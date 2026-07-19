@@ -16,6 +16,21 @@ ngưỡng sai số dấu phẩy động rất nhỏ) với `written_geometry_by_
 mà `builder.py` đã trả về — đây là "nguồn sự thật" đúng, KHÔNG so lại với
 toạ độ thô trong `primitive_doc` (vì builder có thể đã áp solved override
 từ Constraint Solving, so với toạ độ thô sẽ ra dương tính giả).
+
+MỞ RỘNG (round-trip INSERT, mục "việc nên làm tiếp" trong HANDOFF.md):
+ngoài primitive thô (line/circle/arc/text) ở trên, `review_dxf()` giờ còn
+đối chiếu lại từng entity INSERT do `semantic_components.py` chèn (Semantic
+Component API, mục 12.4) — dùng CÙNG chiến lược round-trip qua `handle`,
+so với `build_result.written_component_by_part_id` (nguồn sự thật đọc lại
+trực tiếp từ entity INSERT ngay lúc build, xem `builder.py`). Các trường
+kiểm tra: `handle`, block name (`entity.dxf.name`), `layer`, insert point
+(x/y/z), `xscale`/`yscale`/`zscale`, `rotation`, và từng ATTRIB (tag/text).
+Lỗi INSERT được gom vào `ReviewResult.component_mismatches` — dùng
+`ComponentMismatch` (dataclass có field/expected/actual, không phải chuỗi
+tự do) để dễ lọc/debug theo part_id hoặc theo field cụ thể, tách biệt với
+`mismatches` (primitive thô, vẫn là List[str] như cũ, không đổi hợp đồng
+cũ). Repair #1 cho INSERT KHÔNG nằm trong phạm vi module này (xem
+HANDOFF.md mục "việc nên làm tiếp" #2 — để lại cho Repair #1/#2 sau).
 """
 
 from __future__ import annotations
@@ -27,7 +42,29 @@ from typing import Dict, List
 from .builder import BuildResult
 
 _DEFAULT_TOLERANCE_MM = 1e-6
+_ROTATION_TOLERANCE_DEG = 1e-4
 _EXPECTED_DXFTYPE = {"line": "LINE", "circle": "CIRCLE", "arc": "ARC", "text": "TEXT"}
+_INSERT_SCALE_FIELDS = ("xscale", "yscale", "zscale")
+
+
+@dataclass
+class ComponentMismatch:
+    """1 lỗi cụ thể phát hiện khi round-trip kiểm tra 1 entity INSERT
+    (Semantic Component). Structured — KHÔNG phải chuỗi tự do như
+    `mismatches` (primitive thô) — để dễ lọc/debug theo `part_id` hoặc
+    theo `field` cụ thể (vd lọc riêng mọi lỗi rotation, hay mọi lỗi của
+    1 part_id). `message` là bản người-đọc-được, dùng khi cần in báo cáo
+    dạng text; `str(mismatch)` trả về đúng `message` để vẫn in được trực
+    tiếp trong 1 report gộp chung với `mismatches`."""
+
+    part_id: str
+    field: str
+    expected: object
+    actual: object
+    message: str
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return self.message
 
 
 @dataclass
@@ -35,10 +72,45 @@ class ReviewResult:
     passed: bool
     checked_count: int
     mismatches: List[str] = field(default_factory=list)
+    # --- round-trip INSERT (Semantic Component API, xem docstring module) ---
+    component_checked_count: int = 0
+    component_mismatches: List[ComponentMismatch] = field(default_factory=list)
+
+    def format_report(self) -> str:
+        """Report lỗi có cấu trúc, gom theo part_id — dùng khi debug thủ
+        công (in ra console/log), KHÔNG thay thế `mismatches`/
+        `component_mismatches` (vẫn nguyên cho code xử lý tiếp, vd
+        Repair #1 dùng `mismatches` trực tiếp)."""
+        lines: List[str] = []
+        status = "PASS" if self.passed else "FAIL"
+        lines.append(f"Reviewer #1: {status}")
+        lines.append(
+            f"  primitives: {self.checked_count} checked, {len(self.mismatches)} mismatch"
+        )
+        for m in self.mismatches:
+            lines.append(f"    - {m}")
+        lines.append(
+            f"  components (INSERT): {self.component_checked_count} checked, "
+            f"{len(self.component_mismatches)} mismatch"
+        )
+        by_part: Dict[str, List[ComponentMismatch]] = {}
+        for cm in self.component_mismatches:
+            by_part.setdefault(cm.part_id, []).append(cm)
+        for part_id in sorted(by_part):
+            lines.append(f"    - {part_id}:")
+            for cm in by_part[part_id]:
+                lines.append(
+                    f"        [{cm.field}] expected={cm.expected!r} actual={cm.actual!r} — {cm.message}"
+                )
+        return "\n".join(lines)
 
 
 def _dist(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _dist3(a, b) -> float:
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
 
 def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERANCE_MM) -> ReviewResult:
@@ -128,4 +200,113 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
     # không thuộc trách nhiệm Reviewer #1 (đó là lỗi dữ liệu Phase 1/2 gốc,
     # không phải lỗi round-trip DXF) — không kiểm ở đây theo thiết kế.
 
-    return ReviewResult(passed=(len(mismatches) == 0), checked_count=checked, mismatches=mismatches)
+    component_mismatches: List[ComponentMismatch] = []
+    component_checked = 0
+
+    for part_id, handle in build_result.component_handle_by_part_id.items():
+        written = build_result.written_component_by_part_id.get(part_id)
+        if written is None:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field="written_component", expected="<có ghi nhận>", actual=None,
+                message=f"{part_id}: không có written_component ghi nhận lúc build (bug ở builder.py)",
+            ))
+            continue
+
+        entity = db.get(handle)
+        if entity is None:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field="handle", expected=handle, actual=None,
+                message=f"{part_id}: handle INSERT '{handle}' không tìm thấy sau khi đọc lại DXF",
+            ))
+            continue
+
+        component_checked += 1
+        dxftype = entity.dxftype()
+        if dxftype != "INSERT":
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field="dxftype", expected="INSERT", actual=dxftype,
+                message=f"{part_id}: kỳ vọng entity kiểu INSERT, đọc lại được {dxftype}",
+            ))
+            continue
+
+        actual_block_name = entity.dxf.name
+        if actual_block_name != written["block_name"]:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field="block_name",
+                expected=written["block_name"], actual=actual_block_name,
+                message=(
+                    f"{part_id}: kỳ vọng block name '{written['block_name']}', "
+                    f"đọc lại được '{actual_block_name}'"
+                ),
+            ))
+
+        actual_layer = entity.dxf.layer
+        if actual_layer != written["layer"]:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field="layer", expected=written["layer"], actual=actual_layer,
+                message=f"{part_id}: kỳ vọng layer INSERT '{written['layer']}', đọc lại được '{actual_layer}'",
+            ))
+
+        actual_insert_v = entity.dxf.insert
+        actual_insert = (actual_insert_v.x, actual_insert_v.y, actual_insert_v.z)
+        expected_insert = written["insert"]
+        if _dist3(actual_insert, expected_insert) > tolerance_mm:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field="insert_point", expected=expected_insert, actual=actual_insert,
+                message=f"{part_id}: điểm chèn INSERT lệch — ghi {expected_insert}, đọc lại {actual_insert}",
+            ))
+
+        for axis in _INSERT_SCALE_FIELDS:
+            actual_val = getattr(entity.dxf, axis)
+            expected_val = written[axis]
+            if abs(actual_val - expected_val) > tolerance_mm:
+                component_mismatches.append(ComponentMismatch(
+                    part_id=part_id, field=axis, expected=expected_val, actual=actual_val,
+                    message=f"{part_id}: {axis} INSERT lệch — ghi {expected_val}, đọc lại {actual_val}",
+                ))
+
+        actual_rotation = entity.dxf.rotation
+        expected_rotation = written["rotation_deg"]
+        if abs(actual_rotation - expected_rotation) > _ROTATION_TOLERANCE_DEG:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field="rotation_deg",
+                expected=expected_rotation, actual=actual_rotation,
+                message=(
+                    f"{part_id}: góc rotation INSERT lệch — ghi {expected_rotation}, "
+                    f"đọc lại {actual_rotation}"
+                ),
+            ))
+
+        expected_attribs: Dict[str, str] = written["attribs"]
+        actual_attribs = {a.dxf.tag: a.dxf.text for a in entity.attribs}
+        for tag, expected_text in expected_attribs.items():
+            if tag not in actual_attribs:
+                component_mismatches.append(ComponentMismatch(
+                    part_id=part_id, field=f"attrib:{tag}", expected=expected_text, actual=None,
+                    message=f"{part_id}: thiếu ATTRIB '{tag}' sau khi đọc lại DXF (kỳ vọng '{expected_text}')",
+                ))
+            elif actual_attribs[tag] != expected_text:
+                component_mismatches.append(ComponentMismatch(
+                    part_id=part_id, field=f"attrib:{tag}",
+                    expected=expected_text, actual=actual_attribs[tag],
+                    message=(
+                        f"{part_id}: ATTRIB '{tag}' lệch — ghi '{expected_text}', "
+                        f"đọc lại '{actual_attribs[tag]}'"
+                    ),
+                ))
+        for tag in sorted(set(actual_attribs) - set(expected_attribs)):
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id, field=f"attrib:{tag}", expected=None, actual=actual_attribs[tag],
+                message=(
+                    f"{part_id}: ATTRIB thừa '{tag}'='{actual_attribs[tag]}' "
+                    f"không có trong ghi nhận lúc build"
+                ),
+            ))
+
+    return ReviewResult(
+        passed=(len(mismatches) == 0 and len(component_mismatches) == 0),
+        checked_count=checked,
+        mismatches=mismatches,
+        component_checked_count=component_checked,
+        component_mismatches=component_mismatches,
+    )
