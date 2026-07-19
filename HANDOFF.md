@@ -16,7 +16,10 @@
 
 Bản Phase 3 hiện có Semantic Component API mở rộng: frame beam, bracket, panel round/rect, bracket L, hinge và node. DXF Builder lưu handle của primitive và component theo part.
 
-Các lần thử bổ sung kiểm tra `INSERT` component trong Reviewer #1 chưa được áp dụng vào mã nguồn; mã trong gói là nguyên trạng dự án tại thời điểm xuất.
+Round-trip kiểm tra `INSERT` component trong Reviewer #1 đã được áp dụng vào
+mã nguồn (19/07/2026, nhánh `feature/reviewer-insert-roundtrip`, xem mục
+"Bàn giao bổ sung — Reviewer #1 INSERT round-trip" ở cuối file) — trước đó
+các lần thử chỉ nằm ngoài mã nguồn, nay `builder.py`/`reviewer.py` đã có.
 
 Phase 5 đã có 64 unit test, demo end-to-end và CLI `python -m agent_lib.run`.
 CLI/demo tự cấu hình UTF-8 để chạy được trong PowerShell Windows dùng code page cũ.
@@ -38,8 +41,12 @@ Chạy lệnh từ thư mục `cad_agent` để các package Phase 1–5 cùng n
 
 ## Việc nên làm tiếp
 
-1. Mở rộng Reviewer #1 để round-trip kiểm tra `INSERT` component: handle, block name, layer, insert point, x/y/z scale, rotation và ATTRIB.
-2. Sau đó thêm Repair #1 cho component INSERT hoặc tách rõ phần này sang Repair #2 MCP.
+1. ~~Mở rộng Reviewer #1 để round-trip kiểm tra `INSERT` component: handle,
+   block name, layer, insert point, x/y/z scale, rotation và ATTRIB.~~ ĐÃ
+   LÀM (19/07/2026, nhánh `feature/reviewer-insert-roundtrip`) — xem mục
+   "Bàn giao bổ sung — Reviewer #1 INSERT round-trip" ở cuối file.
+2. Thêm Repair #1 cho component INSERT hoặc tách rõ phần này sang Repair #2
+   MCP.
 3. Phase 4: tích hợp AutoCAD MCP (file_ipc), Reviewer #2 visual/zoom và Repair #2 theo handle.
 4. Duy trì ranh giới: Reviewer #1 chỉ kiểm tra chuyển đổi IR → DXF; lỗi nhận thức/pattern phải do Reviewer #2 đánh giá với ảnh gốc.
 
@@ -159,3 +166,70 @@ implement P1 trong "Phương án tổng thể".
 6. P3 (chưa bắt đầu): tăng `text_block_lateral_px` mặc định từ 15px lên
    25px trong `merge_collinear_lines()` — thay đổi nhỏ, rủi ro thấp, có
    thể làm độc lập bất kỳ lúc nào.
+
+---
+
+## Bàn giao bổ sung — Reviewer #1: round-trip kiểm tra INSERT component (19/07/2026)
+
+Áp dụng patch `0001-reviewer-insert-roundtrip.patch` trên nhánh
+`feature/reviewer-insert-roundtrip` (từ `main`), đúng việc #1 ở mục "Việc
+nên làm tiếp" phía trên (trước đó đã thử trong phiên chat nhưng chưa đưa
+vào mã nguồn — xem log cũ của mục đó).
+
+### Đã làm
+
+- **`dxf_builder_lib/builder.py`**: `BuildResult.written_component_by_part_id`
+  — đọc lại TRỰC TIẾP từ entity INSERT vừa tạo (block name, layer, insert
+  point x/y/z, x/y/z scale, rotation, ATTRIB) ngay lúc build, trước khi lưu
+  file — cùng nguyên tắc với `written_geometry_by_primitive_id` đã có cho
+  primitive thô. Đây là "nguồn sự thật" cho Reviewer #1 đối chiếu ngược sau
+  khi đọc lại file DXF.
+- **`dxf_builder_lib/reviewer.py`**: `review_dxf()` giờ round-trip cả entity
+  INSERT theo `handle`, so khớp: handle, block name, layer, insert point
+  (x/y/z), xscale/yscale/zscale, rotation, và từng ATTRIB (tag/text). Lỗi
+  gom vào `ReviewResult.component_mismatches` — dùng dataclass
+  `ComponentMismatch` (part_id/field/expected/actual/message) thay vì chuỗi
+  tự do, để dễ lọc/debug theo part_id hoặc field cụ thể. Thêm
+  `ReviewResult.format_report()` in báo cáo gộp theo part_id. Hợp đồng cũ
+  (`mismatches: List[str]`, `checked_count`, `passed`) giữ nguyên, không đổi
+  — component_checked_count/component_mismatches là field mới, không phá
+  code cũ đang dùng ReviewResult.
+- **`dxf_builder_lib/tests/test_reviewer.py`**: 12 test mới — 1 happy path +
+  1 loại lỗi cho mỗi trường (handle, written_component thiếu, block name,
+  layer, insert point, xscale, rotation, ATTRIB sai giá trị, ATTRIB thiếu) +
+  1 test xác nhận `build_components=False` (mặc định) không có gì để kiểm +
+  1 test xác nhận report có cấu trúc (không phải chuỗi tự do). Tự SKIP rõ
+  ràng (không fail) khi chưa cài `ezdxf`, đúng quy ước sẵn có trong file.
+
+Không sửa `primitive_ir_lib/`. Không làm Repair #1 cho INSERT (để lại theo
+mục "việc nên làm tiếp" #2 phía trên).
+
+### Đã verify
+
+```
+python3 -m dxf_builder_lib.tests.test_reviewer
+→ 17/17 test PASS (5 test cũ + 12 test mới, 1 SKIP đổi thành chạy thật vì
+  đã cài ezdxf trong môi trường verify)
+
+python3 -m dxf_builder_lib.tests.test_builder            → 5/5 PASS
+python3 -m dxf_builder_lib.tests.test_repair              → 5/5 PASS (không đổi)
+python3 -m dxf_builder_lib.tests.test_semantic_components → 11/11 PASS (không đổi)
+python3 -m unittest discover -s mcp_integration_lib/tests -v → 4/4 PASS (không đổi)
+python3 -m unittest discover -s agent_lib/tests -v            → 64/64 PASS (không đổi)
+```
+
+Patch áp bằng `git apply --check` sạch (không cần fuzz/offset), commit giữ
+nguyên message gốc của patch qua `git am`.
+
+### Giới hạn trung thực (chưa giải quyết)
+
+- Repair #1 cho INSERT (sửa lại entity theo `written_component_by_part_id`
+  khi Reviewer #1 báo mismatch) CHƯA làm — patch này chỉ dừng ở phát hiện
+  lỗi (Reviewer), không tự sửa. Xem "việc nên làm tiếp" #2.
+- Nhánh này tách từ `main`, KHÔNG chứa fix hồi quy tick-mark/witness-line
+  của `primitive_ir_lib` (nhánh `fix/tick-mark-witness-line-regression`,
+  bàn giao trước đó) — 2 nhánh độc lập, cần merge riêng hoặc rebase khi gộp
+  vào `main`.
+- Chưa test round-trip INSERT trên component nào ngoài "beam" (dùng trong
+  fixture `_build_beam_component`) — bracket/panel/hinge/node khác có thể
+  có ATTRIB hoặc field riêng chưa được test tới.
