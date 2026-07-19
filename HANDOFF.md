@@ -63,12 +63,12 @@ implement P1 trong "Phương án tổng thể".
 
 - **Benchmark Lớp 1 trên ảnh thật**: phát hiện Lớp 1 (tick-mark chéo 45°,
   `detect_tick_mark_at_point`) không gây gộp nhầm trên ảnh thật, nhưng cũng
-  KHÔNG cải thiện được gì — vì bản vẽ "TP-TL-A001/07/26" dùng witness-line
+  KHÔNG cải thiện được gì—vì bản vẽ "TP-TL-A001/07/26" dùng witness-line
   DỌC (~90° với dim-line), không phải tick-mark chéo 45°. Chi tiết 3 case
-  test (witness-line 1700, dim-chain 2760/1525, outer dim-line 5500) nằm
-  trong lịch sử chat, chưa được ghi thành file riêng — **cần chép lại vào
-  một file benchmark report nếu muốn giữ lại lâu dài** (xem "Việc tiếp
-  theo" bên dưới, mục 4).
+  test (witness-line 1700, dim-chain 2760/1525, outer dim-line 5500) đã được
+  ghi lại đầy đủ trong báo cáo benchmark
+  [`docs/benchmarks/layer1-tick-mark-real-image-benchmark.md`](docs/benchmarks/layer1-tick-mark-real-image-benchmark.md)
+  (kết quả mong đợi, false-positive cần tránh x=673, và cách tái lập test).
 
 - **Xác định đúng vị trí ranh giới thật** giữa "2760" và "1525" trên ảnh
   thật: x≈776 (không phải x≈524 như nhận định sai ban đầu trong phiên —
@@ -167,21 +167,35 @@ implement P1 trong "Phương án tổng thể".
    `split_raw_line_at_internal_witness_lines()` đơn lẻ) trên ca thật
    "2760"/"1525" của ảnh `2026-07-18_101706.png` để xác nhận pipeline đầu
    cuối tách đúng, có dùng `blocking_texts` thật (OCR Tesseract) song song.
-2. Ghi lại benchmark 3 case (witness-line 1700 / dim-chain 2760-1525 /
-   outer 5500) thành file report riêng (kiểu
-   `PHUONG_AN_BO_SUNG_LOP1_TICK_MARK.md`) — hiện chỉ tồn tại trong lịch sử
-   hội thoại, chưa có trong repo.
-3. P2 (chưa bắt đầu): mở rộng `detect_tick_mark_at_point` cho tick chéo 45°
+1. Chạy lại **toàn bộ** `merge_collinear_lines()` (không chỉ
+   `split_raw_line_at_internal_witness_lines()` đơn lẻ) trên ca thật
+   "2760"/"1525" của ảnh `2026-07-18_101706.png` để xác nhận pipeline đầu
+   cuối tách đúng, có dùng `blocking_texts` thật (OCR Tesseract) song song.
+   VẪN CHƯA LÀM — đây vẫn là việc ưu tiên #1.
+2. ~~Cập nhật docstring đầu `line_merging.py` cho khớp thay đổi.~~ **ĐÃ
+   LÀM** (mục "Hồi quy đã sửa" ở trên, nhánh
+   `fix/tick-mark-witness-line-regression`) — docstring đầu file giờ mô tả
+   đầy đủ 2 lớp tín hiệu + bước tách nội bộ + quy ước đặt tên
+   tick_mark/witness_line.
+3. ~~Ghi lại benchmark 3 case (witness-line 1700 / dim-chain 2760-1525 /
+   outer 5500) thành file report riêng~~ — **ĐÃ LÀM** (phiên
+   docs/layer1-real-image-benchmark, merge từ `origin/main`): báo cáo đầy đủ
+   ở [`docs/benchmarks/layer1-tick-mark-real-image-benchmark.md`](docs/benchmarks/layer1-tick-mark-real-image-benchmark.md)
+   (kết quả mong đợi, false-positive x=673 cần tránh, ngưỡng tham số dùng,
+   và kịch bản tái lập test bằng ảnh thật + test tự động hoá offline).
+4. P2 (chưa bắt đầu): mở rộng `detect_tick_mark_at_point` cho tick chéo 45°
    dùng `HoughLines` thay `HoughLinesP` để bắt witness-line ngắn tốt hơn —
    xuất phát từ 1 proof-of-concept trong phiên chat, chưa đưa vào code.
-4. P3 (chưa bắt đầu): tăng `text_block_lateral_px` mặc định từ 15px lên
+5. P3 (chưa bắt đầu): tăng `text_block_lateral_px` mặc định từ 15px lên
    25px trong `merge_collinear_lines()` — thay đổi nhỏ, rủi ro thấp, có
    thể làm độc lập bất kỳ lúc nào.
-5. `max_offset_drift_px=2` (mới, mục sửa hồi quy ở trên) mới hiệu chỉnh
+6. `max_offset_drift_px=2` (mới, mục sửa hồi quy ở trên) mới hiệu chỉnh
    thủ công trên fixture tổng hợp — CHƯA benchmark trên ảnh scan thật có
    witness-line hơi nghiêng (không hoàn toàn vuông góc do ảnh bị xoay/méo
    nhẹ khi scan); nếu sau này thấy witness-line thật bị bỏ sót, đây là nơi
-   cần xem lại đầu tiên.
+   cần xem lại đầu tiên. Có thể đối chiếu thêm với
+   `docs/benchmarks/layer1-tick-mark-real-image-benchmark.md` (mục 3) khi
+   làm việc #1 ở trên.
 
 ---
 
