@@ -81,6 +81,14 @@ class BuildResult:
     skipped_part_ids: List[str] = field(default_factory=list)
     skipped_part_reasons: Dict[str, str] = field(default_factory=dict)
     component_count: int = 0
+    # đúng những gì ĐÃ GHI vào entity INSERT (block name, layer, insert
+    # point, x/y/z scale, rotation, ATTRIB) — đọc lại TRỰC TIẾP từ chính
+    # entity vừa tạo (đối tượng blockref trong doc, TRƯỚC saveas) thay vì
+    # từ ComponentInsertResult, để "nguồn sự thật" luôn khớp bất kể hàm
+    # insert nào trong semantic_components.py sinh ra nó — cùng nguyên tắc
+    # written_geometry_by_primitive_id ở trên, dùng cho reviewer.py đối
+    # chiếu ngược sau khi đọc lại file (round-trip INSERT).
+    written_component_by_part_id: Dict[str, dict] = field(default_factory=dict)
 
 
 def _part_type_by_primitive_id(semantic_doc) -> Dict[str, str]:
@@ -219,6 +227,20 @@ def build_dxf(
         for res in assembly.inserted:
             result.component_handle_by_part_id[res.part_id] = res.handle
             result.component_type_by_part_id[res.part_id] = res.component_type
+
+            blockref_entity = doc.entitydb.get(res.handle)
+            insert_pt = blockref_entity.dxf.insert
+            attribs = {a.dxf.tag: a.dxf.text for a in blockref_entity.attribs}
+            result.written_component_by_part_id[res.part_id] = {
+                "block_name": blockref_entity.dxf.name,
+                "layer": blockref_entity.dxf.layer,
+                "insert": (insert_pt.x, insert_pt.y, insert_pt.z),
+                "xscale": blockref_entity.dxf.xscale,
+                "yscale": blockref_entity.dxf.yscale,
+                "zscale": blockref_entity.dxf.zscale,
+                "rotation_deg": blockref_entity.dxf.rotation,
+                "attribs": attribs,
+            }
         result.skipped_part_ids = assembly.skipped_part_ids
         result.skipped_part_reasons = assembly.skip_reasons
         result.component_count = len(assembly.inserted)
