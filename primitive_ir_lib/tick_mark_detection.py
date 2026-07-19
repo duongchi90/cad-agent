@@ -40,10 +40,12 @@ GIỚI HẠN TRUNG THỰC (chưa giải quyết hết):
     dim-chain (2760/1525), mà dùng WITNESS-LINE THẲNG ĐỨNG (vuông góc ~90°
     với dim-line) cắt ngang tại điểm ranh giới. detect_tick_mark_at_point()
     với dải mặc định [25°-65°] KHÔNG bắt được kiểu ký hiệu này — đây là lý do
-    thêm hàm split_raw_line_at_tick_marks() bên dưới, dùng phương pháp khác
+    thêm hàm split_raw_line_at_internal_witness_lines() bên dưới, dùng phương pháp khác
     (column-projection, không phải Hough góc chéo) cho đúng loại ký hiệu này.
 
-CHỨC NĂNG THỨ 2 — split_raw_line_at_tick_marks() (thêm 19/07/2026):
+CHỨC NĂNG THỨ 2 — split_raw_line_at_internal_witness_lines() (thêm
+19/07/2026, đổi tên từ split_raw_line_at_tick_marks() cùng ngày sau khi sửa
+hồi quy — xem "SỬA THÊM" trong docstring _perpendicular_witness_at_point):
   Trên ảnh thật, Hough thường tự "fuse" một dim-chain nhiều đoạn (vd
   "2760"+"1525" trên cùng 1 dim-line) thành 1 RawLine LIÊN TỤC — KHÔNG có
   khoảng trống pixel nào ở ranh giới, dù ranh giới đó có witness-line cắt
@@ -52,30 +54,34 @@ CHỨC NĂNG THỨ 2 — split_raw_line_at_tick_marks() (thêm 19/07/2026):
   segment thì không có khoảng trống nào để kiểm tra, nên bug này KHÔNG thể
   fix bằng cơ chế "chặn gộp" (Lớp 1/2 trong merge_collinear_lines) mà phải
   TÁCH line fused đó trước, ngay tại bước tiền xử lý — đó là việc của hàm
-  split_raw_line_at_tick_marks().
+  split_raw_line_at_internal_witness_lines().
 
   CÁCH DÒ (khác hẳn detect_tick_mark_at_point — không dùng Hough góc chéo):
     Quét dọc theo trục chính của line (bước step_px), tại mỗi điểm lấy 1 dải
     cột hẹp (±col_half_px) VUÔNG GÓC với line, đếm số hàng có pixel tối
     (< dark_threshold) trong dải đó — nếu đủ số hàng tối liên tiếp NGAY SÁT
     line (điều kiện "chạm" — touching, để phân biệt với text/ghi chú nổi trôi
-    KHÔNG chạm line) và tổng đủ dài — coi là có witness-line cắt ngang tại đó.
-    Kiểm tra CẢ 2 phía (trước và sau line theo phương pháp tuyến) vì ký hiệu
-    có thể chỉ hiện ở 1 phía trên ảnh scan.
+    KHÔNG chạm line) VÀ không trôi dạt cột (loại nét chéo, xem
+    _perpendicular_witness_at_point) VÀ tổng đủ dài — coi là có witness-line
+    cắt ngang tại đó. Kiểm tra CẢ 2 phía (trước và sau line theo phương pháp
+    tuyến) vì ký hiệu có thể chỉ hiện ở 1 phía trên ảnh scan.
 
-  GIỚI HẠN TRUNG THỰC của split_raw_line_at_tick_marks():
+  GIỚI HẠN TRUNG THỰC của split_raw_line_at_internal_witness_lines():
     - Chỉ mới benchmark chính xác trên 1 điểm ranh giới thật (2760/1525 của
       "TP-TL-A001/07/26") + fixture tổng hợp — CHƯA chạy trên nhiều ảnh scan
       khác nhau.
     - Điều kiện "chạm" (touching) là heuristic đơn giản (row liền kề dim-line
-      có pixel tối) — trên ảnh scan nhiễu/mờ có thể vẫn lọt sai ở ranh giới
-      giữa witness-line thật và ghi chú/hatch tình cờ chạm sát dim-line.
+      có pixel tối, không trôi dạt cột) — trên ảnh scan nhiễu/mờ có thể vẫn
+      lọt sai ở ranh giới giữa witness-line thật và ghi chú/hatch tình cờ
+      chạm sát dim-line và giữ được cột gần cố định.
     - CHƯA xử lý line có góc bất kỳ một cách kỹ lưỡng (mới test kỹ dim-line
       ngang/dọc — góc xiên dùng phép quay toạ độ chung nhưng chưa benchmark).
     - CHƯA gộp với detect_tick_mark_at_point() (tick-mark chéo 45°) thành 1
       hàm duy nhất — 2 kiểu ký hiệu (chéo 45° vs vuông góc 90°) hiện dùng 2
-      cơ chế dò khác nhau, gọi riêng. Cần thêm ảnh thật dùng tick-mark chéo
-      thật để xác nhận cơ chế cũ còn đúng khi kết hợp.
+      cơ chế dò khác nhau, gọi riêng, và từ 19/07/2026 tên hàm/tham số cũng
+      tách bạch rõ theo đúng phạm vi ("tick_mark" chỉ dùng cho Lớp 1 chéo,
+      "witness_line" chỉ dùng cho tách nội bộ vuông góc). Cần thêm ảnh thật
+      dùng tick-mark chéo thật để xác nhận cơ chế cũ còn đúng khi kết hợp.
 """
 
 from __future__ import annotations
@@ -189,6 +195,7 @@ def _perpendicular_witness_at_point(
     leading_gap_max_px: int = 5,
     min_run_px: int = 8,
     run_gap_tol_px: int = 1,
+    max_offset_drift_px: float = 2.0,
 ) -> bool:
     """Column-projection: kiểm tra có witness-line/nét CẮT NGANG (~vuông góc)
     line chính tại điểm (px,py) hay không — dùng cho ký hiệu ranh giới kiểu
@@ -212,52 +219,114 @@ def _perpendicular_witness_at_point(
         là đủ đạt min_dark_rows=4 dù các pixel đó KHÔNG liên tục / không
         phải cùng 1 đường thẳng — bắt nhầm text/hatch rời rạc thành witness-line.
 
-    THUẬT TOÁN MỚI (chạy dọc theo pháp tuyến, đếm CHUỖI LIÊN TỤC thay vì chỉ
-    đếm tổng số hàng tối):
+    SỬA THÊM 19/07/2026 (hồi quy `split_internal_witness_lines` /
+    `test_tick_mark_blocks_merge_even_without_any_blocking_text`): bản trên
+    (đếm chuỗi liên tục) vẫn KHÔNG phân biệt được nét CHÉO ~45° (tick-mark
+    của Lớp 1 — detect_tick_mark_at_point) lướt ngang qua cửa sổ dò với nét
+    VUÔNG GÓC thật, vì nó chỉ hỏi "có pixel tối trong cửa sổ ±col_half_px
+    hay không" ở từng hàng — một nét chéo đi qua gần điểm quét vẫn để lại
+    đúng kiểu chuỗi liên tục đó, chỉ khác là vị trí cột (offset ngang so với
+    trục line) TRÔI DẠT dần qua từng hàng (đặc trưng hình học của 1 đường
+    45°: dịch ~1px ngang cho mỗi 1px dọc), trong khi 1 witness-line vuông
+    góc thật giữ offset gần NHƯ CỐ ĐỊNH (~0, đúng cột đang quét) suốt chuỗi.
+    Ngoài ra chính độ dày nét của dim-line gốc (vd 2px) cũng khiến hàng k=1
+    "tối cả cửa sổ" dù không có witness-line nào — nhưng vì cửa sổ đối xứng
+    quanh px, offset trung điểm của hàng đó vẫn tính ra ~0 (trùng với offset
+    của 1 witness-line thật ở đúng vị trí đang quét) nên không cần xử lý
+    riêng: cơ chế neo + kiểm tra trôi dạt bên dưới đã tự nhiên bao quát luôn
+    trường hợp này.
+
+    THUẬT TOÁN (dò dọc theo pháp tuyến, đếm CHUỖI LIÊN TỤC + kiểm tra không
+    trôi dạt offset):
       1. Cho phép hở đầu (standoff) tối đa `leading_gap_max_px` trước khi gặp
          hàng tối đầu tiên — witness-line thật thường không chạm dim-line
          ngay từ pixel đầu tiên.
       2. Từ hàng tối đầu tiên đó, CHUỖI phải liên tục — cho phép hở nhỏ
          `run_gap_tol_px` (nhiễu quét 1px) nhưng hở lớn hơn thì NGẮT chuỗi
-         (đây là điểm khác biệt cốt lõi so với bản cũ: text/hatch rải rác ở
-         xa không còn nối được vào chuỗi tính từ dim-line).
-      3. Chuỗi liên tục đó phải dài >= `min_run_px` mới coi là witness-line
-         thật (đường quá ngắn — vd chỉ đúng độ dày nét dim-line — bị loại).
+         (phân biệt witness-line thật với text/hatch rải rác ở xa, không
+         liên tục từ dim-line).
+      3. MỚI: theo dõi biên độ (min/max) offset cột của TẤT CẢ hàng đã chấp
+         nhận vào chuỗi TÍNH DỒN từ đầu chuỗi — 1 hàng tối mới chỉ được tính
+         vào chuỗi nếu thêm nó vào KHÔNG làm biên độ (max - min) đó vượt quá
+         `max_offset_drift_px`. Cố ý dùng biên độ CỘNG DỒN thay vì so từng
+         hàng với 1 mốc neo cố định: 1 nét chéo có thể trôi dạt "tới rồi
+         lui" quanh 1 neo suy biến (vd neo=0 vì hàng đầu bị chính độ dày
+         dim-line lấp đầy cả cửa sổ quét) sao cho MỖI hàng riêng lẻ vẫn nằm
+         trong ngưỡng so với neo, nhưng biên độ tổng của cả chuỗi thì vượt
+         hẳn — chỉ so-với-neo-cố-định sẽ lọt trường hợp này (đã gặp khi viết
+         test hồi quy, xem test_tick_mark_detection.py). Witness-line vuông
+         góc thật giữ offset gần như 1 điểm cố định suốt chuỗi nên biên độ
+         luôn hẹp; hàng không thoả bị coi như 1 lần "hở" (không cộng
+         run_len), cho phép hở đơn lẻ nhờ `run_gap_tol_px` nhưng lệch liên
+         tục nhiều hàng sẽ NGẮT chuỗi.
+      4. Chuỗi liên tục (thoả cả 2, 3) đó phải dài >= `min_run_px` mới coi
+         là witness-line thật (đường quá ngắn bị loại).
 
     Kiểm tra CẢ 2 phía của line (theo 2 chiều pháp tuyến +n và -n).
 
-    GIỚI HẠN TRUNG THỰC: ngưỡng leading_gap_max_px=5 / min_run_px=8 hiệu
-    chỉnh thủ công trên 1 điểm ranh giới thật (x=776) + 1 điểm false-positive
-    đã biết (x=673) của "TP-TL-A001/07/26" — CHƯA quét rộng trên nhiều ảnh
-    scan khác để xác nhận ngưỡng này tổng quát.
+    GIỚI HẠN TRUNG THỰC: ngưỡng leading_gap_max_px=5 / min_run_px=8 /
+    max_offset_drift_px=2 hiệu chỉnh thủ công trên 1 điểm ranh giới thật
+    (x=776), 1 điểm false-positive đã biết (x=673) của "TP-TL-A001/07/26",
+    và ca hồi quy tổng hợp (2 tick-mark chéo 45° đối xứng quanh 1 khoảng
+    trống — xem test_tick_mark_blocks_merge_even_without_any_blocking_text)
+    — CHƯA quét rộng trên nhiều ảnh scan khác để xác nhận ngưỡng này tổng
+    quát; witness-line thật bị nghiêng nhiều hơn vài độ so với vuông góc
+    chuẩn (vd do ảnh scan bị xoay/méo) có thể vượt max_offset_drift_px và bị
+    bỏ sót — đánh đổi có chủ đích để tránh dính nét chéo 45°.
     """
     h, w = gray.shape[:2]
     dx, dy = math.cos(angle), math.sin(angle)      # dọc theo line
     nx, ny = -math.sin(angle), math.cos(angle)     # pháp tuyến
 
-    def _row_dark(ox: float, oy: float) -> bool:
+    def _row_dark_offset(ox: float, oy: float) -> Optional[float]:
+        """Trả về offset cột (trung điểm min/max các pixel tối, đơn vị `j`
+        dọc theo trục line) nếu hàng có pixel tối trong cửa sổ ±col_half_px,
+        ngược lại None (hàng không tối)."""
+        dark_js = []
         for j in range(-col_half_px, col_half_px + 1):
             xi = int(round(ox + j * dx))
             yi = int(round(oy + j * dy))
             if 0 <= yi < h and 0 <= xi < w and gray[yi, xi] < dark_threshold:
-                return True
-        return False
+                dark_js.append(j)
+        if not dark_js:
+            return None
+        return (min(dark_js) + max(dark_js)) / 2.0
 
     for side in (1.0, -1.0):
         run_len = 0
         run_started = False
         started_within_leading = False
         gap = 0
+        run_min_offset: Optional[float] = None
+        run_max_offset: Optional[float] = None
         for k in range(1, probe_window_px + 1):
             ox = px + side * k * nx
             oy = py + side * k * ny
-            if _row_dark(ox, oy):
+            offset = _row_dark_offset(ox, oy)
+            # so KHÔNG chỉ với neo ban đầu mà với biên độ (min/max) TÍCH LUỸ
+            # của cả chuỗi đã chấp nhận — 1 nét chéo có thể trôi dạt "qua lại"
+            # quanh 1 neo suy biến (vd anchor=0 vì hàng đầu bị chính độ dày
+            # dim-line lấp đầy cả cửa sổ, xem SỬA THÊM ở trên) mà từng bước so
+            # với neo vẫn trong ngưỡng, nhưng biên độ CỘNG DỒN của cả chuỗi thì
+            # vượt hẳn — chỉ 1 witness-line vuông góc thật mới giữ biên độ hẹp
+            # suốt cả chuỗi.
+            if offset is not None:
+                new_min = offset if run_min_offset is None else min(run_min_offset, offset)
+                new_max = offset if run_max_offset is None else max(run_max_offset, offset)
+                on_axis = (new_max - new_min) <= max_offset_drift_px
+            else:
+                on_axis = False
+            if on_axis:
                 if not run_started:
                     run_started = True
                     started_within_leading = k <= leading_gap_max_px
+                run_min_offset, run_max_offset = new_min, new_max
                 run_len += 1
                 gap = 0
             elif run_started:
+                # hàng không tối, hoặc tối nhưng làm biên độ trôi dạt tích luỹ
+                # vượt ngưỡng (dấu hiệu nét chéo) -> tính là 1 lần "hở" trong
+                # chuỗi, KHÔNG cộng run_len, nhưng vẫn cho phép hở nhỏ.
                 gap += 1
                 if gap > run_gap_tol_px:
                     break
@@ -328,7 +397,7 @@ def find_internal_boundary_offsets(
     return [sorted(c)[len(c) // 2] for c in clustered]
 
 
-def split_raw_line_at_tick_marks(
+def split_raw_line_at_internal_witness_lines(
     line: "RawLine",
     image_bgr: Optional[np.ndarray],
     diagonal_angle_min_deg: float = 25.0,
@@ -345,11 +414,24 @@ def split_raw_line_at_tick_marks(
 ) -> List["RawLine"]:
     """Tách 1 RawLine dài bị Hough fuse liền (KHÔNG có khoảng trống pixel)
     tại các điểm NẰM GIỮA line có ký hiệu ranh giới cắt ngang (witness-line
-    vuông góc — xem _perpendicular_witness_at_point). Trả về [line] nguyên
+    VUÔNG GÓC — xem _perpendicular_witness_at_point). Trả về [line] nguyên
     vẹn nếu image_bgr=None hoặc không dò được điểm ranh giới nào bên trong.
 
-    LƯU Ý: `diagonal_angle_min_deg`/`diagonal_angle_max_deg` hiện CHƯA được
-    dùng trong hàm này (giữ tham số để tương thích chữ ký gọi từ
+    LƯU Ý ĐẶT TÊN: hàm này (và cờ `split_internal_witness_lines` gọi nó từ
+    line_merging.py) CHỈ xử lý witness-line VUÔNG GÓC — KHÔNG xử lý tick-mark
+    CHÉO ~45° (đó là việc của detect_tick_mark_at_point / Lớp 1, dùng riêng
+    cho khoảng TRỐNG giữa 2 segment trong gap_blocked_by_tick_mark() ở
+    line_merging.py). Tên hàm trước đây (`split_raw_line_at_tick_marks`)
+    dùng chung chữ "tick_marks" cho cả 2 khái niệm khác nhau — đây chính là
+    nguồn gây hồi quy `test_tick_mark_blocks_merge_even_without_any_blocking_text`
+    (19/07/2026): dễ hiểu lầm là cờ này cũng nên bắt luôn tick-mark chéo,
+    trong khi thuật toán bên trong (_perpendicular_witness_at_point) không
+    hề dò theo góc — đã sửa thuật toán để chủ động LOẠI nét chéo (xem
+    docstring _perpendicular_witness_at_point), và đổi tên hàm/cờ cho khớp
+    đúng phạm vi thật của nó.
+
+    `diagonal_angle_min_deg`/`diagonal_angle_max_deg` hiện CHƯA được dùng
+    trong hàm này (giữ tham số để tương thích chữ ký gọi từ
     line_merging.py và cho hướng mở rộng sau — dò thêm tick-mark chéo 45°
     NẰM GIỮA line bằng detect_tick_mark_at_point, không chỉ witness-line
     vuông góc). Xem giới hạn trung thực ở docstring đầu file.

@@ -8,7 +8,7 @@ hợp vẽ trực tiếp bằng cv2 (không cần ảnh scan thật):
     nhầm hatch chéo ở xa không liên quan tới witness-line đang xét.
   - image_bgr=None -> luôn False (rơi về lớp dự phòng text-anchor).
 
-Bổ sung 19/07/2026 — test cho split_raw_line_at_tick_marks() /
+Bổ sung 19/07/2026 — test cho split_raw_line_at_internal_witness_lines() /
 find_internal_boundary_offsets() (witness-line VUÔNG GÓC, khác tick-mark
 chéo ở trên). Các fixture dưới đây mô phỏng LẠI ĐÚNG 2 lỗi phát hiện khi
 benchmark trên ảnh thật "TP-TL-A001/07/26" (xem docstring
@@ -29,7 +29,7 @@ import numpy as np
 from primitive_ir_lib.tick_mark_detection import (
     detect_tick_mark_at_point,
     find_internal_boundary_offsets,
-    split_raw_line_at_tick_marks,
+    split_raw_line_at_internal_witness_lines,
 )
 from primitive_ir_lib.geometry_extraction import RawLine
 
@@ -82,7 +82,7 @@ def test_none_image_returns_false():
     assert found is False
 
 
-# ------------------------------------------------------------- split_raw_line_at_tick_marks --
+# ------------------------------------------------------------- split_raw_line_at_internal_witness_lines --
 
 def _canvas_with_internal_witness_line(boundary_x=300, y=200, stem_len_px=16):
     """Ảnh tổng hợp: 1 dim-line NGANG liên tục (Hough sẽ fuse thành 1 line
@@ -106,10 +106,10 @@ def test_finds_internal_boundary_touching_dim_line():
     assert abs(found_x - 300) <= 2, f"Ranh giới tìm thấy lệch quá xa: x={found_x}"
 
 
-def test_split_raw_line_at_tick_marks_splits_at_boundary():
+def test_split_raw_line_at_internal_witness_lines_splits_at_boundary():
     img = _canvas_with_internal_witness_line(boundary_x=300, y=200, stem_len_px=16)
     line = _line((50, 200), (550, 200), "fused")
-    parts = split_raw_line_at_tick_marks(line, img)
+    parts = split_raw_line_at_internal_witness_lines(line, img)
     assert len(parts) == 2, f"Phải tách thành 2 đoạn tại ranh giới, ra: {len(parts)}"
     boundary_candidates = [p.p2_px[0] for p in parts[:-1]]
     assert any(abs(bx - 300) <= 2 for bx in boundary_candidates)
@@ -147,7 +147,7 @@ def test_does_not_confuse_nearby_scattered_text_with_witness_line():
     offsets = find_internal_boundary_offsets(img, line)
     assert offsets == [], f"Không được nhận nhầm text rời rạc thành witness-line, ra offsets={offsets}"
 
-    parts = split_raw_line_at_tick_marks(line, img)
+    parts = split_raw_line_at_internal_witness_lines(line, img)
     assert len(parts) == 1, "Không có ranh giới thật -> không được tách"
 
 
@@ -156,14 +156,14 @@ def test_split_returns_original_line_when_no_internal_boundary():
     img = np.full((300, 500, 3), 255, dtype=np.uint8)
     cv2.line(img, (50, 150), (450, 150), (0, 0, 0), 2)
     line = _line((50, 150), (450, 150), "solo")
-    parts = split_raw_line_at_tick_marks(line, img)
+    parts = split_raw_line_at_internal_witness_lines(line, img)
     assert len(parts) == 1
     assert parts[0] is line
 
 
 def test_split_returns_original_line_when_image_bgr_is_none():
     line = _line((50, 150), (450, 150), "solo")
-    parts = split_raw_line_at_tick_marks(line, None)
+    parts = split_raw_line_at_internal_witness_lines(line, None)
     assert len(parts) == 1
     assert parts[0] is line
 
@@ -188,3 +188,77 @@ def test_detects_tick_mark_on_vertical_line():
     ref_angle = math.pi / 2  # đường dọc
     found = detect_tick_mark_at_point(img, point=(100.0, 100.0), ref_angle=ref_angle)
     assert found is True
+
+
+# --------------------------------------------------------------------------
+# Regression 19/07/2026: _perpendicular_witness_at_point (dùng bởi
+# find_internal_boundary_offsets / split_raw_line_at_internal_witness_lines)
+# KHÔNG được nhận nhầm tick-mark CHÉO ~45° (tín hiệu của Lớp 1,
+# detect_tick_mark_at_point) thành witness-line VUÔNG GÓC — xem
+# test_tick_mark_blocks_merge_even_without_any_blocking_text trong
+# test_line_merging.py cho ca tích hợp đầy đủ qua merge_collinear_lines().
+# Các test dưới đây kiểm tra trực tiếp ở tầng thấp hơn (tick_mark_detection).
+# --------------------------------------------------------------------------
+
+def test_perpendicular_witness_false_positive_diagonal_tick_mark_near_endpoint():
+    """False positive: dựng gray thủ công có 1 nét CHÉO 45° (không phải
+    vuông góc) đi qua rất gần điểm đang quét, đủ để tạo 1 chuỗi pixel tối
+    liên tục theo tiêu chí cũ (không lọc góc) — _perpendicular_witness_at_point
+    phải trả về False vì nét chéo trôi dạt offset theo chiều dọc, không phải
+    1 witness-line vuông góc đứng yên 1 chỗ."""
+    from primitive_ir_lib.tick_mark_detection import _perpendicular_witness_at_point
+
+    gray = np.full((60, 80), 255, dtype=np.uint8)
+    dim_y = 40
+    gray[dim_y, :] = 0  # dim-line ngang mỏng 1px
+
+    # nét chéo 45°: từ (30,48) tới (46,32) — đi ngang qua vùng ngay dưới
+    # điểm quét (30,40) mà không phải là 1 witness-line dọc thật.
+    for i in range(17):
+        x = 30 + i
+        y = 48 - i
+        gray[y, x] = 0
+        if x + 1 < gray.shape[1]:
+            gray[y, x + 1] = 0  # nét dày ~2px để giống cv2.line(thickness=2)
+
+    found = _perpendicular_witness_at_point(gray, 30.0, float(dim_y), 0.0)
+    assert found is False, "Không được nhận nhầm nét chéo 45° thành witness-line vuông góc"
+
+
+def test_perpendicular_witness_true_positive_genuine_vertical_stays_on_axis():
+    """True positive (đối chứng trực tiếp với test false-positive ở trên):
+    cùng kích thước cửa sổ, nhưng witness-line THẬT (dọc, giữ nguyên cột)
+    vẫn phải được detect — xác nhận việc lọc trôi dạt không làm mất tín hiệu
+    thật, chỉ loại tín hiệu chéo."""
+    from primitive_ir_lib.tick_mark_detection import _perpendicular_witness_at_point
+
+    gray = np.full((60, 80), 255, dtype=np.uint8)
+    dim_y = 40
+    gray[dim_y, :] = 0
+    gray[24:37, 30] = 0  # witness-line dọc thật, đứng yên tại x=30
+
+    found = _perpendicular_witness_at_point(gray, 30.0, float(dim_y), 0.0)
+    assert found is True
+
+
+def test_find_internal_boundary_offsets_ignores_diagonal_tick_marks_near_interior():
+    """False positive ở mức find_internal_boundary_offsets(): 1 line ngang
+    liền mạch có 2 tick-mark CHÉO 45° (kiểu Lớp 1) nằm gần 2 đầu mút thật
+    nhưng vẫn trong vùng quét nội bộ (ngoài endpoint_margin_px) — không được
+    coi là ranh giới nội bộ cần tách, vì đó không phải witness-line vuông
+    góc. Đây là fixture tương tự
+    test_tick_mark_blocks_merge_even_without_any_blocking_text nhưng chỉ
+    test riêng hàm tầng thấp, không qua merge_collinear_lines()."""
+    img = np.full((220, 500, 3), 255, dtype=np.uint8)
+    y = 140
+    cv2.line(img, (0, y), (450, y), (0, 0, 0), 2)  # 1 line liền mạch, không gap
+    # 2 tick-mark chéo 45° gần 2 đầu mút (bên trong phạm vi quét nội bộ)
+    cv2.line(img, (18, y + 8), (34, y - 8), (0, 0, 0), 2)
+    cv2.line(img, (416, y + 8), (432, y - 8), (0, 0, 0), 2)
+
+    line = _line((0, y), (450, y), "solo")
+    offsets = find_internal_boundary_offsets(img, line, endpoint_margin_px=8.0)
+    assert offsets == [], f"Không được tách nhầm tại tick-mark chéo, ra offsets={offsets}"
+
+    parts = split_raw_line_at_internal_witness_lines(line, img, endpoint_margin_px=8.0)
+    assert len(parts) == 1, "Không có witness-line vuông góc thật -> không được tách"

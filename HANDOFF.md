@@ -97,65 +97,81 @@ implement P1 trong "Phương án tổng thể".
   giới; không tách khi `image_bgr=None`; không tách ranh giới quá sát đầu
   mút). Tất cả pass độc lập (`pytest primitive_ir_lib/tests/test_tick_mark_detection.py`).
 
-### Đang làm dở — CHƯA xong, có hồi quy chưa xử lý
+### Hồi quy đã sửa (19/07/2026, nhánh `fix/tick-mark-witness-line-regression`)
 
-- **File đang sửa: `primitive_ir_lib/line_merging.py`**. Đã thêm tham số
-  `split_internal_tick_marks: bool = True` vào `merge_collinear_lines()` và
-  gọi `split_raw_line_at_tick_marks()` cho từng `RawLine` đầu vào TRƯỚC bước
-  union-find/gộp — nhưng việc wiring này **CHƯA hoàn tất và đang gây hồi
-  quy**:
+- **Nguyên nhân xác nhận bằng debug trực tiếp (không chỉ đoán từ log)**:
+  `_perpendicular_witness_at_point()` (dùng bởi `find_internal_boundary_offsets`/
+  `split_raw_line_at_tick_marks`, được gọi TRƯỚC union-find trong
+  `merge_collinear_lines` khi `split_internal_tick_marks=True`) chỉ hỏi "có
+  pixel tối trong cửa sổ ±col_half_px hay không" ở từng hàng quét dọc theo
+  pháp tuyến — KHÔNG lọc theo góc. Khi 1 tick-mark CHÉO ~45° (tín hiệu của
+  Lớp 1, `detect_tick_mark_at_point`) nằm gần điểm đang quét, nó vẫn tạo ra
+  1 chuỗi pixel tối liên tục hợp lệ theo tiêu chí cũ (chỉ khác là vị trí cột
+  "trôi dạt" dần qua từng hàng — đặc trưng hình học của 1 đường 45°) — bị
+  nhận nhầm thành witness-line vuông góc, khiến line trong test bị tách
+  thành 4 đoạn thay vì gộp đúng 2. Đã dựng lại chính xác bằng script debug
+  in ra offset cột (`j`) từng hàng, thấy rõ dãy `[2.5, 2.0, 1.5, 1.0, 0.0,
+  -1.0, -1.5, ...]` — trôi dạt tuyến tính đúng kiểu 45°, khác hẳn 1
+  witness-line vuông góc thật (offset gần như đứng yên 1 chỗ suốt chuỗi).
+
+- **Đã sửa**: `_perpendicular_witness_at_point()` giờ theo dõi biên độ
+  (min/max) offset cột TÍCH LUỸ của cả chuỗi đã chấp nhận — 1 hàng tối mới
+  chỉ được tính vào chuỗi nếu không làm biên độ đó vượt `max_offset_drift_px`
+  (mặc định 2px). Cố ý dùng biên độ CỘNG DỒN thay vì so từng hàng với 1 mốc
+  neo cố định: chỉ so-với-neo-cố-định vẫn lọt 1 ca thứ 2 (tick-mark nằm sâu
+  hơn trong line, không sát đầu mút) vì offset của nó dao động "qua lại"
+  quanh neo=0 (suy biến do độ dày dim-line lấp đầy cửa sổ ở hàng đầu) mà
+  từng bước riêng lẻ vẫn trong ngưỡng — phát hiện được nhờ viết thêm test
+  false-positive thứ 2 trước khi chốt fix.
+
+- **Đổi tên cho rõ nghĩa** (theo đúng gợi ý mục (c) ở bản cũ của mục này):
+  `split_internal_tick_marks` (cờ của `merge_collinear_lines`) →
+  `split_internal_witness_lines`; `split_raw_line_at_tick_marks()` →
+  `split_raw_line_at_internal_witness_lines()`. Từ nay "tick_mark" CHỈ dùng
+  cho tín hiệu chéo 45° của Lớp 1 (`detect_tick_mark_at_point`,
+  `use_tick_mark_detection`, `tick_mark_window_px`, `tick_mark_proximity_px`
+  — không đổi, vẫn dùng cho khoảng TRỐNG giữa 2 segment), "witness_line" CHỈ
+  dùng cho bước tách nội bộ vuông góc mới. Không đổi tên
+  `_perpendicular_witness_at_point`/`find_internal_boundary_offsets` (đã đủ
+  rõ nghĩa từ trước).
+
+- **Kết quả sau sửa**:
 
   ```
   pytest primitive_ir_lib/tests/ -q
-  → 1 failed, 42 passed
-  FAILED test_line_merging.py::test_tick_mark_blocks_merge_even_without_any_blocking_text
-    assert len(merged) == 2   (mong đợi 2 line)
-    → thực tế ra 4 line (['rawline-split-...'] x4)
+  → 46 passed (43 cũ + 3 test mới: 1 false-positive tick-mark-gần-đầu-mút,
+    1 true-positive đối chứng, 1 false-positive tick-mark-nằm-sâu-trong-line)
   ```
 
-  Nguyên nhân (chưa sửa, chỉ mới xác định qua log lỗi): test đó dựng 1 ảnh
-  tổng hợp có nét chéo tick-mark thật ở giữa 1 line dài — nhưng vì
-  `split_internal_tick_marks=True` mặc định BẬT và fixture của test đó có
-  witness-line/nét dọc mà `_perpendicular_witness_at_point` cũng bắt được
-  (không chỉ tick chéo 45° như test đó dự tính), line bị tách thành 4 mảnh
-  thay vì gộp lại đúng 2 theo kỳ vọng ban đầu của test. Cần xem lại: (a)
-  fixture của test cũ có vô tình chứa witness-line vuông góc không mong
-  muốn, hay (b) `split_raw_line_at_tick_marks` đang chạy quá nhạy trên
-  chính fixture đó, hay (c) thứ tự gọi Lớp 1 (chéo) / Lớp mới (vuông góc)
-  trong `merge_collinear_lines` cần tách bạch rõ hơn thay vì cùng một cờ
-  `split_internal_tick_marks`.
+  Không sửa assertion nào của test cũ để ép pass — chỉ sửa thuật toán dò +
+  đổi tên. `test_does_not_merge_across_dimension_chain_boundary` (ca thật
+  dim-chain 2760/1525, dùng text-anchor Lớp 2) vẫn PASS nguyên vẹn, xác
+  nhận chức năng tách boundary thật không bị ảnh hưởng.
 
-- **CHƯA chạy lại toàn bộ pipeline trên ảnh thật** sau khi wiring — tức là
-  P1 CHƯA được xác nhận đầu-cuối là sửa đúng bug gốc (dim-chain "2760"+
-  "1525" gộp nhầm) khi gọi qua `merge_collinear_lines()` đầy đủ (kèm
-  `blocking_texts` thật, `cross_validate()`, v.v.) — mới chỉ verify hàm
-  `split_raw_line_at_tick_marks()` đơn lẻ (không qua `merge_collinear_lines`).
-
-- Docstring đầu `line_merging.py` (mô tả "Lớp 1 tick-mark", "Lớp 2
-  text-anchor") CHƯA được cập nhật để nhắc tới bước split-nội-bộ mới này —
-  hiện chỉ có docstring của riêng tham số `split_internal_tick_marks` là
-  mới.
+- **CHƯA làm** (giữ nguyên từ trước, vẫn còn nợ): CHƯA chạy lại toàn bộ
+  `merge_collinear_lines()` (kèm `blocking_texts` thật từ OCR Tesseract,
+  `cross_validate()`) trên đúng ảnh `2026-07-18_101706.png` để xác nhận
+  pipeline đầu-cuối tách đúng ranh giới "2760"/"1525" thật — mới xác nhận
+  hết hồi quy trên fixture tổng hợp. Đây vẫn là việc ưu tiên #1 tiếp theo.
 
 ### Việc tiếp theo (theo thứ tự)
 
-1. **Sửa hồi quy** ở `test_tick_mark_blocks_merge_even_without_any_blocking_text`
-   trong `primitive_ir_lib/tests/test_line_merging.py` — debug xem fixture
-   của test đó có vô tình khớp điều kiện witness-line vuông góc hay không,
-   rồi quyết định: sửa fixture (nếu nó thật sự chứa cấu trúc vuông góc
-   ngoài ý muốn) hay sửa ngưỡng/logic trong
-   `_perpendicular_witness_at_point`/`find_internal_boundary_offsets`.
-2. Sau khi hết hồi quy, chạy lại **toàn bộ** `merge_collinear_lines()`
-   (không chỉ `split_raw_line_at_tick_marks()` đơn lẻ) trên ca thật
+1. Chạy lại **toàn bộ** `merge_collinear_lines()` (không chỉ
+   `split_raw_line_at_internal_witness_lines()` đơn lẻ) trên ca thật
    "2760"/"1525" của ảnh `2026-07-18_101706.png` để xác nhận pipeline đầu
    cuối tách đúng, có dùng `blocking_texts` thật (OCR Tesseract) song song.
-3. Cập nhật docstring đầu `line_merging.py` cho khớp thay đổi.
-4. Ghi lại benchmark 3 case (witness-line 1700 / dim-chain 2760-1525 /
+2. Ghi lại benchmark 3 case (witness-line 1700 / dim-chain 2760-1525 /
    outer 5500) thành file report riêng (kiểu
    `PHUONG_AN_BO_SUNG_LOP1_TICK_MARK.md`) — hiện chỉ tồn tại trong lịch sử
    hội thoại, chưa có trong repo.
-5. P2 (chưa bắt đầu): mở rộng `detect_tick_mark_at_point` cho tick chéo 45°
+3. P2 (chưa bắt đầu): mở rộng `detect_tick_mark_at_point` cho tick chéo 45°
    dùng `HoughLines` thay `HoughLinesP` để bắt witness-line ngắn tốt hơn —
    xuất phát từ 1 proof-of-concept trong phiên chat, chưa đưa vào code.
-6. P3 (chưa bắt đầu): tăng `text_block_lateral_px` mặc định từ 15px lên
+4. P3 (chưa bắt đầu): tăng `text_block_lateral_px` mặc định từ 15px lên
    25px trong `merge_collinear_lines()` — thay đổi nhỏ, rủi ro thấp, có
    thể làm độc lập bất kỳ lúc nào.
+5. `max_offset_drift_px=2` (mới, mục sửa hồi quy ở trên) mới hiệu chỉnh
+   thủ công trên fixture tổng hợp — CHƯA benchmark trên ảnh scan thật có
+   witness-line hơi nghiêng (không hoàn toàn vuông góc do ảnh bị xoay/méo
+   nhẹ khi scan); nếu sau này thấy witness-line thật bị bỏ sót, đây là nơi
+   cần xem lại đầu tiên.

@@ -16,12 +16,14 @@ FIX — 2 LỚP TÍN HIỆU ĐỘC LẬP VỚI GAP-DISTANCE (xem "Phương án t
 sau báo cáo 18/07/2026), xếp theo thứ tự ưu tiên:
 
   Lớp 1 (chính, mới thêm): tick-mark/arrowhead detection
-    (tick_mark_detection.py) — dò ký hiệu ranh giới (nét chéo ~45°/mũi tên)
-    ngay tại ảnh gốc, quanh 2 đầu mút của khoảng trống. Đây là tín hiệu đúng
-    bản chất CAD nhất vì KHÔNG phụ thuộc OCR đọc đúng/định vị đúng text —
-    chỉ cần truyền image_bgr vào merge_collinear_lines(). Nếu không truyền
-    image_bgr (hoặc không dò được nét chéo nào), lớp này coi như "không kết
-    luận được" và nhường cho Lớp 2, KHÔNG tự suy ra là "không có ranh giới".
+    (tick_mark_detection.py:detect_tick_mark_at_point) — dò ký hiệu ranh
+    giới CHÉO ~45°/mũi tên ngay tại ảnh gốc, quanh 2 đầu mút của khoảng
+    TRỐNG giữa 2 segment (use_tick_mark_detection, tick_mark_window_px,
+    tick_mark_proximity_px bên dưới). Đây là tín hiệu đúng bản chất CAD
+    nhất vì KHÔNG phụ thuộc OCR đọc đúng/định vị đúng text — chỉ cần truyền
+    image_bgr vào merge_collinear_lines(). Nếu không truyền image_bgr (hoặc
+    không dò được nét chéo nào), lớp này coi như "không kết luận được" và
+    nhường cho Lớp 2, KHÔNG tự suy ra là "không có ranh giới".
 
   Lớp 2 (dự phòng, giữ nguyên từ bản trước): text-anchor blocking — dùng vị
     trí các RawText đã đọc được (semantic_role = dimension_value) làm "neo".
@@ -33,6 +35,42 @@ sau báo cáo 18/07/2026), xếp theo thứ tự ưu tiên:
   hơn" của cross_validation.py). Cả 2 lớp đều không báo -> gộp theo
   gap_tol_px như cũ.
 
+BƯỚC TIỀN XỬ LÝ RIÊNG — split_internal_witness_lines (thêm 19/07/2026,
+KHÔNG phải Lớp 1/2 ở trên): trên ảnh thật, Hough thường tự "fuse" một
+dim-chain nhiều đoạn (vd "2760"+"1525" chung 1 dim-line) thành 1 RawLine
+LIÊN TỤC không hề có khoảng trống pixel nào ở ranh giới — khi đó Lớp 1/2 ở
+trên (chỉ kiểm tra khoảng TRỐNG giữa 2 segment) không bao giờ được gọi tới.
+Trước khi gộp, merge_collinear_lines() gọi
+tick_mark_detection.py:split_raw_line_at_internal_witness_lines() cho từng
+RawLine đầu vào để tách các line bị fuse kiểu này tại witness-line VUÔNG GÓC
+nằm giữa line (khác hẳn tick-mark CHÉO 45° của Lớp 1). Xem tham số
+split_internal_witness_lines bên dưới.
+
+  QUY ƯỚC ĐẶT TÊN (để tránh nhầm lẫn 2 khái niệm, xem hồi quy bên dưới):
+  "tick_mark" LUÔN chỉ tín hiệu CHÉO ~45°/mũi tên của Lớp 1
+  (detect_tick_mark_at_point, use_tick_mark_detection, tick_mark_window_px,
+  tick_mark_proximity_px) — dùng cho khoảng TRỐNG giữa 2 segment.
+  "witness_line" LUÔN chỉ tín hiệu VUÔNG GÓC của bước tiền xử lý
+  (split_internal_witness_lines,
+  split_raw_line_at_internal_witness_lines) — dùng để tách 1 RawLine liền
+  mạch tại ranh giới NẰM GIỮA line, trước khi union-find/gộp.
+
+  HỒI QUY ĐÃ SỬA (19/07/2026,
+  test_tick_mark_blocks_merge_even_without_any_blocking_text): cờ này lúc
+  đầu tên là `split_internal_tick_marks` — dùng chung chữ "tick_marks" cho
+  cả 2 khái niệm ở trên dù thuật toán bên trong
+  (_perpendicular_witness_at_point) không hề lọc theo góc, chỉ hỏi "có pixel
+  tối trong cửa sổ quét hay không". Khi 1 tick-mark chéo 45° của Lớp 1 nằm
+  sát đầu mút BÊN TRONG phạm vi quét nội bộ của 1 line (như trong fixture
+  test), nó cũng tạo ra 1 chuỗi pixel tối liên tục hợp lệ theo tiêu chí cũ,
+  khiến line bị tách nhầm thành 4 đoạn thay vì gộp đúng 2 theo ranh giới
+  thật. Đã sửa 2 việc: (1) `_perpendicular_witness_at_point` giờ theo dõi vị
+  trí cột (offset) của từng hàng tối và NGẮT chuỗi nếu offset trôi dạt quá
+  `max_offset_drift_px` — đúng đặc trưng hình học phân biệt 1 nét chéo (trôi
+  dạt ~1px/hàng) với 1 nét vuông góc thật (offset gần như cố định); (2) đổi
+  tên cờ/hàm liên quan cho khớp đúng phạm vi ("witness_line" thay vì
+  "tick_marks" chung chung) để tránh lặp lại nhầm lẫn tương tự sau này.
+
 LƯU Ý QUAN TRỌNG (trung thực về giới hạn):
   - Tick-mark detection (Lớp 1) mới tự-test bằng fixture tổng hợp vẽ bằng
     cv2 (tests/test_tick_mark_detection.py, tests/test_line_merging.py),
@@ -40,8 +78,15 @@ LƯU Ý QUAN TRỌNG (trung thực về giới hạn):
     docstring của tick_mark_detection.py (rủi ro dương tính giả từ hatch
     chéo dày đặc).
   - Text-anchor (Lớp 2) cũng mới chỉ tự-test bằng fixture tổng hợp.
+  - split_internal_witness_lines (bước tiền xử lý) đã benchmark trên 1 điểm
+    ranh giới thật (x=776, "2760"/"1525" của "TP-TL-A001/07/26") cho hàm
+    split_raw_line_at_internal_witness_lines() đơn lẻ — nhưng CHƯA chạy lại
+    toàn bộ merge_collinear_lines() (kèm blocking_texts thật, cross_validate,
+    v.v.) trên ảnh đó để xác nhận pipeline đầu-cuối; mới xác nhận hết hồi quy
+    trên fixture tổng hợp.
   - Cả 2 lớp CHƯA chạy lại trên đúng ảnh "TP-TL-A001/07/26" đã gây lỗi trong
-    báo cáo gốc. Cần xác nhận trên ảnh thật trước khi xem đây là fix đã chốt.
+    báo cáo gốc qua merge_collinear_lines() đầy đủ. Cần xác nhận trên ảnh
+    thật trước khi xem đây là fix đã chốt.
   - Vision API tier 3 (xác nhận thủ công khi cả 2 tín hiệu trên đều mơ hồ) và
     việc phân biệt mũi tên thật (2 nét chéo đối xứng) với 1 nét hatch chéo
     tình cờ VẪN CHƯA triển khai — để lại cho vòng sau.
@@ -56,7 +101,7 @@ import numpy as np
 
 from .geometry_extraction import RawLine
 from .models import new_id
-from .tick_mark_detection import detect_tick_mark_at_point, split_raw_line_at_tick_marks
+from .tick_mark_detection import detect_tick_mark_at_point, split_raw_line_at_internal_witness_lines
 
 try:  # RawText chỉ cần cho type hint / truy cập bbox_px, tránh phụ thuộc vòng
     from .text_extraction import RawText
@@ -113,7 +158,7 @@ def merge_collinear_lines(
     use_tick_mark_detection: bool = True,
     tick_mark_window_px: float = 20.0,
     tick_mark_proximity_px: float = 6.0,
-    split_internal_tick_marks: bool = True,
+    split_internal_witness_lines: bool = True,
 ) -> List[RawLine]:
     """Gộp các RawLine thẳng hàng, gần nhau thành 1 line liền mạch — trừ khi
     khoảng trống giữa chúng bị "chặn" bởi Lớp 1 (tick-mark/arrowhead dò trực
@@ -129,19 +174,31 @@ def merge_collinear_lines(
                                 so sánh/rollback riêng lớp này).
       tick_mark_window_px,
       tick_mark_proximity_px  — chuyển tiếp cho detect_tick_mark_at_point().
-      split_internal_tick_marks — TRƯỚC khi gộp, cắt các RawLine dài bị Hough
-                                tự fuse liền (không hề có khoảng trống pixel)
-                                tại các witness-line vuông góc NẰM GIỮA line
-                                — hiện tượng phát hiện khi benchmark trên ảnh
-                                thật "TP-TL-A001/07/26" (19/07/2026): dim-chain
-                                nhiều đoạn (vd "2760"+"1525" chung 1 dim-line)
-                                thường bị Hough fuse thành 1 RawLine LIÊN TỤC,
-                                khiến Lớp 1/2 phía dưới (vốn chỉ kiểm tra
-                                KHOẢNG TRỐNG giữa 2 segment) không bao giờ
-                                được gọi tới ở ranh giới đó. Cần image_bgr;
-                                bỏ qua (giữ nguyên raw_lines) nếu image_bgr=None.
-                                Xem tick_mark_detection.py:
-                                split_raw_line_at_tick_marks().
+      split_internal_witness_lines — TRƯỚC khi gộp, cắt các RawLine dài bị
+                                Hough tự fuse liền (không hề có khoảng trống
+                                pixel) tại các witness-line VUÔNG GÓC NẰM
+                                GIỮA line — hiện tượng phát hiện khi benchmark
+                                trên ảnh thật "TP-TL-A001/07/26" (19/07/2026):
+                                dim-chain nhiều đoạn (vd "2760"+"1525" chung 1
+                                dim-line) thường bị Hough fuse thành 1
+                                RawLine LIÊN TỤC, khiến Lớp 1/2 phía dưới
+                                (vốn chỉ kiểm tra KHOẢNG TRỐNG giữa 2 segment)
+                                không bao giờ được gọi tới ở ranh giới đó.
+                                Cần image_bgr; bỏ qua (giữ nguyên raw_lines)
+                                nếu image_bgr=None. LƯU Ý ĐẶT TÊN: cờ này CHỈ
+                                bắt witness-line vuông góc, KHÔNG bắt tick-mark
+                                chéo 45° (đó là use_tick_mark_detection ở
+                                trên, cho khoảng TRỐNG giữa 2 segment) — tên
+                                cũ (`split_internal_tick_marks`, trước
+                                19/07/2026) dùng chung chữ "tick_marks" cho cả
+                                2 khái niệm khác nhau và là nguồn gây hồi quy
+                                test_tick_mark_blocks_merge_even_without_any_blocking_text
+                                (line bị tách nhầm tại chính tick-mark chéo
+                                của Lớp 1 khi nó nằm sát đầu mút bên trong
+                                line) — đã đổi tên cho khớp đúng phạm vi, xem
+                                tick_mark_detection.py:
+                                split_raw_line_at_internal_witness_lines() và
+                                docstring _perpendicular_witness_at_point.
       angle_tol_deg          — 2 line được coi là cùng phương nếu lệch góc <= tol.
       perp_tol_px            — 2 line cùng phương chỉ được gộp nếu nằm trên cùng
                                 1 đường thẳng (khoảng cách vuông góc <= tol).
@@ -157,10 +214,10 @@ def merge_collinear_lines(
     Trả về danh sách RawLine mới (line đã gộp + line không đổi). Line đã gộp có
     id mới (tiền tố 'rawline-merged'), confidence = max của các line thành phần.
     """
-    if split_internal_tick_marks and image_bgr is not None:
+    if split_internal_witness_lines and image_bgr is not None:
         split_lines: List[RawLine] = []
         for line in raw_lines:
-            split_lines.extend(split_raw_line_at_tick_marks(line, image_bgr))
+            split_lines.extend(split_raw_line_at_internal_witness_lines(line, image_bgr))
         raw_lines = split_lines
 
     n = len(raw_lines)
