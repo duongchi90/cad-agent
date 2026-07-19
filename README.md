@@ -1,6 +1,13 @@
 # CAD Agent — Phase 1–5
 
 Xem `CAD-Agent-Kien-Truc-v1_3.md` cho toàn bộ bối cảnh/kiến trúc dự án.
+Các tài liệu benchmark/kế hoạch bổ sung nằm trong `docs/`:
+
+- `docs/benchmarks/layer1-tick-mark-real-image-benchmark.md` — benchmark Lớp 1
+  (tick-mark / witness-line detection) trên ảnh thật "TP-TL-A001/07/26": 3 ca
+  (witness-line 1700, dim-chain 2760/1525, outer 5500), kết quả mong đợi,
+  false-positive cần tránh và cách tái lập test.
+
 5 package trong repo này:
 
 - **`primitive_ir_lib/`** (Phase 1) — sinh Primitive IR từ ảnh scan/PDF:
