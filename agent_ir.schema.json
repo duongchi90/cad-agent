@@ -1,0 +1,205 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cad-agent.local/schemas/agent_ir.schema.json",
+  "title": "AgentIRDocument",
+  "description": "Tầng dữ liệu Phase 5 (Agent), nằm GIỮA Semantic IR (Phase 2) và DXF Builder (Phase 3) trong pipeline. Vai trò: ghi nhận các quyết định mà LLM Agent đưa ra cho từng case ambiguous/confidence thấp, giữ audit trail đầy đủ (prompt + response) để debug ngược. KHÔNG thay thế primitive_ir.schema.json hay semantic_ir.schema.json — AgentReport chỉ THAM CHIẾU (bằng id) tới primitive/part/constraint đã có, không sao chép lại geometry/text/part_type. Nguyên tắc cốt lõi (mục 7 tài liệu kiến trúc): 'Agent chỉ khuyên, caller quyết định apply hay không' — mọi action trong AgentReport không tự sửa IR, caller đọc report rồi apply từng action qua apply_agent_report().",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "timestamp", "task_count", "action_count", "skipped_count", "summary", "tasks", "actions", "skip_reasons"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "id ngẫu nhiên (uuid hex 8 ký tự, prefix 'report-') cho mỗi lần chạy Agent. Dùng để phân biệt nhiều AgentReport khác nhau khi log/audit."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Version của chính schema này, tách biệt khỏi schema_version của Primitive/Semantic IR."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Thời điểm tạo report (ISO 8601 UTC), do models.now_iso() sinh."
+    },
+    "task_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tổng số task đã tạo (= len(tasks))."
+    },
+    "action_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tổng số action đã tạo (= len(actions)), bao gồm cả no_action."
+    },
+    "skipped_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Số case/module bị skip (không có image, không có vision_reader, không có solve_result...). Chi tiết xem skip_reasons."
+    },
+    "summary": {
+      "type": "object",
+      "description": "Counter theo action_type — đếm số action mỗi loại. VD: {'override_text': 3, 'pick_conflict_winner': 2, 'drop_constraint': 1, 'no_action': 5}. Nhờ summary caller biết nhanh có bao nhiêu action thực sự thay đổi IR.",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "tasks": {
+      "type": "array",
+      "description": "Danh sách AgentTask — mỗi task = 1 case ambiguous cần Agent xử lý. Task được tạo khi phát hiện primitive text confidence thấp, part confidence thấp, cross-validation conflict, hoặc solver không converge.",
+      "items": {"$ref": "#/definitions/AgentTask"}
+    },
+    "actions": {
+      "type": "array",
+      "description": "Danh sách AgentAction — quyết định cho từng task. 1 task có thể có 0 hoặc 1 action (no_action nếu Agent quyết định không thay đổi, hoặc action override nếu có thay đổi).",
+      "items": {"$ref": "#/definitions/AgentAction"}
+    },
+    "skip_reasons": {
+      "type": "object",
+      "description": "Dict lý do skip: key = ref (vd 'text-rereader-no-vision'), value = mô tả tiếng Việt. Giúp debug vì sao module nào đó không chạy.",
+      "additionalProperties": {"type": "string"}
+    }
+  },
+  "definitions": {
+    "TaskType": {
+      "type": "string",
+      "enum": ["reclassify_part", "reread_text", "resolve_conflict", "advise_constraint"],
+      "description": "4 loại task Phase 5: (1) reclassify_part — Part Re-classifier dùng Vision để phân loại lại part_type; (2) reread_text — Text Re-reader đọc lại text confidence thấp; (3) resolve_conflict — Conflict Resolver quyết định text vs geometry; (4) advise_constraint — Constraint Advisor (rule-based, KHÔNG Vision) đề xuất drop constraint."
+    },
+    "AgentTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "task_type", "priority", "reason"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "id ngẫu nhiên (uuid hex 8 ký tự, prefix 'task-')."
+        },
+        "task_type": {"$ref": "#/definitions/TaskType"},
+        "primitive_id": {
+          "type": "string",
+          "description": "ref tới Primitive.id trong PrimitiveIRDocument — cho reread_text, resolve_conflict."
+        },
+        "part_id": {
+          "type": "string",
+          "description": "ref tới SemanticPart.id trong SemanticIRDocument — cho reclassify_part."
+        },
+        "constraint_id": {
+          "type": "string",
+          "description": "ref tới Constraint.id trong SemanticIRDocument — cho advise_constraint."
+        },
+        "cross_validation_id": {
+          "type": "string",
+          "description": "ref tới CrossValidation.id trong PrimitiveIRDocument.cross_validations — cho resolve_conflict."
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 = cao nhất, số lớn = ưu tiên thấp hơn. Phase 5 bước đầu chưa dùng priority để sort, để chỗ cho caller tự xếp nếu cần."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Lý do đẩy sang agent (vd 'confidence 0.55 < ngưỡng 0.7', 'delta 15% > ngưỡng 3%'). Lưu lại để debug tại sao task này tồn tại."
+        }
+      }
+    },
+    "ActionType": {
+      "type": "string",
+      "enum": [
+        "override_part_type", "override_text", "pick_conflict_winner",
+        "drop_constraint", "no_action"
+      ],
+      "description": "5 loại action: (1) override_part_type — đổi part_type của SemanticPart; (2) override_text — đổi content/parsed_value/semantic_role của Primitive text; (3) pick_conflict_winner — chọn text/geometry/new_value cho cross-validation conflict; (4) drop_constraint — Advisor khuyên bỏ constraint; (5) no_action — Agent quyết định không thay đổi (xác nhận gốc đúng, hoặc LLM trả response không hợp lệ)."
+    },
+    "ResolutionWinner": {
+      "type": "string",
+      "enum": ["text", "geometry", "new_value"],
+      "description": "Winner cho pick_conflict_winner: text = text value đúng; geometry = geometry đo đúng; new_value = cả 2 sai, value là giá trị đúng LLM đọc được."
+    },
+    "Evidence": {
+      "type": "object",
+      "description": "Audit trail cho mỗi action: prompt gửi LLM + response nhận được. Giúp debug khi Agent quyết định sai (xem 'tại sao override part_type này', 'prompt đã gửi gì, LLM đã trả gì'). None cho rule-based (Constraint Advisor không gọi LLM).",
+      "additionalProperties": false,
+      "required": ["prompt", "response", "timestamp"],
+      "properties": {
+        "prompt": {"type": "string"},
+        "response": {"type": "string"},
+        "model": {
+          "type": "string",
+          "description": "Tên model LLM (vd 'claude-sonnet-4-6'). None nếu rule-based."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "AgentAction": {
+      "type": "object",
+      "description": "Quyết định Agent đưa ra cho 1 task. Không tự apply — caller đọc action_type + values rồi gọi apply_agent_report() để ghi đè vào Primitive/Semantic IR. Field target_* được copy trực tiếp từ task (primitive_id/part_id/cross_validation_id) để apply không phụ thuộc matching task_id (mỗi module gán task_id nội bộ riêng).",
+      "additionalProperties": false,
+      "required": ["id", "task_id", "action_type", "confidence", "applied"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "id ngẫu nhiên (uuid hex 8 ký tự, prefix 'action-')."
+        },
+        "task_id": {
+          "type": "string",
+          "description": "ref ngược tới AgentTask.id."
+        },
+        "action_type": {"$ref": "#/definitions/ActionType"},
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Confidence của chính quyết định này. VD Vision trả 0.95 cho text reread; Advisor luôn 0.9 (tin tưởng drop dựa trên confidence có sẵn)."
+        },
+        "applied": {
+          "type": "boolean",
+          "default": false,
+          "description": "Caller set True khi đã apply vào IR. Tránh apply 2 lần (idempotent)."
+        },
+        "evidence": {"$ref": "#/definitions/Evidence"},
+        "target_primitive_id": {
+          "type": "string",
+          "description": "Primitive.id đích (cho override_text, pick_conflict_winner). Copy từ AgentTask.primitive_id để apply_agent_report không cần tra task."
+        },
+        "target_part_id": {
+          "type": "string",
+          "description": "SemanticPart.id đích (cho override_part_type). Copy từ AgentTask.part_id."
+        },
+        "target_cross_validation_id": {
+          "type": "string",
+          "description": "CrossValidation.id đích (cho pick_conflict_winner). Copy từ AgentTask.cross_validation_id."
+        },
+        "new_part_type": {
+          "type": "string",
+          "description": "Giá trị part_type mới cho override_part_type (thuộc enum PartType của semantic_ir.schema.json)."
+        },
+        "new_text_content": {
+          "type": "string",
+          "description": "Nội dung text mới cho override_text."
+        },
+        "new_parsed_value": {
+          "type": "number",
+          "description": "Giá trị số parse từ text mới (nếu text là số)."
+        },
+        "new_semantic_role": {
+          "type": "string",
+          "description": "Semantic role mới (dimension_value/drawing_code/general_note/unknown) cho override_text."
+        },
+        "conflict_winner": {"$ref": "#/definitions/ResolutionWinner"},
+        "conflict_new_value": {
+          "type": "number",
+          "description": "Giá trị mới nếu conflict_winner=new_value."
+        },
+        "dropped_constraint_id": {
+          "type": "string",
+          "description": "Constraint.id cần drop (cho drop_constraint)."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Ghi chú thêm (vd mô tả lý do override, context, fallback)."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cad-agent.local/schemas/semantic_ir.schema.json",
+  "title": "SemanticIRDocument",
+  "description": "Tầng dữ liệu Phase 2 (Pattern Recognition + Constraint Detection), nằm giữa Primitive IR (Phase 1) và Constraint Solving (SolveSpace). KHÔNG thay thế primitive_ir.schema.json — mọi part/constraint ở đây CHỈ tham chiếu (bằng id) tới primitives đã có trong 1 PrimitiveIRDocument, không sao chép lại geometry/text. Lý do (xem mục 10.1 CAD-Agent-Kien-Truc-v1_3.md): giữ Primitive IR deterministic/thuần hình học, tách bạch lỗi 'dịch thuật' (Reviewer #1) khỏi lỗi 'nhận thức' (Pattern Recognition, Reviewer #2). Semantic IR là nơi các lỗi nhận thức có thể xảy ra và cần review riêng.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "primitive_ir_ref", "parts", "constraints"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Version của chính schema này, tách biệt khỏi schema_version của Primitive IR."
+    },
+    "primitive_ir_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_name", "primitive_count"],
+      "description": "Tham chiếu ngược tới PrimitiveIRDocument nguồn — KHÔNG nhúng toàn bộ document đó vào đây (tránh 2 nguồn sự thật). primitive_count dùng để phát hiện lệch phiên bản (vd Primitive IR bị chạy lại/sửa sau khi Semantic IR đã build).",
+      "properties": {
+        "file_name": {"type": "string"},
+        "primitive_count": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string"}
+      }
+    },
+    "parts": {
+      "type": "array",
+      "description": "Danh sách 'linh kiện' ngữ nghĩa (thanh khung, lỗ bắt vít, tấm tôn...) được Pattern Recognition suy ra từ primitives thô. 1 part có thể gồm nhiều primitive (vd 1 thanh khung = 1 line); primitives cũng có thể KHÔNG thuộc part nào (chưa phân loại được -> để rule-based khác/Vision xử lý sau, KHÔNG ép gán bừa).",
+      "items": {"$ref": "#/definitions/SemanticPart"}
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Quan hệ hình học DETERMINISTIC giữa các primitive (song song/vuông góc/bằng nhau/trùng điểm đầu...) — input trực tiếp cho Constraint Solving (SolveSpace) ở bước sau. Đây là kết quả đo được bằng công thức hình học thuần, KHÔNG phải suy luận ngữ nghĩa (khác với parts[]) nên confidence thường cao/gần tuyệt đối, trừ khi nằm sát ngưỡng dung sai.",
+      "items": {"$ref": "#/definitions/Constraint"}
+    }
+  },
+  "definitions": {
+    "PartType": {
+      "type": "string",
+      "description": "Từ vựng domain khung xương/thùng xe cải tạo ô tô (mục 1, mục 4 tài liệu kiến trúc) — KHÔNG dùng từ vựng P&ID. 2 nhóm: (1) single-primitive parts ('thanh_*'/'lo_bat_vit'/'duong_vien_tron') suy TRỰC TIẾP từ hình học 1 primitive; (2) compound parts ('khung_chu_nhat'/'gia_do'/'ban_le'/'diem_noi') ghép nhiều primitive theo luật hình học thuần — tái dùng chính các constraint đã detect (parallel/perpendicular/coincident_endpoint), KHÔNG đoán bừa hình dạng phức hợp khi luật chưa thoả mãn rõ ràng (đúng nguyên tắc mục 10.1: rule-based trước, phần mơ hồ để Vision xử lý sau).",
+      "enum": [
+        "thanh_ngang", "thanh_doc", "thanh_xien",
+        "lo_bat_vit", "duong_vien_tron",
+        "khung_chu_nhat", "gia_do", "ban_le", "diem_noi",
+        "unclassified"
+      ]
+    },
+    "SemanticPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "part_type", "primitive_ids", "confidence", "source"],
+      "properties": {
+        "id": {"type": "string"},
+        "part_type": {"$ref": "#/definitions/PartType"},
+        "primitive_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"},
+          "description": "id của các Primitive (trong Primitive IR gốc) tạo nên part này. Single-primitive part (thanh_*/lo_bat_vit/duong_vien_tron): đúng 1 phần tử. Compound part (khung_chu_nhat/gia_do/ban_le/diem_noi): 2 phần tử trở lên, theo số primitive cấu thành linh kiện phức hợp."
+        },
+        "confidence": {
+          "type": "number", "minimum": 0.0, "maximum": 1.0,
+          "description": "Độ tin cậy phân loại RULE-BASED, KHÔNG phải confidence trích xuất hình học (đã có ở Primitive IR). vd 1 line dài/ngang rõ ràng -> confidence cao; 1 line gần góc 45° khó phân biệt ngang/xiên -> confidence thấp hơn, cần review."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["rule_geometry", "vision_assisted"],
+          "description": "rule_geometry: suy từ góc/độ dài/bán kính thuần (module pattern_recognition.py). vision_assisted: [CHƯA triển khai Phase 2 bước đầu] dành chỗ cho khi cần Vision xác nhận phần rule-based confidence thấp/mơ hồ, đúng nguyên tắc mục 7 tài liệu kiến trúc."
+        },
+        "geometry_summary": {"$ref": "#/definitions/GeometrySummary"},
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["unreviewed", "reviewer2_pass", "reviewer2_fail", "repaired"],
+              "default": "unreviewed"
+            },
+            "notes": {"type": "string"}
+          }
+        }
+      }
+    },
+    "GeometrySummary": {
+      "type": "object",
+      "description": "Tóm tắt hình học tiện dùng cho bước sau (Constraint Detection, DXF layer gán tự động...) — suy trực tiếp từ geometry của primitive gốc (đơn vị mm, đã calibrate), KHÔNG phải dữ liệu độc lập mới.",
+      "additionalProperties": false,
+      "properties": {
+        "length_mm": {"type": "number", "minimum": 0},
+        "orientation_deg": {
+          "type": "number", "minimum": 0, "exclusiveMaximum": 180,
+          "description": "Góc của line so với trục X, chuẩn hoá về [0,180) vì line không có hướng (0° và 180° là cùng 1 line)."
+        },
+        "radius_mm": {"type": "number", "minimum": 0}
+      }
+    },
+    "ConstraintType": {
+      "type": "string",
+      "enum": ["parallel", "perpendicular", "equal_length", "coincident_endpoint", "collinear"],
+      "description": "5 loại quan hệ hình học deterministic đo được trực tiếp giữa 2 line — đúng tập constraint cơ bản mà python-solvespace hỗ trợ solve (mục 3 tài liệu kiến trúc: 'parallel/perpendicular/tangent/equal-length'). tangent (line-circle) và coincident giữa circle chưa nằm trong bước đầu này."
+    },
+    "Constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "primitive_ids", "confidence", "tolerance"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"$ref": "#/definitions/ConstraintType"},
+        "primitive_ids": {
+          "type": "array",
+          "minItems": 2, "maxItems": 2,
+          "items": {"type": "string"},
+          "description": "Đúng 2 id primitive kiểu 'line' (Phase 2 bước đầu chỉ xét quan hệ line-line, chưa xét line-circle/circle-circle)."
+        },
+        "confidence": {
+          "type": "number", "minimum": 0.0, "maximum": 1.0,
+          "description": "1.0 trừ khi sai số đo được nằm sát ngưỡng tolerance (vd góc lệch 88° cho perpendicular với tolerance 5° -> gần biên, confidence hạ xuống thay vì cứng nhắc true/false)."
+        },
+        "tolerance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "angle_deg": {"type": "number", "minimum": 0},
+            "length_percent": {"type": "number", "minimum": 0},
+            "distance_mm": {"type": "number", "minimum": 0}
+          },
+          "description": "Ngưỡng dung sai ĐÃ DÙNG khi detect constraint này — lưu lại để Reviewer/debug biết vì sao constraint này được/không được tạo ra, không phải giá trị cấu hình toàn cục ẩn."
+        },
+        "measured": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "angle_diff_deg": {"type": "number"},
+            "length_diff_percent": {"type": "number"},
+            "endpoint_distance_mm": {"type": "number"}
+          },
+          "description": "Giá trị đo thực tế tương ứng với loại constraint (chỉ 1 trong 3 field áp dụng tuỳ 'type')."
+        }
+      }
+    }
+  }
+}

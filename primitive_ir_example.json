@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0.0",
+
+  "source_document": {
+    "file_name": "khung_thung_xe_don_gian_p1.png",
+    "page_index": 0,
+    "image_width_px": 1600,
+    "image_height_px": 900,
+    "sha256": "b7f2...redacted...9c1a"
+  },
+
+  "calibration": {
+    "unit": "mm",
+    "pixel_to_unit_scale": 2.0936,
+    "origin_px": [120, 780],
+    "method": "known_dimension_reference",
+    "reference_note": "Dùng kích thước 1700 ở view chính; witness-line đo được 812px -> 1700/812 = 2.0936 mm/px."
+  },
+
+  "primitives": [
+    {
+      "id": "prim-0001",
+      "type": "line",
+      "source": "geometry_opencv",
+      "confidence": 0.94,
+      "layer": "UNCLASSIFIED",
+      "handle": "2F",
+      "geometry": {
+        "start": { "x": 120.0, "y": 0.0 },
+        "end": { "x": 120.0, "y": 1700.0 }
+      },
+      "trace": {
+        "bbox_px": [118, 780, 122, 1592],
+        "extraction_tool": "opencv-canny-hough-v1",
+        "extracted_at": "2026-07-16T03:10:00Z"
+      },
+      "validation": { "status": "unreviewed" }
+    },
+    {
+      "id": "prim-0002",
+      "type": "line",
+      "source": "geometry_opencv",
+      "confidence": 0.91,
+      "layer": "UNCLASSIFIED",
+      "handle": "30",
+      "geometry": {
+        "start": { "x": 0.0, "y": 0.0 },
+        "end": { "x": 900.0, "y": 0.0 }
+      },
+      "trace": {
+        "bbox_px": [120, 780, 550, 782],
+        "extraction_tool": "opencv-canny-hough-v1",
+        "extracted_at": "2026-07-16T03:10:00Z"
+      },
+      "validation": { "status": "unreviewed" }
+    },
+    {
+      "id": "prim-0003",
+      "type": "circle",
+      "source": "geometry_opencv",
+      "confidence": 0.88,
+      "layer": "UNCLASSIFIED",
+      "handle": "31",
+      "geometry": {
+        "center": { "x": 450.0, "y": 300.0 },
+        "radius": 25.0
+      },
+      "trace": {
+        "bbox_px": [330, 636, 378, 684],
+        "extraction_tool": "opencv-canny-hough-v1",
+        "extracted_at": "2026-07-16T03:10:00Z"
+      },
+      "validation": { "status": "unreviewed" }
+    },
+    {
+      "id": "prim-0004",
+      "type": "text",
+      "source": "text_vision",
+      "confidence": 0.97,
+      "layer": "KICH-THUOC",
+      "handle": null,
+      "text_data": {
+        "content": "1700",
+        "position": { "x": 100.0, "y": 850.0 },
+        "rotation_deg": 90,
+        "height": 8.0,
+        "parsed_value": 1700,
+        "semantic_role": "dimension_value"
+      },
+      "trace": {
+        "bbox_px": [95, 790, 118, 1590],
+        "extraction_tool": "claude-vision",
+        "extracted_at": "2026-07-16T03:11:00Z"
+      },
+      "validation": { "status": "unreviewed" }
+    },
+    {
+      "id": "prim-0005",
+      "type": "text",
+      "source": "text_tesseract",
+      "confidence": 0.99,
+      "layer": "TEXT-TITLEBLOCK",
+      "handle": null,
+      "text_data": {
+        "content": "TP-TL-A001/07/26",
+        "position": { "x": 1400.0, "y": 20.0 },
+        "rotation_deg": 0,
+        "height": 5.0,
+        "parsed_value": null,
+        "semantic_role": "drawing_code"
+      },
+      "trace": {
+        "bbox_px": [1350, 860, 1590, 880],
+        "extraction_tool": "tesseract-5.3",
+        "extracted_at": "2026-07-16T03:11:30Z"
+      },
+      "validation": { "status": "unreviewed" }
+    }
+  ],
+
+  "cross_validations": [
+    {
+      "id": "cv-0001",
+      "text_primitive_id": "prim-0004",
+      "geometry_primitive_id": "prim-0001",
+      "text_value": 1700,
+      "geometry_measured_length": 1699.98,
+      "delta_percent": 0.0012,
+      "match_threshold_percent": 3,
+      "status": "confirmed"
+    }
+  ]
+}

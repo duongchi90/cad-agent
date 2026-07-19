@@ -1,0 +1,159 @@
+{
+  "id": "report-a659aaa7",
+  "schema_version": "1.0.0",
+  "timestamp": "2026-07-17T18:56:00Z",
+  "task_count": 6,
+  "action_count": 6,
+  "skipped_count": 1,
+  "summary": {
+    "no_action": 1,
+    "override_part_type": 1,
+    "pick_conflict_winner": 4
+  },
+  "tasks": [
+    {
+      "id": "task-bbcf0a4c",
+      "task_type": "reclassify_part",
+      "priority": 0,
+      "reason": "confidence=0.55 < 0.7",
+      "part_id": "part-c661dbb9"
+    },
+    {
+      "id": "task-3cf9154c",
+      "task_type": "reclassify_part",
+      "priority": 0,
+      "reason": "confidence=0.6 < 0.7",
+      "part_id": "part-5f148bb0"
+    },
+    {
+      "id": "task-aff92445",
+      "task_type": "resolve_conflict",
+      "priority": 0,
+      "reason": "conflict: text=4200.0 vs geometry=287.5 (delta=93.2%)",
+      "primitive_id": "rawtext-5a31705b",
+      "cross_validation_id": "cv-934be858"
+    },
+    {
+      "id": "task-2e0ce03a",
+      "task_type": "resolve_conflict",
+      "priority": 0,
+      "reason": "conflict: text=1900.0 vs geometry=807.5 (delta=57.5%)",
+      "primitive_id": "rawtext-14a0acbd",
+      "cross_validation_id": "cv-fe792760"
+    },
+    {
+      "id": "task-882faa80",
+      "task_type": "resolve_conflict",
+      "priority": 0,
+      "reason": "conflict: text=2100.0 vs geometry=287.5 (delta=86.3%)",
+      "primitive_id": "rawtext-3a549565",
+      "cross_validation_id": "cv-68bcc591"
+    },
+    {
+      "id": "task-5201737a",
+      "task_type": "resolve_conflict",
+      "priority": 0,
+      "reason": "conflict: text=4200.0 vs geometry=330.625 (delta=15.0%)",
+      "primitive_id": "rawtext-5a31705b",
+      "cross_validation_id": "cv-9f1a19a6"
+    }
+  ],
+  "actions": [
+    {
+      "id": "action-c3760ac9",
+      "task_id": "classify-part-c661dbb9",
+      "action_type": "no_action",
+      "confidence": 0.85,
+      "applied": false,
+      "evidence": {
+        "prompt": "Đây là crop từ bản vẽ kỹ thuật cải tạo ô tô tải (THACO). Phân loại thành phần cơ khí trong vùng crop này thành 1 trong các loại:\n - thanh_ngang: thanh dầm ngang (gần 0° hoặc 180° so với trục X)\n - tha",
+        "response": "{\"part_type\": \"thanh_ngang\", \"confidence\": 0.85}",
+        "timestamp": "2026-07-17T18:56:00Z"
+      },
+      "notes": "LLM xác nhận part_type=thanh_ngang"
+    },
+    {
+      "id": "action-d072db58",
+      "task_id": "classify-part-5f148bb0",
+      "action_type": "override_part_type",
+      "confidence": 0.85,
+      "applied": true,
+      "evidence": {
+        "prompt": "Đây là crop từ bản vẽ kỹ thuật cải tạo ô tô tải (THACO). Phân loại thành phần cơ khí trong vùng crop này thành 1 trong các loại:\n - thanh_ngang: thanh dầm ngang (gần 0° hoặc 180° so với trục X)\n - tha",
+        "response": "{\"part_type\": \"thanh_ngang\", \"confidence\": 0.85}",
+        "timestamp": "2026-07-17T18:56:00Z",
+        "model": "claude-sonnet-4-6"
+      },
+      "target_part_id": "part-5f148bb0",
+      "new_part_type": "thanh_ngang",
+      "notes": "override part part-5f148bb0: duong_vien_tron -> thanh_ngang (confidence gốc=0.6, LLM confidence=0.85, source: rule_geometry -> vision_assisted)"
+    },
+    {
+      "id": "action-ad901136",
+      "task_id": "resolve-cv-934be858",
+      "action_type": "pick_conflict_winner",
+      "confidence": 0.9,
+      "applied": true,
+      "evidence": {
+        "prompt": "Đây là crop từ bản vẽ kỹ thuật. Có 1 kích thước/biểu thị bị xung đột:\n - Giá trị đọc bởi OCR/Vision (text): 4200.0 mm\n - Giá trị đo bằng hình học (OpenCV): 287.5 mm\nChênh lệch: 93.2%\n\nHãy nhìn crop và",
+        "response": "{\"winner\": \"text\", \"value\": 1700, \"confidence\": 0.9}",
+        "timestamp": "2026-07-17T18:56:00Z"
+      },
+      "target_primitive_id": "rawtext-5a31705b",
+      "target_cross_validation_id": "cv-934be858",
+      "conflict_winner": "text",
+      "notes": "resolve conflict cv-934be858: winner=text (text=4200.0, geometry=287.5, delta=93.2%, LLM conf=0.9)"
+    },
+    {
+      "id": "action-9c4021b8",
+      "task_id": "resolve-cv-fe792760",
+      "action_type": "pick_conflict_winner",
+      "confidence": 0.9,
+      "applied": true,
+      "evidence": {
+        "prompt": "Đây là crop từ bản vẽ kỹ thuật. Có 1 kích thước/biểu thị bị xung đột:\n - Giá trị đọc bởi OCR/Vision (text): 1900.0 mm\n - Giá trị đo bằng hình học (OpenCV): 807.5 mm\nChênh lệch: 57.5%\n\nHãy nhìn crop và",
+        "response": "{\"winner\": \"text\", \"value\": 1700, \"confidence\": 0.9}",
+        "timestamp": "2026-07-17T18:56:00Z"
+      },
+      "target_primitive_id": "rawtext-14a0acbd",
+      "target_cross_validation_id": "cv-fe792760",
+      "conflict_winner": "text",
+      "notes": "resolve conflict cv-fe792760: winner=text (text=1900.0, geometry=807.5, delta=57.5%, LLM conf=0.9)"
+    },
+    {
+      "id": "action-68a0cfc6",
+      "task_id": "resolve-cv-68bcc591",
+      "action_type": "pick_conflict_winner",
+      "confidence": 0.9,
+      "applied": true,
+      "evidence": {
+        "prompt": "Đây là crop từ bản vẽ kỹ thuật. Có 1 kích thước/biểu thị bị xung đột:\n - Giá trị đọc bởi OCR/Vision (text): 2100.0 mm\n - Giá trị đo bằng hình học (OpenCV): 287.5 mm\nChênh lệch: 86.3%\n\nHãy nhìn crop và",
+        "response": "{\"winner\": \"text\", \"value\": 1700, \"confidence\": 0.9}",
+        "timestamp": "2026-07-17T18:56:00Z"
+      },
+      "target_primitive_id": "rawtext-3a549565",
+      "target_cross_validation_id": "cv-68bcc591",
+      "conflict_winner": "text",
+      "notes": "resolve conflict cv-68bcc591: winner=text (text=2100.0, geometry=287.5, delta=86.3%, LLM conf=0.9)"
+    },
+    {
+      "id": "action-678c6af3",
+      "task_id": "resolve-cv-9f1a19a6",
+      "action_type": "pick_conflict_winner",
+      "confidence": 0.9,
+      "applied": true,
+      "evidence": {
+        "prompt": "Đây là crop từ bản vẽ kỹ thuật. Có 1 kích thước/biểu thị bị xung đột:\n - Giá trị đọc bởi OCR/Vision (text): 4200.0 mm\n - Giá trị đo bằng hình học (OpenCV): 330.625 mm\nChênh lệch: 15.0%\n\nHãy nhìn crop ",
+        "response": "{\"winner\": \"text\", \"value\": 1700, \"confidence\": 0.9}",
+        "timestamp": "2026-07-17T18:56:00Z"
+      },
+      "target_primitive_id": "rawtext-5a31705b",
+      "target_cross_validation_id": "cv-9f1a19a6",
+      "conflict_winner": "text",
+      "notes": "resolve conflict cv-9f1a19a6: winner=text (text=4200.0, geometry=330.625, delta=15.0%, LLM conf=0.9)"
+    }
+  ],
+  "skip_reasons": {
+    "advisor-no-solve-result": "BỎ QUA: không có solve_result (có thể python-solvespace chưa cài hoặc chưa chạy constraint_solving)"
+  }
+}

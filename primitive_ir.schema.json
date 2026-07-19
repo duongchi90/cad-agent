@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cad-agent.local/schemas/primitive_ir.schema.json",
+  "title": "PrimitiveIRDocument",
+  "description": "Primitive Intermediate Representation cho pipeline Scan/PDF -> AutoCAD LT. Biểu diễn kết quả Geometry Extraction (OpenCV) + Text/Label Extraction (Tesseract/Vision) TRƯỚC khi qua Pattern Recognition/Constraint Solving. Mỗi entity mang theo nguồn trích xuất + confidence riêng để Reviewer #1 (headless) và Reviewer #2 (visual) có căn cứ số liệu để chấm điểm, không đoán mò.",
+  "type": "object",
+  "required": ["schema_version", "source_document", "calibration", "primitives"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Version của schema này, KHÔNG phải version của bản vẽ."
+    },
+
+    "source_document": {
+      "type": "object",
+      "description": "Thông tin về ảnh/scan gốc mà toàn bộ Primitive IR này được trích xuất ra.",
+      "required": ["file_name", "page_index", "image_width_px", "image_height_px"],
+      "additionalProperties": false,
+      "properties": {
+        "file_name": { "type": "string", "description": "Tên file scan/PDF gốc, vd. 'THACO_K165-CS_TK2_p2.png'." },
+        "page_index": { "type": "integer", "minimum": 0, "description": "Trang thứ mấy trong PDF gốc (0-based)." },
+        "image_width_px": { "type": "integer", "minimum": 1 },
+        "image_height_px": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "description": "Hash ảnh gốc, dùng để phát hiện re-run trên ảnh đã đổi." }
+      }
+    },
+
+    "calibration": {
+      "type": "object",
+      "description": "Quy đổi tọa độ pixel (ảnh) -> tọa độ bản vẽ (đơn vị CAD, thường là mm). Bắt buộc phải có vì mọi tọa độ x/y trong 'primitives' đều ở đơn vị CAD, KHÔNG phải pixel.",
+      "required": ["unit", "pixel_to_unit_scale", "origin_px", "method"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "type": "string", "enum": ["mm", "cm", "m"], "default": "mm" },
+        "pixel_to_unit_scale": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Hệ số nhân: 1 pixel = pixel_to_unit_scale đơn vị CAD. Suy ra từ 1 kích thước đã biết chắc chắn trên bản vẽ (vd. khoảng cách giữa 2 đường tâm đã ghi kích thước rõ) hoặc từ khung tỷ lệ title block."
+        },
+        "origin_px": {
+          "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
+          "description": "Tọa độ pixel [x, y] tương ứng với gốc (0,0) trong hệ tọa độ CAD."
+        },
+        "method": {
+          "type": "string",
+          "enum": ["known_dimension_reference", "title_block_scale", "manual_override"],
+          "description": "known_dimension_reference: đo bằng 1 kích thước đã biết trên bản vẽ (đáng tin nhất, không phụ thuộc metadata scan). title_block_scale: đọc tỷ lệ ghi trong title block (vd 1:20) + DPI ảnh. manual_override: người dùng nhập tay khi 2 cách trên không khả dụng."
+        },
+        "reference_note": { "type": "string", "description": "Ghi chú kích thước/đối tượng nào đã dùng để calibrate, vd. 'Dùng kích thước 1700 ở view chính, witness-line đo được 812px'." }
+      }
+    },
+
+    "primitives": {
+      "type": "array",
+      "description": "Danh sách entity hình học + text đã trích xuất, CHƯA qua Pattern Recognition (chưa biết cái nào là 'thanh khung', 'bản lề'...).",
+      "items": { "$ref": "#/definitions/Primitive" }
+    },
+
+    "cross_validations": {
+      "type": "array",
+      "description": "Danh sách đối chiếu chéo giữa 1 primitive dạng text (giá trị đọc bởi Vision/Tesseract, vd số kích thước '1700') và 1 primitive dạng geometry (witness-line/dimension-line đo bằng OpenCV). Đây là cơ chế thực thi nguyên tắc mục 7: không nguồn nào (Vision hay OpenCV) được quyết một mình.",
+      "items": { "$ref": "#/definitions/CrossValidation" }
+    }
+  },
+
+  "definitions": {
+
+    "Primitive": {
+      "type": "object",
+      "required": ["id", "type", "source", "confidence", "layer", "handle", "trace", "validation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "UUID nội bộ, ổn định trong suốt pipeline (khác với 'handle' là ID cấp bởi AutoCAD/ezdxf)." },
+
+        "type": {
+          "type": "string",
+          "enum": ["line", "circle", "arc", "text"],
+          "description": "line/circle/arc: geometry thuần từ OpenCV. text: nhãn/ghi chú/kích thước từ Tesseract hoặc Vision."
+        },
+
+        "source": {
+          "type": "string",
+          "enum": ["geometry_opencv", "text_tesseract", "text_vision"],
+          "description": "geometry_opencv: Canny+Hough đo hình học. text_tesseract: OCR rule-based, dùng cho title block/mã bản vẽ sạch (tier 1, mục 9.2). text_vision: VLM đọc trực tiếp crop, dùng cho ghi chú dài/số kích thước xoay/chữ nhỏ mà Tesseract thất bại (tier 3, mục 9.2)."
+        },
+
+        "confidence": {
+          "type": "number", "minimum": 0, "maximum": 1,
+          "description": "Độ tin cậy RIÊNG theo nguồn trích xuất, không so sánh chéo giữa 2 nguồn khác nhau bằng cùng 1 thang. geometry_opencv: dựa trên độ dài đoạn/số điểm Hough vote. text_tesseract: dựa trên OCR engine confidence gốc. text_vision: dựa trên model tự báo cáo (self-reported) HOẶC 1.0 nếu đã được cross_validations xác nhận khớp với geometry."
+        },
+
+        "layer": {
+          "type": "string",
+          "description": "Layer CAD đề xuất, vd. 'KHUNG-XUONG', 'KICH-THUOC', 'GHI-CHU', 'TEXT-TITLEBLOCK'. Do bước Pattern Recognition gán sau, để mặc định 'UNCLASSIFIED' nếu Primitive IR mới xuất ra từ Geometry/Text Extraction."
+        },
+
+        "handle": {
+          "type": ["string", "null"],
+          "description": "Entity handle CAD (vd '2F', '30'). NULL cho tới khi DXF Builder (ezdxf) build xong. Sau khi build, handle giữ nguyên 100% qua drawing_open theo test v1.2 mục 9.4 -> dùng làm khóa target trực tiếp cho Repair #2, KHÔNG cần fallback theo layer/tọa độ."
+        },
+
+        "geometry": {
+          "description": "Bắt buộc nếu type là line/circle/arc, KHÔNG có nếu type là text.",
+          "oneOf": [
+            { "$ref": "#/definitions/LineGeometry" },
+            { "$ref": "#/definitions/CircleGeometry" },
+            { "$ref": "#/definitions/ArcGeometry" }
+          ]
+        },
+
+        "text_data": {
+          "description": "Bắt buộc nếu type là text.",
+          "$ref": "#/definitions/TextData"
+        },
+
+        "trace": {
+          "type": "object",
+          "description": "Liên kết ngược về ảnh gốc để debug khi Reviewer báo lỗi ('tại sao Repair lại sửa entity này') mà không cần dò lại toàn bộ ảnh.",
+          "required": ["bbox_px"],
+          "additionalProperties": false,
+          "properties": {
+            "bbox_px": {
+              "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4,
+              "description": "[x_min, y_min, x_max, y_max] theo pixel ảnh gốc, vùng chứa entity/text này."
+            },
+            "extraction_tool": { "type": "string", "description": "vd. 'opencv-canny-hough-v1', 'tesseract-5.3', 'claude-vision'." },
+            "extracted_at": { "type": "string", "format": "date-time" }
+          }
+        },
+
+        "validation": {
+          "type": "object",
+          "description": "Trạng thái review, cập nhật dần qua các bước Reviewer #1 (headless, bắt lỗi dịch thuật) và Reviewer #2 (visual, bắt lỗi nhận thức) theo kiến trúc mục 2.",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["unreviewed", "reviewer1_pass", "reviewer1_fail", "reviewer2_pass", "reviewer2_fail", "repaired"],
+              "default": "unreviewed"
+            },
+            "notes": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "LineGeometry": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "$ref": "#/definitions/Point2D" },
+        "end": { "$ref": "#/definitions/Point2D" }
+      }
+    },
+
+    "CircleGeometry": {
+      "type": "object",
+      "required": ["center", "radius"],
+      "additionalProperties": false,
+      "properties": {
+        "center": { "$ref": "#/definitions/Point2D" },
+        "radius": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+
+    "ArcGeometry": {
+      "type": "object",
+      "required": ["center", "radius", "start_angle_deg", "end_angle_deg"],
+      "additionalProperties": false,
+      "properties": {
+        "center": { "$ref": "#/definitions/Point2D" },
+        "radius": { "type": "number", "exclusiveMinimum": 0 },
+        "start_angle_deg": { "type": "number" },
+        "end_angle_deg": { "type": "number" }
+      }
+    },
+
+    "Point2D": {
+      "type": "object",
+      "required": ["x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+
+    "TextData": {
+      "type": "object",
+      "required": ["content", "position", "rotation_deg", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "content": { "type": "string", "description": "Chuỗi văn bản đã đọc được, nguyên văn." },
+        "position": { "$ref": "#/definitions/Point2D", "description": "Điểm neo (insertion point) của text, đơn vị CAD." },
+        "rotation_deg": { "type": "number", "description": "Góc xoay text, vd 90 cho số kích thước xoay dọc (mục 9.2 tier 3)." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "description": "Chiều cao chữ, đơn vị CAD." },
+        "parsed_value": {
+          "type": ["number", "null"],
+          "description": "Nếu content là số kích thước (vd '1700'), parse sẵn ra number để cross_validations dùng trực tiếp, không phải parse string lại lần 2."
+        },
+        "semantic_role": {
+          "type": "string",
+          "enum": ["dimension_value", "title_block_field", "drawing_code", "general_note", "table_cell", "unknown"],
+          "default": "unknown",
+          "description": "Phân loại sơ bộ vai trò của text — hỗ trợ routing tới đúng bước xử lý sau (vd 'table_cell' cần bước tách ô theo lưới trước khi tin nội dung, xem mục 4/9.2)."
+        }
+      }
+    },
+
+    "CrossValidation": {
+      "type": "object",
+      "required": ["id", "text_primitive_id", "geometry_primitive_id", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "text_primitive_id": { "type": "string", "description": "id của Primitive type=text (nguồn: Vision hoặc Tesseract)." },
+        "geometry_primitive_id": { "type": "string", "description": "id của Primitive type=line (witness-line/dimension-line) dùng để đo độ dài thực." },
+        "text_value": { "type": "number", "description": "Giá trị số đọc được từ text_data.parsed_value." },
+        "geometry_measured_length": { "type": "number", "description": "Độ dài đo được từ geometry, đã nhân calibration.pixel_to_unit_scale, cùng đơn vị với calibration.unit." },
+        "delta_percent": { "type": "number", "description": "abs(text_value - geometry_measured_length) / text_value * 100." },
+        "match_threshold_percent": { "type": "number", "default": 3, "description": "Ngưỡng sai số chấp nhận được, mặc định 3%. Vượt ngưỡng -> status = 'conflict', đẩy sang Reviewer để người/AI xử lý, KHÔNG tự ý chọn nguồn nào." },
+        "status": {
+          "type": "string",
+          "enum": ["confirmed", "conflict", "unverified"],
+          "description": "confirmed: delta trong ngưỡng. conflict: vượt ngưỡng, cần Reviewer quyết định. unverified: chưa tìm được geometry tương ứng để đối chiếu (vd witness-line bị OpenCV bỏ sót)."
+        }
+      }
+    }
+  }
+}

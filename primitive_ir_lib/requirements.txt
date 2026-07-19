@@ -1,0 +1,8 @@
+opencv-python>=4.8
+numpy>=1.24
+pytesseract>=0.3.10
+pillow>=10.0
+
+# optional — chỉ cần nếu dùng vision_client.py (Claude Vision API thật)
+# pip install anthropic
+

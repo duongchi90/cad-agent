@@ -1,0 +1,109 @@
+# CAD Agent — Phase 1–5
+
+Xem `CAD-Agent-Kien-Truc-v1_3.md` cho toàn bộ bối cảnh/kiến trúc dự án.
+5 package trong repo này:
+
+- **`primitive_ir_lib/`** (Phase 1) — sinh Primitive IR từ ảnh scan/PDF:
+  Geometry Extraction (OpenCV Canny+Hough), Text Extraction (Tesseract +
+  Vision API thật, 3 tier), Cross-validation. Xem `primitive_ir_lib/README.md`.
+- **`semantic_ir_lib/`** (Phase 2) — sinh Semantic IR từ Primitive IR:
+  Pattern Recognition (primitive → linh kiện: thanh ngang/dọc/xiên, lỗ
+  bắt vít...) + Constraint Detection (song song/vuông góc/bằng nhau/trùng
+  điểm đầu/thẳng hàng) + Constraint Pruning (lọc constraint yếu/trùng/dư
+  thừa bắc cầu) + Constraint Solving (tích hợp `python-solvespace` THẬT,
+  "làm sạch" toạ độ line). Xem `semantic_ir_lib/README.md`.
+- **`dxf_builder_lib/`** (Phase 3) — DXF Builder (`ezdxf` THẬT,
+  build 1 lần từ Primitive IR + toạ độ đã solve + layer theo Semantic IR)
+  + Reviewer #1 headless (đọc lại DXF, so khớp tuyệt đối theo handle, bắt
+  lỗi dịch thuật của Builder) + Repair #1 headless (xoá/vẽ lại entity bị
+  lỗi, review lại để xác nhận). Xem `dxf_builder_lib/README.md`.
+- **`mcp_integration_lib/`** (Phase 4) — Reviewer #2 và Repair #2 qua
+  AutoCAD MCP. Reviewer xác minh handle/type/layer và geometry khi MCP hỗ trợ
+  `entity:get`; khi timeout, kiểm tra cấu trúc vẫn chạy và báo degraded rõ ràng.
+- **`agent_lib/`** (Phase 5) — xử lý các case mơ hồ/confidence thấp sau
+  Semantic IR: đọc lại text, phân loại lại part, giải quyết conflict
+  text–geometry bằng Vision và đề xuất bỏ constraint bằng rule-based.
+  Agent chỉ tạo `AgentReport` có audit trail; caller mới quyết định apply.
+
+## Cài đặt
+
+```bash
+pip install opencv-python numpy pytesseract pillow --break-system-packages
+# + cài binary tesseract-ocr của hệ điều hành (vd apt-get install tesseract-ocr tesseract-ocr-vie)
+
+# optional — chỉ cần nếu dùng Claude Vision API thật (primitive_ir_lib/vision_client.py)
+pip install anthropic --break-system-packages
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# optional — chỉ cần cho bước Constraint Solving (semantic_ir_lib/constraint_solving.py)
+pip install python-solvespace --break-system-packages
+
+# optional — chỉ cần cho bước DXF Builder/Reviewer #1 (dxf_builder_lib/)
+pip install ezdxf --break-system-packages
+```
+
+## Chạy demo pipeline (Phase 1–5)
+
+```bash
+python3 -m primitive_ir_lib.demo_pipeline            # -> demo_output/primitive_ir_demo_output.json
+python3 -m semantic_ir_lib.demo_pipeline             # đọc file trên -> Pattern Recognition -> Constraint
+                                                       # Detection -> Pruning -> Solving -> demo_output/semantic_ir_demo_output.json
+python3 -m dxf_builder_lib.demo_pipeline             # đọc 2 file trên -> DXF Builder -> Reviewer #1
+                                                       # -> demo_output/cad_agent_demo_output.dxf
+python3 -m agent_lib.demo_pipeline                    # Phase 1 -> 2 -> 5 -> 3 với Vision stub
+python3 -m mcp_integration_lib.demo_pipeline           # Phase 4: Reviewer #2 -> Repair #2 (Fake MCP)
+
+# hoặc dùng Claude Vision API thật cho Phase 1 thay vì mock:
+python3 -m primitive_ir_lib.demo_pipeline --real-vision
+python3 -m semantic_ir_lib.demo_pipeline
+python3 -m dxf_builder_lib.demo_pipeline
+python3 -m agent_lib.demo_pipeline
+python3 -m mcp_integration_lib.demo_pipeline
+```
+
+Nếu chưa cài `python-solvespace`/`ezdxf`, các bước Solving/Builder tự bỏ
+qua (in rõ lý do), không crash — phần còn lại của pipeline vẫn chạy đầy đủ.
+
+## Chạy toàn bộ test
+
+```bash
+python3 -m primitive_ir_lib.tests.test_basic            # 17 test
+python3 -m primitive_ir_lib.tests.test_vision_client     # 4 test
+python3 -m semantic_ir_lib.tests.test_semantic_ir        # 15 test
+python3 -m semantic_ir_lib.tests.test_constraint_pruning # 9 test (thuần logic, luôn chạy được)
+python3 -m semantic_ir_lib.tests.test_constraint_solving # 7 test (cần python-solvespace, tự SKIP nếu chưa cài)
+python3 -m dxf_builder_lib.tests.test_builder            # 5 test (1 luôn chạy được, 4 cần ezdxf, tự SKIP nếu chưa cài)
+python3 -m dxf_builder_lib.tests.test_reviewer           # 5 test (1 luôn chạy được, 4 cần ezdxf, tự SKIP nếu chưa cài)
+python3 -m dxf_builder_lib.tests.test_repair             # 5 test (1 luôn chạy được, 4 cần ezdxf, tự SKIP nếu chưa cài)
+python3 -m unittest discover -s mcp_integration_lib/tests -v # 4 test Phase 4
+python3 -m unittest discover -s agent_lib/tests -v        # 64 test Phase 5
+```
+
+57/57 test PASS (tính đến thời điểm cập nhật README này); 7 test trong
+`test_constraint_solving.py` cần `python-solvespace` và 12 test trong
+`dxf_builder_lib/tests/` cần `ezdxf` để chạy thật, tự SKIP (không fail)
+nếu chưa cài các package optional này.
+
+## Trạng thái
+
+- **Phase 1**: hoàn chỉnh về code (geometry/text/table extraction,
+  cross-validation, Vision API thật). Còn thiếu duy nhất: benchmark
+  `vision_client.py` với ảnh scan thật + API key thật.
+- **Phase 2**: Pattern Recognition + Constraint Detection + Constraint
+  Pruning + Constraint Solving (thật, `python-solvespace`) đã có code +
+  test. Còn thiếu: ghép linh kiện phức hợp nhiều primitive, constraint
+  line-circle/circle-circle, và benchmark ngưỡng góc/bán kính/confidence
+  trên ảnh scan thật. Xem mục 11.5 tài liệu kiến trúc cho danh sách việc
+  còn lại.
+- **Phase 3**: DXF Builder + Reviewer #1 + Repair #1 (cả 3 dùng `ezdxf`,
+  tự SKIP khi chưa cài) đã có code + test. Còn thiếu: Semantic API riêng
+  cho domain khung xương/thùng xe cải tạo, constraint arc, benchmark thật
+   khi có `ezdxf`. Xem mục 12 tài liệu kiến trúc.
+- **Phase 5**: hoàn chỉnh về code + 64 test: Text Re-reader, Part
+  Re-classifier, Conflict Resolver, Constraint Advisor, `AgentReport` schema,
+  apply có kiểm soát, demo và CLI chạy trên IR/ảnh thật. Vision thật là tuỳ
+  chọn (cần `anthropic` + `ANTHROPIC_API_KEY`); khi không có, các module Vision
+  skip an toàn còn advisor rule-based vẫn hoạt động.
+- **Phase 4**: hoàn chỉnh mô-đun tích hợp MCP với interface `LiveMCPClient`,
+  reviewer/repair theo handle, test Fake MCP và demo phục hồi lỗi. Để chạy với
+  AutoCAD thật, inject callback `call_tool` của MCP runtime vào `LiveMCPClient`.
