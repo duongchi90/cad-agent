@@ -56,12 +56,12 @@ implement P1 trong "Phương án tổng thể".
 
 - **Benchmark Lớp 1 trên ảnh thật**: phát hiện Lớp 1 (tick-mark chéo 45°,
   `detect_tick_mark_at_point`) không gây gộp nhầm trên ảnh thật, nhưng cũng
-  KHÔNG cải thiện được gì — vì bản vẽ "TP-TL-A001/07/26" dùng witness-line
+  KHÔNG cải thiện được gì—vì bản vẽ "TP-TL-A001/07/26" dùng witness-line
   DỌC (~90° với dim-line), không phải tick-mark chéo 45°. Chi tiết 3 case
-  test (witness-line 1700, dim-chain 2760/1525, outer dim-line 5500) nằm
-  trong lịch sử chat, chưa được ghi thành file riêng — **cần chép lại vào
-  một file benchmark report nếu muốn giữ lại lâu dài** (xem "Việc tiếp
-  theo" bên dưới, mục 4).
+  test (witness-line 1700, dim-chain 2760/1525, outer dim-line 5500) đã được
+  ghi lại đầy đủ trong báo cáo benchmark
+  [`docs/benchmarks/layer1-tick-mark-real-image-benchmark.md`](docs/benchmarks/layer1-tick-mark-real-image-benchmark.md)
+  (kết quả mong đợi, false-positive cần tránh x=673, và cách tái lập test).
 
 - **Xác định đúng vị trí ranh giới thật** giữa "2760" và "1525" trên ảnh
   thật: x≈776 (không phải x≈524 như nhận định sai ban đầu trong phiên —
@@ -149,10 +149,12 @@ implement P1 trong "Phương án tổng thể".
    "2760"/"1525" của ảnh `2026-07-18_101706.png` để xác nhận pipeline đầu
    cuối tách đúng, có dùng `blocking_texts` thật (OCR Tesseract) song song.
 3. Cập nhật docstring đầu `line_merging.py` cho khớp thay đổi.
-4. Ghi lại benchmark 3 case (witness-line 1700 / dim-chain 2760-1525 /
-   outer 5500) thành file report riêng (kiểu
-   `PHUONG_AN_BO_SUNG_LOP1_TICK_MARK.md`) — hiện chỉ tồn tại trong lịch sử
-   hội thoại, chưa có trong repo.
+4. ~~Ghi lại benchmark 3 case (witness-line 1700 / dim-chain 2760-1525 /
+   outer 5500) thành file report riêng~~ — **ĐÃ LÀM** (phiên docs/layer1-real-image-benchmark):
+   báo cáo đầy đủ ở
+   [`docs/benchmarks/layer1-tick-mark-real-image-benchmark.md`](docs/benchmarks/layer1-tick-mark-real-image-benchmark.md)
+   (kết quả mong đợi, false-positive x=673 cần tránh, ngưỡng tham số dùng,
+   và kịch bản tái lập test bằng ảnh thật + test tự động hoá offline).
 5. P2 (chưa bắt đầu): mở rộng `detect_tick_mark_at_point` cho tick chéo 45°
    dùng `HoughLines` thay `HoughLinesP` để bắt witness-line ngắn tốt hơn —
    xuất phát từ 1 proof-of-concept trong phiên chat, chưa đưa vào code.
