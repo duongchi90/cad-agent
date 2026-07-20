@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from primitive_ir_lib.models import (
     Calibration, LineGeometry, Point2D, Primitive, PrimitiveIRDocument,
     SourceDocument, Trace,
@@ -22,6 +24,11 @@ try:
     _HAS_SOLVESPACE = True
 except ImportError:
     _HAS_SOLVESPACE = False
+
+pytestmark = pytest.mark.skipif(
+    not _HAS_SOLVESPACE,
+    reason="python-solvespace is an optional dependency",
+)
 
 
 def _line(id_, x0, y0, x1, y1) -> Primitive:
