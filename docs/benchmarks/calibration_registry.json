@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "records": [
+    {
+      "id": "truck-2026-07-18",
+      "file_name": "2026-07-18_101706.png",
+      "sha256": "fcd7692977c4485372ce35b87a1528c5e4252fe462ad2ca3f597d52867c8ca70",
+      "scale_mm_per_px": 0.0917,
+      "evidence": "Verified against the 2760 mm / 1525 mm dimension-line benchmark; witness split boundary retained.",
+      "status": "verified"
+    }
+  ]
+}

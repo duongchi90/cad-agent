@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Human-reviewed geometry ground truth; do not mark annotated without visual verification.",
+  "completed": [
+    "truck-2026-07-18:dimension-split-2760-1525"
+  ],
+  "pending": [
+    {
+      "dataset": "pdf_benchmark_v2",
+      "document": "190-2011-kccba",
+      "page": 1
+    },
+    {
+      "dataset": "pdf_benchmark_v2",
+      "document": "bv-sa-lan",
+      "page": 1
+    },
+    {
+      "dataset": "pdf_benchmark_v2",
+      "document": "bv-sa-lan",
+      "page": 2
+    },
+    {
+      "dataset": "pdf_benchmark_v2",
+      "document": "bv-sa-lan",
+      "page": 3
+    },
+    {
+      "dataset": "pdf_benchmark_v2",
+      "document": "bv-sa-lan",
+      "page": 4
+    },
+    {
+      "dataset": "pdf_benchmark_v2",
+      "document": "bv-sa-lan",
+      "page": 5
+    },
+    {
+      "dataset": "pdf_benchmark_v2",
+      "document": "bv-sa-lan",
+      "page": 6
+    },
+    {
+      "dataset": "image_benchmark_v1",
+      "document": "truck",
+      "page": 1
+    },
+    {
+      "dataset": "image_benchmark_v1",
+      "document": "barge-side",
+      "page": 1
+    },
+    {
+      "dataset": "image_benchmark_v1",
+      "document": "barge-section",
+      "page": 1
+    },
+    {
+      "dataset": "image_benchmark_v1",
+      "document": "barge-structure",
+      "page": 1
+    },
+    {
+      "dataset": "image_benchmark_v1",
+      "document": "barge-equipment",
+      "page": 1
+    }
+  ]
+}

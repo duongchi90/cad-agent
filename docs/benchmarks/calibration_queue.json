@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "verified": [
+    "truck-2026-07-18"
+  ],
+  "pending_physical_reference": [
+    "barge-side",
+    "barge-section",
+    "barge-structure",
+    "barge-equipment",
+    "190-2011-kccba",
+    "bv-sa-lan"
+  ],
+  "rule": "Do not create CAD-scale IR or DXF until a physical dimension/reference is reviewed and recorded in calibration_registry.json."
+}

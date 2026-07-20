@@ -1,0 +1,11 @@
+# Runtime dependencies for the complete CAD Agent pipeline (Phases 1–5).
+-r primitive_ir_lib/requirements.txt
+
+# Phase 3 DXF builder and headless reviewer.
+ezdxf>=1.4
+
+# Optional integrations are intentionally not required:
+# anthropic          # real Vision API; requires ANTHROPIC_API_KEY
+# python-solvespace  # constraint solver; unavailable on some Python versions
+# Optional live OCR; SDK installs without calling the API.
+anthropic>=0.117

@@ -110,6 +110,21 @@ def test_ban_le_parallel_two_circles():
     print("OK   test_ban_le_parallel_two_circles")
 
 
+def test_ban_le_selects_circles_across_both_lines():
+    """Bản lề 4 lỗ vẫn phải chọn circle phủ cả hai thanh song song."""
+    h1 = _line("h1", 0, 0, 100, 0)
+    h2 = _line("h2", 0, 5, 100, 5)
+    c1 = _circle("c1", 0, 0, 4)
+    c2 = _circle("c2", 100, 0, 4)
+    c3 = _circle("c3", 0, 5, 4)
+    c4 = _circle("c4", 100, 5, 4)
+    parts = _detect_and_compound([h1, h2, c1, c2, c3, c4])
+    hinge = [p for p in parts if p.part_type == "ban_le"]
+    assert len(hinge) == 1, f"4 lỗ quanh hai thanh phải là ban_le, nhận {parts}"
+    assert {"h1", "h2"}.issubset(hinge[0].primitive_ids)
+    print("OK   test_ban_le_selects_circles_across_both_lines")
+
+
 def test_ban_le_negative_only_one_circle():
     h1 = _line("h1", 0, 0, 100, 0)
     h2 = _line("h2", 0, 5, 100, 5)
@@ -210,6 +225,10 @@ def test_integration_via_assemble():
     types = [p.part_type for p in doc.parts]
 
     assert "khung_chu_nhat" in types, f"integration: phải có khung, nhận {types}"
+    assert any(
+        p.part_type == "gia_do" and set(p.primitive_ids) == {"g1", "g2"}
+        for p in doc.parts
+    ), "integration: cặp g1/g2 độc lập phải được nhận diện là gia_do"
     assert "gia_do" in types, f"integration: phải có gia_do, nhận {types}"
     assert "ban_le" in types, f"integration: phải có ban_le, nhận {types}"
     assert "diem_noi" in types, f"integration: phải có diem_noi, nhận {types}"
@@ -225,6 +244,7 @@ _TESTS = [
     test_gia_do_perpendicular_coincident,
     test_gia_do_negative_parallel,
     test_ban_le_parallel_two_circles,
+    test_ban_le_selects_circles_across_both_lines,
     test_ban_le_negative_only_one_circle,
     test_ban_le_negative_circles_too_far,
     test_diem_noi_three_lines_at_origin,

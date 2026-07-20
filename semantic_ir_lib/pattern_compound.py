@@ -294,22 +294,34 @@ def _find_ban_le(
             if gap > parallel_gap_max_mm:
                 continue
 
-            # 2 circle gần endpoint của line (thường 1 đầu là trục, 1 đầu bắt vít).
-            # Tìm 2 circle khác nhau, mỗi cái gần 1 endpoint.
+            # Hai circle của bản lề phải neo gần nhất vào hai thanh khác nhau.
+            # Chọn circle gần nhất cho từng thanh trên toàn bộ danh sách, thay
+            # vì dừng ở hai endpoint đầu tiên (bản lề có thể có 4 lỗ).
             endpoints_la = [la.geometry.start, la.geometry.end]
             endpoints_lb = [lb.geometry.start, lb.geometry.end]
-            candidate_points = endpoints_la + endpoints_lb
+            nearest_circles: Dict[str, Tuple[float, str]] = {}
+            for cid in circle_ids:
+                circle = prim_by_id[cid]
+                if circle.geometry is None:
+                    continue
+                assert isinstance(circle.geometry, CircleGeometry)
+                center = circle.geometry.center
+                dist_a = min(math.hypot(center.x - pt.x, center.y - pt.y) for pt in endpoints_la)
+                dist_b = min(math.hypot(center.x - pt.x, center.y - pt.y) for pt in endpoints_lb)
+                if min(dist_a, dist_b) > bolt_hole_search_radius_mm:
+                    continue
+                if dist_a < dist_b:
+                    owner, distance = la_id, dist_a
+                elif dist_b < dist_a:
+                    owner, distance = lb_id, dist_b
+                else:
+                    continue  # circle cách đều hai thanh -> không đủ bằng chứng gắn kết
+                if owner not in nearest_circles or distance < nearest_circles[owner][0]:
+                    nearest_circles[owner] = (distance, cid)
 
-            found_circles: List[str] = []
-            for pt in candidate_points:
-                cid = _circle_near_point(prim_by_id, circle_ids, pt, bolt_hole_search_radius_mm)
-                if cid is not None and cid not in found_circles:
-                    found_circles.append(cid)
-                if len(found_circles) >= 2:
-                    break
-
-            if len(found_circles) < 2:
-                continue  # thiếu circle -> không đủ bằng kiện bản lề, KHÔNG đoán bừa
+            if set(nearest_circles) != {la_id, lb_id}:
+                continue  # thiếu circle riêng cho một trong hai thanh
+            found_circles = [nearest_circles[la_id][1], nearest_circles[lb_id][1]]
 
             prim_ids = [la_id, lb_id] + found_circles
             base_conf = _avg_confidence(parallel) if parallel else 0.5
