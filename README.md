@@ -49,6 +49,13 @@ pip install python-solvespace --break-system-packages
 pip install ezdxf --break-system-packages
 ```
 
+## Environment notes
+
+- Install all runtime dependencies with `pip install -r requirements.txt`.
+  This includes PyMuPDF (`fitz`) and pypdf, which are required for PDF input.
+- Copy `.env.example` to `.env` only for optional Claude Vision calls. Keep
+  `ANTHROPIC_API_KEY` out of Git; `.env` files are ignored by this repository.
+
 ## Chạy demo pipeline (Phase 1–5)
 
 ```bash
