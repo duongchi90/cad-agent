@@ -14,10 +14,13 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install Python dependencies
-        run: python -m pip install --upgrade pip; python -m pip install -r requirements.txt pytest python-solvespace
+        run: python -m pip install --upgrade pip; python -m pip install -r requirements.txt pytest python-solvespace ruff
       - name: Install Tesseract OCR
         run: choco install tesseract --no-progress -y
       - name: Run offline test suite
         run: |
           $env:PATH = 'C:\Program Files\Tesseract-OCR;' + $env:PATH
           python -m pytest primitive_ir_lib/tests semantic_ir_lib/tests dxf_builder_lib/tests mcp_integration_lib/tests agent_lib/tests -q
+      - name: Report unused imports
+        continue-on-error: true
+        run: python -m ruff check primitive_ir_lib semantic_ir_lib dxf_builder_lib mcp_integration_lib agent_lib --select F401
