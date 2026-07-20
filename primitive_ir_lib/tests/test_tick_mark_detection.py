@@ -241,6 +241,84 @@ def test_perpendicular_witness_true_positive_genuine_vertical_stays_on_axis():
     assert found is True
 
 
+# --------------------------------------------------------------------------
+# Regression 20/07/2026: benchmark mở rộng trên "TP-TL-A001/07/26" bằng
+# RawLine trích xuất THẬT qua Hough (không phải toạ độ tự dựng) phát hiện
+# min_run_px=8 (mặc định cũ) vẫn lọt sai ở witness-line "1700" (dọc, 1 đoạn)
+# và "5500" (ngang, 1 đoạn) — 1 nét hatch CHÉO THOẢI (không phải 45° dốc như
+# 2 test false-positive phía trên) đi gần dim-line, trong cửa sổ quét hẹp,
+# tình cờ giữ offset trôi dạt CHẬM đủ lâu (~9 hàng) để vượt qua min_run_px=8
+# cũ trước khi trôi ra khỏi max_offset_drift_px=2. Nét 45° dốc (2 test trên)
+# trôi dạt NHANH nên đã bị chặn từ trước ở cả 2 ngưỡng — đây là ca khác, dốc
+# thoải hơn, cần min_run_px cao hơn mới chặn được. Xem docstring
+# _perpendicular_witness_at_point mục "SỬA THÊM 20/07/2026" để biết chi tiết
+# gốc rễ + số liệu benchmark trên ảnh thật.
+# --------------------------------------------------------------------------
+
+def _shallow_diagonal_hatch_near_vertical_line_gray():
+    """Dựng gray 100x100 mô phỏng lại đúng cơ chế lỗi Case A/C 20/07/2026:
+    dim-line dọc liên tục (x=50) + 1 nét hatch chéo THOẢI (trôi dạt offset
+    0,0,1,1,1,2,2,2,2 qua 9 hàng liên tiếp k=1..9, rồi mất tín hiệu) đi gần
+    line tại y=40. Đây KHÔNG phải witness-line vuông góc thật (offset không
+    đứng yên 1 chỗ) nhưng đủ chậm để fool ngưỡng min_run_px=8 cũ."""
+    gray = np.full((100, 100), 255, dtype=np.uint8)
+    gray[10:90, 50] = 0  # dim-line dọc kiểu "1700", liên tục 1 đoạn
+    py_anchor = 40
+    drift_offsets = [0, 0, 1, 1, 1, 2, 2, 2, 2]  # k=1..9
+    for k, off in enumerate(drift_offsets, start=1):
+        gray[py_anchor + off, 50 - k] = 0
+    return gray
+
+
+def test_perpendicular_witness_regression_shallow_diagonal_drift_needs_min_run_px_12():
+    """Đơn vị: với ngưỡng cũ min_run_px=8, hatch chéo thoải (9 hàng liên tục
+    trong ngưỡng trôi dạt) bị báo nhầm True. Với min_run_px=12 (mặc định mới
+    từ 20/07/2026), cùng dữ liệu bị loại đúng -> False."""
+    from primitive_ir_lib.tick_mark_detection import _perpendicular_witness_at_point
+
+    gray = _shallow_diagonal_hatch_near_vertical_line_gray()
+    angle = math.pi / 2  # line dọc
+
+    found_old_threshold = _perpendicular_witness_at_point(
+        gray, 50.0, 40.0, angle, min_run_px=8)
+    assert found_old_threshold is True, (
+        "Fixture phải tái hiện đúng lỗi cũ (min_run_px=8 báo nhầm True) — "
+        "nếu assert này fail, fixture không còn mô phỏng đúng bug gốc nữa."
+    )
+
+    found_new_default = _perpendicular_witness_at_point(
+        gray, 50.0, 40.0, angle, min_run_px=12)
+    assert found_new_default is False, (
+        "min_run_px=12 phải loại được hatch chéo thoải này (fix 20/07/2026)"
+    )
+
+
+def test_find_internal_boundary_offsets_default_rejects_shallow_diagonal_hatch():
+    """Tích hợp: find_internal_boundary_offsets() với mặc định HIỆN TẠI
+    (min_run_px=12) không được tách nhầm dim-line dọc 1 đoạn (kiểu "1700")
+    chỉ vì có hatch chéo thoải gần đó. Đồng thời xác nhận rõ ràng: nếu ai đó
+    lỡ hạ min_run_px về 8 (giá trị cũ trước 20/07/2026), lỗi sẽ quay lại —
+    ghi thẳng vào test để hồi quy tương lai không âm thầm hạ ngưỡng này."""
+    gray = _shallow_diagonal_hatch_near_vertical_line_gray()
+    line = _line((50.0, 10.0), (50.0, 90.0), "1700-style")
+
+    offsets_default = find_internal_boundary_offsets(gray, line)
+    assert offsets_default == [], (
+        f"Mặc định hiện tại (min_run_px=12) phải giữ nguyên 1 đoạn, ra "
+        f"offsets={offsets_default}"
+    )
+
+    offsets_old_threshold = find_internal_boundary_offsets(gray, line, min_run_px=8)
+    assert offsets_old_threshold != [], (
+        "Ngưỡng cũ min_run_px=8 phải còn tái hiện được lỗi gốc trên chính "
+        "fixture này — nếu assert này fail, fixture đã bị đổi và không còn "
+        "chứng minh được vì sao cần fix 20/07/2026 nữa."
+    )
+
+    parts = split_raw_line_at_internal_witness_lines(line, gray)
+    assert len(parts) == 1, "Không có witness-line vuông góc thật -> không được tách"
+
+
 def test_find_internal_boundary_offsets_ignores_diagonal_tick_marks_near_interior():
     """False positive ở mức find_internal_boundary_offsets(): 1 line ngang
     liền mạch có 2 tick-mark CHÉO 45° (kiểu Lớp 1) nằm gần 2 đầu mút thật
