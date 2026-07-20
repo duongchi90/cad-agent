@@ -28,6 +28,9 @@ class LiveReviewResult:
 def _same(a: Any, b: Any, tolerance: float = 1e-6) -> bool:
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         return isclose(float(a), float(b), abs_tol=tolerance)
+    if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)) and {len(a), len(b)} == {2, 3}:
+        short, long = (a, b) if len(a) == 2 else (b, a)
+        return _same(short, long[:2], tolerance) and isclose(float(long[2]), 0.0, abs_tol=tolerance)
     if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)) and len(a) == len(b):
         return all(_same(x, y, tolerance) for x, y in zip(a, b))
     return a == b

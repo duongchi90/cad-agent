@@ -151,6 +151,9 @@ def build_dxf(
     solved_primitives = solved_primitives or {}
 
     doc = ezdxf.new(dxfversion=dxf_version)
+    # CAD-Agent produces geometry in millimetres. Declaring the unit prevents
+    # AutoCAD from applying an implicit conversion when it opens the DXF.
+    doc.header["$INSUNITS"] = 4  # millimetres
     msp = doc.modelspace()
 
     result = BuildResult(output_path=output_path)

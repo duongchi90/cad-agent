@@ -22,6 +22,7 @@ class MCPToolError(RuntimeError):
 
 class MCPClient(Protocol):
     def drawing_open(self, path: str) -> Dict[str, Any]: ...
+    def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]: ...
     def entity_create_line(self, x1: float, y1: float, x2: float, y2: float, layer: Optional[str] = None) -> Dict[str, Any]: ...
     def entity_create_circle(self, cx: float, cy: float, radius: float, layer: Optional[str] = None) -> Dict[str, Any]: ...
     def entity_create_arc(self, cx: float, cy: float, radius: float, start_angle: float, end_angle: float, layer: Optional[str] = None) -> Dict[str, Any]: ...
@@ -59,6 +60,9 @@ class FakeMCPClient:
         self.opened_path = path
         return {"ok": True, "payload": {"path": path, "entity_count": len(self._entities)}}
 
+    def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
+        return {name: None for name in names}
+
     def entity_list(self, layer: Optional[str] = None) -> List[Dict[str, Any]]:
         return [{"type": entity.dxftype, "handle": entity.handle, "layer": entity.layer}
                 for entity in self._entities.values() if layer is None or layer == entity.layer]
@@ -94,9 +98,15 @@ class FakeMCPClient:
 class FileIPCLiveMCPClient:
     """Minimal File IPC client for a loaded AutoLISP MCP dispatcher."""
     def __init__(self, ipc_dir: str = "C:/temp", trigger: Optional[Callable[[], None]] = None,
-                 timeout_s: float = 10.0, poll_interval_s: float = 0.1) -> None:
+                 timeout_s: float = 10.0, poll_interval_s: float = 0.1,
+                 raw_lisp_trigger: Optional[Callable[[str], None]] = None,
+                 bootstrap_lisp_path: Optional[str] = None,
+                 document_settle_s: float = 2.0) -> None:
         self._dir, self._trigger = Path(ipc_dir), trigger
         self._timeout, self._poll = timeout_s, poll_interval_s
+        self._raw_lisp_trigger = raw_lisp_trigger
+        self._bootstrap_lisp_path = bootstrap_lisp_path
+        self._document_settle_s = document_settle_s
 
     def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         request_id = uuid.uuid4().hex[:12]
@@ -126,7 +136,25 @@ class FileIPCLiveMCPClient:
         return self._dispatch("entity-list", {k: v for k, v in {"layer": layer}.items() if v is not None}).get("entities", [])
 
     def drawing_open(self, path: str) -> Dict[str, Any]:
+        if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
+            normalized_path = path.replace("\\", "/").replace('"', '\\"')
+            normalized_loader = self._bootstrap_lisp_path.replace("\\", "/").replace('"', '\\"')
+            # Opening another document replaces the document-scoped AutoLISP
+            # namespace. Invoke AutoCAD's COM API, then load the dispatcher in
+            # the newly active document before issuing another IPC command.
+            self._raw_lisp_trigger(
+                '(progn (vl-load-com) '
+                '(setq mcp-open-doc (vla-open (vla-get-Documents (vlax-get-acad-object)) "'
+                + normalized_path + '")) (vla-activate mcp-open-doc))'
+            )
+            time.sleep(self._document_settle_s)
+            self._raw_lisp_trigger('(load "' + normalized_loader + '")')
+            time.sleep(self._document_settle_s)
+            return {"path": path}
         return self._dispatch("drawing-open", {"path": path})
+
+    def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
+        return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})
 
     def entity_get(self, entity_id: str) -> Dict[str, Any]:
         return self._dispatch("entity-get", {"entity_id": entity_id})
@@ -147,9 +175,9 @@ class FileIPCLiveMCPClient:
         return self._dispatch("create-text", {k: v for k, v in {"x": x, "y": y, "text": text, "height": height, "rotation": rotation, "layer": layer}.items() if v is not None})
 
 
-def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:
-    """Return a trigger that invokes the loaded AutoLISP dispatcher."""
-    def trigger() -> None:
+def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
+    """Return a trigger that types a complete AutoLISP expression in AutoCAD."""
+    def trigger(expression: str) -> None:
         mdi_clients: List[int] = []
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def callback(child: int, _lparam: int) -> bool:
@@ -162,9 +190,15 @@ def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:
         ctypes.windll.user32.EnumChildWindows(hwnd, callback_type(callback), 0)
         target = mdi_clients[0] if mdi_clients else hwnd
         post = ctypes.windll.user32.PostMessageW
-        for ch in "\x1b\x1b(c:mcp-dispatch)\r":
+        for ch in "\x1b\x1b" + expression + "\r":
             post(target, 0x0102, ord(ch), 0)
     return trigger
+
+
+def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:
+    """Return a trigger that invokes the loaded AutoLISP dispatcher."""
+    raw_trigger = make_windows_lisp_trigger(hwnd)
+    return lambda: raw_trigger("(c:mcp-dispatch)")
 
 
 CallTool = Callable[[str, str, Dict[str, Any]], Dict[str, Any]]
@@ -185,6 +219,7 @@ class LiveMCPClient:
         return result
 
     def drawing_open(self, path: str): return self._invoke("drawing", "open", data={"path": path})
+    def drawing_get_variables(self, names): return self._invoke("drawing", "get_variables", data={"names": names})["payload"]
     def entity_create_line(self, x1, y1, x2, y2, layer=None): return self._invoke("entity", "create_line", x1=x1, y1=y1, x2=x2, y2=y2, layer=layer)["payload"]
     def entity_create_circle(self, cx, cy, radius, layer=None): return self._invoke("entity", "create_circle", data={"cx": cx, "cy": cy, "radius": radius}, layer=layer)["payload"]
     def entity_create_arc(self, cx, cy, radius, start_angle, end_angle, layer=None): return self._invoke("entity", "create_arc", data={"cx": cx, "cy": cy, "radius": radius, "start_angle": start_angle, "end_angle": end_angle}, layer=layer)["payload"]

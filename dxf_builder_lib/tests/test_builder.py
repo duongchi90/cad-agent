@@ -100,6 +100,9 @@ def test_build_line_circle_text_assigns_handles_and_writes_file():
         assert l1.handle is not None and l1.handle != ""
         # mỗi handle phải khác nhau
         assert len(set(result.handle_by_primitive_id.values())) == 3
+
+        reopened = ezdxf.readfile(out_path)
+        assert reopened.header["$INSUNITS"] == 4
     print("OK   test_build_line_circle_text_assigns_handles_and_writes_file")
 
 

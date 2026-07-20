@@ -7,6 +7,7 @@ from dxf_builder_lib.builder import BuildResult
 from mcp_integration_lib.mcp_client import FakeMCPClient, FileIPCLiveMCPClient, MCPToolError, MCPTimeoutError
 from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import review_dxf_live
+from mcp_integration_lib.reviewer2 import _same
 
 
 def _pair(kind="line", entity_get=False):
@@ -22,6 +23,8 @@ def _pair(kind="line", entity_get=False):
 
 
 class Phase4Tests(unittest.TestCase):
+    def test_geometry_comparison_accepts_autocad_z_zero(self):
+        self.assertTrue(_same((10.0, 0.0), (10.0, 0.0, 0.0)))
     def test_structural_review_passes_when_entity_get_times_out(self):
         build, client = _pair()
         result = review_dxf_live(build, client)
@@ -56,6 +59,36 @@ class FileIPCClientTests(unittest.TestCase):
                 self.assertEqual((command["command"], command["params"]), ("drawing-open", {"path": "a.dxf"}))
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {"path": "a.dxf"}}))
             self.assertEqual(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_open("a.dxf"), {"path": "a.dxf"})
+
+    def test_maps_drawing_get_variables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual(
+                    (command["command"], command["params"]),
+                    ("drawing-get-variables", {"names_str": "DWGNAME;INSUNITS"}),
+                )
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps({"request_id": command["request_id"], "ok": True,
+                                "payload": {"DWGNAME": "a.dxf", "INSUNITS": 4}}))
+            client = FileIPCLiveMCPClient(tmp, trigger, .1, .001)
+            self.assertEqual(client.drawing_get_variables(["DWGNAME", "INSUNITS"]),
+                             {"DWGNAME": "a.dxf", "INSUNITS": 4})
+
+    def test_uses_raw_lisp_bootstrap_to_open_a_new_document(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            trigger=lambda: None,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            document_settle_s=0,
+        )
+        client.drawing_open("C:/work/a.dxf")
+        self.assertEqual(2, len(raw_commands))
+        self.assertIn('vla-open', raw_commands[0])
+        self.assertIn('C:/work/a.dxf', raw_commands[0])
+        self.assertEqual('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
 
     def test_raises_timeout_without_result(self):
         with tempfile.TemporaryDirectory() as tmp:

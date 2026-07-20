@@ -28,6 +28,27 @@ Phase 4 đã được tích hợp với Phase 5. Chạy `python -m unittest disc
 mcp_integration_lib/tests -v` để kiểm tra Reviewer #2/Repair #2; muốn nối
 AutoCAD MCP thật, cung cấp callback runtime cho `LiveMCPClient`.
 
+### Bổ sung Phase 4 — File IPC AutoCAD thật (20/07/2026)
+
+`FileIPCLiveMCPClient` giờ có thể dùng AutoCAD File IPC trực tiếp, bao gồm
+trường hợp mở DXF mới làm mất AutoLISP dispatcher theo document. Khi cung cấp
+`raw_lisp_trigger` và `bootstrap_lisp_path`, client mở document qua AutoCAD
+COM rồi tự nạp lại `mcp_dispatch.lsp` trong document mới. DXF Builder cũng
+ghi `$INSUNITS=4` (mm), tránh AutoCAD tự scale sai đơn vị.
+
+Smoke test opt-in kiểm chứng trên AutoCAD thật toàn bộ chuỗi `build_dxf` →
+review → cố tình thay sai geometry → Repair #2 → review:
+
+```powershell
+$env:CAD_AGENT_FILE_IPC='1'
+$env:CAD_AGENT_AUTOCAD_HWND='395092' # thay bằng hwnd AutoCAD đang chạy
+$env:CAD_AGENT_AUTOCAD_LISP_PATH='C:/.../mcp_dispatch.lsp'
+python -m unittest mcp_integration_lib.tests.test_file_ipc_e2e -v
+```
+
+Test này chỉ chạy khi đặt `CAD_AGENT_FILE_IPC=1`; AutoCAD sẽ giữ DXF smoke
+đang active nên file tạm dưới `C:/temp` được để hệ điều hành dọn sau.
+
 ## Kiểm tra môi trường
 
 Các test khi chạy bằng Python mặc định 3.7 dừng ở lỗi `typing.Literal` trong `primitive_ir_lib.models` (Literal thuộc Python 3.8+). Dùng Python 3.8+ (khuyến nghị 3.10+) và cài dependencies trước khi chạy.
