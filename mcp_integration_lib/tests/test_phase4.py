@@ -76,6 +76,30 @@ class FileIPCClientTests(unittest.TestCase):
             self.assertEqual(client.drawing_get_variables(["DWGNAME", "INSUNITS"]),
                              {"DWGNAME": "a.dxf", "INSUNITS": 4})
 
+    def test_maps_block_attributes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual((command["command"], command["params"]),
+                                 ("block-get-attributes", {"entity_id": "10"}))
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps({"request_id": command["request_id"], "ok": True,
+                                "payload": {"attributes": {"PART_ID": "beam-1"}}}))
+            self.assertEqual(FileIPCLiveMCPClient(tmp, trigger, .1, .001).block_get_attributes("10"),
+                             {"PART_ID": "beam-1"})
+
+    def test_maps_block_attribute_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual((command["command"], command["params"]),
+                                 ("block-update-attribute", {"entity_id": "10", "tag": "PART_ID", "value": "wrong"}))
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps({"request_id": command["request_id"], "ok": True, "payload": {}}))
+            self.assertIsNone(FileIPCLiveMCPClient(tmp, trigger, .1, .001).block_update_attribute("10", "PART_ID", "wrong"))
+
     def test_uses_raw_lisp_bootstrap_to_open_a_new_document(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(

@@ -23,6 +23,8 @@ class MCPToolError(RuntimeError):
 class MCPClient(Protocol):
     def drawing_open(self, path: str) -> Dict[str, Any]: ...
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]: ...
+    def block_get_attributes(self, entity_id: str) -> Dict[str, str]: ...
+    def block_update_attribute(self, entity_id: str, tag: str, value: str) -> None: ...
     def entity_create_line(self, x1: float, y1: float, x2: float, y2: float, layer: Optional[str] = None) -> Dict[str, Any]: ...
     def entity_create_circle(self, cx: float, cy: float, radius: float, layer: Optional[str] = None) -> Dict[str, Any]: ...
     def entity_create_arc(self, cx: float, cy: float, radius: float, start_angle: float, end_angle: float, layer: Optional[str] = None) -> Dict[str, Any]: ...
@@ -62,6 +64,16 @@ class FakeMCPClient:
 
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return {name: None for name in names}
+
+    def block_get_attributes(self, entity_id: str) -> Dict[str, str]:
+        entity = self._entities.get(entity_id)
+        return dict(entity.geom.get("attributes", {})) if entity is not None else {}
+
+    def block_update_attribute(self, entity_id: str, tag: str, value: str) -> None:
+        entity = self._entities.get(entity_id)
+        if entity is None:
+            raise MCPToolError(f"entity {entity_id!r} does not exist")
+        entity.geom.setdefault("attributes", {})[tag] = value
 
     def entity_list(self, layer: Optional[str] = None) -> List[Dict[str, Any]]:
         return [{"type": entity.dxftype, "handle": entity.handle, "layer": entity.layer}
@@ -156,6 +168,12 @@ class FileIPCLiveMCPClient:
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})
 
+    def block_get_attributes(self, entity_id: str) -> Dict[str, str]:
+        return self._dispatch("block-get-attributes", {"entity_id": entity_id}).get("attributes", {})
+
+    def block_update_attribute(self, entity_id: str, tag: str, value: str) -> None:
+        self._dispatch("block-update-attribute", {"entity_id": entity_id, "tag": tag, "value": value})
+
     def entity_get(self, entity_id: str) -> Dict[str, Any]:
         return self._dispatch("entity-get", {"entity_id": entity_id})
 
@@ -220,6 +238,8 @@ class LiveMCPClient:
 
     def drawing_open(self, path: str): return self._invoke("drawing", "open", data={"path": path})
     def drawing_get_variables(self, names): return self._invoke("drawing", "get_variables", data={"names": names})["payload"]
+    def block_get_attributes(self, entity_id): return self._invoke("block", "get_attributes", entity_id=entity_id)["payload"].get("attributes", {})
+    def block_update_attribute(self, entity_id, tag, value): self._invoke("block", "update_attribute", entity_id=entity_id, tag=tag, value=value)
     def entity_create_line(self, x1, y1, x2, y2, layer=None): return self._invoke("entity", "create_line", x1=x1, y1=y1, x2=x2, y2=y2, layer=layer)["payload"]
     def entity_create_circle(self, cx, cy, radius, layer=None): return self._invoke("entity", "create_circle", data={"cx": cx, "cy": cy, "radius": radius}, layer=layer)["payload"]
     def entity_create_arc(self, cx, cy, radius, start_angle, end_angle, layer=None): return self._invoke("entity", "create_arc", data={"cx": cx, "cy": cy, "radius": radius, "start_angle": start_angle, "end_angle": end_angle}, layer=layer)["payload"]
