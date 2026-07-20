@@ -1,7 +1,10 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.mcp_client import FakeMCPClient
+from mcp_integration_lib.mcp_client import FakeMCPClient, FileIPCLiveMCPClient, MCPToolError, MCPTimeoutError
 from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import review_dxf_live
 
@@ -42,3 +45,39 @@ class Phase4Tests(unittest.TestCase):
         build, client = _pair("arc")
         client._entities["10"].layer = "BAD"
         self.assertEqual(repair_dxf_live(build, review_dxf_live(build, client).mismatches, client).repaired_count, 1)
+
+
+class FileIPCClientTests(unittest.TestCase):
+    def test_maps_drawing_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual((command["command"], command["params"]), ("drawing-open", {"path": "a.dxf"}))
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {"path": "a.dxf"}}))
+            self.assertEqual(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_open("a.dxf"), {"path": "a.dxf"})
+
+    def test_raises_timeout_without_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(MCPTimeoutError):
+                FileIPCLiveMCPClient(tmp, lambda: None, .01, .001).entity_list()
+
+    def test_raises_tool_error_from_dispatcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": False, "error": "missing"}))
+            with self.assertRaises(MCPToolError):
+                FileIPCLiveMCPClient(tmp, trigger, .1, .001).entity_get("10")
+    def test_maps_entity_list_to_dispatcher_response(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual(command["command"], "entity-list")
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps({"request_id": command["request_id"], "ok": True,
+                                "payload": {"entities": [{"handle": "10", "type": "LINE", "layer": "0"}]}}))
+            client = FileIPCLiveMCPClient(ipc_dir=tmp, trigger=trigger, timeout_s=0.1, poll_interval_s=0.001)
+            self.assertEqual(client.entity_list(), [{"handle": "10", "type": "LINE", "layer": "0"}])

@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import base64
+import json
+import ctypes
+from ctypes import wintypes
 import time
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 
@@ -84,6 +89,82 @@ class FakeMCPClient:
         return self._create("TEXT", layer, {"insert": (x, y), "content": text, "height": height, "rotation_deg": rotation})
     def tamper(self, handle: str, **overrides: Any) -> None:
         self._entities[handle].geom.update(overrides)
+
+
+class FileIPCLiveMCPClient:
+    """Minimal File IPC client for a loaded AutoLISP MCP dispatcher."""
+    def __init__(self, ipc_dir: str = "C:/temp", trigger: Optional[Callable[[], None]] = None,
+                 timeout_s: float = 10.0, poll_interval_s: float = 0.1) -> None:
+        self._dir, self._trigger = Path(ipc_dir), trigger
+        self._timeout, self._poll = timeout_s, poll_interval_s
+
+    def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        request_id = uuid.uuid4().hex[:12]
+        cmd = self._dir / f"autocad_mcp_cmd_{request_id}.json"
+        result = self._dir / f"autocad_mcp_result_{request_id}.json"
+        self._dir.mkdir(parents=True, exist_ok=True)
+        try:
+            cmd.write_text(json.dumps({"request_id": request_id, "command": command, "params": params}), encoding="utf-8")
+            if self._trigger is None:
+                raise MCPToolError("File IPC requires an AutoCAD dispatcher trigger")
+            self._trigger()
+            deadline = time.time() + self._timeout
+            while time.time() < deadline:
+                if result.exists():
+                    data = json.loads(result.read_text(encoding="utf-8"))
+                    if data.get("request_id") == request_id:
+                        if not data.get("ok", False):
+                            raise MCPToolError(str(data.get("error", "unknown MCP tool error")))
+                        return data.get("payload", {})
+                time.sleep(self._poll)
+            raise MCPTimeoutError(f"Timeout waiting for result (request_id={request_id})")
+        finally:
+            cmd.unlink(missing_ok=True)
+            result.unlink(missing_ok=True)
+
+    def entity_list(self, layer: Optional[str] = None) -> List[Dict[str, Any]]:
+        return self._dispatch("entity-list", {k: v for k, v in {"layer": layer}.items() if v is not None}).get("entities", [])
+
+    def drawing_open(self, path: str) -> Dict[str, Any]:
+        return self._dispatch("drawing-open", {"path": path})
+
+    def entity_get(self, entity_id: str) -> Dict[str, Any]:
+        return self._dispatch("entity-get", {"entity_id": entity_id})
+
+    def entity_erase(self, entity_id: str) -> None:
+        self._dispatch("entity-erase", {"entity_id": entity_id})
+
+    def entity_create_line(self, x1, y1, x2, y2, layer=None):
+        return self._dispatch("create-line", {k: v for k, v in {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "layer": layer}.items() if v is not None})
+
+    def entity_create_circle(self, cx, cy, radius, layer=None):
+        return self._dispatch("create-circle", {k: v for k, v in {"cx": cx, "cy": cy, "radius": radius, "layer": layer}.items() if v is not None})
+
+    def entity_create_arc(self, cx, cy, radius, start_angle, end_angle, layer=None):
+        return self._dispatch("create-arc", {k: v for k, v in {"cx": cx, "cy": cy, "radius": radius, "start_angle": start_angle, "end_angle": end_angle, "layer": layer}.items() if v is not None})
+
+    def annotation_create_text(self, x, y, text, height=None, rotation=None, layer=None):
+        return self._dispatch("create-text", {k: v for k, v in {"x": x, "y": y, "text": text, "height": height, "rotation": rotation, "layer": layer}.items() if v is not None})
+
+
+def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:
+    """Return a trigger that invokes the loaded AutoLISP dispatcher."""
+    def trigger() -> None:
+        mdi_clients: List[int] = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def callback(child: int, _lparam: int) -> bool:
+            name = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetClassNameW(child, name, len(name))
+            if name.value == "MDIClient":
+                mdi_clients.append(child)
+                return False
+            return True
+        ctypes.windll.user32.EnumChildWindows(hwnd, callback_type(callback), 0)
+        target = mdi_clients[0] if mdi_clients else hwnd
+        post = ctypes.windll.user32.PostMessageW
+        for ch in "\x1b\x1b(c:mcp-dispatch)\r":
+            post(target, 0x0102, ord(ch), 0)
+    return trigger
 
 
 CallTool = Callable[[str, str, Dict[str, Any]], Dict[str, Any]]

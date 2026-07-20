@@ -372,3 +372,17 @@ compound pattern: cặp primitive `g1`/`g2` được nhận diện là `gia_do` 
 `main` phải dùng fast-forward. Không merge trực tiếp lịch sử độc lập của
 `master`; giữ `master` và các feature/fix branch để dọn trong một thay đổi
 riêng sau khi `main` ổn định.
+
+---
+
+## 2026-07-20 — File IPC Live MCP adapter
+
+`mcp_integration_lib.mcp_client.FileIPCLiveMCPClient` kết nối trực tiếp
+AutoCAD File IPC qua `C:/temp`, giữ `FakeMCPClient` cho unit test và giữ
+`LiveMCPClient` callback-based không đổi. Adapter hỗ trợ open/list/get/erase
+và tạo line/circle/arc/text cho Phase 4 primitive review/repair.
+
+Live smoke test: bật `CAD_AGENT_FILE_IPC=1` và đặt
+`CAD_AGENT_AUTOCAD_HWND` bằng frame handle AutoCAD; trigger tự tìm child
+`MDIClient` trước khi gửi `(c:mcp-dispatch)`. Smoke test chỉ đọc entity list
+và đã PASS trên AutoCAD thật.
