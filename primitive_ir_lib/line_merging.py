@@ -153,7 +153,7 @@ def merge_collinear_lines(
     angle_tol_deg: float = 3.0,
     perp_tol_px: float = 6.0,
     gap_tol_px: float = 25.0,
-    text_block_lateral_px: float = 15.0,
+    text_block_lateral_px: float = 25.0,
     text_block_padding_px: float = 4.0,
     use_tick_mark_detection: bool = True,
     tick_mark_window_px: float = 20.0,
@@ -206,7 +206,17 @@ def merge_collinear_lines(
                                 (nếu không bị chặn bởi Lớp 1 hoặc Lớp 2).
       text_block_lateral_px  — bề rộng "hành lang" quanh line dùng để coi 1 text
                                 là "nằm trên/sát line đó" (khoảng cách vuông góc
-                                từ tâm bbox text tới line).
+                                từ tâm bbox text tới line). Mặc định tăng từ
+                                15px lên 25px (19/07/2026, mục P3 trong
+                                HANDOFF.md) — nới thêm biên an toàn cho sai số
+                                định vị tâm bbox text của OCR (Tesseract), theo
+                                nguyên tắc bảo thủ chung của Lớp 2 ("thà không
+                                gộp nhầm còn hơn"). CHƯA benchmark trên ảnh
+                                thật để xác nhận 25px là đủ/không quá rộng —
+                                nếu sau này thấy Lớp 2 chặn gộp nhầm ở chỗ
+                                không nên chặn (text ở xa line thật sự không
+                                liên quan bị tính là "trên line"), đây là nơi
+                                cần xem lại đầu tiên.
       text_block_padding_px  — nới rộng khoảng trống thêm bao nhiêu px về 2 phía
                                 khi kiểm tra xem text có rơi vào khoảng trống đó
                                 không (bảo thủ: thà không gộp nhầm còn hơn).

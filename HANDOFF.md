@@ -186,9 +186,12 @@ implement P1 trong "Phương án tổng thể".
 4. P2 (chưa bắt đầu): mở rộng `detect_tick_mark_at_point` cho tick chéo 45°
    dùng `HoughLines` thay `HoughLinesP` để bắt witness-line ngắn tốt hơn —
    xuất phát từ 1 proof-of-concept trong phiên chat, chưa đưa vào code.
-5. P3 (chưa bắt đầu): tăng `text_block_lateral_px` mặc định từ 15px lên
-   25px trong `merge_collinear_lines()` — thay đổi nhỏ, rủi ro thấp, có
-   thể làm độc lập bất kỳ lúc nào.
+5. ~~P3: tăng `text_block_lateral_px` mặc định từ 15px lên 25px trong
+   `merge_collinear_lines()`.~~ **ĐÃ LÀM** (19/07/2026, nhánh
+   `chore/text-block-lateral-px-25`) — nới biên an toàn cho sai số định vị
+   tâm bbox text của OCR, theo nguyên tắc bảo thủ của Lớp 2. CHƯA benchmark
+   trên ảnh thật để xác nhận 25px là đủ/không quá rộng (xem docstring tham
+   số `text_block_lateral_px` trong `line_merging.py`).
 6. `max_offset_drift_px=2` (mới, mục sửa hồi quy ở trên) mới hiệu chỉnh
    thủ công trên fixture tổng hợp — CHƯA benchmark trên ảnh scan thật có
    witness-line hơi nghiêng (không hoàn toàn vuông góc do ảnh bị xoay/méo
