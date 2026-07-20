@@ -1,5 +1,44 @@
 # Báo cáo benchmark Lớp 1 — tick-mark / witness-line detection trên ảnh thật
 
+> ## ĐÍNH CHÍNH 20/07/2026 — false-positive thật phát hiện thêm ở Ca A và Ca C
+>
+> Benchmark mở rộng ngày 20/07/2026 (chạy `find_internal_boundary_offsets()`
+> trên các `RawLine` trích xuất **THẬT** bằng `extract_lines()` (Hough) trên
+> chính ảnh `2026-07-18_101706.png`, thay vì toạ độ đầu-mút tự đo/tự dựng như
+> phiên 19/07) phát hiện: kết luận "✅ đúng, không tạo ranh giới giả" của **Ca
+> A** và **Ca C** ở mục 4 bên dưới **KHÔNG còn chính xác** với tham số mặc
+> định cũ (`min_run_px=8`). Cả 2 ca đều bị tách nhầm do hatch chéo THOẢI (dốc
+> nhẹ hơn tick-mark 45° chuẩn) nằm gần dim-line:
+>
+> | Ca | Line thật (Hough) | `min_run_px=8` (cũ) | `min_run_px=12` (mới, mặc định từ 20/07) | Nguyên nhân |
+> |---|---|---|---|---|
+> | A (1700) | `(934,249)→(934,98)` | **TÁCH SAI** tại offset≈78 (y≈171) | Không tách ✅ | Hatch chéo kính chắn gió (hình chiếu đứng) đi gần line |
+> | B (2760/1525) | `(524,355)→(838,355)` | Tách đúng tại offset=252 (x≈776) | Tách đúng tại offset=252 (x≈776), không đổi | — (ranh giới thật, không bị ảnh hưởng) |
+> | C (5500) | `(415,375)→(917,375)` | **TÁCH SAI** tại offset≈252 (x≈667) | Không tách ✅ | Hatch chéo hộp bình nhiên liệu nằm sát dim-line |
+>
+> **Đã fix**: nâng `min_run_px` mặc định từ 8 lên 12 trong cả 3 hàm
+> (`_perpendicular_witness_at_point`, `find_internal_boundary_offsets`,
+> `split_raw_line_at_internal_witness_lines`) tại
+> `primitive_ir_lib/tick_mark_detection.py`. Xác nhận lại cả 3 ca với mặc
+> định mới: A → `[]` ✅, B → `[252.0]` (x≈776) ✅ không đổi, C → `[]` ✅.
+> Toàn bộ 46 test hiện có trước đó vẫn PASS (không hồi quy); đã thêm 2 test
+> hồi quy mới tái hiện đúng cơ chế lỗi này bằng fixture tổng hợp (không cần
+> ảnh thật) — xem `test_perpendicular_witness_regression_shallow_diagonal_drift_needs_min_run_px_12`
+> và `test_find_internal_boundary_offsets_default_rejects_shallow_diagonal_hatch`
+> trong `primitive_ir_lib/tests/test_tick_mark_detection.py`.
+>
+> **Đây vẫn là fix GIẢM RỦI RO, không phải fix hình học triệt để**: 1 hatch
+> chéo khác trôi dạt chậm hơn nữa (chạm đủ ≥12 hàng liên tục đúng trục) vẫn
+> có thể đánh lừa thuật toán. Xem mục 6 (đã cập nhật) và docstring
+> `_perpendicular_witness_at_point` (mục "SỬA THÊM 20/07/2026") để biết chi
+> tiết đầy đủ + số liệu.
+>
+> Nội dung mục 1-6 bên dưới **giữ nguyên như phiên 19/07/2026 gốc** (để bảo
+> toàn lịch sử/audit trail); coi kết luận "Ca A/C đúng, không tạo ranh giới
+> giả" trong các mục đó là **đã lỗi thời, đã được đính chính ở trên**.
+
+---
+
 - **Ngày benchmark**: 19/07/2026
 - **Phiên làm việc**: bổ sung Lớp 1 tick-mark detection theo
   `PHUONG_AN_BO_SUNG_LOP1_TICK_MARK.md` ("Phương án tổng thể").
@@ -303,10 +342,14 @@ Các test có liên quan trực tiếp đến kết luận ở mục 4:
 - **Chưa khép kín đầu-cuối**: `split_raw_line_at_tick_marks()` mới verify đơn
   lẻ; gọi qua `merge_collinear_lines()` đầy đủ **vẫn còn hồi quy** (1 test cũ).
   Chi tiết: `HANDOFF.md` mục "Đang làm dở".
-- **Ngưỡng hiệu chỉnh thủ công**: `leading_gap_max_px=5`, `min_run_px=8`,
+- **Ngưỡng hiệu chỉnh thủ công**: `leading_gap_max_px=5`, `min_run_px=8`
+  (LƯU Ý: đã nâng lên **12** từ 20/07/2026 — xem đính chính đầu file),
   `run_gap_tol_px=1` được chọn dựa trên đúng 2 điểm của ảnh
   "TP-TL-A001/07/26" (x=776 True, x=673 False). **Chưa quét rộng** trên nhiều
-  ảnh scan khác để xác nhận ngưỡng này tổng quát.
+  ảnh scan khác để xác nhận ngưỡng này tổng quát. Bản thân `min_run_px=8`
+  còn lọt thêm 2 false-positive khác (Ca A, Ca C) như đính chính 20/07/2026
+  đã ghi ở đầu file — `min_run_px=12` giảm rủi ro nhưng KHÔNG loại trừ hoàn
+  toàn khả năng còn ca thứ 3 chưa phát hiện.
 - **Ảnh thật chưa commit**: toạ độ trong file này không thể tái lập chính xác
   nếu không có ảnh gốc. Khi commit ảnh, nên kèm hash (vd sha256) để kiểm tra
   nguyên vẹn.

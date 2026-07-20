@@ -193,7 +193,7 @@ def _perpendicular_witness_at_point(
     col_half_px: int = 3,
     dark_threshold: int = 190,
     leading_gap_max_px: int = 5,
-    min_run_px: int = 8,
+    min_run_px: int = 12,
     run_gap_tol_px: int = 1,
     max_offset_drift_px: float = 2.0,
 ) -> bool:
@@ -264,10 +264,39 @@ def _perpendicular_witness_at_point(
 
     Kiểm tra CẢ 2 phía của line (theo 2 chiều pháp tuyến +n và -n).
 
-    GIỚI HẠN TRUNG THỰC: ngưỡng leading_gap_max_px=5 / min_run_px=8 /
-    max_offset_drift_px=2 hiệu chỉnh thủ công trên 1 điểm ranh giới thật
-    (x=776), 1 điểm false-positive đã biết (x=673) của "TP-TL-A001/07/26",
-    và ca hồi quy tổng hợp (2 tick-mark chéo 45° đối xứng quanh 1 khoảng
+    SỬA THÊM 20/07/2026 (false-positive mới trên witness-line dọc thật,
+    KHÔNG phải chuỗi): benchmark mở rộng (chạy find_internal_boundary_offsets
+    trên các RawLine trích xuất THẬT bằng Hough, không phải toạ độ tự dựng)
+    phát hiện min_run_px=8 vẫn còn lọt sai ở 2 nơi trên "TP-TL-A001/07/26":
+      - Case A ("1700", witness-line dọc 1 đoạn, KHÔNG phải chuỗi): bị tách
+        giả tại offset~78 (y~171). Nguyên nhân: 1 nét hatch chéo của kính
+        chắn gió (hình chiếu đứng bên cạnh) đi ngang gần line "1700"; trong
+        cửa sổ quét hẹp 8 hàng, nét chéo đó tình cờ giữ offset gần trục đủ
+        lâu để "trông giống" witness-line vuông góc trước khi trôi ra ngoài
+        ngưỡng — độ dài chuỗi giả này chạm đúng min_run_px=8 cũ.
+      - Case C ("5500", tổng chiều dài, cũng 1 đoạn không phải chuỗi): cùng
+        cơ chế, bị tách giả tại offset~252 (x~667) — do hatch chéo của 1
+        khối hình chữ nhật (bình nhiên liệu) nằm sát dim-line "5500" ở giữa
+        bản vẽ. Đây là ca MỚI, benchmark gốc 19/07/2026 (dùng toạ độ tay,
+        không phải Hough thật cho Case C) đã bỏ sót.
+    Đối chứng: ranh giới THẬT của Case B (2760/1525, x~776, offset=252 tính
+    từ x=524) vẫn được giữ nguyên đúng ở cả 2 mức min_run_px.
+    Hiệu chỉnh lại: nâng min_run_px 8 -> 12 (nằm giữa 8px của 2 false-positive
+    trên và ~22px của ranh giới thật Case B, đo được tại x~776 chạy on-axis
+    liên tục >=22 hàng) loại được cả 2 false-positive trên mà KHÔNG ảnh hưởng
+    Case B. Đây là fix GIẢM RỦI RO, không phải fix hình học triệt để: 1 nét
+    hatch chéo khác chạm đủ >=12 hàng liên tục theo đúng trục vẫn có thể đánh
+    lừa thuật toán — phân biệt "witness-line vuông góc thật" với "hatch chéo
+    tình cờ đủ dài" một cách chắc chắn cần thêm tín hiệu khác (vd kiểm tra độ
+    trôi dạt góc/độ dày nét), chưa triển khai (xem GIỚI HẠN TRUNG THỰC ở đầu
+    file). 46/46 test hiện có trong `primitive_ir_lib/tests/` vẫn PASS sau khi
+    đổi min_run_px 8->12 (không có hồi quy).
+
+    GIỚI HẠN TRUNG THỰC: ngưỡng leading_gap_max_px=5 / min_run_px=12 (SỬA
+    20/07/2026, xem trên; trước đó là 8) / max_offset_drift_px=2 hiệu chỉnh
+    thủ công trên 1 điểm ranh giới thật (x=776), 1 điểm false-positive đã
+    biết (x=673) của "TP-TL-A001/07/26", và ca hồi quy tổng hợp (2 tick-mark
+    chéo 45° đối xứng quanh 1 khoảng
     trống — xem test_tick_mark_blocks_merge_even_without_any_blocking_text)
     — CHƯA quét rộng trên nhiều ảnh scan khác để xác nhận ngưỡng này tổng
     quát; witness-line thật bị nghiêng nhiều hơn vài độ so với vuông góc
@@ -345,7 +374,7 @@ def find_internal_boundary_offsets(
     col_half_px: int = 3,
     dark_threshold: int = 190,
     leading_gap_max_px: int = 5,
-    min_run_px: int = 8,
+    min_run_px: int = 12,
     run_gap_tol_px: int = 1,
 ) -> List[float]:
     """Quét dọc theo `line` (từ p1 đến p2), trả về danh sách khoảng cách
@@ -409,7 +438,7 @@ def split_raw_line_at_internal_witness_lines(
     col_half_px: int = 3,
     dark_threshold: int = 190,
     leading_gap_max_px: int = 5,
-    min_run_px: int = 8,
+    min_run_px: int = 12,
     run_gap_tol_px: int = 1,
 ) -> List["RawLine"]:
     """Tách 1 RawLine dài bị Hough fuse liền (KHÔNG có khoảng trống pixel)
