@@ -23,6 +23,7 @@ class MCPToolError(RuntimeError):
 class MCPClient(Protocol):
     def drawing_open(self, path: str) -> Dict[str, Any]: ...
     def drawing_save(self, path: Optional[str] = None) -> None: ...
+    def drawing_save_as_dxf(self, path: str) -> None: ...
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]: ...
     def block_get_attributes(self, entity_id: str) -> Dict[str, str]: ...
     def block_update_attribute(self, entity_id: str, tag: str, value: str) -> None: ...
@@ -64,6 +65,8 @@ class FakeMCPClient:
         return {"ok": True, "payload": {"path": path, "entity_count": len(self._entities)}}
 
     def drawing_save(self, path: Optional[str] = None) -> None: pass
+
+    def drawing_save_as_dxf(self, path: str) -> None: self.drawing_save(path)
 
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return {name: None for name in names}
@@ -165,11 +168,27 @@ class FileIPCLiveMCPClient:
             time.sleep(self._document_settle_s)
             self._raw_lisp_trigger('(load "' + normalized_loader + '")')
             time.sleep(self._document_settle_s)
+            self._wait_for_dispatcher()
             return {"path": path}
         return self._dispatch("drawing-open", {"path": path})
 
+    def _wait_for_dispatcher(self) -> None:
+        deadline = time.time() + self._timeout
+        last_error: Optional[Exception] = None
+        while time.time() < deadline:
+            try:
+                self._dispatch("ping", {})
+                return
+            except (MCPTimeoutError, MCPToolError) as exc:
+                last_error = exc
+                time.sleep(self._poll)
+        raise MCPTimeoutError(f"AutoCAD dispatcher did not become ready: {last_error}")
+
     def drawing_save(self, path: Optional[str] = None) -> None:
         self._dispatch("drawing-save", {"path": path} if path else {})
+
+    def drawing_save_as_dxf(self, path: str) -> None:
+        self._dispatch("drawing-save-as-dxf", {"path": path.replace("\\", "/")})
 
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})
@@ -244,6 +263,7 @@ class LiveMCPClient:
 
     def drawing_open(self, path: str): return self._invoke("drawing", "open", data={"path": path})
     def drawing_save(self, path=None): self._invoke("drawing", "save", data={"path": path} if path else {})
+    def drawing_save_as_dxf(self, path): self._invoke("drawing", "save_as_dxf", data={"path": path})
     def drawing_get_variables(self, names): return self._invoke("drawing", "get_variables", data={"names": names})["payload"]
     def block_get_attributes(self, entity_id): return self._invoke("block", "get_attributes", entity_id=entity_id)["payload"].get("attributes", {})
     def block_update_attribute(self, entity_id, tag, value): self._invoke("block", "update_attribute", entity_id=entity_id, tag=tag, value=value)

@@ -69,6 +69,24 @@ class FileIPCClientTests(unittest.TestCase):
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {}}))
             self.assertIsNone(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_save("a.dxf"))
 
+    def test_maps_drawing_save_as_dxf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual((command["command"], command["params"]), ("drawing-save-as-dxf", {"path": "a.dxf"}))
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {}}))
+            self.assertIsNone(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_save_as_dxf("a.dxf"))
+
+    def test_normalizes_windows_dxf_export_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual(command["params"], {"path": "C:/temp/out.dxf"})
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {}}))
+            FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_save_as_dxf(r"C:\temp\out.dxf")
+
     def test_maps_drawing_get_variables(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
@@ -117,11 +135,25 @@ class FileIPCClientTests(unittest.TestCase):
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             document_settle_s=0,
         )
+        client._dispatch = lambda command, params: {}
         client.drawing_open("C:/work/a.dxf")
         self.assertEqual(2, len(raw_commands))
         self.assertIn('vla-open', raw_commands[0])
         self.assertIn('C:/work/a.dxf', raw_commands[0])
         self.assertEqual('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
+
+    def test_bootstrap_waits_for_dispatcher_ping(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            trigger=lambda: None,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            document_settle_s=0,
+        )
+        calls = []
+        client._dispatch = lambda command, params: calls.append((command, params)) or {}
+        client.drawing_open("C:/work/a.dxf")
+        self.assertEqual([("ping", {})], calls)
 
     def test_raises_timeout_without_result(self):
         with tempfile.TemporaryDirectory() as tmp:
