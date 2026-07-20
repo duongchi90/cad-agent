@@ -22,6 +22,7 @@ class MCPToolError(RuntimeError):
 
 class MCPClient(Protocol):
     def drawing_open(self, path: str) -> Dict[str, Any]: ...
+    def drawing_save(self, path: Optional[str] = None) -> None: ...
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]: ...
     def block_get_attributes(self, entity_id: str) -> Dict[str, str]: ...
     def block_update_attribute(self, entity_id: str, tag: str, value: str) -> None: ...
@@ -61,6 +62,8 @@ class FakeMCPClient:
     def drawing_open(self, path: str) -> Dict[str, Any]:
         self.opened_path = path
         return {"ok": True, "payload": {"path": path, "entity_count": len(self._entities)}}
+
+    def drawing_save(self, path: Optional[str] = None) -> None: pass
 
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return {name: None for name in names}
@@ -165,6 +168,9 @@ class FileIPCLiveMCPClient:
             return {"path": path}
         return self._dispatch("drawing-open", {"path": path})
 
+    def drawing_save(self, path: Optional[str] = None) -> None:
+        self._dispatch("drawing-save", {"path": path} if path else {})
+
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})
 
@@ -237,6 +243,7 @@ class LiveMCPClient:
         return result
 
     def drawing_open(self, path: str): return self._invoke("drawing", "open", data={"path": path})
+    def drawing_save(self, path=None): self._invoke("drawing", "save", data={"path": path} if path else {})
     def drawing_get_variables(self, names): return self._invoke("drawing", "get_variables", data={"names": names})["payload"]
     def block_get_attributes(self, entity_id): return self._invoke("block", "get_attributes", entity_id=entity_id)["payload"].get("attributes", {})
     def block_update_attribute(self, entity_id, tag, value): self._invoke("block", "update_attribute", entity_id=entity_id, tag=tag, value=value)

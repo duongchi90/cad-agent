@@ -60,6 +60,15 @@ class FileIPCClientTests(unittest.TestCase):
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {"path": "a.dxf"}}))
             self.assertEqual(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_open("a.dxf"), {"path": "a.dxf"})
 
+    def test_maps_drawing_save(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            def trigger():
+                command = json.loads(next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text())
+                self.assertEqual((command["command"], command["params"]), ("drawing-save", {"path": "a.dxf"}))
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {}}))
+            self.assertIsNone(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_save("a.dxf"))
+
     def test_maps_drawing_get_variables(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
