@@ -17,4 +17,6 @@ jobs:
       - name: Install Tesseract OCR
         run: choco install tesseract --no-progress -y
       - name: Run offline test suite
-        run: python -m pytest primitive_ir_lib/tests semantic_ir_lib/tests dxf_builder_lib/tests mcp_integration_lib/tests agent_lib/tests -q
+        run: |
+          $env:PATH = 'C:\Program Files\Tesseract-OCR;' + $env:PATH
+          python -m pytest primitive_ir_lib/tests semantic_ir_lib/tests dxf_builder_lib/tests mcp_integration_lib/tests agent_lib/tests -q
