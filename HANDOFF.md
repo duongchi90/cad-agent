@@ -45,8 +45,9 @@ Chạy lệnh từ thư mục `cad_agent` để các package Phase 1–5 cùng n
    block name, layer, insert point, x/y/z scale, rotation và ATTRIB.~~ ĐÃ
    LÀM (19/07/2026, nhánh `feature/reviewer-insert-roundtrip`) — xem mục
    "Bàn giao bổ sung — Reviewer #1 INSERT round-trip" ở cuối file.
-2. Thêm Repair #1 cho component INSERT hoặc tách rõ phần này sang Repair #2
-   MCP.
+2. ~~Thêm Repair #1 cho component INSERT hoặc tách rõ phần này sang Repair #2
+   MCP.~~ ĐÃ LÀM (19/07/2026, nhánh `feature/repair-insert-component`) —
+   xem mục "Bàn giao bổ sung — Repair #1 cho INSERT component" ở cuối file.
 3. Phase 4: tích hợp AutoCAD MCP (file_ipc), Reviewer #2 visual/zoom và Repair #2 theo handle.
 4. Duy trì ranh giới: Reviewer #1 chỉ kiểm tra chuyển đổi IR → DXF; lỗi nhận thức/pattern phải do Reviewer #2 đánh giá với ảnh gốc.
 
@@ -269,3 +270,73 @@ nguyên message gốc của patch qua `git am`.
 - Chưa test round-trip INSERT trên component nào ngoài "beam" (dùng trong
   fixture `_build_beam_component`) — bracket/panel/hinge/node khác có thể
   có ATTRIB hoặc field riêng chưa được test tới.
+
+---
+
+## Bàn giao bổ sung — Repair #1 cho INSERT component (19/07/2026)
+
+Làm việc #2 ở mục "Việc nên làm tiếp" phía trên, trên nhánh
+`feature/repair-insert-component` (từ `main`, sau khi đã merge cả fix
+tick-mark và Reviewer #1 INSERT round-trip).
+
+### Đã làm
+
+- **`dxf_builder_lib/repair.py`**: thêm `ComponentRepairResult` (dataclass,
+  tách riêng khỏi `RepairResult` — field `part_id` thay vì `primitive_id`,
+  đúng tinh thần `ComponentMismatch` tách khỏi `mismatches` ở reviewer.py)
+  và `repair_insert_components(build_result, component_mismatches)`. CÙNG
+  chiến lược xoá-theo-handle-rồi-vẽ-lại với `repair_dxf()` (primitive thô),
+  nhưng:
+  - Nguồn sự thật là `written_component_by_part_id` (không phải
+    `written_geometry_by_primitive_id`).
+  - Input là `List[ComponentMismatch]` có sẵn `part_id` (không cần trích từ
+    chuỗi tự do như `_primitive_id_from_mismatch()`).
+  - Vẽ lại bằng `msp.add_blockref()` + `blockref.add_auto_attribs()` — vì
+    MỌI component type (frame_beam/bracket/panel/panel_rect/bracket_L/
+    hinge/node) đều dùng chung cơ chế blockref+attrib này, hàm này generic
+    cho tất cả, KHÔNG cần nhánh theo `component_type_by_part_id` (khác
+    `repair_dxf()`, phải nhánh theo geom_type vì line/circle/arc/text mỗi
+    loại 1 hàm `add_*` khác nhau).
+  - Có 2 điểm bỏ qua an toàn (skip, không crash): thiếu handle/written_component
+    trong BuildResult (bug builder.py), và block definition bị thiếu trong
+    file DXF khi cần vẽ lại (bất thường, nằm ngoài phạm vi Repair #1 — repair
+    này không tự định nghĩa lại block).
+- **`dxf_builder_lib/tests/test_repair.py`**: thêm 5 test — rỗng không làm
+  gì, sửa block_name sai, sửa xscale+rotation cùng lúc (xác nhận chỉ
+  repair 1 lần dù 2 field lỗi), thiếu 1 ATTRIB, và 2 part độc lập bị lỗi
+  khác kiểu nhau (xác nhận không lẫn dữ liệu giữa 2 part — b1 dài 500mm và
+  b2 dài 300mm phải giữ đúng xscale riêng sau repair).
+
+Không sửa `reviewer.py`/`builder.py`/`primitive_ir_lib/`.
+
+### Đã verify
+
+```
+python3 -m dxf_builder_lib.tests.test_repair    → 10/10 PASS (5 cũ + 5 mới)
+python3 -m dxf_builder_lib.tests.test_builder              → 5/5 PASS (không đổi)
+python3 -m dxf_builder_lib.tests.test_reviewer              → 17/17 PASS (không đổi)
+python3 -m dxf_builder_lib.tests.test_semantic_components   → 11/11 PASS (không đổi)
+python3 -m pytest primitive_ir_lib/tests/ -q                 → 46/46 PASS (không đổi)
+python3 -m unittest discover -s mcp_integration_lib/tests    → 4/4 PASS (không đổi)
+python3 -m unittest discover -s agent_lib/tests               → 64/64 PASS (không đổi)
+```
+
+Vòng lặp `build → tamper (giả lập lỗi thật) → review (phát hiện) →
+repair_insert_components → review (xác nhận hết lỗi)` chạy đúng cho từng
+loại lỗi test — không sửa assertion nào để ép pass.
+
+### Giới hạn trung thực (chưa giải quyết)
+
+- Chỉ test trên component "frame_beam" (dùng fixture `_build_beam_component`
+  có sẵn từ test_reviewer.py) — bracket/panel/panel_rect/bracket_L/hinge/
+  node chưa có test repair riêng, dù về lý thuyết cùng cơ chế blockref+attrib
+  generic nên NÊN hoạt động đúng (không có nhánh riêng theo component_type
+  trong code repair).
+- Nhánh `chore/text-block-lateral-px-25` (P3, bump text_block_lateral_px
+  15px->25px) làm song song, CHƯA merge vào nhánh này hay `main` — 2 nhánh
+  độc lập, không đụng chung file (`primitive_ir_lib/line_merging.py` vs
+  `dxf_builder_lib/repair.py`).
+- Case "block definition bị thiếu khi cần repair" (nhánh bỏ qua an toàn
+  trong `repair_insert_components()`) chưa có test riêng — khó dựng fixture
+  thật cho case này (phải xoá block definition khỏi file DXF theo cách hợp
+  lệ, chưa thử với ezdxf API).
