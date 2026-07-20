@@ -340,3 +340,35 @@ loại lỗi test — không sửa assertion nào để ép pass.
   trong `repair_insert_components()`) chưa có test riêng — khó dựng fixture
   thật cho case này (phải xoá block definition khỏi file DXF theo cách hợp
   lệ, chưa thử với ezdxf API).
+
+---
+
+## 2026-07-20 — Main/master integration verified
+
+Nhánh `integration/main-master` (commit `1e960bb`) lấy `main` làm nền,
+khôi phục các benchmark/vision-preflight độc lập từ `master`, và sửa hồi quy
+compound pattern: cặp primitive `g1`/`g2` được nhận diện là `gia_do` trong
+`test_integration_via_assemble`.
+
+### Môi trường test đã xác minh
+
+- Dùng `.venv-py311` với Python 3.11.9 vì `python-solvespace` build thành
+  công ở môi trường này; giữ Python 3.12 hệ thống không thay đổi.
+- Khi chạy OCR tests, thêm `C:\Program Files\Tesseract-OCR` vào `PATH` cho
+  tiến trình test.
+- Lệnh đầy đủ:
+
+  ```powershell
+  $env:PATH = 'C:\Program Files\Tesseract-OCR;' + $env:PATH
+  .\.venv-py311\Scripts\python.exe -m pytest primitive_ir_lib/tests semantic_ir_lib/tests dxf_builder_lib/tests mcp_integration_lib/tests agent_lib/tests -q
+  ```
+
+- Kết quả: **220 passed, 3 warnings**. Ba warning là cảnh báo có chủ ý khi
+  OCR Tesseract quét fixture không có ROI, không phải test failure.
+
+### Trạng thái nhánh
+
+`main` là tổ tiên trực tiếp của `integration/main-master`, nên promotion sang
+`main` phải dùng fast-forward. Không merge trực tiếp lịch sử độc lập của
+`master`; giữ `master` và các feature/fix branch để dọn trong một thay đổi
+riêng sau khi `main` ổn định.
