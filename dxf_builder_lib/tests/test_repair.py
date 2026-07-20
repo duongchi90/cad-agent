@@ -31,7 +31,7 @@ from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticP
 
 from dxf_builder_lib.builder import build_dxf
 from dxf_builder_lib.repair import repair_dxf, repair_insert_components
-from dxf_builder_lib.reviewer import review_dxf
+from dxf_builder_lib.reviewer import ComponentMismatch, review_dxf
 
 try:
     import ezdxf  # noqa: F401
@@ -227,6 +227,22 @@ def test_repair_multiple_entities_independently():
         review_after = review_dxf(build_result)
         assert review_after.passed, f"sau repair phải pass, còn: {review_after.mismatches}"
     print("OK   test_repair_multiple_entities_independently")
+
+
+def test_repair_insert_skips_missing_block_definition():
+    if not _HAS_EZDXF:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        doc = ezdxf.readfile(out_path)
+        block_name = build_result.written_component_by_part_id[part_id]["block_name"]
+        doc.blocks.delete_block(block_name, safe=False)
+        doc.saveas(out_path)
+        mismatch = ComponentMismatch(part_id, "block_name", block_name, "BAD", "forced mismatch")
+        result = repair_insert_components(build_result, [mismatch])
+        assert result.repaired_count == 0
+        assert result.skipped_part_ids == [part_id]
+        assert "không tồn tại" in result.details[0]
 
 
 def test_repair_insert_empty_mismatches_does_nothing():

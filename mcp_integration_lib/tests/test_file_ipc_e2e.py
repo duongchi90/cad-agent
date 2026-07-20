@@ -54,11 +54,14 @@ class FileIPCEndToEndTests(unittest.TestCase):
         self.assertEqual(expected, client.block_get_attributes(build.component_handle_by_part_id[part_id])[attribute])
         self.assertTrue(review_dxf(build).passed)
 
-    def test_bracket_panel_hinge_round_trip_real_autocad(self):
+    def test_remaining_components_round_trip_real_autocad(self):
         cases = [
             ("bracket", [Primitive(id="h", type="circle", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=CircleGeometry(center=Point2D(10, 20), radius=4))], "lo_bat_vit", ["h"], "HOLE_DIAMETER_MM"),
             ("panel", [Primitive(id="c", type="circle", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=CircleGeometry(center=Point2D(10, 20), radius=75))], "duong_vien_tron", ["c"], "RADIUS_MM"),
+            ("panel_rect", [Primitive(id="a", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,0), end=Point2D(200,0))), Primitive(id="b", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(200,0), end=Point2D(200,100)))], "khung_chu_nhat", ["a","b"], "WIDTH_MM"),
+            ("bracket_L", [Primitive(id="a", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,0), end=Point2D(150,0))), Primitive(id="b", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,0), end=Point2D(0,80)))], "gia_do", ["a","b"], "LEG_A_MM"),
             ("hinge", [Primitive(id="a", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,0), end=Point2D(120,0))), Primitive(id="b", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,8), end=Point2D(120,8))), Primitive(id="h1", type="circle", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=CircleGeometry(center=Point2D(0,4), radius=3)), Primitive(id="h2", type="circle", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=CircleGeometry(center=Point2D(120,4), radius=3))], "ban_le", ["a","b","h1","h2"], "GAP_MM"),
+            ("node", [Primitive(id="a", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,0), end=Point2D(100,0))), Primitive(id="b", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,0), end=Point2D(0,80))), Primitive(id="c", type="line", source="smoke", confidence=1, trace=Trace(bbox_px=(0,0,1,1)), geometry=LineGeometry(start=Point2D(0,0), end=Point2D(-60,60)))], "diem_noi", ["a","b","c"], "LEG_COUNT"),
         ]
         for name, primitives, part_type, ids, attribute in cases:
             with self.subTest(name=name):
