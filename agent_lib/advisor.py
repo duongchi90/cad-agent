@@ -22,11 +22,10 @@ nhận (caller nhận action list nhưng biết là chưa verify bằng solver t
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from .models import AgentAction, AgentReport, AgentTask, Evidence, new_id
+from .models import AgentAction, AgentReport, AgentTask
 
 
 @dataclass

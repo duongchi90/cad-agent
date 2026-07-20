@@ -14,7 +14,7 @@ from typing import List, Optional
 from .calibration import Calibration
 from .geometry_extraction import RawCircle, RawLine
 from .models import (
-    ArcGeometry, CircleGeometry, LineGeometry, Primitive,
+    CircleGeometry, LineGeometry, Primitive,
     PrimitiveIRDocument, SourceDocument, Trace, now_iso,
 )
 from .text_extraction import RawText

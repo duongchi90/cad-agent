@@ -31,18 +31,16 @@ Optional dependency: `anthropic` — nếu chưa cài, skip toàn bộ với lý
 from __future__ import annotations
 
 import json
-import math
 import re
-import uuid
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
 from primitive_ir_lib.models import CrossValidation, Primitive, PrimitiveIRDocument
 
 from .models import (
-    AgentAction, AgentReport, AgentTask, Evidence, ResolutionWinner, new_id,
+    AgentAction, AgentReport, AgentTask, Evidence,
 )
 
 # prompt gửi LLM khi có conflict (tiếng Việt)

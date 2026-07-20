@@ -11,7 +11,7 @@ from unittest import TestCase
 
 from agent_lib.io_utils import load_document_dict, save_document
 from agent_lib.models import (
-    AgentAction, AgentReport, AgentTask, Evidence, ResolutionWinner,
+    AgentAction, AgentReport, AgentTask, Evidence,
 )
 
 

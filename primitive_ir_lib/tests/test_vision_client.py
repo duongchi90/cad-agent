@@ -7,7 +7,6 @@ thật (việc đó cần key thật, xem docstring vision_client.py).
 
 from __future__ import annotations
 
-import sys
 
 import numpy as np
 

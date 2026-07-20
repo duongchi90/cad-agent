@@ -28,15 +28,14 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from semantic_ir_lib.models import SemanticPart, PartType
+from semantic_ir_lib.models import SemanticPart
 
-from .models import AgentAction, AgentReport, AgentTask, Evidence, new_id
+from .models import AgentAction, AgentReport, AgentTask, Evidence
 
 # ngưỡng confidence mặc định: part có confidence dưới ngưỡng này sẽ được đẩy
 # sang Vision để phân loại lại. 0.7 = giữa range [0.5, 1.0] — part có confidence

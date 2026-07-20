@@ -10,9 +10,9 @@ from typing import Dict, List, Optional
 from unittest import TestCase
 
 from agent_lib.advisor import (
-    AdvisorResult, advise_drop_constraints, apply_advisor_actions,
+    advise_drop_constraints, apply_advisor_actions,
 )
-from agent_lib.models import AgentReport, AgentTask
+from agent_lib.models import AgentReport
 
 
 # ---- mock Constraint (giống semantic_ir_lib.models.Constraint) ----

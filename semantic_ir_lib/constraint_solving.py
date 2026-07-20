@@ -24,7 +24,7 @@ của solver tự hội tụ về nghiệm GẦN initial guess nhất thoả mã
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from primitive_ir_lib.models import Point2D, Primitive, PrimitiveIRDocument
 

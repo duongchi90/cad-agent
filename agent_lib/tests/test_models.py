@@ -8,7 +8,7 @@ from unittest import TestCase
 
 from agent_lib.models import (
     AgentAction, AgentReport, AgentTask, Evidence,
-    SCHEMA_VERSION, new_id, now_iso,
+    SCHEMA_VERSION,
 )
 
 

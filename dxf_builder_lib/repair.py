@@ -38,7 +38,6 @@ Optional dependency: `ezdxf` — cùng chiến lược lazy-import/graceful-skip
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Set
 

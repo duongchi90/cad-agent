@@ -190,7 +190,6 @@ def test_integration_via_assemble():
     """Test toàn bộ assemble pipeline: single-parts + constraints + compound."""
     from semantic_ir_lib.assemble import build_semantic_document
     from primitive_ir_lib.models import PrimitiveIRDocument, SourceDocument, Calibration
-    from primitive_ir_lib.models import SemanticRole
 
     # 1. Khung chữ nhật: 4 line kín
     r1 = _line("r1", 0, 0, 200, 0)

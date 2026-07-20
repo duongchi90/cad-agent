@@ -19,8 +19,6 @@ from __future__ import annotations
 import os
 import sys
 
-import cv2
-import numpy as np
 
 
 def _configure_console_output() -> None:
@@ -35,7 +33,6 @@ def _configure_console_output() -> None:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from primitive_ir_lib.assemble import build_document
-from primitive_ir_lib.calibration import Calibration
 from primitive_ir_lib.cross_validation import cross_validate
 from primitive_ir_lib.demo_pipeline import (
     IMG_H, IMG_W, make_synthetic_drawing, TABLE_ROI,

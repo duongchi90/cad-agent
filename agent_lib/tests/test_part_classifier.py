@@ -14,7 +14,7 @@ from primitive_ir_lib.models import (
     CircleGeometry, LineGeometry, Point2D, Primitive, Trace, Validation,
 )
 from semantic_ir_lib.models import (
-    GeometrySummary, PartValidation, SemanticPart,
+    SemanticPart,
 )
 
 

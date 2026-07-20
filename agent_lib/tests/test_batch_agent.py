@@ -4,20 +4,19 @@ LUÔN CHẠY ĐƯỢC — mock Vision reader, không cần API key hay package b
 """
 
 import unittest
-from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import List
 from unittest import TestCase
 
 import numpy as np
 
 from agent_lib.batch_agent import apply_agent_report, run_agent
-from agent_lib.models import AgentAction, AgentReport, AgentTask
+from agent_lib.models import AgentAction, AgentReport
 from primitive_ir_lib.models import (
     Calibration, CircleGeometry, CrossValidation, LineGeometry, Point2D,
     Primitive, SourceDocument, TextData, Trace, Validation, PrimitiveIRDocument,
 )
 from semantic_ir_lib.models import (
-    Constraint, GeometrySummary, SemanticIRDocument, SemanticPart,
+    Constraint, SemanticIRDocument, SemanticPart,
 )
 
 

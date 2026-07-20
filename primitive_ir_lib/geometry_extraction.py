@@ -31,7 +31,7 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 
-from .models import new_id, now_iso
+from .models import new_id
 
 
 @dataclass

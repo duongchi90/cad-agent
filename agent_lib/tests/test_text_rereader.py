@@ -5,7 +5,6 @@ LUÔN CHẠY ĐƯỢC — mock Vision reader, không cần API key.
 
 import unittest
 from unittest import TestCase
-from unittest.mock import MagicMock
 
 import numpy as np
 

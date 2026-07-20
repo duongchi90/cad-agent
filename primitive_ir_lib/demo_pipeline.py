@@ -19,7 +19,6 @@ trong ảnh này, không diễn giải" — xem đoạn code mẫu (đã comment
 
 from __future__ import annotations
 
-import json
 import os
 
 import cv2
@@ -27,7 +26,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .assemble import build_document
-from .calibration import auto_estimate_calibration, find_nearest_line
+from .calibration import auto_estimate_calibration
 from .cross_validation import cross_validate
 from .geometry_extraction import extract_raw_geometry
 from .io_utils import save_document

@@ -26,13 +26,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 
 from primitive_ir_lib.models import Primitive, SemanticRole
 
-from .models import AgentAction, AgentReport, AgentTask, Evidence, new_id
+from .models import AgentAction, AgentReport, AgentTask
 
 # ngưỡng confidence mặc định: text có confidence dưới ngưỡng này sẽ được đẩy
 # sang Vision để đọc lại. 0.5 = Tesseract confidence thấp (thường ~0.15-0.4
