@@ -15,10 +15,13 @@ Các tài liệu benchmark/kế hoạch bổ sung nằm trong `docs/`:
   Vision API thật, 3 tier), Cross-validation. Xem `primitive_ir_lib/README.md`.
 - **`semantic_ir_lib/`** (Phase 2) — sinh Semantic IR từ Primitive IR:
   Pattern Recognition (primitive → linh kiện: thanh ngang/dọc/xiên, lỗ
-  bắt vít...) + Constraint Detection (song song/vuông góc/bằng nhau/trùng
-  điểm đầu/thẳng hàng) + Constraint Pruning (lọc constraint yếu/trùng/dư
-  thừa bắc cầu) + Constraint Solving (tích hợp `python-solvespace` THẬT,
-  "làm sạch" toạ độ line). Xem `semantic_ir_lib/README.md`.
+  bắt vít...) + Pattern Compound (ghép nhiều primitive thành 1 linh kiện
+  phức hợp: khung_chu_nhat/gia_do/ban_le/diem_noi, tái dùng constraint đã
+  detect, không đo lại hình học) + Constraint Detection (song song/vuông
+  góc/bằng nhau/trùng điểm đầu/thẳng hàng) + Constraint Pruning (lọc
+  constraint yếu/trùng/dư thừa bắc cầu) + Constraint Solving (tích hợp
+  `python-solvespace` THẬT, "làm sạch" toạ độ line). Xem
+  `semantic_ir_lib/README.md`.
 - **`dxf_builder_lib/`** (Phase 3) — DXF Builder (`ezdxf` THẬT,
   build 1 lần từ Primitive IR + toạ độ đã solve + layer theo Semantic IR)
   + Reviewer #1 headless (đọc lại DXF, so khớp tuyệt đối theo handle, bắt
@@ -103,12 +106,16 @@ nếu chưa cài các package optional này.
 - **Phase 1**: hoàn chỉnh về code (geometry/text/table extraction,
   cross-validation, Vision API thật). Còn thiếu duy nhất: benchmark
   `vision_client.py` với ảnh scan thật + API key thật.
-- **Phase 2**: Pattern Recognition + Constraint Detection + Constraint
-  Pruning + Constraint Solving (thật, `python-solvespace`) đã có code +
-  test. Còn thiếu: ghép linh kiện phức hợp nhiều primitive, constraint
-  line-circle/circle-circle, và benchmark ngưỡng góc/bán kính/confidence
-  trên ảnh scan thật. Xem mục 11.5 tài liệu kiến trúc cho danh sách việc
-  còn lại.
+- **Phase 2**: Pattern Recognition + Pattern Compound (ghép linh kiện phức
+  hợp: khung_chu_nhat/gia_do/ban_le/diem_noi, `semantic_ir_lib/pattern_compound.py`,
+  14 test — xem mục 11.6 tài liệu kiến trúc) + Constraint Detection +
+  Constraint Pruning + Constraint Solving (thật, `python-solvespace`) đã có
+  code + test. Còn thiếu: constraint line-circle/circle-circle (tangent,
+  concentric), và benchmark ngưỡng góc/bán kính/confidence/compound (gap
+  song song, bán kính tìm lỗ vít, khoảng cách cluster điểm nối) trên ảnh
+  scan thật — pipeline demo hiện dùng ảnh tổng hợp và chưa từng tạo ra
+  compound part nào trên chính ảnh đó, dấu hiệu ngưỡng cần tinh chỉnh khi
+  có ảnh thật. Xem mục 11.6 tài liệu kiến trúc cho danh sách việc còn lại.
 - **Phase 3**: DXF Builder + Reviewer #1 + Repair #1 (cả 3 dùng `ezdxf`,
   tự SKIP khi chưa cài) đã có code + test. Còn thiếu: Semantic API riêng
   cho domain khung xương/thùng xe cải tạo, constraint arc, benchmark thật

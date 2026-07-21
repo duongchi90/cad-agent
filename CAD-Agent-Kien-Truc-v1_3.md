@@ -239,14 +239,17 @@ Bắt đầu Phase 2 theo đúng phương pháp đã dùng ở Phase 1 (mục 10
 
 `constraint_detection.py` so từng cặp line, phát hiện 5 quan hệ deterministic (`parallel`, `perpendicular`, `equal_length`, `coincident_endpoint`, `collinear`) bằng công thức hình học thuần (góc, khoảng cách điểm-đường thẳng), KHÔNG dùng SolveSpace ở bước này — đây mới là bước "Detection", "Solving" (dùng `python-solvespace`) để lại cho bước sau đọc `constraints[]` làm input. Test trên dữ liệu tổng hợp cho 6 case (mỗi loại quan hệ + case không có quan hệ + case reject sai type) đều đúng; chạy thử trên chính output demo Phase 1 (43 primitives, ảnh tổng hợp) ra 35 parts + 229 constraints — số constraint cao vì ảnh tổng hợp có nhiều line song song/vuông góc trùng lặp (khung nhiều thanh cùng hướng), là hành vi ĐÚNG kỳ vọng (không lọc trùng ở bước Detection), nhưng cho thấy rõ cần bước lọc/rút gọn trước khi đưa vào solver thật trên ảnh nhiều line hơn.
 
-**11.4. Việc còn lại của Phase 2 (đã làm 2/5, xem mục 11.5)**
+**11.4. Việc còn lại của Phase 2 (đã làm 3/5, xem mục 11.5 và 11.6)**
 
-- Ghép nhiều primitive thành 1 part phức hợp (bản lề, giá đỡ, mối hàn) — cần rule hình dạng hoặc Vision-assisted (`source: vision_assisted` đã có chỗ trong schema).
-- Constraint line-circle/circle-circle (tangent, concentric) — bước đầu chỉ có line-line.
+- ~~Ghép nhiều primitive thành 1 part phức hợp (bản lề, giá đỡ, mối hàn)~~ —
+  **đã làm, xem 11.6**. Dùng rule hình dạng thuần dựa trên constraint đã
+  detect (KHÔNG dùng Vision-assisted; trường `source: vision_assisted` vẫn
+  còn chỗ trong schema cho tương lai nếu rule hình học không đủ).
+- Constraint line-circle/circle-circle (tangent, concentric) — bước đầu chỉ có line-line, vẫn còn thiếu.
 - ~~Lọc/rút gọn `constraints[]` trước khi đưa vào SolveSpace~~ — **đã làm, xem 11.5**.
-- Benchmark ngưỡng góc/bán kính/confidence (mục 11.2, và `min_confidence` mặc định của pruning) trên ảnh scan thật.
+- Benchmark ngưỡng góc/bán kính/confidence (mục 11.2, và `min_confidence` mặc định của pruning) **cùng các ngưỡng compound mới** (`bolt_hole_search_radius_mm`, `parallel_gap_max_mm`, `coincident_distance_mm` — xem 11.6) trên ảnh scan thật — vẫn còn thiếu, và là việc ưu tiên cao nhất còn lại của Phase 2 vì demo hiện dùng ảnh tổng hợp và CHƯA từng tạo ra compound part nào trên chính ảnh đó (dấu hiệu ngưỡng đề xuất trong 11.6 cần tinh chỉnh, không phải bug logic).
 - ~~Tích hợp `python-solvespace` thật (Constraint Solving)~~ — **đã làm, xem 11.5**.
-- Xuất `solved_primitives` sang DXF Builder (ezdxf) — bước kế tiếp trong pipeline theo mục 2, chưa bắt đầu.
+- Xuất `solved_primitives` sang DXF Builder (ezdxf) — bước kế tiếp trong pipeline theo mục 2, đã làm ở Phase 3 (mục 12).
 
 **11.5. [MỚI] Constraint Pruning + Constraint Solving thật — đã làm xong**
 
@@ -291,6 +294,65 @@ huống trên) và `semantic_ir_lib/tests/test_constraint_solving.py` (7 test
 thật với solvespace cho 5 loại constraint + 2 case biên). Cả 2 file test
 tự SKIP phần cần solvespace nếu chưa cài package (không fail sandbox không
 mạng).
+
+**11.6. [MỚI] Pattern Compound — ghép nhiều primitive thành 1 linh kiện phức hợp — đã làm xong**
+
+Việc còn lại đầu tiên của mục 11.4 (ghép compound) nay đã có code + test,
+package mới `semantic_ir_lib/pattern_compound.py`, đứng phía trên
+`pattern_recognition.py` (single-primitive parts) nhưng KHÔNG thay thế nó —
+1 primitive vừa có single-part riêng, vừa có thể thuộc 1 compound part
+(Reviewer #2, Phase 4, cần cả 2 góc nhìn: lỗi dịch thuật cấp primitive lẫn
+lỗi nhận thức cấp linh kiện).
+
+Nguyên tắc thiết kế: (1) không đoán bừa — chỉ tạo compound khi luật hình
+học rõ ràng thoả mãn, thiếu 1 điều kiện thì bỏ qua, không ép gán; (2) tái
+dùng `constraints[]` đã có từ `constraint_detection.py` làm input chính,
+KHÔNG đo lại hình học — module chỉ xác minh điều kiện tổ hợp, nếu ngưỡng
+detect đổi thì compound tự theo kịp (đúng nguyên tắc "1 nguồn sự thật" đã
+áp dụng ở 11.3/11.5); (3) confidence compound = trung bình có trọng số
+confidence các constraint thành phần × hệ số khớp hình học, chỉ để xếp
+hạng ưu tiên review chứ không phải xác suất thống kê thật.
+
+4 loại compound (`build_compound_parts()`, entry point):
+
+- **`khung_chu_nhat`** (khung chữ nhật kín): tìm 2 cặp `parallel` sao cho
+  4 line có `perpendicular` giữa 2 nhóm và `coincident_endpoint` khép kín
+  ở ≥3/4 góc (cho phép hở nhẹ do ảnh scan không khép kín hoàn hảo).
+- **`gia_do`** (giá đỡ góc vuông, L-bracket): 2 line có cả `perpendicular`
+  và `coincident_endpoint` tại 1 đầu chung — compound đơn giản nhất.
+- **`ban_le`** (bản lề): 2 line gần song song (gap ≤ `parallel_gap_max_mm`,
+  mặc định 50mm — bản lề thật có 2 lá kim loại cách nhau vài mm nên KHÔNG
+  yêu cầu `coincident_endpoint` như 2 loại trên) + mỗi line có 1 circle nhỏ
+  riêng gần endpoint (trong bán kính `bolt_hole_search_radius_mm`, mặc định
+  30mm — mỗi circle chỉ được gán cho thanh gần nhất, loại các case cách đều
+  2 thanh vì không đủ bằng chứng gắn kết).
+- **`diem_noi`** (điểm hàn/nút gia cố nhiều thanh hội tụ): cluster endpoint
+  các line theo khoảng cách (`coincident_distance_mm`, mặc định 2.0mm,
+  đồng bộ ngưỡng mặc định của `constraint_detection`) bằng Union-Find, giữ
+  cluster có ≥3 line endpoint (2 line hội tụ tại 1 điểm đã là `gia_do`, để
+  tránh trùng loại) và ≥50% cặp line trong cluster có `coincident_endpoint`
+  constraint thật.
+
+Chống trùng: các compound ứng viên được xếp theo số primitive giảm dần rồi
+confidence giảm dần, chọn tham lam (greedy) sao cho 1 primitive không bị
+gán vào nhiều compound — vd 4 line tạo `khung_chu_nhat` thì KHÔNG bị tách
+thành 4 `gia_do` riêng lẻ.
+
+Wired vào `assemble.py` (`build_semantic_document(..., enable_compound_parts=True)`
+mặc định, có thể tắt để so sánh/debug). Test: `semantic_ir_lib/tests/test_pattern_compound.py`
+— 14 test, PASS độc lập, thuần logic (không cần package optional nào).
+
+**Hạn chế thật, đã xác nhận bằng cách chạy demo pipeline thật**: đúng như
+mục 11.4 vẫn còn ghi (benchmark ngưỡng trên ảnh thật CHƯA làm) —
+`python3 -m semantic_ir_lib.demo_pipeline` (chạy nối tiếp
+`primitive_ir_lib.demo_pipeline` trên ảnh tổng hợp, 43 primitive) hiện
+KHÔNG tạo ra compound part nào, dù dữ liệu thô có vài nhóm line trông như
+khung. Đây là dấu hiệu ngưỡng mặc định (đặc biệt `coincident_distance_mm`/
+dung sai coincident_endpoint của `constraint_detection`) chưa khớp với sai
+số thật của line đã merge từ Hough, KHÔNG phải lỗi logic của
+`pattern_compound.py` (14 test tổng hợp riêng đều pass đúng theo thiết kế).
+Việc benchmark/tinh chỉnh ngưỡng này trên ảnh scan thật là ưu tiên cao nhất
+còn lại của Phase 2 (xem mục 11.4 đã cập nhật).
 
 ## 12. [MỚI] Phase 3 — DXF Builder + Reviewer #1 headless + Repair #1: code đầy đủ
 
