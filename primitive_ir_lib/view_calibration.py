@@ -24,32 +24,13 @@ def mm_per_px_for_scale(denominator: int, dpi: int) -> float:
     return denominator * 25.4 / dpi
 
 
-def extract_scale_label_candidates(primitives: Iterable[dict], dpi: int) -> list[dict]:
-    """Collect review-only scale candidates with their OCR provenance."""
-    candidates = []
-    for primitive in primitives:
-        if primitive.get("type") != "text":
-            continue
-        denominator = parse_scale_label(primitive.get("text_data", {}).get("content", ""))
-        if denominator is None:
-            continue
-        candidates.append({
-            "source_text_id": primitive["id"],
-            "bbox_px": primitive["trace"]["bbox_px"],
-            "scale_denominator": denominator,
-            "pixel_to_unit_scale": mm_per_px_for_scale(denominator, dpi),
-            "status": "needs_verification",
-        })
-    return candidates
-
-
 def _bbox_distance(a: tuple, b: tuple) -> float:
     dx = max(a[0] - b[2], b[0] - a[2], 0.0)
     dy = max(a[1] - b[3], b[1] - a[3], 0.0)
     return (dx * dx + dy * dy) ** 0.5
 
 
-def _line_regions(lines: Iterable[object], gap_px: float = 30.0) -> list[tuple]:
+def _line_regions(lines: Iterable[object], gap_px: float) -> list[tuple]:
     """Cluster touching/nearby line bboxes into conservative drawing regions."""
     regions: list[list[float]] = []
     for line in lines:
@@ -69,12 +50,15 @@ def _line_regions(lines: Iterable[object], gap_px: float = 30.0) -> list[tuple]:
 
 def detect_view_candidates(raw_texts: Iterable[object], raw_lines: Iterable[object],
                            image_width: int, image_height: int, dpi: int,
-                           max_label_distance_px: float = 120.0) -> list[dict]:
+                           max_label_distance_mm: float = 21.1666666667,
+                           region_gap_mm: float = 5.2916666667) -> list[dict]:
     """Associate every scale label with one unambiguous nearby line region."""
     del image_width, image_height
     lines = list(raw_lines)
     texts = list(raw_texts)
-    regions = _line_regions(lines)
+    px_per_mm = dpi / 25.4
+    regions = _line_regions(lines, gap_px=region_gap_mm * px_per_mm)
+    max_label_distance_px = max_label_distance_mm * px_per_mm
     candidates = []
     for text in texts:
         denominator = parse_scale_label(text.content)

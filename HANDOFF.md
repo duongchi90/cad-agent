@@ -534,6 +534,19 @@ $env:PATH='C:\Program Files\Tesseract-OCR;'+$env:PATH
 - Một batch rerun có feature mới đã được người dùng yêu cầu tạm dừng; artifact
   dở dang nằm trong `output/` và không phải kết quả benchmark chính thức.
 
+### Cập nhật review sau benchmark
+
+- Bỏ fallback sidecar không thể chạy trong `run_pdf`; integration test hiện
+  kiểm tra đúng đường `run_image sidecar -> PDF manifest`.
+- Đổi ngưỡng gán label và gộp line từ pixel cố định sang mm quy đổi theo DPI.
+  Giá trị mặc định tương đương 120px/30px tại 144 DPI, nhưng giữ cùng khoảng
+  cách vật lý khi render 288 DPI.
+- Thêm test cho chọn đúng vùng gần hơn trong scene có hai vùng, và giữ line
+  đúng khi region được hợp từ ba line.
+- Rerun 4 PDF (30 trang) tại 144 DPI: 59 candidate có evidence; 54 candidate
+  có delta <=3%, 3 nằm trong (3%,10%], 2 >10%. Tất cả vẫn
+  `needs_verification`; report local nằm trong `output/` và không commit.
+
 ---
 
 ## 2026-07-20 — File IPC Live MCP adapter
