@@ -362,9 +362,9 @@ loại lỗi test — không sửa assertion nào để ép pass.
   generic nên NÊN hoạt động đúng (không có nhánh riêng theo component_type
   trong code repair).
 - Nhánh `chore/text-block-lateral-px-25` (P3, bump text_block_lateral_px
-  15px->25px) làm song song, CHƯA merge vào nhánh này hay `main` — 2 nhánh
-  độc lập, không đụng chung file (`primitive_ir_lib/line_merging.py` vs
-  `dxf_builder_lib/repair.py`).
+  15px->25px) làm song song với nhánh này. **[Cập nhật 21/07/2026]** Đã xác
+  nhận merge vào `main`: `primitive_ir_lib/line_merging.py` hiện có
+  `text_block_lateral_px: float = 25.0`.
 - Case "block definition bị thiếu khi cần repair" (nhánh bỏ qua an toàn
   trong `repair_insert_components()`) chưa có test riêng — khó dựng fixture
   thật cho case này (phải xoá block definition khỏi file DXF theo cách hợp
@@ -401,6 +401,14 @@ compound pattern: cặp primitive `g1`/`g2` được nhận diện là `gia_do` 
 `main` phải dùng fast-forward. Không merge trực tiếp lịch sử độc lập của
 `master`; giữ `master` và các feature/fix branch để dọn trong một thay đổi
 riêng sau khi `main` ổn định.
+
+**[Cập nhật 21/07/2026]** Lịch sử các nhánh trên đã được gộp (squash) thành
+1 commit khi đẩy lên GitHub (`duongchi90/cad-agent`) — `git branch -a` trên
+remote hiện chỉ còn `main`, không còn `master`/`integration/main-master`/các
+nhánh `feature-`/`fix-`/`chore-` liệt kê trong file này. Mọi ghi chú "chưa
+merge"/"nhánh độc lập" ở các mục phía trên chỉ còn giá trị lịch sử (giải
+thích quyết định/diễn biến từng phiên làm việc) — code hiện tại trên `main`
+đã bao gồm toàn bộ các thay đổi đó.
 
 ---
 
