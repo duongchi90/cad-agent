@@ -37,6 +37,8 @@ PartSource = Literal["rule_geometry", "vision_assisted"]
 PartValidationStatus = Literal["unreviewed", "reviewer2_pass", "reviewer2_fail", "repaired"]
 ConstraintType = Literal[
     "parallel", "perpendicular", "equal_length", "coincident_endpoint", "collinear",
+    # line-circle/circle-circle (constraint_detection.detect_circle_constraints)
+    "tangent", "concentric",
 ]
 
 
@@ -115,6 +117,9 @@ class Constraint:
     confidence: float
     tolerance: dict  # {"angle_deg": ...} | {"length_percent": ...} | {"distance_mm": ...}
     id: str = field(default_factory=lambda: new_id("cst"))
+    # measured: {"angle_diff_deg"|"length_diff_percent"|"endpoint_distance_mm"|
+    # "tangent_gap_mm"|"center_distance_mm": ...} tuỳ 'type' — 2 field cuối
+    # dùng cho 'tangent'/'concentric' (detect_circle_constraints)
     measured: Optional[dict] = None
 
     def __post_init__(self):

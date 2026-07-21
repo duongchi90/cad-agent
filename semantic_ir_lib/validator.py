@@ -24,6 +24,7 @@ _VALID_PART_TYPES = {
 _VALID_PART_SOURCES = {"rule_geometry", "vision_assisted"}
 _VALID_CONSTRAINT_TYPES = {
     "parallel", "perpendicular", "equal_length", "coincident_endpoint", "collinear",
+    "tangent", "concentric",
 }
 
 

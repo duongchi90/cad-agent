@@ -34,6 +34,15 @@ from .table_extraction import extract_table_cells
 from .text_extraction import extract_text_tesseract, extract_text_vision
 from .validator import validate_document
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Cùng thư mục mà semantic_ir_lib/demo_pipeline.py đọc làm input mặc định
+# (_DEFAULT_PRIMITIVE_IR_PATH ở đó) — trước đây hardcode "/home/claude/
+# demo_output" (đặc thù sandbox, khác thư mục này), khiến 2 demo không nối
+# được với nhau trên máy khác/sandbox khác (semantic_ir_lib âm thầm đọc
+# nhầm file fixture cũ đã commit sẵn ở primitive_ir_lib/demo_output/ thay vì
+# output mới nhất vừa chạy).
+_DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "primitive_ir_lib", "demo_output")
+
 IMG_W, IMG_H = 900, 700
 
 # Vùng bảng thông số 2 hàng x 3 cột (tier 2), đặt ở góc trên-phải, tách biệt
@@ -141,7 +150,7 @@ def mock_vision_reader(crop_bgr: np.ndarray) -> str:
     return max(candidates, key=len) if candidates else ""
 
 
-def run_demo(output_dir="/home/claude/demo_output", use_real_vision=False) -> dict:
+def run_demo(output_dir=_DEFAULT_OUTPUT_DIR, use_real_vision=False) -> dict:
     """use_real_vision=True: nối vision_reader/cell_reader thật (vision_client.py)
     thay cho mock_vision_reader() — cần `pip install anthropic` + biến môi
     trường ANTHROPIC_API_KEY. Nếu thiếu 1 trong 2 điều kiện đó, tự động log

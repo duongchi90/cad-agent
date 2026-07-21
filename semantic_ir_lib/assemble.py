@@ -16,7 +16,7 @@ from typing import List
 
 from primitive_ir_lib.models import Primitive, PrimitiveIRDocument
 
-from .constraint_detection import detect_constraints
+from .constraint_detection import detect_circle_constraints, detect_constraints
 from .models import PrimitiveIRRef, SemanticIRDocument
 from .pattern_compound import build_compound_parts
 from .pattern_recognition import build_parts_from_primitives
@@ -49,6 +49,7 @@ def build_semantic_document(
     """
     primitives: List[Primitive] = primitive_doc.primitives
     line_primitives = [p for p in primitives if p.type == "line"]
+    circle_primitives = [p for p in primitives if p.type == "circle"]
 
     parts = build_parts_from_primitives(
         primitives,
@@ -59,6 +60,14 @@ def build_semantic_document(
         line_primitives,
         angle_tolerance_deg=constraint_angle_tolerance_deg,
         length_tolerance_percent=constraint_length_tolerance_percent,
+        distance_tolerance_mm=constraint_distance_tolerance_mm,
+    )
+    # tangent (line-circle) + concentric (circle-circle) — cùng ngưỡng
+    # distance_tolerance_mm với line-line ở trên (mục 11.4 tài liệu kiến
+    # trúc: "Còn thiếu: constraint line-circle/circle-circle", đã bổ sung).
+    constraints += detect_circle_constraints(
+        line_primitives,
+        circle_primitives,
         distance_tolerance_mm=constraint_distance_tolerance_mm,
     )
 

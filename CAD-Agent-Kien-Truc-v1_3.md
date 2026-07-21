@@ -239,13 +239,28 @@ Bắt đầu Phase 2 theo đúng phương pháp đã dùng ở Phase 1 (mục 10
 
 `constraint_detection.py` so từng cặp line, phát hiện 5 quan hệ deterministic (`parallel`, `perpendicular`, `equal_length`, `coincident_endpoint`, `collinear`) bằng công thức hình học thuần (góc, khoảng cách điểm-đường thẳng), KHÔNG dùng SolveSpace ở bước này — đây mới là bước "Detection", "Solving" (dùng `python-solvespace`) để lại cho bước sau đọc `constraints[]` làm input. Test trên dữ liệu tổng hợp cho 6 case (mỗi loại quan hệ + case không có quan hệ + case reject sai type) đều đúng; chạy thử trên chính output demo Phase 1 (43 primitives, ảnh tổng hợp) ra 35 parts + 229 constraints — số constraint cao vì ảnh tổng hợp có nhiều line song song/vuông góc trùng lặp (khung nhiều thanh cùng hướng), là hành vi ĐÚNG kỳ vọng (không lọc trùng ở bước Detection), nhưng cho thấy rõ cần bước lọc/rút gọn trước khi đưa vào solver thật trên ảnh nhiều line hơn.
 
-**11.4. Việc còn lại của Phase 2 (đã làm 3/5, xem mục 11.5 và 11.6)**
+**11.4. Việc còn lại của Phase 2 (đã làm 4/5, xem mục 11.5 và 11.6)**
 
 - ~~Ghép nhiều primitive thành 1 part phức hợp (bản lề, giá đỡ, mối hàn)~~ —
   **đã làm, xem 11.6**. Dùng rule hình dạng thuần dựa trên constraint đã
   detect (KHÔNG dùng Vision-assisted; trường `source: vision_assisted` vẫn
   còn chỗ trong schema cho tương lai nếu rule hình học không đủ).
-- Constraint line-circle/circle-circle (tangent, concentric) — bước đầu chỉ có line-line, vẫn còn thiếu.
+- ~~Constraint line-circle/circle-circle (tangent, concentric)~~ — **đã làm**.
+  `constraint_detection.detect_circle_constraints(lines, circles, ...)` —
+  hàm tách riêng khỏi `detect_constraints()` (khác type input, cùng quy ước
+  raise ValueError nếu gọi sai type, không tự lọc im lặng). `tangent`:
+  |khoảng cách tâm circle tới đường thẳng vô hạn chứa line − bán kính| ≤
+  ngưỡng (dùng lại `_point_to_infinite_line_distance()` đã có cho
+  `collinear`). `concentric`: khoảng cách 2 tâm ≤ ngưỡng. Cùng
+  `distance_tolerance_mm` mặc định 5.0mm với line-line (đồng bộ, cùng bậc
+  sai số Hough — mục 11.6). Đã wire vào `assemble.py` (gộp vào
+  `constraints[]` chung) và cập nhật `semantic_ir.schema.json`/
+  `validator.py` chấp nhận 2 type mới. Constraint Solving
+  (`python-solvespace`, mục 11.5) CHƯA hỗ trợ circle primitive — 2 type
+  này bị bỏ qua ở bước solve (vào `skipped_constraints`), không crash;
+  tích hợp solve cho circle là việc riêng, chưa làm. Test:
+  `semantic_ir_lib/tests/test_semantic_ir.py` (7 test: tangent/concentric
+  dương tính + âm tính + dung sai nhỏ + reject sai type).
 - ~~Lọc/rút gọn `constraints[]` trước khi đưa vào SolveSpace~~ — **đã làm, xem 11.5**.
 - Benchmark ngưỡng góc/bán kính/confidence (mục 11.2, và `min_confidence` mặc định của pruning) **cùng các ngưỡng compound mới** (`bolt_hole_search_radius_mm`, `parallel_gap_max_mm`, `coincident_distance_mm` — xem 11.6) trên ảnh scan thật — vẫn còn thiếu. `coincident_endpoint`/`gia_do` đã xác nhận hoạt động đúng trên demo (5.0mm, xem 11.6), nhưng `ban_le`/`khung_chu_nhat` và ngưỡng 5.0mm nói chung mới benchmark trên 1 ảnh tổng hợp — vẫn cần benchmark thật trên ảnh scan domain khung xe.
 - ~~Tích hợp `python-solvespace` thật (Constraint Solving)~~ — **đã làm, xem 11.5**.

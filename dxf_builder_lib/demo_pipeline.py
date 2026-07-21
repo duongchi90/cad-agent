@@ -29,14 +29,23 @@ import os
 from semantic_ir_lib.constraint_pruning import prune_constraints
 from semantic_ir_lib.io_utils import load_primitive_ir_document, load_semantic_ir_document
 
-_DEFAULT_PRIMITIVE_IR_PATH = "/home/claude/demo_output/primitive_ir_demo_output.json"
-_DEFAULT_SEMANTIC_IR_PATH = "/home/claude/demo_output/semantic_ir_demo_output.json"
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Khớp đúng nơi 2 bước trước thực sự ghi ra (sau khi sửa hardcoded path):
+# primitive_ir_lib/demo_pipeline.py -> primitive_ir_lib/demo_output/, còn
+# semantic_ir_lib/demo_pipeline.py -> <repo_root>/demo_output/ (đọc input
+# từ thư mục trên, ghi output sang thư mục này) — xem docstring 2 file đó.
+# Trước đây cả 3 default ở đây đều hardcode "/home/claude/demo_output",
+# chỉ đúng tình cờ nếu repo được clone thẳng vào /home/claude (không phải
+# /home/claude/cad-agent hay máy khác).
+_DEFAULT_PRIMITIVE_IR_PATH = os.path.join(_REPO_ROOT, "primitive_ir_lib", "demo_output", "primitive_ir_demo_output.json")
+_DEFAULT_SEMANTIC_IR_PATH = os.path.join(_REPO_ROOT, "demo_output", "semantic_ir_demo_output.json")
+_DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "demo_output")
 
 
 def run_demo(
     primitive_ir_path: str = _DEFAULT_PRIMITIVE_IR_PATH,
     semantic_ir_path: str = _DEFAULT_SEMANTIC_IR_PATH,
-    output_dir: str = "/home/claude/demo_output",
+    output_dir: str = _DEFAULT_OUTPUT_DIR,
 ) -> dict:
     for p in (primitive_ir_path, semantic_ir_path):
         if not os.path.exists(p):

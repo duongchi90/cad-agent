@@ -97,8 +97,8 @@
     },
     "ConstraintType": {
       "type": "string",
-      "enum": ["parallel", "perpendicular", "equal_length", "coincident_endpoint", "collinear"],
-      "description": "5 loại quan hệ hình học deterministic đo được trực tiếp giữa 2 line — đúng tập constraint cơ bản mà python-solvespace hỗ trợ solve (mục 3 tài liệu kiến trúc: 'parallel/perpendicular/tangent/equal-length'). tangent (line-circle) và coincident giữa circle chưa nằm trong bước đầu này."
+      "enum": ["parallel", "perpendicular", "equal_length", "coincident_endpoint", "collinear", "tangent", "concentric"],
+      "description": "7 loại quan hệ hình học deterministic: 5 loại đầu đo giữa 2 line (song song/vuông góc/bằng nhau/trùng điểm đầu/thẳng hàng, constraint_detection.detect_constraints); 'tangent' (line-circle) và 'concentric' (circle-circle) đo bởi constraint_detection.detect_circle_constraints — bổ sung theo mục 11.4 tài liệu kiến trúc. Constraint Solving (python-solvespace) hiện chỉ áp dụng 5 loại line-line; tangent/concentric bị bỏ qua ở bước solve (skipped_constraints) cho tới khi solving hỗ trợ circle primitive."
     },
     "Constraint": {
       "type": "object",
@@ -111,7 +111,7 @@
           "type": "array",
           "minItems": 2, "maxItems": 2,
           "items": {"type": "string"},
-          "description": "Đúng 2 id primitive kiểu 'line' (Phase 2 bước đầu chỉ xét quan hệ line-line, chưa xét line-circle/circle-circle)."
+          "description": "Đúng 2 id primitive. Với type parallel/perpendicular/equal_length/coincident_endpoint/collinear: cả 2 đều là 'line'. Với type 'tangent': [line_id, circle_id]. Với type 'concentric': 2 id 'circle'."
         },
         "confidence": {
           "type": "number", "minimum": 0.0, "maximum": 1.0,
@@ -133,9 +133,11 @@
           "properties": {
             "angle_diff_deg": {"type": "number"},
             "length_diff_percent": {"type": "number"},
-            "endpoint_distance_mm": {"type": "number"}
+            "endpoint_distance_mm": {"type": "number"},
+            "tangent_gap_mm": {"type": "number"},
+            "center_distance_mm": {"type": "number"}
           },
-          "description": "Giá trị đo thực tế tương ứng với loại constraint (chỉ 1 trong 3 field áp dụng tuỳ 'type')."
+          "description": "Giá trị đo thực tế tương ứng với loại constraint (chỉ 1 trong 5 field áp dụng tuỳ 'type'). tangent_gap_mm: |khoảng_cách(tâm, đường thẳng) - bán_kính| cho 'tangent'. center_distance_mm: khoảng cách 2 tâm cho 'concentric'."
         }
       }
     }

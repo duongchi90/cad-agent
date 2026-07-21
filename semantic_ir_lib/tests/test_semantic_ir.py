@@ -6,7 +6,7 @@ from primitive_ir_lib.models import (
     CircleGeometry, LineGeometry, Point2D, Primitive, Trace,
 )
 
-from semantic_ir_lib.constraint_detection import detect_constraints
+from semantic_ir_lib.constraint_detection import detect_circle_constraints, detect_constraints
 from semantic_ir_lib.pattern_recognition import build_parts_from_primitives
 from semantic_ir_lib.validator import validate_document
 
@@ -179,6 +179,82 @@ def test_detect_constraints_rejects_non_line_primitive():
     print("OK   test_detect_constraints_rejects_non_line_primitive")
 
 
+# ------------------------------------------------- constraint_detection (circle) --
+def test_tangent_line_circle_detected():
+    """Line ngang y=0 và circle tâm (50, 10) bán kính 10 -> tiếp tuyến đúng
+    (khoảng cách tâm tới đường thẳng = 10 = bán kính)."""
+    line = _line("l1", 0, 0, 100, 0)
+    circle = _circle("c1", 50, 10, 10)
+    cs = detect_circle_constraints([line], [circle])
+    types = {c.type for c in cs}
+    assert "tangent" in types, f"circle chạm đúng line phải là tangent, nhận {types}"
+    t = [c for c in cs if c.type == "tangent"][0]
+    assert set(t.primitive_ids) == {"l1", "c1"}
+    print("OK   test_tangent_line_circle_detected")
+
+
+def test_tangent_negative_circle_far_from_line():
+    """Circle cách xa line (gap 50mm so với bán kính) -> KHÔNG phải tangent."""
+    line = _line("l1", 0, 0, 100, 0)
+    circle = _circle("c1", 50, 100, 10)
+    cs = detect_circle_constraints([line], [circle])
+    types = {c.type for c in cs}
+    assert "tangent" not in types, f"circle xa KHÔNG phải tangent, nhận {types}"
+    print("OK   test_tangent_negative_circle_far_from_line")
+
+
+def test_tangent_tolerates_small_gap():
+    """Hồi quy tương tự coincident_endpoint: circle lệch nhẹ (3mm, trong
+    ngưỡng mặc định 5.0mm) so với tiếp tuyến chính xác vẫn phải nhận diện
+    được — dữ liệu đo từ ảnh scan hiếm khi tiếp tuyến khớp tuyệt đối."""
+    line = _line("l1", 0, 0, 100, 0)
+    circle = _circle("c1", 50, 13, 10)  # cách đường thẳng 13mm, bán kính 10 -> gap 3mm
+    cs = detect_circle_constraints([line], [circle])
+    types = {c.type for c in cs}
+    assert "tangent" in types, f"gap 3mm trong ngưỡng 5.0mm vẫn phải là tangent, nhận {types}"
+    print("OK   test_tangent_tolerates_small_gap")
+
+
+def test_concentric_circle_circle_detected():
+    c1 = _circle("c1", 0, 0, 5)
+    c2 = _circle("c2", 0, 0, 12)  # cùng tâm, bán kính khác (vd lỗ + vòng đệm)
+    cs = detect_circle_constraints([], [c1, c2])
+    types = {c.type for c in cs}
+    assert "concentric" in types, f"2 circle cùng tâm phải là concentric, nhận {types}"
+    con = [c for c in cs if c.type == "concentric"][0]
+    assert set(con.primitive_ids) == {"c1", "c2"}
+    print("OK   test_concentric_circle_circle_detected")
+
+
+def test_concentric_negative_different_centers():
+    c1 = _circle("c1", 0, 0, 5)
+    c2 = _circle("c2", 100, 100, 5)
+    cs = detect_circle_constraints([], [c1, c2])
+    types = {c.type for c in cs}
+    assert "concentric" not in types, f"tâm cách xa KHÔNG phải concentric, nhận {types}"
+    print("OK   test_concentric_negative_different_centers")
+
+
+def test_detect_circle_constraints_rejects_non_line_in_lines_param():
+    circ = _circle("c1", 0, 0, 5.0)
+    try:
+        detect_circle_constraints([circ], [])
+        raise AssertionError("Phải raise ValueError khi lines chứa primitive không phải line")
+    except ValueError:
+        pass
+    print("OK   test_detect_circle_constraints_rejects_non_line_in_lines_param")
+
+
+def test_detect_circle_constraints_rejects_non_circle_in_circles_param():
+    line = _line("l1", 0, 0, 100, 0)
+    try:
+        detect_circle_constraints([], [line])
+        raise AssertionError("Phải raise ValueError khi circles chứa primitive không phải circle")
+    except ValueError:
+        pass
+    print("OK   test_detect_circle_constraints_rejects_non_circle_in_circles_param")
+
+
 # ------------------------------------------------------------------ validator --
 def test_validator_passes_on_well_formed_document():
     l1 = _line("l1", 0, 0, 100, 0)
@@ -225,6 +301,13 @@ _TESTS = [
     test_coincident_endpoint_still_rejects_clearly_unrelated_gap,
     test_unrelated_lines_produce_no_constraint,
     test_detect_constraints_rejects_non_line_primitive,
+    test_tangent_line_circle_detected,
+    test_tangent_negative_circle_far_from_line,
+    test_tangent_tolerates_small_gap,
+    test_concentric_circle_circle_detected,
+    test_concentric_negative_different_centers,
+    test_detect_circle_constraints_rejects_non_line_in_lines_param,
+    test_detect_circle_constraints_rejects_non_circle_in_circles_param,
     test_validator_passes_on_well_formed_document,
     test_validator_catches_dangling_primitive_id,
 ]
