@@ -121,6 +121,17 @@ và `calibration_registry.py` cung cấp 2 bước:
     đúng nguyên tắc "rule-based/deterministic trước, AI/suy đoán chỉ hỗ trợ" đã
     thống nhất trong dự án.
 
+### Mixed-scale PDF sheets
+
+Một trang PDF có thể chứa nhiều view với tỷ lệ riêng (`TL 1:40`, `TL 1:20`,
+`TL 1:10`, `TL 1:8`, `TL 1:5`). `run_pdf` vì vậy ghi các nhãn tỷ lệ OCR và
+candidate vùng hình học vào manifest dưới dạng `scale_label_candidates`.
+Candidate chỉ được tạo khi nhãn có đúng một cụm line gần nhất; nếu có nhiều
+vùng cạnh tranh hoặc OCR không đọc được nhãn, pipeline bỏ qua thay vì đoán.
+Mỗi candidate luôn là `needs_verification` và có thể kèm evidence đối chiếu
+dimension/geometry. Candidate không thay thế calibration toàn trang, không tự
+xuất DXF, và không được xem là scale sản xuất.
+
 Còn thiếu: benchmark `auto_estimate_calibration()` trên ảnh scan thật (hiện chỉ có
 unit test trên fixture tổng hợp) — cùng loại benchmark mà Phase 1 các bước
 geometry/text extraction khác đã làm.
