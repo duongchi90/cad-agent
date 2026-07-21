@@ -71,6 +71,16 @@ def cross_validate(
         if text.semantic_role != "dimension_value" or text.parsed_value is None:
             continue
 
+        if text.parsed_value == 0:
+            results.append(CrossValidation(
+                text_primitive_id=text.id,
+                geometry_primitive_id="",
+                status="unverified",
+                text_value=text.parsed_value,
+                match_threshold_percent=threshold_percent,
+            ))
+            continue
+
         line = find_nearest_line(text, raw_lines, max_distance_px=max_distance_px)
 
         if line is None:
