@@ -71,6 +71,14 @@ Chạy lệnh từ thư mục `cad_agent` để các package Phase 1–5 cùng n
    xem mục "Bàn giao bổ sung — Repair #1 cho INSERT component" ở cuối file.
 3. Phase 4: tích hợp AutoCAD MCP (file_ipc), Reviewer #2 visual/zoom và Repair #2 theo handle.
 4. Duy trì ranh giới: Reviewer #1 chỉ kiểm tra chuyển đổi IR → DXF; lỗi nhận thức/pattern phải do Reviewer #2 đánh giá với ảnh gốc.
+5. Benchmark `auto_estimate_calibration()` (`primitive_ir_lib/calibration.py`,
+   thêm 21/07/2026) trên ảnh scan thật — hiện chỉ có unit test trên fixture
+   tổng hợp, chưa qua cùng quy trình benchmark-trên-ảnh-thật mà các bước
+   khác của Phase 1 đã làm (xem `docs/benchmarks/`). Đặc biệt cần case
+   `find_nearest_line` chọn nhầm line khi bản vẽ có nhiều kích thước sát
+   nhau/nhiều view — heuristic hiện tại (khoảng cách tâm bbox thuần) chưa
+   tính hướng line so với `rotation_deg` của text, đã ghi rõ là giới hạn
+   trong docstring.
 
 ---
 

@@ -12,7 +12,8 @@ Các tài liệu benchmark/kế hoạch bổ sung nằm trong `docs/`:
 
 - **`primitive_ir_lib/`** (Phase 1) — sinh Primitive IR từ ảnh scan/PDF:
   Geometry Extraction (OpenCV Canny+Hough), Text Extraction (Tesseract +
-  Vision API thật, 3 tier), Cross-validation. Xem `primitive_ir_lib/README.md`.
+  Vision API thật, 3 tier), Cross-validation, Calibration (quy đổi px→mm,
+  xem mục "Calibration (px → mm)" bên dưới). Xem `primitive_ir_lib/README.md`.
 - **`semantic_ir_lib/`** (Phase 2) — sinh Semantic IR từ Primitive IR:
   Pattern Recognition (primitive → linh kiện: thanh ngang/dọc/xiên, lỗ
   bắt vít...) + Pattern Compound (ghép nhiều primitive thành 1 linh kiện
@@ -100,6 +101,29 @@ python3 -m unittest discover -s agent_lib/tests -v        # 64 test Phase 5
 `test_constraint_solving.py` cần `python-solvespace` và 12 test trong
 `dxf_builder_lib/tests/` cần `ezdxf` để chạy thật, tự SKIP (không fail)
 nếu chưa cài các package optional này.
+
+## Calibration (px → mm)
+
+Toạ độ hình học đọc từ ảnh/PDF là pixel; DXF cần mm. `primitive_ir_lib/calibration.py`
+và `calibration_registry.py` cung cấp 2 bước:
+
+- **`auto_estimate_calibration(raw_texts, raw_lines, image_height_px)`** — tự động
+  quét `raw_texts` tìm text đầu tiên có `semantic_role == "dimension_value"`, ghép
+  với `RawLine` gần nhất (`find_nearest_line`, ngưỡng `max_distance_px`), dùng cặp
+  đó làm mốc quy đổi (`method="known_dimension_reference"`, xem mục 10.3
+  `CAD-Agent-Kien-Truc-v1_3.md`). Trả về `None` nếu không tìm được cặp phù hợp.
+- **`calibration_registry.py`** — sổ ghi calibration đã xác nhận, mỗi bản ghi gắn
+  `sha256` của đúng file ảnh/PDF đã dùng để đo. Có 2 trạng thái:
+  - `verified` — người dùng đã tự kiểm tra, `get_verified_scale()` chấp nhận dùng.
+  - `needs_verification` — dành cho kết quả từ `auto_estimate_calibration()`;
+    `get_verified_scale()` **từ chối** trả scale cho tới khi ai đó đổi lại thành
+    `verified`. Cố ý không tự tin dùng calibration suy đoán cho DXF sản xuất —
+    đúng nguyên tắc "rule-based/deterministic trước, AI/suy đoán chỉ hỗ trợ" đã
+    thống nhất trong dự án.
+
+Còn thiếu: benchmark `auto_estimate_calibration()` trên ảnh scan thật (hiện chỉ có
+unit test trên fixture tổng hợp) — cùng loại benchmark mà Phase 1 các bước
+geometry/text extraction khác đã làm.
 
 ## Trạng thái
 

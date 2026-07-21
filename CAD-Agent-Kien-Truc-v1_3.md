@@ -103,12 +103,20 @@ Final DWG
 
 ## 6. Roadmap đề xuất
 
+> **[CẬP NHẬT 21/07/2026]** Mục này (6-8) được viết ở giai đoạn v1.2/v1.3, khi
+> Phase 2-5 còn ở dạng đề xuất. Thực tế cả 5 phase nay đã có code + test đầy đủ
+> (`primitive_ir_lib`/`semantic_ir_lib`/`dxf_builder_lib`/`mcp_integration_lib`/
+> `agent_lib`) — xem `README.md` mục "Trạng thái" và `HANDOFF.md` mục "Việc nên
+> làm tiếp" để biết trạng thái/việc-còn-thiếu ĐÚNG với code hiện tại. Giữ lại
+> nội dung gốc bên dưới làm bối cảnh lịch sử (lý do các quyết định kiến trúc
+> ban đầu), không phải danh sách việc-cần-làm hiện hành.
+
 - **Phase 0 [v1.2: GẦN NHƯ XONG]**: Benchmark line extraction (OpenCV Canny+Hough) trên 4 ảnh scan thật — ✅ xong, kết quả tốt. Benchmark OCR/text extraction trên cùng 4 ảnh — ✅ xong, xác định rõ chiến lược 3 tier (mục 9). Test entity handle mapping trên AutoCAD LT thật — ✅ **[v1.2]** xong, khớp 100% (mục 9.4). **CÒN THIẾU DUY NHẤT**: chạy thử chính Image2CAD (hiện mới test OpenCV thuần thay thế); đọc repo `autocad-drafting` (độ ưu tiên thấp, domain đã đổi khỏi P&ID).
-- **Phase 1 (~1 tuần) [v1.3: SCHEMA ĐÃ CHỐT]**: Thiết kế chuẩn Primitive IR (JSON), có trường phân biệt nguồn trích xuất (`geometry_opencv` vs `text_tesseract` vs `text_vision`) và `confidence` riêng cho từng nguồn, cộng trường `handle` (đã xác nhận an toàn để dùng trực tiếp). Xem mục 10.
-- **Phase 2**: Pattern Recognition + Constraint Detection cho domain khung xương cải tạo ô tô (thời gian chưa ước lượng được).
-- **Phase 3**: Headless Builder (ezdxf) + Reviewer #1 headless.
-- **Phase 4**: Tích hợp AutoCAD MCP thật (file_ipc) — Reviewer #2 (zoom, screenshot), Repair #2.
-- **Phase 5**: Agent hoá phần ambiguous/confidence thấp bằng LLM.
+- **Phase 1 (~1 tuần) [v1.3: SCHEMA ĐÃ CHỐT]**: Thiết kế chuẩn Primitive IR (JSON), có trường phân biệt nguồn trích xuất (`geometry_opencv` vs `text_tesseract` vs `text_vision`) và `confidence` riêng cho từng nguồn, cộng trường `handle` (đã xác nhận an toàn để dùng trực tiếp). Xem mục 10. **[Cập nhật]** Code đã xong (`primitive_ir_lib/`), gồm cả Calibration (`calibration.py`/`calibration_registry.py`, xem mục 10.3 và README) — còn thiếu benchmark Vision API thật quy mô lớn và benchmark calibration tự động trên ảnh thật.
+- **Phase 2**: Pattern Recognition + Constraint Detection cho domain khung xương cải tạo ô tô. **[Cập nhật]** Code đã xong (`semantic_ir_lib/`) — còn thiếu benchmark ngưỡng (góc/bán kính/confidence/compound) trên nhiều ảnh thật, và circle primitive chưa được đưa vào Constraint Solving.
+- **Phase 3**: Headless Builder (ezdxf) + Reviewer #1 headless. **[Cập nhật]** Code đã xong (`dxf_builder_lib/`), gồm Repair #1 và round-trip INSERT — còn thiếu Semantic API riêng domain khung xương/thùng xe cải tạo, constraint arc, và test round-trip cho các component ngoài `frame_beam`.
+- **Phase 4**: Tích hợp AutoCAD MCP thật (file_ipc) — Reviewer #2 (zoom, screenshot), Repair #2. **[Cập nhật]** Adapter File IPC đã có (`mcp_integration_lib/`), smoke test đọc entity list đã PASS trên AutoCAD thật — còn thiếu Reviewer #2 visual/zoom thật.
+- **Phase 5**: Agent hoá phần ambiguous/confidence thấp bằng LLM. **[Cập nhật]** Code đã xong (`agent_lib/`), 64 test, CLI `python -m agent_lib.run` chạy được trên IR/ảnh thật.
 
 ## 7. Nguyên tắc thiết kế đã thống nhất
 
@@ -121,14 +129,19 @@ Final DWG
 
 ## 8. Việc cần làm ngay (action item)
 
+> **[CẬP NHẬT 21/07/2026]** Toàn bộ action item gốc bên dưới đã xong (đánh dấu
+> ☑ trước 07/2026). Danh sách việc-cần-làm hiện hành đã chuyển sang mục
+> "Việc nên làm tiếp" trong `HANDOFF.md` (cập nhật thường xuyên hơn file này) —
+> xem file đó để biết ưu tiên hiện tại thay vì danh sách dưới đây.
+
 ☑ ~~Gửi 3-5 ảnh/trang PDF scan thật để benchmark~~ — đã gửi 4 ảnh, đã benchmark (mục 9)
 ☑ ~~Xác nhận domain bản vẽ~~ — đã xác nhận: khung xương/thùng xe cải tạo, không phải P&ID
 ☑ **[v1.2]** ~~Test entity handle mapping (ezdxf → AutoCAD LT `drawing_open` → `entity_list`)~~ — đã test thật trên AutoCAD LT của người dùng, khớp 100% (mục 9.4)
 ☑ **[v1.3]** ~~Thiết kế Primitive IR schema có phân nhánh nguồn trích xuất text (Tesseract/Vision)~~ — đã chốt JSON Schema draft-07 chính thức + file ví dụ (mục 10)
-☐ Đọc/upload nội dung repo `puran-water/autocad-drafting` (độ ưu tiên giảm do domain đổi)
-☐ Viết prototype bước "tách ô bảng theo lưới trước khi đọc" cho case bảng nhiều cột (mục 9, mục 4)
-☐ **[v1.3]** Viết code build Primitive IR thật từ output OpenCV (thay vì tay gõ như file ví dụ) — nối kết quả benchmark mục 9.1 vào đúng schema mục 10
-☐ **[v1.3]** Viết hàm `cross_validate()`: input 1 text primitive (dimension) + danh sách geometry primitive ứng viên → output object `CrossValidation` (mục 10.2)
+☑ Đọc/upload nội dung repo `puran-water/autocad-drafting` — không còn liên quan, domain đã đổi khỏi P&ID
+☑ **[v1.3]** ~~Viết code build Primitive IR thật từ output OpenCV~~ — đã có (`primitive_ir_lib/`)
+☑ **[v1.3]** ~~Viết hàm `cross_validate()`~~ — đã có (`primitive_ir_lib/`, xem mục 10.2)
+☑ ~~Viết prototype bước "tách ô bảng theo lưới trước khi đọc" cho case bảng nhiều cột~~ — đã có (`primitive_ir_lib/table_extraction.py`, Tier 2, dùng lại `RawLine` đã detect để dựng lưới rồi OCR từng ô độc lập, không chạy lại Hough)
 
 ## 9. [MỚI] Phase 0 — Kết quả benchmark thực tế (4 ảnh scan thật)
 
