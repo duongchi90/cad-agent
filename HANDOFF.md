@@ -71,14 +71,56 @@ Chạy lệnh từ thư mục `cad_agent` để các package Phase 1–5 cùng n
    xem mục "Bàn giao bổ sung — Repair #1 cho INSERT component" ở cuối file.
 3. Phase 4: tích hợp AutoCAD MCP (file_ipc), Reviewer #2 visual/zoom và Repair #2 theo handle.
 4. Duy trì ranh giới: Reviewer #1 chỉ kiểm tra chuyển đổi IR → DXF; lỗi nhận thức/pattern phải do Reviewer #2 đánh giá với ảnh gốc.
-5. Benchmark `auto_estimate_calibration()` (`primitive_ir_lib/calibration.py`,
-   thêm 21/07/2026) trên ảnh scan thật — hiện chỉ có unit test trên fixture
-   tổng hợp, chưa qua cùng quy trình benchmark-trên-ảnh-thật mà các bước
-   khác của Phase 1 đã làm (xem `docs/benchmarks/`). Đặc biệt cần case
-   `find_nearest_line` chọn nhầm line khi bản vẽ có nhiều kích thước sát
-   nhau/nhiều view — heuristic hiện tại (khoảng cách tâm bbox thuần) chưa
-   tính hướng line so với `rotation_deg` của text, đã ghi rõ là giới hạn
-   trong docstring.
+5. ~~Benchmark `auto_estimate_calibration()` trên ảnh scan thật~~ MỘT PHẦN
+   ĐÃ LÀM (21/07/2026) — xem
+   [`docs/benchmarks/calibration-auto-estimate-real-image-benchmark.md`](docs/benchmarks/calibration-auto-estimate-real-image-benchmark.md).
+   Benchmark trên ảnh thật thứ 2 ("TP-GC-A018/07/26") **xác nhận đúng** nghi
+   ngờ: `find_nearest_line` chọn nhầm line khi bản vẽ có nhiều kích thước
+   sát nhau/nhiều view — ca cụ thể text "1970" bị gán nhầm 1 line dài 337px
+   (cách tâm text 16px) thay vì line đúng dài 428px (cách tâm text 46px,
+   nhưng mới là line chạm đúng 2 mũi tên), khiến scale suy ra sai lệch
+   **~60%** so với scale đo độc lập từ dim-line tổng "11790" trên cùng ảnh.
+
+   **[Cập nhật 21/07/2026, tiếp]** Đã implement hướng sửa #1 (lọc theo
+   hướng): `find_nearest_line()` giờ có tham số `angle_tolerance_deg`
+   (mặc định 20°), CHỈ lọc line theo hướng khi `text.rotation_deg != 0`
+   (text bị xoay chủ ý — case "số kích thước xoay dọc"). Cố ý KHÔNG lọc khi
+   `rotation_deg == 0` (mặc định, mọi text qua `extract_text_tesseract()`
+   hiện nay) vì text đọc ngang vẫn thường đo cạnh dọc — test có sẵn
+   `test_find_nearest_line_respects_max_distance` xác nhận điều này. Đã
+   thêm 6 test mới (`primitive_ir_lib/tests/test_calibration.py`, file mới
+   — trước đây `calibration.py` chưa có test riêng, chỉ có
+   `test_calibration_registry.py`). **Đã tự chạy lại benchmark thật để xác
+   nhận trung thực**: fix này **KHÔNG** sửa được ca "1970" đã benchmark —
+   text đó có `rotation_deg=0.0` nên không kích hoạt lọc, và dù có kích
+   hoạt thì 2 line cạnh tranh (337px sai / 428px đúng) đều cùng hướng ngang
+   nên lọc hướng không phân biệt được. Cần hướng #2 (ưu tiên line chạm 2
+   đầu mũi tên) hoặc #3 (kiểm tra đồng thuận nhiều ứng viên) — **chưa
+   implement**. Xem mục 8-9 báo cáo benchmark để biết chi tiết đầy đủ.
+
+   **[Cập nhật 21/07/2026, tiếp nữa] Đã implement hướng sửa #2 (ưu tiên
+   line chạm mũi tên)**: `find_nearest_line()`/`auto_estimate_calibration()`
+   có thêm tham số tuỳ chọn `image_bgr` (mặc định `None`, không phá hành
+   vi cũ). Khi có truyền `image_bgr`, trong số các line còn lại sau lọc
+   khoảng cách + lọc hướng, hàm đếm mỗi line chạm bao nhiêu đầu mút (0/1/2)
+   bằng ký hiệu tick-mark/mũi tên — tái dùng thẳng
+   `detect_tick_mark_at_point()` đã có sẵn trong `tick_mark_detection.py`
+   (Lớp 1), **không cần code phát hiện mũi tên mới** như mục 6 báo cáo
+   benchmark từng ghi nhầm là "cần thêm, chưa có". Ưu tiên line chạm nhiều
+   đầu hơn; chỉ tie-break bằng khoảng cách khi số đầu chạm bằng nhau.
+
+   Đã thêm 4 test mới trong `test_calibration.py` (tổng 10 test, 6 cũ +4
+   mới), gồm 1 test tái hiện ĐÚNG tỷ lệ ca lỗi thật "1970" bằng ảnh tổng
+   hợp (line cắt cụt gần tâm text hơn nhưng chỉ chạm 1/2 đầu mũi tên vs
+   line đầy đủ xa hơn nhưng chạm cả 2) — xác nhận hướng #2 chọn đúng line
+   trong ca này. **Giới hạn trung thực**: mới test bằng ảnh tổng hợp
+   (cv2.line vẽ tay), **CHƯA chạy lại benchmark bằng đúng ảnh thật
+   "TP-GC-A018/07/26"** (ảnh gốc không commit) để xác nhận hướng #2 sửa
+   được đúng ca "1970" trên ảnh thật — cần ai đó có lại ảnh gốc (cùng
+   sha256 đã ghi trong báo cáo benchmark) chạy lại
+   `auto_estimate_calibration(..., image_bgr=img)` để đóng vòng lặp này.
+   Hướng #3 (kiểm tra đồng thuận nhiều ứng viên dimension_value) vẫn
+   **chưa implement**.
 
 ---
 
