@@ -88,3 +88,16 @@ def test_detect_view_candidate_records_dimension_evidence_inside_region():
 
     assert candidate["dimension_evidence"]["text_primitive_id"] == "dimension"
     assert candidate["dimension_evidence"]["delta_percent"] == pytest.approx(0.0)
+
+
+def test_detect_view_candidate_omits_evidence_for_page_spanning_region():
+    label = _text("TL 1:8", (500, 150, 560, 180), "scale")
+    dimension = RawText("dimension", "5140", (1000, 700, 1050, 730), 0.0, 0.9,
+                        "text_tesseract", parsed_value=5140.0, semantic_role="dimension_value")
+    lines = [_line(2, 2, 1198, 2), _line(2, 2, 2, 798),
+             _line(1198, 2, 1198, 798), _line(2, 798, 1198, 798)]
+
+    candidate = detect_view_candidates([label, dimension], lines, 1200, 800, 144)[0]
+
+    assert candidate["region_bbox_px"] == [2.0, 2.0, 1198.0, 798.0]
+    assert "dimension_evidence" not in candidate
