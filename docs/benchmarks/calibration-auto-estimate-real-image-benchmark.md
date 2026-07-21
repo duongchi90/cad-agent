@@ -330,5 +330,65 @@ chéo rõ trong cửa sổ 20px mặc định, hoặc mũi tên có hình dạng
 góc 25°-65°. **Không nên coi hướng #2 đã "sửa xong" ca "1970" cho tới khi
 chạy lại đúng ảnh gốc và xác nhận `auto_estimate_calibration()` trả về
 scale ≈3.658mm/px** (khớp scale độc lập ở mục 4) thay vì 5.8457mm/px sai
-như trước. Hướng #3 (kiểm tra đồng thuận đa ứng viên) vẫn hoàn toàn chưa
-implement.
+như trước.
+
+---
+
+## 11. Cập nhật 21/07/2026 — đã implement hướng sửa #3 (đồng thuận đa ứng viên)
+
+**Đã implement**: `auto_estimate_calibration()` thêm 3 tham số tuỳ chọn:
+`require_consensus` (bật/tắt cơ chế), `consensus_tolerance_pct` (mặc định
+10%), `min_consensus_candidates` (mặc định 2). Khi bật, hàm quét **toàn
+bộ** `raw_texts` thay vì dừng ở text `dimension_value` đầu tiên tìm được
+line — thu thập mọi cặp (text, line) hợp lệ, mỗi cặp cho 1 scale suy ra,
+tính scale trung vị, chỉ chấp nhận kết quả khi đủ số ứng viên (`>=
+min_consensus_candidates`) nằm trong dung sai `consensus_tolerance_pct` so
+với trung vị. Không đủ đồng thuận → trả `None` (từ chối) thay vì đoán liều
+— đúng nguyên văn khuyến nghị #3 ở mục 6 ("coi là dấu hiệu không đáng tin
+và từ chối trả kết quả"). Chỉ có 1 ứng viên (không đủ dữ liệu so sánh) →
+vẫn trả về nhưng gắn cờ rõ trong `reference_note`.
+
+**Phát hiện quan trọng — tự phát hiện qua chạy thử, không chỉ suy luận**:
+dự định ban đầu đặt `require_consensus=True` làm **mặc định** (đúng tinh
+thần "an toàn hơn" của khuyến nghị gốc). Nhưng khi chạy thử
+`python3 -m primitive_ir_lib.demo_pipeline` với default đó, pipeline
+**crash ngay lập tức** — 3 `dimension_value` trong fixture demo
+("4200"/"1900"/"2100") cho 3 scale không đồng thuận với nhau (khớp với
+chính output cross-validation đã in ra từ trước: delta% 90.4/42.4/81.5% —
+tự nó đã là bằng chứng các cặp text/line này vốn không nhất quán). Điều
+này lộ ra: bật `require_consensus=True` làm mặc định sẽ phá vỡ MỌI call
+site hiện có (`demo_pipeline.py`, `run_image.py`, `verify_full.py`) chưa
+được cập nhật để xử lý kết quả `None`. Đã sửa lại: default
+**`require_consensus=False`** (giữ nguyên hành vi cũ), nhất quán với cách
+#1 và #2 đã làm (cả hai đều opt-in qua tham số, không đổi hành vi mặc
+định) — xác nhận `demo_pipeline` chạy lại bình thường (exit code 0) sau
+khi đổi.
+
+**Test**: 5 test mới trong `test_calibration.py` (tổng 15 test):
+- Đồng thuận đa số bỏ qua 1 outlier rõ rệt (2 ứng viên scale=2.0 mm/px,
+  1 ứng viên scale=30.0 mm/px) → chọn đúng scale đồng thuận.
+- 2 ứng viên lệch nhau quá xa (2.0 vs 30.0), không đạt đồng thuận tối
+  thiểu → trả `None`.
+- Chỉ 1 ứng viên → vẫn trả về, `reference_note` có "CHƯA xác minh đồng
+  thuận".
+- Default (không truyền `require_consensus`) VÀ `require_consensus=False`
+  tường minh đều giữ đúng hành vi cũ — dùng ứng viên đầu tiên bất kể có là
+  outlier hay không.
+
+Toàn bộ 17 test `test_basic.py` + 4 `test_vision_client.py` cũ vẫn PASS —
+không hồi quy.
+
+**GIỚI HẠN TRUNG THỰC — cả 3 hướng sửa vẫn chưa được xác nhận cùng lúc
+trên ảnh thật**: benchmark trên đây (mục 3-4), hướng #2 (mục 10), và hướng
+#3 (mục này) đều mới verify bằng dữ liệu/ảnh **tổng hợp**. Chưa có lần
+chạy nào dùng `auto_estimate_calibration(raw_texts, raw_lines,
+image_height_px, image_bgr=img, require_consensus=True)` — tức bật ĐỦ cả
+3 hướng sửa cùng lúc — trên chính ảnh thật "TP-GC-A018/07/26" (sha256
+`dd7fd9e931c1d326526809a7e860a5d2a83fc7e24621352e015507604aa340d3`) để
+xem: (a) trong 7 `dimension_value` đã tìm được, có bao nhiêu ứng viên
+match được line qua `find_nearest_line`; (b) trong số đó có bao nhiêu thực
+sự đồng thuận; (c) scale cuối cùng có khớp ≈3.658mm/px (đối chiếu độc lập
+ở mục 4) hay không, hay `require_consensus=True` lại từ chối trả kết quả
+vì đa số 7 ứng viên vốn dĩ nhiễu/không đồng thuận trên ảnh thật này. Đây
+là việc cần làm tiếp để đóng vòng lặp — cần ai đó có lại ảnh gốc cùng
+sha256 trên.

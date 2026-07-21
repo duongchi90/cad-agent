@@ -119,8 +119,47 @@ Chạy lệnh từ thư mục `cad_agent` để các package Phase 1–5 cùng n
    được đúng ca "1970" trên ảnh thật — cần ai đó có lại ảnh gốc (cùng
    sha256 đã ghi trong báo cáo benchmark) chạy lại
    `auto_estimate_calibration(..., image_bgr=img)` để đóng vòng lặp này.
-   Hướng #3 (kiểm tra đồng thuận nhiều ứng viên dimension_value) vẫn
-   **chưa implement**.
+
+   **[Cập nhật 21/07/2026, tiếp nữa nữa] Đã implement hướng sửa #3 (kiểm
+   tra đồng thuận đa ứng viên)**: `auto_estimate_calibration()` có thêm 3
+   tham số tuỳ chọn `require_consensus`, `consensus_tolerance_pct`
+   (mặc định 10%), `min_consensus_candidates` (mặc định 2). Khi
+   `require_consensus=True`, hàm thu thập MỌI cặp (text dimension_value,
+   line) hợp lệ trong ảnh (không dừng ở cặp đầu tiên), tính scale trung vị,
+   chỉ trả về `Calibration` khi đủ ứng viên đồng thuận (lệch median
+   `<= consensus_tolerance_pct`) — nếu không đủ đồng thuận, **từ chối, trả
+   `None`** thay vì đoán liều, đúng khuyến nghị #3 gốc. Nếu chỉ có 1 ứng
+   viên (không đủ để so đồng thuận), vẫn trả về nhưng `reference_note` ghi
+   rõ "CHƯA xác minh đồng thuận".
+
+   **Phát hiện quan trọng khi cài đặt (tự kiểm chứng, không chỉ suy
+   luận)**: dự định ban đầu để `require_consensus=True` làm MẶC ĐỊNH (đúng
+   tinh thần "an toàn hơn tiện lợi" của khuyến nghị #3) — nhưng khi tự chạy
+   thử `python3 -m primitive_ir_lib.demo_pipeline` với default đó, pipeline
+   **crash ngay** (`RuntimeError: Không tự động ước lượng được calibration`)
+   vì 3 `dimension_value` trong fixture demo (4200/1900/2100) cho 3 scale
+   KHÔNG đồng thuận — lộ ra rằng bật mặc định sẽ phá vỡ mọi call site hiện
+   có (`demo_pipeline.py`, `run_image.py`, `verify_full.py`) mà chưa ai cập
+   nhật để xử lý `None`. Đã **đổi lại default về `require_consensus=False`**
+   (giữ hành vi cũ, nhất quán với cách #1/#2 đã làm — opt-in tường minh),
+   xác nhận demo pipeline chạy lại bình thường (exit 0) sau khi đổi.
+   Người dùng muốn bật lớp an toàn này cho code mới/production cần tự
+   truyền `require_consensus=True`.
+
+   Đã thêm 5 test mới trong `test_calibration.py` (tổng 15 test): đồng
+   thuận đa số bỏ qua outlier, từ chối khi 2 ứng viên lệch nhau quá xa,
+   1 ứng viên duy nhất vẫn trả về kèm cảnh báo, và 2 test xác nhận cả
+   default lẫn `require_consensus=False` tường minh đều giữ đúng hành vi
+   cũ (dùng ứng viên đầu tiên, kể cả khi nó là outlier). Toàn bộ 17 test
+   `test_basic.py` + 4 `test_vision_client.py` vẫn PASS.
+
+   **Giới hạn trung thực còn lại**: cơ chế đồng thuận mới test bằng dữ
+   liệu tổng hợp (nhiều cặp text/line dựng tay), **CHƯA chạy
+   `require_consensus=True` trên đúng ảnh thật "TP-GC-A018/07/26"** để xem
+   trong 7 `dimension_value` tìm được ở ca đó, sau khi thêm cả #1+#2+#3 thì
+   có bao nhiêu ứng viên thực sự đồng thuận và calibration cuối cùng có ra
+   đúng ≈3.658mm/px hay không — vẫn cần ảnh gốc (sha256 đã ghi ở báo cáo
+   benchmark) để đóng vòng lặp cho cả 3 hướng sửa cùng lúc.
 
 ---
 

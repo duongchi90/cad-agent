@@ -11,7 +11,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from primitive_ir_lib.calibration import find_nearest_line
+from primitive_ir_lib.calibration import auto_estimate_calibration, find_nearest_line
 from primitive_ir_lib.geometry_extraction import RawLine
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
 
@@ -189,3 +189,98 @@ def test_tie_break_by_distance_when_both_lines_touch_same_number_of_arrows():
 
     found = find_nearest_line(text, [closer, farther], max_distance_px=200, image_bgr=img)
     assert found is not None and found.id == "closer"
+
+
+# --------------------------------- hướng sửa #3: đồng thuận đa ứng viên --
+# (docs/benchmarks/calibration-auto-estimate-real-image-benchmark.md, mục 6
+# khuyến nghị #3 và mục 11 cập nhật): thay vì tin ngay ứng viên
+# dimension_value ĐẦU TIÊN tìm được line, auto_estimate_calibration() giờ
+# thu thập MỌI ứng viên, so scale suy ra giữa chúng, chỉ trả kết quả khi đủ
+# ứng viên đồng thuận (trong dung sai `consensus_tolerance_pct`).
+
+def _pair(value: str, cx: float, line_length: float, id_: str):
+    """Tạo 1 cặp (RawText dimension_value, RawLine) đặt gần nhau (dist=10px)
+    quanh toạ độ x=cx, sao cho scale suy ra = parsed_value / line_length."""
+    text = _text(value, (cx - 5, 45, cx + 5, 55), id_=f"t-{id_}")
+    line = _line((cx - line_length / 2, 60), (cx + line_length / 2, 60), id_=f"l-{id_}")
+    return text, line
+
+
+def test_auto_estimate_consensus_uses_majority_and_ignores_outlier():
+    """3 ứng viên: 2 cái cho scale=2.0 mm/px (đồng thuận), 1 cái ("3000",
+    line rất ngắn) cho scale=30.0 mm/px (outlier, lệch xa median) — phải
+    chọn scale từ 2 ứng viên đồng thuận, bỏ qua outlier."""
+    text1, line1 = _pair("1000", 300, 500, "a")     # scale = 1000/500 = 2.0
+    text2, line2 = _pair("2000", 2300, 1000, "b")   # scale = 2000/1000 = 2.0
+    text3, line3 = _pair("3000", 4300, 100, "c")    # scale = 3000/100 = 30.0 (outlier)
+
+    cal = auto_estimate_calibration(
+        [text1, text2, text3], [line1, line2, line3], image_height_px=200,
+        require_consensus=True,
+    )
+    assert cal is not None
+    assert abs(cal.pixel_to_unit_scale - 2.0) < 1e-6
+    assert "Đồng thuận: 2/3" in (cal.reference_note or "")
+
+
+def test_auto_estimate_rejects_when_only_two_candidates_disagree():
+    """Chỉ 2 ứng viên, lệch nhau quá xa (2.0 vs 30.0 mm/px, không ai nằm
+    trong dung sai 10% so với trung vị) -> không đủ đồng thuận -> từ chối
+    (`None`) thay vì đoán liều theo ứng viên đầu tiên — đúng ca thật đã
+    benchmark (lệch 60%)."""
+    text1, line1 = _pair("1000", 300, 500, "a")   # scale = 2.0
+    text2, line2 = _pair("3000", 2300, 100, "b")  # scale = 30.0
+
+    cal = auto_estimate_calibration(
+        [text1, text2], [line1, line2], image_height_px=200, require_consensus=True,
+    )
+    assert cal is None
+
+
+def test_auto_estimate_single_candidate_returns_with_unverified_note():
+    """Chỉ 1 ứng viên hợp lệ trong toàn ảnh -> không đủ dữ liệu để kiểm tra
+    đồng thuận -> vẫn trả về (không có lựa chọn nào khác) nhưng ghi rõ CHƯA
+    xác minh đồng thuận trong reference_note, để needs_verification/reviewer
+    biết mà thận trọng."""
+    text1, line1 = _pair("1000", 300, 500, "a")
+    cal = auto_estimate_calibration(
+        [text1], [line1], image_height_px=200, require_consensus=True,
+    )
+    assert cal is not None
+    assert abs(cal.pixel_to_unit_scale - 2.0) < 1e-6
+    assert "CHƯA xác minh đồng thuận" in (cal.reference_note or "")
+
+
+def test_auto_estimate_default_keeps_old_first_wins_behavior_backward_compat():
+    """MẶC ĐỊNH (không truyền `require_consensus`) phải giữ nguyên hành vi
+    CŨ — dùng ngay ứng viên đầu tiên, bất kể đồng thuận — để không phá vỡ
+    các call site hiện có (`demo_pipeline.py`, `run_image.py`,
+    `verify_full.py`) chưa được cập nhật để xử lý `None`. Xem lý do đổi
+    default trong docstring `auto_estimate_calibration` (tự phát hiện demo
+    pipeline crash khi thử bật `require_consensus=True` mặc định)."""
+    text_outlier, line_outlier = _pair("3000", 4300, 100, "c")  # scale = 30.0, đứng đầu
+    text1, line1 = _pair("1000", 300, 500, "a")
+    text2, line2 = _pair("2000", 2300, 1000, "b")
+
+    cal = auto_estimate_calibration(
+        [text_outlier, text1, text2], [line_outlier, line1, line2], image_height_px=200,
+    )
+    assert cal is not None
+    assert abs(cal.pixel_to_unit_scale - 30.0) < 1e-6
+
+
+def test_auto_estimate_require_consensus_false_keeps_old_first_wins_behavior():
+    """require_consensus=False -> tắt hẳn #3, quay lại hành vi CŨ: dùng
+    ngay ứng viên ĐẦU TIÊN theo thứ tự raw_texts, bất kể có đồng thuận hay
+    không. Cố ý đặt outlier ("3000", scale=30.0) làm phần tử ĐẦU trong danh
+    sách để phân biệt rõ với hành vi consensus (vốn sẽ bỏ qua outlier này)."""
+    text_outlier, line_outlier = _pair("3000", 4300, 100, "c")  # scale = 30.0, đứng đầu danh sách
+    text1, line1 = _pair("1000", 300, 500, "a")                  # scale = 2.0
+    text2, line2 = _pair("2000", 2300, 1000, "b")                # scale = 2.0
+
+    cal = auto_estimate_calibration(
+        [text_outlier, text1, text2], [line_outlier, line1, line2],
+        image_height_px=200, require_consensus=False,
+    )
+    assert cal is not None
+    assert abs(cal.pixel_to_unit_scale - 30.0) < 1e-6

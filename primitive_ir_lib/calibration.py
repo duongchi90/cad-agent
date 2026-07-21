@@ -178,6 +178,15 @@ def estimate_calibration_from_reference(
     )
 
 
+def _median(values: List[float]) -> float:
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2 == 1:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
+
+
 def auto_estimate_calibration(
     raw_texts: List[RawText],
     raw_lines: List[RawLine],
@@ -186,29 +195,59 @@ def auto_estimate_calibration(
     max_distance_px: float = 150.0,
     angle_tolerance_deg: float = 20.0,
     image_bgr: Optional[np.ndarray] = None,
+    require_consensus: bool = False,
+    consensus_tolerance_pct: float = 10.0,
+    min_consensus_candidates: int = 2,
 ) -> Optional[Calibration]:
-    """Tự động: quét raw_texts tìm text đầu tiên có semantic_role
-    'dimension_value', ghép với line gần nhất (`find_nearest_line` — lọc
-    theo hướng khi text.rotation_deg != 0, VÀ ưu tiên line chạm mũi tên khi
-    có truyền `image_bgr`; xem docstring `find_nearest_line`), dùng làm mốc
-    calibration. Trả về None nếu không tìm được cặp nào phù hợp — khi đó
-    cần method='manual_override' (người dùng tự nhập, xem mục 10.3).
+    """Tự động ước lượng calibration từ các text `dimension_value` ghép với
+    line gần nhất (`find_nearest_line` — lọc theo hướng khi
+    `text.rotation_deg != 0` (#1), VÀ ưu tiên line chạm mũi tên khi có
+    truyền `image_bgr` (#2); xem docstring `find_nearest_line`).
 
-    `image_bgr`: ảnh gốc (BGR, cùng ảnh đã dùng cho `extract_raw_geometry`/
-    `extract_text_tesseract`) — TUỲ CHỌN, truyền vào để bật hướng sửa #2
-    (ưu tiên line chạm 2 đầu mũi tên, xem
-    docs/benchmarks/calibration-auto-estimate-real-image-benchmark.md mục
-    6 và 8). Không truyền (mặc định None) -> giữ nguyên hành vi cũ, chỉ so
-    khoảng cách + lọc hướng.
+    `require_consensus=False` (MẶC ĐỊNH, đổi lại sau khi tự phát hiện lỗi):
+    tắt cơ chế #3, giữ nguyên hành vi CŨ — dùng ngay ứng viên ĐẦU TIÊN theo
+    thứ tự `raw_texts`, không kiểm tra đồng thuận. Lý do mặc định là
+    `False` (không phải `True` như khuyến nghị ban đầu ở mục 6 báo cáo
+    benchmark): khi tự thử bật `require_consensus=True` mặc định, chạy lại
+    `python3 -m primitive_ir_lib.demo_pipeline` bị crash ngay
+    (`RuntimeError: Không tự động ước lượng được calibration`) vì 3
+    `dimension_value` trong fixture demo cho 3 scale KHÔNG đồng thuận —
+    lộ ra rằng bật mặc định sẽ phá vỡ mọi call site hiện có
+    (`demo_pipeline.py`, `run_image.py`, `verify_full.py`) mà chưa ai cập
+    nhật để xử lý `None`. Giữ nhất quán với cách #1/#2 đã làm (opt-in, mặc
+    định giữ hành vi cũ) — set `require_consensus=True` TƯỜNG MINH khi
+    muốn bật lớp an toàn này (khuyến khích cho code mới/production, xem
+    test `test_calibration.py`).
 
-    LƯU Ý (xem docs/benchmarks/calibration-auto-estimate-real-image-benchmark.md):
-    hàm vẫn dừng ngay ở TEXT ĐẦU TIÊN tìm được line hợp lệ, chưa kiểm tra
-    đồng thuận scale giữa nhiều dimension_value khác nhau (hướng sửa #3,
-    vẫn CHƯA implement). Ưu tiên chạm-mũi-tên (#2) chỉ giúp chọn đúng line
-    trong số các line GẦN text; nó không thay thế việc đối chiếu đa điểm.
+    Khi `require_consensus=True`, hàm thu thập MỌI cặp (text, line) hợp lệ
+    thay vì dừng ở cặp đầu tiên:
+
+    - Nếu tìm được `>= min_consensus_candidates` ứng viên: tính scale
+      trung vị (median) của tất cả, coi các ứng viên có độ lệch tương đối
+      so với trung vị `<= consensus_tolerance_pct` (%) là "đồng thuận". Nếu
+      số ứng viên đồng thuận cũng `>= min_consensus_candidates`, trả về
+      Calibration dựng từ ứng viên đồng thuận GẦN trung vị nhất (đại diện
+      ổn định nhất), kèm ghi chú số ứng viên đã đồng thuận/tổng số. Nếu
+      KHÔNG đủ ứng viên đồng thuận (lệch nhau quá nhiều, như ca thật
+      "1970" từng benchmark — 60%) -> **từ chối, trả về `None`** thay vì
+      đoán liều — đúng khuyến nghị #3 trong báo cáo benchmark ("coi là dấu
+      hiệu không đáng tin và từ chối trả kết quả").
+    - Nếu chỉ tìm được 1 ứng viên (không đủ để so đồng thuận): trả về ứng
+      viên đó như cũ (không có cách nào kiểm tra đồng thuận với 1 điểm dữ
+      liệu), nhưng `reference_note` ghi rõ "chỉ 1 ứng viên, CHƯA xác minh
+      đồng thuận" — để `needs_verification` (calibration_registry.py) và
+      người review biết mà không tự tin dùng ngay.
+    - Nếu không tìm được ứng viên nào: trả về `None` như cũ.
+
+    LƯU Ý TRUNG THỰC: cơ chế đồng thuận này mới kiểm bằng test tổng hợp
+    (`test_calibration.py`), CHƯA chạy lại trên đúng ảnh thật
+    "TP-GC-A018/07/26" để xem trong 7 `dimension_value` tìm được ở ca đó,
+    có bao nhiêu ứng viên thực sự đồng thuận sau khi thêm #3 — vẫn cần
+    benchmark thật để đóng vòng lặp (xem mục 9/11 báo cáo benchmark).
     Không dùng kết quả hàm này cho DXF sản xuất mà không xác minh — xem
     `calibration_registry.py` (`needs_verification`).
     """
+    candidates: List[Tuple[RawText, RawLine, float]] = []
     for text in raw_texts:
         if text.semantic_role != "dimension_value" or text.parsed_value is None:
             continue
@@ -216,6 +255,49 @@ def auto_estimate_calibration(
             text, raw_lines, max_distance_px=max_distance_px,
             angle_tolerance_deg=angle_tolerance_deg, image_bgr=image_bgr,
         )
-        if line is not None:
-            return estimate_calibration_from_reference(text, line, image_height_px, unit=unit)
-    return None
+        if line is None:
+            continue
+        pixel_length = line.length_px()
+        if pixel_length <= 0:
+            continue
+        scale = text.parsed_value / pixel_length
+        candidates.append((text, line, scale))
+        if not require_consensus:
+            break  # hành vi cũ: dùng ngay ứng viên đầu tiên, không thu thập thêm
+
+    if not candidates:
+        return None
+
+    if not require_consensus or len(candidates) < min_consensus_candidates:
+        text, line, _scale = candidates[0]
+        cal = estimate_calibration_from_reference(text, line, image_height_px, unit=unit)
+        if require_consensus and len(candidates) < min_consensus_candidates:
+            cal.reference_note = (
+                (cal.reference_note or "")
+                + f" [Chỉ tìm được {len(candidates)} ứng viên dimension_value hợp lệ"
+                f" (cần >= {min_consensus_candidates} để kiểm tra đồng thuận) —"
+                " CHƯA xác minh đồng thuận, dùng thận trọng.]"
+            )
+        return cal
+
+    scales = [c[2] for c in candidates]
+    median_scale = _median(scales)
+    agreeing = [
+        c for c in candidates
+        if median_scale != 0 and abs(c[2] - median_scale) / abs(median_scale) * 100.0 <= consensus_tolerance_pct
+    ]
+
+    if len(agreeing) < min_consensus_candidates:
+        return None  # không đủ đồng thuận -> từ chối, không đoán liều
+
+    best_text, best_line, best_scale = min(
+        agreeing, key=lambda c: abs(c[2] - median_scale)
+    )
+    cal = estimate_calibration_from_reference(best_text, best_line, image_height_px, unit=unit)
+    cal.reference_note = (
+        (cal.reference_note or "")
+        + f" [Đồng thuận: {len(agreeing)}/{len(candidates)} ứng viên dimension_value"
+        f" khớp scale trong dung sai {consensus_tolerance_pct:.0f}%"
+        f" (median={median_scale:.4f} {unit}/px).]"
+    )
+    return cal
