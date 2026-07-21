@@ -21,7 +21,6 @@ import fitz
 
 from .calibration_registry import get_verified_scale
 from .run_image import run
-from .view_calibration import extract_scale_label_candidates
 
 
 def _configure_console_output() -> None:
@@ -106,11 +105,7 @@ def run_pdf(
                 "cross_validation_count": len(payload["cross_validations"]),
                 "calibration_method": payload["calibration"]["method"],
                 "scale_mm_per_px": payload["calibration"]["pixel_to_unit_scale"],
-                "scale_label_candidates": (
-                    json.loads(view_candidates_path.read_text(encoding="utf-8"))
-                    if view_candidates_path.is_file()
-                    else extract_scale_label_candidates(payload["primitives"], dpi)
-                ),
+                "scale_label_candidates": json.loads(view_candidates_path.read_text(encoding="utf-8")),
             })
     finally:
         document.close()
