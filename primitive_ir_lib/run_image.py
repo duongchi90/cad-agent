@@ -23,13 +23,13 @@ import cv2
 import pytesseract
 
 from .assemble import build_document
-from .calibration import Calibration
-from .calibration_registry import get_verified_scale
+from .calibration import Calibration, auto_estimate_calibration
+from .calibration_registry import add_record, get_verified_scale
 from .cross_validation import cross_validate
 from .geometry_extraction import extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
-from .text_extraction import extract_text_tesseract
+from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
 
 Bbox = Tuple[int, int, int, int]
 
@@ -67,15 +67,28 @@ def _sha256(path: str) -> str:
 def run(
     image_path: str,
     output_path: str,
-    scale_mm_per_px: float,
+    scale_mm_per_px: Optional[float] = None,
     preset: str = "real_scan_tuned_v1",
     ocr_rois: Optional[List[Bbox]] = None,
     tesseract_cmd: Optional[str] = None,
     merge_lines: bool = False,
+    auto_ocr_roi: bool = False,
+    auto_calibrate: bool = False,
+    calibration_registry_path: Optional[Path] = None,
+    calibration_id: Optional[str] = None,
 ) -> str:
-    """Extract a validated Primitive IR JSON from one PNG/JPG drawing image."""
-    if scale_mm_per_px <= 0:
+    """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
+
+    scale_mm_per_px vẫn là cách được khuyến nghị (đã verify thủ công). Nếu
+    không có, cần bật auto_calibrate=True để thử suy ra tỷ lệ tự động từ 1
+    cặp (text kích thước, line đo được) tìm thấy qua OCR — xem cảnh báo an
+    toàn trong auto_estimate_calibration(): kết quả này CHƯA được verify,
+    không nên dùng thẳng cho DXF sản xuất mà không kiểm tra lại.
+    """
+    if scale_mm_per_px is not None and scale_mm_per_px <= 0:
         raise ValueError("scale_mm_per_px phải lớn hơn 0")
+    if scale_mm_per_px is None and not auto_calibrate:
+        raise ValueError("Cần scale_mm_per_px hoặc bật auto_calibrate=True")
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Không thấy ảnh đầu vào: {image_path}")
 
@@ -84,25 +97,63 @@ def run(
         raise ValueError(f"Không đọc được ảnh bằng OpenCV: {image_path}")
 
     raw_geometry = extract_raw_geometry(image, preset=preset)
+
+    effective_rois = list(ocr_rois) if ocr_rois else []
+    if auto_ocr_roi or (auto_calibrate and not effective_rois):
+        detected = detect_text_candidate_rois(image)
+        effective_rois = list({*effective_rois, *detected}) if effective_rois else detected
+        print(f"[run-image] auto-ocr-roi: {len(detected)} vùng ứng viên được phát hiện tự động.")
+
     raw_texts = []
-    if ocr_rois:
+    if effective_rois:
         _configure_tesseract(tesseract_cmd)
-        raw_texts = extract_text_tesseract(image, roi_boxes=ocr_rois)
+        raw_texts = extract_text_tesseract(image, roi_boxes=effective_rois)
 
     raw_lines = raw_geometry.lines
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=raw_texts, image_bgr=image)
 
-    calibration = Calibration(
-        unit="mm",
-        pixel_to_unit_scale=scale_mm_per_px,
-        origin_px=(0.0, float(image.shape[0])),
-        method="manual_override",
-        reference_note=(
-            "Scale supplied via --scale-mm-per-px; verify against a known "
-            "dimension before using output for production DXF."
-        ),
-    )
+    if scale_mm_per_px is not None:
+        calibration = Calibration(
+            unit="mm",
+            pixel_to_unit_scale=scale_mm_per_px,
+            origin_px=(0.0, float(image.shape[0])),
+            method="manual_override",
+            reference_note=(
+                "Scale supplied via --scale-mm-per-px; verify against a known "
+                "dimension before using output for production DXF."
+            ),
+        )
+    else:
+        calibration = auto_estimate_calibration(raw_texts, raw_lines, image.shape[0], unit="mm")
+        if calibration is None:
+            raise ValueError(
+                "auto_calibrate không tìm được cặp (dimension_value, line gần "
+                "nhất) hợp lệ trong các ROI đã quét — cần cung cấp "
+                "--scale-mm-per-px thủ công hoặc thêm --ocr-roi bao trùm 1 "
+                "kích thước đã biết."
+            )
+        print(
+            "[run-image] CẢNH BÁO: scale được suy tự động "
+            f"({calibration.pixel_to_unit_scale} mm/px, method="
+            f"{calibration.method}) — CHƯA được verify, chỉ dùng để test/"
+            "khảo sát, không dùng thẳng cho DXF sản xuất."
+        )
+        if calibration_registry_path is not None and calibration_id is not None:
+            add_record(
+                calibration_registry_path,
+                calibration_id,
+                Path(image_path),
+                calibration.pixel_to_unit_scale,
+                evidence=calibration.reference_note or "auto_estimate_calibration",
+                status="needs_verification",
+            )
+            print(
+                f"[run-image] Đã ghi bản ghi calibration '{calibration_id}' "
+                f"vào {calibration_registry_path} với status=needs_verification "
+                "— cần người xác minh và đổi status='verified' trước khi dùng "
+                "qua --calibration-registry."
+            )
     document = build_document(
         file_name=os.path.basename(image_path),
         page_index=0,
@@ -142,24 +193,45 @@ def main() -> int:
                         choices=("default", "real_scan_tuned_v1"))
     parser.add_argument("--ocr-roi", action="append", type=_parse_roi, default=[],
                         help="ROI OCR: x0,y0,x1,y1; có thể truyền nhiều lần")
+    parser.add_argument("--auto-ocr-roi", action="store_true",
+                        help="Tự động phát hiện vùng ứng viên chứa text (connected-"
+                             "components) thay vì phải tự khoanh --ocr-roi bằng tay. "
+                             "Có thể kết hợp với --ocr-roi (cộng dồn).")
+    parser.add_argument("--auto-calibrate", action="store_true",
+                        help="Suy tỷ lệ mm/px tự động từ 1 cặp (kích thước OCR đọc "
+                             "được, line gần nhất) thay vì --scale-mm-per-px. KẾT QUẢ "
+                             "CHƯA ĐƯỢC VERIFY — chỉ dùng để khảo sát/test, không dùng "
+                             "thẳng cho DXF sản xuất. Kết hợp với --calibration-registry "
+                             "+ --calibration-id để ghi lại kết quả (status=needs_verification) "
+                             "cho việc xác minh sau.")
     parser.add_argument("--tesseract-cmd", help="Đường dẫn tesseract.exe nếu không ở PATH")
     parser.add_argument("--merge-lines", action="store_true",
                         help="Bật merge + witness split trước khi assemble IR")
     args = parser.parse_args()
 
     try:
-        if args.calibration_registry:
+        scale_mm_per_px: Optional[float] = None
+        if args.auto_calibrate:
+            if args.calibration_registry and not args.calibration_id:
+                parser.error("--calibration-registry với --auto-calibrate cần thêm --calibration-id")
+            if args.scale_mm_per_px is not None:
+                parser.error("--auto-calibrate không dùng cùng --scale-mm-per-px")
+        elif args.calibration_registry:
             if not args.calibration_id or args.scale_mm_per_px is not None:
                 parser.error("Registry mode requires --calibration-id and no --scale-mm-per-px")
             scale_mm_per_px = get_verified_scale(Path(args.calibration_registry), args.calibration_id, Path(args.image))
         elif args.scale_mm_per_px is not None:
             scale_mm_per_px = args.scale_mm_per_px
         else:
-            parser.error("Supply --scale-mm-per-px or a verified calibration registry")
+            parser.error("Supply --scale-mm-per-px, --auto-calibrate, or a verified calibration registry")
         result = run(
             image_path=args.image,
             output_path=args.output,
             scale_mm_per_px=scale_mm_per_px,
+            auto_ocr_roi=args.auto_ocr_roi,
+            auto_calibrate=args.auto_calibrate,
+            calibration_registry_path=Path(args.calibration_registry) if (args.auto_calibrate and args.calibration_registry) else None,
+            calibration_id=args.calibration_id if args.auto_calibrate else None,
             preset=args.preset,
             ocr_rois=args.ocr_roi,
             tesseract_cmd=args.tesseract_cmd,

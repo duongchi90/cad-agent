@@ -26,6 +26,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
+import cv2
 import numpy as np
 import pytesseract
 
@@ -148,6 +149,98 @@ def extract_text_tesseract(
                 semantic_role=role,
             ))
     return results
+
+
+# ------------------------------------------------------- auto ROI detect --
+def detect_text_candidate_rois(
+    image_bgr: np.ndarray,
+    min_component_area: int = 12,
+    max_component_area: int = 4000,
+    min_component_height: int = 6,
+    max_component_height: int = 60,
+    cluster_gap_px: int = 25,
+    padding_px: int = 6,
+    min_cluster_components: int = 2,
+) -> List[Bbox]:
+    """Gợi ý các vùng ROI có khả năng chứa text, thay cho việc phải tự tay
+    khoanh --ocr-roi từng vùng bằng mắt.
+
+    KHÔNG chạy Tesseract trên toàn ảnh (đã benchmark thật ở mục 4 báo cáo
+    kiểm thử Phase 1: quét toàn ảnh CAD dày đặc nét vẽ ra gần như toàn rác).
+    Thay vào đó, hàm này chỉ dùng connected-components để tìm các cụm mảnh
+    nhỏ có kích thước giống ký tự (loại bỏ nét vẽ dài — line/border thường
+    có 1 chiều rất lớn), rồi gom các mảnh gần nhau thành từng vùng ứng viên
+    (giống 1 dòng chữ hoặc 1 cụm số kích thước). Đây là bước LỌC SƠ BỘ để
+    thu hẹp vùng cần chạy OCR thật — không thay thế cho việc review lại kết
+    quả, đúng tinh thần "không đoán bừa" đã áp dụng cho calibration.
+
+    Trả về list rỗng nếu không tìm được cụm nào đủ lớn — khi đó vẫn cần
+    khoanh --ocr-roi thủ công như trước.
+    """
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    # Nhị phân hoá ngược (chữ/nét tối trên nền sáng -> foreground = trắng)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 10,
+    )
+    num_labels, _, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    candidates = []  # (cx, cy, x0, y0, x1, y1)
+    for i in range(1, num_labels):  # bỏ qua label 0 = background
+        x, y, w, h, area = stats[i]
+        if not (min_component_area <= area <= max_component_area):
+            continue
+        if not (min_component_height <= h <= max_component_height):
+            continue
+        # Loại nét vẽ dài (line/border): tỉ lệ khung quá dẹt theo 1 chiều
+        if w > 0 and h / max(w, 1) < 0.06:
+            continue
+        cx, cy = centroids[i]
+        candidates.append((cx, cy, x, y, x + w, y + h))
+
+    if not candidates:
+        return []
+
+    # Gom cụm đơn giản kiểu union-find theo khoảng cách tâm < cluster_gap_px
+    n = len(candidates)
+    parent = list(range(n))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = candidates[i][0] - candidates[j][0]
+            dy = candidates[i][1] - candidates[j][1]
+            if (dx * dx + dy * dy) ** 0.5 <= cluster_gap_px:
+                union(i, j)
+
+    clusters: dict = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(candidates[i])
+
+    height, width = image_bgr.shape[:2]
+    rois: List[Bbox] = []
+    for members in clusters.values():
+        if len(members) < min_cluster_components:
+            continue
+        x0 = max(0, int(min(m[2] for m in members)) - padding_px)
+        y0 = max(0, int(min(m[3] for m in members)) - padding_px)
+        x1 = min(width, int(max(m[4] for m in members)) + padding_px)
+        y1 = min(height, int(max(m[5] for m in members)) + padding_px)
+        if x1 > x0 and y1 > y0:
+            rois.append((x0, y0, x1, y1))
+
+    # Sắp theo vị trí đọc tự nhiên: trên->dưới, trái->phải
+    rois.sort(key=lambda b: (b[1], b[0]))
+    return rois
 
 
 # -------------------------------------------------------------- tier 3: --
