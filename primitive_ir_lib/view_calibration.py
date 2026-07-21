@@ -53,7 +53,6 @@ def detect_view_candidates(raw_texts: Iterable[object], raw_lines: Iterable[obje
                            max_label_distance_mm: float = 21.1666666667,
                            region_gap_mm: float = 5.2916666667) -> list[dict]:
     """Associate every scale label with one unambiguous nearby line region."""
-    del image_width, image_height
     lines = list(raw_lines)
     texts = list(raw_texts)
     px_per_mm = dpi / 25.4
@@ -78,6 +77,13 @@ def detect_view_candidates(raw_texts: Iterable[object], raw_lines: Iterable[obje
             "pixel_to_unit_scale": mm_per_px_for_scale(denominator, dpi),
             "status": "needs_verification",
         }
+        region_area = max(0.0, (region[2] - region[0]) * (region[3] - region[1]))
+        page_area = max(1.0, image_width * image_height)
+        # A page-spanning cluster is usually a border/title-block bridge, not a
+        # single view.  Its dimensions are not safe evidence for this label.
+        if region_area / page_area >= 0.80:
+            candidates.append(candidate)
+            continue
         dimensions = [item for item in texts if item.semantic_role == "dimension_value"
                       and item.parsed_value is not None and item.parsed_value > 0
                       and item.bbox_px[0] >= region[0] and item.bbox_px[1] >= region[1]
