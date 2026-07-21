@@ -131,6 +131,35 @@ def test_coincident_endpoint_detected():
     print("OK   test_coincident_endpoint_detected")
 
 
+def test_coincident_endpoint_tolerates_hough_corner_noise():
+    """Hồi quy: line lấy từ Hough/merge KHÔNG chạm pixel-chính-xác tại góc
+    (lệch vài mm do stroke width bị tách đôi cạnh, đã đo thật 3.43mm trên
+    demo_pipeline — xem semantic_ir_lib/constraint_detection.py comment ở
+    _DEFAULT_DISTANCE_TOL_MM). Ngưỡng mặc định phải đủ rộng để vẫn coi đây
+    là 1 góc thật, KHÔNG được thu hẹp lại 2.0mm cũ (sẽ làm gia_do/khung_chu_nhat
+    không bao giờ trigger được trên dữ liệu thật)."""
+    l1 = _line("l1", 0, 0, 100, 0)
+    l2 = _line("l2", 103.4, 0, 103.4, 100)  # lệch 3.4mm so với chạm đúng — mô phỏng nhiễu Hough thật
+    cs = detect_constraints([l1, l2])
+    types = {c.type for c in cs}
+    assert "coincident_endpoint" in types, (
+        "gap 3.4mm phải vẫn coi là coincident (bằng chứng đo thật từ demo "
+        "pipeline) — nếu fail, có thể distance_tolerance_mm đã bị thu hẹp lại"
+    )
+    print("OK   test_coincident_endpoint_tolerates_hough_corner_noise")
+
+
+def test_coincident_endpoint_still_rejects_clearly_unrelated_gap():
+    """Đối chứng cho test trên: gap 50mm (rõ ràng không phải cùng góc) vẫn
+    phải bị từ chối — tránh nới lỏng quá tay khi sửa test phía trên."""
+    l1 = _line("l1", 0, 0, 100, 0)
+    l2 = _line("l2", 150, 0, 150, 100)
+    cs = detect_constraints([l1, l2])
+    types = {c.type for c in cs}
+    assert "coincident_endpoint" not in types
+    print("OK   test_coincident_endpoint_still_rejects_clearly_unrelated_gap")
+
+
 def test_unrelated_lines_produce_no_constraint():
     l1 = _line("l1", 0, 0, 100, 0)
     l2 = _line("l2", 500, 500, 530, 537)  # góc lệch, xa, độ dài khác hẳn
@@ -192,6 +221,8 @@ _TESTS = [
     test_perpendicular_lines_detected,
     test_collinear_lines_detected,
     test_coincident_endpoint_detected,
+    test_coincident_endpoint_tolerates_hough_corner_noise,
+    test_coincident_endpoint_still_rejects_clearly_unrelated_gap,
     test_unrelated_lines_produce_no_constraint,
     test_detect_constraints_rejects_non_line_primitive,
     test_validator_passes_on_well_formed_document,

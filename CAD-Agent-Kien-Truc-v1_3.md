@@ -247,7 +247,7 @@ Bắt đầu Phase 2 theo đúng phương pháp đã dùng ở Phase 1 (mục 10
   còn chỗ trong schema cho tương lai nếu rule hình học không đủ).
 - Constraint line-circle/circle-circle (tangent, concentric) — bước đầu chỉ có line-line, vẫn còn thiếu.
 - ~~Lọc/rút gọn `constraints[]` trước khi đưa vào SolveSpace~~ — **đã làm, xem 11.5**.
-- Benchmark ngưỡng góc/bán kính/confidence (mục 11.2, và `min_confidence` mặc định của pruning) **cùng các ngưỡng compound mới** (`bolt_hole_search_radius_mm`, `parallel_gap_max_mm`, `coincident_distance_mm` — xem 11.6) trên ảnh scan thật — vẫn còn thiếu, và là việc ưu tiên cao nhất còn lại của Phase 2 vì demo hiện dùng ảnh tổng hợp và CHƯA từng tạo ra compound part nào trên chính ảnh đó (dấu hiệu ngưỡng đề xuất trong 11.6 cần tinh chỉnh, không phải bug logic).
+- Benchmark ngưỡng góc/bán kính/confidence (mục 11.2, và `min_confidence` mặc định của pruning) **cùng các ngưỡng compound mới** (`bolt_hole_search_radius_mm`, `parallel_gap_max_mm`, `coincident_distance_mm` — xem 11.6) trên ảnh scan thật — vẫn còn thiếu. `coincident_endpoint`/`gia_do` đã xác nhận hoạt động đúng trên demo (5.0mm, xem 11.6), nhưng `ban_le`/`khung_chu_nhat` và ngưỡng 5.0mm nói chung mới benchmark trên 1 ảnh tổng hợp — vẫn cần benchmark thật trên ảnh scan domain khung xe.
 - ~~Tích hợp `python-solvespace` thật (Constraint Solving)~~ — **đã làm, xem 11.5**.
 - Xuất `solved_primitives` sang DXF Builder (ezdxf) — bước kế tiếp trong pipeline theo mục 2, đã làm ở Phase 3 (mục 12).
 
@@ -327,11 +327,11 @@ hạng ưu tiên review chứ không phải xác suất thống kê thật.
   30mm — mỗi circle chỉ được gán cho thanh gần nhất, loại các case cách đều
   2 thanh vì không đủ bằng chứng gắn kết).
 - **`diem_noi`** (điểm hàn/nút gia cố nhiều thanh hội tụ): cluster endpoint
-  các line theo khoảng cách (`coincident_distance_mm`, mặc định 2.0mm,
-  đồng bộ ngưỡng mặc định của `constraint_detection`) bằng Union-Find, giữ
-  cluster có ≥3 line endpoint (2 line hội tụ tại 1 điểm đã là `gia_do`, để
-  tránh trùng loại) và ≥50% cặp line trong cluster có `coincident_endpoint`
-  constraint thật.
+  các line theo khoảng cách (`coincident_distance_mm`, mặc định 5.0mm kể từ
+  bản sửa ngưỡng dưới đây — trước là 2.0mm, đồng bộ ngưỡng mặc định của
+  `constraint_detection`) bằng Union-Find, giữ cluster có ≥3 line endpoint
+  (2 line hội tụ tại 1 điểm đã là `gia_do`, để tránh trùng loại) và ≥50%
+  cặp line trong cluster có `coincident_endpoint` constraint thật.
 
 Chống trùng: các compound ứng viên được xếp theo số primitive giảm dần rồi
 confidence giảm dần, chọn tham lam (greedy) sao cho 1 primitive không bị
@@ -340,19 +340,51 @@ thành 4 `gia_do` riêng lẻ.
 
 Wired vào `assemble.py` (`build_semantic_document(..., enable_compound_parts=True)`
 mặc định, có thể tắt để so sánh/debug). Test: `semantic_ir_lib/tests/test_pattern_compound.py`
-— 14 test, PASS độc lập, thuần logic (không cần package optional nào).
+— 17 test (14 gốc + 3 hồi quy, xem bản sửa ngưỡng ngay dưới), PASS độc lập,
+thuần logic (không cần package optional nào).
 
-**Hạn chế thật, đã xác nhận bằng cách chạy demo pipeline thật**: đúng như
-mục 11.4 vẫn còn ghi (benchmark ngưỡng trên ảnh thật CHƯA làm) —
-`python3 -m semantic_ir_lib.demo_pipeline` (chạy nối tiếp
-`primitive_ir_lib.demo_pipeline` trên ảnh tổng hợp, 43 primitive) hiện
-KHÔNG tạo ra compound part nào, dù dữ liệu thô có vài nhóm line trông như
-khung. Đây là dấu hiệu ngưỡng mặc định (đặc biệt `coincident_distance_mm`/
-dung sai coincident_endpoint của `constraint_detection`) chưa khớp với sai
-số thật của line đã merge từ Hough, KHÔNG phải lỗi logic của
-`pattern_compound.py` (14 test tổng hợp riêng đều pass đúng theo thiết kế).
-Việc benchmark/tinh chỉnh ngưỡng này trên ảnh scan thật là ưu tiên cao nhất
-còn lại của Phase 2 (xem mục 11.4 đã cập nhật).
+**Bản sửa ngưỡng `coincident_endpoint` (2.0mm → 5.0mm) — đã làm, demo pipeline
+giờ ra được compound thật:**
+
+Đúng như hạn chế đã ghi nhận trước đó, `python3 -m semantic_ir_lib.demo_pipeline`
+từng KHÔNG tạo ra compound part nào dù dữ liệu thô có 1 góc L rõ ràng.
+Nguyên nhân THẬT (xác nhận bằng đo trực tiếp, không đoán): ảnh gốc vẽ góc L
+khớp pixel-chính-xác (`primitive_ir_lib/demo_pipeline.py`,
+`draw.line([(150,50),(150,550)])` nối `draw.line([(150,550),(750,550)])`,
+chung điểm), nhưng sau Canny+Hough+merge (nét vẽ rộng 3px bị tách thành 2
+line gần song song mỗi cạnh, cách nhau ~10mm = 3px × scale ~3.4mm/px), 4 tổ
+hợp endpoint gần góc đo được khoảng cách 3.43mm / 12.38mm / 14.16mm /
+18.49mm — tất cả đều LỚN HƠN `distance_tolerance_mm` cũ (2.0mm) dùng chung
+cho `coincident_endpoint`, nên `gia_do`/`khung_chu_nhat` không bao giờ có
+đủ điều kiện `coincident_endpoint` để trigger, bất kể ngưỡng riêng của
+`pattern_compound.py` là gì — bug nằm ở `constraint_detection.py`, không
+phải `pattern_compound.py`.
+
+Đã sửa `_DEFAULT_DISTANCE_TOL_MM` trong `constraint_detection.py` từ 2.0mm
+lên 5.0mm (và đồng bộ `constraint_distance_tolerance_mm` mặc định trong
+`assemble.py`) — đủ dư so với 3.43mm đã đo (margin ~45%), đồng thời vẫn AN
+TOÀN dưới ~10mm (khoảng cách 2 line trùng lặp do Hough tách đôi 1 nét vẽ),
+tránh `collinear` (dùng chung tolerance này) nhận nhầm 2 cạnh song song của
+cùng 1 nét vẽ thành "cùng 1 đường thẳng". Đã rà toàn bộ test cũ trước khi
+sửa — mọi case dùng khoảng cách đúng 0mm (chạm thật) hoặc ≥50mm (cố ý xa),
+không có case biên 2–10mm nào bị ảnh hưởng.
+
+Verify: `python3 -m semantic_ir_lib.demo_pipeline` giờ phát hiện
+`coincident_endpoint` giữa `rawline-3d7f162f`/`rawline-206f4c51`
+(`endpoint_distance_mm: 3.434`) và tạo ra `gia_do` thật (confidence 0.829)
+cho đúng cặp line đại diện góc L. Thêm 3 test hồi quy
+(`test_coincident_endpoint_tolerates_hough_corner_noise`,
+`test_coincident_endpoint_still_rejects_clearly_unrelated_gap` trong
+`semantic_ir_lib/tests/test_semantic_ir.py`;
+`test_gia_do_with_hough_corner_noise` trong `test_pattern_compound.py`) để
+khoá lại hành vi này — chống ai đó vô tình thu hẹp ngưỡng về 2.0mm cũ mà
+không biết sẽ tái phát đúng bug này.
+
+**Hạn chế thật còn lại**: giá trị 5.0mm vẫn là ĐỀ XUẤT dựa trên 1 ảnh tổng
+hợp, CHƯA benchmark trên ảnh scan thật domain khung xe (mục 11.4) —
+`ban_le` (`bolt_hole_search_radius_mm`, `parallel_gap_max_mm`) và
+`khung_chu_nhat` trên dữ liệu thật vẫn chưa được kiểm chứng riêng, chỉ mới
+`gia_do` trên đúng 1 case demo.
 
 ## 12. [MỚI] Phase 3 — DXF Builder + Reviewer #1 headless + Repair #1: code đầy đủ
 

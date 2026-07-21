@@ -96,6 +96,20 @@ def test_gia_do_negative_parallel():
     print("OK   test_gia_do_negative_parallel")
 
 
+def test_gia_do_with_hough_corner_noise():
+    """Hồi quy: góc L không chạm pixel-chính-xác (lệch 3.4mm, đúng độ lớn đo
+    thật từ semantic_ir_lib/demo_pipeline.py trên output Phase 1 Hough thật)
+    vẫn phải tạo được gia_do. Trước khi sửa _DEFAULT_DISTANCE_TOL_MM
+    (2.0mm -> 5.0mm), case này KHÔNG tạo compound nào — đây chính là bug
+    khiến demo pipeline chưa từng ra compound. Xem mục 11.6 tài liệu kiến trúc."""
+    l1 = _line("l1", 0, 0, 100, 0)
+    l2 = _line("l2", 103.4, 0, 103.4, 100)
+    parts = _detect_and_compound([l1, l2])
+    types = [p.part_type for p in parts]
+    assert "gia_do" in types, f"gap 3.4mm (nhiễu Hough thật) phải vẫn ra gia_do, nhận {types}"
+    print("OK   test_gia_do_with_hough_corner_noise")
+
+
 # ================================================================== ban_le ===
 def test_ban_le_parallel_two_circles():
     h1 = _line("h1", 0, 0, 100, 0)
@@ -242,6 +256,7 @@ _TESTS = [
     test_khung_chu_nhat_negative_incomplete,
     test_gia_do_perpendicular_coincident,
     test_gia_do_negative_parallel,
+    test_gia_do_with_hough_corner_noise,
     test_ban_le_parallel_two_circles,
     test_ban_le_selects_circles_across_both_lines,
     test_ban_le_negative_only_one_circle,

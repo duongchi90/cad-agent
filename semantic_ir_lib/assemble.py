@@ -29,7 +29,9 @@ def build_semantic_document(
     bolt_hole_max_radius_mm: float = 15.0,
     constraint_angle_tolerance_deg: float = 3.0,
     constraint_length_tolerance_percent: float = 3.0,
-    constraint_distance_tolerance_mm: float = 2.0,
+    # 5.0mm — đồng bộ _DEFAULT_DISTANCE_TOL_MM của constraint_detection.py,
+    # xem comment ở đó cho bằng chứng đo được (corner gap 3.43mm sau Hough).
+    constraint_distance_tolerance_mm: float = 5.0,
     enable_compound_parts: bool = True,
     compound_bolt_hole_search_radius_mm: float = 30.0,
     compound_parallel_gap_max_mm: float = 50.0,

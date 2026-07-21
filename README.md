@@ -108,14 +108,15 @@ nếu chưa cài các package optional này.
   `vision_client.py` với ảnh scan thật + API key thật.
 - **Phase 2**: Pattern Recognition + Pattern Compound (ghép linh kiện phức
   hợp: khung_chu_nhat/gia_do/ban_le/diem_noi, `semantic_ir_lib/pattern_compound.py`,
-  14 test — xem mục 11.6 tài liệu kiến trúc) + Constraint Detection +
+  17 test — xem mục 11.6 tài liệu kiến trúc) + Constraint Detection +
   Constraint Pruning + Constraint Solving (thật, `python-solvespace`) đã có
-  code + test. Còn thiếu: constraint line-circle/circle-circle (tangent,
-  concentric), và benchmark ngưỡng góc/bán kính/confidence/compound (gap
-  song song, bán kính tìm lỗ vít, khoảng cách cluster điểm nối) trên ảnh
-  scan thật — pipeline demo hiện dùng ảnh tổng hợp và chưa từng tạo ra
-  compound part nào trên chính ảnh đó, dấu hiệu ngưỡng cần tinh chỉnh khi
-  có ảnh thật. Xem mục 11.6 tài liệu kiến trúc cho danh sách việc còn lại.
+  code + test. Ngưỡng `coincident_endpoint` đã sửa (2.0mm → 5.0mm, dựa trên
+  nhiễu Hough thật đo được — mục 11.6): demo pipeline giờ phát hiện được
+  compound thật (`gia_do`) thay vì luôn rỗng. Còn thiếu: constraint
+  line-circle/circle-circle (tangent, concentric), và benchmark đầy đủ các
+  ngưỡng (góc/bán kính/confidence/compound) trên ảnh scan thật domain khung
+  xe — ngưỡng 5.0mm mới benchmark trên 1 ảnh tổng hợp. Xem mục 11.6 tài
+  liệu kiến trúc cho chi tiết.
 - **Phase 3**: DXF Builder + Reviewer #1 + Repair #1 (cả 3 dùng `ezdxf`,
   tự SKIP khi chưa cài) đã có code + test. Còn thiếu: Semantic API riêng
   cho domain khung xương/thùng xe cải tạo, constraint arc, benchmark thật

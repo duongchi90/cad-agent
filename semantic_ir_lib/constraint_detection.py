@@ -25,7 +25,16 @@ from .models import Constraint
 
 _DEFAULT_ANGLE_TOL_DEG = 3.0
 _DEFAULT_LENGTH_TOL_PERCENT = 3.0
-_DEFAULT_DISTANCE_TOL_MM = 2.0
+# 5.0mm (trước là 2.0mm) — 2.0mm thấp hơn cả nhiễu Hough thật đo được trên
+# demo pipeline: sau Canny+Hough+merge (Phase 1), 1 góc L vẽ khớp tuyệt đối
+# theo pixel vẫn ra khoảng cách góc thực tế ~3.43mm giữa cặp line gần nhất
+# (nét vẽ rộng 3px bị tách/làm tròn qua Hough). Với ngưỡng cũ, coincident_
+# endpoint không bao giờ trigger được trên dữ liệu thật -> gia_do/khung_chu_nhat
+# ở pattern_compound.py không bao giờ có điều kiện để ghép. 5.0mm đủ rộng để
+# bao nhiễu đo được (3.43mm) nhưng vẫn từ chối rõ ràng các gap không liên
+# quan (đã kiểm tra test cũ: mọi case dùng 0mm hoặc >=50mm, không có ca biên
+# 2-10mm). Xem mục 11.6 tài liệu kiến trúc.
+_DEFAULT_DISTANCE_TOL_MM = 5.0
 
 
 def _orientation(p: Primitive) -> float:
