@@ -84,6 +84,14 @@ reported as `SKIP` or `NOT RUN`. The specialized markers are `real_data` and
 executes either live gate. Unverified calibration, ambiguous recognition, and
 production DXF mutation require human approval.
 
+## Mixed-scale PDF sheets
+
+A PDF page can contain views with different scales such as `TL 1:40` and
+`TL 1:20`. PDF rendering records OCR scale-label candidates and the associated
+geometry region in its per-page manifest. A candidate remains
+`needs_verification`: it never replaces an approved calibration or authorizes
+DXF production automatically.
+
 ## Canonical documentation
 
 - Product and scope: `docs/PROJECT.md`

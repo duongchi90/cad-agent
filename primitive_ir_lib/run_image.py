@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -30,6 +31,7 @@ from .geometry_extraction import extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
 from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
+from .view_calibration import detect_view_candidates
 
 Bbox = Tuple[int, int, int, int]
 
@@ -76,6 +78,8 @@ def run(
     auto_calibrate: bool = False,
     calibration_registry_path: Optional[Path] = None,
     calibration_id: Optional[str] = None,
+    view_candidates_output_path: Optional[str] = None,
+    view_candidates_dpi: Optional[int] = None,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -112,6 +116,14 @@ def run(
     raw_lines = raw_geometry.lines
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=raw_texts, image_bgr=image)
+
+    if view_candidates_output_path is not None:
+        if view_candidates_dpi is None:
+            raise ValueError("view_candidates_dpi is required with view_candidates_output_path")
+        candidates = detect_view_candidates(raw_texts, raw_lines, image.shape[1], image.shape[0], dpi=view_candidates_dpi)
+        candidates_path = Path(view_candidates_output_path)
+        candidates_path.parent.mkdir(parents=True, exist_ok=True)
+        candidates_path.write_text(json.dumps(candidates, indent=2) + "\n", encoding="utf-8")
 
     if scale_mm_per_px is not None:
         calibration = Calibration(
