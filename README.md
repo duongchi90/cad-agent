@@ -134,6 +134,13 @@ nếu chưa cài các package optional này.
   từ `__file__` (`primitive_ir_lib/demo_output/` cho Phase 1,
   `<repo_root>/demo_output/` cho Phase 2/3) — 3 lệnh chạy tuần tự ở trên
   giờ tự nối đúng trên mọi máy, không cần chỉnh `output_dir=` tay.
+  Đã xác nhận bằng chứng cụ thể: fixture `primitive_ir_lib/demo_output/`
+  và `demo_output/semantic_ir_demo_output.json` đã commit trước đó cực kỳ
+  stale (từ trước khi có Pattern Compound/tangent-concentric/ngưỡng
+  5.0mm) — 7 parts/17 constraints, không `gia_do`/`khung_chu_nhat`/
+  `tangent` nào. Regenerate lại bằng đúng code hiện tại ra 37 parts/253
+  constraints, có đủ `gia_do`/`khung_chu_nhat`/`tangent` — đã commit đè
+  fixture mới này.
 - **Phase 5**: hoàn chỉnh về code + 64 test: Text Re-reader, Part
   Re-classifier, Conflict Resolver, Constraint Advisor, `AgentReport` schema,
   apply có kiểm soát, demo và CLI chạy trên IR/ảnh thật. Vision thật là tuỳ

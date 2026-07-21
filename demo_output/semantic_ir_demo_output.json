@@ -2,46 +2,14 @@
   "schema_version": "1.0.0",
   "primitive_ir_ref": {
     "file_name": "primitive_ir_demo_output.json",
-    "primitive_count": 9
+    "primitive_count": 43
   },
   "parts": [
     {
-      "id": "part-ebcedf43",
-      "part_type": "thanh_ngang",
-      "primitive_ids": [
-        "rawline-ef7faa85"
-      ],
-      "confidence": 1.0,
-      "source": "rule_geometry",
-      "validation": {
-        "status": "unreviewed"
-      },
-      "geometry_summary": {
-        "length_mm": 2067.474,
-        "orientation_deg": 0.0
-      }
-    },
-    {
-      "id": "part-a1ae2bf4",
-      "part_type": "thanh_ngang",
-      "primitive_ids": [
-        "rawline-3d7f162f"
-      ],
-      "confidence": 1.0,
-      "source": "rule_geometry",
-      "validation": {
-        "status": "unreviewed"
-      },
-      "geometry_summary": {
-        "length_mm": 2060.606,
-        "orientation_deg": 0.0
-      }
-    },
-    {
-      "id": "part-f4af9e47",
+      "id": "part-2c76a664",
       "part_type": "thanh_doc",
       "primitive_ids": [
-        "rawline-206f4c51"
+        "rawline-920e84ad"
       ],
       "confidence": 1.0,
       "source": "rule_geometry",
@@ -54,26 +22,10 @@
       }
     },
     {
-      "id": "part-b433593a",
-      "part_type": "thanh_doc",
-      "primitive_ids": [
-        "rawline-e8b01d57"
-      ],
-      "confidence": 1.0,
-      "source": "rule_geometry",
-      "validation": {
-        "status": "unreviewed"
-      },
-      "geometry_summary": {
-        "length_mm": 1706.868,
-        "orientation_deg": 90.0
-      }
-    },
-    {
-      "id": "part-ca2050ab",
+      "id": "part-251b460c",
       "part_type": "thanh_ngang",
       "primitive_ids": [
-        "rawline-9098537f"
+        "rawline-e4770668"
       ],
       "confidence": 1.0,
       "source": "rule_geometry",
@@ -81,31 +33,303 @@
         "status": "unreviewed"
       },
       "geometry_summary": {
-        "length_mm": 353.737,
+        "length_mm": 2038.645,
         "orientation_deg": 0.0
       }
     },
     {
-      "id": "part-3db35cd3",
+      "id": "part-9e72c3a7",
       "part_type": "thanh_ngang",
       "primitive_ids": [
-        "rawline-d50f7a43"
+        "rawline-68ca9209"
       ],
-      "confidence": 0.969,
+      "confidence": 1.0,
       "source": "rule_geometry",
       "validation": {
         "status": "unreviewed"
       },
       "geometry_summary": {
-        "length_mm": 312.544,
-        "orientation_deg": 0.63
+        "length_mm": 2031.872,
+        "orientation_deg": 0.0
       }
     },
     {
-      "id": "part-6c0329f2",
+      "id": "part-d7888578",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-c15c63c7"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 1676.295,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-5f4b6896",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-f5d44c50"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 1080.279,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-54a8b9b4",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-8455a7c4"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 1093.825,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-6fb64e85",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-c4addff4"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 1093.825,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-5df20b66",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 1093.825,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-145f83cf",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 1076.892,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-d4018a54",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 1093.825,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-3a3316b5",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 396.215,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-41840f5d",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 389.442,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-1a2328ac",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 389.442,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-536e5e1b",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 402.988,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-acbbb31a",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 389.442,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-7cd5d2a2",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 389.442,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-a1deb011",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 389.442,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-fcf71b62",
+      "part_type": "thanh_doc",
+      "primitive_ids": [
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 389.442,
+        "orientation_deg": 90.0
+      }
+    },
+    {
+      "id": "part-efdf6516",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 348.805,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-3e3fa812",
+      "part_type": "thanh_ngang",
+      "primitive_ids": [
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "length_mm": 365.737,
+        "orientation_deg": 0.0
+      }
+    },
+    {
+      "id": "part-5e553efe",
       "part_type": "duong_vien_tron",
       "primitive_ids": [
-        "rawcirc-9cbe4779"
+        "rawcirc-6f9b9f51"
       ],
       "confidence": 0.6,
       "source": "rule_geometry",
@@ -113,17 +337,255 @@
         "status": "unreviewed"
       },
       "geometry_summary": {
-        "radius_mm": 69.374
+        "radius_mm": 68.406
+      }
+    },
+    {
+      "id": "part-841d8d18",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-7f25bcae"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 231.972
+      }
+    },
+    {
+      "id": "part-b71d5458",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-c9af1f4b"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 184.9
+      }
+    },
+    {
+      "id": "part-5c3f5ec5",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-fb8b897d"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 147.649
+      }
+    },
+    {
+      "id": "part-ef651e21",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-25530aed"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 138.845
+      }
+    },
+    {
+      "id": "part-f9ca454f",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-10515242"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 145.618
+      }
+    },
+    {
+      "id": "part-df69bdd4",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-7067c6d9"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 110.737
+      }
+    },
+    {
+      "id": "part-d1c969f7",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-29be945d"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 134.442
+      }
+    },
+    {
+      "id": "part-07fbe325",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-0bf21214"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 102.61
+      }
+    },
+    {
+      "id": "part-fb515b7f",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-48f7c4cf"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 145.956
+      }
+    },
+    {
+      "id": "part-21a60305",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-546c7a5f"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 144.94
+      }
+    },
+    {
+      "id": "part-83499947",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-7934eaa8"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 134.104
+      }
+    },
+    {
+      "id": "part-648f4d10",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-eac64f55"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 49.781
+      }
+    },
+    {
+      "id": "part-401f781b",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-3208f149"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 70.438
+      }
+    },
+    {
+      "id": "part-a0cd1a07",
+      "part_type": "duong_vien_tron",
+      "primitive_ids": [
+        "rawcirc-e71b1cbe"
+      ],
+      "confidence": 0.6,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      },
+      "geometry_summary": {
+        "radius_mm": 43.008
+      }
+    },
+    {
+      "id": "part-64770d6d",
+      "part_type": "khung_chu_nhat",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-8455a7c4",
+        "rawline-8be0a646",
+        "rawline-ac38669b"
+      ],
+      "confidence": 0.774,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
+      }
+    },
+    {
+      "id": "part-9094a28d",
+      "part_type": "gia_do",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-c15c63c7"
+      ],
+      "confidence": 0.831,
+      "source": "rule_geometry",
+      "validation": {
+        "status": "unreviewed"
       }
     }
   ],
   "constraints": [
     {
-      "id": "cst-239d92e1",
-      "type": "parallel",
+      "id": "cst-035b4ec2",
+      "type": "perpendicular",
       "primitive_ids": [
-        "rawline-ef7faa85",
-        "rawline-3d7f162f"
+        "rawline-920e84ad",
+        "rawline-e4770668"
       ],
       "confidence": 1.0,
       "tolerance": {
@@ -134,11 +596,311 @@
       }
     },
     {
-      "id": "cst-50ae3cb7",
+      "id": "cst-0a22af98",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-68ca9209"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d35f515d",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-c15c63c7"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-6cd7f108",
       "type": "equal_length",
       "primitive_ids": [
-        "rawline-ef7faa85",
-        "rawline-3d7f162f"
+        "rawline-920e84ad",
+        "rawline-c15c63c7"
+      ],
+      "confidence": 0.768,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.394
+      }
+    },
+    {
+      "id": "cst-803c0a21",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-f5d44c50"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-030e2e35",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-8455a7c4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-46634ba9",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-c4addff4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-f2284920",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-9af6b670",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-57996e80",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ee266d97",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-92579471",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e779cde8",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-9a31f948",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-1e8ae9f0",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c313dc4b",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ff70ee1d",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-6763c8a4",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d0b0a990",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b52ace24",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-920e84ad",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-80d63045",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-68ca9209"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d257e03f",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-68ca9209"
       ],
       "confidence": 0.945,
       "tolerance": {
@@ -149,11 +911,11 @@
       }
     },
     {
-      "id": "cst-50ed22d6",
+      "id": "cst-ebdacbef",
       "type": "perpendicular",
       "primitive_ids": [
-        "rawline-ef7faa85",
-        "rawline-206f4c51"
+        "rawline-e4770668",
+        "rawline-c15c63c7"
       ],
       "confidence": 1.0,
       "tolerance": {
@@ -164,11 +926,101 @@
       }
     },
     {
-      "id": "cst-ef17be96",
+      "id": "cst-2767470b",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-f5d44c50"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-df22975a",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-8455a7c4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d4a47411",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-c4addff4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-7bb1f2a0",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e201301b",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ac8f660b",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-db7e7d42",
       "type": "perpendicular",
       "primitive_ids": [
-        "rawline-ef7faa85",
-        "rawline-e8b01d57"
+        "rawline-e4770668",
+        "rawline-ac38669b"
       ],
       "confidence": 1.0,
       "tolerance": {
@@ -179,41 +1031,11 @@
       }
     },
     {
-      "id": "cst-de9e3d1d",
-      "type": "parallel",
-      "primitive_ids": [
-        "rawline-ef7faa85",
-        "rawline-9098537f"
-      ],
-      "confidence": 1.0,
-      "tolerance": {
-        "angle_deg": 3.0
-      },
-      "measured": {
-        "angle_diff_deg": 0.0
-      }
-    },
-    {
-      "id": "cst-a66a87a2",
-      "type": "parallel",
-      "primitive_ids": [
-        "rawline-ef7faa85",
-        "rawline-d50f7a43"
-      ],
-      "confidence": 0.895,
-      "tolerance": {
-        "angle_deg": 3.0
-      },
-      "measured": {
-        "angle_diff_deg": 0.63
-      }
-    },
-    {
-      "id": "cst-236a9bd3",
+      "id": "cst-114f240f",
       "type": "perpendicular",
       "primitive_ids": [
-        "rawline-3d7f162f",
-        "rawline-206f4c51"
+        "rawline-e4770668",
+        "rawline-7988895c"
       ],
       "confidence": 1.0,
       "tolerance": {
@@ -224,11 +1046,11 @@
       }
     },
     {
-      "id": "cst-6e0afbda",
+      "id": "cst-785ec17f",
       "type": "perpendicular",
       "primitive_ids": [
-        "rawline-3d7f162f",
-        "rawline-e8b01d57"
+        "rawline-e4770668",
+        "rawline-7785b4b9"
       ],
       "confidence": 1.0,
       "tolerance": {
@@ -239,11 +1061,11 @@
       }
     },
     {
-      "id": "cst-b9c862c1",
-      "type": "parallel",
+      "id": "cst-aa98c52d",
+      "type": "perpendicular",
       "primitive_ids": [
-        "rawline-3d7f162f",
-        "rawline-9098537f"
+        "rawline-e4770668",
+        "rawline-8be0a646"
       ],
       "confidence": 1.0,
       "tolerance": {
@@ -254,26 +1076,11 @@
       }
     },
     {
-      "id": "cst-ba9da393",
-      "type": "parallel",
+      "id": "cst-e145284a",
+      "type": "perpendicular",
       "primitive_ids": [
-        "rawline-3d7f162f",
-        "rawline-d50f7a43"
-      ],
-      "confidence": 0.895,
-      "tolerance": {
-        "angle_deg": 3.0
-      },
-      "measured": {
-        "angle_diff_deg": 0.63
-      }
-    },
-    {
-      "id": "cst-d32c1227",
-      "type": "parallel",
-      "primitive_ids": [
-        "rawline-206f4c51",
-        "rawline-e8b01d57"
+        "rawline-e4770668",
+        "rawline-7d9bb705"
       ],
       "confidence": 1.0,
       "tolerance": {
@@ -284,93 +1091,3288 @@
       }
     },
     {
-      "id": "cst-df7d1f92",
+      "id": "cst-856ca782",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-60ec4191",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-f377842c",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e57c0e55",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d9e7b391",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-e4770668",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-fb62f16c",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-c15c63c7"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-75e46617",
+      "type": "coincident_endpoint",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-c15c63c7"
+      ],
+      "confidence": 0.661,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "endpoint_distance_mm": 3.386
+      }
+    },
+    {
+      "id": "cst-266a1571",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-f5d44c50"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-de68b201",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-8455a7c4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-405608cb",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-c4addff4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-f54e047d",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-81acc22b",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-03696182",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e1cacf53",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e9c24ec6",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-4b259d2e",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-5187d579",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-2d4de8a7",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-43268166",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-a9e06fd5",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-52d85875",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-4f618e35",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ff07a938",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-68ca9209",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-8ef82ac3",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-f5d44c50"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-928639dc",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-8455a7c4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-89f4c32f",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-c4addff4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-2cabaea4",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-7a4739e6",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-62ac165e",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-03240908",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-aedac07c",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-52c0fdd0",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-6d72661d",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-65e96399",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-18c584b2",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-6eee7bb1",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b82710ad",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-05d439fd",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-1775cc23",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c15c63c7",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-02822b45",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-8455a7c4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-5ed0549e",
       "type": "equal_length",
       "primitive_ids": [
-        "rawline-206f4c51",
-        "rawline-e8b01d57"
+        "rawline-f5d44c50",
+        "rawline-8455a7c4"
       ],
-      "confidence": 0.933,
+      "confidence": 0.794,
       "tolerance": {
         "length_percent": 3.0
       },
       "measured": {
-        "length_diff_percent": 0.402
+        "length_diff_percent": 1.238
       }
     },
     {
-      "id": "cst-2c4a38f1",
-      "type": "perpendicular",
-      "primitive_ids": [
-        "rawline-206f4c51",
-        "rawline-9098537f"
-      ],
-      "confidence": 1.0,
-      "tolerance": {
-        "angle_deg": 3.0
-      },
-      "measured": {
-        "angle_diff_deg": 0.0
-      }
-    },
-    {
-      "id": "cst-14b56617",
-      "type": "perpendicular",
-      "primitive_ids": [
-        "rawline-206f4c51",
-        "rawline-d50f7a43"
-      ],
-      "confidence": 0.895,
-      "tolerance": {
-        "angle_deg": 3.0
-      },
-      "measured": {
-        "angle_diff_deg": 0.63
-      }
-    },
-    {
-      "id": "cst-2dd0ed7c",
-      "type": "perpendicular",
-      "primitive_ids": [
-        "rawline-e8b01d57",
-        "rawline-9098537f"
-      ],
-      "confidence": 1.0,
-      "tolerance": {
-        "angle_deg": 3.0
-      },
-      "measured": {
-        "angle_diff_deg": 0.0
-      }
-    },
-    {
-      "id": "cst-e0becd71",
-      "type": "perpendicular",
-      "primitive_ids": [
-        "rawline-e8b01d57",
-        "rawline-d50f7a43"
-      ],
-      "confidence": 0.895,
-      "tolerance": {
-        "angle_deg": 3.0
-      },
-      "measured": {
-        "angle_diff_deg": 0.63
-      }
-    },
-    {
-      "id": "cst-f8f0a0a9",
+      "id": "cst-d0f62f1e",
       "type": "parallel",
       "primitive_ids": [
-        "rawline-9098537f",
-        "rawline-d50f7a43"
+        "rawline-f5d44c50",
+        "rawline-c4addff4"
       ],
-      "confidence": 0.895,
+      "confidence": 1.0,
       "tolerance": {
         "angle_deg": 3.0
       },
       "measured": {
-        "angle_diff_deg": 0.63
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d41e86de",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-c4addff4"
+      ],
+      "confidence": 0.794,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.238
+      }
+    },
+    {
+      "id": "cst-484beb78",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-13fe400f",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-d920c25d"
+      ],
+      "confidence": 0.794,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.238
+      }
+    },
+    {
+      "id": "cst-f60ad38b",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-bb85470b",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-733928f4"
+      ],
+      "confidence": 0.948,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.313
+      }
+    },
+    {
+      "id": "cst-b2a0f0e0",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-edac6505",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-594eb485"
+      ],
+      "confidence": 0.794,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.238
+      }
+    },
+    {
+      "id": "cst-fef24fe6",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-4d051f43",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-1cf4ca97",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-1a93b4f5",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-42e11e6b",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e5c32c37",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-816e8fed",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-a767324e",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-f2d87010",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-13092a52",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ae8c3022",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-c4addff4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d15a8ade",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-c4addff4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-b0c6bfe9",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-eb8dc91a",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-9bc3edc5",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-19158272",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-733928f4"
+      ],
+      "confidence": 0.742,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.548
+      }
+    },
+    {
+      "id": "cst-41381497",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-5cdd2ae7",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-c3b9e02f",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-6df37839",
+      "type": "coincident_endpoint",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-ac38669b"
+      ],
+      "confidence": 0.661,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "endpoint_distance_mm": 3.386
+      }
+    },
+    {
+      "id": "cst-d95e6333",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d3f672d8",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-1af4b5c4",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-aade439a",
+      "type": "coincident_endpoint",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-8be0a646"
+      ],
+      "confidence": 0.661,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "endpoint_distance_mm": 3.386
+      }
+    },
+    {
+      "id": "cst-abce8e67",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-79cd306d",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c440ed8b",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-feea3a5e",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ed25eb41",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b5099e84",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8455a7c4",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d9e03bfa",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-3c103500",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-d920c25d"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-2495e2d3",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-a064c1cd",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-733928f4"
+      ],
+      "confidence": 0.742,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.548
+      }
+    },
+    {
+      "id": "cst-30c993eb",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-56ec87fb",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-cfb98029",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-afc30427",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b1b17ca4",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-22ad2623",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-9175c516",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-078f1079",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c63f409b",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-abc87ca3",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-4b24c7d2",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-64dd5896",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-762499d1",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-733928f4"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d8e3b653",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-733928f4"
+      ],
+      "confidence": 0.742,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.548
+      }
+    },
+    {
+      "id": "cst-179b4028",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-cb52712d",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-a3653766",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-a3eebc1d",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b1aa35c1",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-406630c5",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c392f9c8",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-683ff51b",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-642182cd",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d80b185d",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e0ca4b5e",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-fec00734",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-7cc24df2",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-594eb485"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-fd42829c",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-594eb485"
+      ],
+      "confidence": 0.742,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.548
+      }
+    },
+    {
+      "id": "cst-f6696c00",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-9b6f935c",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-05e0dac1",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-97e0110b",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-74b2ab6b",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-be14f1ee",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c22c19fb",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-190f0127",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-f16318f2",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-93f21d54",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e0c9805d",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-ac38669b"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-8c10623a",
+      "type": "coincident_endpoint",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-ac38669b"
+      ],
+      "confidence": 0.661,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "endpoint_distance_mm": 3.386
+      }
+    },
+    {
+      "id": "cst-c22ee525",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-8a139914",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c8791c8f",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ce7ccb54",
+      "type": "coincident_endpoint",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-8be0a646"
+      ],
+      "confidence": 0.661,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "endpoint_distance_mm": 3.386
+      }
+    },
+    {
+      "id": "cst-bbce8414",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-21912163",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-3f3ce6b8",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-bc675f42",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-6182079c",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d0205372",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-25ded1fd",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-7988895c"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-17110f67",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-7988895c"
+      ],
+      "confidence": 0.715,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.709
+      }
+    },
+    {
+      "id": "cst-3ed430f4",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-fd869183",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 0.715,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.709
+      }
+    },
+    {
+      "id": "cst-835bbae4",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-54d7fc05",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-8be0a646"
+      ],
+      "confidence": 0.72,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.681
+      }
+    },
+    {
+      "id": "cst-4223fc1d",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-095bda33",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 0.715,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.709
+      }
+    },
+    {
+      "id": "cst-489f8c76",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-24ed6013",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-78eefd58"
+      ],
+      "confidence": 0.715,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.709
+      }
+    },
+    {
+      "id": "cst-5502ece2",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-863ab42c",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-c99fce41"
+      ],
+      "confidence": 0.715,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.709
+      }
+    },
+    {
+      "id": "cst-78098372",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b85ee8e2",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-00d74721"
+      ],
+      "confidence": 0.715,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 1.709
+      }
+    },
+    {
+      "id": "cst-10510330",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c33c6b93",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-ac38669b",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-3c2db14c",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-4a8dd188",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-7785b4b9"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-5271974c",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-59481bc3",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b8b61522",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-44daa78a",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-cdc85127",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-0d8e5329",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-7e45bfc9",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-eaa3b0a6",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d6ccabb1",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-aa698414",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-92e509a3",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-533a687d",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-8be0a646"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-a6bf903c",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-0b4777e0",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-713f120a",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-84660e57",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-3e76894c",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-d7082a55",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-03987505",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-e694f5c1",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-c997f93e",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-36afb00c",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-7785b4b9",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-40971168",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8be0a646",
+        "rawline-7d9bb705"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-ef9e0984",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8be0a646",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-caaf6489",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8be0a646",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-9e7f966d",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-8be0a646",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-a1256d85",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8be0a646",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-79f752dd",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-8be0a646",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-135013d7",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c01675f5",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-78eefd58"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-42d13060",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-6f2d0584",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-888515e0",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-3ec434c1",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-c48801db",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-73405ebb",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-c11970d7",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-5745231d",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawline-c99fce41"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-58ab1672",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-aa379248",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-b45ba55c",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-bc05667c",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-4674d1c0",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-c99fce41",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-042b2144",
+      "type": "equal_length",
+      "primitive_ids": [
+        "rawline-c99fce41",
+        "rawline-00d74721"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "length_percent": 3.0
+      },
+      "measured": {
+        "length_diff_percent": 0.0
+      }
+    },
+    {
+      "id": "cst-a5d4269b",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c99fce41",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-97147631",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-c99fce41",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-4aae6150",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-00d74721",
+        "rawline-19ed42ec"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-f7260460",
+      "type": "perpendicular",
+      "primitive_ids": [
+        "rawline-00d74721",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-848cebb3",
+      "type": "parallel",
+      "primitive_ids": [
+        "rawline-19ed42ec",
+        "rawline-3cc61fa0"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "angle_deg": 3.0
+      },
+      "measured": {
+        "angle_diff_deg": 0.0
+      }
+    },
+    {
+      "id": "cst-b9b2109d",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawcirc-fb8b897d"
+      ],
+      "confidence": 0.627,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 3.725
+      }
+    },
+    {
+      "id": "cst-e59b0175",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-f5d44c50",
+        "rawcirc-3208f149"
+      ],
+      "confidence": 0.898,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 1.016
+      }
+    },
+    {
+      "id": "cst-79fe2004",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-c4addff4",
+        "rawcirc-29be945d"
+      ],
+      "confidence": 0.932,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.677
+      }
+    },
+    {
+      "id": "cst-477d2bf9",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawcirc-25530aed"
+      ],
+      "confidence": 0.831,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 1.693
+      }
+    },
+    {
+      "id": "cst-e9a6abed",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawcirc-0bf21214"
+      ],
+      "confidence": 0.932,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.677
+      }
+    },
+    {
+      "id": "cst-1c313c19",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawcirc-48f7c4cf"
+      ],
+      "confidence": 0.797,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 2.032
+      }
+    },
+    {
+      "id": "cst-fce52bf7",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawcirc-eac64f55"
+      ],
+      "confidence": 0.932,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.677
+      }
+    },
+    {
+      "id": "cst-926a0fc7",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-d920c25d",
+        "rawcirc-e71b1cbe"
+      ],
+      "confidence": 0.932,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.677
+      }
+    },
+    {
+      "id": "cst-a6986c59",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawcirc-10515242"
+      ],
+      "confidence": 0.831,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 1.693
+      }
+    },
+    {
+      "id": "cst-40e4f157",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawcirc-546c7a5f"
+      ],
+      "confidence": 0.898,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 1.016
+      }
+    },
+    {
+      "id": "cst-02abe5ea",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-733928f4",
+        "rawcirc-7934eaa8"
+      ],
+      "confidence": 0.966,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.339
+      }
+    },
+    {
+      "id": "cst-54b7c9c3",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-594eb485",
+        "rawcirc-0bf21214"
+      ],
+      "confidence": 0.729,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 2.709
+      }
+    },
+    {
+      "id": "cst-fe97d93e",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-7988895c",
+        "rawcirc-29be945d"
+      ],
+      "confidence": 0.932,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.677
+      }
+    },
+    {
+      "id": "cst-d03eb3d2",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-8be0a646",
+        "rawcirc-c9af1f4b"
+      ],
+      "confidence": 0.966,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.339
+      }
+    },
+    {
+      "id": "cst-399bd2dd",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-7d9bb705",
+        "rawcirc-25530aed"
+      ],
+      "confidence": 0.831,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 1.693
+      }
+    },
+    {
+      "id": "cst-dbe02dea",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawcirc-7f25bcae"
+      ],
+      "confidence": 1.0,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.0
+      }
+    },
+    {
+      "id": "cst-a8de23b5",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawcirc-0bf21214"
+      ],
+      "confidence": 0.729,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 2.709
+      }
+    },
+    {
+      "id": "cst-f0d4119a",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-78eefd58",
+        "rawcirc-eac64f55"
+      ],
+      "confidence": 0.932,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.677
+      }
+    },
+    {
+      "id": "cst-a778ea8e",
+      "type": "tangent",
+      "primitive_ids": [
+        "rawline-c99fce41",
+        "rawcirc-c9af1f4b"
+      ],
+      "confidence": 0.966,
+      "tolerance": {
+        "distance_mm": 5.0
+      },
+      "measured": {
+        "tangent_gap_mm": 0.339
       }
     }
   ]
