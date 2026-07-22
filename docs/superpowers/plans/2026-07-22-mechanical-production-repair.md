@@ -1,14 +1,20 @@
 # AutoCAD Mechanical Production Review/Repair Implementation Plan
 
-**Status:** Executing
+**Status:** Completed
 
 **Base SHA:** `68713d593a9ae8d24711586f74b44b5163bd542c`
 
+**Completion Head SHA:** `d00856128f1b62841790d3eec6e64142e11f7d2e`
+
 **Verification command:** `scripts/verify.ps1`
 
-**Required gates:** the deterministic offline suite and `autocad_mechanical`
-live review smoke must pass. `real_data` is not affected unless the operator
-supplies and approves a private drawing.
+**Verification result:** `PASS` on the Completion Head SHA: 299 offline tests,
+zero failures/errors/skips; `autocad_mechanical` unavailable-state probe
+reported 4 explicit skips.
+
+**Required gate result:** the disposable AutoCAD Mechanical staged-DXF review
+passed with 10 structural and 10 geometry checks. `real_data` remains `NOT RUN`
+without an approved private drawing.
 
 ## Steps
 
