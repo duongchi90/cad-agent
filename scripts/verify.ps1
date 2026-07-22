@@ -7,6 +7,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$candidateHead = (& git -C $repoRoot rev-parse HEAD | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $candidateHead -notmatch '^[0-9a-f]{40}$') {
+    throw "Could not resolve an exact Git commit SHA for verification."
+}
+$initialStatus = @(& git -C $repoRoot -c core.quotepath=false `
+    status --porcelain=v1 --untracked-files=all)
+if ($LASTEXITCODE -ne 0) {
+    throw "git status failed while checking verification provenance."
+}
+if ($initialStatus.Count -ne 0) {
+    throw "Verification requires a clean tree before test gates. Commit or stash these paths:`n$($initialStatus -join "`n")"
+}
+Write-Host "Commit SHA: $candidateHead"
+Write-Host "Repository: clean at verification start."
+
 if (-not $PythonExe) {
     $PythonExe = Join-Path $repoRoot ".venv-py311\Scripts\python.exe"
 }

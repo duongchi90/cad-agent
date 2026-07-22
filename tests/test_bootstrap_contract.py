@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BootstrapContractTests(unittest.TestCase):
+    def test_bootstrap_environment_path_is_git_ignored(self) -> None:
+        bootstrap = (ROOT / "scripts/bootstrap.ps1").read_text(encoding="utf-8")
+        match = re.search(
+            r'^\$venvDir = Join-Path \$repoRoot "([^"]+)"$',
+            bootstrap,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(match, "bootstrap must declare its repository-local venv")
+        configured_venv = match.group(1).replace("\\", "/")
+        completed = subprocess.run(
+            [
+                "git",
+                "check-ignore",
+                "--quiet",
+                "--no-index",
+                f"{configured_venv}/contract-probe",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            completed.returncode,
+            f"bootstrap venv is not ignored: {configured_venv}",
+        )
+
     def test_dependency_roles_are_explicit(self) -> None:
         runtime = (ROOT / "requirements/runtime.in").read_text(encoding="utf-8")
         vision = (ROOT / "requirements/vision.in").read_text(encoding="utf-8")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,33 @@ UPLOAD_ARTIFACT_SHA = "b7c566a772e6b6bfb58ed0dc250532a479d7789f"
 
 
 class VerificationContractTests(unittest.TestCase):
+    def test_verify_records_clean_candidate_provenance_before_test_gates(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        self.assertIn("status --porcelain=v1 --untracked-files=all", script)
+        self.assertIn("rev-parse HEAD", script)
+        self.assertIn("^[0-9a-f]{40}$", script)
+        self.assertIn('Write-Host "Commit SHA: $candidateHead"', script)
+        self.assertIn(
+            'Write-Host "Repository: clean at verification start."', script
+        )
+        clean_guard = script.index("status --porcelain=v1 --untracked-files=all")
+        first_test_gate = script.index("Invoke-PytestGate `")
+        self.assertLess(clean_guard, first_test_gate)
+
+    def test_verification_scratch_paths_are_git_ignored(self) -> None:
+        for probe in (
+            ".artifacts/test-results/contract-probe.xml",
+            ".superpowers/sdd/contract-probe.md",
+        ):
+            completed = subprocess.run(
+                ["git", "check-ignore", "--quiet", "--no-index", probe],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, f"not ignored: {probe}")
+
     def test_verify_script_owns_all_checks(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
         for test_root in (
