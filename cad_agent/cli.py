@@ -22,6 +22,7 @@ from .manifest import (
     verify_source,
     write_manifest,
 )
+from .live import LiveSafetyError, load_build_evidence, review_dict, review_live, repair_live, write_build_evidence, write_live_report
 
 
 class CommandError(ValueError):
@@ -73,7 +74,7 @@ def _run_semantic(primitive_path: Path, output: Path) -> None:
     save_document(semantic, str(output))
 
 
-def _run_dxf(primitive_path: Path, semantic_path: Path, output: Path) -> str:
+def _run_dxf(primitive_path: Path, semantic_path: Path, output: Path, evidence_path: Path) -> str:
     from dxf_builder_lib.builder import build_dxf
     from dxf_builder_lib.reviewer import review_dxf
     from semantic_ir_lib.constraint_pruning import prune_constraints
@@ -95,6 +96,7 @@ def _run_dxf(primitive_path: Path, semantic_path: Path, output: Path) -> str:
     review = review_dxf(built)
     if not review.passed:
         raise CommandError("Headless DXF review failed: " + "; ".join(review.mismatches))
+    write_build_evidence(evidence_path, built)
     return f"entities={built.entity_count}; components={built.component_count}; review=PASS"
 
 
@@ -124,6 +126,7 @@ def run_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: di
                     _artifact(output_dir, "primitive_ir"),
                     _artifact(output_dir, "semantic_ir"),
                     artifact,
+                    output_dir / "build-evidence.json",
                 )
             _write_stage(manifest_path, manifest, stage, "completed", artifact, details)
         except Exception as exc:
@@ -180,6 +183,61 @@ def _resume_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _live_client(hwnd: int, dispatcher: Path):
+    from mcp_integration_lib.mcp_client import (
+        FileIPCLiveMCPClient,
+        make_windows_dispatch_trigger,
+        make_windows_lisp_trigger,
+    )
+
+    if hwnd <= 0:
+        raise CommandError("--hwnd must be a positive AutoCAD window handle.")
+    if not dispatcher.is_file():
+        raise CommandError(f"AutoCAD dispatcher does not exist: {dispatcher}")
+    return FileIPCLiveMCPClient(
+        trigger=make_windows_dispatch_trigger(hwnd),
+        raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
+        bootstrap_lisp_path=str(dispatcher),
+    )
+
+
+def _mechanical_review_command(args: argparse.Namespace) -> int:
+    dxf = args.dxf.resolve()
+    evidence = args.build_evidence.resolve()
+    build = load_build_evidence(evidence, dxf)
+    review = review_live(build, _live_client(args.hwnd, args.dispatcher.resolve()), dxf)
+    report = {
+        "operation": "mechanical-review",
+        "dxf_path": str(dxf),
+        "dxf_sha256": sha256_file(dxf),
+        "review": review_dict(review),
+    }
+    write_live_report(args.report.resolve(), report)
+    print(args.report.resolve())
+    return 0 if review.passed else 1
+
+
+def _mechanical_repair_command(args: argparse.Namespace) -> int:
+    if args.confirm_repair != "APPLY":
+        raise CommandError("Production repair requires --confirm-repair APPLY exactly.")
+    if not args.approval_reference.strip():
+        raise CommandError("Production repair requires a non-empty --approval-reference.")
+    dxf = args.dxf.resolve()
+    evidence = args.build_evidence.resolve()
+    build = load_build_evidence(evidence, dxf)
+    report = repair_live(
+        build,
+        _live_client(args.hwnd, args.dispatcher.resolve()),
+        dxf,
+        evidence,
+        args.backup_dir.resolve(),
+        args.approval_reference.strip(),
+    )
+    write_live_report(args.report.resolve(), report)
+    print(args.report.resolve())
+    return 0 if report["save_state"] in {"saved", "not_needed"} else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cad_agent")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -193,6 +251,17 @@ def build_parser() -> argparse.ArgumentParser:
     resume = subcommands.add_parser("resume", help="Resume a validated staged run")
     resume.add_argument("--manifest", type=Path, required=True)
     resume.add_argument("--input", type=Path, required=True)
+    review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
+    repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
+    for command in (review, repair):
+        command.add_argument("--dxf", type=Path, required=True)
+        command.add_argument("--build-evidence", type=Path, required=True)
+        command.add_argument("--hwnd", type=int, required=True)
+        command.add_argument("--dispatcher", type=Path, required=True)
+        command.add_argument("--report", type=Path, required=True)
+    repair.add_argument("--backup-dir", type=Path, required=True)
+    repair.add_argument("--approval-reference", required=True)
+    repair.add_argument("--confirm-repair", required=True)
     return parser
 
 
@@ -205,7 +274,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run":
             return _run_command(args)
-        return _resume_command(args)
-    except (CommandError, ManifestError, OSError, ValueError) as exc:
+        if args.command == "resume":
+            return _resume_command(args)
+        if args.command == "mechanical-review":
+            return _mechanical_review_command(args)
+        return _mechanical_repair_command(args)
+    except (CommandError, ManifestError, LiveSafetyError, OSError, ValueError) as exc:
         print(f"cad_agent: {exc}", file=sys.stderr)
         return 2

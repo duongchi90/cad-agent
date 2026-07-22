@@ -41,6 +41,7 @@ def test_run_and_resume_create_verified_checkpoints() -> None:
         assert manifest["approvals"]["calibration"] == {"approved": True, "reference": "ticket-123"}
         assert all(record["state"] == "completed" and record["sha256"] for record in manifest["stages"].values())
         assert (output / "staged.dxf").is_file()
+        assert (output / "build-evidence.json").is_file()
 
         before = manifest_path.read_bytes()
         assert main(["resume", "--manifest", str(manifest_path), "--input", str(source)]) == 0
