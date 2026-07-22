@@ -15,7 +15,7 @@ from cad_agent.fidelity import (
     run_fidelity_pdf,
     write_region_proposal,
 )
-from cad_agent.cli import main
+from cad_agent.cli import CommandError, _refuse_fidelity_dxf, main
 
 
 def _pdf(path: Path) -> None:
@@ -69,6 +69,15 @@ def test_fidelity_manifest_rejects_repo_output_root(tmp_path: Path) -> None:
     _pdf(source)
     with pytest.raises(FidelityError, match="outside"):
         new_fidelity_manifest(source, Path.cwd() / "output" / "private", 144, "approved-test", workspace_root=Path.cwd())
+
+
+def test_mechanical_boundary_refuses_a_fidelity_layout_dxf(tmp_path: Path) -> None:
+    dxf = tmp_path / "layout_dxf" / "page_01.dxf"
+    dxf.parent.mkdir()
+    dxf.write_text("0\nEOF\n", encoding="utf-8")
+    (tmp_path / "fidelity-run-manifest.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(CommandError, match="cannot enter Mechanical"):
+        _refuse_fidelity_dxf(dxf)
 
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:

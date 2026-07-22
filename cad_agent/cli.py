@@ -29,6 +29,14 @@ class CommandError(ValueError):
     """A user-correctable command error."""
 
 
+def _refuse_fidelity_dxf(dxf: Path) -> None:
+    """Keep private visual-fidelity artifacts out of Mechanical workflows."""
+    from .fidelity import FIDELITY_MANIFEST_NAME
+
+    if (dxf.parent.parent / FIDELITY_MANIFEST_NAME).is_file():
+        raise CommandError("Fidelity layout DXFs are review-only and cannot enter Mechanical review or repair.")
+
+
 def _configure_console_output() -> None:
     """Keep delegated OCR diagnostics printable in a Windows console."""
     for stream in (sys.stdout, sys.stderr):
@@ -295,6 +303,7 @@ def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
 
 def _mechanical_review_command(args: argparse.Namespace) -> int:
     dxf = args.dxf.resolve()
+    _refuse_fidelity_dxf(dxf)
     evidence = args.build_evidence.resolve()
     build = load_build_evidence(evidence, dxf)
     review = review_live(build, _live_client(args.hwnd, args.dispatcher.resolve(), args.timeout_s), dxf)
@@ -315,6 +324,7 @@ def _mechanical_repair_command(args: argparse.Namespace) -> int:
     if not args.approval_reference.strip():
         raise CommandError("Production repair requires a non-empty --approval-reference.")
     dxf = args.dxf.resolve()
+    _refuse_fidelity_dxf(dxf)
     evidence = args.build_evidence.resolve()
     build = load_build_evidence(evidence, dxf)
     report = repair_live(
