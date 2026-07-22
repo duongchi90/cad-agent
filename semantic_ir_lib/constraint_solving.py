@@ -31,6 +31,8 @@ from primitive_ir_lib.models import Point2D, Primitive, PrimitiveIRDocument
 from .models import Constraint
 
 _SUPPORTED_TYPES = {"parallel", "perpendicular", "equal_length", "coincident_endpoint", "collinear"}
+_COORDINATE_UNKNOWNS_PER_LINE = 4
+_MAX_SOLVER_UNKNOWNS = 1_000
 
 
 @dataclass
@@ -99,6 +101,14 @@ def solve_constraints(
     }
 
     relevant_ids = {pid for c in constraints for pid in c.primitive_ids if pid in line_by_id}
+
+    # SolveSpace receives two point coordinates for every relevant line. Its
+    # nonlinear solve is retried in three constraint orders below, so starting
+    # a system above this capacity makes a safe fallback consume minutes of
+    # CPU on dense scans. The DXF caller preserves calibrated input geometry
+    # for this existing explicit status.
+    if len(relevant_ids) * _COORDINATE_UNKNOWNS_PER_LINE > _MAX_SOLVER_UNKNOWNS:
+        return SolveResult(status="too_many_unknowns", dof=0)
 
     status_map = {
         ResultFlag.OKAY: "okay",

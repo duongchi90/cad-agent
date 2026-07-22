@@ -146,6 +146,25 @@ def test_empty_constraints_solves_trivially_with_zero_relevant_primitives():
     print("OK   test_empty_constraints_solves_trivially_with_zero_relevant_primitives")
 
 
+def test_solver_capacity_guard_skips_construction_for_more_than_1000_unknowns(monkeypatch):
+    """A dense scan must fall back before constructing an expensive solver."""
+    import python_solvespace
+
+    def unexpected_solver_construction():
+        raise AssertionError("capacity guard must run before SolverSystem construction")
+
+    monkeypatch.setattr(python_solvespace, "SolverSystem", unexpected_solver_construction)
+    lines = [_line(f"l{i}", 0, i * 10, 100, i * 10) for i in range(251)]
+    constraints = [_c("parallel", f"l{i}", f"l{i + 1}") for i in range(250)]
+
+    result = solve_constraints(_doc(*lines), constraints)
+
+    assert result.status == "too_many_unknowns"
+    assert result.dof == 0
+    assert result.solved_primitives == {}
+    assert result.applied_constraint_count == 0
+
+
 _TESTS = [
     test_parallel_constraint_makes_lines_exactly_parallel,
     test_perpendicular_constraint_enforced,
@@ -154,6 +173,7 @@ _TESTS = [
     test_collinear_constraint_enforced,
     test_unsupported_and_missing_primitive_constraints_are_skipped,
     test_empty_constraints_solves_trivially_with_zero_relevant_primitives,
+    test_solver_capacity_guard_skips_construction_for_more_than_1000_unknowns,
 ]
 
 
