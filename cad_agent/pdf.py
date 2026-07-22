@@ -18,7 +18,14 @@ def _stage(state: str = "pending", artifact: str | None = None, digest: str | No
     return {"state": state, "artifact": artifact, "sha256": digest, "details": None}
 
 
-def new_pdf_manifest(source: Path, scale_mm_per_px: float, approval: str, dpi: int) -> dict[str, Any]:
+def new_pdf_manifest(
+    source: Path,
+    scale_mm_per_px: float,
+    approval: str,
+    dpi: int,
+    *,
+    auto_ocr_roi: bool = False,
+) -> dict[str, Any]:
     if not source.is_file():
         raise ManifestError(f"Input PDF does not exist: {source}")
     if scale_mm_per_px <= 0:
@@ -30,7 +37,11 @@ def new_pdf_manifest(source: Path, scale_mm_per_px: float, approval: str, dpi: i
     return {
         "schema_version": PDF_MANIFEST_SCHEMA_VERSION,
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "pdf"},
-        "configuration": {"scale_mm_per_px": scale_mm_per_px, "dpi": dpi},
+        "configuration": {
+            "scale_mm_per_px": scale_mm_per_px,
+            "dpi": dpi,
+            "auto_ocr_roi": auto_ocr_roi,
+        },
         "approvals": {"calibration": {"approved": True, "reference": approval.strip()}},
         "render": _stage(artifact="pdf/manifest.json"),
         "pages": [],
@@ -70,9 +81,16 @@ def _completed(output_dir: Path, stage: dict[str, Any]) -> bool:
     return completed_artifact(output_dir, stage)
 
 
-def _page_record(number: int, primitive: Path, rendered: Path, output_dir: Path) -> dict[str, Any]:
+def _page_record(
+    number: int,
+    primitive: Path,
+    rendered: Path,
+    output_dir: Path,
+    scale_label_candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
     return {
         "page": number,
+        "scale_label_candidates": scale_label_candidates,
         "rendered_png": _stage(
             "completed",
             str(rendered.relative_to(output_dir)).replace("\\", "/"),
@@ -105,6 +123,7 @@ def _ensure_rendered(source: Path, output_dir: Path, manifest_path: Path, manife
         dpi=int(config["dpi"]),
         preset="real_scan_tuned_v1",
         merge_lines=True,
+        auto_ocr_roi=bool(config.get("auto_ocr_roi", False)),
     )
     rendered_manifest = output_dir / "pdf" / "manifest.json"
     if not rendered_manifest.is_file():
@@ -120,7 +139,16 @@ def _ensure_rendered(source: Path, output_dir: Path, manifest_path: Path, manife
             raise ManifestError(f"PDF render manifest references missing Primitive IR: {primitive}")
         if not rendered_png.is_file():
             raise ManifestError(f"PDF render manifest references missing rendered page: {rendered_png}")
-        pages.append(_page_record(int(item["page"]), primitive, rendered_png, output_dir))
+        candidates = item.get("scale_label_candidates", [])
+        if not isinstance(candidates, list):
+            raise ManifestError("PDF render manifest has invalid scale-label candidates.")
+        pages.append(_page_record(
+            int(item["page"]),
+            primitive,
+            rendered_png,
+            output_dir,
+            candidates,
+        ))
     if not pages:
         raise ManifestError("PDF contains no renderable pages.")
     manifest["pages"] = pages

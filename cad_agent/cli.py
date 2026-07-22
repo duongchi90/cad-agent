@@ -29,6 +29,13 @@ class CommandError(ValueError):
     """A user-correctable command error."""
 
 
+def _configure_console_output() -> None:
+    """Keep delegated OCR diagnostics printable in a Windows console."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def _artifact(output_dir: Path, stage: str) -> Path:
     return output_dir / {
         "primitive_ir": "primitive_ir.json",
@@ -195,7 +202,13 @@ def _run_pdf_command(args: argparse.Namespace) -> int:
     manifest_path = output_dir / PDF_MANIFEST_NAME
     if manifest_path.exists():
         raise CommandError(f"PDF run manifest already exists: {manifest_path}; use resume-pdf instead.")
-    manifest = new_pdf_manifest(source, args.scale_mm_per_px, args.calibration_approval, args.dpi)
+    manifest = new_pdf_manifest(
+        source,
+        args.scale_mm_per_px,
+        args.calibration_approval,
+        args.dpi,
+        auto_ocr_roi=args.auto_ocr_roi,
+    )
     write_manifest(manifest_path, manifest)
     run_pdf_stages(source, output_dir, manifest_path, manifest)
     print(manifest_path)
@@ -285,6 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_pdf.add_argument("--scale-mm-per-px", type=float, required=True)
     run_pdf.add_argument("--calibration-approval", required=True)
     run_pdf.add_argument("--dpi", type=int, default=144)
+    run_pdf.add_argument("--auto-ocr-roi", action="store_true", help="Detect OCR regions before PDF scale-label review")
     resume_pdf = subcommands.add_parser("resume-pdf", help="Resume a validated staged PDF run")
     resume_pdf.add_argument("--manifest", type=Path, required=True)
     resume_pdf.add_argument("--input", type=Path, required=True)
@@ -303,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_console_output()
     args = build_parser().parse_args(argv)
     try:
         if args.command == "doctor":

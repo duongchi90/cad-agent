@@ -32,6 +32,7 @@ def test_pdf_run_writes_page_checkpoints_and_resume_preserves_them() -> None:
         persisted = json.loads((output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
         assert len(persisted["pages"]) == 2
         for page in persisted["pages"]:
+            assert page["scale_label_candidates"] == []
             assert all(stage["state"] == "completed" and stage["sha256"] for stage in page["stages"].values())
             assert (output / page["stages"]["dxf"]["artifact"]).is_file()
             assert (output / page["stages"]["build_evidence"]["artifact"]).is_file()
@@ -118,3 +119,22 @@ def test_pdf_cli_run_and_resume() -> None:
             "--manifest", str(output / "pdf-run-manifest.json"),
             "--input", str(source),
         ]) == 0
+
+
+def test_pdf_cli_persists_auto_ocr_roi_choice() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "drawing.pdf"
+        output = root / "run"
+        _pdf(source)
+
+        assert main([
+            "run-pdf",
+            "--input", str(source),
+            "--output-dir", str(output),
+            "--scale-mm-per-px", "0.5",
+            "--calibration-approval", "ticket-123",
+            "--auto-ocr-roi",
+        ]) == 0
+        manifest = json.loads((output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
+        assert manifest["configuration"]["auto_ocr_roi"] is True

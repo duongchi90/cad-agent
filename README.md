@@ -70,6 +70,11 @@ Use `resume-pdf` with that manifest and the original PDF to retry only missing
 page stages. A changed source PDF is rejected by SHA-256 before any checkpoint
 is reused.
 
+Add `--auto-ocr-roi` to preserve per-page OCR scale-label candidates in the
+manifest. These candidates are review metadata only: a candidate such as
+`1:40` remains `needs_verification` and never overrides the approved manual
+scale automatically.
+
 To review a staged DXF in AutoCAD Mechanical, retain its `build-evidence.json`
 and run `cad_agent mechanical-review` with the AutoCAD window handle and loaded
 dispatcher. `mechanical-repair` is separate: it requires an approval reference,

@@ -7,13 +7,17 @@ import unicodedata
 from typing import Iterable, Optional
 
 
-_SCALE_RE = re.compile(r"(?:TL|TY\s*LE|TILE)\s*[-:]?\s*1\s*:\s*(\d+)", re.IGNORECASE)
+_LABELED_SCALE_RE = re.compile(
+    r"(?:TL|THI|TY\s*(?:LE|L[EB]|1[EB])|TILE)\s*[-:]?\s*1\s*:\s*(\d+)",
+    re.IGNORECASE,
+)
+_BARE_SCALE_RE = re.compile(r"\s*1\s*:\s*(\d+)\s*", re.IGNORECASE)
 
 
 def parse_scale_label(content: str) -> Optional[int]:
     """Return the denominator from an OCR scale label, or ``None``."""
     normalized = unicodedata.normalize("NFD", content).encode("ascii", "ignore").decode()
-    match = _SCALE_RE.search(normalized)
+    match = _LABELED_SCALE_RE.search(normalized) or _BARE_SCALE_RE.fullmatch(normalized)
     return int(match.group(1)) if match else None
 
 

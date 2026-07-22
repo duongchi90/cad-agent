@@ -31,9 +31,19 @@ from .geometry_extraction import extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
 from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
-from .view_calibration import detect_view_candidates
+from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
+
+
+def _title_block_roi(image_width: int, image_height: int) -> Bbox:
+    """Return the conventional lower-right title-block search area."""
+    return (
+        int(image_width * 0.58),
+        int(image_height * 0.67),
+        image_width,
+        image_height,
+    )
 
 
 def _parse_roi(value: str) -> Bbox:
@@ -112,6 +122,16 @@ def run(
     if effective_rois:
         _configure_tesseract(tesseract_cmd)
         raw_texts = extract_text_tesseract(image, roi_boxes=effective_rois)
+
+    if view_candidates_output_path is not None:
+        _configure_tesseract(tesseract_cmd)
+        title_texts = extract_text_tesseract(
+            image,
+            roi_boxes=[_title_block_roi(image.shape[1], image.shape[0])],
+            min_confidence=10,
+            psm=11,
+        )
+        raw_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
 
     raw_lines = raw_geometry.lines
     if merge_lines:

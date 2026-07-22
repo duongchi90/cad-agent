@@ -13,6 +13,9 @@ def test_parse_scale_label_accepts_common_title_variants():
     assert parse_scale_label("TL 1:40") == 40
     assert parse_scale_label("Tỷ lệ 1:8") == 8
     assert parse_scale_label("Tile 1:20") == 20
+    assert parse_scale_label("Ty1B: 1:40") == 40
+    assert parse_scale_label("THI: 1:40") == 40
+    assert parse_scale_label("1:40") == 40
     assert parse_scale_label("4:40") is None
 
 
