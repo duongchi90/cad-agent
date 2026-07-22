@@ -24,6 +24,7 @@ from cad_agent.fidelity import (
     run_fidelity_text_reconstruct,
     run_fidelity_dimension_observations,
     run_fidelity_linetype_reconstruct,
+    run_fidelity_table_text_reconstruct,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -178,6 +179,29 @@ def test_linetype_reconstruction_cli_writes_private_candidate(tmp_path: Path) ->
         "--observation", str(observation), "--base-dxf", str(base_dxf),
     ]) == 0
     assert (output / "linetype_reconstruction" / "page_01" / "layout.dxf").is_file()
+
+
+def test_table_text_reconstruction_emits_only_matched_cells(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    base_dxf = output / page["artifacts"]["layout_dxf"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+    observation = output / "table-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-table-text-observation-1.0", "private_artifact": True,
+        "state": "needs_human_approval", "page": 1, "source_render_sha256": sha256_file(rendered),
+        "candidates": [
+            {"cell_match_state": "matched", "cell_bbox_px": [10, 20, 80, 40], "text": {"content": "MATCH", "bbox_px": [15, 22, 60, 38]}},
+            {"cell_match_state": "needs_review", "cell_bbox_px": None, "text": {"content": "SKIP", "bbox_px": [100, 20, 160, 40]}},
+        ],
+    }), encoding="utf-8")
+    result = run_fidelity_table_text_reconstruct(source, output, manifest, observation, base_dxf, workspace_root=Path.cwd())
+    assert [entity.dxf.text for entity in ezdxf.readfile(result).modelspace().query("TEXT")] == ["MATCH"]
 
 
 def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:

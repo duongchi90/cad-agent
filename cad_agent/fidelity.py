@@ -471,6 +471,66 @@ def run_fidelity_table_text_observations(source: Path, output_root: Path, manife
     return outputs
 
 
+def run_fidelity_table_text_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    observation_path: Path,
+    base_dxf: Path,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Emit only cell-matched table OCR into a fresh private fidelity DXF."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(observation_path, output_root) or not observation_path.is_file():
+        raise FidelityError("Table text observation must reside inside the private fidelity output root.")
+    if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    if observation.get("schema_version") != "fidelity-table-text-observation-1.0" or observation.get("private_artifact") is not True:
+        raise FidelityError("Table text observation has an unsupported schema.")
+    page_number = observation.get("page")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Table text observation page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Table text observation does not match the rendered page.")
+    audit = json.loads(_safe_artifact_path(output_root, page["artifacts"]["layout_audit"]).read_text(encoding="utf-8"))
+    height_px = int(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf)
+    model = document.modelspace()
+    emitted = 0
+    for candidate in observation.get("candidates", []):
+        if not isinstance(candidate, dict) or candidate.get("cell_match_state") != "matched":
+            continue
+        text = candidate.get("text", {})
+        content, bbox = text.get("content"), text.get("bbox_px") if isinstance(text, dict) else (None, None)
+        if not isinstance(content, str) or not content.strip() or not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        x0, _, _, y1 = (float(value) for value in bbox)
+        height = max(1.5, min(8.0, (float(bbox[3]) - float(bbox[1])) * scale))
+        entity = model.add_text(content.strip(), dxfattribs={"layer": "FIDELITY_TABLE_TEXT", "height": height})
+        entity.set_placement((x0 * scale, (height_px - y1) * scale))
+        emitted += 1
+    base_root = output_root / "table_text_reconstruction"
+    revision = 2
+    while (base_root / f"page_{page_number:02d}").exists():
+        base_root = output_root / f"table_text_reconstruction-r{revision}"
+        revision += 1
+    root = base_root / f"page_{page_number:02d}"
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-table-text", "source_render_sha256": sha256_file(rendered), "observation_sha256": sha256_file(observation_path), "base_dxf_sha256": sha256_file(base_dxf), "emitted_text_entities": emitted, "unresolved": ["table OCR text is candidate-only and requires visual review", "unmatched OCR is intentionally excluded"]}, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
 _DIMENSION_VALUE = re.compile(r"^(?:[Ø⌀Rr]\s*)?\d+(?:[.,]\d+)?(?:\s*(?:mm|cm|m|°))?$")
 
 
