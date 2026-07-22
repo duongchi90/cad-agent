@@ -54,6 +54,9 @@ review gate.
 - No rewrite of the five existing implementation packages.
 - No automatic production mutation without human approval.
 
-## Canonical reference
+## Canonical references
 
 - Current architecture: `docs/ARCHITECTURE.md`
+- Verified status: `docs/STATUS.md`
+- Quality and release gates: `docs/QUALITY.md`
+- Design/plan record policy: `docs/superpowers/README.md`

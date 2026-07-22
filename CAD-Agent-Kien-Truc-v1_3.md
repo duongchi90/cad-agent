@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+> **Historical record.** Current architecture is maintained in
+> `docs/ARCHITECTURE.md`; current verified status and operating gates are in
+> `docs/STATUS.md` and `docs/QUALITY.md`. Preserve the material below as dated
+> implementation evidence, not as the source of current project truth.
+
 # CAD Agent — Scan/PDF → AutoCAD LT: Tổng hợp kiến trúc (v1.2)
 
 > Tài liệu tổng hợp toàn bộ quá trình phân tích, dùng để tiếp tục thảo luận/triển khai ở phiên làm việc mới mà không mất context.

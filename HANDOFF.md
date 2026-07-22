@@ -1,4 +1,10 @@
-﻿# CAD Agent — handoff Phase 1–3
+> [!IMPORTANT]
+> **Historical record.** Current architecture is maintained in
+> `docs/ARCHITECTURE.md`; current verified status and operating gates are in
+> `docs/STATUS.md` and `docs/QUALITY.md`. Preserve the material below as dated
+> implementation evidence, not as the source of current project truth.
+
+# CAD Agent — handoff Phase 1–3
 
 ## Gói này gồm
 
