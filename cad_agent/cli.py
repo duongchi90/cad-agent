@@ -292,6 +292,19 @@ def _fidelity_reconstruct_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_region_approval_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, write_region_approval
+
+    manifest_path = args.manifest.resolve()
+    write_region_approval(
+        args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), args.page,
+        args.revision, args.region_id, args.approval_reference, workspace_root=Path.cwd(),
+    )
+    suffix = "" if args.revision == 1 else f"-r{args.revision}"
+    print(manifest_path.parent / "region_approvals" / f"page_{args.page:02d}{suffix}.json")
+    return 0
+
+
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
@@ -389,6 +402,13 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_regions.add_argument("--page", type=int, required=True)
     fidelity_regions.add_argument("--regions", type=Path, required=True, help="Private JSON containing regions and excluded_regions")
     fidelity_regions.add_argument("--revision", type=int, default=1)
+    fidelity_approval = subcommands.add_parser("fidelity-region-approve", help="Write a SHA-bound approval for selected fidelity regions")
+    fidelity_approval.add_argument("--input", type=Path, required=True)
+    fidelity_approval.add_argument("--manifest", type=Path, required=True)
+    fidelity_approval.add_argument("--page", type=int, required=True)
+    fidelity_approval.add_argument("--revision", type=int, default=1)
+    fidelity_approval.add_argument("--region-id", action="append", required=True)
+    fidelity_approval.add_argument("--approval-reference", required=True)
     fidelity_reconstruct = subcommands.add_parser("fidelity-reconstruct", help="Build fresh clean geometry candidates from approved fidelity regions")
     fidelity_reconstruct.add_argument("--input", type=Path, required=True)
     fidelity_reconstruct.add_argument("--manifest", type=Path, required=True)
@@ -432,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_region_proposal_command(args)
         if args.command == "fidelity-reconstruct":
             return _fidelity_reconstruct_command(args)
+        if args.command == "fidelity-region-approve":
+            return _fidelity_region_approval_command(args)
         if args.command == "mechanical-review":
             return _mechanical_review_command(args)
         return _mechanical_repair_command(args)

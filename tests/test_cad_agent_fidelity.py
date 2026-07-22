@@ -159,3 +159,9 @@ def test_fidelity_cli_creates_private_baseline() -> None:
             "--manifest", str(output / "fidelity-run-manifest.json"), "--page", "1", "--regions", str(regions),
         ]) == 0
         assert (output / "region_proposals" / "page_01.json").is_file()
+        assert main([
+            "fidelity-region-approve", "--input", str(source),
+            "--manifest", str(output / "fidelity-run-manifest.json"), "--page", "1",
+            "--region-id", "main", "--approval-reference", "approved-test",
+        ]) == 0
+        assert (output / "region_approvals" / "page_01.json").is_file()
