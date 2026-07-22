@@ -335,6 +335,14 @@ def _fidelity_text_approval_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_text_review_index_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, write_fidelity_text_review_index
+
+    manifest_path = args.manifest.resolve()
+    print(write_fidelity_text_review_index(args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), workspace_root=Path.cwd()))
+    return 0
+
+
 def _fidelity_compose_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_compose
 
@@ -480,6 +488,9 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_text_approve.add_argument("--observation", type=Path, required=True)
     fidelity_text_approve.add_argument("--candidate-id", action="append", required=True)
     fidelity_text_approve.add_argument("--approval-reference", required=True)
+    fidelity_text_review = subcommands.add_parser("fidelity-text-review-index", help="Write a private browser review page for OCR candidates")
+    fidelity_text_review.add_argument("--input", type=Path, required=True)
+    fidelity_text_review.add_argument("--manifest", type=Path, required=True)
     fidelity_compose = subcommands.add_parser("fidelity-compose", help="Compose approved region geometry into a paper-coordinate review page")
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
@@ -537,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_text_observe_command(args)
         if args.command == "fidelity-text-approve":
             return _fidelity_text_approval_command(args)
+        if args.command == "fidelity-text-review-index":
+            return _fidelity_text_review_index_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
         if args.command == "fidelity-review-index":

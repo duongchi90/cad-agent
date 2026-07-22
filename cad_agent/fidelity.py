@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -482,6 +483,39 @@ def write_fidelity_text_approval(
     }
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return payload
+
+
+def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Create a private, read-only browser review page for OCR candidates."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    index = output_root / "fidelity_text_review" / "index.html"
+    if index.exists():
+        raise FidelityError(f"Fidelity text review index already exists: {index}")
+    cards: list[str] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        observation_path = output_root / "fidelity_text_observations" / f"page_{number:02d}.json"
+        if not observation_path.is_file():
+            raise FidelityError(f"Missing text observation for page {number}; run fidelity-text-observe first.")
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+        if observation.get("source") != manifest.get("source") or observation.get("page") != number:
+            raise FidelityError(f"Text observation for page {number} does not match the fidelity manifest.")
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        rows = []
+        for candidate in observation.get("candidates", []):
+            candidate_id = escape(str(candidate.get("id", "")))
+            content = escape(str(candidate.get("content", "")))
+            confidence = escape(str(candidate.get("confidence", "")))
+            bbox = escape(str(candidate.get("bbox_px", "")))
+            rows.append(f'<tr><td><input type="checkbox" data-page="{number}" value="{candidate_id}"></td><td><code>{candidate_id}</code></td><td>{content}</td><td>{confidence}</td><td><code>{bbox}</code></td></tr>')
+        rel_rendered = Path(os.path.relpath(rendered, index.parent)).as_posix()
+        cards.append(f'<section><h2>Trang {number} <small>{len(rows)} ứng viên</small></h2><details><summary>Xem ảnh PDF</summary><img src="{rel_rendered}" alt="PDF page {number}"></details><div class="scroll"><table><thead><tr><th>Duyệt</th><th>ID</th><th>OCR</th><th>Độ tin cậy</th><th>Khung pixel</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>')
+    page_html = """<!doctype html><meta charset='utf-8'><title>Duyệt chữ PDF riêng tư</title><style>body{font:15px system-ui,sans-serif;margin:20px;background:#f4f6f8;color:#18212b}header,section{background:#fff;border:1px solid #d9e0e6;border-radius:10px;padding:16px;margin:14px 0}h1{margin:0 0 6px}h2{margin:0 0 12px;font-size:18px}small{font-weight:400;color:#5d6b78}button{padding:10px 14px;border:0;border-radius:7px;background:#075985;color:#fff;font-weight:600}p{line-height:1.45}.scroll{overflow-x:auto;margin-top:12px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid #e4e9ed;padding:8px;text-align:left;vertical-align:top}th{background:#f8fafc}code{font-size:12px}img{max-width:100%;margin-top:12px;border:1px solid #cad3dc}summary{cursor:pointer;font-weight:600}</style><header><h1>Duyệt ứng viên chữ - riêng tư</h1><p>Chọn các OCR đúng, rồi bấm nút để sao chép ID. Việc chọn ở đây <strong>không</strong> tự tạo DXF hay phê duyệt; chỉ dùng để chuẩn bị lệnh duyệt từng chữ có kiểm tra Unicode.</p><button onclick='copyIds()'>Sao chép các ID đã chọn</button><p id='result' aria-live='polite'></p></header>""" + "\n".join(cards) + """<script>function copyIds(){const byPage={};document.querySelectorAll('input:checked').forEach(x=>(byPage[x.dataset.page]??=[]).push(x.value));const text=Object.entries(byPage).map(([page,ids])=>'Trang '+page+': '+ids.join(', ')).join('\\n');navigator.clipboard.writeText(text);document.querySelector('#result').textContent=text?'Đã sao chép.':'Chưa chọn ứng viên nào.';}</script>"""
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text(page_html, encoding="utf-8")
+    return index
 
 
 def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path) -> Path:

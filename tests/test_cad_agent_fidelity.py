@@ -16,6 +16,7 @@ from cad_agent.fidelity import (
     run_fidelity_pdf,
     run_fidelity_reconstruct,
     run_fidelity_text_observations,
+    write_fidelity_text_review_index,
     write_fidelity_text_approval,
     write_region_proposal,
     write_region_approval,
@@ -118,6 +119,9 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert observation["candidates"]
         assert all(candidate["content"] for candidate in observation["candidates"])
         assert observation["unresolved"] == ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"]
+        review = write_fidelity_text_review_index(source, output, manifest, workspace_root=Path.cwd())
+        assert review.is_file()
+        assert observation["candidates"][0]["id"] in review.read_text(encoding="utf-8")
         with pytest.raises(FidelityError, match="already exists"):
             run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
 
@@ -222,6 +226,8 @@ def test_fidelity_cli_creates_private_baseline() -> None:
         assert (output / "fidelity_observations" / "page_01.json").is_file()
         assert main(["fidelity-text-observe", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_text_observations" / "page_01.json").is_file()
+        assert main(["fidelity-text-review-index", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
+        assert (output / "fidelity_text_review" / "index.html").is_file()
         candidate_id = json.loads((output / "fidelity_text_observations" / "page_01.json").read_text(encoding="utf-8"))["candidates"][0]["id"]
         assert main([
             "fidelity-text-approve", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json"),
