@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 SETUP_PYTHON_SHA = "ece7cb06caefa5fff74198d8649806c4678c61a1"
 UPLOAD_ARTIFACT_SHA = "b7c566a772e6b6bfb58ed0dc250532a479d7789f"
+TESSERACT_INSTALLER_SHA = (
+    "c885fff6998e0608ba4bb8ab51436e1c6775c2bafc2559a19b423e18678b60c9"
+)
 
 
 class VerificationContractTests(unittest.TestCase):
@@ -66,6 +69,23 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("ls-files", script)
         self.assertIn('Write-Host "Tesseract: $tesseractPath ($tesseractVersion)"', script)
 
+    def test_verify_discovers_tesseract_with_bootstrap_precedence(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        environment_override = script.index(
+            "$tesseractPath = $env:CAD_AGENT_TESSERACT_CMD"
+        )
+        path_lookup = script.index(
+            '$tesseractCommand = Get-Command "tesseract.exe" '
+            "-ErrorAction SilentlyContinue"
+        )
+        resolved_source = script.index("$tesseractPath = $tesseractCommand.Source")
+        default_path = script.index(
+            '$tesseractPath = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"'
+        )
+        self.assertLess(environment_override, path_lookup)
+        self.assertLess(path_lookup, resolved_source)
+        self.assertLess(resolved_source, default_path)
+
     def test_workflow_is_pinned_and_least_privilege(self) -> None:
         workflow = (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
         self.assertIn("permissions:\n  contents: read", workflow)
@@ -83,6 +103,30 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn(".\\scripts\\verify.ps1", workflow)
         self.assertIn("path: .artifacts/test-results/", workflow)
         self.assertNotIn("python -m pytest primitive_ir_lib", workflow)
+
+    def test_workflow_hash_verifies_native_tesseract_before_execution(self) -> None:
+        workflow = (ROOT / ".github/workflows/tests.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("choco install tesseract", workflow.lower())
+        self.assertIn(
+            "https://github.com/UB-Mannheim/tesseract/releases/download/"
+            "v5.4.0.20240606/"
+            "tesseract-ocr-w64-setup-5.4.0.20240606.exe",
+            workflow,
+        )
+        digest_match = re.search(
+            r'\$tesseractSha256\s*=\s*"([0-9a-fA-F]{64})"', workflow
+        )
+        self.assertIsNotNone(digest_match, "native installer needs a SHA-256 identity")
+        assert digest_match is not None
+        self.assertEqual(TESSERACT_INSTALLER_SHA, digest_match.group(1).lower())
+        hash_check = workflow.index("Get-FileHash")
+        execution = workflow.index("Start-Process")
+        self.assertLess(digest_match.start(), hash_check)
+        self.assertLess(hash_check, execution)
+        self.assertIn("-Algorithm SHA256", workflow)
+        self.assertIn("Tesseract installer SHA-256 mismatch", workflow)
 
 
 if __name__ == "__main__":

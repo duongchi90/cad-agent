@@ -24,8 +24,20 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/windows-py311.lock
 
-      - name: Install Tesseract 5.4.0
-        run: choco install tesseract --version=5.4.0.20240606 --no-progress -y
+      - name: Install Tesseract 5.4.0.20240606
+        run: |
+          $tesseractUrl = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
+          $tesseractSha256 = "c885fff6998e0608ba4bb8ab51436e1c6775c2bafc2559a19b423e18678b60c9"
+          $installerPath = Join-Path $env:RUNNER_TEMP "tesseract-ocr-w64-setup-5.4.0.20240606.exe"
+          Invoke-WebRequest -Uri $tesseractUrl -OutFile $installerPath
+          $actualSha256 = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+          if ($actualSha256 -ne $tesseractSha256) {
+            throw "Tesseract installer SHA-256 mismatch: expected $tesseractSha256, found $actualSha256."
+          }
+          $installer = Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "Tesseract installer failed with exit code $($installer.ExitCode)."
+          }
 
       - name: Bootstrap locked environment
         run: .\scripts\bootstrap.ps1 -PythonExe python

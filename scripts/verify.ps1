@@ -52,7 +52,12 @@ if ($LASTEXITCODE -ne 0) {
 
 $tesseractPath = $env:CAD_AGENT_TESSERACT_CMD
 if (-not $tesseractPath) {
-    $tesseractPath = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+    $tesseractCommand = Get-Command "tesseract.exe" -ErrorAction SilentlyContinue
+    if ($tesseractCommand) {
+        $tesseractPath = $tesseractCommand.Source
+    } else {
+        $tesseractPath = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+    }
 }
 if (-not (Test-Path -LiteralPath $tesseractPath -PathType Leaf)) {
     throw "Tesseract executable not found: $tesseractPath"
