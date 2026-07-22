@@ -8,6 +8,7 @@ import ezdxf
 import fitz
 import pytest
 
+from primitive_ir_lib.geometry_extraction import RawLine
 from cad_agent.fidelity import (
     FidelityError,
     new_fidelity_manifest,
@@ -83,6 +84,17 @@ def test_mechanical_boundary_refuses_a_fidelity_layout_dxf(tmp_path: Path) -> No
     (tmp_path / "fidelity-run-manifest.json").write_text("{}\n", encoding="utf-8")
     with pytest.raises(CommandError, match="cannot enter Mechanical"):
         _refuse_fidelity_dxf(dxf)
+
+
+def test_line_pattern_observation_is_sidecar_only() -> None:
+    from cad_agent.fidelity import _observe_line_patterns
+
+    lines = [
+        RawLine(f"line-{index}", (index * 20.0, 10.0), (index * 20.0 + 12.0, 10.0), 1.0, (index * 20.0, 10.0, index * 20.0 + 12.0, 10.0))
+        for index in range(3)
+    ]
+    patterns = _observe_line_patterns(lines)
+    assert patterns == [{"axis": "horizontal", "coordinate_px": 8, "segment_count": 3, "median_gap_px": 8.0, "status": "needs_review"}]
 
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:

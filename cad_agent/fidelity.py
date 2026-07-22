@@ -351,10 +351,32 @@ def run_fidelity_observations(source: Path, output_root: Path, manifest: dict[st
         if output.exists():
             raise FidelityError(f"Fidelity observation already exists: {output}")
         output.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"schema_version": "fidelity-observation-1.0", "private_artifact": True, "state": status, "source_render_sha256": sha256_file(rendered), "table_grid": {"roi_px": list(roi), "vertical_axes_px": xs, "horizontal_axes_px": ys, "cells": [list(cell.bbox_px) for cell in cells] if status == "needs_review" else [], "reason": reason}, "unresolved": ["no cell OCR or DXF text is emitted without table-region approval"]}
+        payload = {"schema_version": "fidelity-observation-1.0", "private_artifact": True, "state": status, "source_render_sha256": sha256_file(rendered), "table_grid": {"roi_px": list(roi), "vertical_axes_px": xs, "horizontal_axes_px": ys, "cells": [list(cell.bbox_px) for cell in cells] if status == "needs_review" else [], "reason": reason}, "line_patterns": _observe_line_patterns(raw.lines), "unresolved": ["no cell OCR or DXF text is emitted without table-region approval", "line patterns do not define a DXF linetype without an explicit approved mapping"]}
         output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         outputs.append(output)
     return outputs
+
+
+def _observe_line_patterns(lines: list[Any]) -> list[dict[str, Any]]:
+    """Find conservative runs of separated, axis-aligned raw segments."""
+    result: list[dict[str, Any]] = []
+    for axis in ("horizontal", "vertical"):
+        groups: dict[int, list[tuple[float, float]]] = {}
+        for line in lines:
+            x0, y0, x1, y1 = line.bbox_px
+            if axis == "horizontal" and abs(y1 - y0) <= 3 and x1 - x0 >= 8:
+                groups.setdefault(round((y0 + y1) / 2 / 4) * 4, []).append((x0, x1))
+            if axis == "vertical" and abs(x1 - x0) <= 3 and y1 - y0 >= 8:
+                groups.setdefault(round((x0 + x1) / 2 / 4) * 4, []).append((y0, y1))
+        for coordinate, spans in groups.items():
+            spans.sort()
+            if len(spans) < 3:
+                continue
+            gaps = [round(spans[index + 1][0] - spans[index][1], 2) for index in range(len(spans) - 1)]
+            positive = [gap for gap in gaps if 2 <= gap <= 40]
+            if len(positive) >= 2:
+                result.append({"axis": axis, "coordinate_px": coordinate, "segment_count": len(spans), "median_gap_px": float(np.median(positive)), "status": "needs_review"})
+    return result
 
 
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
