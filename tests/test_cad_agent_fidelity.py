@@ -92,6 +92,7 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
             source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
         )
         assert proposal["state"] == "needs_human_approval"
+        assert proposal["unclassified_area_state"] == "needs_classification"
         assert proposal["page"]["coordinate_system"] == "pixel-top-left"
         assert proposal["source"] == {"name": "drawing.pdf", "sha256": manifest["source"]["sha256"], "kind": "pdf"}
         assert (output / "region_proposals" / "page_01.json").is_file()
@@ -104,6 +105,12 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         ]
         with pytest.raises(FidelityError, match="overlap"):
             write_region_proposal(source, output, output / "fidelity-run-manifest.json", manifest, 1, overlap, workspace_root=Path.cwd())
+
+        revision = write_region_proposal(
+            source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(), revision=2,
+        )
+        assert revision["revision"] == 2
+        assert (output / "region_proposals" / "page_01-r2.json").is_file()
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:

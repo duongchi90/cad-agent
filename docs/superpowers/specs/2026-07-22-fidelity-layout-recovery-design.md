@@ -71,6 +71,9 @@ creates model-space views after explicit calibration and view approval.
   their rectangles must be in bounds, have a three-pixel gutter, and cannot
   overlap each other or an excluded region. Reuse verifies the PDF, rendered
   page, page dimensions, and every referenced artifact hash before it writes.
+- A changed proposal is a new positive revision (`page_NN-rN.json`), never an
+  overwrite. Any area outside its green reconstruction or orange exclusion
+  rectangles remains explicitly `needs_classification`.
 - This recovery slice exports zero model-space views. A candidate that spans
   most of a page, as on the current private PDF, cannot authorize one.
 

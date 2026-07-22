@@ -173,10 +173,13 @@ def write_region_proposal(
     regions: dict[str, Any],
     *,
     workspace_root: Path,
+    revision: int = 1,
 ) -> dict[str, Any]:
     """Write a source-bound, review-only page-region proposal outside the repository."""
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
+    if revision <= 0:
+        raise FidelityError("Region proposal revision must be positive.")
     if manifest_path.resolve().parent != output_root.resolve():
         raise FidelityError("Fidelity manifest must reside directly in the private output root.")
     verify_source(manifest, source)
@@ -202,6 +205,7 @@ def write_region_proposal(
         "schema_version": "fidelity-region-proposal-1.0",
         "private_artifact": True,
         "state": "needs_human_approval",
+        "revision": revision,
         "source": manifest["source"],
         "page": {
             "number": page_number,
@@ -213,12 +217,14 @@ def write_region_proposal(
         },
         "proposal_definition_sha256": definition_sha256,
         "minimum_gutter_px": 3,
+        "unclassified_area_state": "needs_classification",
         "regions": included,
         "excluded_regions": excluded,
         "allowed_action": "layout-reconstruction-only",
         "prohibited_actions": ["model-export", "scale-approval", "mechanical-review", "mechanical-repair"],
     }
-    proposal_path = output_root / "region_proposals" / f"page_{page_number:02d}.json"
+    suffix = "" if revision == 1 else f"-r{revision}"
+    proposal_path = output_root / "region_proposals" / f"page_{page_number:02d}{suffix}.json"
     if proposal_path.exists():
         raise FidelityError(f"Region proposal already exists: {proposal_path}; create a new private staging root to revise it.")
     write_manifest(proposal_path, proposal)

@@ -265,9 +265,10 @@ def _fidelity_region_proposal_command(args: argparse.Namespace) -> int:
     manifest_path = args.manifest.resolve()
     write_region_proposal(
         args.input.resolve(), manifest_path.parent, manifest_path, read_fidelity_manifest(manifest_path),
-        args.page, regions, workspace_root=Path.cwd(),
+        args.page, regions, workspace_root=Path.cwd(), revision=args.revision,
     )
-    print(manifest_path.parent / "region_proposals" / f"page_{args.page:02d}.json")
+    suffix = "" if args.revision == 1 else f"-r{args.revision}"
+    print(manifest_path.parent / "region_proposals" / f"page_{args.page:02d}{suffix}.json")
     return 0
 
 
@@ -365,6 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_regions.add_argument("--manifest", type=Path, required=True)
     fidelity_regions.add_argument("--page", type=int, required=True)
     fidelity_regions.add_argument("--regions", type=Path, required=True, help="Private JSON containing regions and excluded_regions")
+    fidelity_regions.add_argument("--revision", type=int, default=1)
     review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
     repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
     for command in (review, repair):
