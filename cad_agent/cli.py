@@ -322,6 +322,14 @@ def _fidelity_compose_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_review_index_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, write_fidelity_review_index
+
+    manifest_path = args.manifest.resolve()
+    print(write_fidelity_review_index(args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), workspace_root=Path.cwd()))
+    return 0
+
+
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
@@ -437,6 +445,9 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
     fidelity_compose.add_argument("--approval", type=Path, required=True)
+    fidelity_index = subcommands.add_parser("fidelity-review-index", help="Write a private static review index for fidelity artifacts")
+    fidelity_index.add_argument("--input", type=Path, required=True)
+    fidelity_index.add_argument("--manifest", type=Path, required=True)
     review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
     repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
     for command in (review, repair):
@@ -482,6 +493,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_observe_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
+        if args.command == "fidelity-review-index":
+            return _fidelity_review_index_command(args)
         if args.command == "mechanical-review":
             return _mechanical_review_command(args)
         return _mechanical_repair_command(args)

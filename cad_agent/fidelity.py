@@ -8,6 +8,7 @@ or calibration can never be mistaken for CAD source geometry.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -425,6 +426,33 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
     cv2.imwrite(str(root / "overlay.png"), overlay)
     (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(image.shape[:2], 255, dtype=np.uint8)), "unresolved": ["unselected content remains absent", "no text/dimensions/linetypes/tables/model export"]}, indent=2) + "\n", encoding="utf-8")
     return root
+
+
+def write_fidelity_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Write a private static index linking the existing per-page review artifacts."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    index = output_root / "fidelity_review" / "index.html"
+    if index.exists():
+        raise FidelityError(f"Fidelity review index already exists: {index}")
+    cards: list[str] = []
+    for page in manifest.get("pages", []):
+        artifacts = page["artifacts"]
+        rendered = _safe_artifact_path(output_root, artifacts["rendered_png"])
+        overlay_record = artifacts.get("fidelity_overlay")
+        overlay = _safe_artifact_path(output_root, overlay_record) if isinstance(overlay_record, dict) else None
+        observation = output_root / "fidelity_observations" / f"page_{page['page']:02d}.json"
+        table_state = "not run"
+        if observation.is_file():
+            table_state = json.loads(observation.read_text(encoding="utf-8")).get("state", "unknown")
+        rel_rendered = Path(os.path.relpath(rendered, index.parent)).as_posix()
+        rel_overlay = Path(os.path.relpath(overlay, index.parent)).as_posix() if overlay else None
+        overlay_html = f'<img src="{rel_overlay}" alt="overlay page {page["page"]}">' if rel_overlay else "<p>overlay not generated</p>"
+        cards.append(f'<section><h2>Page {page["page"]} <small>table: {table_state}</small></h2><div><figure><figcaption>PDF render</figcaption><img src="{rel_rendered}" alt="PDF page {page["page"]}"></figure><figure><figcaption>DXF overlay</figcaption>{overlay_html}</figure></div></section>')
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("<!doctype html><meta charset='utf-8'><title>Private Fidelity Review</title><style>body{font:14px sans-serif;margin:20px;background:#f5f5f5}section{background:#fff;padding:12px;margin:12px 0}section>div{display:flex;gap:12px}figure{width:48%;margin:0}img{max-width:100%;border:1px solid #bbb}small{font-weight:normal;color:#666}</style><h1>Private fidelity review - needs review</h1>" + "\n".join(cards), encoding="utf-8")
+    return index
 
 
 def _observe_line_patterns(lines: list[Any]) -> list[dict[str, Any]]:
