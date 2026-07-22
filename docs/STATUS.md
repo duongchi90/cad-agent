@@ -37,8 +37,8 @@ the skips and the run used Python 3.12.
 
 | Area | State | Evidence and limit |
 |---|---|---|
-| Primitive IR | Partially verified | Final Python 3.11 offline gate passed with zero skips; approved private `real_data` execution was NOT RUN and its unavailable-state probe was SKIP. |
-| Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips. |
+| Primitive IR | Verified | Final Python 3.11 offline gate passed with zero skips; the approved private PDF, identified by SHA-256 below, completed Primitive IR for all nine pages. |
+| Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips; the approved private PDF completed all nine Semantic IR checkpoints. |
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
 | MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
 | Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
@@ -58,9 +58,9 @@ the skips and the run used Python 3.12.
 
 ## Next slice
 
-Normalize the approved private real-data benchmark and harden algorithms only
-against fresh benchmark evidence. The final Windows/AutoCAD Mechanical 2027 production
-review-repair loop remains after that slice.
+Maintain the SHA-bound private benchmark and run any future optimization against
+it. Production repair remains a separate human-approved operation with backup
+and a second live review; it was not requested or run here.
 
 ## Thin vertical-slice CLI evidence
 
@@ -88,7 +88,18 @@ review-repair loop remains after that slice.
 - Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` -> exit `0`; offline JUnit `tests=304; failures=0; errors=0; skipped=0`; SHA-256 `d9f8d85ed0ae42b14d4db00639a51d329a438b11ee2878cb8428b576dbd0e0fe`.
 - `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`), SHA-256 `9bef0b1195208264fc4b7e0f07c0ec898f659f9925b6caa983143659ebb107d5`; approved private run `NOT RUN`.
 - `autocad_mechanical`: unavailable-state probe `SKIP` (`tests=4; skipped=4`), SHA-256 `ec6a9b12540c9188a76988880e3651f81c63c399d4da5c989002f2c9b4b801f4`.
-- Remaining risk: no approved private PDF was run and no AutoCAD Mechanical mutation is part of this command.
+- Remaining risk: no approved private PDF was run at this historical command; the later full private-PDF evidence is recorded below.
+
+## Approved private PDF full-run evidence
+
+- State: **Verified**
+- Date: `2026-07-22`
+- Approved input: private PDF SHA-256 `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`; it remains outside Git.
+- Calibration: all nine title blocks state `1:40`; the approved 144-DPI conversion is `7.055555555556 mm/px`. OCR also records any detected scale label as a `needs_verification` candidate and never overrides the approved manual calibration.
+- Checkpoints: all 9/9 rendered-page, Primitive IR, Semantic IR, staged-DXF, and SHA-bound build-evidence records completed under private staging. Every staged DXF passed the headless reviewer.
+- Dense-data optimization evidence: page 1 completed compound recognition with 1,170 primitives and 538,983 detected constraints. Page 5 reduced 109,399 raw constraints to 1,392 after pruning; its 478 relevant lines exceed the documented 1,000-coordinate solver capacity, so the DXF preserved calibrated primitive geometry through the explicit `too_many_unknowns` fallback instead of spending minutes in an unstable solve.
+- Live staged review: the standard `cad_agent mechanical-review` command with `--timeout-s 60` reviewed page 5 through AutoCAD Mechanical 2027 and reported `passed=true`, `structural_checked=485`, `geometry_checked=485`, no mismatches, no warnings, and no degraded geometry check. It was read-only: no repair or save was requested.
+- Final repository verification: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` passed with `317 passed, 5 deselected`; the final timeout-option revision is covered by focused CLI/live tests and a second final verifier run.
 
 ## Mechanical production review/repair evidence
 

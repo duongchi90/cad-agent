@@ -6,8 +6,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
-from cad_agent.cli import doctor_payload, main
+from cad_agent.cli import CommandError, _live_client, doctor_payload, main
 
 
 def _drawing(path: Path, offset: int = 0) -> None:
@@ -64,3 +65,24 @@ def test_resume_rejects_a_changed_input_before_stage_work(capsys) -> None:
             "resume", "--manifest", str(output / "run-manifest.json"), "--input", str(changed),
         ]) == 2
         assert "SHA-256 does not match" in capsys.readouterr().err
+
+
+def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp_path: Path) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    client = _live_client(42, dispatcher, timeout_s=60.0)
+
+    assert isinstance(client, _Client)
+    assert captured["timeout_s"] == 60.0
+    with pytest.raises(CommandError, match="timeout"):
+        _live_client(42, dispatcher, timeout_s=0.0)

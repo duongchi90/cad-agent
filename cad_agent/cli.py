@@ -224,7 +224,7 @@ def _resume_pdf_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _live_client(hwnd: int, dispatcher: Path):
+def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
         make_windows_dispatch_trigger,
@@ -233,12 +233,15 @@ def _live_client(hwnd: int, dispatcher: Path):
 
     if hwnd <= 0:
         raise CommandError("--hwnd must be a positive AutoCAD window handle.")
+    if timeout_s <= 0:
+        raise CommandError("--timeout-s must be positive.")
     if not dispatcher.is_file():
         raise CommandError(f"AutoCAD dispatcher does not exist: {dispatcher}")
     return FileIPCLiveMCPClient(
         trigger=make_windows_dispatch_trigger(hwnd),
         raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
         bootstrap_lisp_path=str(dispatcher),
+        timeout_s=timeout_s,
     )
 
 
@@ -246,7 +249,7 @@ def _mechanical_review_command(args: argparse.Namespace) -> int:
     dxf = args.dxf.resolve()
     evidence = args.build_evidence.resolve()
     build = load_build_evidence(evidence, dxf)
-    review = review_live(build, _live_client(args.hwnd, args.dispatcher.resolve()), dxf)
+    review = review_live(build, _live_client(args.hwnd, args.dispatcher.resolve(), args.timeout_s), dxf)
     report = {
         "operation": "mechanical-review",
         "dxf_path": str(dxf),
@@ -268,7 +271,7 @@ def _mechanical_repair_command(args: argparse.Namespace) -> int:
     build = load_build_evidence(evidence, dxf)
     report = repair_live(
         build,
-        _live_client(args.hwnd, args.dispatcher.resolve()),
+        _live_client(args.hwnd, args.dispatcher.resolve(), args.timeout_s),
         dxf,
         evidence,
         args.backup_dir.resolve(),
@@ -310,6 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--hwnd", type=int, required=True)
         command.add_argument("--dispatcher", type=Path, required=True)
         command.add_argument("--report", type=Path, required=True)
+        command.add_argument("--timeout-s", type=float, default=10.0, help="File IPC timeout in seconds (default: 10)")
     repair.add_argument("--backup-dir", type=Path, required=True)
     repair.add_argument("--approval-reference", required=True)
     repair.add_argument("--confirm-repair", required=True)
