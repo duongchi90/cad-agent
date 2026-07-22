@@ -14,6 +14,7 @@ from cad_agent.fidelity import (
     new_fidelity_manifest,
     run_fidelity_overlays,
     run_fidelity_pdf,
+    run_fidelity_reconstruct,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -149,6 +150,10 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         ]) == 0
         assert (output / "reconstruction_candidates" / "page_01" / "main_view" / "geometry.dxf").is_file()
         assert run_fidelity_compose(source, output, manifest, output / "region_approvals" / "page_01-r2.json", workspace_root=Path.cwd()).is_dir()
+        foreign = root / "foreign-approval.json"
+        foreign.write_text((output / "region_approvals" / "page_01-r2.json").read_text(encoding="utf-8"), encoding="utf-8")
+        with pytest.raises(FidelityError, match="inside the private"):
+            run_fidelity_reconstruct(source, output, manifest, foreign, workspace_root=Path.cwd())
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:

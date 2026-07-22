@@ -279,6 +279,8 @@ def run_fidelity_reconstruct(
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
+    if not _is_within(approval_path, output_root):
+        raise FidelityError("Region approval must reside inside the private fidelity output root.")
     try:
         approval = json.loads(approval_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -295,6 +297,8 @@ def run_fidelity_reconstruct(
     if page is None:
         raise FidelityError("Approved page is absent from the fidelity manifest.")
     rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if approval["page"].get("render_sha256") != sha256_file(rendered):
+        raise FidelityError("Region approval render hash no longer matches the page artifact.")
     image = cv2.imread(str(rendered))
     if image is None:
         raise FidelityError("Cannot read approved rendered page.")
@@ -362,6 +366,8 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
+    if not _is_within(approval_path, output_root):
+        raise FidelityError("Region approval must reside inside the private fidelity output root.")
     approval = json.loads(approval_path.read_text(encoding="utf-8"))
     if approval.get("state") != "approved-layout-reconstruction-only" or approval.get("source") != manifest.get("source"):
         raise FidelityError("Region approval is not valid for composition.")
@@ -369,6 +375,9 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
     page = next((item for item in manifest["pages"] if item["page"] == page_number), None)
     if page is None:
         raise FidelityError("Approved page is absent from the fidelity manifest.")
+    rendered_for_hash = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if approval["page"].get("render_sha256") != sha256_file(rendered_for_hash):
+        raise FidelityError("Region approval render hash no longer matches the page artifact.")
     proposal_path = _safe_artifact_path(output_root, approval["proposal"])
     proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
     selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
