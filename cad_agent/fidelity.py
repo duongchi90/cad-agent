@@ -357,6 +357,67 @@ def run_fidelity_observations(source: Path, output_root: Path, manifest: dict[st
     return outputs
 
 
+def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path) -> Path:
+    """Place approved local geometry back into a paper-coordinate review page."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    if approval.get("state") != "approved-layout-reconstruction-only" or approval.get("source") != manifest.get("source"):
+        raise FidelityError("Region approval is not valid for composition.")
+    page_number = approval["page"]["number"]
+    page = next((item for item in manifest["pages"] if item["page"] == page_number), None)
+    if page is None:
+        raise FidelityError("Approved page is absent from the fidelity manifest.")
+    proposal_path = _safe_artifact_path(output_root, approval["proposal"])
+    proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
+    suffix = "" if approval["proposal"]["revision"] == 1 else f"-r{approval['proposal']['revision']}"
+    root = output_root / "reconstruction_pages" / f"page_{page_number:02d}{suffix}"
+    if root.exists():
+        raise FidelityError(f"Composed fidelity page already exists: {root}")
+    import ezdxf
+
+    composed = ezdxf.new("R2010")
+    composed.header["$INSUNITS"] = 4
+    model = composed.modelspace()
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    height_px = approval["page"]["render_height_px"]
+    for region in selected:
+        candidate = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
+        if not candidate.is_file():
+            raise FidelityError(f"Missing approved region candidate: {candidate}")
+        x0, _, _, y1 = region["bbox_px"]
+        offset_x, offset_y = x0 * scale, (height_px - y1) * scale
+        for entity in ezdxf.readfile(candidate).modelspace():
+            if entity.dxftype() == "LINE":
+                a, b = entity.dxf.start, entity.dxf.end
+                model.add_line((a.x + offset_x, a.y + offset_y), (b.x + offset_x, b.y + offset_y), dxfattribs={"layer": "FIDELITY_GEOMETRY"})
+            elif entity.dxftype() == "CIRCLE":
+                c = entity.dxf.center
+                model.add_circle((c.x + offset_x, c.y + offset_y), entity.dxf.radius, dxfattribs={"layer": "FIDELITY_GEOMETRY"})
+    root.mkdir(parents=True)
+    dxf = root / "layout.dxf"; composed.saveas(dxf)
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    image = cv2.imread(str(rendered))
+    if image is None:
+        raise FidelityError("Cannot read rendered page for composition.")
+    # The drawing renderer fits model extents to a page. Render each local
+    # candidate at its native crop size and paste it back at the approved pixel
+    # rectangle so the comparison preserves sheet coordinates.
+    vector = np.full_like(image, 255)
+    for region in selected:
+        x0, y0, x1, y1 = region["bbox_px"]
+        candidate = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
+        local_vector = _render_layout_dxf(candidate, (x1 - x0) * scale, (y1 - y0) * scale, x1 - x0, y1 - y0)
+        vector[y0:y1, x0:x1] = local_vector
+    source_edges = cv2.Canny(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 50, 150); vector_edges = cv2.Canny(cv2.cvtColor(vector, cv2.COLOR_BGR2GRAY), 50, 150)
+    overlay = image.copy(); overlap = (source_edges > 0) & (vector_edges > 0); overlay[source_edges > 0] = (0, 0, 255); overlay[vector_edges > 0] = (255, 255, 0); overlay[overlap] = (0, 255, 0)
+    cv2.imwrite(str(root / "overlay.png"), overlay)
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(image.shape[:2], 255, dtype=np.uint8)), "unresolved": ["unselected content remains absent", "no text/dimensions/linetypes/tables/model export"]}, indent=2) + "\n", encoding="utf-8")
+    return root
+
+
 def _observe_line_patterns(lines: list[Any]) -> list[dict[str, Any]]:
     """Find conservative runs of separated, axis-aligned raw segments."""
     result: list[dict[str, Any]] = []

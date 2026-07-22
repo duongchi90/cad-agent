@@ -16,6 +16,7 @@ from cad_agent.fidelity import (
     run_fidelity_pdf,
     write_region_proposal,
     write_region_approval,
+    run_fidelity_compose,
 )
 from cad_agent.cli import CommandError, _refuse_fidelity_dxf, main
 
@@ -147,6 +148,7 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
             "--approval", str(output / "region_approvals" / "page_01-r2.json"),
         ]) == 0
         assert (output / "reconstruction_candidates" / "page_01" / "main_view" / "geometry.dxf").is_file()
+        assert run_fidelity_compose(source, output, manifest, output / "region_approvals" / "page_01-r2.json", workspace_root=Path.cwd()).is_dir()
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:
