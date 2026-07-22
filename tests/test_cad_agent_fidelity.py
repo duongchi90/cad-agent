@@ -16,6 +16,8 @@ from cad_agent.fidelity import (
     run_fidelity_pdf,
     run_fidelity_reconstruct,
     run_fidelity_text_observations,
+    run_fidelity_observations,
+    run_fidelity_table_text_observations,
     write_fidelity_text_review_index,
     write_fidelity_text_approval,
     write_fidelity_text_approvals_from_selection,
@@ -146,6 +148,19 @@ def test_text_selection_file_creates_page_approvals(tmp_path: Path) -> None:
     selection.write_text(json.dumps({"schema_version": "fidelity-text-selection-1.0", "source": manifest["source"], "selections": [{"page": 1, "candidate_ids": [candidate_id]}]}), encoding="utf-8")
     approvals = write_fidelity_text_approvals_from_selection(source, output, manifest, selection, "approved-test", workspace_root=Path.cwd())
     assert [approval["page"] for approval in approvals] == [1]
+
+
+def test_table_cell_observations_stay_sidecar_only(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    run_fidelity_observations(source, output, manifest, workspace_root=Path.cwd())
+    outputs = run_fidelity_table_text_observations(source, output, manifest, workspace_root=Path.cwd())
+    payload = json.loads(outputs[0].read_text(encoding="utf-8"))
+    assert payload["state"] in {"needs_human_approval", "not_evaluated"}
+    assert payload["unresolved"] == ["no table-cell OCR candidate is emitted as DXF text or a table entity without per-cell approval"]
 
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:

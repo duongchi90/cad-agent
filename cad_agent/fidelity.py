@@ -408,6 +408,68 @@ def run_fidelity_text_observations(source: Path, output_root: Path, manifest: di
     return outputs
 
 
+def run_fidelity_table_text_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """OCR only previously observed table cells; preserve every result as review-only evidence."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    _configure_tesseract(None)
+    base_root = output_root / "fidelity_table_text_observations"
+    observation_root = base_root
+    revision = 2
+    while observation_root.exists() and any(observation_root.iterdir()):
+        observation_root = output_root / f"fidelity_table_text_observations-r{revision}"
+        revision += 1
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        observation_path = output_root / "fidelity_observations" / f"page_{number:02d}.json"
+        if not observation_path.is_file():
+            raise FidelityError(f"Missing table observation for page {number}; run fidelity-observe first.")
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+        table = observation.get("table_grid", {})
+        cells = table.get("cells", []) if observation.get("state") == "needs_review" else []
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for table-cell OCR.")
+        candidates = []
+        roi = table.get("roi_px")
+        if cells and isinstance(roi, list) and len(roi) == 4:
+            recognized = extract_text_tesseract(
+                image, roi_boxes=[tuple(int(v) for v in roi)], min_confidence=20, psm=6,
+            )
+            for text in recognized:
+                x0, y0, x1, y1 = text.bbox_px
+                center_x, center_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+                matches = [
+                    (index, bbox) for index, bbox in enumerate(cells)
+                    if isinstance(bbox, list) and len(bbox) == 4 and bbox[0] <= center_x <= bbox[2] and bbox[1] <= center_y <= bbox[3]
+                ]
+                candidates.append({
+                    "cell_index": matches[0][0] if len(matches) == 1 else None,
+                    "cell_bbox_px": matches[0][1] if len(matches) == 1 else None,
+                    "text": _raw_text_payload(text),
+                    "cell_match_state": "matched" if len(matches) == 1 else "needs_review",
+                })
+        output = observation_root / f"page_{number:02d}.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": "fidelity-table-text-observation-1.0",
+            "private_artifact": True,
+            "state": "needs_human_approval" if candidates else "not_evaluated",
+            "source": manifest["source"],
+            "page": number,
+            "source_render_sha256": sha256_file(rendered),
+            "source_table_observation": _artifact(observation_path, output_root),
+            "candidates": candidates,
+            "unresolved": ["no table-cell OCR candidate is emitted as DXF text or a table entity without per-cell approval"],
+        }
+        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
 def _unicode_glyph_render_check(content: str) -> dict[str, Any]:
     """Prove each non-space codepoint has a non-replacement glyph in the approved font."""
     font_path = Path(os.environ.get("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\arial.ttf"))

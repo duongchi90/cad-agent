@@ -323,6 +323,15 @@ def _fidelity_text_observe_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_table_text_observe_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_table_text_observations
+
+    manifest_path = args.manifest.resolve()
+    for output in run_fidelity_table_text_observations(args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), workspace_root=Path.cwd()):
+        print(output)
+    return 0
+
+
 def _fidelity_text_approval_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, write_fidelity_text_approval
 
@@ -494,6 +503,9 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_text_observe = subcommands.add_parser("fidelity-text-observe", help="Write hash-bound OCR candidates for later per-text review")
     fidelity_text_observe.add_argument("--input", type=Path, required=True)
     fidelity_text_observe.add_argument("--manifest", type=Path, required=True)
+    fidelity_table_text_observe = subcommands.add_parser("fidelity-table-text-observe", help="Write review-only OCR candidates for observed table cells")
+    fidelity_table_text_observe.add_argument("--input", type=Path, required=True)
+    fidelity_table_text_observe.add_argument("--manifest", type=Path, required=True)
     fidelity_text_approve = subcommands.add_parser("fidelity-text-approve", help="Approve selected OCR candidates after Unicode glyph rendering")
     fidelity_text_approve.add_argument("--input", type=Path, required=True)
     fidelity_text_approve.add_argument("--manifest", type=Path, required=True)
@@ -564,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_observe_command(args)
         if args.command == "fidelity-text-observe":
             return _fidelity_text_observe_command(args)
+        if args.command == "fidelity-table-text-observe":
+            return _fidelity_table_text_observe_command(args)
         if args.command == "fidelity-text-approve":
             return _fidelity_text_approval_command(args)
         if args.command == "fidelity-text-review-index":
