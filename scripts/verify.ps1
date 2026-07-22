@@ -125,7 +125,7 @@ $snapshotBefore = Get-RepositorySnapshot
 $artifactDir = Join-Path $repoRoot ".artifacts\test-results"
 $junitPath = Join-Path $artifactDir "junit.xml"
 $realDataJunitPath = Join-Path $artifactDir "real-data-unavailable.xml"
-$autocadJunitPath = Join-Path $artifactDir "autocad-lt-unavailable.xml"
+$autocadJunitPath = Join-Path $artifactDir "autocad-mechanical-unavailable.xml"
 New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
 $tesseractDir = Split-Path -Parent $tesseractPath

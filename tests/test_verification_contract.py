@@ -63,7 +63,7 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("importlib.metadata", script)
         self.assertIn("not real_data and not autocad_mechanical", script)
         self.assertIn("real-data-unavailable.xml", script)
-        self.assertIn("autocad-lt-unavailable.xml", script)
+        self.assertIn("autocad-mechanical-unavailable.xml", script)
         self.assertIn("check_environment.py", script)
         self.assertIn("Get-FileHash", script)
         self.assertIn("ls-files", script)
