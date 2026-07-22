@@ -516,6 +516,91 @@ def run_fidelity_dimension_observations(source: Path, output_root: Path, manifes
     return outputs
 
 
+def run_fidelity_linetype_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    observation_path: Path,
+    base_dxf: Path,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Apply hash-bound horizontal dashed-pattern evidence to a private DXF clone."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(observation_path, output_root) or not observation_path.is_file():
+        raise FidelityError("Linetype observation must reside inside the private fidelity output root.")
+    if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    try:
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise FidelityError("Linetype observation is invalid JSON.") from exc
+    if observation.get("schema_version") != "fidelity-linetype-observation-1.0" or observation.get("private_artifact") is not True:
+        raise FidelityError("Linetype observation has an unsupported schema.")
+    page_number = observation.get("page")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Linetype observation page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Linetype observation does not match the rendered page.")
+    patterns = observation.get("patterns")
+    if not isinstance(patterns, list):
+        raise FidelityError("Linetype observation patterns are invalid.")
+    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    height_px = int(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    coordinates = [
+        (height_px - float(pattern["coordinate_px"])) * scale
+        for pattern in patterns
+        if isinstance(pattern, dict)
+        and pattern.get("axis") == "horizontal"
+        and pattern.get("suggested_linetype") == "DASHED"
+        and isinstance(pattern.get("coordinate_px"), (int, float))
+    ]
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf)
+    if "FIDELITY_DASHED" not in document.linetypes:
+        document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    tolerance_mm = max(0.25, 3.0 * scale)
+    changed = 0
+    for entity in document.modelspace().query("LINE"):
+        start, end = entity.dxf.start, entity.dxf.end
+        if abs(float(start.y) - float(end.y)) > tolerance_mm:
+            continue
+        if any(abs(float(start.y) - coordinate) <= tolerance_mm for coordinate in coordinates):
+            entity.dxf.linetype = "FIDELITY_DASHED"
+            changed += 1
+    base_root = output_root / "linetype_reconstruction"
+    revision = 2
+    while (base_root / f"page_{page_number:02d}").exists():
+        base_root = output_root / f"linetype_reconstruction-r{revision}"
+        revision += 1
+    root = base_root / f"page_{page_number:02d}"
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    report = {
+        "state": "needs_review",
+        "profile": "fidelity-layout-linetype",
+        "page": page_number,
+        "source_render_sha256": sha256_file(rendered),
+        "observation_sha256": sha256_file(observation_path),
+        "base_dxf_sha256": sha256_file(base_dxf),
+        "output_dxf_sha256": sha256_file(output),
+        "matched_horizontal_pattern_count": len(coordinates),
+        "changed_line_entities": changed,
+        "tolerance_mm": tolerance_mm,
+        "unresolved": ["dashed mapping is a fidelity candidate and needs visual review", "no model export"],
+    }
+    (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
 def write_fidelity_dimension_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
     """Write a private browser index for review-only dimension candidates."""
     if _is_within(output_root, workspace_root):

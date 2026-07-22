@@ -23,6 +23,7 @@ from cad_agent.fidelity import (
     write_fidelity_text_approvals_from_selection,
     run_fidelity_text_reconstruct,
     run_fidelity_dimension_observations,
+    run_fidelity_linetype_reconstruct,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -105,6 +106,78 @@ def test_line_pattern_observation_is_sidecar_only() -> None:
     ]
     patterns = _observe_line_patterns(lines)
     assert patterns == [{"axis": "horizontal", "coordinate_px": 8, "segment_count": 3, "median_gap_px": 8.0, "status": "needs_review"}]
+
+
+def test_linetype_reconstruction_is_hash_bound_and_changes_only_matching_horizontal_lines(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page = manifest["pages"][0]
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    y_px = 40
+    y_mm = (audit["source_page"]["render_height_px"] - y_px) * scale
+    base_dxf = output / "base.dxf"
+    document = ezdxf.new("R2010")
+    model = document.modelspace()
+    model.add_line((10, y_mm), (40, y_mm))
+    model.add_line((10, y_mm + 10), (40, y_mm + 10))
+    model.add_line((10, y_mm), (20, y_mm + 10))
+    document.saveas(base_dxf)
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+
+    observation = output / "linetype-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "patterns": [{"axis": "horizontal", "coordinate_px": y_px, "segment_count": 3, "median_gap_px": 8.0, "status": "needs_review", "suggested_linetype": "DASHED"}],
+    }), encoding="utf-8")
+
+    result = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base_dxf, workspace_root=Path.cwd())
+    entities = list(ezdxf.readfile(result).modelspace())
+    assert entities[0].dxf.linetype == "FIDELITY_DASHED"
+    assert entities[1].dxf.linetype == "BYLAYER"
+    assert entities[2].dxf.linetype == "BYLAYER"
+    report = json.loads(result.with_name("report.json").read_text(encoding="utf-8"))
+    assert report["state"] == "needs_review"
+    assert report["changed_line_entities"] == 1
+    revision = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base_dxf, workspace_root=Path.cwd())
+    assert revision.parent.parent.name == "linetype_reconstruction-r2"
+
+
+def test_linetype_reconstruction_cli_writes_private_candidate(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    base_dxf = output / page["artifacts"]["layout_dxf"]["artifact"]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+
+    observation = output / "linetype-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "patterns": [],
+    }), encoding="utf-8")
+
+    assert main([
+        "fidelity-linetype-reconstruct", "--input", str(source), "--manifest", str(manifest_path),
+        "--observation", str(observation), "--base-dxf", str(base_dxf),
+    ]) == 0
+    assert (output / "linetype_reconstruction" / "page_01" / "layout.dxf").is_file()
 
 
 def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
