@@ -24,6 +24,7 @@ class VerificationContractTests(unittest.TestCase):
         ):
             self.assertIn(test_root, script)
         self.assertIn("-m pytest", script)
+        self.assertIn("-p no:cacheprovider", script)
         self.assertIn("-m ruff check", script)
         self.assertIn("git diff --check", script)
         self.assertIn("git diff --cached --check", script)

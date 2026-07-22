@@ -83,7 +83,7 @@ function Invoke-PytestGate {
         [ValidateSet("offline", "all-skipped")]
         [string]$ExpectedState
     )
-    & $PythonExe -m pytest @testTargets -q -m $MarkerExpression `
+    & $PythonExe -m pytest @testTargets -q -m $MarkerExpression -p no:cacheprovider `
         "--junitxml=$JUnitPath"
     if ($LASTEXITCODE -ne 0) {
         throw "$Name pytest gate failed with exit code $LASTEXITCODE."
