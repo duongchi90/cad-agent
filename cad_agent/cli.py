@@ -224,6 +224,26 @@ def _resume_pdf_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_pdf_command(args: argparse.Namespace) -> int:
+    from .fidelity import FIDELITY_MANIFEST_NAME, new_fidelity_manifest, run_fidelity_pdf
+
+    source = args.input.resolve()
+    output_root = args.output_dir.resolve()
+    manifest_path = output_root / FIDELITY_MANIFEST_NAME
+    if manifest_path.exists():
+        raise CommandError(f"Fidelity manifest already exists: {manifest_path}; use a new private output root.")
+    manifest = new_fidelity_manifest(
+        source,
+        output_root,
+        args.dpi,
+        args.source_approval,
+        workspace_root=Path.cwd(),
+    )
+    run_fidelity_pdf(source, output_root, manifest_path, manifest)
+    print(manifest_path)
+    return 0
+
+
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
@@ -305,6 +325,11 @@ def build_parser() -> argparse.ArgumentParser:
     resume_pdf = subcommands.add_parser("resume-pdf", help="Resume a validated staged PDF run")
     resume_pdf.add_argument("--manifest", type=Path, required=True)
     resume_pdf.add_argument("--input", type=Path, required=True)
+    fidelity_pdf = subcommands.add_parser("fidelity-pdf", help="Create a private clean paper-coordinate PDF layout baseline")
+    fidelity_pdf.add_argument("--input", type=Path, required=True)
+    fidelity_pdf.add_argument("--output-dir", type=Path, required=True)
+    fidelity_pdf.add_argument("--source-approval", required=True)
+    fidelity_pdf.add_argument("--dpi", type=int, default=144)
     review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
     repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
     for command in (review, repair):
@@ -336,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_pdf_command(args)
         if args.command == "resume-pdf":
             return _resume_pdf_command(args)
+        if args.command == "fidelity-pdf":
+            return _fidelity_pdf_command(args)
         if args.command == "mechanical-review":
             return _mechanical_review_command(args)
         return _mechanical_repair_command(args)
