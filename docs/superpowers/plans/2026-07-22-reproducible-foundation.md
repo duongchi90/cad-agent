@@ -8,19 +8,17 @@
 
 **Tech Stack:** Windows PowerShell 5.1+, CPython 3.11, pip-tools 7.6.0, pytest, Ruff, GitHub Actions, Tesseract 5.4.0.20240606, Markdown/TOML/YAML.
 
-**Status:** Planned
+**Status:** Completed
 
 **Base SHA:** `c6bfbc3a8c867cfe7ffc5d78cae28f61fb3efb45`
 
-**Completion Head SHA:** Not recorded until the final evidence commit exists.
+**Completion Head SHA:** `770e1eb25d1f9081f7acfc4dfb87f87a63b7a12d`
 
 **Verification command:** `scripts/verify.ps1`
 
-**Verification result:** Not recorded until execution completes.
+**Verification result:** `PASS` on the Completion Head SHA; see the Foundation certificate in `docs/STATUS.md`.
 
-**Specialized gate result:** Not recorded until execution completes. This
-foundation-only slice must collect `real_data` and `autocad_lt`
-unavailable-state probes as `SKIP`, never execute either live gate.
+**Specialized gate result:** `real_data`: `SKIP` probe, live gate `NOT RUN`; `autocad_lt`: `SKIP` probe, live gate `NOT RUN`.
 
 ## Global Constraints
 
