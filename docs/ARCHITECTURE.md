@@ -71,12 +71,17 @@ without reprocessing the original image.
 - Real drawings, private annotations, credentials, and API keys stay outside
   Git.
 
-## Planned orchestrator boundary
+## Orchestrator boundary
 
-A thin `cad_agent` package will eventually own environment checks, run
-manifests, checkpoints, approvals, resumability, and evidence reports. It will
-call the package APIs above and contain no recognition or CAD algorithms. It is
-not implemented in this slice.
+The thin `cad_agent` package owns environment reporting, image-run manifests,
+atomic checkpoints, calibration-approval recording, resumability, and staged
+evidence. Its `run` command delegates the deterministic image-to-DXF path to
+the packages above; `resume` verifies the input SHA-256 before it reuses any
+checkpoint. It contains no recognition or CAD algorithms.
+
+The current slice deliberately excludes PDF orchestration, Agent action
+application, File IPC, and AutoCAD LT repair/mutation. Existing package entry
+points remain the authority for those capabilities.
 
 ## Historical reference
 

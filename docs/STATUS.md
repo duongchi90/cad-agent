@@ -43,6 +43,7 @@ the skips and the run used Python 3.12.
 | MCP/File IPC | Partially verified | Offline/fake IPC tests passed; live `autocad_lt` execution was NOT RUN and its unavailable-state probe was SKIP. |
 | Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
+| Thin image orchestration CLI | Verified | `cad_agent` run/resume regression tests and the full Python 3.11 offline gate passed on `8410712f0c7c23f707acc1b251620712806be971`; it emits staged DXF only and does not invoke live AutoCAD or Agent mutation. |
 
 ## Known production gates
 
@@ -56,8 +57,22 @@ the skips and the run used Python 3.12.
 
 ## Next slice
 
-After the foundation is certified, design and implement the thin `cad_agent`
-vertical-slice CLI with manifests, checkpoints, approval gates, and resumability.
+Normalize the approved private real-data benchmark and harden algorithms only
+against fresh benchmark evidence. The final Windows/AutoCAD LT production
+review-repair loop remains after that slice.
+
+## Thin vertical-slice CLI evidence
+
+- State: **Verified**
+- Date: `2026-07-22`
+- Implementation Head SHA: `8410712f0c7c23f707acc1b251620712806be971`
+- Design and plan: `docs/superpowers/specs/2026-07-22-vertical-slice-cli-design.md`; `docs/superpowers/plans/2026-07-22-vertical-slice-cli.md`
+- Focused command: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_cli.py -q -p no:cacheprovider` → `3 passed`
+- Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` → exit `0`
+- Offline JUnit: `tests=295; failures=0; errors=0; skipped=0`
+- `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`); approved private run `NOT RUN`
+- `autocad_lt`: unavailable-state probe `SKIP` (`tests=4; skipped=4`); live session run `NOT RUN`
+- Remaining risk: this image-only orchestrator emits a staged DXF and does not perform AutoCAD LT mutation; PDF orchestration remains with `primitive_ir_lib.run_pdf`.
 
 ## Foundation certificate
 

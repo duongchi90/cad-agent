@@ -181,7 +181,9 @@ class DocumentationContractTests(unittest.TestCase):
         ):
             self.assertIn(schema, architecture)
         self.assertIn("cad_agent", architecture)
-        self.assertIn("not implemented in this slice", architecture)
+        self.assertIn("staged", architecture)
+        self.assertIn("contains no recognition or CAD algorithms", architecture)
+        self.assertIn("AutoCAD LT repair/mutation", architecture)
         self.assertIn("detected constraints only", architecture)
         self.assertIn("PruneResult", architecture)
         self.assertIn("SolveResult", architecture)
