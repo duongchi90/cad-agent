@@ -113,6 +113,118 @@ def read_fidelity_manifest(path: Path) -> dict[str, Any]:
     return manifest
 
 
+def _safe_artifact_path(output_root: Path, record: dict[str, Any]) -> Path:
+    artifact = record.get("artifact")
+    if not isinstance(artifact, str) or Path(artifact).is_absolute():
+        raise FidelityError("Fidelity artifact path must be a relative path.")
+    resolved = (output_root / artifact).resolve()
+    if not _is_within(resolved, output_root):
+        raise FidelityError("Fidelity artifact path escapes the private output root.")
+    if not resolved.is_file() or sha256_file(resolved) != record.get("sha256"):
+        raise FidelityError("Fidelity artifact is missing or no longer matches its manifest hash.")
+    return resolved
+
+
+def _normalized_regions(regions: dict[str, Any], width: int, height: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def normalize(items: object, category: str) -> list[dict[str, Any]]:
+        if not isinstance(items, list) or not items:
+            raise FidelityError(f"Region proposal requires at least one {category} record.")
+        result: list[dict[str, Any]] = []
+        ids: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip():
+                raise FidelityError(f"Every {category} record requires a non-empty id.")
+            if item["id"] in ids:
+                raise FidelityError(f"Duplicate {category} id: {item['id']}")
+            box = item.get("bbox_px")
+            if not isinstance(box, list) or len(box) != 4 or any(isinstance(value, bool) or not isinstance(value, int) for value in box):
+                raise FidelityError(f"{category} bbox_px must contain four integer coordinates.")
+            x0, y0, x1, y1 = box
+            if x0 < 0 or y0 < 0 or x1 > width or y1 > height or x1 - x0 < 30 or y1 - y0 < 30:
+                raise FidelityError(f"{category} bbox_px is outside the page or too small.")
+            purpose = item.get("purpose")
+            expected = "layout-reconstruction" if category == "region" else "exclude"
+            if purpose != expected:
+                raise FidelityError(f"{category} purpose must be {expected!r}.")
+            ids.add(item["id"])
+            result.append({"id": item["id"], "bbox_px": box, "purpose": purpose})
+        return result
+
+    included = normalize(regions.get("regions"), "region")
+    excluded = normalize(regions.get("excluded_regions"), "excluded_region")
+    all_regions = [("region", item) for item in included] + [("excluded_region", item) for item in excluded]
+    for index, (kind, item) in enumerate(all_regions):
+        ax0, ay0, ax1, ay1 = item["bbox_px"]
+        for other_kind, other in all_regions[index + 1:]:
+            bx0, by0, bx1, by1 = other["bbox_px"]
+            horizontal_gap = max(ax0 - bx1, bx0 - ax1, 0)
+            vertical_gap = max(ay0 - by1, by0 - ay1, 0)
+            if horizontal_gap < 3 and vertical_gap < 3:
+                raise FidelityError(f"{kind} {item['id']!r} and {other_kind} {other['id']!r} overlap or lack the required 3 px gutter.")
+    return included, excluded
+
+
+def write_region_proposal(
+    source: Path,
+    output_root: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    page_number: int,
+    regions: dict[str, Any],
+    *,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """Write a source-bound, review-only page-region proposal outside the repository."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    if manifest_path.resolve().parent != output_root.resolve():
+        raise FidelityError("Fidelity manifest must reside directly in the private output root.")
+    verify_source(manifest, source)
+    page = next((record for record in manifest.get("pages", []) if record.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError(f"Fidelity manifest has no page {page_number}.")
+    rendered = _safe_artifact_path(output_root, page.get("artifacts", {}).get("rendered_png", {}))
+    audit = _safe_artifact_path(output_root, page.get("artifacts", {}).get("layout_audit", {}))
+    audit_payload = json.loads(audit.read_text(encoding="utf-8"))
+    source_page = audit_payload.get("source_page", {})
+    if source_page.get("page") != page_number or source_page.get("render_sha256") != sha256_file(rendered):
+        raise FidelityError("Layout audit render hash does not match the manifest artifact.")
+    width = source_page.get("render_width_px")
+    height = source_page.get("render_height_px")
+    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+        raise FidelityError("Layout audit is missing valid rendered page dimensions.")
+    included, excluded = _normalized_regions(regions, width, height)
+    definition = {"regions": included, "excluded_regions": excluded}
+    definition_sha256 = __import__("hashlib").sha256(
+        json.dumps(definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    proposal = {
+        "schema_version": "fidelity-region-proposal-1.0",
+        "private_artifact": True,
+        "state": "needs_human_approval",
+        "source": manifest["source"],
+        "page": {
+            "number": page_number,
+            "render_sha256": source_page["render_sha256"],
+            "render_width_px": width,
+            "render_height_px": height,
+            "dpi": source_page["dpi"],
+            "coordinate_system": "pixel-top-left",
+        },
+        "proposal_definition_sha256": definition_sha256,
+        "minimum_gutter_px": 3,
+        "regions": included,
+        "excluded_regions": excluded,
+        "allowed_action": "layout-reconstruction-only",
+        "prohibited_actions": ["model-export", "scale-approval", "mechanical-review", "mechanical-repair"],
+    }
+    proposal_path = output_root / "region_proposals" / f"page_{page_number:02d}.json"
+    if proposal_path.exists():
+        raise FidelityError(f"Region proposal already exists: {proposal_path}; create a new private staging root to revise it.")
+    write_manifest(proposal_path, proposal)
+    return proposal
+
+
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
     height, width = image.shape[:2]
     _configure_tesseract(None)

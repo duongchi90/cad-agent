@@ -62,6 +62,15 @@ creates model-space views after explicit calibration and view approval.
 - Per-view scale candidates from the restored nightly workflow remain
   `needs_verification` until a reviewer supplies an approved, non-overlapping
   region bound to the source-page SHA.
+- A `fidelity-region-proposal` is a private, source/render-SHA-bound sidecar in
+  displayed raster pixels (top-left origin). It stores non-overlapping view
+  regions, excluded title/table/note regions, and a stable proposal-definition
+  hash. It is `needs_human_approval`, permits only region-specific layout
+  reconstruction, and never changes the fidelity manifest, DXF, or IR.
+- Region inputs are explicitly supplied by the reviewer in private staging;
+  their rectangles must be in bounds, have a three-pixel gutter, and cannot
+  overlap each other or an excluded region. Reuse verifies the PDF, rendered
+  page, page dimensions, and every referenced artifact hash before it writes.
 - This recovery slice exports zero model-space views. A candidate that spans
   most of a page, as on the current private PDF, cannot authorize one.
 

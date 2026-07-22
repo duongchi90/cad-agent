@@ -8,7 +8,13 @@ import ezdxf
 import fitz
 import pytest
 
-from cad_agent.fidelity import FidelityError, new_fidelity_manifest, run_fidelity_overlays, run_fidelity_pdf
+from cad_agent.fidelity import (
+    FidelityError,
+    new_fidelity_manifest,
+    run_fidelity_overlays,
+    run_fidelity_pdf,
+    write_region_proposal,
+)
 from cad_agent.cli import main
 
 
@@ -65,6 +71,41 @@ def test_fidelity_manifest_rejects_repo_output_root(tmp_path: Path) -> None:
         new_fidelity_manifest(source, Path.cwd() / "output" / "private", 144, "approved-test", workspace_root=Path.cwd())
 
 
+def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "drawing.pdf"
+        output = root / "private-staging"
+        _pdf(source)
+        manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+        run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+        regions = {
+            "regions": [
+                {"id": "main_view", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"},
+                {"id": "detail", "bbox_px": [260, 20, 390, 150], "purpose": "layout-reconstruction"},
+            ],
+            "excluded_regions": [
+                {"id": "title_block", "bbox_px": [20, 400, 390, 580], "purpose": "exclude"},
+            ],
+        }
+        proposal = write_region_proposal(
+            source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+        )
+        assert proposal["state"] == "needs_human_approval"
+        assert proposal["page"]["coordinate_system"] == "pixel-top-left"
+        assert proposal["source"] == {"name": "drawing.pdf", "sha256": manifest["source"]["sha256"], "kind": "pdf"}
+        assert (output / "region_proposals" / "page_01.json").is_file()
+        assert not (output / "layout_dxf" / "page_01.dxf").read_text(encoding="utf-8").count("INSERT")
+
+        overlap = dict(regions)
+        overlap["regions"] = [
+            {"id": "a", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"},
+            {"id": "b", "bbox_px": [200, 20, 390, 150], "purpose": "layout-reconstruction"},
+        ]
+        with pytest.raises(FidelityError, match="overlap"):
+            write_region_proposal(source, output, output / "fidelity-run-manifest.json", manifest, 1, overlap, workspace_root=Path.cwd())
+
+
 def test_fidelity_cli_creates_private_baseline() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -81,3 +122,13 @@ def test_fidelity_cli_creates_private_baseline() -> None:
             "--manifest", str(output / "fidelity-run-manifest.json"),
         ]) == 0
         assert (output / "fidelity_overlay" / "page_01.png").is_file()
+        regions = root / "regions.json"
+        regions.write_text(json.dumps({
+            "regions": [{"id": "main", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"}],
+            "excluded_regions": [{"id": "title", "bbox_px": [20, 400, 390, 580], "purpose": "exclude"}],
+        }), encoding="utf-8")
+        assert main([
+            "fidelity-region-proposal", "--input", str(source),
+            "--manifest", str(output / "fidelity-run-manifest.json"), "--page", "1", "--regions", str(regions),
+        ]) == 0
+        assert (output / "region_proposals" / "page_01.json").is_file()

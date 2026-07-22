@@ -253,6 +253,24 @@ def _fidelity_overlay_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_region_proposal_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, write_region_proposal
+
+    try:
+        regions = json.loads(args.regions.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CommandError(f"Cannot read region input: {args.regions}") from exc
+    if not isinstance(regions, dict):
+        raise CommandError("Region input must be a JSON object.")
+    manifest_path = args.manifest.resolve()
+    write_region_proposal(
+        args.input.resolve(), manifest_path.parent, manifest_path, read_fidelity_manifest(manifest_path),
+        args.page, regions, workspace_root=Path.cwd(),
+    )
+    print(manifest_path.parent / "region_proposals" / f"page_{args.page:02d}.json")
+    return 0
+
+
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
@@ -342,6 +360,11 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_overlay = subcommands.add_parser("fidelity-overlay", help="Create review-only PDF-to-clean-DXF comparison overlays")
     fidelity_overlay.add_argument("--input", type=Path, required=True)
     fidelity_overlay.add_argument("--manifest", type=Path, required=True)
+    fidelity_regions = subcommands.add_parser("fidelity-region-proposal", help="Write a SHA-bound, review-only page-region proposal")
+    fidelity_regions.add_argument("--input", type=Path, required=True)
+    fidelity_regions.add_argument("--manifest", type=Path, required=True)
+    fidelity_regions.add_argument("--page", type=int, required=True)
+    fidelity_regions.add_argument("--regions", type=Path, required=True, help="Private JSON containing regions and excluded_regions")
     review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
     repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
     for command in (review, repair):
@@ -377,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_pdf_command(args)
         if args.command == "fidelity-overlay":
             return _fidelity_overlay_command(args)
+        if args.command == "fidelity-region-proposal":
+            return _fidelity_region_proposal_command(args)
         if args.command == "mechanical-review":
             return _mechanical_review_command(args)
         return _mechanical_repair_command(args)

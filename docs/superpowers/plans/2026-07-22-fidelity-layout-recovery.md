@@ -14,3 +14,6 @@
    them.
 6. Run the approved private nine-page PDF, visually inspect the result, run
    the required checks, and record only fresh evidence.
+7. Add a SHA-bound, private page-region proposal sidecar for a reviewed page;
+   it is a required human-approval input to any future per-view work and never
+   authorizes model export by itself.
