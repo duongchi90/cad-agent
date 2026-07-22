@@ -87,6 +87,18 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertNotIn('choices=("stamp", "check")', lock_guard)
         self.assertIn("generated_path.replace(lock_path)", lock_guard)
 
+    def test_bootstrap_validates_lock_before_installing_dependencies(self) -> None:
+        bootstrap = (ROOT / "scripts/bootstrap.ps1").read_text(encoding="utf-8")
+        lock_check = bootstrap.index(
+            '& $venvPython (Join-Path $repoRoot "scripts\\lock_contract.py") check $lockFile'
+        )
+        pip_install = bootstrap.index("-m pip install")
+        self.assertLess(
+            lock_check,
+            pip_install,
+            "bootstrap must reject an invalid lock before pip installs from it",
+        )
+
     def test_lock_stamp_rejects_a_changed_direct_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             temporary_requirements = Path(tmp)

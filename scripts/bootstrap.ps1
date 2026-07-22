@@ -32,15 +32,16 @@ if ($LASTEXITCODE -ne 0 -or $venvVersion -ne "3.11") {
     throw "$venvDir exists but is not a Python 3.11 environment. Move it aside and rerun bootstrap."
 }
 
+& $venvPython (Join-Path $repoRoot "scripts\lock_contract.py") check $lockFile
+if ($LASTEXITCODE -ne 0) {
+    throw "Dependency lock contract failed."
+}
+
 & $venvPython -m pip install --disable-pip-version-check --require-hashes -r $lockFile
 if ($LASTEXITCODE -ne 0) {
     throw "Installing requirements/windows-py311.lock failed."
 }
 
-& $venvPython (Join-Path $repoRoot "scripts\lock_contract.py") check $lockFile
-if ($LASTEXITCODE -ne 0) {
-    throw "Dependency lock contract failed."
-}
 & $venvPython (Join-Path $repoRoot "scripts\check_environment.py") $lockFile
 if ($LASTEXITCODE -ne 0) {
     throw "Installed environment does not match the dependency lock."
