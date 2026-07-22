@@ -40,7 +40,7 @@ the skips and the run used Python 3.12.
 | Primitive IR | Partially verified | Final Python 3.11 offline gate passed with zero skips; approved private `real_data` execution was NOT RUN and its unavailable-state probe was SKIP. |
 | Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips. |
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD LT mutation is outside this state. |
-| MCP/File IPC | Partially verified | Offline/fake IPC tests passed; live `autocad_lt` execution was NOT RUN and its unavailable-state probe was SKIP. |
+| MCP/File IPC | Partially verified | Offline/fake IPC tests passed and four File IPC live tests passed on AutoCAD Mechanical 2027; the supported AutoCAD LT-specific live gate remains NOT RUN, while its unavailable-state probe was SKIP. |
 | Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
 | Thin image orchestration CLI | Verified | `cad_agent` run/resume regression tests and the full Python 3.11 offline gate passed on `8410712f0c7c23f707acc1b251620712806be971`; it emits staged DXF only and does not invoke live AutoCAD or Agent mutation. |
@@ -73,6 +73,17 @@ review-repair loop remains after that slice.
 - `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`); approved private run `NOT RUN`
 - `autocad_lt`: unavailable-state probe `SKIP` (`tests=4; skipped=4`); live session run `NOT RUN`
 - Remaining risk: this image-only orchestrator emits a staged DXF and does not perform AutoCAD LT mutation; PDF orchestration remains with `primitive_ir_lib.run_pdf`.
+
+## Live File IPC evidence
+
+- State: **Partially verified**
+- Date: `2026-07-22`
+- Head SHA: `52b92885698827c36984f02e8461f4e18de6072c`
+- Command: `CAD_AGENT_FILE_IPC=1`, AutoCAD HWND `393650`, and the locally loaded dispatcher; `& '.\.venv-py311\Scripts\python.exe' -m pytest -m autocad_lt -ra -p no:cacheprovider`
+- Result: `4 passed, 296 deselected` in `69.52s`; the run covered active-document access, primitive live review/repair, beam INSERT attribute repair, and five remaining component INSERT repairs.
+- Session: AutoCAD Mechanical 2027, process `acad.exe`, HWND `393650`.
+- Safety: all smoke DXFs were newly created under `C:\temp`; no production drawing was saved or modified.
+- Limit: AutoCAD Mechanical is not the project-supported AutoCAD LT environment. This validates the File IPC path but does **not** convert the AutoCAD LT gate from `NOT RUN` to `PASS`.
 
 ## Foundation certificate
 
