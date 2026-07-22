@@ -73,14 +73,16 @@ without reprocessing the original image.
 
 ## Orchestrator boundary
 
-The thin `cad_agent` package owns environment reporting, image-run manifests,
-atomic checkpoints, calibration-approval recording, resumability, and staged
-evidence. Its `run` command delegates the deterministic image-to-DXF path to
-the packages above; `resume` verifies the input SHA-256 before it reuses any
+The thin `cad_agent` package owns environment reporting, image/PDF run
+manifests, atomic checkpoints, calibration-approval recording, resumability,
+and staged evidence. Its `run` command delegates the deterministic
+image-to-DXF path, while `run-pdf` renders every PDF page and records separate
+Primitive IR, Semantic IR, DXF, and build-evidence checkpoints for each page.
+`resume` and `resume-pdf` verify the input SHA-256 before they reuse any
 checkpoint. It contains no recognition or CAD algorithms.
 
-The current slice deliberately excludes PDF orchestration and Agent action
-application. Its ordinary `run` command produces staged artifacts only;
+The current slice deliberately excludes Agent action application. Its ordinary
+`run` and `run-pdf` commands produce staged artifacts only;
 `mechanical-review` reads a SHA-bound `BuildResult` evidence record through
 File IPC, while `mechanical-repair` requires an approval reference, literal
 operator confirmation, a DXF/evidence backup, and a passing second review

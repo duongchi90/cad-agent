@@ -183,6 +183,34 @@ def _resume_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_pdf_command(args: argparse.Namespace) -> int:
+    from .pdf import PDF_MANIFEST_NAME, new_pdf_manifest, run_pdf_stages
+
+    source = args.input.resolve()
+    if not source.is_file():
+        raise CommandError(f"Input PDF does not exist: {source}")
+    if source.suffix.lower() != ".pdf":
+        raise CommandError("run-pdf accepts only a PDF input.")
+    output_dir = args.output_dir.resolve()
+    manifest_path = output_dir / PDF_MANIFEST_NAME
+    if manifest_path.exists():
+        raise CommandError(f"PDF run manifest already exists: {manifest_path}; use resume-pdf instead.")
+    manifest = new_pdf_manifest(source, args.scale_mm_per_px, args.calibration_approval, args.dpi)
+    write_manifest(manifest_path, manifest)
+    run_pdf_stages(source, output_dir, manifest_path, manifest)
+    print(manifest_path)
+    return 0
+
+
+def _resume_pdf_command(args: argparse.Namespace) -> int:
+    from .pdf import read_pdf_manifest, run_pdf_stages
+
+    manifest_path = args.manifest.resolve()
+    run_pdf_stages(args.input.resolve(), manifest_path.parent, manifest_path, read_pdf_manifest(manifest_path))
+    print(manifest_path)
+    return 0
+
+
 def _live_client(hwnd: int, dispatcher: Path):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
@@ -251,6 +279,15 @@ def build_parser() -> argparse.ArgumentParser:
     resume = subcommands.add_parser("resume", help="Resume a validated staged run")
     resume.add_argument("--manifest", type=Path, required=True)
     resume.add_argument("--input", type=Path, required=True)
+    run_pdf = subcommands.add_parser("run-pdf", help="Run every PDF page through staged DXF generation")
+    run_pdf.add_argument("--input", type=Path, required=True)
+    run_pdf.add_argument("--output-dir", type=Path, required=True)
+    run_pdf.add_argument("--scale-mm-per-px", type=float, required=True)
+    run_pdf.add_argument("--calibration-approval", required=True)
+    run_pdf.add_argument("--dpi", type=int, default=144)
+    resume_pdf = subcommands.add_parser("resume-pdf", help="Resume a validated staged PDF run")
+    resume_pdf.add_argument("--manifest", type=Path, required=True)
+    resume_pdf.add_argument("--input", type=Path, required=True)
     review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
     repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
     for command in (review, repair):
@@ -276,6 +313,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run_command(args)
         if args.command == "resume":
             return _resume_command(args)
+        if args.command == "run-pdf":
+            return _run_pdf_command(args)
+        if args.command == "resume-pdf":
+            return _resume_pdf_command(args)
         if args.command == "mechanical-review":
             return _mechanical_review_command(args)
         return _mechanical_repair_command(args)

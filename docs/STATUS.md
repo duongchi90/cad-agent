@@ -43,7 +43,7 @@ the skips and the run used Python 3.12.
 | MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
 | Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
-| Thin image orchestration CLI | Verified | `cad_agent` run/resume, build evidence, and safety-loop regression tests passed. Ordinary `run` emits staged DXF only; separate Mechanical review/repair commands enforce evidence, approval, backup, and second-review boundaries. |
+| Thin image/PDF orchestration CLI | Verified | `cad_agent` run/resume and run-pdf/resume-pdf produce SHA-bound staged DXF and build evidence. Separate Mechanical review/repair commands enforce evidence, approval, backup, and second-review boundaries. |
 | Production repair safety loop | Partially verified | Fake-MCP tests cover refusal, backup, repair, second review, and rollback. A real AutoCAD Mechanical staged-DXF review passed; no production drawing repair was run. |
 
 ## Known production gates
@@ -73,7 +73,7 @@ review-repair loop remains after that slice.
 - Offline JUnit: `tests=295; failures=0; errors=0; skipped=0`
 - `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`); approved private run `NOT RUN`
 - `autocad_lt`: historical unavailable-state probe `SKIP` (`tests=4; skipped=4`); live session run `NOT RUN` at this pre-target-change commit
-- Remaining risk: this image-only orchestrator emits a staged DXF and does not perform AutoCAD Mechanical mutation; PDF orchestration remains with `primitive_ir_lib.run_pdf`.
+- Historical limitation: this former image-only slice is superseded by the PDF vertical-slice evidence below.
 
 ## Mechanical production review/repair evidence
 

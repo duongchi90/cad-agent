@@ -26,7 +26,7 @@ three JUnit artifacts under `.artifacts/`.
 
 ## Packages
 
-- `cad_agent/`: thin `doctor`, `run`, and `resume` orchestration with durable manifests.
+- `cad_agent/`: thin image/PDF orchestration with durable manifests.
 - `primitive_ir_lib/`: image/PDF to Primitive IR.
 - `semantic_ir_lib/`: parts, compounds, constraints, pruning, and solving.
 - `agent_lib/`: audited advice for ambiguous cases.
@@ -50,6 +50,25 @@ Use `python -m cad_agent doctor --json` to inspect prerequisites, and `resume`
 with the generated `run-manifest.json` plus the original input to retry only an
 incomplete stage. The CLI produces staged DXF only; it never performs AutoCAD Mechanical
 repair or production mutation.
+
+## Staged PDF run
+
+`run-pdf` renders every page then creates independently resumable Primitive IR,
+Semantic IR, DXF, and build-evidence checkpoints per page. It also records the
+manual-scale approval and source SHA-256 in `pdf-run-manifest.json`:
+
+```powershell
+& '.\.venv-py311\Scripts\python.exe' -m cad_agent run-pdf `
+  --input C:\approved-data\drawing.pdf `
+  --output-dir output\drawing-pdf-run `
+  --scale-mm-per-px 0.0917 `
+  --calibration-approval 'approved ticket/reference' `
+  --dpi 144
+```
+
+Use `resume-pdf` with that manifest and the original PDF to retry only missing
+page stages. A changed source PDF is rejected by SHA-256 before any checkpoint
+is reused.
 
 To review a staged DXF in AutoCAD Mechanical, retain its `build-evidence.json`
 and run `cad_agent mechanical-review` with the AutoCAD window handle and loaded
