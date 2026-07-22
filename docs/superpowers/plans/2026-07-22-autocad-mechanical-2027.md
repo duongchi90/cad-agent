@@ -1,14 +1,20 @@
 # AutoCAD Mechanical 2027 Target Implementation Plan
 
-**Status:** Executing
+**Status:** Completed
 
 **Base SHA:** `cc956f2c12b487ae48b4d3c28abf95593c2e3f0c`
 
+**Completion Head SHA:** `4346e6e0bf7ea55a3fe138a9402550009c536f54`
+
 **Verification command:** `scripts/verify.ps1`
 
-**Required live gate:** `autocad_mechanical` must pass on the connected
-AutoCAD Mechanical 2027 session. `real_data` remains unaffected and is
-explicitly `NOT RUN` when no approved private input is supplied.
+**Verification result:** `PASS` on the Completion Head SHA: 295 offline tests,
+zero failures/errors/skips; `autocad_mechanical` unavailable-state probe
+reported 4 explicit skips.
+
+**Required live gate result:** `autocad_mechanical` passed 4 tests on AutoCAD
+Mechanical 2027. `real_data` remains unaffected and `NOT RUN` without an
+approved private input.
 
 ## Steps
 
