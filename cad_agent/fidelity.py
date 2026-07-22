@@ -102,7 +102,16 @@ def new_fidelity_manifest(
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
     height, width = image.shape[:2]
     _configure_tesseract(None)
-    rois = _deduplicate_rois([_title_block_roi(width, height), *detect_text_candidate_rois(image)])
+    page_area = width * height
+    detected = [
+        roi for roi in detect_text_candidate_rois(image)
+        if (roi[2] - roi[0]) * (roi[3] - roi[1]) <= page_area * 0.08
+    ]
+    # Hough-connected drawing strokes can form thousands of false text ROIs.
+    # Audit a bounded set and retain the count so an omitted ROI is visible to
+    # review instead of letting a private batch hang indefinitely.
+    detected.sort(key=lambda roi: (roi[2] - roi[0]) * (roi[3] - roi[1]), reverse=True)
+    rois = _deduplicate_rois([_title_block_roi(width, height), *detected[:8]])
     texts = extract_text_tesseract(image, roi_boxes=rois, min_confidence=20, psm=11)
     scale_candidates = detect_view_candidates(texts, raw_geometry.lines, width, height, dpi=dpi)
     return {
@@ -115,7 +124,7 @@ def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: 
             "render_height_px": height,
             "dpi": dpi,
         },
-        "ocr": {"engine": "tesseract-local", "psm": 11, "rois_px": [list(roi) for roi in rois], "texts": [_raw_text_payload(text) for text in texts]},
+        "ocr": {"engine": "tesseract-local", "psm": 11, "roi_limit": 9, "detected_roi_count": len(detected), "rois_px": [list(roi) for roi in rois], "texts": [_raw_text_payload(text) for text in texts]},
         "table_audit": {"status": "not_evaluated", "reason": "table-region approval is required before per-cell OCR"},
         "scale_candidates": scale_candidates,
         "unresolved": ["OCR output is sidecar-only", "No model-space view is authorized"],
@@ -152,8 +161,14 @@ def run_fidelity_pdf(source: Path, output_root: Path, manifest_path: Path, manif
             page_width_mm, page_height_mm = _page_size_mm(page)
             scale_x = page_width_mm / width
             scale_y = page_height_mm / height
-            if abs(scale_x - scale_y) > 1e-6:
+            relative_scale_delta = abs(scale_x - scale_y) / max(scale_x, scale_y)
+            if relative_scale_delta > 0.002:
                 raise FidelityError("Rendered page has a non-uniform pixel-to-paper transform.")
+            # Raster dimensions are integral while PDF page boxes are not, so
+            # a small X/Y difference is normal rounding. Use their mean for
+            # the scalar Primitive IR contract and retain the page dimensions
+            # in the manifest for the layout audit.
+            paper_scale = (scale_x + scale_y) / 2.0
             raw = extract_raw_geometry(image, preset="real_scan_tuned_v1")
             layout_doc = build_document(
                 file_name=rendered.name,
@@ -162,7 +177,7 @@ def run_fidelity_pdf(source: Path, output_root: Path, manifest_path: Path, manif
                 image_height_px=height,
                 calibration=Calibration(
                     unit="mm",
-                    pixel_to_unit_scale=scale_x,
+                    pixel_to_unit_scale=paper_scale,
                     origin_px=(0.0, float(height)),
                     method="manual_override",
                     reference_note="Fidelity layout: displayed PDF page coordinates in paper millimetres.",
@@ -187,6 +202,7 @@ def run_fidelity_pdf(source: Path, output_root: Path, manifest_path: Path, manif
             pages.append({
                 "page": number,
                 "paper_size_mm": [round(page_width_mm, 4), round(page_height_mm, 4)],
+                "pixel_to_paper_mm": {"x": scale_x, "y": scale_y, "used": paper_scale},
                 "artifacts": {"rendered_png": _artifact(rendered, output_root), "layout_ir": _artifact(layout_ir, output_root), "layout_dxf": _artifact(dxf, output_root), "layout_audit": _artifact(audit, output_root)},
                 "structural_roundtrip": "pass",
                 "fidelity_state": "needs_review",
