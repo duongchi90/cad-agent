@@ -40,7 +40,7 @@ the skips and the run used Python 3.12.
 | Primitive IR | Partially verified | Final Python 3.11 offline gate passed with zero skips; approved private `real_data` execution was NOT RUN and its unavailable-state probe was SKIP. |
 | Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips. |
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
-| MCP/File IPC | Partially verified | Offline/fake IPC tests passed; current AutoCAD Mechanical 2027 live evidence is recorded after the renamed `autocad_mechanical` gate runs. |
+| MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
 | Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
 | Thin image orchestration CLI | Verified | `cad_agent` run/resume regression tests and the full Python 3.11 offline gate passed on `8410712f0c7c23f707acc1b251620712806be971`; it emits staged DXF only and does not invoke live AutoCAD or Agent mutation. |
@@ -84,6 +84,21 @@ review-repair loop remains after that slice.
 - Session: AutoCAD Mechanical 2027, process `acad.exe`, HWND `393650`.
 - Safety: all smoke DXFs were newly created under `C:\temp`; no production drawing was saved or modified.
 - Limit: the then-current marker was `autocad_lt`, so this evidence predates the AutoCAD Mechanical target contract and is retained as historical context only.
+
+## AutoCAD Mechanical 2027 target evidence
+
+- State: **Verified**
+- Date: `2026-07-22`
+- Implementation Head SHA: `bda0cf0ea094d67bddca65aa8f9df953a4f25078`
+- Design and plan: `docs/superpowers/specs/2026-07-22-autocad-mechanical-2027-design.md`; `docs/superpowers/plans/2026-07-22-autocad-mechanical-2027.md`
+- Live command: `CAD_AGENT_FILE_IPC=1`, AutoCAD Mechanical HWND `393650`, and the loaded dispatcher; `& '.\.venv-py311\Scripts\python.exe' -m pytest -m autocad_mechanical -ra -p no:cacheprovider` → `4 passed, 296 deselected` in `69.41s`
+- Live scope: active-document access, primitive live review/repair, beam INSERT attribute repair, and five remaining component INSERT repairs; every smoke DXF was created under `C:\temp`.
+- Session: AutoCAD Mechanical 2027, `acad.exe`, HWND `393650`.
+- Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` → exit `0`
+- Offline JUnit: `tests=295; failures=0; errors=0; skipped=0`; SHA-256 `5d380796e1c5582ee3f1df48b9979853cda782f66ba3268fe8a46f5126b57298`
+- `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`); SHA-256 `c2e3927cd97a46b1c45658ec263e5d221cb169a0be3de26a99a5651c9e42d289`; approved private run `NOT RUN`
+- `autocad_mechanical`: unavailable-state probe `SKIP` (`tests=4; skipped=4`); SHA-256 `039a06a9c3c6a0a4aa7c6283fae44cd4c44caa04c7809f5bc7ffdbe20146be74`
+- Remaining risk: production drawing mutation remains prohibited without a verified backup, explicit human approval, live review, repair, and a second review.
 
 ## Foundation certificate
 
