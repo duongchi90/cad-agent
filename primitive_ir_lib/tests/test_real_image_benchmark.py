@@ -12,6 +12,7 @@ from pathlib import Path
 
 import cv2
 import pytesseract
+import pytest
 
 from primitive_ir_lib.geometry_extraction import extract_raw_geometry
 from primitive_ir_lib.line_merging import merge_collinear_lines
@@ -19,6 +20,8 @@ from primitive_ir_lib.text_extraction import extract_text_tesseract
 
 _IMAGE_ENV = "CAD_AGENT_REAL_IMAGE"
 _TESSERACT_ENV = "CAD_AGENT_TESSERACT_CMD"
+
+pytestmark = pytest.mark.real_data
 
 
 def _configure_tesseract() -> None:
@@ -34,8 +37,7 @@ def _configure_tesseract() -> None:
 def test_real_scan_2760_1525_boundary_survives_full_merge():
     image_path = os.environ.get(_IMAGE_ENV)
     if not image_path:
-        print(f"SKIP: set {_IMAGE_ENV} to run the real-image benchmark")
-        return
+        pytest.skip(f"set {_IMAGE_ENV} to run the real-image benchmark")
     if not Path(image_path).is_file():
         raise AssertionError(f"{_IMAGE_ENV} does not point to a file: {image_path}")
 
