@@ -110,10 +110,10 @@ and a second live review; it was not requested or run here.
 - Implementation Head SHA: `374e75fb15abe9fd33df74fe61a84c966946f488`
 - Design and plan: `docs/superpowers/specs/2026-07-22-fidelity-reconstruction-cli-design.md`; `docs/superpowers/plans/2026-07-22-fidelity-reconstruction-cli.md`
 - Behavior: the private `fidelity-pdf`, `fidelity-overlay`, `fidelity-region-proposal`, `fidelity-region-approve`, `fidelity-reconstruct`, and `fidelity-observe` commands bind source and artifact hashes, keep output outside Git, forbid Mechanical operations on fidelity DXFs, and preserve `needs_review` rather than claiming a visual pass.
-- Private source evidence: all nine paper-coordinate baselines and overlays completed. A page-5 principal-region candidate was reconstructed only from an explicit SHA-bound approval. Table-grid observations are available for pages 2, 3, 5, 6, 8, and 9; no cell OCR/text was promoted into DXF.
+- Private source evidence: all nine paper-coordinate baselines and overlays completed. Under the user's explicit 2026-07-22 approval, every page has one SHA-bound `sheet_content` layout-region approval, reconstruction candidate, and composed page DXF outside Git (page 5 uses revision 4). These are broad layout regions, not approved model-view geometry. Table-grid observations are available for pages 2, 3, 5, 6, 8, and 9; no cell OCR/text was promoted into DXF.
 - Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` -> exit `0`; offline JUnit `tests=323; failures=0; errors=0; skipped=0`.
 - `real_data`: private command evidence exists but the marker benchmark is **NOT RUN** for this workflow; `autocad_mechanical`: **NOT RUN** by design because fidelity artifacts are refused before live review/repair.
-- Remaining risk: only one page region has an approved reconstruction candidate; Unicode text, dimensions, linetypes, hatch, table-cell approval/OCR, page composition, and the other eight pages remain unfinished.
+- Remaining risk: all nine compositions remain `needs_review`, and broad layout approvals do not validate visual similarity. Unicode text, dimensions, linetypes, hatch, table-cell approval/OCR, and disciplined model-view reconstruction remain unfinished.
 
 ## Mechanical production review/repair evidence
 

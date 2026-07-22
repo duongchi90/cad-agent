@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -32,3 +33,18 @@ def test_private_fidelity_pdf_has_nine_hash_bound_layout_pages() -> None:
             artifact = root / record["artifact"]
             assert artifact.is_file()
             assert sha256_file(artifact) == record["sha256"]
+    if os.environ.get("CAD_AGENT_FIDELITY_REQUIRE_RECONSTRUCTION") == "1":
+        for page in manifest["pages"]:
+            number = page["page"]
+            approvals = sorted((root / "region_approvals").glob(f"page_{number:02d}*.json"))
+            assert approvals, f"page {number} has no reconstruction approval"
+            approval = json.loads(approvals[-1].read_text(encoding="utf-8"))
+            for region_id in approval["approved_region_ids"]:
+                candidate = root / "reconstruction_candidates" / f"page_{number:02d}" / region_id
+                assert (candidate / "geometry.dxf").is_file()
+                assert (candidate / "report.json").is_file()
+            revision = approval["proposal"]["revision"]
+            suffix = "" if revision == 1 else f"-r{revision}"
+            composed = root / "reconstruction_pages" / f"page_{number:02d}{suffix}"
+            assert (composed / "layout.dxf").is_file()
+            assert (composed / "report.json").is_file()
