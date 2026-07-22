@@ -305,6 +305,15 @@ def _fidelity_region_approval_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_observe_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_observations
+
+    manifest_path = args.manifest.resolve()
+    for output in run_fidelity_observations(args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), workspace_root=Path.cwd()):
+        print(output)
+    return 0
+
+
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
@@ -413,6 +422,9 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_reconstruct.add_argument("--input", type=Path, required=True)
     fidelity_reconstruct.add_argument("--manifest", type=Path, required=True)
     fidelity_reconstruct.add_argument("--approval", type=Path, required=True)
+    fidelity_observe = subcommands.add_parser("fidelity-observe", help="Write bounded private table-grid observations for all fidelity pages")
+    fidelity_observe.add_argument("--input", type=Path, required=True)
+    fidelity_observe.add_argument("--manifest", type=Path, required=True)
     review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
     repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
     for command in (review, repair):
@@ -454,6 +466,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_reconstruct_command(args)
         if args.command == "fidelity-region-approve":
             return _fidelity_region_approval_command(args)
+        if args.command == "fidelity-observe":
+            return _fidelity_observe_command(args)
         if args.command == "mechanical-review":
             return _mechanical_review_command(args)
         return _mechanical_repair_command(args)

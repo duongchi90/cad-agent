@@ -21,6 +21,7 @@ from primitive_ir_lib.geometry_extraction import extract_raw_geometry
 from primitive_ir_lib.io_utils import save_document
 from primitive_ir_lib.run_image import _configure_tesseract
 from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
+from primitive_ir_lib.table_extraction import build_cells, detect_grid
 from primitive_ir_lib.view_calibration import detect_view_candidates
 
 from .manifest import ManifestError, sha256_file, verify_source, write_manifest
@@ -326,6 +327,34 @@ def run_fidelity_reconstruct(
         (candidate_root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "region": region, "entities": {"LINE": len(raw.lines), "CIRCLE": len(raw.circles)}, "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(crop.shape[:2], 255, dtype=np.uint8)), "unresolved": ["text/dimensions/linetypes/tables remain sidecar-only", "no model export"]}, indent=2) + "\n", encoding="utf-8")
         results.append(candidate_root)
     return results
+
+
+def run_fidelity_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Record bounded table-grid observations for every private fidelity page."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for observations.")
+        height, width = image.shape[:2]
+        roi = (0, int(height * 0.65), width, height)
+        raw = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+        xs, ys = detect_grid(raw.lines, roi)
+        cells = build_cells(xs, ys, roi)
+        status = "needs_review" if len(xs) >= 3 and len(ys) >= 3 and len(cells) <= 200 else "not_evaluated"
+        reason = None if status == "needs_review" else "grid requires at least three axes each and no more than 200 cells"
+        output = output_root / "fidelity_observations" / f"page_{page['page']:02d}.json"
+        if output.exists():
+            raise FidelityError(f"Fidelity observation already exists: {output}")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema_version": "fidelity-observation-1.0", "private_artifact": True, "state": status, "source_render_sha256": sha256_file(rendered), "table_grid": {"roi_px": list(roi), "vertical_axes_px": xs, "horizontal_axes_px": ys, "cells": [list(cell.bbox_px) for cell in cells] if status == "needs_review" else [], "reason": reason}, "unresolved": ["no cell OCR or DXF text is emitted without table-region approval"]}
+        output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
 
 
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
