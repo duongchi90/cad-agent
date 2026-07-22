@@ -1,6 +1,6 @@
 # PDF Vertical-Slice Orchestration Implementation Plan
 
-**Status:** Executing
+**Status:** Complete
 
 **Base SHA:** `51259f829f1bbcc5570824356fe0832918781027`
 
@@ -17,3 +17,11 @@ affected unless an operator separately invokes them with approved inputs.
 2. Implement `run-pdf` and `resume-pdf` with atomic per-page checkpoints.
 3. Run focused PDF tests and the full verifier.
 4. Record evidence and close the plan.
+
+## Completion evidence
+
+- Implementation commit: `1669f25e88847b47284219c92769801a5bc81768`
+- Focused command: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_pdf.py tests\test_cad_agent_cli.py tests\test_cad_agent_live.py -q -p no:cacheprovider` -> `12 passed`
+- Focused Ruff command: `& '.\.venv-py311\Scripts\python.exe' -m ruff check cad_agent tests\test_cad_agent_pdf.py` -> `All checks passed!`
+- Authoritative verifier: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` -> exit `0`; offline JUnit `tests=304; failures=0; errors=0; skipped=0`.
+- The unavailable-state probes remain intentionally separate: `real_data` `SKIP` (one test) and `autocad_mechanical` `SKIP` (four tests). No private PDF or production drawing was used.
