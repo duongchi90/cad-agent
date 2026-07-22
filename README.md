@@ -46,6 +46,7 @@ production DXF mutation require human approval.
 - Current architecture: `docs/ARCHITECTURE.md`
 - Verified status: `docs/STATUS.md`
 - Test and release gates: `docs/QUALITY.md`
+- Agent working agreement: `AGENTS.md`
 
 `HANDOFF.md` and `CAD-Agent-Kien-Truc-v1_3.md` are retained as historical
 records; they are not current status sources.
