@@ -365,6 +365,14 @@ def _fidelity_text_approval_selection_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_text_reconstruct_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_text_reconstruct
+
+    manifest_path = args.manifest.resolve()
+    print(run_fidelity_text_reconstruct(args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), args.approval.resolve(), base_dxf=args.base_dxf.resolve() if args.base_dxf else None, workspace_root=Path.cwd()))
+    return 0
+
+
 def _fidelity_compose_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_compose
 
@@ -521,6 +529,11 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_text_selection.add_argument("--manifest", type=Path, required=True)
     fidelity_text_selection.add_argument("--selection", type=Path, required=True)
     fidelity_text_selection.add_argument("--approval-reference", required=True)
+    fidelity_text_reconstruct = subcommands.add_parser("fidelity-text-reconstruct", help="Emit approved OCR as a fresh fidelity-only DXF")
+    fidelity_text_reconstruct.add_argument("--input", type=Path, required=True)
+    fidelity_text_reconstruct.add_argument("--manifest", type=Path, required=True)
+    fidelity_text_reconstruct.add_argument("--approval", type=Path, required=True)
+    fidelity_text_reconstruct.add_argument("--base-dxf", type=Path)
     fidelity_compose = subcommands.add_parser("fidelity-compose", help="Compose approved region geometry into a paper-coordinate review page")
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
@@ -584,6 +597,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_text_review_index_command(args)
         if args.command == "fidelity-text-approve-selection":
             return _fidelity_text_approval_selection_command(args)
+        if args.command == "fidelity-text-reconstruct":
+            return _fidelity_text_reconstruct_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
         if args.command == "fidelity-review-index":

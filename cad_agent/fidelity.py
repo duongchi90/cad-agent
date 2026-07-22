@@ -578,6 +578,59 @@ def write_fidelity_text_approvals_from_selection(
     return results
 
 
+def run_fidelity_text_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    approval_path: Path,
+    *,
+    base_dxf: Path | None = None,
+    workspace_root: Path,
+) -> Path:
+    """Emit approved OCR as paper-coordinate TEXT in a fresh fidelity-only DXF."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root) or not approval_path.is_file():
+        raise FidelityError("Text approval must reside inside the private fidelity output root.")
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    if approval.get("state") != "approved-text-candidates-only" or approval.get("source") != manifest.get("source"):
+        raise FidelityError("Text approval is not valid for reconstruction.")
+    page = next((item for item in manifest["pages"] if item["page"] == approval.get("page")), None)
+    if page is None:
+        raise FidelityError("Text approval page is absent from the fidelity manifest.")
+    if base_dxf is not None and (not _is_within(base_dxf, output_root) or not base_dxf.is_file()):
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf) if base_dxf is not None else ezdxf.new("R2010")
+    document.header["$INSUNITS"] = 4
+    model = document.modelspace()
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+    height_px = int(json.loads(audit_path.read_text(encoding="utf-8"))["source_page"]["render_height_px"])
+    emitted = 0
+    for approved in approval.get("approved_candidates", []):
+        candidate = approved.get("candidate", {})
+        content = candidate.get("content")
+        bbox = candidate.get("bbox_px")
+        if not isinstance(content, str) or not content.strip() or not isinstance(bbox, list) or len(bbox) != 4:
+            raise FidelityError("Text approval contains an invalid candidate.")
+        x0, _, _, y1 = (float(value) for value in bbox)
+        text_height = max(1.5, min(10.0, (float(bbox[3]) - float(bbox[1])) * scale))
+        entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height})
+        entity.set_placement((x0 * scale, (height_px - y1) * scale))
+        emitted += 1
+    root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
+    if root.exists():
+        raise FidelityError(f"Text reconstruction already exists: {root}")
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "emitted_text_entities": emitted, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
 def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
     """Create a private, read-only browser review page for OCR candidates."""
     if _is_within(output_root, workspace_root):

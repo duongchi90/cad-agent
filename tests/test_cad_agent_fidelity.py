@@ -21,6 +21,7 @@ from cad_agent.fidelity import (
     write_fidelity_text_review_index,
     write_fidelity_text_approval,
     write_fidelity_text_approvals_from_selection,
+    run_fidelity_text_reconstruct,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -134,6 +135,8 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert approved["state"] == "approved-text-candidates-only"
         assert approved["approved_candidates"][0]["glyph_render"]["passed"] is True
         assert (output / "fidelity_text_approvals" / "page_01.json").is_file()
+        text_dxf = run_fidelity_text_reconstruct(source, output, manifest, output / "fidelity_text_approvals" / "page_01.json", workspace_root=Path.cwd())
+        assert {entity.dxftype() for entity in ezdxf.readfile(text_dxf).modelspace()} == {"TEXT"}
 
 
 def test_text_selection_file_creates_page_approvals(tmp_path: Path) -> None:
