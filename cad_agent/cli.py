@@ -323,6 +323,18 @@ def _fidelity_text_observe_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_text_approval_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, write_fidelity_text_approval
+
+    manifest_path = args.manifest.resolve()
+    result = write_fidelity_text_approval(
+        args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), args.page,
+        args.observation.resolve(), args.candidate_id, args.approval_reference, workspace_root=Path.cwd(),
+    )
+    print(manifest_path.parent / "fidelity_text_approvals" / f"page_{result['page']:02d}.json")
+    return 0
+
+
 def _fidelity_compose_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_compose
 
@@ -461,6 +473,13 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_text_observe = subcommands.add_parser("fidelity-text-observe", help="Write hash-bound OCR candidates for later per-text review")
     fidelity_text_observe.add_argument("--input", type=Path, required=True)
     fidelity_text_observe.add_argument("--manifest", type=Path, required=True)
+    fidelity_text_approve = subcommands.add_parser("fidelity-text-approve", help="Approve selected OCR candidates after Unicode glyph rendering")
+    fidelity_text_approve.add_argument("--input", type=Path, required=True)
+    fidelity_text_approve.add_argument("--manifest", type=Path, required=True)
+    fidelity_text_approve.add_argument("--page", type=int, required=True)
+    fidelity_text_approve.add_argument("--observation", type=Path, required=True)
+    fidelity_text_approve.add_argument("--candidate-id", action="append", required=True)
+    fidelity_text_approve.add_argument("--approval-reference", required=True)
     fidelity_compose = subcommands.add_parser("fidelity-compose", help="Compose approved region geometry into a paper-coordinate review page")
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
@@ -516,6 +535,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_observe_command(args)
         if args.command == "fidelity-text-observe":
             return _fidelity_text_observe_command(args)
+        if args.command == "fidelity-text-approve":
+            return _fidelity_text_approval_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
         if args.command == "fidelity-review-index":

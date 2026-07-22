@@ -16,6 +16,7 @@ from cad_agent.fidelity import (
     run_fidelity_pdf,
     run_fidelity_reconstruct,
     run_fidelity_text_observations,
+    write_fidelity_text_approval,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -120,6 +121,13 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         with pytest.raises(FidelityError, match="already exists"):
             run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
 
+        approved = write_fidelity_text_approval(
+            source, output, manifest, 1, outputs[0], [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
+        )
+        assert approved["state"] == "approved-text-candidates-only"
+        assert approved["approved_candidates"][0]["glyph_render"]["passed"] is True
+        assert (output / "fidelity_text_approvals" / "page_01.json").is_file()
+
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:
     with tempfile.TemporaryDirectory() as directory:
@@ -214,6 +222,13 @@ def test_fidelity_cli_creates_private_baseline() -> None:
         assert (output / "fidelity_observations" / "page_01.json").is_file()
         assert main(["fidelity-text-observe", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_text_observations" / "page_01.json").is_file()
+        candidate_id = json.loads((output / "fidelity_text_observations" / "page_01.json").read_text(encoding="utf-8"))["candidates"][0]["id"]
+        assert main([
+            "fidelity-text-approve", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json"),
+            "--page", "1", "--observation", str(output / "fidelity_text_observations" / "page_01.json"),
+            "--candidate-id", candidate_id, "--approval-reference", "approved-test",
+        ]) == 0
+        assert (output / "fidelity_text_approvals" / "page_01.json").is_file()
         assert main(["fidelity-review-index", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_review" / "index.html").is_file()
         assert main(["fidelity-review-queue", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0

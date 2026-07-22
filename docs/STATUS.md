@@ -113,7 +113,7 @@ and a second live review; it was not requested or run here.
 - Private source evidence: all nine paper-coordinate baselines and overlays completed. Under the user's explicit 2026-07-22 approval, every page has one SHA-bound `sheet_content` layout-region approval, reconstruction candidate, and composed page DXF outside Git (page 5 uses revision 4). These are broad layout regions, not approved model-view geometry. Table-grid observations are available for pages 2, 3, 5, 6, 8, and 9; hash-bound OCR candidate sidecars now exist for all 9/9 pages. No cell OCR/text was promoted into DXF.
 - Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` -> exit `0`; offline JUnit `tests=323; failures=0; errors=0; skipped=0`.
 - `real_data`: private command evidence exists but the marker benchmark is **NOT RUN** for this workflow; `autocad_mechanical`: **NOT RUN** by design because fidelity artifacts are refused before live review/repair.
-- Remaining risk: all nine compositions remain `needs_review`, and broad layout approvals do not validate visual similarity. Unicode text, dimensions, linetypes, hatch, table-cell approval/OCR, and disciplined model-view reconstruction remain unfinished.
+- Remaining risk: all nine compositions remain `needs_review`, and broad layout approvals do not validate visual similarity. Per-text approval plus local Unicode glyph-render validation is available but no private OCR candidate has been approved or emitted to DXF. Dimensions, linetypes, hatch, table-cell approval/OCR, and disciplined model-view reconstruction remain unfinished.
 
 ## Mechanical production review/repair evidence
 

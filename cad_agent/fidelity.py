@@ -15,6 +15,7 @@ from typing import Any
 import cv2
 import fitz
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from primitive_ir_lib.assemble import build_document
 from primitive_ir_lib.calibration import Calibration
@@ -404,6 +405,83 @@ def run_fidelity_text_observations(source: Path, output_root: Path, manifest: di
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         outputs.append(output)
     return outputs
+
+
+def _unicode_glyph_render_check(content: str) -> dict[str, Any]:
+    """Prove each non-space codepoint has a non-replacement glyph in the approved font."""
+    font_path = Path(os.environ.get("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\arial.ttf"))
+    if not font_path.is_file():
+        raise FidelityError(f"Fidelity Unicode glyph-render font is unavailable: {font_path}")
+    try:
+        font = ImageFont.truetype(str(font_path), size=32)
+    except OSError as exc:
+        raise FidelityError(f"Cannot load fidelity Unicode glyph-render font: {font_path}") from exc
+    replacement = bytes(font.getmask("\ufffd"))
+    unsupported = [char for char in content if not char.isspace() and (not any(font.getmask(char)) or bytes(font.getmask(char)) == replacement)]
+    bounds = font.getbbox(content)
+    image = Image.new("L", (max(1, bounds[2] - bounds[0] + 4), max(1, bounds[3] - bounds[1] + 4)))
+    ImageDraw.Draw(image).text((2 - bounds[0], 2 - bounds[1]), content, font=font, fill=255)
+    return {
+        "passed": not unsupported and image.getbbox() is not None,
+        "font": {"name": font_path.name, "sha256": sha256_file(font_path)},
+        "unsupported_codepoints": [f"U+{ord(char):04X}" for char in unsupported],
+        "rendered_nonempty": image.getbbox() is not None,
+    }
+
+
+def write_fidelity_text_approval(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    page_number: int,
+    observation_path: Path,
+    candidate_ids: list[str],
+    approval_reference: str,
+    *,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """Record explicit per-text approval after a local Unicode glyph-render check."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(observation_path, output_root) or not observation_path.is_file():
+        raise FidelityError("Text observation must reside inside the private fidelity output root.")
+    if not candidate_ids or len(set(candidate_ids)) != len(candidate_ids):
+        raise FidelityError("Text approval requires one or more unique candidate ids.")
+    if not approval_reference.strip():
+        raise FidelityError("Text approval requires a non-empty approval reference.")
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    if observation.get("state") != "needs_human_approval" or observation.get("source") != manifest.get("source"):
+        raise FidelityError("Text observation is not valid for approval.")
+    if observation.get("page") != page_number:
+        raise FidelityError("Text approval page does not match its observation.")
+    candidates = {item.get("id"): item for item in observation.get("candidates", []) if isinstance(item, dict)}
+    if any(candidate_id not in candidates for candidate_id in candidate_ids):
+        raise FidelityError("Text approval references an unknown OCR candidate.")
+    approved_candidates = []
+    for candidate_id in candidate_ids:
+        candidate = candidates[candidate_id]
+        glyph_render = _unicode_glyph_render_check(candidate["content"])
+        if not glyph_render["passed"]:
+            raise FidelityError(f"Unicode glyph-render check failed for OCR candidate: {candidate_id}")
+        approved_candidates.append({"candidate": candidate, "glyph_render": glyph_render})
+    output = output_root / "fidelity_text_approvals" / f"page_{page_number:02d}.json"
+    if output.exists():
+        raise FidelityError(f"Fidelity text approval already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": page_number,
+        "observation": _artifact(observation_path, output_root),
+        "approval_reference": approval_reference.strip(),
+        "approved_candidates": approved_candidates,
+        "unresolved": ["approved OCR candidates are not emitted into DXF by this command", "text placement, height, style, and DXF emission require a separate approved reconstruction step"],
+    }
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
 
 
 def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path) -> Path:
