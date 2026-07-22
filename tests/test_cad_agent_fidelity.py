@@ -18,6 +18,7 @@ from cad_agent.fidelity import (
     run_fidelity_text_observations,
     write_fidelity_text_review_index,
     write_fidelity_text_approval,
+    write_fidelity_text_approvals_from_selection,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -131,6 +132,20 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert approved["state"] == "approved-text-candidates-only"
         assert approved["approved_candidates"][0]["glyph_render"]["passed"] is True
         assert (output / "fidelity_text_approvals" / "page_01.json").is_file()
+
+
+def test_text_selection_file_creates_page_approvals(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    candidate_id = json.loads(observation.read_text(encoding="utf-8"))["candidates"][0]["id"]
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps({"schema_version": "fidelity-text-selection-1.0", "source": manifest["source"], "selections": [{"page": 1, "candidate_ids": [candidate_id]}]}), encoding="utf-8")
+    approvals = write_fidelity_text_approvals_from_selection(source, output, manifest, selection, "approved-test", workspace_root=Path.cwd())
+    assert [approval["page"] for approval in approvals] == [1]
 
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:

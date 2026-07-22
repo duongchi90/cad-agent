@@ -485,14 +485,48 @@ def write_fidelity_text_approval(
     return payload
 
 
+def write_fidelity_text_approvals_from_selection(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    selection_path: Path,
+    approval_reference: str,
+    *,
+    workspace_root: Path,
+) -> list[dict[str, Any]]:
+    """Apply an exported browser selection as separate, explicit per-page approvals."""
+    try:
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError(f"Cannot read text selection file: {selection_path}") from exc
+    if selection.get("schema_version") != "fidelity-text-selection-1.0" or selection.get("source") != manifest.get("source"):
+        raise FidelityError("Text selection does not match the private fidelity source.")
+    selections = selection.get("selections")
+    if not isinstance(selections, list) or not selections:
+        raise FidelityError("Text selection requires at least one page selection.")
+    results = []
+    for item in selections:
+        if not isinstance(item, dict) or not isinstance(item.get("page"), int) or not isinstance(item.get("candidate_ids"), list):
+            raise FidelityError("Text selection page records are invalid.")
+        observation = output_root / "fidelity_text_observations" / f"page_{item['page']:02d}.json"
+        results.append(write_fidelity_text_approval(
+            source, output_root, manifest, item["page"], observation, item["candidate_ids"], approval_reference,
+            workspace_root=workspace_root,
+        ))
+    return results
+
+
 def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
     """Create a private, read-only browser review page for OCR candidates."""
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
-    index = output_root / "fidelity_text_review" / "index.html"
-    if index.exists():
-        raise FidelityError(f"Fidelity text review index already exists: {index}")
+    review_root = output_root / "fidelity_text_review"
+    index = review_root / "index.html"
+    revision = 2
+    while index.exists():
+        index = review_root / f"index-r{revision}.html"
+        revision += 1
     cards: list[str] = []
     for page in manifest.get("pages", []):
         number = page["page"]
@@ -512,8 +546,9 @@ def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: 
             rows.append(f'<tr><td><input type="checkbox" data-page="{number}" value="{candidate_id}"></td><td><code>{candidate_id}</code></td><td>{content}</td><td>{confidence}</td><td><code>{bbox}</code></td></tr>')
         rel_rendered = Path(os.path.relpath(rendered, index.parent)).as_posix()
         cards.append(f'<section><h2>Trang {number} <small>{len(rows)} ứng viên</small></h2><details><summary>Xem ảnh PDF</summary><img src="{rel_rendered}" alt="PDF page {number}"></details><div class="scroll"><table><thead><tr><th>Duyệt</th><th>ID</th><th>OCR</th><th>Độ tin cậy</th><th>Khung pixel</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>')
-    page_html = """<!doctype html><meta charset='utf-8'><title>Duyệt chữ PDF riêng tư</title><style>body{font:15px system-ui,sans-serif;margin:20px;background:#f4f6f8;color:#18212b}header,section{background:#fff;border:1px solid #d9e0e6;border-radius:10px;padding:16px;margin:14px 0}h1{margin:0 0 6px}h2{margin:0 0 12px;font-size:18px}small{font-weight:400;color:#5d6b78}button{padding:10px 14px;border:0;border-radius:7px;background:#075985;color:#fff;font-weight:600}p{line-height:1.45}.scroll{overflow-x:auto;margin-top:12px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid #e4e9ed;padding:8px;text-align:left;vertical-align:top}th{background:#f8fafc}code{font-size:12px}img{max-width:100%;margin-top:12px;border:1px solid #cad3dc}summary{cursor:pointer;font-weight:600}</style><header><h1>Duyệt ứng viên chữ - riêng tư</h1><p>Chọn các OCR đúng, rồi bấm nút để sao chép ID. Việc chọn ở đây <strong>không</strong> tự tạo DXF hay phê duyệt; chỉ dùng để chuẩn bị lệnh duyệt từng chữ có kiểm tra Unicode.</p><button onclick='copyIds()'>Sao chép các ID đã chọn</button><p id='result' aria-live='polite'></p></header>""" + "\n".join(cards) + """<script>function copyIds(){const byPage={};document.querySelectorAll('input:checked').forEach(x=>(byPage[x.dataset.page]??=[]).push(x.value));const text=Object.entries(byPage).map(([page,ids])=>'Trang '+page+': '+ids.join(', ')).join('\\n');navigator.clipboard.writeText(text);document.querySelector('#result').textContent=text?'Đã sao chép.':'Chưa chọn ứng viên nào.';}</script>"""
-    index.parent.mkdir(parents=True, exist_ok=True)
+    source_json = json.dumps(manifest["source"], ensure_ascii=False)
+    page_html = """<!doctype html><meta charset='utf-8'><title>Duyệt chữ PDF riêng tư</title><style>body{font:15px system-ui,sans-serif;margin:20px;background:#f4f6f8;color:#18212b}header,section{background:#fff;border:1px solid #d9e0e6;border-radius:10px;padding:16px;margin:14px 0}h1{margin:0 0 6px}h2{margin:0 0 12px;font-size:18px}small{font-weight:400;color:#5d6b78}button{padding:10px 14px;border:0;border-radius:7px;background:#075985;color:#fff;font-weight:600;margin-right:8px}p{line-height:1.45}.scroll{overflow-x:auto;margin-top:12px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid #e4e9ed;padding:8px;text-align:left;vertical-align:top}th{background:#f8fafc}code{font-size:12px}img{max-width:100%;margin-top:12px;border:1px solid #cad3dc}summary{cursor:pointer;font-weight:600}</style><header><h1>Duyệt ứng viên chữ - riêng tư</h1><p>Chọn các OCR đúng rồi tải tệp lựa chọn. Tệp đó được dùng để tạo phê duyệt từng chữ có kiểm tra Unicode; việc tick không tự tạo DXF.</p><button onclick='copyIds()'>Sao chép ID</button><button onclick='downloadSelection()'>Tải tệp lựa chọn</button><p id='result' aria-live='polite'></p></header>""" + "\n".join(cards) + f"""<script>const source={source_json};function selected(){{const byPage={{}};document.querySelectorAll('input:checked').forEach(x=>(byPage[x.dataset.page]??=[]).push(x.value));return byPage;}}function copyIds(){{const byPage=selected();const text=Object.entries(byPage).map(([page,ids])=>'Trang '+page+': '+ids.join(', ')).join('\\n');navigator.clipboard.writeText(text);document.querySelector('#result').textContent=text?'Đã sao chép.':'Chưa chọn ứng viên nào.';}}function downloadSelection(){{const byPage=selected();const selections=Object.entries(byPage).map(([page,candidate_ids])=>({{page:Number(page),candidate_ids}}));if(!selections.length){{document.querySelector('#result').textContent='Chưa chọn ứng viên nào.';return;}}const blob=new Blob([JSON.stringify({{schema_version:'fidelity-text-selection-1.0',source,selections}},null,2)],{{type:'application/json'}});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='fidelity-text-selection.json';link.click();URL.revokeObjectURL(link.href);document.querySelector('#result').textContent='Đã tải tệp lựa chọn.';}}</script>"""
+    review_root.mkdir(parents=True, exist_ok=True)
     index.write_text(page_html, encoding="utf-8")
     return index
 
