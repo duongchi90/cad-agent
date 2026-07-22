@@ -15,6 +15,7 @@ from cad_agent.fidelity import (
     run_fidelity_overlays,
     run_fidelity_pdf,
     run_fidelity_reconstruct,
+    run_fidelity_text_observations,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -97,6 +98,27 @@ def test_line_pattern_observation_is_sidecar_only() -> None:
     ]
     patterns = _observe_line_patterns(lines)
     assert patterns == [{"axis": "horizontal", "coordinate_px": 8, "segment_count": 3, "median_gap_px": 8.0, "status": "needs_review"}]
+
+
+def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "drawing.pdf"
+        output = root / "private-staging"
+        _pdf(source)
+        manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+        run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+        outputs = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+        assert len(outputs) == 1
+        observation = json.loads(outputs[0].read_text(encoding="utf-8"))
+        assert observation["state"] == "needs_human_approval"
+        assert observation["source_layout_audit"]["sha256"]
+        assert observation["candidates"]
+        assert all(candidate["content"] for candidate in observation["candidates"])
+        assert observation["unresolved"] == ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"]
+        with pytest.raises(FidelityError, match="already exists"):
+            run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
 
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:
@@ -190,6 +212,8 @@ def test_fidelity_cli_creates_private_baseline() -> None:
         assert (output / "region_approvals" / "page_01.json").is_file()
         assert main(["fidelity-observe", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_observations" / "page_01.json").is_file()
+        assert main(["fidelity-text-observe", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
+        assert (output / "fidelity_text_observations" / "page_01.json").is_file()
         assert main(["fidelity-review-index", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_review" / "index.html").is_file()
         assert main(["fidelity-review-queue", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0

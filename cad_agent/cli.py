@@ -314,6 +314,15 @@ def _fidelity_observe_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_text_observe_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_text_observations
+
+    manifest_path = args.manifest.resolve()
+    for output in run_fidelity_text_observations(args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), workspace_root=Path.cwd()):
+        print(output)
+    return 0
+
+
 def _fidelity_compose_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_compose
 
@@ -449,6 +458,9 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_observe = subcommands.add_parser("fidelity-observe", help="Write bounded private table-grid observations for all fidelity pages")
     fidelity_observe.add_argument("--input", type=Path, required=True)
     fidelity_observe.add_argument("--manifest", type=Path, required=True)
+    fidelity_text_observe = subcommands.add_parser("fidelity-text-observe", help="Write hash-bound OCR candidates for later per-text review")
+    fidelity_text_observe.add_argument("--input", type=Path, required=True)
+    fidelity_text_observe.add_argument("--manifest", type=Path, required=True)
     fidelity_compose = subcommands.add_parser("fidelity-compose", help="Compose approved region geometry into a paper-coordinate review page")
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
@@ -502,6 +514,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_region_approval_command(args)
         if args.command == "fidelity-observe":
             return _fidelity_observe_command(args)
+        if args.command == "fidelity-text-observe":
+            return _fidelity_text_observe_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
         if args.command == "fidelity-review-index":

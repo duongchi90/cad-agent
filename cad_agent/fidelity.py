@@ -362,6 +362,50 @@ def run_fidelity_observations(source: Path, output_root: Path, manifest: dict[st
     return outputs
 
 
+def run_fidelity_text_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Write hash-bound OCR candidates for later per-text review, never DXF text."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        audit_record = page["artifacts"]["layout_audit"]
+        audit_path = _safe_artifact_path(output_root, audit_record)
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        raw_texts = audit.get("ocr", {}).get("texts", [])
+        candidates = [
+            {
+                "id": item["id"],
+                "content": item["content"].strip(),
+                "bbox_px": item["bbox_px"],
+                "rotation_deg": item["rotation_deg"],
+                "confidence": item["confidence"],
+                "source": item["source"],
+                "semantic_role": item["semantic_role"],
+                "parsed_value": item["parsed_value"],
+            }
+            for item in raw_texts
+            if isinstance(item, dict) and isinstance(item.get("content"), str) and item["content"].strip()
+        ]
+        output = output_root / "fidelity_text_observations" / f"page_{page['page']:02d}.json"
+        if output.exists():
+            raise FidelityError(f"Fidelity text observation already exists: {output}")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": "fidelity-text-observation-1.0",
+            "private_artifact": True,
+            "state": "needs_human_approval" if candidates else "not_evaluated",
+            "source": manifest["source"],
+            "page": page["page"],
+            "source_layout_audit": audit_record,
+            "candidates": candidates,
+            "unresolved": ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"],
+        }
+        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
 def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path) -> Path:
     """Place approved local geometry back into a paper-coordinate review page."""
     if _is_within(output_root, workspace_root):
