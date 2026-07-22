@@ -43,7 +43,8 @@ NGUYÊN TẮC THIẾT KẾ (bám sát dự án, mục 10.1/7):
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Set, Tuple
+from itertools import combinations
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from primitive_ir_lib.models import CircleGeometry, LineGeometry, Primitive, Point2D
 
@@ -76,6 +77,23 @@ def _constraints_between(
     if ctype is None:
         return cs
     return [c for c in cs if c.type == ctype]
+
+
+def _constraint_pairs(constraints: Iterable[Constraint], ctype: str) -> Set[Tuple[str, str]]:
+    """Return unique unordered primitive pairs for one constraint type."""
+    return {
+        tuple(sorted(c.primitive_ids))
+        for c in constraints
+        if c.type == ctype and len(c.primitive_ids) == 2
+    }
+
+
+def _pair_neighbors(pairs: Iterable[Tuple[str, str]]) -> Dict[str, Set[str]]:
+    neighbors: Dict[str, Set[str]] = {}
+    for a, b in pairs:
+        neighbors.setdefault(a, set()).add(b)
+        neighbors.setdefault(b, set()).add(a)
+    return neighbors
 
 
 def _circle_near_point(
@@ -122,8 +140,9 @@ def _point_to_infinite_line_distance(pt: Point2D, a: Point2D, b: Point2D) -> flo
 
 # ============================================================ khung_chu_nhat ==
 def _find_khung_chu_nhat(
-    line_ids: List[str],
     idx: Dict[Tuple[str, str], List[Constraint]],
+    parallel_pairs: Set[Tuple[str, str]],
+    coincident_neighbors: Dict[str, Set[str]],
 ) -> List[SemanticPart]:
     """Tìm khung chữ nhật kín: 4 line thoả mãn đồng thời:
     - 2 cặp parallel (mỗi cặp 2 line trong 4 line);
@@ -142,21 +161,11 @@ def _find_khung_chu_nhat(
     used: Set[Tuple[str, str, str, str]] = set()  # tránh khung trùng (cùng 4 line khác thứ tự)
 
     # gom tất cả cặp parallel thành list, index nhanh
-    parallel_pairs: List[Tuple[str, str]] = []
-    seen_parallel: Set[Tuple[str, str]] = set()
-    for la in line_ids:
-        for lb in line_ids:
-            if la >= lb:
+    for a, b in sorted(parallel_pairs):
+        crossing = sorted((coincident_neighbors.get(a, set()) | coincident_neighbors.get(b, set())) - {a, b})
+        for c, d in combinations(crossing, 2):
+            if (c, d) not in parallel_pairs:
                 continue
-            if _constraints_between(idx, la, lb, "parallel"):
-                parallel_pairs.append((la, lb))
-                seen_parallel.add((la, lb))
-
-    n = len(parallel_pairs)
-    for i in range(n):
-        a, b = parallel_pairs[i]
-        for j in range(i + 1, n):
-            c, d = parallel_pairs[j]
             if len({a, b, c, d}) != 4:
                 continue  # có primitive trùng giữa 2 cặp parallel -> không phải khung 4 line
 
@@ -210,8 +219,9 @@ def _find_khung_chu_nhat(
 
 # ================================================================== gia_do ===
 def _find_gia_do(
-    line_ids: List[str],
     idx: Dict[Tuple[str, str], List[Constraint]],
+    perpendicular_pairs: Set[Tuple[str, str]],
+    coincident_pairs: Set[Tuple[str, str]],
 ) -> List[SemanticPart]:
     """Tìm L-bracket (gia đỡ góc vuông): 2 line perpendicular + coincident
    _endpoint tại 1 đầu chung. Đây là compound đơn giản nhất — dạng chữ L.
@@ -223,24 +233,18 @@ def _find_gia_do(
     assemble.py gộp tất cả, Reviewer #2 (Phase 4) sẽ chọn nhìn cái nào.
     """
     parts: List[SemanticPart] = []
-    n = len(line_ids)
-    for i in range(n):
-        a = line_ids[i]
-        for j in range(i + 1, n):
-            b = line_ids[j]
-            perp = _constraints_between(idx, a, b, "perpendicular")
-            coinc = _constraints_between(idx, a, b, "coincident_endpoint")
-            if not perp or not coinc:
-                continue
-            all_cs = perp + coinc
-            confidence = round(_avg_confidence(all_cs), 3)
-            parts.append(SemanticPart(
-                part_type="gia_do",
-                primitive_ids=[a, b],
-                confidence=confidence,
-                source="rule_geometry",
-                geometry_summary=GeometrySummary(),  # 2 line khác hướng -> không có orientation đơn
-            ))
+    for a, b in sorted(perpendicular_pairs & coincident_pairs):
+        perp = _constraints_between(idx, a, b, "perpendicular")
+        coinc = _constraints_between(idx, a, b, "coincident_endpoint")
+        all_cs = perp + coinc
+        confidence = round(_avg_confidence(all_cs), 3)
+        parts.append(SemanticPart(
+            part_type="gia_do",
+            primitive_ids=[a, b],
+            confidence=confidence,
+            source="rule_geometry",
+            geometry_summary=GeometrySummary(),  # 2 line khác hướng -> không có orientation đơn
+        ))
     return parts
 
 
@@ -462,10 +466,14 @@ def build_compound_parts(
     line_ids = [p.id for p in primitives if p.type == "line"]
     circle_ids = [p.id for p in primitives if p.type == "circle"]
     idx = _index_constraints_by_pair(constraints)
+    parallel_pairs = _constraint_pairs(constraints, "parallel")
+    coincident_pairs = _constraint_pairs(constraints, "coincident_endpoint")
+    perpendicular_pairs = _constraint_pairs(constraints, "perpendicular")
+    coincident_neighbors = _pair_neighbors(coincident_pairs)
 
     raw: List[SemanticPart] = []
-    raw += _find_khung_chu_nhat(line_ids, idx)
-    raw += _find_gia_do(line_ids, idx)
+    raw += _find_khung_chu_nhat(idx, parallel_pairs, coincident_neighbors)
+    raw += _find_gia_do(idx, perpendicular_pairs, coincident_pairs)
     raw += _find_ban_le(prim_by_id, line_ids, circle_ids, idx, bolt_hole_search_radius_mm, parallel_gap_max_mm)
     raw += _find_diem_noi(prim_by_id, line_ids, idx, coincident_distance_mm)
 
