@@ -22,6 +22,7 @@ from cad_agent.fidelity import (
     write_fidelity_text_approval,
     write_fidelity_text_approvals_from_selection,
     run_fidelity_text_reconstruct,
+    run_fidelity_dimension_observations,
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
@@ -166,6 +167,21 @@ def test_table_cell_observations_stay_sidecar_only(tmp_path: Path) -> None:
     assert payload["unresolved"] == ["no table-cell OCR candidate is emitted as DXF text or a table entity without per-cell approval"]
 
 
+def test_dimension_observations_are_hash_bound_and_sidecar_only(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+    outputs = run_fidelity_dimension_observations(source, output, manifest, workspace_root=Path.cwd())
+    payload = json.loads(outputs[0].read_text(encoding="utf-8"))
+    assert payload["state"] in {"needs_human_approval", "not_evaluated"}
+    assert payload["source"] == manifest["source"]
+    assert payload["unresolved"] == ["no candidate is emitted as a DXF DIMENSION without explicit mapping approval"]
+
+
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -259,6 +275,10 @@ def test_fidelity_cli_creates_private_baseline() -> None:
         assert (output / "fidelity_observations" / "page_01.json").is_file()
         assert main(["fidelity-text-observe", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_text_observations" / "page_01.json").is_file()
+        assert main(["fidelity-dimension-observe", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
+        assert (output / "fidelity_dimension_observations" / "page_01.json").is_file()
+        assert main(["fidelity-dimension-review-index", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
+        assert (output / "fidelity_dimension_review" / "index.html").is_file()
         assert main(["fidelity-text-review-index", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_text_review" / "index.html").is_file()
         candidate_id = json.loads((output / "fidelity_text_observations" / "page_01.json").read_text(encoding="utf-8"))["candidates"][0]["id"]

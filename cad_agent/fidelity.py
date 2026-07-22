@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -468,6 +469,77 @@ def run_fidelity_table_text_observations(source: Path, output_root: Path, manife
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         outputs.append(output)
     return outputs
+
+
+_DIMENSION_VALUE = re.compile(r"^(?:[Ø⌀Rr]\s*)?\d+(?:[.,]\d+)?(?:\s*(?:mm|cm|m|°))?$")
+
+
+def run_fidelity_dimension_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Write review-only dimension-like OCR candidates with nearby line evidence."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    base_root = output_root / "fidelity_dimension_observations"
+    observation_root = base_root
+    revision = 2
+    while observation_root.exists() and any(observation_root.iterdir()):
+        observation_root = output_root / f"fidelity_dimension_observations-r{revision}"
+        revision += 1
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        text_path = output_root / "fidelity_text_observations" / f"page_{number:02d}.json"
+        if not text_path.is_file():
+            raise FidelityError(f"Missing text observation for page {number}; run fidelity-text-observe first.")
+        text_observation = json.loads(text_path.read_text(encoding="utf-8"))
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for dimension observation.")
+        raw = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+        candidates = []
+        for text in text_observation.get("candidates", []):
+            content = str(text.get("content", "")).strip()
+            if not _DIMENSION_VALUE.fullmatch(content):
+                continue
+            x0, y0, x1, y1 = (float(value) for value in text["bbox_px"])
+            nearby = [
+                line.id for line in raw.lines
+                if line.bbox_px[0] <= x1 + 30 and line.bbox_px[2] >= x0 - 30 and line.bbox_px[1] <= y1 + 30 and line.bbox_px[3] >= y0 - 30
+            ][:12]
+            candidates.append({"text": text, "nearby_line_ids": nearby, "state": "needs_human_approval"})
+        output = observation_root / f"page_{number:02d}.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema_version": "fidelity-dimension-observation-1.0", "private_artifact": True, "state": "needs_human_approval" if candidates else "not_evaluated", "source": manifest["source"], "page": number, "source_render_sha256": sha256_file(rendered), "source_text_observation": _artifact(text_path, output_root), "candidates": candidates, "unresolved": ["no candidate is emitted as a DXF DIMENSION without explicit mapping approval"]}
+        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
+def write_fidelity_dimension_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Write a private browser index for review-only dimension candidates."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    root = output_root / "fidelity_dimension_review"
+    index = root / "index.html"
+    revision = 2
+    while index.exists():
+        index = root / f"index-r{revision}.html"
+        revision += 1
+    cards = []
+    for page in manifest.get("pages", []):
+        path = output_root / "fidelity_dimension_observations" / f"page_{page['page']:02d}.json"
+        if not path.is_file():
+            raise FidelityError(f"Missing dimension observation for page {page['page']}; run fidelity-dimension-observe first.")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        rows = "".join(f"<tr><td>{escape(str(item['text']['content']))}</td><td>{escape(str(item['text']['bbox_px']))}</td><td>{len(item['nearby_line_ids'])}</td></tr>" for item in payload.get("candidates", []))
+        rel = Path(os.path.relpath(rendered, index.parent)).as_posix()
+        cards.append(f"<section><h2>Trang {page['page']} <small>{len(payload.get('candidates', []))} ứng viên</small></h2><img src='{rel}' alt='Trang {page['page']}'><table><tr><th>Giá trị</th><th>Khung pixel</th><th>Nét gần</th></tr>{rows}</table></section>")
+    root.mkdir(parents=True, exist_ok=True)
+    index.write_text("<!doctype html><meta charset='utf-8'><title>Duyệt kích thước</title><style>body{font:15px system-ui;margin:20px;background:#f4f6f8}section{background:#fff;padding:16px;margin:14px 0;border-radius:10px}img{max-width:100%;border:1px solid #aaa}table{border-collapse:collapse;width:100%;margin-top:12px}td,th{padding:7px;border-bottom:1px solid #ddd;text-align:left}small{font-weight:400;color:#667}</style><h1>Duyệt ứng viên kích thước</h1><p>Chỉ là quan sát; chưa tạo DXF DIMENSION.</p>" + "\n".join(cards), encoding="utf-8")
+    return index
 
 
 def _unicode_glyph_render_check(content: str) -> dict[str, Any]:
