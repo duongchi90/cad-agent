@@ -43,7 +43,8 @@ the skips and the run used Python 3.12.
 | MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
 | Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
-| Thin image orchestration CLI | Verified | `cad_agent` run/resume regression tests and the full Python 3.11 offline gate passed on `8410712f0c7c23f707acc1b251620712806be971`; it emits staged DXF only and does not invoke live AutoCAD or Agent mutation. |
+| Thin image orchestration CLI | Verified | `cad_agent` run/resume, build evidence, and safety-loop regression tests passed. Ordinary `run` emits staged DXF only; separate Mechanical review/repair commands enforce evidence, approval, backup, and second-review boundaries. |
+| Production repair safety loop | Partially verified | Fake-MCP tests cover refusal, backup, repair, second review, and rollback. A real AutoCAD Mechanical staged-DXF review passed; no production drawing repair was run. |
 
 ## Known production gates
 
@@ -73,6 +74,20 @@ review-repair loop remains after that slice.
 - `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`); approved private run `NOT RUN`
 - `autocad_lt`: historical unavailable-state probe `SKIP` (`tests=4; skipped=4`); live session run `NOT RUN` at this pre-target-change commit
 - Remaining risk: this image-only orchestrator emits a staged DXF and does not perform AutoCAD Mechanical mutation; PDF orchestration remains with `primitive_ir_lib.run_pdf`.
+
+## Mechanical production review/repair evidence
+
+- State: **Partially verified**
+- Date: `2026-07-22`
+- Implementation Head SHA: `ddf683431cabf4b4a12c3448aed0a20b7b54d429`
+- Design and plan: `docs/superpowers/specs/2026-07-22-mechanical-production-repair-design.md`; `docs/superpowers/plans/2026-07-22-mechanical-production-repair.md`
+- Safety behavior: `run` writes `build-evidence.json` bound to the staged DXF SHA-256. `mechanical-review` is read-only; `mechanical-repair` requires an approval reference, literal `--confirm-repair APPLY`, timestamped DXF/evidence backups, and a passing post-repair live review before save.
+- Focused tests: `tests/test_cad_agent_live.py` and `tests/test_cad_agent_cli.py` → `7 passed`; coverage includes missing approval refusal, backup creation, successful fake repair, and failed-second-review rollback.
+- Live staged review: `cad_agent mechanical-review` on a disposable DXF under `C:\temp` through AutoCAD Mechanical 2027 → `passed=true`, `structural_checked=10`, `geometry_checked=10`, no mismatch or degraded geometry check.
+- Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` → exit `0`; offline JUnit `tests=299; failures=0; errors=0; skipped=0`; SHA-256 `80140e4ca6c7089742a8282ad0e9cea083ce167c110b91f11cbe3f0d485e3569`
+- `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`), SHA-256 `f6b25dd4aa7da9b5c12eaad290bc042061a53b54897fec50d176e9035f0aadb3`; approved private run `NOT RUN`
+- `autocad_mechanical`: unavailable-state probe `SKIP` (`tests=4; skipped=4`), SHA-256 `69ba0f74887b47dfb2a09f4a4a670acdead32db67677e63f70b28084f7a402e5`
+- Remaining risk: no customer/production drawing was repaired. A real repair remains gated on an approved input, backup verification, explicit operator approval, and a post-repair review.
 
 ## Historical File IPC evidence before the AutoCAD Mechanical target change
 

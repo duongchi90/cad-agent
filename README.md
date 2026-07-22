@@ -51,6 +51,12 @@ with the generated `run-manifest.json` plus the original input to retry only an
 incomplete stage. The CLI produces staged DXF only; it never performs AutoCAD Mechanical
 repair or production mutation.
 
+To review a staged DXF in AutoCAD Mechanical, retain its `build-evidence.json`
+and run `cad_agent mechanical-review` with the AutoCAD window handle and loaded
+dispatcher. `mechanical-repair` is separate: it requires an approval reference,
+`--confirm-repair APPLY`, and a writable backup directory before it can save a
+repair.
+
 ## Safety
 
 Private drawings and annotations stay outside Git. Missing private/live tests are

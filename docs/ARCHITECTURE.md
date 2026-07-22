@@ -79,9 +79,13 @@ evidence. Its `run` command delegates the deterministic image-to-DXF path to
 the packages above; `resume` verifies the input SHA-256 before it reuses any
 checkpoint. It contains no recognition or CAD algorithms.
 
-The current slice deliberately excludes PDF orchestration, Agent action
-application, File IPC, and AutoCAD Mechanical repair/mutation. Existing package entry
-points remain the authority for those capabilities.
+The current slice deliberately excludes PDF orchestration and Agent action
+application. Its ordinary `run` command produces staged artifacts only;
+`mechanical-review` reads a SHA-bound `BuildResult` evidence record through
+File IPC, while `mechanical-repair` requires an approval reference, literal
+operator confirmation, a DXF/evidence backup, and a passing second review
+before it saves. Existing package APIs remain the authority for the underlying
+review and repair behavior.
 
 ## Historical reference
 
