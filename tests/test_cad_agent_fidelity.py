@@ -192,3 +192,5 @@ def test_fidelity_cli_creates_private_baseline() -> None:
         assert (output / "fidelity_observations" / "page_01.json").is_file()
         assert main(["fidelity-review-index", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_review" / "index.html").is_file()
+        assert main(["fidelity-review-queue", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
+        assert (output / "fidelity_review" / "queue.json").is_file()

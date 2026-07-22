@@ -455,6 +455,28 @@ def write_fidelity_review_index(source: Path, output_root: Path, manifest: dict[
     return index
 
 
+def write_fidelity_review_queue(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Summarize page-level private review work without promoting any candidate."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    queue_path = output_root / "fidelity_review" / "queue.json"
+    if queue_path.exists():
+        raise FidelityError(f"Fidelity review queue already exists: {queue_path}")
+    items: list[dict[str, Any]] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        observation = output_root / "fidelity_observations" / f"page_{number:02d}.json"
+        table_state = "not_run"
+        if observation.is_file():
+            table_state = json.loads(observation.read_text(encoding="utf-8")).get("state", "unknown")
+        approvals = sorted((output_root / "region_approvals").glob(f"page_{number:02d}*.json")) if (output_root / "region_approvals").is_dir() else []
+        items.append({"page": number, "state": "needs_review", "priority": 1 if number == 5 else 2, "table_observation": table_state, "approved_region_records": [path.relative_to(output_root).as_posix() for path in approvals], "next_action": "reconstruct approved region" if approvals else "select and approve a reconstruction region"})
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(json.dumps({"schema_version": "fidelity-review-queue-1.0", "private_artifact": True, "state": "needs_review", "items": items}, indent=2) + "\n", encoding="utf-8")
+    return queue_path
+
+
 def _observe_line_patterns(lines: list[Any]) -> list[dict[str, Any]]:
     """Find conservative runs of separated, axis-aligned raw segments."""
     result: list[dict[str, Any]] = []
