@@ -31,3 +31,5 @@ dist/
 .lock-venv/
 .artifacts/
 .superpowers/
+output/
+tmp/
