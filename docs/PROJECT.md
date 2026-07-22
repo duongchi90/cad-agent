@@ -3,18 +3,18 @@
 ## Goal
 
 Convert an approved real CAD image or PDF into a reviewable DXF, validate it
-headlessly, open it in AutoCAD LT, and produce reproducible evidence for every
+headlessly, open it in AutoCAD Mechanical 2027, and produce reproducible evidence for every
 stage.
 
 ## Supported environment
 
 - Windows
 - Python 3.11
-- AutoCAD LT
+- AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-Other operating systems, Python versions, and full AutoCAD may work in parts,
-but they are not release evidence for this project.
+Other operating systems, Python versions, and AutoCAD products are not release
+evidence for this project.
 
 ## Product principles
 
@@ -29,7 +29,7 @@ but they are not release evidence for this project.
 ## First product milestone
 
 One approved real image or PDF runs through Primitive IR, Semantic IR, optional
-agent advice, DXF build/headless review, and AutoCAD LT live review/repair. The
+agent advice, DXF build/headless review, and AutoCAD Mechanical 2027 live review/repair. The
 run records input hash, configuration, artifacts, approvals, and test evidence.
 
 ## Modernization slices
@@ -40,7 +40,7 @@ run records input hash, configuration, artifacts, approvals, and test evidence.
    checkpoints, approval gates, and no duplicated domain algorithms.
 3. Private real-data benchmark normalization and evidence-driven algorithm
    hardening.
-4. Windows/AutoCAD LT production review-repair loop, backup policy, live smoke,
+4. Windows/AutoCAD Mechanical 2027 production review-repair loop, backup policy, live smoke,
    and release checklist.
 
 Each slice receives its own approved design, implementation plan, tests, and
@@ -50,7 +50,7 @@ review gate.
 
 - No GUI, web service, or VPS.
 - No Linux or macOS production support.
-- No full AutoCAD support commitment.
+- No AutoCAD product/version support beyond AutoCAD Mechanical 2027.
 - No rewrite of the five existing implementation packages.
 - No automatic production mutation without human approval.
 

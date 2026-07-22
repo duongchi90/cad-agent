@@ -6,7 +6,7 @@ requires-python = ">=3.11,<3.12"
 [tool.cad_agent]
 supported_os = "windows"
 supported_python = "3.11"
-supported_autocad = "AutoCAD LT"
+supported_autocad = "AutoCAD Mechanical 2027"
 tesseract_version = "5.4.0.20240606"
 
 [tool.pytest.ini_options]
@@ -22,7 +22,7 @@ testpaths = [
 addopts = ["--strict-markers", "-ra"]
 markers = [
   "real_data: requires an approved private CAD image or PDF outside Git",
-  "autocad_lt: requires a running local AutoCAD LT File IPC session",
+  "autocad_mechanical: requires a running local AutoCAD Mechanical 2027 File IPC session",
 ]
 filterwarnings = ["error"]
 

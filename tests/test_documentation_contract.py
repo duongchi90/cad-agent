@@ -24,7 +24,7 @@ class DocumentationContractTests(unittest.TestCase):
             "offline",
             "contract",
             "real_data",
-            "autocad_lt",
+            "autocad_mechanical",
             "P0",
             "P1",
             "P2",
@@ -54,11 +54,11 @@ class DocumentationContractTests(unittest.TestCase):
                 "Supported release environment",
                 "Windows",
                 "Python 3.11",
-                "AutoCAD LT",
+                "AutoCAD Mechanical 2027",
                 "Tesseract 5.4.0.20240606",
                 r".\scripts\verify.ps1",
                 "`real_data`",
-                "`autocad_lt`",
+                "`autocad_mechanical`",
                 "SKIP",
                 "NOT RUN",
             ):
@@ -160,7 +160,7 @@ class DocumentationContractTests(unittest.TestCase):
         project = (ROOT / "docs/PROJECT.md").read_text(encoding="utf-8")
         self.assertIn("Windows", project)
         self.assertIn("Python 3.11", project)
-        self.assertIn("AutoCAD LT", project)
+        self.assertIn("AutoCAD Mechanical 2027", project)
         self.assertIn("No GUI, web service, or VPS", project)
         self.assertIn("Incremental hardening", project)
 
@@ -183,7 +183,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("cad_agent", architecture)
         self.assertIn("staged", architecture)
         self.assertIn("contains no recognition or CAD algorithms", architecture)
-        self.assertIn("AutoCAD LT repair/mutation", architecture)
+        self.assertIn("AutoCAD Mechanical repair/mutation", architecture)
         self.assertIn("detected constraints only", architecture)
         self.assertIn("PruneResult", architecture)
         self.assertIn("SolveResult", architecture)

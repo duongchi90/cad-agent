@@ -13,7 +13,7 @@ List observable pass/fail outcomes with exact commands or artifacts.
 
 ## Required gates
 
-Name `offline`, `real_data`, and/or `autocad_lt`; record external prerequisites.
+Name `offline`, `real_data`, and/or `autocad_mechanical`; record external prerequisites.
 
 ## Safety and rollback
 

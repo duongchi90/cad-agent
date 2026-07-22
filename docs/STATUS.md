@@ -5,7 +5,7 @@
 - **Verified:** the named command ran successfully on the named commit and
   environment.
 - **Partially verified:** deterministic coverage passed, but a required private
-  data or AutoCAD LT gate has not run on the same candidate.
+  data or AutoCAD Mechanical gate has not run on the same candidate.
 - **Unverified:** no current reproducible evidence supports the claim.
 - **NOT RUN:** the gate was intentionally not executed; this is never a pass.
 
@@ -13,15 +13,15 @@
 
 - Windows
 - Python 3.11
-- AutoCAD LT
+- AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
 ## Authoritative verification
 
 After bootstrap, run `.\scripts\verify.ps1`. It runs the offline gate and
-collects unavailable-state probes for `real_data` and `autocad_lt` as explicit
+collects unavailable-state probes for `real_data` and `autocad_mechanical` as explicit
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
-LT gate that was not separately executed remains `NOT RUN`.
+Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ## Pre-foundation baseline
 
@@ -39,8 +39,8 @@ the skips and the run used Python 3.12.
 |---|---|---|
 | Primitive IR | Partially verified | Final Python 3.11 offline gate passed with zero skips; approved private `real_data` execution was NOT RUN and its unavailable-state probe was SKIP. |
 | Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips. |
-| DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD LT mutation is outside this state. |
-| MCP/File IPC | Partially verified | Offline/fake IPC tests passed and four File IPC live tests passed on AutoCAD Mechanical 2027; the supported AutoCAD LT-specific live gate remains NOT RUN, while its unavailable-state probe was SKIP. |
+| DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
+| MCP/File IPC | Partially verified | Offline/fake IPC tests passed; current AutoCAD Mechanical 2027 live evidence is recorded after the renamed `autocad_mechanical` gate runs. |
 | Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
 | Thin image orchestration CLI | Verified | `cad_agent` run/resume regression tests and the full Python 3.11 offline gate passed on `8410712f0c7c23f707acc1b251620712806be971`; it emits staged DXF only and does not invoke live AutoCAD or Agent mutation. |
@@ -52,13 +52,13 @@ the skips and the run used Python 3.12.
   callers must opt into consensus and retain human approval for unverified
   scale.
 - Private drawing benchmarks remain outside Git and are addressed by SHA-256.
-- AutoCAD LT mutation requires backup, human approval, live review, repair, and
+- AutoCAD Mechanical mutation requires backup, human approval, live review, repair, and
   a second review.
 
 ## Next slice
 
 Normalize the approved private real-data benchmark and harden algorithms only
-against fresh benchmark evidence. The final Windows/AutoCAD LT production
+against fresh benchmark evidence. The final Windows/AutoCAD Mechanical 2027 production
 review-repair loop remains after that slice.
 
 ## Thin vertical-slice CLI evidence
@@ -71,10 +71,10 @@ review-repair loop remains after that slice.
 - Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` → exit `0`
 - Offline JUnit: `tests=295; failures=0; errors=0; skipped=0`
 - `real_data`: unavailable-state probe `SKIP` (`tests=1; skipped=1`); approved private run `NOT RUN`
-- `autocad_lt`: unavailable-state probe `SKIP` (`tests=4; skipped=4`); live session run `NOT RUN`
-- Remaining risk: this image-only orchestrator emits a staged DXF and does not perform AutoCAD LT mutation; PDF orchestration remains with `primitive_ir_lib.run_pdf`.
+- `autocad_lt`: historical unavailable-state probe `SKIP` (`tests=4; skipped=4`); live session run `NOT RUN` at this pre-target-change commit
+- Remaining risk: this image-only orchestrator emits a staged DXF and does not perform AutoCAD Mechanical mutation; PDF orchestration remains with `primitive_ir_lib.run_pdf`.
 
-## Live File IPC evidence
+## Historical File IPC evidence before the AutoCAD Mechanical target change
 
 - State: **Partially verified**
 - Date: `2026-07-22`
@@ -83,7 +83,7 @@ review-repair loop remains after that slice.
 - Result: `4 passed, 296 deselected` in `69.52s`; the run covered active-document access, primitive live review/repair, beam INSERT attribute repair, and five remaining component INSERT repairs.
 - Session: AutoCAD Mechanical 2027, process `acad.exe`, HWND `393650`.
 - Safety: all smoke DXFs were newly created under `C:\temp`; no production drawing was saved or modified.
-- Limit: AutoCAD Mechanical is not the project-supported AutoCAD LT environment. This validates the File IPC path but does **not** convert the AutoCAD LT gate from `NOT RUN` to `PASS`.
+- Limit: the then-current marker was `autocad_lt`, so this evidence predates the AutoCAD Mechanical target contract and is retained as historical context only.
 
 ## Foundation certificate
 

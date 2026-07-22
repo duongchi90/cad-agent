@@ -10,7 +10,7 @@ import pytest
 from mcp_integration_lib.mcp_client import FileIPCLiveMCPClient, make_windows_dispatch_trigger
 
 
-pytestmark = pytest.mark.autocad_lt
+pytestmark = pytest.mark.autocad_mechanical
 
 
 @unittest.skipUnless(os.getenv("CAD_AGENT_FILE_IPC") == "1", "requires live AutoCAD File IPC")

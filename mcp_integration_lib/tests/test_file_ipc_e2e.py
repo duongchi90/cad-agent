@@ -29,7 +29,7 @@ from dxf_builder_lib.repair import repair_insert_components
 from dxf_builder_lib.reviewer import review_dxf
 
 
-pytestmark = pytest.mark.autocad_lt
+pytestmark = pytest.mark.autocad_mechanical
 
 
 @unittest.skipUnless(os.getenv("CAD_AGENT_FILE_IPC") == "1", "requires AutoCAD File IPC")

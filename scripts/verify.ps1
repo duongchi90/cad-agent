@@ -144,7 +144,7 @@ Push-Location $repoRoot
 try {
     Invoke-PytestGate `
         -Name "offline" `
-        -MarkerExpression "not real_data and not autocad_lt" `
+        -MarkerExpression "not real_data and not autocad_mechanical" `
         -JUnitPath $junitPath `
         -ExpectedState "offline"
 
@@ -169,8 +169,8 @@ try {
             -JUnitPath $realDataJunitPath `
             -ExpectedState "all-skipped"
         Invoke-PytestGate `
-            -Name "autocad_lt unavailable-state probe" `
-            -MarkerExpression "autocad_lt" `
+            -Name "autocad_mechanical unavailable-state probe" `
+            -MarkerExpression "autocad_mechanical" `
             -JUnitPath $autocadJunitPath `
             -ExpectedState "all-skipped"
     } finally {

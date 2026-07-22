@@ -1,14 +1,14 @@
 # Release Checklist
 
 - **Candidate Head SHA:** required 40-character commit
-- **Target:** Windows, Python 3.11, AutoCAD LT
+- **Target:** Windows, Python 3.11, AutoCAD Mechanical 2027
 - **Human approval:** approver identity and timestamp
 
 ## Evidence
 
 - [ ] `scripts/verify.ps1` passed on the candidate Head SHA.
 - [ ] Required `real_data` gate passed, or is explicitly not affected.
-- [ ] Required `autocad_lt` gate passed, or is explicitly not affected.
+- [ ] Required `autocad_mechanical` gate passed, or is explicitly not affected.
 - [ ] JUnit, private input hash, and live-session evidence are recorded.
 - [ ] Independent findings are adjudicated; unresolved P0/P1 count is zero.
 

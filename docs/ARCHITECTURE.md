@@ -8,7 +8,7 @@ Image/PDF
   -> semantic_ir_lib        (parts, compounds, constraints, pruning, solving)
   -> agent_lib              (optional audited advice for ambiguous cases)
   -> dxf_builder_lib        (DXF build -> headless review -> headless repair)
-  -> mcp_integration_lib    (AutoCAD LT live review/repair through File IPC)
+  -> mcp_integration_lib    (AutoCAD Mechanical 2027 live review/repair through File IPC)
 ```
 
 The phase number is not the call order in every entry point. In particular,
@@ -48,16 +48,16 @@ and is followed by another review.
 
 ### `mcp_integration_lib`
 
-Connects the built DXF to AutoCAD LT through a live client or File IPC. Reviewer
+Connects the built DXF to AutoCAD Mechanical 2027 through a live client or File IPC. Reviewer
 #2 and Repair #2 operate on AutoCAD-side entities by handle. Live tests require
-an explicit local AutoCAD LT session and never run silently in ordinary CI.
+an explicit local AutoCAD Mechanical 2027 session and never run silently in ordinary CI.
 
 ## Contracts
 
 - `primitive_ir.schema.json`: primitive geometry/text/calibration contract.
 - `semantic_ir.schema.json`: semantic parts and constraints contract.
 - `agent_ir.schema.json`: proposed actions and audit-trail contract.
-- DXF entity handles connect build evidence to headless and AutoCAD LT review.
+- DXF entity handles connect build evidence to headless and AutoCAD Mechanical review.
 
 Each phase writes or accepts a stable artifact so a later phase can be rerun
 without reprocessing the original image.
@@ -66,7 +66,7 @@ without reprocessing the original image.
 
 - Unverified calibration or ambiguous recognition stops at a human approval
   boundary.
-- Headless review/repair completes before AutoCAD LT mutation.
+- Headless review/repair completes before AutoCAD Mechanical mutation.
 - Production DXF repair requires a backup and explicit user approval.
 - Real drawings, private annotations, credentials, and API keys stay outside
   Git.
@@ -80,7 +80,7 @@ the packages above; `resume` verifies the input SHA-256 before it reuses any
 checkpoint. It contains no recognition or CAD algorithms.
 
 The current slice deliberately excludes PDF orchestration, Agent action
-application, File IPC, and AutoCAD LT repair/mutation. Existing package entry
+application, File IPC, and AutoCAD Mechanical repair/mutation. Existing package entry
 points remain the authority for those capabilities.
 
 ## Historical reference

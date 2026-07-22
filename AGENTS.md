@@ -18,7 +18,7 @@ command output.
 
 - Windows
 - Python 3.11
-- AutoCAD LT
+- AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
 Do not expand platform, deployment, or AutoCAD scope without an approved design.
@@ -52,7 +52,7 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 - Calibration, OCR, geometry, line merging, pattern recognition, or constraints:
   run the affected `real_data` benchmark using the approved private input.
 - File IPC, handles, components, live review, or live repair: run the affected
-  `autocad_lt` smoke test.
+  `autocad_mechanical` smoke test.
 - If a prerequisite is absent, report `SKIP` or `NOT RUN`; never report a pass.
 - Automatic calibration's production gate is at least two independent
   candidates with median relative error at most 3 percent.
@@ -63,7 +63,7 @@ root or lint target to `scripts/verify.ps1` and its contract test.
   unapproved generated DXF files.
 - Human approval is required for unverified calibration, ambiguous recognition,
   and production DXF mutation.
-- Preserve the original DXF and establish rollback before AutoCAD LT repair.
+- Preserve the original DXF and establish rollback before AutoCAD Mechanical repair.
 - Avoid destructive Git/filesystem operations. Resolve and verify exact targets
   before any approved deletion or recursive move.
 - Do not alter architecture, public schemas, or package boundaries outside the
@@ -73,7 +73,7 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 
 - Small: Codex plus one bounded independent review.
 - Medium: requirements/architecture plus correctness/test reviews.
-- Calibration, geometry, File IPC, AutoCAD LT, architecture, or release:
+- Calibration, geometry, File IPC, AutoCAD Mechanical, architecture, or release:
   requirements/architecture, correctness/test, and security/operations reviews.
 
 Give Claude Free reviewers a compact packet from `docs/templates/`, not the full

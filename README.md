@@ -1,13 +1,13 @@
 # CAD Agent
 
 CAD Agent converts CAD images/PDFs into structured IR and DXF, then validates
-the result headlessly and through AutoCAD LT.
+the result headlessly and through AutoCAD Mechanical 2027.
 
 ## Supported release environment
 
 - Windows
 - Python 3.11
-- AutoCAD LT
+- AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
 ## Quick start
@@ -31,7 +31,7 @@ three JUnit artifacts under `.artifacts/`.
 - `semantic_ir_lib/`: parts, compounds, constraints, pruning, and solving.
 - `agent_lib/`: audited advice for ambiguous cases.
 - `dxf_builder_lib/`: DXF build, headless review, and headless repair.
-- `mcp_integration_lib/`: AutoCAD LT live review/repair through File IPC.
+- `mcp_integration_lib/`: AutoCAD Mechanical 2027 live review/repair through File IPC.
 
 ## Staged image run
 
@@ -48,14 +48,14 @@ an explicit calibration approval reference and creates resumable checkpoints:
 
 Use `python -m cad_agent doctor --json` to inspect prerequisites, and `resume`
 with the generated `run-manifest.json` plus the original input to retry only an
-incomplete stage. The CLI produces staged DXF only; it never performs AutoCAD LT
+incomplete stage. The CLI produces staged DXF only; it never performs AutoCAD Mechanical
 repair or production mutation.
 
 ## Safety
 
 Private drawings and annotations stay outside Git. Missing private/live tests are
 reported as `SKIP` or `NOT RUN`. The specialized markers are `real_data` and
-`autocad_lt`; `.\scripts\verify.ps1` probes their unavailable state but never
+`autocad_mechanical`; `.\scripts\verify.ps1` probes their unavailable state but never
 executes either live gate. Unverified calibration, ambiguous recognition, and
 production DXF mutation require human approval.
 

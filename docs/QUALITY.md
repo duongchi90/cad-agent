@@ -4,7 +4,7 @@
 
 - Windows
 - Python 3.11
-- AutoCAD LT
+- AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
 ## Authoritative local commands
@@ -24,7 +24,7 @@ JUnit outputs. CI calls the same scripts rather than copying the commands.
 
 ### `offline`
 
-Deterministic tests that require no customer data and no running AutoCAD LT.
+Deterministic tests that require no customer data and no running AutoCAD Mechanical session.
 They gate every commit and pull request.
 
 ### `contract`
@@ -51,9 +51,9 @@ $env:CAD_AGENT_TESSERACT_CMD = 'C:\Program Files\Tesseract-OCR\tesseract.exe'
 & '.\.venv-py311\Scripts\python.exe' -m pytest -m real_data -ra
 ```
 
-### `autocad_lt`
+### `autocad_mechanical`
 
-Live tests marked `autocad_lt`. They require AutoCAD LT, File IPC, the approved
+Live tests marked `autocad_mechanical`. They require AutoCAD Mechanical 2027, File IPC, the approved
 dispatcher, and explicit environment variables. Without them, pytest reports an
 explicit skip. File IPC, handle, block/component, live review, live repair, or
 release changes require this gate.
@@ -62,7 +62,7 @@ release changes require this gate.
 $env:CAD_AGENT_FILE_IPC = '1'
 $env:CAD_AGENT_AUTOCAD_HWND = '<active-window-handle>'
 $env:CAD_AGENT_AUTOCAD_LISP_PATH = 'C:\approved-tools\mcp_dispatch.lsp'
-& '.\.venv-py311\Scripts\python.exe' -m pytest -m autocad_lt -ra
+& '.\.venv-py311\Scripts\python.exe' -m pytest -m autocad_mechanical -ra
 ```
 
 The two angle-bracket values are operator-supplied runtime inputs, not committed
@@ -104,7 +104,7 @@ Every verification record contains:
 - Windows, Python, Tesseract, and relevant dependency versions;
 - passed, failed, skipped, warning, and not-run states;
 - private input SHA-256 when a real-data gate runs;
-- AutoCAD LT/session identifiers when a live gate runs;
+- AutoCAD Mechanical/session identifiers when a live gate runs;
 - artifact paths and remaining risks.
 
 ## Independent review tiers
@@ -112,7 +112,7 @@ Every verification record contains:
 - Small change: Codex plus one bounded Claude review.
 - Medium-risk change: requirements/architecture review and correctness/test
   review.
-- Calibration, geometry, File IPC, AutoCAD LT, architecture, or release:
+- Calibration, geometry, File IPC, AutoCAD Mechanical, architecture, or release:
   requirements/architecture, correctness/test, and security/operations reviews.
 
 First-pass reviews are blind to each other. Findings require concrete scope,
@@ -123,6 +123,6 @@ impact, evidence, and a proposed verification. Numeric scores are not used.
 Before merge: focused tests, `scripts/verify.ps1`, `git diff --check`, scope
 review, and no unresolved P0/P1.
 
-Before a production AutoCAD LT run: private-data evidence when affected, live
+Before a production AutoCAD Mechanical run: private-data evidence when affected, live
 smoke when affected, backup/rollback path, human approval, and a second review
 after any repair.
