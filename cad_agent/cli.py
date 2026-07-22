@@ -244,6 +244,15 @@ def _fidelity_pdf_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_overlay_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_overlays
+
+    manifest_path = args.manifest.resolve()
+    run_fidelity_overlays(args.input.resolve(), manifest_path.parent, manifest_path, read_fidelity_manifest(manifest_path))
+    print(manifest_path)
+    return 0
+
+
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
@@ -330,6 +339,9 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_pdf.add_argument("--output-dir", type=Path, required=True)
     fidelity_pdf.add_argument("--source-approval", required=True)
     fidelity_pdf.add_argument("--dpi", type=int, default=144)
+    fidelity_overlay = subcommands.add_parser("fidelity-overlay", help="Create review-only PDF-to-clean-DXF comparison overlays")
+    fidelity_overlay.add_argument("--input", type=Path, required=True)
+    fidelity_overlay.add_argument("--manifest", type=Path, required=True)
     review = subcommands.add_parser("mechanical-review", help="Review a staged DXF through AutoCAD Mechanical")
     repair = subcommands.add_parser("mechanical-repair", help="Repair a staged DXF with explicit approval")
     for command in (review, repair):
@@ -363,6 +375,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resume_pdf_command(args)
         if args.command == "fidelity-pdf":
             return _fidelity_pdf_command(args)
+        if args.command == "fidelity-overlay":
+            return _fidelity_overlay_command(args)
         if args.command == "mechanical-review":
             return _mechanical_review_command(args)
         return _mechanical_repair_command(args)

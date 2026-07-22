@@ -13,6 +13,7 @@ from typing import Any
 
 import cv2
 import fitz
+import numpy as np
 
 from primitive_ir_lib.assemble import build_document
 from primitive_ir_lib.calibration import Calibration
@@ -97,6 +98,19 @@ def new_fidelity_manifest(
         "approvals": {"source": {"approved": True, "reference": approval.strip()}},
         "pages": [],
     }
+
+
+def read_fidelity_manifest(path: Path) -> dict[str, Any]:
+    """Load the private baseline manifest needed to generate overlays."""
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"Cannot read fidelity manifest: {path}") from exc
+    if manifest.get("schema_version") != FIDELITY_SCHEMA_VERSION:
+        raise ManifestError("Unsupported fidelity manifest schema version.")
+    if not manifest.get("private_artifact") or not isinstance(manifest.get("pages"), list):
+        raise ManifestError("Fidelity manifest is missing private page records.")
+    return manifest
 
 
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
@@ -210,4 +224,84 @@ def run_fidelity_pdf(source: Path, output_root: Path, manifest_path: Path, manif
     finally:
         document.close()
     manifest["pages"] = pages
+    write_manifest(manifest_path, manifest)
+
+
+def _render_layout_dxf(dxf: Path, width_mm: float, height_mm: float, width_px: int, height_px: int) -> np.ndarray:
+    import ezdxf
+    from ezdxf.addons.drawing import Frontend, RenderContext, layout
+    from ezdxf.addons.drawing.pymupdf import PyMuPdfBackend
+
+    document = ezdxf.readfile(dxf)
+    backend = PyMuPdfBackend()
+    Frontend(RenderContext(document), backend).draw_layout(document.modelspace(), finalize=True)
+    png = backend.get_replay(layout.Page(width_mm, height_mm)).get_pixmap(144, alpha=True).tobytes("png")
+    rendered = cv2.imdecode(np.frombuffer(png, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if rendered is None:
+        raise FidelityError("Could not rasterize clean layout DXF.")
+    if rendered.shape[2] == 4:
+        alpha = rendered[:, :, 3:4].astype(np.float32) / 255.0
+        rendered = (rendered[:, :, :3].astype(np.float32) * alpha + 255.0 * (1.0 - alpha)).astype(np.uint8)
+    return cv2.resize(rendered, (width_px, height_px), interpolation=cv2.INTER_AREA)
+
+
+def _edge_metrics(source_edges: np.ndarray, vector_edges: np.ndarray, mask: np.ndarray) -> dict[str, float]:
+    source = np.logical_and(source_edges > 0, mask > 0)
+    vector = np.logical_and(vector_edges > 0, mask > 0)
+    tolerance = cv2.dilate(source.astype(np.uint8), np.ones((7, 7), dtype=np.uint8)) > 0
+    reverse_tolerance = cv2.dilate(vector.astype(np.uint8), np.ones((7, 7), dtype=np.uint8)) > 0
+    precision = float(np.logical_and(vector, tolerance).sum() / max(1, vector.sum()))
+    recall = float(np.logical_and(source, reverse_tolerance).sum() / max(1, source.sum()))
+    return {"precision": round(precision, 6), "recall": round(recall, 6), "f1": round(2 * precision * recall / max(1e-12, precision + recall), 6)}
+
+
+def _fidelity_report(rendered: Path, dxf: Path, paper_size: list[float], overlay: Path) -> dict[str, Any]:
+    source = cv2.imread(str(rendered))
+    if source is None:
+        raise FidelityError("Could not read rendered PDF page for fidelity overlay.")
+    height, width = source.shape[:2]
+    vector = _render_layout_dxf(dxf, float(paper_size[0]), float(paper_size[1]), width, height)
+    source_edges = cv2.Canny(cv2.cvtColor(source, cv2.COLOR_BGR2GRAY), 50, 150)
+    vector_edges = cv2.Canny(cv2.cvtColor(vector, cv2.COLOR_BGR2GRAY), 50, 150)
+    full_mask = np.full((height, width), 255, dtype=np.uint8)
+    content_mask = full_mask.copy()
+    content_mask[: int(height * 0.03), :] = 0
+    content_mask[-int(height * 0.25):, :] = 0
+    content_mask[:, : int(width * 0.03)] = 0
+    content_mask[:, -int(width * 0.03):] = 0
+    overlay_image = source.copy()
+    overlap = np.logical_and(source_edges > 0, vector_edges > 0)
+    overlay_image[source_edges > 0] = (0, 0, 255)
+    overlay_image[vector_edges > 0] = (255, 255, 0)
+    overlay_image[overlap] = (0, 255, 0)
+    overlay.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(overlay), overlay_image):
+        raise FidelityError("Could not write fidelity overlay.")
+    return {
+        "schema_version": "fidelity-report-1.0",
+        "state": "needs_review",
+        "metric": {"renderer": "ezdxf-pymupdf", "edge_detector": "canny-50-150", "tolerance_px": 3},
+        "source_sha256": sha256_file(rendered),
+        "dxf_sha256": sha256_file(dxf),
+        "overlay_sha256": sha256_file(overlay),
+        "full_page": _edge_metrics(source_edges, vector_edges, full_mask),
+        "content_roi": _edge_metrics(source_edges, vector_edges, content_mask),
+    }
+
+
+def run_fidelity_overlays(source: Path, output_root: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
+    if manifest.get("schema_version") != FIDELITY_SCHEMA_VERSION:
+        raise ManifestError("Unsupported fidelity manifest schema version.")
+    verify_source(manifest, source)
+    for page in manifest.get("pages", []):
+        artifacts = page["artifacts"]
+        rendered = output_root / artifacts["rendered_png"]["artifact"]
+        dxf = output_root / artifacts["layout_dxf"]["artifact"]
+        overlay = output_root / "fidelity_overlay" / f"page_{page['page']:02d}.png"
+        report_path = output_root / "fidelity_report" / f"page_{page['page']:02d}.json"
+        report = _fidelity_report(rendered, dxf, page["paper_size_mm"], overlay)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        artifacts["fidelity_overlay"] = _artifact(overlay, output_root)
+        artifacts["fidelity_report"] = _artifact(report_path, output_root)
     write_manifest(manifest_path, manifest)

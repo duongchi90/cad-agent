@@ -8,7 +8,7 @@ import ezdxf
 import fitz
 import pytest
 
-from cad_agent.fidelity import FidelityError, new_fidelity_manifest, run_fidelity_pdf
+from cad_agent.fidelity import FidelityError, new_fidelity_manifest, run_fidelity_overlays, run_fidelity_pdf
 from cad_agent.cli import main
 
 
@@ -49,6 +49,14 @@ def test_fidelity_pdf_writes_clean_paper_coordinate_layout_and_audit() -> None:
         assert audit["source_page"]["render_width_px"] > 0
         assert audit["ocr"]["texts"]
 
+        run_fidelity_overlays(source, output, output / "fidelity-run-manifest.json", persisted)
+        refreshed = json.loads((output / "fidelity-run-manifest.json").read_text(encoding="utf-8"))
+        report_path = output / refreshed["pages"][0]["artifacts"]["fidelity_report"]["artifact"]
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["state"] == "needs_review"
+        assert 0.0 <= report["full_page"]["precision"] <= 1.0
+        assert 0.0 <= report["content_roi"]["recall"] <= 1.0
+
 
 def test_fidelity_manifest_rejects_repo_output_root(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
@@ -68,3 +76,8 @@ def test_fidelity_cli_creates_private_baseline() -> None:
             "--source-approval", "approved-test",
         ]) == 0
         assert (output / "fidelity-run-manifest.json").is_file()
+        assert main([
+            "fidelity-overlay", "--input", str(source),
+            "--manifest", str(output / "fidelity-run-manifest.json"),
+        ]) == 0
+        assert (output / "fidelity_overlay" / "page_01.png").is_file()
