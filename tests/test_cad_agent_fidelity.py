@@ -14,6 +14,7 @@ from cad_agent.fidelity import (
     run_fidelity_overlays,
     run_fidelity_pdf,
     write_region_proposal,
+    write_region_approval,
 )
 from cad_agent.cli import CommandError, _refuse_fidelity_dxf, main
 
@@ -120,6 +121,10 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         )
         assert revision["revision"] == 2
         assert (output / "region_proposals" / "page_01-r2.json").is_file()
+        approval = write_region_approval(source, output, manifest, 1, 2, ["main_view"], "approved-test", workspace_root=Path.cwd())
+        assert approval["state"] == "approved-layout-reconstruction-only"
+        assert approval["approved_region_ids"] == ["main_view"]
+        assert (output / "region_approvals" / "page_01-r2.json").is_file()
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:

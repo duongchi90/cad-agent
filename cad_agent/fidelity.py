@@ -231,6 +231,46 @@ def write_region_proposal(
     return proposal
 
 
+def write_region_approval(
+    source: Path, output_root: Path, manifest: dict[str, Any], page_number: int, revision: int,
+    region_ids: list[str], approval_reference: str, *, workspace_root: Path,
+) -> dict[str, Any]:
+    """Freeze an explicit human approval for selected region-proposal records."""
+    if _is_within(output_root, workspace_root) or revision <= 0 or not approval_reference.strip():
+        raise FidelityError("Region approval requires an external root, positive revision, and approval reference.")
+    verify_source(manifest, source)
+    suffix = "" if revision == 1 else f"-r{revision}"
+    proposal_path = output_root / "region_proposals" / f"page_{page_number:02d}{suffix}.json"
+    try:
+        proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Cannot read the region proposal to approve.") from exc
+    if proposal.get("state") != "needs_human_approval" or proposal.get("source") != manifest.get("source"):
+        raise FidelityError("Region proposal is not eligible for approval.")
+    page = proposal.get("page", {})
+    if page.get("number") != page_number:
+        raise FidelityError("Region proposal page does not match the approval request.")
+    available = {item["id"] for item in proposal.get("regions", [])}
+    if not region_ids or len(set(region_ids)) != len(region_ids) or not set(region_ids) <= available:
+        raise FidelityError("Approval must name one or more unique region ids from the proposal.")
+    approval = {
+        "schema_version": "fidelity-region-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-layout-reconstruction-only",
+        "source": manifest["source"],
+        "page": page,
+        "proposal": {"artifact": str(proposal_path.relative_to(output_root)).replace("\\", "/"), "sha256": sha256_file(proposal_path), "definition_sha256": proposal["proposal_definition_sha256"], "revision": revision},
+        "approved_region_ids": region_ids,
+        "approval_reference": approval_reference.strip(),
+        "prohibited_actions": ["model-export", "scale-approval", "mechanical-review", "mechanical-repair"],
+    }
+    approval_path = output_root / "region_approvals" / f"page_{page_number:02d}{suffix}.json"
+    if approval_path.exists():
+        raise FidelityError(f"Region approval already exists: {approval_path}")
+    write_manifest(approval_path, approval)
+    return approval
+
+
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
     height, width = image.shape[:2]
     _configure_tesseract(None)
