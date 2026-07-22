@@ -537,10 +537,12 @@ def run_fidelity_overlays(source: Path, output_root: Path, manifest_path: Path, 
     if manifest.get("schema_version") != FIDELITY_SCHEMA_VERSION:
         raise ManifestError("Unsupported fidelity manifest schema version.")
     verify_source(manifest, source)
+    if _is_within(output_root, Path.cwd()) or manifest_path.resolve().parent != output_root.resolve():
+        raise FidelityError("Fidelity overlay requires a private manifest directly under its external output root.")
     for page in manifest.get("pages", []):
         artifacts = page["artifacts"]
-        rendered = output_root / artifacts["rendered_png"]["artifact"]
-        dxf = output_root / artifacts["layout_dxf"]["artifact"]
+        rendered = _safe_artifact_path(output_root, artifacts["rendered_png"])
+        dxf = _safe_artifact_path(output_root, artifacts["layout_dxf"])
         overlay = output_root / "fidelity_overlay" / f"page_{page['page']:02d}.png"
         report_path = output_root / "fidelity_report" / f"page_{page['page']:02d}.json"
         report = _fidelity_report(rendered, dxf, page["paper_size_mm"], overlay)

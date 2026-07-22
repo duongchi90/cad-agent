@@ -64,6 +64,10 @@ def test_fidelity_pdf_writes_clean_paper_coordinate_layout_and_audit() -> None:
         assert 0.0 <= report["full_page"]["precision"] <= 1.0
         assert 0.0 <= report["content_roi"]["recall"] <= 1.0
 
+        dxf.write_text("tampered", encoding="utf-8")
+        with pytest.raises(FidelityError, match="no longer matches"):
+            run_fidelity_overlays(source, output, output / "fidelity-run-manifest.json", refreshed)
+
 
 def test_fidelity_manifest_rejects_repo_output_root(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
