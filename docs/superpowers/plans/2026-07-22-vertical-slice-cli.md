@@ -1,14 +1,18 @@
 # Thin Vertical-Slice CLI Implementation Plan
 
-**Status:** Executing
+**Status:** Completed
 
 **Base SHA:** `accb2cf`
 
+**Completion Head SHA:** `f5589fb0c4889c0f00895763c2accc22808eac43`
+
 **Verification command:** `scripts/verify.ps1`
 
-**Required specialized gates:** `real_data` and `autocad_lt` are not affected
-by this deterministic orchestrator slice; their unavailable-state probes must
-remain `SKIP` and live execution remains `NOT RUN`.
+**Verification result:** `PASS` on the Completion Head SHA: 295 offline tests,
+zero failures/errors/skips.
+
+**Specialized gate result:** `real_data`: `SKIP` probe, live gate `NOT RUN`;
+`autocad_lt`: `SKIP` probe, live gate `NOT RUN`.
 
 ## Steps
 
