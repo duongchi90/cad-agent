@@ -271,6 +271,63 @@ def write_region_approval(
     return approval
 
 
+def run_fidelity_reconstruct(
+    source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path,
+) -> list[Path]:
+    """Build fresh, clean geometry candidates for explicitly approved regions."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Cannot read region approval.") from exc
+    if approval.get("state") != "approved-layout-reconstruction-only" or approval.get("source") != manifest.get("source"):
+        raise FidelityError("Region approval is not valid for this source.")
+    proposal_record = approval.get("proposal", {})
+    proposal_path = _safe_artifact_path(output_root, {"artifact": proposal_record.get("artifact"), "sha256": proposal_record.get("sha256")})
+    proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    if proposal.get("proposal_definition_sha256") != proposal_record.get("definition_sha256"):
+        raise FidelityError("Approved proposal definition no longer matches its approval.")
+    page_number = approval.get("page", {}).get("number")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Approved page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    image = cv2.imread(str(rendered))
+    if image is None:
+        raise FidelityError("Cannot read approved rendered page.")
+    selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
+    from dxf_builder_lib.builder import build_dxf
+    results: list[Path] = []
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    for region in selected:
+        x0, y0, x1, y1 = region["bbox_px"]
+        crop = image[y0:y1, x0:x1]
+        raw = extract_raw_geometry(crop, preset="real_scan_tuned_v1")
+        candidate_root = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"]
+        if candidate_root.exists():
+            raise FidelityError(f"Reconstruction candidate already exists: {candidate_root}")
+        candidate_root.mkdir(parents=True)
+        doc = build_document(
+            file_name=f"page_{page_number:02d}_{region['id']}.png", page_index=page_number - 1,
+            image_width_px=crop.shape[1], image_height_px=crop.shape[0],
+            calibration=Calibration(unit="mm", pixel_to_unit_scale=scale, origin_px=(0.0, float(crop.shape[0])), method="manual_override", reference_note="Approved fidelity-layout region in paper millimetres."),
+            raw_lines=raw.lines, raw_circles=raw.circles, raw_texts=[], sha256=sha256_file(rendered),
+        )
+        dxf = candidate_root / "geometry.dxf"
+        build_dxf(doc, str(dxf), build_components=False)
+        vector = _render_layout_dxf(dxf, crop.shape[1] * scale, crop.shape[0] * scale, crop.shape[1], crop.shape[0])
+        source_edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
+        vector_edges = cv2.Canny(cv2.cvtColor(vector, cv2.COLOR_BGR2GRAY), 50, 150)
+        overlay = crop.copy(); overlap = (source_edges > 0) & (vector_edges > 0)
+        overlay[source_edges > 0] = (0, 0, 255); overlay[vector_edges > 0] = (255, 255, 0); overlay[overlap] = (0, 255, 0)
+        cv2.imwrite(str(candidate_root / "source.png"), crop); cv2.imwrite(str(candidate_root / "overlay.png"), overlay)
+        (candidate_root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "region": region, "entities": {"LINE": len(raw.lines), "CIRCLE": len(raw.circles)}, "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(crop.shape[:2], 255, dtype=np.uint8)), "unresolved": ["text/dimensions/linetypes/tables remain sidecar-only", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+        results.append(candidate_root)
+    return results
+
+
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
     height, width = image.shape[:2]
     _configure_tesseract(None)

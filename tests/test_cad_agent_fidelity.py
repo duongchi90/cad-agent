@@ -125,6 +125,12 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         assert approval["state"] == "approved-layout-reconstruction-only"
         assert approval["approved_region_ids"] == ["main_view"]
         assert (output / "region_approvals" / "page_01-r2.json").is_file()
+        assert main([
+            "fidelity-reconstruct", "--input", str(source),
+            "--manifest", str(output / "fidelity-run-manifest.json"),
+            "--approval", str(output / "region_approvals" / "page_01-r2.json"),
+        ]) == 0
+        assert (output / "reconstruction_candidates" / "page_01" / "main_view" / "geometry.dxf").is_file()
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:
