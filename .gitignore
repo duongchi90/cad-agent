@@ -28,3 +28,8 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+.lock-venv/
+.artifacts/
+.superpowers/
+output/
+tmp/

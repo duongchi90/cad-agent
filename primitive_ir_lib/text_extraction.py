@@ -77,6 +77,7 @@ def extract_text_tesseract(
     roi_boxes: Optional[List[Bbox]] = None,
     min_confidence: int = 40,
     lang: str = "eng",
+    psm: int = 6,
 ) -> List[RawText]:
     """Tesseract trên toàn ảnh hoặc trên từng ROI đã khoanh (vd vùng title
     block). Dùng cho tier 1 (mục 9.2): mã bản vẽ, title block sạch — KHÔNG
@@ -111,7 +112,7 @@ def extract_text_tesseract(
             continue
         data = pytesseract.image_to_data(
             crop, lang=lang, output_type=pytesseract.Output.DICT,
-            config="--psm 6",
+            config=f"--psm {psm}",
         )
         n = len(data["text"])
         # Gộp các từ trên cùng 1 dòng (block_num, par_num, line_num giống nhau)

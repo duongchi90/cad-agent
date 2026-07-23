@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 import ezdxf
+import pytest
 
 from dxf_builder_lib.builder import build_dxf
 from primitive_ir_lib.models import (
@@ -26,6 +27,9 @@ from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import review_dxf_live
 from dxf_builder_lib.repair import repair_insert_components
 from dxf_builder_lib.reviewer import review_dxf
+
+
+pytestmark = pytest.mark.autocad_mechanical
 
 
 @unittest.skipUnless(os.getenv("CAD_AGENT_FILE_IPC") == "1", "requires AutoCAD File IPC")

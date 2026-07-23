@@ -199,6 +199,11 @@ def test_single_line_no_compound():
     print("OK   test_single_line_no_compound")
 
 
+def test_dense_unrelated_parallel_lines_do_not_expand_compound_search():
+    lines = [_line(f"dense-{index}", 0, index * 20, 100, index * 20) for index in range(100)]
+    assert _detect_and_compound(lines) == []
+
+
 # =========================================================== integration ====
 def test_integration_via_assemble():
     """Test toàn bộ assemble pipeline: single-parts + constraints + compound."""
@@ -265,6 +270,7 @@ _TESTS = [
     test_diem_noi_negative_two_lines_only,
     test_unrelated_lines_no_compound,
     test_single_line_no_compound,
+    test_dense_unrelated_parallel_lines_do_not_expand_compound_search,
     test_integration_via_assemble,
 ]
 

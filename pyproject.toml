@@ -1,0 +1,34 @@
+[project]
+name = "cad-agent"
+version = "0.0.0"
+requires-python = ">=3.11,<3.12"
+
+[tool.cad_agent]
+supported_os = "windows"
+supported_python = "3.11"
+supported_autocad = "AutoCAD Mechanical 2027"
+tesseract_version = "5.4.0.20240606"
+
+[tool.pytest.ini_options]
+minversion = "8.4"
+testpaths = [
+  "tests",
+  "primitive_ir_lib/tests",
+  "semantic_ir_lib/tests",
+  "dxf_builder_lib/tests",
+  "mcp_integration_lib/tests",
+  "agent_lib/tests",
+]
+addopts = ["--strict-markers", "-ra"]
+markers = [
+  "real_data: requires an approved private CAD image or PDF outside Git",
+  "autocad_mechanical: requires a running local AutoCAD Mechanical 2027 File IPC session",
+]
+filterwarnings = ["error"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["F401"]

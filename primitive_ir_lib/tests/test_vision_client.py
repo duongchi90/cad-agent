@@ -7,10 +7,15 @@ thật (việc đó cần key thật, xem docstring vision_client.py).
 
 from __future__ import annotations
 
-
 import numpy as np
+import pytest
 
 from primitive_ir_lib.vision_client import make_hybrid_cell_reader
+
+
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:extract_text_tesseract:UserWarning"
+)
 
 
 def _make_text_crop(text: str, w: int = 200, h: int = 80) -> np.ndarray:

@@ -79,6 +79,7 @@ def run_pdf(
             image_path = render_dir / f"page_{index:02d}.png"
             page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(str(image_path))
             output_path = ir_dir / f"page_{index:02d}.json"
+            view_candidates_path = ir_dir / f"page_{index:02d}.view_candidates.json"
             page_calibration_id = (
                 f"{calibration_id_prefix}_page{index:02d}"
                 if (auto_calibrate and calibration_registry_path is not None)
@@ -92,6 +93,8 @@ def run_pdf(
                 auto_calibrate=auto_calibrate,
                 calibration_registry_path=calibration_registry_path,
                 calibration_id=page_calibration_id,
+                view_candidates_output_path=str(view_candidates_path),
+                view_candidates_dpi=dpi,
             )
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             manifest["pages"].append({
@@ -102,6 +105,7 @@ def run_pdf(
                 "cross_validation_count": len(payload["cross_validations"]),
                 "calibration_method": payload["calibration"]["method"],
                 "scale_mm_per_px": payload["calibration"]["pixel_to_unit_scale"],
+                "scale_label_candidates": json.loads(view_candidates_path.read_text(encoding="utf-8")),
             })
     finally:
         document.close()

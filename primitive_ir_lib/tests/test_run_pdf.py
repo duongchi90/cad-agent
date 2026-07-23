@@ -88,17 +88,28 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
 
     def fake_run(image_path, output_path, scale_mm_per_px=None, preset="real_scan_tuned_v1",
                  ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
-                 auto_calibrate=False, calibration_registry_path=None, calibration_id=None):
+                 auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
+                 view_candidates_output_path=None, view_candidates_dpi=None):
         captured_calls.append(dict(
             auto_ocr_roi=auto_ocr_roi, auto_calibrate=auto_calibrate,
             calibration_registry_path=calibration_registry_path,
             calibration_id=calibration_id,
+                view_candidates_output_path=view_candidates_output_path,
+                view_candidates_dpi=view_candidates_dpi,
         ))
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
-            "primitives": [], "cross_validations": [],
+            "primitives": [{
+                "id": "scale", "type": "text", "trace": {"bbox_px": [10, 20, 60, 40]},
+                "text_data": {"content": "TL 1:40"},
+            }], "cross_validations": [],
             "calibration": {"method": "known_dimension_reference", "pixel_to_unit_scale": 5.0},
         }), encoding="utf-8")
+        Path(view_candidates_output_path).write_text(json.dumps([{
+            "source_text_id": "scale", "bbox_px": [10, 20, 60, 40],
+            "region_bbox_px": [0, 0, 100, 100], "scale_denominator": 40,
+            "pixel_to_unit_scale": 7.0555555556, "status": "needs_verification",
+        }]), encoding="utf-8")
         return str(output_path)
 
     registry_path = tmp_path / "registry.json"
@@ -116,10 +127,15 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
         assert c["auto_ocr_roi"] is True
         assert c["auto_calibrate"] is True
         assert c["calibration_registry_path"] == registry_path
+        assert c["view_candidates_output_path"] is not None
+        assert c["view_candidates_dpi"] == 144
 
     assert manifest["scale_mm_per_px"] == "auto"
     assert [p["scale_mm_per_px"] for p in manifest["pages"]] == [5.0, 5.0]
     assert [p["calibration_method"] for p in manifest["pages"]] == ["known_dimension_reference"] * 2
+    assert manifest["pages"][0]["scale_label_candidates"][0]["scale_denominator"] == 40
+    assert manifest["pages"][0]["scale_label_candidates"][0]["status"] == "needs_verification"
+    assert "region_bbox_px" in manifest["pages"][0]["scale_label_candidates"][0]
 
 
 _TESTS = [

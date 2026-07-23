@@ -1,0 +1,7 @@
+-r runtime.in
+-r vision.in
+-r solver.in
+
+pip-tools==7.6.0
+pytest>=8.4,<10
+ruff>=0.12,<1

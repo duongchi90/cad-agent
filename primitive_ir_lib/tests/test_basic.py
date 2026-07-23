@@ -120,6 +120,20 @@ def test_cross_validate_unverified_when_no_line_nearby():
     assert results[0].geometry_primitive_id == ""
 
 
+def test_cross_validate_unverified_for_zero_dimension_value():
+    """OCR can read drawing labels such as ``00`` as a numeric dimension."""
+    line = _line((100, 50), (100, 550), id_="near")
+    text = _text("00", (60, 280, 90, 320), id_="zero")
+    cal = estimate_calibration_from_reference(_text("1700", (60, 280, 90, 320)), line,
+                                              image_height_px=700)
+
+    results = cross_validate([text], [line], cal)
+
+    assert len(results) == 1
+    assert results[0].status == "unverified"
+    assert results[0].geometry_primitive_id == ""
+
+
 # ----------------------------------------------------------- table tier 2 --
 def _make_grid_lines(table_roi, rows=2, cols=3):
     """Dựng các RawLine tạo thành lưới bảng `rows x cols` ô (vùng table_roi).

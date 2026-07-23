@@ -1,0 +1,1341 @@
+"""Private, paper-coordinate PDF layout baseline.
+
+This module intentionally creates a diagnostic layout DXF, not a model-space
+conversion. It keeps OCR and scale observations in sidecars so unreviewed text
+or calibration can never be mistaken for CAD source geometry.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from html import escape
+from pathlib import Path
+from typing import Any
+
+import cv2
+import fitz
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+from primitive_ir_lib.assemble import build_document
+from primitive_ir_lib.calibration import Calibration
+from primitive_ir_lib.geometry_extraction import RawGeometry, extract_raw_geometry
+from primitive_ir_lib.io_utils import save_document
+from primitive_ir_lib.run_image import _configure_tesseract
+from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
+from primitive_ir_lib.table_extraction import build_cells, detect_grid
+from primitive_ir_lib.view_calibration import detect_view_candidates
+
+from .manifest import ManifestError, sha256_file, verify_source, write_manifest
+
+FIDELITY_MANIFEST_NAME = "fidelity-run-manifest.json"
+FIDELITY_SCHEMA_VERSION = "fidelity-run-1.0"
+
+
+class FidelityError(ValueError):
+    """Raised for an unsafe or unsupported fidelity-layout request."""
+
+
+def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
+    """Remove only sub-12-pixel strokes from a review-only raw candidate."""
+    retained: list[Any] = []
+    for line in raw.lines:
+        if line.length_px() < 12.0:
+            continue
+        start, end = sorted((line.p1_px, line.p2_px))
+        duplicate_index = next((
+            index for index, existing in enumerate(retained)
+            if max(abs(start[0] - existing[0][0]), abs(start[1] - existing[0][1]),
+                   abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
+        ), None)
+        if duplicate_index is None:
+            retained.append((start, end, line))
+        else:
+            current = retained[duplicate_index][2]
+            if (line.confidence, line.length_px()) > (current.confidence, current.length_px()):
+                retained[duplicate_index] = (start, end, line)
+    return RawGeometry(
+        lines=[item[2] for item in retained],
+        circles=list(raw.circles),
+    )
+
+
+def _raw_geometry_edges(raw: RawGeometry, shape: tuple[int, int]) -> np.ndarray:
+    canvas = np.full(shape, 255, dtype=np.uint8)
+    for line in raw.lines:
+        cv2.line(
+            canvas,
+            tuple(round(value) for value in line.p1_px),
+            tuple(round(value) for value in line.p2_px),
+            0,
+            1,
+            lineType=cv2.LINE_AA,
+        )
+    for circle in raw.circles:
+        cv2.circle(
+            canvas,
+            tuple(round(value) for value in circle.center_px),
+            max(1, round(circle.radius_px)),
+            0,
+            1,
+            lineType=cv2.LINE_AA,
+        )
+    return cv2.Canny(canvas, 50, 150)
+
+
+def _select_fidelity_geometry(raw: RawGeometry, crop: np.ndarray, scale: float) -> tuple[RawGeometry, dict[str, Any]]:
+    """Choose a filtered candidate only if it improves local tolerant edge F1."""
+    del scale  # Raw geometry and the cropped PDF share pixel coordinates here.
+    source_edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
+    mask = np.full(crop.shape[:2], 255, dtype=np.uint8)
+    baseline_edges = _raw_geometry_edges(raw, crop.shape[:2])
+    filtered = _filter_fidelity_geometry(raw)
+    filtered_edges = _raw_geometry_edges(filtered, crop.shape[:2])
+    baseline = {"edge_metric": _edge_metrics(source_edges, baseline_edges, mask), "line_entities": len(raw.lines), "circle_entities": len(raw.circles)}
+    filtered_report = {"edge_metric": _edge_metrics(source_edges, filtered_edges, mask), "line_entities": len(filtered.lines), "circle_entities": len(filtered.circles)}
+    if filtered_report["edge_metric"]["f1"] > baseline["edge_metric"]["f1"]:
+        return filtered, {"selected_profile": "filtered", "baseline": baseline, "filtered": filtered_report}
+    return raw, {"selected_profile": "baseline", "baseline": baseline, "filtered": filtered_report}
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _artifact(path: Path, output_root: Path) -> dict[str, str]:
+    return {
+        "artifact": str(path.relative_to(output_root)).replace("\\", "/"),
+        "sha256": sha256_file(path),
+    }
+
+
+def _title_block_roi(width: int, height: int) -> tuple[int, int, int, int]:
+    return (int(width * 0.58), int(height * 0.67), width, height)
+
+
+def _deduplicate_rois(rois: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    return list(dict.fromkeys(rois))
+
+
+def _raw_text_payload(text: object) -> dict[str, Any]:
+    return {
+        "id": text.id,
+        "content": text.content,
+        "bbox_px": list(text.bbox_px),
+        "rotation_deg": text.rotation_deg,
+        "confidence": text.confidence,
+        "source": text.source,
+        "semantic_role": text.semantic_role,
+        "parsed_value": text.parsed_value,
+    }
+
+
+def _page_size_mm(page: fitz.Page) -> tuple[float, float]:
+    # page.rect is the displayed (rotation-aware) box used by get_pixmap().
+    return page.rect.width * 25.4 / 72.0, page.rect.height * 25.4 / 72.0
+
+
+def new_fidelity_manifest(
+    source: Path,
+    output_root: Path,
+    dpi: int,
+    approval: str,
+    *,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    if not source.is_file() or source.suffix.lower() != ".pdf":
+        raise FidelityError("fidelity-pdf requires an existing PDF input.")
+    if dpi <= 0:
+        raise FidelityError("--dpi must be positive.")
+    if not approval.strip():
+        raise FidelityError("fidelity-pdf requires a non-empty source approval reference.")
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    return {
+        "schema_version": FIDELITY_SCHEMA_VERSION,
+        "private_artifact": True,
+        "source": {"name": source.name, "sha256": sha256_file(source), "kind": "pdf"},
+        "configuration": {"dpi": dpi, "transform": "displayed-page-box-v1", "ocr": "tesseract-local-psm11"},
+        "approvals": {"source": {"approved": True, "reference": approval.strip()}},
+        "pages": [],
+    }
+
+
+def read_fidelity_manifest(path: Path) -> dict[str, Any]:
+    """Load the private baseline manifest needed to generate overlays."""
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"Cannot read fidelity manifest: {path}") from exc
+    if manifest.get("schema_version") != FIDELITY_SCHEMA_VERSION:
+        raise ManifestError("Unsupported fidelity manifest schema version.")
+    if not manifest.get("private_artifact") or not isinstance(manifest.get("pages"), list):
+        raise ManifestError("Fidelity manifest is missing private page records.")
+    return manifest
+
+
+def _safe_artifact_path(output_root: Path, record: dict[str, Any]) -> Path:
+    artifact = record.get("artifact")
+    if not isinstance(artifact, str) or Path(artifact).is_absolute():
+        raise FidelityError("Fidelity artifact path must be a relative path.")
+    resolved = (output_root / artifact).resolve()
+    if not _is_within(resolved, output_root):
+        raise FidelityError("Fidelity artifact path escapes the private output root.")
+    if not resolved.is_file() or sha256_file(resolved) != record.get("sha256"):
+        raise FidelityError("Fidelity artifact is missing or no longer matches its manifest hash.")
+    return resolved
+
+
+def _normalized_regions(regions: dict[str, Any], width: int, height: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def normalize(items: object, category: str) -> list[dict[str, Any]]:
+        if not isinstance(items, list) or not items:
+            raise FidelityError(f"Region proposal requires at least one {category} record.")
+        result: list[dict[str, Any]] = []
+        ids: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip():
+                raise FidelityError(f"Every {category} record requires a non-empty id.")
+            if item["id"] in ids:
+                raise FidelityError(f"Duplicate {category} id: {item['id']}")
+            box = item.get("bbox_px")
+            if not isinstance(box, list) or len(box) != 4 or any(isinstance(value, bool) or not isinstance(value, int) for value in box):
+                raise FidelityError(f"{category} bbox_px must contain four integer coordinates.")
+            x0, y0, x1, y1 = box
+            if x0 < 0 or y0 < 0 or x1 > width or y1 > height or x1 - x0 < 30 or y1 - y0 < 30:
+                raise FidelityError(f"{category} bbox_px is outside the page or too small.")
+            purpose = item.get("purpose")
+            expected = "layout-reconstruction" if category == "region" else "exclude"
+            if purpose != expected:
+                raise FidelityError(f"{category} purpose must be {expected!r}.")
+            ids.add(item["id"])
+            result.append({"id": item["id"], "bbox_px": box, "purpose": purpose})
+        return result
+
+    included = normalize(regions.get("regions"), "region")
+    excluded = normalize(regions.get("excluded_regions"), "excluded_region")
+    all_regions = [("region", item) for item in included] + [("excluded_region", item) for item in excluded]
+    for index, (kind, item) in enumerate(all_regions):
+        ax0, ay0, ax1, ay1 = item["bbox_px"]
+        for other_kind, other in all_regions[index + 1:]:
+            bx0, by0, bx1, by1 = other["bbox_px"]
+            horizontal_gap = max(ax0 - bx1, bx0 - ax1, 0)
+            vertical_gap = max(ay0 - by1, by0 - ay1, 0)
+            if horizontal_gap < 3 and vertical_gap < 3:
+                raise FidelityError(f"{kind} {item['id']!r} and {other_kind} {other['id']!r} overlap or lack the required 3 px gutter.")
+    return included, excluded
+
+
+def write_region_proposal(
+    source: Path,
+    output_root: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    page_number: int,
+    regions: dict[str, Any],
+    *,
+    workspace_root: Path,
+    revision: int = 1,
+) -> dict[str, Any]:
+    """Write a source-bound, review-only page-region proposal outside the repository."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    if revision <= 0:
+        raise FidelityError("Region proposal revision must be positive.")
+    if manifest_path.resolve().parent != output_root.resolve():
+        raise FidelityError("Fidelity manifest must reside directly in the private output root.")
+    verify_source(manifest, source)
+    page = next((record for record in manifest.get("pages", []) if record.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError(f"Fidelity manifest has no page {page_number}.")
+    rendered = _safe_artifact_path(output_root, page.get("artifacts", {}).get("rendered_png", {}))
+    audit = _safe_artifact_path(output_root, page.get("artifacts", {}).get("layout_audit", {}))
+    audit_payload = json.loads(audit.read_text(encoding="utf-8"))
+    source_page = audit_payload.get("source_page", {})
+    if source_page.get("page") != page_number or source_page.get("render_sha256") != sha256_file(rendered):
+        raise FidelityError("Layout audit render hash does not match the manifest artifact.")
+    width = source_page.get("render_width_px")
+    height = source_page.get("render_height_px")
+    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+        raise FidelityError("Layout audit is missing valid rendered page dimensions.")
+    included, excluded = _normalized_regions(regions, width, height)
+    definition = {"regions": included, "excluded_regions": excluded}
+    definition_sha256 = __import__("hashlib").sha256(
+        json.dumps(definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    proposal = {
+        "schema_version": "fidelity-region-proposal-1.0",
+        "private_artifact": True,
+        "state": "needs_human_approval",
+        "revision": revision,
+        "source": manifest["source"],
+        "page": {
+            "number": page_number,
+            "render_sha256": source_page["render_sha256"],
+            "render_width_px": width,
+            "render_height_px": height,
+            "dpi": source_page["dpi"],
+            "coordinate_system": "pixel-top-left",
+        },
+        "proposal_definition_sha256": definition_sha256,
+        "minimum_gutter_px": 3,
+        "unclassified_area_state": "needs_classification",
+        "regions": included,
+        "excluded_regions": excluded,
+        "allowed_action": "layout-reconstruction-only",
+        "prohibited_actions": ["model-export", "scale-approval", "mechanical-review", "mechanical-repair"],
+    }
+    suffix = "" if revision == 1 else f"-r{revision}"
+    proposal_path = output_root / "region_proposals" / f"page_{page_number:02d}{suffix}.json"
+    if proposal_path.exists():
+        raise FidelityError(f"Region proposal already exists: {proposal_path}; create a new private staging root to revise it.")
+    write_manifest(proposal_path, proposal)
+    return proposal
+
+
+def write_region_approval(
+    source: Path, output_root: Path, manifest: dict[str, Any], page_number: int, revision: int,
+    region_ids: list[str], approval_reference: str, *, workspace_root: Path,
+) -> dict[str, Any]:
+    """Freeze an explicit human approval for selected region-proposal records."""
+    if _is_within(output_root, workspace_root) or revision <= 0 or not approval_reference.strip():
+        raise FidelityError("Region approval requires an external root, positive revision, and approval reference.")
+    verify_source(manifest, source)
+    suffix = "" if revision == 1 else f"-r{revision}"
+    proposal_path = output_root / "region_proposals" / f"page_{page_number:02d}{suffix}.json"
+    try:
+        proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Cannot read the region proposal to approve.") from exc
+    if proposal.get("state") != "needs_human_approval" or proposal.get("source") != manifest.get("source"):
+        raise FidelityError("Region proposal is not eligible for approval.")
+    page = proposal.get("page", {})
+    if page.get("number") != page_number:
+        raise FidelityError("Region proposal page does not match the approval request.")
+    available = {item["id"] for item in proposal.get("regions", [])}
+    if not region_ids or len(set(region_ids)) != len(region_ids) or not set(region_ids) <= available:
+        raise FidelityError("Approval must name one or more unique region ids from the proposal.")
+    approval = {
+        "schema_version": "fidelity-region-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-layout-reconstruction-only",
+        "source": manifest["source"],
+        "page": page,
+        "proposal": {"artifact": str(proposal_path.relative_to(output_root)).replace("\\", "/"), "sha256": sha256_file(proposal_path), "definition_sha256": proposal["proposal_definition_sha256"], "revision": revision},
+        "approved_region_ids": region_ids,
+        "approval_reference": approval_reference.strip(),
+        "prohibited_actions": ["model-export", "scale-approval", "mechanical-review", "mechanical-repair"],
+    }
+    approval_path = output_root / "region_approvals" / f"page_{page_number:02d}{suffix}.json"
+    if approval_path.exists():
+        raise FidelityError(f"Region approval already exists: {approval_path}")
+    write_manifest(approval_path, approval)
+    return approval
+
+
+def run_fidelity_reconstruct(
+    source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path,
+) -> list[Path]:
+    """Build fresh, clean geometry candidates for explicitly approved regions."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root):
+        raise FidelityError("Region approval must reside inside the private fidelity output root.")
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Cannot read region approval.") from exc
+    if approval.get("state") != "approved-layout-reconstruction-only" or approval.get("source") != manifest.get("source"):
+        raise FidelityError("Region approval is not valid for this source.")
+    proposal_record = approval.get("proposal", {})
+    proposal_path = _safe_artifact_path(output_root, {"artifact": proposal_record.get("artifact"), "sha256": proposal_record.get("sha256")})
+    proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    if proposal.get("proposal_definition_sha256") != proposal_record.get("definition_sha256"):
+        raise FidelityError("Approved proposal definition no longer matches its approval.")
+    page_number = approval.get("page", {}).get("number")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Approved page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if approval["page"].get("render_sha256") != sha256_file(rendered):
+        raise FidelityError("Region approval render hash no longer matches the page artifact.")
+    image = cv2.imread(str(rendered))
+    if image is None:
+        raise FidelityError("Cannot read approved rendered page.")
+    selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
+    from dxf_builder_lib.builder import build_dxf
+    results: list[Path] = []
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    for region in selected:
+        x0, y0, x1, y1 = region["bbox_px"]
+        crop = image[y0:y1, x0:x1]
+        raw = extract_raw_geometry(crop, preset="real_scan_tuned_v1")
+        selected_raw, quality = _select_fidelity_geometry(raw, crop, scale)
+        candidate_root = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"]
+        if candidate_root.exists():
+            raise FidelityError(f"Reconstruction candidate already exists: {candidate_root}")
+        candidate_root.mkdir(parents=True)
+        doc = build_document(
+            file_name=f"page_{page_number:02d}_{region['id']}.png", page_index=page_number - 1,
+            image_width_px=crop.shape[1], image_height_px=crop.shape[0],
+            calibration=Calibration(unit="mm", pixel_to_unit_scale=scale, origin_px=(0.0, float(crop.shape[0])), method="manual_override", reference_note="Approved fidelity-layout region in paper millimetres."),
+            raw_lines=selected_raw.lines, raw_circles=selected_raw.circles, raw_texts=[], sha256=sha256_file(rendered),
+        )
+        dxf = candidate_root / "geometry.dxf"
+        build_dxf(doc, str(dxf), build_components=False)
+        vector = _render_layout_dxf(dxf, crop.shape[1] * scale, crop.shape[0] * scale, crop.shape[1], crop.shape[0])
+        source_edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
+        vector_edges = cv2.Canny(cv2.cvtColor(vector, cv2.COLOR_BGR2GRAY), 50, 150)
+        overlay = crop.copy(); overlap = (source_edges > 0) & (vector_edges > 0)
+        overlay[source_edges > 0] = (0, 0, 255); overlay[vector_edges > 0] = (255, 255, 0); overlay[overlap] = (0, 255, 0)
+        cv2.imwrite(str(candidate_root / "source.png"), crop); cv2.imwrite(str(candidate_root / "overlay.png"), overlay)
+        (candidate_root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "region": region, "entities": {"LINE": len(selected_raw.lines), "CIRCLE": len(selected_raw.circles)}, "quality": quality, "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(crop.shape[:2], 255, dtype=np.uint8)), "unresolved": ["text/dimensions/linetypes/tables remain sidecar-only", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+        results.append(candidate_root)
+    return results
+
+
+def run_fidelity_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Record bounded table-grid observations for every private fidelity page."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for observations.")
+        height, width = image.shape[:2]
+        roi = (0, int(height * 0.65), width, height)
+        raw = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+        xs, ys = detect_grid(raw.lines, roi)
+        cells = build_cells(xs, ys, roi)
+        status = "needs_review" if len(xs) >= 3 and len(ys) >= 3 and len(cells) <= 200 else "not_evaluated"
+        reason = None if status == "needs_review" else "grid requires at least three axes each and no more than 200 cells"
+        output = output_root / "fidelity_observations" / f"page_{page['page']:02d}.json"
+        if output.exists():
+            raise FidelityError(f"Fidelity observation already exists: {output}")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema_version": "fidelity-observation-1.0", "private_artifact": True, "state": status, "source_render_sha256": sha256_file(rendered), "table_grid": {"roi_px": list(roi), "vertical_axes_px": xs, "horizontal_axes_px": ys, "cells": [list(cell.bbox_px) for cell in cells] if status == "needs_review" else [], "reason": reason}, "line_patterns": _observe_line_patterns(raw.lines), "unresolved": ["no cell OCR or DXF text is emitted without table-region approval", "line patterns do not define a DXF linetype without an explicit approved mapping"]}
+        output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
+def run_fidelity_hatch_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Write hash-bound diagonal-stroke evidence without constructing DXF HATCH entities."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    root = output_root / "fidelity_hatch_observations"
+    revision = 2
+    while root.exists() and any(root.iterdir()):
+        root = output_root / f"fidelity_hatch_observations-r{revision}"
+        revision += 1
+    root.mkdir(parents=True, exist_ok=True)
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for hatch observations.")
+        output = root / f"page_{page['page']:02d}.json"
+        payload = {
+            "schema_version": "fidelity-hatch-observation-1.0",
+            "private_artifact": True,
+            "state": "needs_review",
+            "source": manifest["source"],
+            "page": page["page"],
+            "source_render_sha256": sha256_file(rendered),
+            "candidates": _observe_hatch_candidates(image),
+            "unresolved": ["no candidate is emitted as a DXF HATCH without boundary approval"],
+        }
+        output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
+def run_fidelity_text_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Write hash-bound OCR candidates for later per-text review, never DXF text."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        audit_record = page["artifacts"]["layout_audit"]
+        audit_path = _safe_artifact_path(output_root, audit_record)
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        raw_texts = audit.get("ocr", {}).get("texts", [])
+        candidates = [
+            {
+                "id": item["id"],
+                "content": item["content"].strip(),
+                "bbox_px": item["bbox_px"],
+                "rotation_deg": item["rotation_deg"],
+                "confidence": item["confidence"],
+                "source": item["source"],
+                "semantic_role": item["semantic_role"],
+                "parsed_value": item["parsed_value"],
+            }
+            for item in raw_texts
+            if isinstance(item, dict) and isinstance(item.get("content"), str) and item["content"].strip()
+        ]
+        output = output_root / "fidelity_text_observations" / f"page_{page['page']:02d}.json"
+        if output.exists():
+            raise FidelityError(f"Fidelity text observation already exists: {output}")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": "fidelity-text-observation-1.0",
+            "private_artifact": True,
+            "state": "needs_human_approval" if candidates else "not_evaluated",
+            "source": manifest["source"],
+            "page": page["page"],
+            "source_layout_audit": audit_record,
+            "candidates": candidates,
+            "unresolved": ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"],
+        }
+        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
+def run_fidelity_table_text_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """OCR only previously observed table cells; preserve every result as review-only evidence."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    _configure_tesseract(None)
+    base_root = output_root / "fidelity_table_text_observations"
+    observation_root = base_root
+    revision = 2
+    while observation_root.exists() and any(observation_root.iterdir()):
+        observation_root = output_root / f"fidelity_table_text_observations-r{revision}"
+        revision += 1
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        observation_path = output_root / "fidelity_observations" / f"page_{number:02d}.json"
+        if not observation_path.is_file():
+            raise FidelityError(f"Missing table observation for page {number}; run fidelity-observe first.")
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+        table = observation.get("table_grid", {})
+        cells = table.get("cells", []) if observation.get("state") == "needs_review" else []
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for table-cell OCR.")
+        candidates = []
+        roi = table.get("roi_px")
+        if cells and isinstance(roi, list) and len(roi) == 4:
+            recognized = extract_text_tesseract(
+                image, roi_boxes=[tuple(int(v) for v in roi)], min_confidence=20, psm=6,
+            )
+            for text in recognized:
+                x0, y0, x1, y1 = text.bbox_px
+                center_x, center_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+                matches = [
+                    (index, bbox) for index, bbox in enumerate(cells)
+                    if isinstance(bbox, list) and len(bbox) == 4 and bbox[0] <= center_x <= bbox[2] and bbox[1] <= center_y <= bbox[3]
+                ]
+                candidates.append({
+                    "cell_index": matches[0][0] if len(matches) == 1 else None,
+                    "cell_bbox_px": matches[0][1] if len(matches) == 1 else None,
+                    "text": _raw_text_payload(text),
+                    "cell_match_state": "matched" if len(matches) == 1 else "needs_review",
+                })
+        output = observation_root / f"page_{number:02d}.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": "fidelity-table-text-observation-1.0",
+            "private_artifact": True,
+            "state": "needs_human_approval" if candidates else "not_evaluated",
+            "source": manifest["source"],
+            "page": number,
+            "source_render_sha256": sha256_file(rendered),
+            "source_table_observation": _artifact(observation_path, output_root),
+            "candidates": candidates,
+            "unresolved": ["no table-cell OCR candidate is emitted as DXF text or a table entity without per-cell approval"],
+        }
+        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
+def run_fidelity_table_text_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    observation_path: Path,
+    base_dxf: Path,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Emit only cell-matched table OCR into a fresh private fidelity DXF."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(observation_path, output_root) or not observation_path.is_file():
+        raise FidelityError("Table text observation must reside inside the private fidelity output root.")
+    if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    if observation.get("schema_version") != "fidelity-table-text-observation-1.0" or observation.get("private_artifact") is not True:
+        raise FidelityError("Table text observation has an unsupported schema.")
+    page_number = observation.get("page")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Table text observation page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Table text observation does not match the rendered page.")
+    audit = json.loads(_safe_artifact_path(output_root, page["artifacts"]["layout_audit"]).read_text(encoding="utf-8"))
+    height_px = int(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf)
+    model = document.modelspace()
+    emitted = 0
+    for candidate in observation.get("candidates", []):
+        if not isinstance(candidate, dict) or candidate.get("cell_match_state") != "matched":
+            continue
+        text = candidate.get("text", {})
+        content, bbox = text.get("content"), text.get("bbox_px") if isinstance(text, dict) else (None, None)
+        if not isinstance(content, str) or not content.strip() or not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        x0, _, _, y1 = (float(value) for value in bbox)
+        height = max(1.5, min(8.0, (float(bbox[3]) - float(bbox[1])) * scale))
+        entity = model.add_text(content.strip(), dxfattribs={"layer": "FIDELITY_TABLE_TEXT", "height": height})
+        entity.set_placement((x0 * scale, (height_px - y1) * scale))
+        emitted += 1
+    base_root = output_root / "table_text_reconstruction"
+    revision = 2
+    while (base_root / f"page_{page_number:02d}").exists():
+        base_root = output_root / f"table_text_reconstruction-r{revision}"
+        revision += 1
+    root = base_root / f"page_{page_number:02d}"
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-table-text", "source_render_sha256": sha256_file(rendered), "observation_sha256": sha256_file(observation_path), "base_dxf_sha256": sha256_file(base_dxf), "emitted_text_entities": emitted, "unresolved": ["table OCR text is candidate-only and requires visual review", "unmatched OCR is intentionally excluded"]}, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
+_DIMENSION_VALUE = re.compile(r"^(?:[Ø⌀Rr]\s*)?\d+(?:[.,]\d+)?(?:\s*(?:mm|cm|m|°))?$")
+
+
+def run_fidelity_dimension_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Write review-only dimension-like OCR candidates with nearby line evidence."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    base_root = output_root / "fidelity_dimension_observations"
+    observation_root = base_root
+    revision = 2
+    while observation_root.exists() and any(observation_root.iterdir()):
+        observation_root = output_root / f"fidelity_dimension_observations-r{revision}"
+        revision += 1
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        text_path = output_root / "fidelity_text_observations" / f"page_{number:02d}.json"
+        if not text_path.is_file():
+            raise FidelityError(f"Missing text observation for page {number}; run fidelity-text-observe first.")
+        text_observation = json.loads(text_path.read_text(encoding="utf-8"))
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for dimension observation.")
+        raw = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+        candidates = []
+        for text in text_observation.get("candidates", []):
+            content = str(text.get("content", "")).strip()
+            if not _DIMENSION_VALUE.fullmatch(content):
+                continue
+            x0, y0, x1, y1 = (float(value) for value in text["bbox_px"])
+            nearby = [
+                line.id for line in raw.lines
+                if line.bbox_px[0] <= x1 + 30 and line.bbox_px[2] >= x0 - 30 and line.bbox_px[1] <= y1 + 30 and line.bbox_px[3] >= y0 - 30
+            ][:12]
+            candidates.append({"text": text, "nearby_line_ids": nearby, "state": "needs_human_approval"})
+        output = observation_root / f"page_{number:02d}.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema_version": "fidelity-dimension-observation-1.0", "private_artifact": True, "state": "needs_human_approval" if candidates else "not_evaluated", "source": manifest["source"], "page": number, "source_render_sha256": sha256_file(rendered), "source_text_observation": _artifact(text_path, output_root), "candidates": candidates, "unresolved": ["no candidate is emitted as a DXF DIMENSION without explicit mapping approval"]}
+        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
+def run_fidelity_linetype_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    observation_path: Path,
+    base_dxf: Path,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Apply hash-bound horizontal dashed-pattern evidence to a private DXF clone."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(observation_path, output_root) or not observation_path.is_file():
+        raise FidelityError("Linetype observation must reside inside the private fidelity output root.")
+    if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    try:
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise FidelityError("Linetype observation is invalid JSON.") from exc
+    if observation.get("schema_version") != "fidelity-linetype-observation-1.0" or observation.get("private_artifact") is not True:
+        raise FidelityError("Linetype observation has an unsupported schema.")
+    page_number = observation.get("page")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Linetype observation page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Linetype observation does not match the rendered page.")
+    patterns = observation.get("patterns")
+    if not isinstance(patterns, list):
+        raise FidelityError("Linetype observation patterns are invalid.")
+    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    height_px = int(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    coordinates = [
+        (height_px - float(pattern["coordinate_px"])) * scale
+        for pattern in patterns
+        if isinstance(pattern, dict)
+        and pattern.get("axis") == "horizontal"
+        and pattern.get("suggested_linetype") == "DASHED"
+        and isinstance(pattern.get("coordinate_px"), (int, float))
+    ]
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf)
+    if "FIDELITY_DASHED" not in document.linetypes:
+        document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    tolerance_mm = max(0.25, 3.0 * scale)
+    changed = 0
+    for entity in document.modelspace().query("LINE"):
+        start, end = entity.dxf.start, entity.dxf.end
+        if abs(float(start.y) - float(end.y)) > tolerance_mm:
+            continue
+        if any(abs(float(start.y) - coordinate) <= tolerance_mm for coordinate in coordinates):
+            entity.dxf.linetype = "FIDELITY_DASHED"
+            changed += 1
+    base_root = output_root / "linetype_reconstruction"
+    revision = 2
+    while (base_root / f"page_{page_number:02d}").exists():
+        base_root = output_root / f"linetype_reconstruction-r{revision}"
+        revision += 1
+    root = base_root / f"page_{page_number:02d}"
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    report = {
+        "state": "needs_review",
+        "profile": "fidelity-layout-linetype",
+        "page": page_number,
+        "source_render_sha256": sha256_file(rendered),
+        "observation_sha256": sha256_file(observation_path),
+        "base_dxf_sha256": sha256_file(base_dxf),
+        "output_dxf_sha256": sha256_file(output),
+        "matched_horizontal_pattern_count": len(coordinates),
+        "changed_line_entities": changed,
+        "tolerance_mm": tolerance_mm,
+        "unresolved": ["dashed mapping is a fidelity candidate and needs visual review", "no model export"],
+    }
+    (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
+def write_fidelity_dimension_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Write a private browser index for review-only dimension candidates."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    root = output_root / "fidelity_dimension_review"
+    index = root / "index.html"
+    revision = 2
+    while index.exists():
+        index = root / f"index-r{revision}.html"
+        revision += 1
+    cards = []
+    for page in manifest.get("pages", []):
+        path = output_root / "fidelity_dimension_observations" / f"page_{page['page']:02d}.json"
+        if not path.is_file():
+            raise FidelityError(f"Missing dimension observation for page {page['page']}; run fidelity-dimension-observe first.")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        rows = "".join(f"<tr><td>{escape(str(item['text']['content']))}</td><td>{escape(str(item['text']['bbox_px']))}</td><td>{len(item['nearby_line_ids'])}</td></tr>" for item in payload.get("candidates", []))
+        rel = Path(os.path.relpath(rendered, index.parent)).as_posix()
+        cards.append(f"<section><h2>Trang {page['page']} <small>{len(payload.get('candidates', []))} ứng viên</small></h2><img src='{rel}' alt='Trang {page['page']}'><table><tr><th>Giá trị</th><th>Khung pixel</th><th>Nét gần</th></tr>{rows}</table></section>")
+    root.mkdir(parents=True, exist_ok=True)
+    index.write_text("<!doctype html><meta charset='utf-8'><title>Duyệt kích thước</title><style>body{font:15px system-ui;margin:20px;background:#f4f6f8}section{background:#fff;padding:16px;margin:14px 0;border-radius:10px}img{max-width:100%;border:1px solid #aaa}table{border-collapse:collapse;width:100%;margin-top:12px}td,th{padding:7px;border-bottom:1px solid #ddd;text-align:left}small{font-weight:400;color:#667}</style><h1>Duyệt ứng viên kích thước</h1><p>Chỉ là quan sát; chưa tạo DXF DIMENSION.</p>" + "\n".join(cards), encoding="utf-8")
+    return index
+
+
+def _unicode_glyph_render_check(content: str) -> dict[str, Any]:
+    """Prove each non-space codepoint has a non-replacement glyph in the approved font."""
+    font_path = Path(os.environ.get("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\arial.ttf"))
+    if not font_path.is_file():
+        raise FidelityError(f"Fidelity Unicode glyph-render font is unavailable: {font_path}")
+    try:
+        font = ImageFont.truetype(str(font_path), size=32)
+    except OSError as exc:
+        raise FidelityError(f"Cannot load fidelity Unicode glyph-render font: {font_path}") from exc
+    replacement = bytes(font.getmask("\ufffd"))
+    unsupported = [char for char in content if not char.isspace() and (not any(font.getmask(char)) or bytes(font.getmask(char)) == replacement)]
+    bounds = font.getbbox(content)
+    image = Image.new("L", (max(1, bounds[2] - bounds[0] + 4), max(1, bounds[3] - bounds[1] + 4)))
+    ImageDraw.Draw(image).text((2 - bounds[0], 2 - bounds[1]), content, font=font, fill=255)
+    return {
+        "passed": not unsupported and image.getbbox() is not None,
+        "font": {"name": font_path.name, "sha256": sha256_file(font_path)},
+        "unsupported_codepoints": [f"U+{ord(char):04X}" for char in unsupported],
+        "rendered_nonempty": image.getbbox() is not None,
+    }
+
+
+def write_fidelity_text_approval(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    page_number: int,
+    observation_path: Path,
+    candidate_ids: list[str],
+    approval_reference: str,
+    *,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """Record explicit per-text approval after a local Unicode glyph-render check."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(observation_path, output_root) or not observation_path.is_file():
+        raise FidelityError("Text observation must reside inside the private fidelity output root.")
+    if not candidate_ids or len(set(candidate_ids)) != len(candidate_ids):
+        raise FidelityError("Text approval requires one or more unique candidate ids.")
+    if not approval_reference.strip():
+        raise FidelityError("Text approval requires a non-empty approval reference.")
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    if observation.get("state") != "needs_human_approval" or observation.get("source") != manifest.get("source"):
+        raise FidelityError("Text observation is not valid for approval.")
+    if observation.get("page") != page_number:
+        raise FidelityError("Text approval page does not match its observation.")
+    candidates = {item.get("id"): item for item in observation.get("candidates", []) if isinstance(item, dict)}
+    if any(candidate_id not in candidates for candidate_id in candidate_ids):
+        raise FidelityError("Text approval references an unknown OCR candidate.")
+    approved_candidates = []
+    for candidate_id in candidate_ids:
+        candidate = candidates[candidate_id]
+        glyph_render = _unicode_glyph_render_check(candidate["content"])
+        if not glyph_render["passed"]:
+            raise FidelityError(f"Unicode glyph-render check failed for OCR candidate: {candidate_id}")
+        approved_candidates.append({"candidate": candidate, "glyph_render": glyph_render})
+    output = output_root / "fidelity_text_approvals" / f"page_{page_number:02d}.json"
+    if output.exists():
+        raise FidelityError(f"Fidelity text approval already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": page_number,
+        "observation": _artifact(observation_path, output_root),
+        "approval_reference": approval_reference.strip(),
+        "approved_candidates": approved_candidates,
+        "unresolved": ["approved OCR candidates are not emitted into DXF by this command", "text placement, height, style, and DXF emission require a separate approved reconstruction step"],
+    }
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
+def write_fidelity_text_approvals_from_selection(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    selection_path: Path,
+    approval_reference: str,
+    *,
+    workspace_root: Path,
+) -> list[dict[str, Any]]:
+    """Apply an exported browser selection as separate, explicit per-page approvals."""
+    try:
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError(f"Cannot read text selection file: {selection_path}") from exc
+    if selection.get("schema_version") != "fidelity-text-selection-1.0" or selection.get("source") != manifest.get("source"):
+        raise FidelityError("Text selection does not match the private fidelity source.")
+    selections = selection.get("selections")
+    if not isinstance(selections, list) or not selections:
+        raise FidelityError("Text selection requires at least one page selection.")
+    results = []
+    for item in selections:
+        if not isinstance(item, dict) or not isinstance(item.get("page"), int) or not isinstance(item.get("candidate_ids"), list):
+            raise FidelityError("Text selection page records are invalid.")
+        observation = output_root / "fidelity_text_observations" / f"page_{item['page']:02d}.json"
+        results.append(write_fidelity_text_approval(
+            source, output_root, manifest, item["page"], observation, item["candidate_ids"], approval_reference,
+            workspace_root=workspace_root,
+        ))
+    return results
+
+
+def run_fidelity_text_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    approval_path: Path,
+    *,
+    base_dxf: Path | None = None,
+    workspace_root: Path,
+) -> Path:
+    """Emit approved OCR as paper-coordinate TEXT in a fresh fidelity-only DXF."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root) or not approval_path.is_file():
+        raise FidelityError("Text approval must reside inside the private fidelity output root.")
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    if approval.get("state") != "approved-text-candidates-only" or approval.get("source") != manifest.get("source"):
+        raise FidelityError("Text approval is not valid for reconstruction.")
+    page = next((item for item in manifest["pages"] if item["page"] == approval.get("page")), None)
+    if page is None:
+        raise FidelityError("Text approval page is absent from the fidelity manifest.")
+    if base_dxf is not None and (not _is_within(base_dxf, output_root) or not base_dxf.is_file()):
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf) if base_dxf is not None else ezdxf.new("R2010")
+    document.header["$INSUNITS"] = 4
+    model = document.modelspace()
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+    height_px = int(json.loads(audit_path.read_text(encoding="utf-8"))["source_page"]["render_height_px"])
+    emitted = 0
+    for approved in approval.get("approved_candidates", []):
+        candidate = approved.get("candidate", {})
+        content = candidate.get("content")
+        bbox = candidate.get("bbox_px")
+        if not isinstance(content, str) or not content.strip() or not isinstance(bbox, list) or len(bbox) != 4:
+            raise FidelityError("Text approval contains an invalid candidate.")
+        x0, _, _, y1 = (float(value) for value in bbox)
+        text_height = max(1.5, min(10.0, (float(bbox[3]) - float(bbox[1])) * scale))
+        entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height})
+        entity.set_placement((x0 * scale, (height_px - y1) * scale))
+        emitted += 1
+    root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
+    if root.exists():
+        raise FidelityError(f"Text reconstruction already exists: {root}")
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "emitted_text_entities": emitted, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
+def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Create a private, read-only browser review page for OCR candidates."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    review_root = output_root / "fidelity_text_review"
+    index = review_root / "index.html"
+    revision = 2
+    while index.exists():
+        index = review_root / f"index-r{revision}.html"
+        revision += 1
+    cards: list[str] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        observation_path = output_root / "fidelity_text_observations" / f"page_{number:02d}.json"
+        if not observation_path.is_file():
+            raise FidelityError(f"Missing text observation for page {number}; run fidelity-text-observe first.")
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+        if observation.get("source") != manifest.get("source") or observation.get("page") != number:
+            raise FidelityError(f"Text observation for page {number} does not match the fidelity manifest.")
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        rows = []
+        for candidate in observation.get("candidates", []):
+            candidate_id = escape(str(candidate.get("id", "")))
+            content = escape(str(candidate.get("content", "")))
+            confidence = escape(str(candidate.get("confidence", "")))
+            bbox = escape(str(candidate.get("bbox_px", "")))
+            rows.append(f'<tr><td><input type="checkbox" data-page="{number}" value="{candidate_id}"></td><td><code>{candidate_id}</code></td><td>{content}</td><td>{confidence}</td><td><code>{bbox}</code></td></tr>')
+        rel_rendered = Path(os.path.relpath(rendered, index.parent)).as_posix()
+        cards.append(f'<section><h2>Trang {number} <small>{len(rows)} ứng viên</small></h2><details><summary>Xem ảnh PDF</summary><img src="{rel_rendered}" alt="PDF page {number}"></details><div class="scroll"><table><thead><tr><th>Duyệt</th><th>ID</th><th>OCR</th><th>Độ tin cậy</th><th>Khung pixel</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>')
+    source_json = json.dumps(manifest["source"], ensure_ascii=False)
+    page_html = """<!doctype html><meta charset='utf-8'><title>Duyệt chữ PDF riêng tư</title><style>body{font:15px system-ui,sans-serif;margin:20px;background:#f4f6f8;color:#18212b}header,section{background:#fff;border:1px solid #d9e0e6;border-radius:10px;padding:16px;margin:14px 0}h1{margin:0 0 6px}h2{margin:0 0 12px;font-size:18px}small{font-weight:400;color:#5d6b78}button{padding:10px 14px;border:0;border-radius:7px;background:#075985;color:#fff;font-weight:600;margin-right:8px}p{line-height:1.45}.scroll{overflow-x:auto;margin-top:12px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid #e4e9ed;padding:8px;text-align:left;vertical-align:top}th{background:#f8fafc}code{font-size:12px}img{max-width:100%;margin-top:12px;border:1px solid #cad3dc}summary{cursor:pointer;font-weight:600}</style><header><h1>Duyệt ứng viên chữ - riêng tư</h1><p>Chọn các OCR đúng rồi tải tệp lựa chọn. Tệp đó được dùng để tạo phê duyệt từng chữ có kiểm tra Unicode; việc tick không tự tạo DXF.</p><button onclick='copyIds()'>Sao chép ID</button><button onclick='downloadSelection()'>Tải tệp lựa chọn</button><p id='result' aria-live='polite'></p></header>""" + "\n".join(cards) + f"""<script>const source={source_json};function selected(){{const byPage={{}};document.querySelectorAll('input:checked').forEach(x=>(byPage[x.dataset.page]??=[]).push(x.value));return byPage;}}function copyIds(){{const byPage=selected();const text=Object.entries(byPage).map(([page,ids])=>'Trang '+page+': '+ids.join(', ')).join('\\n');navigator.clipboard.writeText(text);document.querySelector('#result').textContent=text?'Đã sao chép.':'Chưa chọn ứng viên nào.';}}function downloadSelection(){{const byPage=selected();const selections=Object.entries(byPage).map(([page,candidate_ids])=>({{page:Number(page),candidate_ids}}));if(!selections.length){{document.querySelector('#result').textContent='Chưa chọn ứng viên nào.';return;}}const blob=new Blob([JSON.stringify({{schema_version:'fidelity-text-selection-1.0',source,selections}},null,2)],{{type:'application/json'}});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='fidelity-text-selection.json';link.click();URL.revokeObjectURL(link.href);document.querySelector('#result').textContent='Đã tải tệp lựa chọn.';}}</script>"""
+    review_root.mkdir(parents=True, exist_ok=True)
+    index.write_text(page_html, encoding="utf-8")
+    return index
+
+
+def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path) -> Path:
+    """Place approved local geometry back into a paper-coordinate review page."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root):
+        raise FidelityError("Region approval must reside inside the private fidelity output root.")
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    if approval.get("state") != "approved-layout-reconstruction-only" or approval.get("source") != manifest.get("source"):
+        raise FidelityError("Region approval is not valid for composition.")
+    page_number = approval["page"]["number"]
+    page = next((item for item in manifest["pages"] if item["page"] == page_number), None)
+    if page is None:
+        raise FidelityError("Approved page is absent from the fidelity manifest.")
+    rendered_for_hash = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if approval["page"].get("render_sha256") != sha256_file(rendered_for_hash):
+        raise FidelityError("Region approval render hash no longer matches the page artifact.")
+    proposal_path = _safe_artifact_path(output_root, approval["proposal"])
+    proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
+    suffix = "" if approval["proposal"]["revision"] == 1 else f"-r{approval['proposal']['revision']}"
+    root = output_root / "reconstruction_pages" / f"page_{page_number:02d}{suffix}"
+    if root.exists():
+        raise FidelityError(f"Composed fidelity page already exists: {root}")
+    import ezdxf
+
+    composed = ezdxf.new("R2010")
+    composed.header["$INSUNITS"] = 4
+    model = composed.modelspace()
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    height_px = approval["page"]["render_height_px"]
+    for region in selected:
+        candidate = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
+        if not candidate.is_file():
+            raise FidelityError(f"Missing approved region candidate: {candidate}")
+        x0, _, _, y1 = region["bbox_px"]
+        offset_x, offset_y = x0 * scale, (height_px - y1) * scale
+        for entity in ezdxf.readfile(candidate).modelspace():
+            if entity.dxftype() == "LINE":
+                a, b = entity.dxf.start, entity.dxf.end
+                model.add_line((a.x + offset_x, a.y + offset_y), (b.x + offset_x, b.y + offset_y), dxfattribs={"layer": "FIDELITY_GEOMETRY"})
+            elif entity.dxftype() == "CIRCLE":
+                c = entity.dxf.center
+                model.add_circle((c.x + offset_x, c.y + offset_y), entity.dxf.radius, dxfattribs={"layer": "FIDELITY_GEOMETRY"})
+    root.mkdir(parents=True)
+    dxf = root / "layout.dxf"; composed.saveas(dxf)
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    image = cv2.imread(str(rendered))
+    if image is None:
+        raise FidelityError("Cannot read rendered page for composition.")
+    # The drawing renderer fits model extents to a page. Render each local
+    # candidate at its native crop size and paste it back at the approved pixel
+    # rectangle so the comparison preserves sheet coordinates.
+    vector = np.full_like(image, 255)
+    for region in selected:
+        x0, y0, x1, y1 = region["bbox_px"]
+        candidate = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
+        local_vector = _render_layout_dxf(candidate, (x1 - x0) * scale, (y1 - y0) * scale, x1 - x0, y1 - y0)
+        vector[y0:y1, x0:x1] = local_vector
+    source_edges = cv2.Canny(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 50, 150); vector_edges = cv2.Canny(cv2.cvtColor(vector, cv2.COLOR_BGR2GRAY), 50, 150)
+    overlay = image.copy(); overlap = (source_edges > 0) & (vector_edges > 0); overlay[source_edges > 0] = (0, 0, 255); overlay[vector_edges > 0] = (255, 255, 0); overlay[overlap] = (0, 255, 0)
+    cv2.imwrite(str(root / "overlay.png"), overlay)
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(image.shape[:2], 255, dtype=np.uint8)), "unresolved": ["unselected content remains absent", "no text/dimensions/linetypes/tables/model export"]}, indent=2) + "\n", encoding="utf-8")
+    return root
+
+
+def write_fidelity_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Write a private static index linking the existing per-page review artifacts."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    index = output_root / "fidelity_review" / "index.html"
+    if index.exists():
+        raise FidelityError(f"Fidelity review index already exists: {index}")
+    cards: list[str] = []
+    for page in manifest.get("pages", []):
+        artifacts = page["artifacts"]
+        rendered = _safe_artifact_path(output_root, artifacts["rendered_png"])
+        overlay_record = artifacts.get("fidelity_overlay")
+        overlay = _safe_artifact_path(output_root, overlay_record) if isinstance(overlay_record, dict) else None
+        observation = output_root / "fidelity_observations" / f"page_{page['page']:02d}.json"
+        table_state = "not run"
+        if observation.is_file():
+            table_state = json.loads(observation.read_text(encoding="utf-8")).get("state", "unknown")
+        rel_rendered = Path(os.path.relpath(rendered, index.parent)).as_posix()
+        rel_overlay = Path(os.path.relpath(overlay, index.parent)).as_posix() if overlay else None
+        overlay_html = f'<img src="{rel_overlay}" alt="overlay page {page["page"]}">' if rel_overlay else "<p>overlay not generated</p>"
+        cards.append(f'<section><h2>Page {page["page"]} <small>table: {table_state}</small></h2><div><figure><figcaption>PDF render</figcaption><img src="{rel_rendered}" alt="PDF page {page["page"]}"></figure><figure><figcaption>DXF overlay</figcaption>{overlay_html}</figure></div></section>')
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("<!doctype html><meta charset='utf-8'><title>Private Fidelity Review</title><style>body{font:14px sans-serif;margin:20px;background:#f5f5f5}section{background:#fff;padding:12px;margin:12px 0}section>div{display:flex;gap:12px}figure{width:48%;margin:0}img{max-width:100%;border:1px solid #bbb}small{font-weight:normal;color:#666}</style><h1>Private fidelity review - needs review</h1>" + "\n".join(cards), encoding="utf-8")
+    return index
+
+
+def write_fidelity_review_queue(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
+    """Summarize page-level private review work without promoting any candidate."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    queue_path = output_root / "fidelity_review" / "queue.json"
+    if queue_path.exists():
+        raise FidelityError(f"Fidelity review queue already exists: {queue_path}")
+    items: list[dict[str, Any]] = []
+    for page in manifest.get("pages", []):
+        number = page["page"]
+        observation = output_root / "fidelity_observations" / f"page_{number:02d}.json"
+        table_state = "not_run"
+        if observation.is_file():
+            table_state = json.loads(observation.read_text(encoding="utf-8")).get("state", "unknown")
+        approvals = sorted((output_root / "region_approvals").glob(f"page_{number:02d}*.json")) if (output_root / "region_approvals").is_dir() else []
+        items.append({"page": number, "state": "needs_review", "priority": 1 if number == 5 else 2, "table_observation": table_state, "approved_region_records": [path.relative_to(output_root).as_posix() for path in approvals], "next_action": "reconstruct approved region" if approvals else "select and approve a reconstruction region"})
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(json.dumps({"schema_version": "fidelity-review-queue-1.0", "private_artifact": True, "state": "needs_review", "items": items}, indent=2) + "\n", encoding="utf-8")
+    return queue_path
+
+
+def _observe_line_patterns(lines: list[Any]) -> list[dict[str, Any]]:
+    """Find conservative runs of separated, axis-aligned raw segments."""
+    result: list[dict[str, Any]] = []
+    for axis in ("horizontal", "vertical"):
+        groups: dict[int, list[tuple[float, float]]] = {}
+        for line in lines:
+            x0, y0, x1, y1 = line.bbox_px
+            if axis == "horizontal" and abs(y1 - y0) <= 3 and x1 - x0 >= 8:
+                groups.setdefault(round((y0 + y1) / 2 / 4) * 4, []).append((x0, x1))
+            if axis == "vertical" and abs(x1 - x0) <= 3 and y1 - y0 >= 8:
+                groups.setdefault(round((x0 + x1) / 2 / 4) * 4, []).append((y0, y1))
+        for coordinate, spans in groups.items():
+            spans.sort()
+            if len(spans) < 3:
+                continue
+            gaps = [round(spans[index + 1][0] - spans[index][1], 2) for index in range(len(spans) - 1)]
+            positive = [gap for gap in gaps if 2 <= gap <= 40]
+            if len(positive) >= 2:
+                result.append({"axis": axis, "coordinate_px": coordinate, "segment_count": len(spans), "median_gap_px": float(np.median(positive)), "status": "needs_review"})
+    return result
+
+
+def _observe_hatch_candidates(image: np.ndarray) -> list[dict[str, Any]]:
+    """Record dense diagonal-stroke cells as review-only hatch evidence."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    segments = cv2.HoughLinesP(
+        cv2.Canny(gray, 50, 150), 1, np.pi / 180, threshold=15,
+        minLineLength=12, maxLineGap=2,
+    )
+    groups: dict[tuple[int, int], int] = {}
+    if segments is not None:
+        for x0, y0, x1, y1 in segments.reshape(-1, 4):
+            dx, dy = int(x1) - int(x0), int(y1) - int(y0)
+            if abs(dx) < 10 or abs(dy) < 10:
+                continue
+            key = (int((int(x0) + int(x1)) / 2) // 100, int((int(y0) + int(y1)) / 2) // 100)
+            groups[key] = groups.get(key, 0) + 1
+    height, width = image.shape[:2]
+    return [
+        {
+            "bbox_px": [column * 100, row * 100, min(width, (column + 1) * 100), min(height, (row + 1) * 100)],
+            "diagonal_segment_count": count,
+            "state": "needs_review",
+        }
+        for (column, row), count in sorted(groups.items())
+        if count >= 5
+    ]
+
+
+def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
+    height, width = image.shape[:2]
+    _configure_tesseract(None)
+    page_area = width * height
+    detected = [
+        roi for roi in detect_text_candidate_rois(image)
+        if (roi[2] - roi[0]) * (roi[3] - roi[1]) <= page_area * 0.08
+    ]
+    # Hough-connected drawing strokes can form thousands of false text ROIs.
+    # Audit a bounded set and retain the count so an omitted ROI is visible to
+    # review instead of letting a private batch hang indefinitely.
+    detected.sort(key=lambda roi: (roi[2] - roi[0]) * (roi[3] - roi[1]), reverse=True)
+    rois = _deduplicate_rois([_title_block_roi(width, height), *detected[:8]])
+    texts = extract_text_tesseract(image, roi_boxes=rois, min_confidence=20, psm=11)
+    scale_candidates = detect_view_candidates(texts, raw_geometry.lines, width, height, dpi=dpi)
+    return {
+        "schema_version": "layout-audit-1.0",
+        "status": "needs_review",
+        "source_page": {
+            "page": page_number,
+            "render_sha256": sha256_file(rendered_path),
+            "render_width_px": width,
+            "render_height_px": height,
+            "dpi": dpi,
+        },
+        "ocr": {"engine": "tesseract-local", "psm": 11, "roi_limit": 9, "detected_roi_count": len(detected), "rois_px": [list(roi) for roi in rois], "texts": [_raw_text_payload(text) for text in texts]},
+        "table_audit": {"status": "not_evaluated", "reason": "table-region approval is required before per-cell OCR"},
+        "scale_candidates": scale_candidates,
+        "unresolved": ["OCR output is sidecar-only", "No model-space view is authorized"],
+    }
+
+
+def run_fidelity_pdf(source: Path, output_root: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
+    if manifest.get("schema_version") != FIDELITY_SCHEMA_VERSION:
+        raise ManifestError("Unsupported fidelity manifest schema version.")
+    verify_source(manifest, source)
+    if not manifest.get("private_artifact"):
+        raise FidelityError("Fidelity manifest must be marked private_artifact.")
+    if manifest_path.exists():
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if existing != manifest:
+            raise FidelityError("Fidelity manifest already exists; use a new private output root.")
+
+    from dxf_builder_lib.builder import build_dxf
+    from dxf_builder_lib.reviewer import review_dxf
+
+    dpi = int(manifest["configuration"]["dpi"])
+    zoom = dpi / 72.0
+    document = fitz.open(str(source))
+    try:
+        pages: list[dict[str, Any]] = []
+        for number, page in enumerate(document, start=1):
+            rendered = output_root / "rendered" / f"page_{number:02d}.png"
+            rendered.parent.mkdir(parents=True, exist_ok=True)
+            page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False).save(str(rendered))
+            image = cv2.imread(str(rendered))
+            if image is None:
+                raise FidelityError(f"Cannot read rendered page {number}.")
+            height, width = image.shape[:2]
+            page_width_mm, page_height_mm = _page_size_mm(page)
+            scale_x = page_width_mm / width
+            scale_y = page_height_mm / height
+            relative_scale_delta = abs(scale_x - scale_y) / max(scale_x, scale_y)
+            if relative_scale_delta > 0.002:
+                raise FidelityError("Rendered page has a non-uniform pixel-to-paper transform.")
+            # Raster dimensions are integral while PDF page boxes are not, so
+            # a small X/Y difference is normal rounding. Use their mean for
+            # the scalar Primitive IR contract and retain the page dimensions
+            # in the manifest for the layout audit.
+            paper_scale = (scale_x + scale_y) / 2.0
+            raw = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+            layout_doc = build_document(
+                file_name=rendered.name,
+                page_index=number - 1,
+                image_width_px=width,
+                image_height_px=height,
+                calibration=Calibration(
+                    unit="mm",
+                    pixel_to_unit_scale=paper_scale,
+                    origin_px=(0.0, float(height)),
+                    method="manual_override",
+                    reference_note="Fidelity layout: displayed PDF page coordinates in paper millimetres.",
+                ),
+                raw_lines=raw.lines,
+                raw_circles=raw.circles,
+                raw_texts=[],
+                sha256=sha256_file(rendered),
+            )
+            layout_ir = output_root / "layout_ir" / f"page_{number:02d}.json"
+            layout_ir.parent.mkdir(parents=True, exist_ok=True)
+            save_document(layout_doc, str(layout_ir))
+            dxf = output_root / "layout_dxf" / f"page_{number:02d}.dxf"
+            dxf.parent.mkdir(parents=True, exist_ok=True)
+            built = build_dxf(layout_doc, str(dxf), build_components=False)
+            review = review_dxf(built)
+            if not review.passed:
+                raise FidelityError(f"Clean layout DXF failed structural review on page {number}.")
+            audit = output_root / "layout_audit" / f"page_{number:02d}.json"
+            audit.parent.mkdir(parents=True, exist_ok=True)
+            audit.write_text(json.dumps(_audit_page(image, raw, dpi, number, rendered), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            pages.append({
+                "page": number,
+                "paper_size_mm": [round(page_width_mm, 4), round(page_height_mm, 4)],
+                "pixel_to_paper_mm": {"x": scale_x, "y": scale_y, "used": paper_scale},
+                "artifacts": {"rendered_png": _artifact(rendered, output_root), "layout_ir": _artifact(layout_ir, output_root), "layout_dxf": _artifact(dxf, output_root), "layout_audit": _artifact(audit, output_root)},
+                "structural_roundtrip": "pass",
+                "fidelity_state": "needs_review",
+            })
+    finally:
+        document.close()
+    manifest["pages"] = pages
+    write_manifest(manifest_path, manifest)
+
+
+def _render_layout_dxf(dxf: Path, width_mm: float, height_mm: float, width_px: int, height_px: int) -> np.ndarray:
+    import ezdxf
+    from ezdxf.addons.drawing import Frontend, RenderContext, layout
+    from ezdxf.addons.drawing.pymupdf import PyMuPdfBackend
+
+    document = ezdxf.readfile(dxf)
+    backend = PyMuPdfBackend()
+    Frontend(RenderContext(document), backend).draw_layout(document.modelspace(), finalize=True)
+    png = backend.get_replay(layout.Page(width_mm, height_mm)).get_pixmap(144, alpha=True).tobytes("png")
+    rendered = cv2.imdecode(np.frombuffer(png, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if rendered is None:
+        raise FidelityError("Could not rasterize clean layout DXF.")
+    if rendered.shape[2] == 4:
+        alpha = rendered[:, :, 3:4].astype(np.float32) / 255.0
+        rendered = (rendered[:, :, :3].astype(np.float32) * alpha + 255.0 * (1.0 - alpha)).astype(np.uint8)
+    return cv2.resize(rendered, (width_px, height_px), interpolation=cv2.INTER_AREA)
+
+
+def _edge_metrics(source_edges: np.ndarray, vector_edges: np.ndarray, mask: np.ndarray) -> dict[str, float]:
+    source = np.logical_and(source_edges > 0, mask > 0)
+    vector = np.logical_and(vector_edges > 0, mask > 0)
+    tolerance = cv2.dilate(source.astype(np.uint8), np.ones((7, 7), dtype=np.uint8)) > 0
+    reverse_tolerance = cv2.dilate(vector.astype(np.uint8), np.ones((7, 7), dtype=np.uint8)) > 0
+    precision = float(np.logical_and(vector, tolerance).sum() / max(1, vector.sum()))
+    recall = float(np.logical_and(source, reverse_tolerance).sum() / max(1, source.sum()))
+    return {"precision": round(precision, 6), "recall": round(recall, 6), "f1": round(2 * precision * recall / max(1e-12, precision + recall), 6)}
+
+
+def _fidelity_report(rendered: Path, dxf: Path, paper_size: list[float], overlay: Path) -> dict[str, Any]:
+    source = cv2.imread(str(rendered))
+    if source is None:
+        raise FidelityError("Could not read rendered PDF page for fidelity overlay.")
+    height, width = source.shape[:2]
+    vector = _render_layout_dxf(dxf, float(paper_size[0]), float(paper_size[1]), width, height)
+    source_edges = cv2.Canny(cv2.cvtColor(source, cv2.COLOR_BGR2GRAY), 50, 150)
+    vector_edges = cv2.Canny(cv2.cvtColor(vector, cv2.COLOR_BGR2GRAY), 50, 150)
+    full_mask = np.full((height, width), 255, dtype=np.uint8)
+    content_mask = full_mask.copy()
+    content_mask[: int(height * 0.03), :] = 0
+    content_mask[-int(height * 0.25):, :] = 0
+    content_mask[:, : int(width * 0.03)] = 0
+    content_mask[:, -int(width * 0.03):] = 0
+    overlay_image = source.copy()
+    overlap = np.logical_and(source_edges > 0, vector_edges > 0)
+    overlay_image[source_edges > 0] = (0, 0, 255)
+    overlay_image[vector_edges > 0] = (255, 255, 0)
+    overlay_image[overlap] = (0, 255, 0)
+    overlay.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(overlay), overlay_image):
+        raise FidelityError("Could not write fidelity overlay.")
+    return {
+        "schema_version": "fidelity-report-1.0",
+        "state": "needs_review",
+        "metric": {"renderer": "ezdxf-pymupdf", "edge_detector": "canny-50-150", "tolerance_px": 3},
+        "source_sha256": sha256_file(rendered),
+        "dxf_sha256": sha256_file(dxf),
+        "overlay_sha256": sha256_file(overlay),
+        "full_page": _edge_metrics(source_edges, vector_edges, full_mask),
+        "content_roi": _edge_metrics(source_edges, vector_edges, content_mask),
+    }
+
+
+def run_fidelity_overlays(source: Path, output_root: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
+    if manifest.get("schema_version") != FIDELITY_SCHEMA_VERSION:
+        raise ManifestError("Unsupported fidelity manifest schema version.")
+    verify_source(manifest, source)
+    if _is_within(output_root, Path.cwd()) or manifest_path.resolve().parent != output_root.resolve():
+        raise FidelityError("Fidelity overlay requires a private manifest directly under its external output root.")
+    for page in manifest.get("pages", []):
+        artifacts = page["artifacts"]
+        rendered = _safe_artifact_path(output_root, artifacts["rendered_png"])
+        dxf = _safe_artifact_path(output_root, artifacts["layout_dxf"])
+        overlay = output_root / "fidelity_overlay" / f"page_{page['page']:02d}.png"
+        report_path = output_root / "fidelity_report" / f"page_{page['page']:02d}.json"
+        report = _fidelity_report(rendered, dxf, page["paper_size_mm"], overlay)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        artifacts["fidelity_overlay"] = _artifact(overlay, output_root)
+        artifacts["fidelity_report"] = _artifact(report_path, output_root)
+    write_manifest(manifest_path, manifest)
