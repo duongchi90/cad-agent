@@ -111,6 +111,21 @@ def test_line_pattern_observation_is_sidecar_only() -> None:
     assert patterns == [{"axis": "horizontal", "coordinate_px": 8, "segment_count": 3, "median_gap_px": 8.0, "status": "needs_review"}]
 
 
+def test_hatch_observation_finds_a_cluster_of_diagonal_strokes() -> None:
+    from cad_agent.fidelity import _observe_hatch_candidates
+
+    image = np.full((160, 160, 3), 255, dtype=np.uint8)
+    for offset in range(20, 70, 10):
+        cv2.line(image, (offset, 70), (offset + 35, 35), (0, 0, 0), 1)
+
+    candidates = _observe_hatch_candidates(image)
+
+    assert len(candidates) == 1
+    assert candidates[0]["bbox_px"] == [0, 0, 100, 100]
+    assert candidates[0]["diagonal_segment_count"] >= 5
+    assert candidates[0]["state"] == "needs_review"
+
+
 def test_linetype_reconstruction_is_hash_bound_and_changes_only_matching_horizontal_lines(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
@@ -279,6 +294,37 @@ def test_dimension_observations_are_hash_bound_and_sidecar_only(tmp_path: Path) 
     assert payload["state"] in {"needs_human_approval", "not_evaluated"}
     assert payload["source"] == manifest["source"]
     assert payload["unresolved"] == ["no candidate is emitted as a DXF DIMENSION without explicit mapping approval"]
+
+
+def test_hatch_observations_are_hash_bound_and_sidecar_only(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_hatch_observations
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    outputs = run_fidelity_hatch_observations(source, output, manifest, workspace_root=Path.cwd())
+
+    assert len(outputs) == 1
+    payload = json.loads(outputs[0].read_text(encoding="utf-8"))
+    assert payload["state"] == "needs_review"
+    assert payload["source"] == manifest["source"]
+    assert payload["source_render_sha256"]
+    assert payload["unresolved"] == ["no candidate is emitted as a DXF HATCH without boundary approval"]
+
+
+def test_hatch_observation_cli_writes_private_sidecars(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+
+    assert main(["fidelity-hatch-observe", "--input", str(source), "--manifest", str(manifest_path)]) == 0
+    assert (output / "fidelity_hatch_observations" / "page_01.json").is_file()
 
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:

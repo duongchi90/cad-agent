@@ -341,6 +341,15 @@ def _fidelity_dimension_observe_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_hatch_observe_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_hatch_observations
+
+    manifest_path = args.manifest.resolve()
+    for output in run_fidelity_hatch_observations(args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), workspace_root=Path.cwd()):
+        print(output)
+    return 0
+
+
 def _fidelity_dimension_review_index_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, write_fidelity_dimension_review_index
 
@@ -546,6 +555,9 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_dimension_observe = subcommands.add_parser("fidelity-dimension-observe", help="Write review-only dimension candidates")
     fidelity_dimension_observe.add_argument("--input", type=Path, required=True)
     fidelity_dimension_observe.add_argument("--manifest", type=Path, required=True)
+    fidelity_hatch_observe = subcommands.add_parser("fidelity-hatch-observe", help="Write review-only diagonal-stroke hatch candidates")
+    fidelity_hatch_observe.add_argument("--input", type=Path, required=True)
+    fidelity_hatch_observe.add_argument("--manifest", type=Path, required=True)
     fidelity_dimension_review = subcommands.add_parser("fidelity-dimension-review-index", help="Write a private browser index for dimension candidates")
     fidelity_dimension_review.add_argument("--input", type=Path, required=True)
     fidelity_dimension_review.add_argument("--manifest", type=Path, required=True)
@@ -633,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_table_text_observe_command(args)
         if args.command == "fidelity-dimension-observe":
             return _fidelity_dimension_observe_command(args)
+        if args.command == "fidelity-hatch-observe":
+            return _fidelity_hatch_observe_command(args)
         if args.command == "fidelity-dimension-review-index":
             return _fidelity_dimension_review_index_command(args)
         if args.command == "fidelity-linetype-reconstruct":

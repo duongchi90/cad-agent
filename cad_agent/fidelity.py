@@ -428,6 +428,39 @@ def run_fidelity_observations(source: Path, output_root: Path, manifest: dict[st
     return outputs
 
 
+def run_fidelity_hatch_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+    """Write hash-bound diagonal-stroke evidence without constructing DXF HATCH entities."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    root = output_root / "fidelity_hatch_observations"
+    revision = 2
+    while root.exists() and any(root.iterdir()):
+        root = output_root / f"fidelity_hatch_observations-r{revision}"
+        revision += 1
+    root.mkdir(parents=True, exist_ok=True)
+    outputs: list[Path] = []
+    for page in manifest.get("pages", []):
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        image = cv2.imread(str(rendered))
+        if image is None:
+            raise FidelityError("Cannot read rendered page for hatch observations.")
+        output = root / f"page_{page['page']:02d}.json"
+        payload = {
+            "schema_version": "fidelity-hatch-observation-1.0",
+            "private_artifact": True,
+            "state": "needs_review",
+            "source": manifest["source"],
+            "page": page["page"],
+            "source_render_sha256": sha256_file(rendered),
+            "candidates": _observe_hatch_candidates(image),
+            "unresolved": ["no candidate is emitted as a DXF HATCH without boundary approval"],
+        }
+        output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        outputs.append(output)
+    return outputs
+
+
 def run_fidelity_text_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
     """Write hash-bound OCR candidates for later per-text review, never DXF text."""
     if _is_within(output_root, workspace_root):
@@ -1083,6 +1116,33 @@ def _observe_line_patterns(lines: list[Any]) -> list[dict[str, Any]]:
             if len(positive) >= 2:
                 result.append({"axis": axis, "coordinate_px": coordinate, "segment_count": len(spans), "median_gap_px": float(np.median(positive)), "status": "needs_review"})
     return result
+
+
+def _observe_hatch_candidates(image: np.ndarray) -> list[dict[str, Any]]:
+    """Record dense diagonal-stroke cells as review-only hatch evidence."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    segments = cv2.HoughLinesP(
+        cv2.Canny(gray, 50, 150), 1, np.pi / 180, threshold=15,
+        minLineLength=12, maxLineGap=2,
+    )
+    groups: dict[tuple[int, int], int] = {}
+    if segments is not None:
+        for x0, y0, x1, y1 in segments.reshape(-1, 4):
+            dx, dy = int(x1) - int(x0), int(y1) - int(y0)
+            if abs(dx) < 10 or abs(dy) < 10:
+                continue
+            key = (int((int(x0) + int(x1)) / 2) // 100, int((int(y0) + int(y1)) / 2) // 100)
+            groups[key] = groups.get(key, 0) + 1
+    height, width = image.shape[:2]
+    return [
+        {
+            "bbox_px": [column * 100, row * 100, min(width, (column + 1) * 100), min(height, (row + 1) * 100)],
+            "diagonal_segment_count": count,
+            "state": "needs_review",
+        }
+        for (column, row), count in sorted(groups.items())
+        if count >= 5
+    ]
 
 
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
