@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from primitive_ir_lib.assemble import build_document
 from primitive_ir_lib.calibration import Calibration
-from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+from primitive_ir_lib.geometry_extraction import RawGeometry, extract_raw_geometry
 from primitive_ir_lib.io_utils import save_document
 from primitive_ir_lib.run_image import _configure_tesseract
 from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
@@ -36,6 +36,68 @@ FIDELITY_SCHEMA_VERSION = "fidelity-run-1.0"
 
 class FidelityError(ValueError):
     """Raised for an unsafe or unsupported fidelity-layout request."""
+
+
+def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
+    """Remove only sub-12-pixel strokes from a review-only raw candidate."""
+    retained: list[Any] = []
+    for line in raw.lines:
+        if line.length_px() < 12.0:
+            continue
+        start, end = sorted((line.p1_px, line.p2_px))
+        duplicate_index = next((
+            index for index, existing in enumerate(retained)
+            if max(abs(start[0] - existing[0][0]), abs(start[1] - existing[0][1]),
+                   abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
+        ), None)
+        if duplicate_index is None:
+            retained.append((start, end, line))
+        else:
+            current = retained[duplicate_index][2]
+            if (line.confidence, line.length_px()) > (current.confidence, current.length_px()):
+                retained[duplicate_index] = (start, end, line)
+    return RawGeometry(
+        lines=[item[2] for item in retained],
+        circles=list(raw.circles),
+    )
+
+
+def _raw_geometry_edges(raw: RawGeometry, shape: tuple[int, int]) -> np.ndarray:
+    canvas = np.full(shape, 255, dtype=np.uint8)
+    for line in raw.lines:
+        cv2.line(
+            canvas,
+            tuple(round(value) for value in line.p1_px),
+            tuple(round(value) for value in line.p2_px),
+            0,
+            1,
+            lineType=cv2.LINE_AA,
+        )
+    for circle in raw.circles:
+        cv2.circle(
+            canvas,
+            tuple(round(value) for value in circle.center_px),
+            max(1, round(circle.radius_px)),
+            0,
+            1,
+            lineType=cv2.LINE_AA,
+        )
+    return cv2.Canny(canvas, 50, 150)
+
+
+def _select_fidelity_geometry(raw: RawGeometry, crop: np.ndarray, scale: float) -> tuple[RawGeometry, dict[str, Any]]:
+    """Choose a filtered candidate only if it improves local tolerant edge F1."""
+    del scale  # Raw geometry and the cropped PDF share pixel coordinates here.
+    source_edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
+    mask = np.full(crop.shape[:2], 255, dtype=np.uint8)
+    baseline_edges = _raw_geometry_edges(raw, crop.shape[:2])
+    filtered = _filter_fidelity_geometry(raw)
+    filtered_edges = _raw_geometry_edges(filtered, crop.shape[:2])
+    baseline = {"edge_metric": _edge_metrics(source_edges, baseline_edges, mask), "line_entities": len(raw.lines), "circle_entities": len(raw.circles)}
+    filtered_report = {"edge_metric": _edge_metrics(source_edges, filtered_edges, mask), "line_entities": len(filtered.lines), "circle_entities": len(filtered.circles)}
+    if filtered_report["edge_metric"]["f1"] > baseline["edge_metric"]["f1"]:
+        return filtered, {"selected_profile": "filtered", "baseline": baseline, "filtered": filtered_report}
+    return raw, {"selected_profile": "baseline", "baseline": baseline, "filtered": filtered_report}
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -314,6 +376,7 @@ def run_fidelity_reconstruct(
         x0, y0, x1, y1 = region["bbox_px"]
         crop = image[y0:y1, x0:x1]
         raw = extract_raw_geometry(crop, preset="real_scan_tuned_v1")
+        selected_raw, quality = _select_fidelity_geometry(raw, crop, scale)
         candidate_root = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"]
         if candidate_root.exists():
             raise FidelityError(f"Reconstruction candidate already exists: {candidate_root}")
@@ -322,7 +385,7 @@ def run_fidelity_reconstruct(
             file_name=f"page_{page_number:02d}_{region['id']}.png", page_index=page_number - 1,
             image_width_px=crop.shape[1], image_height_px=crop.shape[0],
             calibration=Calibration(unit="mm", pixel_to_unit_scale=scale, origin_px=(0.0, float(crop.shape[0])), method="manual_override", reference_note="Approved fidelity-layout region in paper millimetres."),
-            raw_lines=raw.lines, raw_circles=raw.circles, raw_texts=[], sha256=sha256_file(rendered),
+            raw_lines=selected_raw.lines, raw_circles=selected_raw.circles, raw_texts=[], sha256=sha256_file(rendered),
         )
         dxf = candidate_root / "geometry.dxf"
         build_dxf(doc, str(dxf), build_components=False)
@@ -332,7 +395,7 @@ def run_fidelity_reconstruct(
         overlay = crop.copy(); overlap = (source_edges > 0) & (vector_edges > 0)
         overlay[source_edges > 0] = (0, 0, 255); overlay[vector_edges > 0] = (255, 255, 0); overlay[overlap] = (0, 255, 0)
         cv2.imwrite(str(candidate_root / "source.png"), crop); cv2.imwrite(str(candidate_root / "overlay.png"), overlay)
-        (candidate_root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "region": region, "entities": {"LINE": len(raw.lines), "CIRCLE": len(raw.circles)}, "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(crop.shape[:2], 255, dtype=np.uint8)), "unresolved": ["text/dimensions/linetypes/tables remain sidecar-only", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+        (candidate_root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "region": region, "entities": {"LINE": len(selected_raw.lines), "CIRCLE": len(selected_raw.circles)}, "quality": quality, "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(crop.shape[:2], 255, dtype=np.uint8)), "unresolved": ["text/dimensions/linetypes/tables remain sidecar-only", "no model export"]}, indent=2) + "\n", encoding="utf-8")
         results.append(candidate_root)
     return results
 

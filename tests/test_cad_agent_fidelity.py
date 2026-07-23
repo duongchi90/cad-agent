@@ -6,9 +6,11 @@ from pathlib import Path
 
 import ezdxf
 import fitz
+import cv2
+import numpy as np
 import pytest
 
-from primitive_ir_lib.geometry_extraction import RawLine
+from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 from cad_agent.fidelity import (
     FidelityError,
     new_fidelity_manifest,
@@ -328,7 +330,11 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
             "--manifest", str(output / "fidelity-run-manifest.json"),
             "--approval", str(output / "region_approvals" / "page_01-r2.json"),
         ]) == 0
-        assert (output / "reconstruction_candidates" / "page_01" / "main_view" / "geometry.dxf").is_file()
+        candidate = output / "reconstruction_candidates" / "page_01" / "main_view"
+        assert (candidate / "geometry.dxf").is_file()
+        report = json.loads((candidate / "report.json").read_text(encoding="utf-8"))
+        assert report["quality"]["selected_profile"] in {"baseline", "filtered"}
+        assert "f1" in report["quality"]["baseline"]["edge_metric"]
         assert run_fidelity_compose(source, output, manifest, output / "region_approvals" / "page_01-r2.json", workspace_root=Path.cwd()).is_dir()
         foreign = root / "foreign-approval.json"
         foreign.write_text((output / "region_approvals" / "page_01-r2.json").read_text(encoding="utf-8"), encoding="utf-8")
@@ -389,3 +395,38 @@ def test_fidelity_cli_creates_private_baseline() -> None:
         assert (output / "fidelity_review" / "index.html").is_file()
         assert main(["fidelity-review-queue", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_review" / "queue.json").is_file()
+
+
+def test_region_quality_selects_filtered_geometry_only_when_f1_improves() -> None:
+    from cad_agent.fidelity import _select_fidelity_geometry
+
+    crop = np.full((160, 200, 3), 255, dtype=np.uint8)
+    cv2.line(crop, (20, 80), (180, 80), (0, 0, 0), 1)
+    raw = RawGeometry(lines=[
+        RawLine("main", (20.0, 80.0), (180.0, 80.0), 1.0, (20.0, 80.0, 180.0, 80.0)),
+        RawLine("noise-1", (20.0, 25.0), (27.0, 25.0), 0.2, (20.0, 25.0, 27.0, 25.0)),
+        RawLine("noise-2", (35.0, 35.0), (42.0, 35.0), 0.2, (35.0, 35.0, 42.0, 35.0)),
+    ])
+
+    selected, quality = _select_fidelity_geometry(raw, crop, 1.0)
+
+    assert quality["selected_profile"] == "filtered"
+    assert quality["filtered"]["edge_metric"]["f1"] > quality["baseline"]["edge_metric"]["f1"]
+    assert [line.id for line in selected.lines] == ["main"]
+
+
+def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:
+    from cad_agent.fidelity import _select_fidelity_geometry
+
+    crop = np.full((160, 200, 3), 255, dtype=np.uint8)
+    cv2.line(crop, (20, 80), (180, 80), (0, 0, 0), 1)
+    raw = RawGeometry(lines=[
+        RawLine("main", (20.0, 80.0), (180.0, 80.0), 1.0, (20.0, 80.0, 180.0, 80.0)),
+        RawLine("duplicate", (20.0, 86.0), (180.0, 86.0), 0.8, (20.0, 86.0, 180.0, 86.0)),
+    ])
+
+    selected, quality = _select_fidelity_geometry(raw, crop, 1.0)
+
+    assert quality["selected_profile"] == "filtered"
+    assert quality["filtered"]["edge_metric"]["f1"] > quality["baseline"]["edge_metric"]["f1"]
+    assert [line.id for line in selected.lines] == ["main"]
