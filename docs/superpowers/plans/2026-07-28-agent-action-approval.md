@@ -1,19 +1,29 @@
 # Agent Action Approval Implementation Plan
 
-**Status:** In progress
+**Status:** Completed
 
 **Base SHA:** `31b17e9`
 
+**Implementation Head SHA:** `09c276cfcf8d9640bef9f605ffe2430f1f863195`
+
 **Verification command:** `scripts/verify.ps1`
+
+**Verification result:** `PASS` on the implementation Head SHA: 342 offline
+tests, zero failures/errors/skips; the unavailable-state probes reported two
+expected `real_data` skips and four expected `autocad_mechanical` skips.
+
+**Smoke result:** the file runner generated 10 advisory actions from repository
+demo IR and recorded `application_requested=false`,
+`actions_applied=false`.
 
 ## Steps
 
-1. Add focused unit tests for default non-mutation, invalid partial approval,
+1. Completed: Add focused unit tests for default non-mutation, invalid partial approval,
    and explicitly approved application.
-2. Add a reusable approval gate and application audit writer to
+2. Completed: Add a reusable approval gate and application audit writer to
    `agent_lib.run`.
-3. Wire the runner CLI to the literal confirmation and approval reference.
-4. Change the synthetic demo to report-only behavior and write a non-mutating
+3. Completed: Wire the runner CLI to the literal confirmation and approval reference.
+4. Completed: Change the synthetic demo to report-only behavior and write a non-mutating
    application audit.
-5. Update architecture/status documentation.
-6. Run focused tests and the full verifier, then record the completion evidence.
+5. Completed: Update architecture/status documentation.
+6. Completed: Run focused tests and the full verifier, then record the completion evidence.

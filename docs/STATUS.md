@@ -42,7 +42,7 @@ the skips and the run used Python 3.12.
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
 | Visual PDF-to-DXF fidelity | Partially verified | Private paper-coordinate baselines, overlays, region approvals, reconstruction candidates, and table-grid observations exist outside Git. They are `needs_review`; neither the old analysis DXFs nor a headless DXF review proves visual similarity to the PDF. |
 | MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
-| Agent advice/audit | Partially verified | Offline tests passed; `run_agent()` is non-mutating, but the current run/demo entry points auto-apply reports and are not approved production mutation paths. |
+| Agent advice/audit | Verified | `run_agent()`, `agent_lib.run`, and the demo are non-mutating by default. Application requires literal `APPLY` plus a non-empty approval reference, and the runner writes a separate application audit. Focused, full offline, and advisory smoke gates passed on the implementation head below. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
 | Thin image/PDF orchestration CLI | Verified | `cad_agent` run/resume and run-pdf/resume-pdf produce SHA-bound staged DXF and build evidence. Separate Mechanical review/repair commands enforce evidence, approval, backup, and second-review boundaries. |
 | Production repair safety loop | Partially verified | Fake-MCP tests cover refusal, backup, repair, second review, and rollback. A real AutoCAD Mechanical staged-DXF review passed; no production drawing repair was run. |
@@ -151,6 +151,35 @@ and a second live review; it was not requested or run here.
   model or a claim of pixel-perfect visual fidelity. No customer/production
   drawing was mutated or repaired.
 
+## Agent action approval evidence
+
+- State: **Verified**
+- Date: `2026-07-28`
+- Implementation Head SHA: `09c276cfcf8d9640bef9f605ffe2430f1f863195`.
+- Design and plan:
+  `docs/superpowers/specs/2026-07-28-agent-action-approval-design.md`;
+  `docs/superpowers/plans/2026-07-28-agent-action-approval.md`.
+- Safety behavior: the file runner and synthetic demo are advisory by default.
+  Applying a report requires `--confirm-agent-actions APPLY` plus a non-empty
+  `--agent-action-approval`; `agent_application.json` records the request,
+  result, action count, and approval reference.
+- Focused tests: all `agent_lib/tests` -> `70 passed`; this includes default
+  non-mutation, four invalid/partial approval cases, and explicitly approved
+  application.
+- Advisory smoke: the real runner loaded the repository's 900x700 synthetic
+  image and IR, produced 10 constraint-drop proposals, exited `0`, and recorded
+  `application_requested=false` and `actions_applied=false` under
+  `C:\temp\cad-agent-agent-gate-09c276c`.
+- Authoritative command:
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1`
+  -> exit `0`; offline JUnit `tests=342; failures=0; errors=0; skipped=0`.
+- Specialized unavailable-state probes remained safe: `real_data` reported two
+  expected skips and `autocad_mechanical` reported four expected skips. The
+  earlier approved private-PDF and live Mechanical results remain recorded in
+  the delegated-review fidelity refresh above.
+- Boundary: this gate controls in-memory IR application only. It does not grant
+  permission to repair or save a production AutoCAD drawing.
+
 ## Mechanical production review/repair evidence
 
 - State: **Partially verified**
@@ -209,4 +238,8 @@ and a second live review; it was not requested or run here.
 - Lock/environment, Git whitespace, and repository content-hash side-effect checks: `PASS`
 - Verification transcript SHA-256: `486ec0fe693a209a866e96673a34e249b4496ec3906e35d101e44f538c93de3a`
 - Independent review: `docs/reviews/2026-07-22-reproducible-foundation.md`; three final-head reports; unresolved P0/P1 `0`
-- Remaining risks: the approved private `real_data` gate and live `autocad_lt` gate were NOT RUN; current `agent_lib.run`/demo auto-apply behavior is not an approved production mutation path.
+- Limit at this historical foundation head: the approved private `real_data`
+  gate and then-current live `autocad_lt` gate were not run, and the Agent
+  entry points still auto-applied reports. Later sections supersede those
+  specific limits with private-data, AutoCAD Mechanical 2027, and Agent
+  approval-gate evidence.
