@@ -238,7 +238,7 @@ and a second live review; it was not requested or run here.
 - Lock/environment, Git whitespace, and repository content-hash side-effect checks: `PASS`
 - Verification transcript SHA-256: `486ec0fe693a209a866e96673a34e249b4496ec3906e35d101e44f538c93de3a`
 - Independent review: `docs/reviews/2026-07-22-reproducible-foundation.md`; three final-head reports; unresolved P0/P1 `0`
-- Limit at this historical foundation head: the approved private `real_data`
+- Remaining risks: at this historical foundation head, the approved private `real_data`
   gate and then-current live `autocad_lt` gate were not run, and the Agent
   entry points still auto-applied reports. Later sections supersede those
   specific limits with private-data, AutoCAD Mechanical 2027, and Agent
