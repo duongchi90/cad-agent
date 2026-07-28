@@ -40,7 +40,7 @@ the skips and the run used Python 3.12.
 | Primitive IR | Verified | Final Python 3.11 offline gate passed with zero skips; the approved private PDF, identified by SHA-256 below, completed Primitive IR for all nine pages. |
 | Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips; the approved private PDF completed all nine Semantic IR checkpoints. |
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
-| Visual PDF-to-DXF fidelity | Partially verified | Private paper-coordinate baselines, overlays, region approvals, reconstruction candidates, and table-grid observations exist outside Git. They are `needs_review`; neither the old analysis DXFs nor a headless DXF review proves visual similarity to the PDF. |
+| Visual PDF-to-DXF fidelity | Partially verified | Delegated visual review accepted the paper layout and primary linework on all nine reconstruction overlays, and all nine DXFs opened read-only in AutoCAD Mechanical 2027. Text/font/OCR, hatch, linetype, table placement, and true dimension semantics remain excluded from authoritative fidelity. |
 | MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
 | Agent advice/audit | Verified | `run_agent()`, `agent_lib.run`, and the demo are non-mutating by default. Application requires literal `APPLY` plus a non-empty approval reference, and the runner writes a separate application audit. Focused, full offline, and advisory smoke gates passed on the implementation head below. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
@@ -62,6 +62,25 @@ the skips and the run used Python 3.12.
 Maintain the SHA-bound private benchmark and run any future optimization against
 it. Production repair remains a separate human-approved operation with backup
 and a second live review; it was not requested or run here.
+
+## First product milestone decision
+
+- State: **Verified** for the reviewable-DXF scope defined in
+  `docs/PROJECT.md`.
+- Date: `2026-07-28`.
+- The approved nine-page private PDF completed Primitive IR, Semantic IR,
+  optional audited Agent advice, staged/reconstructed DXF, headless structural
+  checks, delegated visual review, and read-only AutoCAD Mechanical 2027 load
+  checks with reproducible evidence.
+- The Agent path is advisory by default and has a separate explicit approval
+  gate. No production drawing was mutated.
+- Deferred work does not block the reviewable milestone: the user explicitly
+  deferred the known font/OCR correction. Hatch, linetype, table placement,
+  and true dimension semantics remain review observations rather than
+  fabricated authoritative CAD entities.
+- Production repair is an operational gate, not an automatic completion step:
+  it still requires a named production DXF, matching evidence, verified backup,
+  explicit repair confirmation, and a passing post-repair review.
 
 ## Thin vertical-slice CLI evidence
 
@@ -122,7 +141,7 @@ and a second live review; it was not requested or run here.
 
 ## Delegated-review fidelity refresh
 
-- State: **Partially verified** (reviewable paper-layout scope only)
+- State: **Verified** (reviewable paper-layout and primary-linework scope only)
 - Date: `2026-07-28`
 - Source: the approved private `202607092308.pdf`, SHA-256
   `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
@@ -147,9 +166,19 @@ and a second live review; it was not requested or run here.
 - Fresh authoritative offline command:
   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1`
   -> exit `0`; offline JUnit `tests=336; failures=0; errors=0; skipped=0`.
-- Limit: these are paper-coordinate, reviewable artifacts, not a production
-  model or a claim of pixel-perfect visual fidelity. No customer/production
-  drawing was mutated or repaired.
+- Delegated visual review: all nine `reconstruction_pages/page_XX/overlay.png`
+  files were inspected on 2026-07-28. Red is source raster edge, cyan is
+  reconstructed DXF edge, and green is overlap. The paper layout and primary
+  vehicle/structure linework were accepted for review use on every page.
+- AutoCAD Mechanical load check: all nine
+  `reconstruction_pages/page_XX/layout.dxf` files opened successfully through
+  the live File IPC backend on HWND `787740`. Each reported seven consistent
+  top-level entities on layers `0`, `Defpoints`, `DIEM_NOI`, and
+  `COMP_DIEM_NOI`; the active page exposed blocks `COMP_NODE` and `GENAXEH`.
+  The check was read-only: no save, repair, or production mutation occurred.
+- Limit: this is not a production model or a claim of pixel-perfect fidelity.
+  Text/font/OCR, hatch, linetype, table placement, and dimension semantics are
+  outside the accepted primary-linework scope.
 
 ## Agent action approval evidence
 
