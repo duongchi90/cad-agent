@@ -120,6 +120,37 @@ and a second live review; it was not requested or run here.
 - Hatch observation: `fidelity-hatch-observe` now writes SHA-bound, review-only diagonal-stroke sidecars. Its nine-page private rerun found six candidates only on pages 3, 5, and 9 (peak segment counts 20, 5, and 10); it found none on the other pages. No DXF `HATCH` entity or production mutation is emitted, and every candidate remains `needs_review` pending explicit boundary approval.
 - Remaining risk: all nine compositions remain `needs_review`, and broad layout approvals do not validate visual similarity. OCR text remains correctable and text placement/style needs review. Disciplined model-view reconstruction, true dimension semantics, verified linetypes/hatches, and table-cell placement still require visual review before they can be represented as authoritative CAD content.
 
+## Delegated-review fidelity refresh
+
+- State: **Partially verified** (reviewable paper-layout scope only)
+- Date: `2026-07-28`
+- Source: the approved private `202607092308.pdf`, SHA-256
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
+- Fresh private output: `C:\temp\cad-agent-fidelity-e48f3970-final-20260728`.
+  It contains all nine rendered pages, structural round-trip passes, overlays,
+  observations, SHA-bound `sheet_content` approvals, geometry candidates, and
+  composed page DXFs. The review authorization was delegated by the user on
+  2026-07-28; it is recorded in the new approval artifacts.
+- OCR evidence: all 419 new OCR candidates exactly match the candidate text and
+  pixel boxes in the previously approved set. Nine fresh text-approval files
+  were created. Fresh DXF text reconstruction was intentionally not run because
+  the user deferred the known Vietnamese preview-font correction.
+- Fresh private-data command:
+  `CAD_AGENT_FIDELITY_PDF=C:\Users\duong\Downloads\202607092308.pdf`,
+  `CAD_AGENT_FIDELITY_MANIFEST=C:\temp\cad-agent-fidelity-e48f3970-final-20260728\fidelity-run-manifest.json`, then
+  `python -m pytest tests\test_cad_agent_fidelity_real_data.py -ra -p no:cacheprovider`
+  -> `1 passed`.
+- Fresh live command: AutoCAD Mechanical 2027 HWND `787740` with
+  `mcp_dispatch.lsp` loaded; `python -m pytest -m autocad_mechanical -ra -p no:cacheprovider`
+  -> `4 passed, 338 deselected` in `69.93s`. The test writes only disposable
+  DXFs under `C:\temp`.
+- Fresh authoritative offline command:
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1`
+  -> exit `0`; offline JUnit `tests=336; failures=0; errors=0; skipped=0`.
+- Limit: these are paper-coordinate, reviewable artifacts, not a production
+  model or a claim of pixel-perfect visual fidelity. No customer/production
+  drawing was mutated or repaired.
+
 ## Mechanical production review/repair evidence
 
 - State: **Partially verified**
