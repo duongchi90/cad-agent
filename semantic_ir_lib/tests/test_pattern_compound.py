@@ -255,6 +255,27 @@ def test_integration_via_assemble():
     print(f"OK   test_integration_via_assemble ({len(doc.parts)} parts, {len(doc.constraints)} constraints)")
 
 
+def test_assemble_stores_pruned_constraints_not_detection_cartesian_product():
+    """Semantic IR must not persist transitive pairwise detection noise."""
+    from semantic_ir_lib.assemble import build_semantic_document
+    from primitive_ir_lib.models import PrimitiveIRDocument, SourceDocument, Calibration
+
+    lines = [_line(f"parallel-{index}", 0, index * 20, 100, index * 20)
+             for index in range(3)]
+    prim_doc = PrimitiveIRDocument(
+        source_document=SourceDocument(file_name="dense.png", page_index=0,
+            image_width_px=1000, image_height_px=800),
+        calibration=Calibration(unit="mm", pixel_to_unit_scale=1.0,
+            origin_px=(0, 0), method="manual_override"),
+        primitives=lines,
+    )
+
+    doc = build_semantic_document(prim_doc, "dense.png", enable_compound_parts=False)
+
+    assert len(doc.constraints) < 6
+    assert {c.type for c in doc.constraints} == {"parallel", "equal_length"}
+
+
 _TESTS = [
     test_khung_chu_nhat_perfect,
     test_khung_chu_nhat_dedup_no_gia_do,

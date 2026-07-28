@@ -17,6 +17,7 @@ from typing import List
 from primitive_ir_lib.models import Primitive, PrimitiveIRDocument
 
 from .constraint_detection import detect_circle_constraints, detect_constraints
+from .constraint_pruning import prune_constraints
 from .models import PrimitiveIRRef, SemanticIRDocument
 from .pattern_compound import build_compound_parts
 from .pattern_recognition import build_parts_from_primitives
@@ -84,6 +85,12 @@ def build_semantic_document(
             coincident_distance_mm=constraint_distance_tolerance_mm,
         )
         parts = parts + compound_parts
+
+    # Persist only the compact, solver-ready constraint set.  Compound
+    # detection above intentionally receives the raw detections because it
+    # uses them as geometric evidence, but the Semantic IR must not retain
+    # the quadratic pairwise detection noise.
+    constraints = prune_constraints(constraints).kept
 
     return SemanticIRDocument(
         primitive_ir_ref=PrimitiveIRRef(

@@ -26,10 +26,13 @@ human-verified must not be reused as verified production scale.
 ### `semantic_ir_lib`
 
 Consumes Primitive IR. Produces `SemanticIRDocument` containing
-single-primitive parts, compound parts, and detected constraints only.
-`prune_constraints()` returns a separate `PruneResult`; `solve_constraints()`
-returns a separate `SolveResult` with `solved_primitives`. Neither result is
-automatically written back into `SemanticIRDocument`.
+single-primitive parts, compound parts, and pruned, solver-ready constraints.
+Assembly keeps the raw detections in memory long enough for compound inference,
+then calls `prune_constraints()` before serialization so quadratic pairwise
+noise is not persisted. `prune_constraints()` still returns a separate
+`PruneResult`, while `solve_constraints()` returns a separate `SolveResult`
+with `solved_primitives`; solved coordinates are never written back into
+`SemanticIRDocument` automatically.
 
 ### `agent_lib`
 

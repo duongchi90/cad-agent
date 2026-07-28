@@ -11,7 +11,7 @@ sinh **Semantic IR** đúng `semantic_ir.schema.json` từ 1 `PrimitiveIRDocumen
 | `models.py` | Dataclass khớp 1-1 `semantic_ir.schema.json`. |
 | `pattern_recognition.py` | `build_parts_from_primitives()` — suy `part_type` (thanh_ngang/thanh_doc/thanh_xien/lo_bat_vit/duong_vien_tron) từ hình học 1 primitive đơn lẻ. CỐ Ý không ghép nhiều primitive thành 1 linh kiện phức hợp (xem mục 11.2). |
 | `constraint_detection.py` | `detect_constraints()` — so từng cặp line, phát hiện parallel/perpendicular/equal_length/coincident_endpoint/collinear bằng công thức hình học thuần. |
-| `assemble.py` | `build_semantic_document()` — ghép Pattern Recognition + Constraint Detection thành `SemanticIRDocument` hoàn chỉnh. |
+| `assemble.py` | `build_semantic_document()` — ghép Pattern Recognition + Constraint Detection, dùng raw constraint để nhận dạng compound, rồi chỉ lưu tập constraint đã prune/solver-ready vào `SemanticIRDocument`. |
 | `validator.py` | Kiểm tra nhẹ theo schema + phát hiện `primitive_ids` tham chiếu treo (dangling reference) đối chiếu ngược Primitive IR gốc. |
 | `io_utils.py` | Lưu Semantic IR + **đọc lại** 1 file JSON Primitive IR đã lưu (Phase 2 chạy độc lập với Phase 1, không cần nối liền script). |
 | `constraint_pruning.py` | `prune_constraints()` — lọc constraint yếu (confidence thấp), trùng lặp, và **dư thừa bắc cầu** (parallel/equal_length/collinear qua Union-Find) + **dư thừa theo nhóm** (perpendicular dư giữa 2 nhóm song song đã biết) trước khi đưa vào solver. |

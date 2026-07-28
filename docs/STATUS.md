@@ -38,7 +38,7 @@ the skips and the run used Python 3.12.
 | Area | State | Evidence and limit |
 |---|---|---|
 | Primitive IR | Verified | Final Python 3.11 offline gate passed with zero skips; the approved private PDF, identified by SHA-256 below, completed Primitive IR for all nine pages. |
-| Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips; the approved private PDF completed all nine Semantic IR checkpoints. |
+| Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips; the approved private PDF completed all nine Semantic IR checkpoints. Assembly now uses raw detections for compound inference but persists only deterministic solver-ready constraints, reducing private page 1 from 538,983 raw relations to 3,693 retained constraints. |
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
 | Visual PDF-to-DXF fidelity | Partially verified | Delegated visual review accepted the paper layout and primary linework on all nine reconstruction overlays, and all nine DXFs opened read-only in AutoCAD Mechanical 2027. Text/font/OCR, hatch, linetype, table placement, and true dimension semantics remain excluded from authoritative fidelity. |
 | MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
@@ -208,6 +208,26 @@ and a second live review; it was not requested or run here.
   the delegated-review fidelity refresh above.
 - Boundary: this gate controls in-memory IR application only. It does not grant
   permission to repair or save a production AutoCAD drawing.
+
+## Semantic constraint compaction evidence
+
+- State: **Partially verified** pending final candidate gates.
+- Date: `2026-07-28`.
+- Design and plan:
+  `docs/superpowers/specs/2026-07-28-semantic-constraint-compaction-design.md`;
+  `docs/superpowers/plans/2026-07-28-semantic-constraint-compaction.md`.
+- Behavior: assembly uses the complete detected set for compound inference and
+  persists only `prune_constraints(...).kept` in Semantic IR.
+- Focused result: compound/pruning tests -> `26 passed`; full dirty-tree
+  offline run -> `343 passed, 6 deselected`; Ruff -> `PASS`.
+- Approved private page 1: 1,170 primitives, 1,187 parts, 3,693 retained
+  constraints, Semantic assembly `34.002s`. The earlier raw count was 538,983.
+- Approved private page 5: 485 primitives, 495 parts, 1,392 retained
+  constraints, Semantic assembly `5.758s`, matching the previously recorded
+  pruning result.
+- Remaining gate: commit the integrated candidate, then rerun
+  `scripts/verify.ps1`, the approved private-data gate, and the live AutoCAD
+  Mechanical gate on that exact Head SHA.
 
 ## Mechanical production review/repair evidence
 
