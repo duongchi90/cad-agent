@@ -157,19 +157,33 @@ class FileIPCLiveMCPClient:
         if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
             normalized_path = path.replace("\\", "/").replace('"', '\\"')
             normalized_loader = self._bootstrap_lisp_path.replace("\\", "/").replace('"', '\\"')
-            # Opening another document replaces the document-scoped AutoLISP
-            # namespace. Invoke AutoCAD's COM API, then load the dispatcher in
-            # the newly active document before issuing another IPC command.
-            self._raw_lisp_trigger(
-                '(progn (vl-load-com) '
-                '(setq mcp-open-doc (vla-open (vla-get-Documents (vlax-get-acad-object)) "'
-                + normalized_path + '")) (vla-activate mcp-open-doc))'
+            expected_name = Path(path).name.casefold()
+            active_name = ""
+            for attempt in range(2):
+                # Opening another document replaces the document-scoped
+                # AutoLISP namespace. Invoke AutoCAD's COM API, then load the
+                # dispatcher in the newly active document. A ping alone is not
+                # enough: it can be answered by the previously active drawing.
+                self._raw_lisp_trigger(
+                    '(progn (vl-load-com) '
+                    '(setq mcp-open-doc (vla-open (vla-get-Documents (vlax-get-acad-object)) "'
+                    + normalized_path + '")) (vla-activate mcp-open-doc))'
+                )
+                time.sleep(self._document_settle_s)
+                self._raw_lisp_trigger('(load "' + normalized_loader + '")')
+                time.sleep(self._document_settle_s)
+                self._wait_for_dispatcher()
+                active_name = str(
+                    self.drawing_get_variables(["DWGNAME"]).get("DWGNAME", "")
+                )
+                if active_name.casefold() == expected_name:
+                    return {"path": path}
+                if attempt == 0:
+                    time.sleep(self._poll)
+            raise MCPToolError(
+                "AutoCAD did not activate requested drawing "
+                f"{Path(path).name!r}; active drawing is {active_name!r}"
             )
-            time.sleep(self._document_settle_s)
-            self._raw_lisp_trigger('(load "' + normalized_loader + '")')
-            time.sleep(self._document_settle_s)
-            self._wait_for_dispatcher()
-            return {"path": path}
         return self._dispatch("drawing-open", {"path": path})
 
     def _wait_for_dispatcher(self) -> None:
@@ -194,7 +208,18 @@ class FileIPCLiveMCPClient:
         return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})
 
     def block_get_attributes(self, entity_id: str) -> Dict[str, str]:
-        return self._dispatch("block-get-attributes", {"entity_id": entity_id}).get("attributes", {})
+        for attempt in range(2):
+            try:
+                return self._dispatch(
+                    "block-get-attributes",
+                    {"entity_id": entity_id},
+                ).get("attributes", {})
+            except MCPTimeoutError:
+                if attempt == 0:
+                    time.sleep(self._poll)
+                    continue
+                raise
+        return {}
 
     def block_update_attribute(self, entity_id: str, tag: str, value: str) -> None:
         self._dispatch("block-update-attribute", {"entity_id": entity_id, "tag": tag, "value": value})

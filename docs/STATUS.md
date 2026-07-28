@@ -229,6 +229,24 @@ and a second live review; it was not requested or run here.
   `scripts/verify.ps1`, the approved private-data gate, and the live AutoCAD
   Mechanical gate on that exact Head SHA.
 
+## File IPC active-document verification
+
+- State: **Partially verified** pending final candidate gates.
+- Date: `2026-07-28`.
+- Release-gate observation: the initial four-test AutoCAD Mechanical run had
+  one transient `block-get-attributes` timeout followed by one wrong-document
+  `Entity not found`; four later component subcases passed.
+- Root cause: raw-LISP document opening waited for a dispatcher ping but did
+  not verify that the requested `DWGNAME` was active.
+- Fix: `drawing_open()` now verifies `DWGNAME` and retries one mismatched open;
+  `block_get_attributes()` retries one timeout because it is read-only. No
+  mutating command is retried.
+- Focused evidence: File IPC client tests -> `19 passed`; the isolated six-case
+  live component round-trip -> `1 passed` in `64.01s`.
+- Design and plan:
+  `docs/superpowers/specs/2026-07-28-file-ipc-active-document-verification-design.md`;
+  `docs/superpowers/plans/2026-07-28-file-ipc-active-document-verification.md`.
+
 ## Mechanical production review/repair evidence
 
 - State: **Partially verified**

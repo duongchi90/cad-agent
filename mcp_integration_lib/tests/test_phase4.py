@@ -135,7 +135,9 @@ class FileIPCClientTests(unittest.TestCase):
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             document_settle_s=0,
         )
-        client._dispatch = lambda command, params: {}
+        client._dispatch = lambda command, params: (
+            {"DWGNAME": "a.dxf"} if command == "drawing-get-variables" else {}
+        )
         client.drawing_open("C:/work/a.dxf")
         self.assertEqual(2, len(raw_commands))
         self.assertIn('vla-open', raw_commands[0])
@@ -151,9 +153,57 @@ class FileIPCClientTests(unittest.TestCase):
             document_settle_s=0,
         )
         calls = []
-        client._dispatch = lambda command, params: calls.append((command, params)) or {}
+        client._dispatch = lambda command, params: (
+            calls.append((command, params))
+            or ({"DWGNAME": "a.dxf"} if command == "drawing-get-variables" else {})
+        )
         client.drawing_open("C:/work/a.dxf")
-        self.assertEqual([("ping", {})], calls)
+        self.assertEqual(
+            [
+                ("ping", {}),
+                ("drawing-get-variables", {"names_str": "DWGNAME"}),
+            ],
+            calls,
+        )
+
+    def test_bootstrap_retries_when_requested_document_is_not_active(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            trigger=lambda: None,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            document_settle_s=0,
+        )
+        names = iter(["old.dxf", "a.dxf"])
+
+        def dispatch(command, params):
+            if command == "drawing-get-variables":
+                return {"DWGNAME": next(names)}
+            return {}
+
+        client._dispatch = dispatch
+        self.assertEqual(
+            {"path": "C:/work/a.dxf"},
+            client.drawing_open("C:/work/a.dxf"),
+        )
+        self.assertEqual(4, len(raw_commands))
+
+    def test_block_attribute_read_retries_one_timeout(self):
+        client = FileIPCLiveMCPClient(trigger=lambda: None)
+        calls = []
+
+        def dispatch(command, params):
+            calls.append((command, params))
+            if len(calls) == 1:
+                raise MCPTimeoutError("transient")
+            return {"attributes": {"PART_ID": "beam-1"}}
+
+        client._dispatch = dispatch
+        self.assertEqual(
+            {"PART_ID": "beam-1"},
+            client.block_get_attributes("10"),
+        )
+        self.assertEqual(2, len(calls))
 
     def test_raises_timeout_without_result(self):
         with tempfile.TemporaryDirectory() as tmp:
