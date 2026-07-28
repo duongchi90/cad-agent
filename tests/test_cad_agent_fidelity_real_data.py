@@ -27,7 +27,11 @@ def test_private_fidelity_pdf_has_nine_hash_bound_layout_pages() -> None:
     assert len(manifest["pages"]) == 9
     root = manifest_file.parent
     for page in manifest["pages"]:
-        assert page["fidelity_state"] == "needs_review"
+        assert page["fidelity_state"] in {
+            "needs_review",
+            "approved_for_mechanical_review",
+            "mechanical_reviewed",
+        }
         for key in ("rendered_png", "layout_dxf", "layout_audit"):
             record = page["artifacts"][key]
             artifact = root / record["artifact"]
@@ -48,3 +52,22 @@ def test_private_fidelity_pdf_has_nine_hash_bound_layout_pages() -> None:
             composed = root / "reconstruction_pages" / f"page_{number:02d}{suffix}"
             assert (composed / "layout.dxf").is_file()
             assert (composed / "report.json").is_file()
+            assert page["fidelity_state"] == "mechanical_reviewed"
+            promotion_record = page["artifacts"]["promotion"]
+            promotion_path = root / promotion_record["artifact"]
+            assert sha256_file(promotion_path) == promotion_record["sha256"]
+            promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+            assert promotion["state"] == "approved_for_mechanical_review"
+            assert promotion["source"] == manifest["source"]
+            assert promotion["page"] == number
+            assert promotion["allowed_actions"] == ["mechanical-review-read-only"]
+            for record in promotion["inputs"].values():
+                assert sha256_file(root / record["artifact"]) == record["sha256"]
+            mechanical_record = page["mechanical_review"]
+            assert mechanical_record["state"] == "completed"
+            mechanical_path = root / mechanical_record["artifact"]
+            assert sha256_file(mechanical_path) == mechanical_record["sha256"]
+            mechanical = json.loads(mechanical_path.read_text(encoding="utf-8"))
+            assert mechanical["state"] == "passed"
+            assert mechanical["save_performed"] is False
+            assert mechanical["repair_performed"] is False
