@@ -190,8 +190,10 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("PruneResult", architecture)
         self.assertIn("SolveResult", architecture)
         self.assertIn("agent_lib.run", architecture)
-        self.assertIn("automatically calls `apply_agent_report()`", architecture)
-        self.assertIn("not an approved production mutation path", architecture)
+        self.assertIn("advisory and non-mutating by default", architecture)
+        self.assertIn("--confirm-agent-actions APPLY", architecture)
+        self.assertIn("--agent-action-approval", architecture)
+        self.assertIn("agent_application.json", architecture)
 
 
 if __name__ == "__main__":

@@ -187,7 +187,7 @@ def main() -> int:
     # Phase 5: Agent
     # ================================================================
     print("\n--- Phase 5: Agent ---")
-    from agent_lib.batch_agent import run_agent, apply_agent_report
+    from agent_lib.batch_agent import run_agent
 
     stub_reader = _StubVisionReader()
     report = run_agent(
@@ -207,20 +207,28 @@ def main() -> int:
     for reason in report.skip_reasons.values():
         print(f"    - SKIP: {reason}")
 
-    # Apply agent actions
-    if report.action_count > 0:
-        summary = apply_agent_report(
-            doc, semantic_doc,
-            doc.cross_validations, semantic_doc.constraints,
-            report,
-        )
-        print(f"[agent-apply] {summary}")
+    # Demo is advisory by default; it never grants itself mutation approval.
+    from agent_lib.run import (
+        _apply_report_with_approval,
+        _save_application_audit,
+    )
+    application_audit = _apply_report_with_approval(
+        doc,
+        semantic_doc,
+        report,
+        confirm_agent_actions=None,
+        approval_reference=None,
+    )
+    print("[agent-apply] advisory only; no approval supplied")
 
     # Lưu agent report
     from .io_utils import save_document
     report_path = os.path.join(output_dir, "agent_report.json")
     save_document(report, report_path)
     print(f"[save] agent report -> {report_path}")
+    application_path = os.path.join(output_dir, "agent_application.json")
+    _save_application_audit(application_audit, application_path)
+    print(f"[save] agent application audit -> {application_path}")
 
     # ================================================================
     # Phase 3: DXF Builder + Reviewer (có hoặc không có ezdxf)

@@ -75,6 +75,15 @@ manifest. These candidates are review metadata only: a candidate such as
 `1:40` remains `needs_verification` and never overrides the approved manual
 scale automatically.
 
+## Agent advice and approved application
+
+`python -m agent_lib.run` is advisory by default: it saves
+`agent_report.json` and `agent_application.json`, then builds from unchanged IR.
+Applying all proposed actions requires both `--confirm-agent-actions APPLY` and
+`--agent-action-approval 'approved ticket/reference'`. That approval affects
+only the in-memory IR for the run; it never authorizes AutoCAD production
+repair.
+
 To review a staged DXF in AutoCAD Mechanical, retain its `build-evidence.json`
 and run `cad_agent mechanical-review` with the AutoCAD window handle and loaded
 dispatcher. `mechanical-repair` is separate: it requires an approval reference,

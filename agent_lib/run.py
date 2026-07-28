@@ -23,6 +23,7 @@ Dùng Claude Vision API thật (cần anthropic + ANTHROPIC_API_KEY):
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -44,6 +45,71 @@ def _configure_console_output() -> None:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _validate_agent_action_approval(
+    confirm_agent_actions: str | None,
+    approval_reference: str | None,
+) -> bool:
+    """Return whether application was requested, rejecting incomplete approval."""
+    application_requested = (
+        confirm_agent_actions is not None or approval_reference is not None
+    )
+    if not application_requested:
+        return False
+    if (
+        confirm_agent_actions != "APPLY"
+        or approval_reference is None
+        or not approval_reference.strip()
+    ):
+        raise ValueError(
+            "Applying Agent actions requires literal APPLY and a non-empty "
+            "approval reference"
+        )
+    return True
+
+
+def _apply_report_with_approval(
+    primitive_doc,
+    semantic_doc,
+    report,
+    *,
+    confirm_agent_actions: str | None,
+    approval_reference: str | None,
+) -> dict:
+    """Apply a report only behind the explicit two-part operator gate."""
+    application_requested = _validate_agent_action_approval(
+        confirm_agent_actions,
+        approval_reference,
+    )
+    summary = None
+    if application_requested and report.action_count > 0:
+        from agent_lib.batch_agent import apply_agent_report
+
+        summary = apply_agent_report(
+            primitive_doc,
+            semantic_doc,
+            primitive_doc.cross_validations,
+            semantic_doc.constraints,
+            report,
+        )
+    actions_applied = any(action.applied for action in report.actions)
+
+    return {
+        "schema_version": "1.0.0",
+        "application_requested": application_requested,
+        "actions_applied": actions_applied,
+        "action_count": report.action_count,
+        "approval_reference": (
+            approval_reference.strip() if application_requested else None
+        ),
+        "summary": summary,
+    }
+
+
+def _save_application_audit(audit: dict, path: str) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(audit, handle, indent=2, ensure_ascii=False)
+
+
 def run(
     image_path: str,
     primitive_ir_path: str = _DEFAULT_PRIMITIVE_IR,
@@ -53,9 +119,11 @@ def run(
     text_confidence_threshold: float = 0.5,
     part_confidence_threshold: float = 0.7,
     run_dxf: bool = True,
+    confirm_agent_actions: str | None = None,
+    agent_action_approval: str | None = None,
 ) -> int:
     """CLI runner Phase 5: load ảnh thật + 2 file JSON IR, chạy Agent,
-    apply actions, lưu report (và tùy chọn build DXF).
+    lưu report và chỉ apply actions khi có phê duyệt rõ ràng.
 
     Parameters:
         image_path: đường dẫn ảnh bản vẽ gốc (PNG/JPG).
@@ -66,8 +134,18 @@ def run(
         text_confidence_threshold: ngưỡng confidence đẩy text sang rereader.
         part_confidence_threshold: ngưỡng confidence đẩy part sang classifier.
         run_dxf: chạy Phase 3 (build DXF + review) sau Agent.
+        confirm_agent_actions: literal ``APPLY`` để yêu cầu áp dụng actions.
+        agent_action_approval: tham chiếu phê duyệt không rỗng của operator.
     """
     _configure_console_output()
+    try:
+        _validate_agent_action_approval(
+            confirm_agent_actions,
+            agent_action_approval,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
+        return 2
 
     import cv2
 
@@ -151,7 +229,7 @@ def run(
     # 5. Phase 5: Agent
     # ================================================================
     print(f"\n--- Phase 5: Agent ---")
-    from agent_lib.batch_agent import run_agent, apply_agent_report
+    from agent_lib.batch_agent import run_agent
 
     report = run_agent(
         primitive_doc=primitive_doc,
@@ -171,22 +249,29 @@ def run(
         else:
             print(f"    - {action.action_type}")
 
-    # Apply agent actions
-    if report.action_count > 0:
-        summary = apply_agent_report(
-            primitive_doc, semantic_doc,
-            primitive_doc.cross_validations, semantic_doc.constraints,
-            report,
-        )
-        print(f"[agent-apply] {summary}")
+    # Apply agent actions only behind the explicit approval gate.
+    application_audit = _apply_report_with_approval(
+        primitive_doc,
+        semantic_doc,
+        report,
+        confirm_agent_actions=confirm_agent_actions,
+        approval_reference=agent_action_approval,
+    )
+    if application_audit["actions_applied"]:
+        print(f"[agent-apply] {application_audit['summary']}")
+    elif application_audit["application_requested"]:
+        print("[agent-apply] approved, but the report contained no actions")
     else:
-        print("[agent-apply] không có action cần apply")
+        print("[agent-apply] advisory only; no approval supplied")
 
     # Save agent report
     from agent_lib.io_utils import save_document
     report_path = os.path.join(output_dir, "agent_report.json")
     save_document(report, report_path)
     print(f"[save] agent report -> {report_path}")
+    application_path = os.path.join(output_dir, "agent_application.json")
+    _save_application_audit(application_audit, application_path)
+    print(f"[save] agent application audit -> {application_path}")
 
     # ================================================================
     # 6. Phase 3: DXF Builder + Reviewer (optional)
@@ -267,6 +352,15 @@ if __name__ == "__main__":
         "--no-dxf", action="store_true",
         help="Bỏ qua Phase 3 (DXF build), chỉ chạy Agent",
     )
+    parser.add_argument(
+        "--confirm-agent-actions",
+        metavar="APPLY",
+        help="Literal APPLY to apply Agent actions; requires --agent-action-approval",
+    )
+    parser.add_argument(
+        "--agent-action-approval",
+        help="Non-empty operator approval reference for applying Agent actions",
+    )
 
     args = parser.parse_args()
     sys.exit(run(
@@ -278,4 +372,6 @@ if __name__ == "__main__":
         text_confidence_threshold=args.text_threshold,
         part_confidence_threshold=args.part_threshold,
         run_dxf=not args.no_dxf,
+        confirm_agent_actions=args.confirm_agent_actions,
+        agent_action_approval=args.agent_action_approval,
     ))

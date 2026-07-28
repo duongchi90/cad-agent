@@ -35,9 +35,14 @@ automatically written back into `SemanticIRDocument`.
 
 Consumes ambiguous Primitive/Semantic IR plus optional image evidence.
 `run_agent()` produces an `AgentReport` without mutating the IR, and
-`apply_agent_report()` is the separate mutation API. The existing
-`agent_lib.run` automatically calls `apply_agent_report()` for all returned actions without a human approval prompt; the demo entry points do the same. They are not an approved production mutation path. This foundation records that boundary and
-does not change the behavior.
+`apply_agent_report()` is the separate mutation API. `agent_lib.run` and the
+synthetic demo are advisory and non-mutating by default. The file runner can
+apply a report only when the operator supplies both
+`--confirm-agent-actions APPLY` and a non-empty
+`--agent-action-approval` reference. It writes `agent_application.json` beside
+the Agent report to record whether application was requested, whether any
+actions were applied, and the approval reference. This in-memory IR gate does
+not authorize production AutoCAD mutation.
 
 ### `dxf_builder_lib`
 
