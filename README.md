@@ -79,10 +79,12 @@ scale automatically.
 
 `python -m agent_lib.run` is advisory by default: it saves
 `agent_report.json` and `agent_application.json`, then builds from unchanged IR.
-Applying all proposed actions requires both `--confirm-agent-actions APPLY` and
-`--agent-action-approval 'approved ticket/reference'`. That approval affects
-only the in-memory IR for the run; it never authorizes AutoCAD production
-repair.
+Application is a second invocation against a reviewed report. It requires
+literal `APPLY`, an approval reference, and approved SHA-256 values for the
+report, source, Primitive IR, and Semantic IR. It never authorizes AutoCAD
+production repair. A visually accepted paper layout uses `fidelity-promote`
+before the read-only `fidelity-mechanical-review`; that path cannot save,
+repair, or export the drawing.
 
 To review a staged DXF in AutoCAD Mechanical, retain its `build-evidence.json`
 and run `cad_agent mechanical-review` with the AutoCAD window handle and loaded

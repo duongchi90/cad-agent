@@ -30,8 +30,11 @@ from cad_agent.fidelity import (
     write_region_proposal,
     write_region_approval,
     run_fidelity_compose,
+    promote_fidelity_page,
+    review_promoted_fidelity_page,
 )
 from cad_agent.cli import CommandError, _refuse_fidelity_dxf, main
+from mcp_integration_lib.mcp_client import FakeMCPClient
 
 
 def _pdf(path: Path) -> None:
@@ -381,7 +384,62 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         report = json.loads((candidate / "report.json").read_text(encoding="utf-8"))
         assert report["quality"]["selected_profile"] in {"baseline", "filtered"}
         assert "f1" in report["quality"]["baseline"]["edge_metric"]
-        assert run_fidelity_compose(source, output, manifest, output / "region_approvals" / "page_01-r2.json", workspace_root=Path.cwd()).is_dir()
+        composed = run_fidelity_compose(
+            source,
+            output,
+            manifest,
+            output / "region_approvals" / "page_01-r2.json",
+            workspace_root=Path.cwd(),
+        )
+        assert composed.is_dir()
+        promotion_path = promote_fidelity_page(
+            source,
+            output,
+            output / "fidelity-run-manifest.json",
+            manifest,
+            1,
+            composed,
+            "delegated-visual-approval",
+            workspace_root=Path.cwd(),
+        )
+        promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+        assert promotion["state"] == "approved_for_mechanical_review"
+        assert promotion["allowed_actions"] == ["mechanical-review-read-only"]
+        assert promotion["expected_structure"]["entity_count"] > 0
+        persisted = json.loads(
+            (output / "fidelity-run-manifest.json").read_text(encoding="utf-8")
+        )
+        assert persisted["pages"][0]["fidelity_state"] == "approved_for_mechanical_review"
+        assert persisted["pages"][0]["mechanical_review"]["state"] == "pending"
+
+        client = FakeMCPClient()
+        document = ezdxf.readfile(composed / "layout.dxf")
+        for index, entity in enumerate(document.modelspace(), start=1):
+            client.preload_entity(
+                format(index, "X"),
+                entity.dxftype(),
+                str(entity.dxf.layer),
+                {},
+            )
+        live_report_path, passed = review_promoted_fidelity_page(
+            source,
+            output,
+            output / "fidelity-run-manifest.json",
+            manifest,
+            1,
+            client,
+            workspace_root=Path.cwd(),
+        )
+        assert passed is True
+        live_report = json.loads(live_report_path.read_text(encoding="utf-8"))
+        assert live_report["state"] == "passed"
+        assert live_report["save_performed"] is False
+        assert live_report["repair_performed"] is False
+        final_manifest = json.loads(
+            (output / "fidelity-run-manifest.json").read_text(encoding="utf-8")
+        )
+        assert final_manifest["pages"][0]["fidelity_state"] == "mechanical_reviewed"
+        assert final_manifest["pages"][0]["mechanical_review"]["state"] == "completed"
         foreign = root / "foreign-approval.json"
         foreign.write_text((output / "region_approvals" / "page_01-r2.json").read_text(encoding="utf-8"), encoding="utf-8")
         with pytest.raises(FidelityError, match="inside the private"):

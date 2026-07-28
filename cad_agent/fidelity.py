@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import Counter
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -1045,6 +1046,186 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
     cv2.imwrite(str(root / "overlay.png"), overlay)
     (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(image.shape[:2], 255, dtype=np.uint8)), "unresolved": ["unselected content remains absent", "no text/dimensions/linetypes/tables/model export"]}, indent=2) + "\n", encoding="utf-8")
     return root
+
+
+def _fidelity_dxf_signature(dxf: Path) -> dict[str, Any]:
+    """Return the read-only structure that AutoCAD must reproduce."""
+    import ezdxf
+
+    entities = list(ezdxf.readfile(dxf).modelspace())
+    return {
+        "entity_count": len(entities),
+        "types": dict(sorted(Counter(entity.dxftype() for entity in entities).items())),
+        "layers": dict(
+            sorted(Counter(str(entity.dxf.layer) for entity in entities).items())
+        ),
+    }
+
+
+def _live_entity_signature(entities: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "entity_count": len(entities),
+        "types": dict(
+            sorted(Counter(str(entity.get("type", "")).upper() for entity in entities).items())
+        ),
+        "layers": dict(
+            sorted(Counter(str(entity.get("layer", "")) for entity in entities).items())
+        ),
+    }
+
+
+def promote_fidelity_page(
+    source: Path,
+    output_root: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    page_number: int,
+    composed_root: Path,
+    approval_reference: str,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Promote one visually approved composition into the canonical checkpoint."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    if manifest_path.resolve().parent != output_root.resolve():
+        raise FidelityError("Fidelity manifest must reside directly under its output root.")
+    verify_source(manifest, source)
+    if not approval_reference.strip():
+        raise FidelityError("Fidelity promotion requires a non-empty visual approval reference.")
+    page = next(
+        (item for item in manifest.get("pages", []) if item.get("page") == page_number),
+        None,
+    )
+    if page is None:
+        raise FidelityError("Promoted page is absent from the fidelity manifest.")
+    composed_root = composed_root.resolve()
+    expected_parent = (output_root / "reconstruction_pages").resolve()
+    if (
+        composed_root.parent != expected_parent
+        or not composed_root.name.startswith(f"page_{page_number:02d}")
+    ):
+        raise FidelityError("Composed page is not the requested reconstruction page.")
+    dxf = composed_root / "layout.dxf"
+    overlay = composed_root / "overlay.png"
+    report_path = composed_root / "report.json"
+    if not all(path.is_file() for path in (dxf, overlay, report_path)):
+        raise FidelityError("Composed page is missing its DXF, overlay, or report.")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("state") != "needs_review" or report.get("profile") != "fidelity-layout":
+        raise FidelityError("Composed page is not a reviewable fidelity-layout candidate.")
+    approval_sha256 = report.get("approval_sha256")
+    approvals = list((output_root / "region_approvals").glob(f"page_{page_number:02d}*.json"))
+    matching_approval = next(
+        (
+            path
+            for path in approvals
+            if isinstance(approval_sha256, str) and sha256_file(path) == approval_sha256
+        ),
+        None,
+    )
+    if matching_approval is None:
+        raise FidelityError("Composed page is not bound to a current region approval.")
+
+    promotion_path = output_root / "fidelity_promotions" / f"page_{page_number:02d}.json"
+    if promotion_path.exists():
+        raise FidelityError(f"Fidelity promotion already exists: {promotion_path}")
+    promotion = {
+        "schema_version": "fidelity-promotion-1.0",
+        "private_artifact": True,
+        "state": "approved_for_mechanical_review",
+        "source": manifest["source"],
+        "page": page_number,
+        "visual_approval": {
+            "approved": True,
+            "reference": approval_reference.strip(),
+        },
+        "inputs": {
+            "region_approval": _artifact(matching_approval, output_root),
+            "composition_report": _artifact(report_path, output_root),
+            "overlay": _artifact(overlay, output_root),
+            "dxf": _artifact(dxf, output_root),
+        },
+        "expected_structure": _fidelity_dxf_signature(dxf),
+        "allowed_actions": ["mechanical-review-read-only"],
+        "prohibited_actions": ["mechanical-repair", "model-export", "production-save"],
+    }
+    write_manifest(promotion_path, promotion)
+    page["artifacts"]["promotion"] = _artifact(promotion_path, output_root)
+    page["artifacts"]["promoted_reconstruction_dxf"] = _artifact(dxf, output_root)
+    page["fidelity_state"] = "approved_for_mechanical_review"
+    page["mechanical_review"] = {
+        "state": "pending",
+        "artifact": None,
+        "sha256": None,
+    }
+    write_manifest(manifest_path, manifest)
+    return promotion_path
+
+
+def review_promoted_fidelity_page(
+    source: Path,
+    output_root: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    page_number: int,
+    client: Any,
+    *,
+    workspace_root: Path,
+) -> tuple[Path, bool]:
+    """Open and structurally verify a promoted page in AutoCAD, without saving."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    page = next(
+        (item for item in manifest.get("pages", []) if item.get("page") == page_number),
+        None,
+    )
+    if page is None or page.get("fidelity_state") != "approved_for_mechanical_review":
+        raise FidelityError("Page has no visual approval for Mechanical review.")
+    promotion_path = _safe_artifact_path(output_root, page["artifacts"]["promotion"])
+    promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+    if (
+        promotion.get("state") != "approved_for_mechanical_review"
+        or promotion.get("source") != manifest.get("source")
+        or promotion.get("page") != page_number
+        or promotion.get("allowed_actions") != ["mechanical-review-read-only"]
+    ):
+        raise FidelityError("Fidelity promotion is invalid for read-only Mechanical review.")
+    dxf = _safe_artifact_path(output_root, promotion["inputs"]["dxf"])
+    opened = client.drawing_open(str(dxf))
+    entities = client.entity_list()
+    actual = _live_entity_signature(entities)
+    expected = promotion["expected_structure"]
+    passed = actual == expected
+    variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME", "INSUNITS"])
+    report_path = output_root / "fidelity_mechanical_review" / f"page_{page_number:02d}.json"
+    if report_path.exists():
+        raise FidelityError(f"Fidelity Mechanical review already exists: {report_path}")
+    report = {
+        "schema_version": "fidelity-mechanical-review-1.0",
+        "private_artifact": True,
+        "operation": "mechanical-review-read-only",
+        "state": "passed" if passed else "failed",
+        "source": manifest["source"],
+        "page": page_number,
+        "promotion_sha256": sha256_file(promotion_path),
+        "dxf": _artifact(dxf, output_root),
+        "open_result": opened,
+        "drawing_variables": variables,
+        "expected_structure": expected,
+        "actual_structure": actual,
+        "save_performed": False,
+        "repair_performed": False,
+    }
+    write_manifest(report_path, report)
+    page["mechanical_review"] = {
+        "state": "completed" if passed else "failed",
+        **_artifact(report_path, output_root),
+    }
+    page["fidelity_state"] = "mechanical_reviewed" if passed else "mechanical_review_failed"
+    write_manifest(manifest_path, manifest)
+    return report_path, passed
 
 
 def write_fidelity_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:

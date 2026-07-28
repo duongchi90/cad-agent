@@ -102,15 +102,32 @@ def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Pa
     raise LiveSafetyError("Could not allocate a unique backup path.")
 
 
-def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, str]:
+def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, Any]:
     dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
+    dxf_source_before = sha256_file(dxf)
+    evidence_source_before = sha256_file(evidence)
     shutil.copy2(dxf, dxf_backup)
     shutil.copy2(evidence, evidence_backup)
+    dxf_source_after = sha256_file(dxf)
+    evidence_source_after = sha256_file(evidence)
+    dxf_backup_hash = sha256_file(dxf_backup)
+    evidence_backup_hash = sha256_file(evidence_backup)
+    verified = (
+        dxf_source_before == dxf_source_after == dxf_backup_hash
+        and evidence_source_before == evidence_source_after == evidence_backup_hash
+    )
+    if not verified:
+        raise LiveSafetyError(
+            "Production backup verification failed; repair is refused before mutation."
+        )
     return {
         "dxf_path": str(dxf_backup),
-        "dxf_sha256": sha256_file(dxf_backup),
+        "dxf_source_sha256": dxf_source_before,
+        "dxf_backup_sha256": dxf_backup_hash,
         "build_evidence_path": str(evidence_backup),
-        "build_evidence_sha256": sha256_file(evidence_backup),
+        "build_evidence_source_sha256": evidence_source_before,
+        "build_evidence_backup_sha256": evidence_backup_hash,
+        "verified": True,
     }
 
 
@@ -164,8 +181,9 @@ def repair_live(
         return report
 
     try:
+        client.drawing_close(save_changes=False)
         client.drawing_open(backup["dxf_path"])
-        report["rollback_state"] = "backup_reopened"
+        report["rollback_state"] = "failed_drawing_closed_and_backup_reopened"
     except Exception as exc:  # pragma: no cover - exercised by live transport failures
-        report["rollback_state"] = f"backup_reopen_failed: {exc}"
+        report["rollback_state"] = f"rollback_failed: {exc}"
     return report

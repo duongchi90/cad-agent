@@ -24,6 +24,7 @@ Dùng Claude Vision API thật (cần anthropic + ANTHROPIC_API_KEY):
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 
@@ -48,10 +49,21 @@ def _configure_console_output() -> None:
 def _validate_agent_action_approval(
     confirm_agent_actions: str | None,
     approval_reference: str | None,
+    approved_report_path: str | None = None,
+    approved_report_sha256: str | None = None,
+    approved_source_sha256: str | None = None,
+    approved_primitive_ir_sha256: str | None = None,
+    approved_semantic_ir_sha256: str | None = None,
 ) -> bool:
     """Return whether application was requested, rejecting incomplete approval."""
     application_requested = (
-        confirm_agent_actions is not None or approval_reference is not None
+        confirm_agent_actions is not None
+        or approval_reference is not None
+        or approved_report_path is not None
+        or approved_report_sha256 is not None
+        or approved_source_sha256 is not None
+        or approved_primitive_ir_sha256 is not None
+        or approved_semantic_ir_sha256 is not None
     )
     if not application_requested:
         return False
@@ -59,12 +71,47 @@ def _validate_agent_action_approval(
         confirm_agent_actions != "APPLY"
         or approval_reference is None
         or not approval_reference.strip()
+        or approved_report_path is None
+        or not approved_report_path.strip()
+        or approved_report_sha256 is None
+        or approved_source_sha256 is None
+        or approved_primitive_ir_sha256 is None
+        or approved_semantic_ir_sha256 is None
+        or any(
+            len(digest) != 64
+            or any(character not in "0123456789abcdefABCDEF" for character in digest)
+            for digest in (
+                approved_report_sha256,
+                approved_source_sha256,
+                approved_primitive_ir_sha256,
+                approved_semantic_ir_sha256,
+            )
+        )
     ):
         raise ValueError(
-            "Applying Agent actions requires literal APPLY and a non-empty "
-            "approval reference"
+            "Applying Agent actions requires literal APPLY, a non-empty "
+            "approval reference, a saved Agent report and SHA-256, plus the "
+            "approved source, Primitive IR, and Semantic IR SHA-256 values"
         )
     return True
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _json_sha256(payload: object) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _apply_report_with_approval(
@@ -74,11 +121,24 @@ def _apply_report_with_approval(
     *,
     confirm_agent_actions: str | None,
     approval_reference: str | None,
+    approved_report_path: str | None = None,
+    approved_report_sha256: str | None = None,
+    approved_source_sha256: str | None = None,
+    approved_primitive_ir_sha256: str | None = None,
+    approved_semantic_ir_sha256: str | None = None,
 ) -> dict:
     """Apply a report only behind the explicit two-part operator gate."""
     application_requested = _validate_agent_action_approval(
         confirm_agent_actions,
         approval_reference,
+        approved_report_path,
+        approved_report_sha256,
+        approved_source_sha256,
+        approved_primitive_ir_sha256,
+        approved_semantic_ir_sha256,
+    )
+    action_set_sha256 = _json_sha256(
+        [{**action.to_dict(), "applied": False} for action in report.actions]
     )
     summary = None
     if application_requested and report.action_count > 0:
@@ -92,15 +152,24 @@ def _apply_report_with_approval(
             report,
         )
     actions_applied = any(action.applied for action in report.actions)
+    applied_actions = [action.to_dict() for action in report.actions if action.applied]
 
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "application_requested": application_requested,
         "actions_applied": actions_applied,
         "action_count": report.action_count,
         "approval_reference": (
             approval_reference.strip() if application_requested else None
         ),
+        "approved_report_sha256": (
+            approved_report_sha256.lower() if application_requested else None
+        ),
+        "action_set_sha256": action_set_sha256,
+        "applied_action_set_sha256": (
+            _json_sha256(applied_actions) if applied_actions else None
+        ),
+        "post_application_solve_status": None,
         "summary": summary,
     }
 
@@ -121,6 +190,11 @@ def run(
     run_dxf: bool = True,
     confirm_agent_actions: str | None = None,
     agent_action_approval: str | None = None,
+    approved_agent_report: str | None = None,
+    approved_agent_report_sha256: str | None = None,
+    approved_source_sha256: str | None = None,
+    approved_primitive_ir_sha256: str | None = None,
+    approved_semantic_ir_sha256: str | None = None,
 ) -> int:
     """CLI runner Phase 5: load ảnh thật + 2 file JSON IR, chạy Agent,
     lưu report và chỉ apply actions khi có phê duyệt rõ ràng.
@@ -139,9 +213,14 @@ def run(
     """
     _configure_console_output()
     try:
-        _validate_agent_action_approval(
+        application_requested = _validate_agent_action_approval(
             confirm_agent_actions,
             agent_action_approval,
+            approved_agent_report,
+            approved_agent_report_sha256,
+            approved_source_sha256,
+            approved_primitive_ir_sha256,
+            approved_semantic_ir_sha256,
         )
     except ValueError as exc:
         print(f"ERROR: {exc}")
@@ -164,6 +243,24 @@ def run(
             return 1
 
     os.makedirs(output_dir, exist_ok=True)
+
+    input_hashes = {
+        "source_image_sha256": _sha256_file(image_path),
+        "primitive_ir_sha256": _sha256_file(primitive_ir_path),
+        "semantic_ir_sha256": _sha256_file(semantic_ir_path),
+    }
+    if application_requested:
+        expected_hashes = {
+            "source_image_sha256": approved_source_sha256,
+            "primitive_ir_sha256": approved_primitive_ir_sha256,
+            "semantic_ir_sha256": approved_semantic_ir_sha256,
+        }
+        if any(
+            input_hashes[name] != str(expected).lower()
+            for name, expected in expected_hashes.items()
+        ):
+            print("ERROR: approved Agent input SHA-256 mismatch; no actions were applied")
+            return 2
 
     # ================================================================
     # 1. Load ảnh gốc
@@ -229,17 +326,38 @@ def run(
     # 5. Phase 5: Agent
     # ================================================================
     print(f"\n--- Phase 5: Agent ---")
-    from agent_lib.batch_agent import run_agent
+    if application_requested:
+        assert approved_agent_report is not None
+        assert approved_agent_report_sha256 is not None
+        if not os.path.isfile(approved_agent_report):
+            print(f"ERROR: approved Agent report does not exist: {approved_agent_report}")
+            return 2
+        actual_report_sha256 = _sha256_file(approved_agent_report)
+        if actual_report_sha256 != approved_agent_report_sha256.lower():
+            print("ERROR: approved Agent report SHA-256 mismatch; no actions were applied")
+            return 2
+        from agent_lib.io_utils import load_agent_report
 
-    report = run_agent(
-        primitive_doc=primitive_doc,
-        semantic_doc=semantic_doc,
-        image_bgr=image,
-        solve_result=solve_result,
-        vision_reader=vision_reader,
-        text_confidence_threshold=text_confidence_threshold,
-        part_confidence_threshold=part_confidence_threshold,
-    )
+        report = load_agent_report(approved_agent_report)
+        if any(action.applied for action in report.actions):
+            print("ERROR: approved Agent report already contains applied actions")
+            return 2
+        print(
+            "[agent] loaded separately reviewed report "
+            f"{report.id} ({actual_report_sha256})"
+        )
+    else:
+        from agent_lib.batch_agent import run_agent
+
+        report = run_agent(
+            primitive_doc=primitive_doc,
+            semantic_doc=semantic_doc,
+            image_bgr=image,
+            solve_result=solve_result,
+            vision_reader=vision_reader,
+            text_confidence_threshold=text_confidence_threshold,
+            part_confidence_threshold=part_confidence_threshold,
+        )
 
     print(f"[agent] tasks={report.task_count}, actions={report.action_count}, "
           f"skipped={report.skipped_count}")
@@ -256,6 +374,11 @@ def run(
         report,
         confirm_agent_actions=confirm_agent_actions,
         approval_reference=agent_action_approval,
+        approved_report_path=approved_agent_report,
+        approved_report_sha256=approved_agent_report_sha256,
+        approved_source_sha256=approved_source_sha256,
+        approved_primitive_ir_sha256=approved_primitive_ir_sha256,
+        approved_semantic_ir_sha256=approved_semantic_ir_sha256,
     )
     if application_audit["actions_applied"]:
         print(f"[agent-apply] {application_audit['summary']}")
@@ -264,11 +387,28 @@ def run(
     else:
         print("[agent-apply] advisory only; no approval supplied")
 
-    # Save agent report
+    if (
+        application_audit["actions_applied"]
+        and application_audit["summary"]["constraints_dropped"] > 0
+    ):
+        pruned = prune_constraints(semantic_doc.constraints)
+        solve_result = solve_constraints(primitive_doc, pruned.kept)
+        application_audit["post_application_solve_status"] = solve_result.status
+        print(
+            "[constraint-solving] recomputed after approved constraint changes: "
+            f"status={solve_result.status}"
+        )
+
+    application_audit["provenance"] = {**input_hashes, "report_id": report.id}
+
+    # Save the advisory report, or a distinct applied copy. Never overwrite the
+    # separately reviewed report that authorized an application.
     from agent_lib.io_utils import save_document
-    report_path = os.path.join(output_dir, "agent_report.json")
+    report_name = "agent_report_applied.json" if application_requested else "agent_report.json"
+    report_path = os.path.join(output_dir, report_name)
     save_document(report, report_path)
     print(f"[save] agent report -> {report_path}")
+    application_audit["saved_report_sha256"] = _sha256_file(report_path)
     application_path = os.path.join(output_dir, "agent_application.json")
     _save_application_audit(application_audit, application_path)
     print(f"[save] agent application audit -> {application_path}")
@@ -361,6 +501,17 @@ if __name__ == "__main__":
         "--agent-action-approval",
         help="Non-empty operator approval reference for applying Agent actions",
     )
+    parser.add_argument(
+        "--approved-agent-report",
+        help="Saved Agent report that was separately reviewed before application",
+    )
+    parser.add_argument(
+        "--approved-agent-report-sha256",
+        help="Expected SHA-256 of the separately reviewed Agent report",
+    )
+    parser.add_argument("--approved-source-sha256")
+    parser.add_argument("--approved-primitive-ir-sha256")
+    parser.add_argument("--approved-semantic-ir-sha256")
 
     args = parser.parse_args()
     sys.exit(run(
@@ -374,4 +525,9 @@ if __name__ == "__main__":
         run_dxf=not args.no_dxf,
         confirm_agent_actions=args.confirm_agent_actions,
         agent_action_approval=args.agent_action_approval,
+        approved_agent_report=args.approved_agent_report,
+        approved_agent_report_sha256=args.approved_agent_report_sha256,
+        approved_source_sha256=args.approved_source_sha256,
+        approved_primitive_ir_sha256=args.approved_primitive_ir_sha256,
+        approved_semantic_ir_sha256=args.approved_semantic_ir_sha256,
     ))

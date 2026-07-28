@@ -5,6 +5,7 @@ import base64
 import json
 import ctypes
 from ctypes import wintypes
+import ntpath
 import time
 import uuid
 from dataclasses import dataclass
@@ -20,8 +21,14 @@ class MCPToolError(RuntimeError):
     """An MCP operation failed."""
 
 
+def _normalized_autocad_path(path: str) -> str:
+    """Normalize an AutoCAD Windows document path for identity comparison."""
+    return ntpath.normpath(path.replace("/", "\\")).casefold()
+
+
 class MCPClient(Protocol):
     def drawing_open(self, path: str) -> Dict[str, Any]: ...
+    def drawing_close(self, save_changes: bool = False) -> None: ...
     def drawing_save(self, path: Optional[str] = None) -> None: ...
     def drawing_save_as_dxf(self, path: str) -> None: ...
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]: ...
@@ -50,6 +57,7 @@ class FakeMCPClient:
         self._entities: Dict[str, _FakeEntity] = {}
         self._next_handle = 0x300
         self.opened_path: Optional[str] = None
+        self.closed_without_save = False
         self.fail_entity_get = fail_entity_get
 
     def _new_handle(self) -> str:
@@ -63,6 +71,10 @@ class FakeMCPClient:
     def drawing_open(self, path: str) -> Dict[str, Any]:
         self.opened_path = path
         return {"ok": True, "payload": {"path": path, "entity_count": len(self._entities)}}
+
+    def drawing_close(self, save_changes: bool = False) -> None:
+        self.closed_without_save = not save_changes
+        self.opened_path = None
 
     def drawing_save(self, path: Optional[str] = None) -> None: pass
 
@@ -157,8 +169,8 @@ class FileIPCLiveMCPClient:
         if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
             normalized_path = path.replace("\\", "/").replace('"', '\\"')
             normalized_loader = self._bootstrap_lisp_path.replace("\\", "/").replace('"', '\\"')
-            expected_name = Path(path).name.casefold()
-            active_name = ""
+            expected_path = _normalized_autocad_path(path)
+            active_path = ""
             for attempt in range(2):
                 # Opening another document replaces the document-scoped
                 # AutoLISP namespace. Invoke AutoCAD's COM API, then load the
@@ -173,16 +185,20 @@ class FileIPCLiveMCPClient:
                 self._raw_lisp_trigger('(load "' + normalized_loader + '")')
                 time.sleep(self._document_settle_s)
                 self._wait_for_dispatcher()
-                active_name = str(
-                    self.drawing_get_variables(["DWGNAME"]).get("DWGNAME", "")
+                variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
+                active_path = _normalized_autocad_path(
+                    ntpath.join(
+                        str(variables.get("DWGPREFIX", "")),
+                        str(variables.get("DWGNAME", "")),
+                    )
                 )
-                if active_name.casefold() == expected_name:
+                if active_path == expected_path:
                     return {"path": path}
                 if attempt == 0:
                     time.sleep(self._poll)
             raise MCPToolError(
                 "AutoCAD did not activate requested drawing "
-                f"{Path(path).name!r}; active drawing is {active_name!r}"
+                f"{expected_path!r}; active drawing is {active_path!r}"
             )
         return self._dispatch("drawing-open", {"path": path})
 
@@ -200,6 +216,18 @@ class FileIPCLiveMCPClient:
 
     def drawing_save(self, path: Optional[str] = None) -> None:
         self._dispatch("drawing-save", {"path": path} if path else {})
+
+    def drawing_close(self, save_changes: bool = False) -> None:
+        if self._raw_lisp_trigger is not None:
+            save_flag = ":vlax-true" if save_changes else ":vlax-false"
+            self._raw_lisp_trigger(
+                "(progn (vl-load-com) "
+                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
+                f"{save_flag}))"
+            )
+            time.sleep(self._document_settle_s)
+            return
+        self._dispatch("drawing-close", {"save_changes": save_changes})
 
     def drawing_save_as_dxf(self, path: str) -> None:
         self._dispatch("drawing-save-as-dxf", {"path": path.replace("\\", "/")})
@@ -287,6 +315,7 @@ class LiveMCPClient:
         return result
 
     def drawing_open(self, path: str): return self._invoke("drawing", "open", data={"path": path})
+    def drawing_close(self, save_changes=False): self._invoke("drawing", "close", data={"save_changes": save_changes})
     def drawing_save(self, path=None): self._invoke("drawing", "save", data={"path": path} if path else {})
     def drawing_save_as_dxf(self, path): self._invoke("drawing", "save_as_dxf", data={"path": path})
     def drawing_get_variables(self, names): return self._invoke("drawing", "get_variables", data={"names": names})["payload"]

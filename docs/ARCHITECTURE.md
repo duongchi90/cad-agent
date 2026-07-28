@@ -39,13 +39,15 @@ with `solved_primitives`; solved coordinates are never written back into
 Consumes ambiguous Primitive/Semantic IR plus optional image evidence.
 `run_agent()` produces an `AgentReport` without mutating the IR, and
 `apply_agent_report()` is the separate mutation API. `agent_lib.run` and the
-synthetic demo are advisory and non-mutating by default. The file runner can
-apply a report only when the operator supplies both
-`--confirm-agent-actions APPLY` and a non-empty
-`--agent-action-approval` reference. It writes `agent_application.json` beside
-the Agent report to record whether application was requested, whether any
-actions were applied, and the approval reference. This in-memory IR gate does
-not authorize production AutoCAD mutation.
+synthetic demo are advisory and non-mutating by default. The file runner
+applies actions only in a second invocation against a saved report. The
+operator supplies `--confirm-agent-actions APPLY`, a non-empty
+`--agent-action-approval`, the report SHA-256, and the approved source,
+Primitive IR, and Semantic IR SHA-256 values. `agent_application.json` records
+those hashes, the action-set hash, the applied-action hash, and any
+post-application solve status. Approved constraint changes are pruned and
+solved again before DXF generation. This in-memory IR gate does not authorize
+production AutoCAD mutation.
 
 ### `dxf_builder_lib`
 
@@ -59,6 +61,8 @@ and is followed by another review.
 Connects the built DXF to AutoCAD Mechanical 2027 through a live client or File IPC. Reviewer
 #2 and Repair #2 operate on AutoCAD-side entities by handle. Live tests require
 an explicit local AutoCAD Mechanical 2027 session and never run silently in ordinary CI.
+Raw-LISP document activation is accepted only when the normalized full
+`DWGPREFIX + DWGNAME` equals the requested path.
 
 ## Contracts
 
@@ -76,6 +80,9 @@ without reprocessing the original image.
   boundary.
 - Headless review/repair completes before AutoCAD Mechanical mutation.
 - Production DXF repair requires a backup and explicit user approval.
+- A production backup is valid only when the source hash is stable across the
+  copy and equals the copied hash. Failed repair closes without save before a
+  verified backup is reopened.
 - Real drawings, private annotations, credentials, and API keys stay outside
   Git.
 
@@ -89,13 +96,22 @@ Primitive IR, Semantic IR, DXF, and build-evidence checkpoints for each page.
 `resume` and `resume-pdf` verify the input SHA-256 before they reuse any
 checkpoint. It contains no recognition or CAD algorithms.
 
-The current slice deliberately excludes Agent action application. Its ordinary
-`run` and `run-pdf` commands produce staged artifacts only;
-`mechanical-review` reads a SHA-bound `BuildResult` evidence record through
-File IPC, while `mechanical-repair` requires an approval reference, literal
-operator confirmation, a DXF/evidence backup, and a passing second review
-before it saves. Existing package APIs remain the authority for the underlying
-review and repair behavior.
+The ordinary `cad_agent run` and `run-pdf` commands produce staged artifacts
+only. Agent application remains a separate hash-bound `agent_lib.run`
+invocation. `mechanical-review` reads a SHA-bound `BuildResult` evidence record
+through File IPC, while `mechanical-repair` requires an approval reference,
+literal operator confirmation, a verified DXF/evidence backup, and a passing
+second review before it saves. Existing package APIs remain the authority for
+the underlying review and repair behavior.
+
+The private fidelity path is also orchestrated by `cad_agent`, but it remains a
+paper-coordinate review profile rather than a production model. After
+composition, `fidelity-promote` records a delegated visual approval, the
+region/composition/DXF hashes, and an expected structural signature in the
+fidelity manifest. `fidelity-mechanical-review` opens only that promoted DXF,
+compares the read-only AutoCAD type/layer signature, and records a page
+checkpoint. It never saves, repairs, or exports. Fidelity artifacts remain
+rejected by the ordinary Mechanical repair flow.
 
 ## Historical reference
 

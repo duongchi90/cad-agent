@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -80,6 +81,15 @@ def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
         assert report["after_review"]["passed"] is True
         assert Path(report["backup"]["dxf_path"]).is_file()
         assert Path(report["backup"]["build_evidence_path"]).is_file()
+        assert report["backup"]["verified"] is True
+        assert (
+            report["backup"]["dxf_source_sha256"]
+            == report["backup"]["dxf_backup_sha256"]
+        )
+        assert (
+            report["backup"]["build_evidence_source_sha256"]
+            == report["backup"]["build_evidence_backup_sha256"]
+        )
         assert json.loads(evidence.read_text(encoding="utf-8"))["build_result"]["handle_by_primitive_id"]
 
 
@@ -103,4 +113,37 @@ def test_failed_second_review_does_not_save_and_reopens_backup() -> None:
 
         assert report["save_state"] == "not_saved"
         assert report["after_review"]["passed"] is False
+        assert client.closed_without_save is True
+        assert report["rollback_state"] == "failed_drawing_closed_and_backup_reopened"
         assert client.opened_path == report["backup"]["dxf_path"]
+
+
+def test_corrupt_backup_aborts_before_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _mismatched_client()
+        original_copy2 = shutil.copy2
+        copy_count = 0
+
+        def corrupting_copy(source, destination):  # type: ignore[no-untyped-def]
+            nonlocal copy_count
+            result = original_copy2(source, destination)
+            copy_count += 1
+            if copy_count == 1:
+                Path(destination).write_bytes(b"corrupt")
+            return result
+
+        monkeypatch.setattr("cad_agent.live.shutil.copy2", corrupting_copy)
+
+        with pytest.raises(LiveSafetyError, match="backup verification"):
+            repair_live(build, client, dxf, evidence, root / "backups", "change-42")
+
+        assert "A" in client._entities
+        assert len(client._entities) == 1

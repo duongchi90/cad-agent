@@ -174,3 +174,28 @@ class FileIPCEndToEndTests(unittest.TestCase):
             self.assertEqual(1, repaired.repaired_count)
             final = review_dxf_live(build, client, open_drawing=False)
             self.assertTrue(final.passed, final.mismatches)
+
+    def test_same_named_drawings_in_different_directories_use_full_path_identity(self):
+        first_dir = tempfile.mkdtemp(prefix="cad_agent_same_a_", dir="C:/temp")
+        second_dir = tempfile.mkdtemp(prefix="cad_agent_same_b_", dir="C:/temp")
+        first_path = os.path.join(first_dir, "same-name.dxf")
+        second_path = os.path.join(second_dir, "same-name.dxf")
+        first = ezdxf.new("R2010")
+        first.modelspace().add_line((0, 0), (10, 0))
+        first.saveas(first_path)
+        second = ezdxf.new("R2010")
+        second.modelspace().add_circle((5, 5), 2)
+        second.saveas(second_path)
+
+        client = self._client()
+        client.drawing_open(first_path)
+        client.drawing_open(second_path)
+
+        variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
+        active = os.path.normcase(
+            os.path.normpath(
+                os.path.join(variables["DWGPREFIX"], variables["DWGNAME"])
+            )
+        )
+        self.assertEqual(os.path.normcase(os.path.normpath(second_path)), active)
+        self.assertEqual({"CIRCLE"}, {entity["type"] for entity in client.entity_list()})

@@ -29,8 +29,11 @@ evidence for this project.
 ## First product milestone
 
 One approved real image or PDF runs through Primitive IR, Semantic IR, optional
-agent advice, DXF build/headless review, and AutoCAD Mechanical 2027 live review/repair. The
-run records input hash, configuration, artifacts, approvals, and test evidence.
+agent advice, DXF build/headless review, and AutoCAD Mechanical 2027 live
+review. If review finds a confirmed production defect, the separately approved
+repair/rollback loop is available; a passing review is never mutated merely to
+exercise repair. The run records input hash, configuration, artifacts,
+approvals, and test evidence.
 
 ## Modernization slices
 

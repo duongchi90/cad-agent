@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import TestCase
 
-from agent_lib.io_utils import load_document_dict, save_document
+from agent_lib.io_utils import load_agent_report, load_document_dict, save_document
 from agent_lib.models import (
     AgentAction, AgentReport, AgentTask, Evidence,
 )
@@ -116,6 +116,18 @@ class TestLoadDocumentDict(TestCase):
         """File không tồn tại → FileNotFoundError."""
         with self.assertRaises(FileNotFoundError):
             load_document_dict("/tmp/khong_ton_tai_agent_report_12345.json")
+
+    def test_load_agent_report_rebuilds_reviewed_actions(self):
+        report = _make_sample_report()
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            path = f.name
+        try:
+            save_document(report, path)
+            loaded = load_agent_report(path)
+            self.assertEqual(loaded.to_dict(), report.to_dict())
+            self.assertIsInstance(loaded.actions[0], AgentAction)
+        finally:
+            os.unlink(path)
 
 
 class TestRoundTrip(TestCase):

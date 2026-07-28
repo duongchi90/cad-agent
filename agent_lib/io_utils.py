@@ -1,13 +1,9 @@
 """
-io_utils.py — Lưu AgentReport ra JSON + đọc dict thô.
+io_utils.py — Lưu AgentReport ra JSON và đọc lại report đã duyệt.
 
-Khớp pattern `semantic_ir_lib/io_utils.py`: chỉ có `save_document()` và
-`load_document_dict()`, KHÔNG có `from_dict()` / `load_agent_report()` — theo
-chốt thiết kế Phase 5: Agent chỉ chạy forward (Primitive+Semantic → Agent →
-save), không cần load lại AgentReport đã lưu để re-apply hoặc diff. Nếu sau
-này cần đọc-ngược AgentReport thành object `AgentReport` thật, viết thêm các
-helper `_agent_task_from_dict`/`_agent_action_from_dict`/`_evidence_from_dict`
-theo pattern `semantic_ir_lib/io_utils.py` (xem note cuối file).
+`load_agent_report()` rebuild một report đã lưu chỉ cho bước application tách
+biệt, có ràng buộc SHA-256. Lần chạy Agent thông thường vẫn forward-only và
+advisory.
 
 Tách logic save/load ra khỏi `demo_pipeline.py` (trước đây tự `json.dump`
 inline) để `run.py` và các caller khác tái use cùng 1 hàm.
@@ -17,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from .models import AgentReport
+from .models import AgentAction, AgentReport, AgentTask, Evidence
 
 
 def save_document(report: AgentReport, path: str) -> None:
@@ -37,3 +33,30 @@ def load_document_dict(path: str) -> dict:
     (report['task_count'], report['actions'], ...)."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_agent_report(path: str) -> AgentReport:
+    """Load a saved AgentReport for a separately approved application step."""
+    payload = load_document_dict(path)
+    report = AgentReport(
+        id=payload["id"],
+        schema_version=payload["schema_version"],
+        timestamp=payload["timestamp"],
+        skipped_count=payload.get("skipped_count", 0),
+        skip_reasons=dict(payload.get("skip_reasons", {})),
+        summary=dict(payload.get("summary", {})),
+    )
+    report.tasks = [AgentTask(**task) for task in payload.get("tasks", [])]
+    actions = []
+    for item in payload.get("actions", []):
+        action = dict(item)
+        evidence = action.get("evidence")
+        if evidence is not None:
+            action["evidence"] = Evidence(**evidence)
+        actions.append(AgentAction(**action))
+    report.actions = actions
+    if payload.get("task_count") != report.task_count:
+        raise ValueError("Agent report task_count does not match its tasks.")
+    if payload.get("action_count") != report.action_count:
+        raise ValueError("Agent report action_count does not match its actions.")
+    return report

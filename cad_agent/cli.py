@@ -419,6 +419,42 @@ def _fidelity_compose_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_promote_command(args: argparse.Namespace) -> int:
+    from .fidelity import promote_fidelity_page, read_fidelity_manifest
+
+    manifest_path = args.manifest.resolve()
+    print(
+        promote_fidelity_page(
+            args.input.resolve(),
+            manifest_path.parent,
+            manifest_path,
+            read_fidelity_manifest(manifest_path),
+            args.page,
+            args.composed_page.resolve(),
+            args.approval_reference,
+            workspace_root=Path.cwd(),
+        )
+    )
+    return 0
+
+
+def _fidelity_mechanical_review_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, review_promoted_fidelity_page
+
+    manifest_path = args.manifest.resolve()
+    report, passed = review_promoted_fidelity_page(
+        args.input.resolve(),
+        manifest_path.parent,
+        manifest_path,
+        read_fidelity_manifest(manifest_path),
+        args.page,
+        _live_client(args.hwnd, args.dispatcher.resolve(), args.timeout_s),
+        workspace_root=Path.cwd(),
+    )
+    print(report)
+    return 0 if passed else 1
+
+
 def _fidelity_review_index_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, write_fidelity_review_index
 
@@ -590,6 +626,25 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
     fidelity_compose.add_argument("--approval", type=Path, required=True)
+    fidelity_promote = subcommands.add_parser(
+        "fidelity-promote",
+        help="Promote a visually approved reconstruction into the canonical fidelity checkpoint",
+    )
+    fidelity_promote.add_argument("--input", type=Path, required=True)
+    fidelity_promote.add_argument("--manifest", type=Path, required=True)
+    fidelity_promote.add_argument("--page", type=int, required=True)
+    fidelity_promote.add_argument("--composed-page", type=Path, required=True)
+    fidelity_promote.add_argument("--approval-reference", required=True)
+    fidelity_mechanical_review = subcommands.add_parser(
+        "fidelity-mechanical-review",
+        help="Read-only AutoCAD Mechanical review of a promoted fidelity page",
+    )
+    fidelity_mechanical_review.add_argument("--input", type=Path, required=True)
+    fidelity_mechanical_review.add_argument("--manifest", type=Path, required=True)
+    fidelity_mechanical_review.add_argument("--page", type=int, required=True)
+    fidelity_mechanical_review.add_argument("--hwnd", type=int, required=True)
+    fidelity_mechanical_review.add_argument("--dispatcher", type=Path, required=True)
+    fidelity_mechanical_review.add_argument("--timeout-s", type=float, default=10.0)
     fidelity_index = subcommands.add_parser("fidelity-review-index", help="Write a private static review index for fidelity artifacts")
     fidelity_index.add_argument("--input", type=Path, required=True)
     fidelity_index.add_argument("--manifest", type=Path, required=True)
@@ -661,6 +716,10 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_text_reconstruct_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
+        if args.command == "fidelity-promote":
+            return _fidelity_promote_command(args)
+        if args.command == "fidelity-mechanical-review":
+            return _fidelity_mechanical_review_command(args)
         if args.command == "fidelity-review-index":
             return _fidelity_review_index_command(args)
         if args.command == "fidelity-review-queue":

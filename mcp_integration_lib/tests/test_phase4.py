@@ -136,7 +136,8 @@ class FileIPCClientTests(unittest.TestCase):
             document_settle_s=0,
         )
         client._dispatch = lambda command, params: (
-            {"DWGNAME": "a.dxf"} if command == "drawing-get-variables" else {}
+            {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+            if command == "drawing-get-variables" else {}
         )
         client.drawing_open("C:/work/a.dxf")
         self.assertEqual(2, len(raw_commands))
@@ -155,13 +156,16 @@ class FileIPCClientTests(unittest.TestCase):
         calls = []
         client._dispatch = lambda command, params: (
             calls.append((command, params))
-            or ({"DWGNAME": "a.dxf"} if command == "drawing-get-variables" else {})
+            or (
+                {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+                if command == "drawing-get-variables" else {}
+            )
         )
         client.drawing_open("C:/work/a.dxf")
         self.assertEqual(
             [
                 ("ping", {}),
-                ("drawing-get-variables", {"names_str": "DWGNAME"}),
+                ("drawing-get-variables", {"names_str": "DWGPREFIX;DWGNAME"}),
             ],
             calls,
         )
@@ -174,11 +178,16 @@ class FileIPCClientTests(unittest.TestCase):
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             document_settle_s=0,
         )
-        names = iter(["old.dxf", "a.dxf"])
+        documents = iter(
+            [
+                {"DWGPREFIX": "C:/old/", "DWGNAME": "old.dxf"},
+                {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"},
+            ]
+        )
 
         def dispatch(command, params):
             if command == "drawing-get-variables":
-                return {"DWGNAME": next(names)}
+                return next(documents)
             return {}
 
         client._dispatch = dispatch
@@ -187,6 +196,48 @@ class FileIPCClientTests(unittest.TestCase):
             client.drawing_open("C:/work/a.dxf"),
         )
         self.assertEqual(4, len(raw_commands))
+
+    def test_bootstrap_retries_same_named_document_in_different_directory(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            trigger=lambda: None,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            document_settle_s=0,
+        )
+        documents = iter(
+            [
+                {"DWGPREFIX": "C:/other/", "DWGNAME": "same.dxf"},
+                {"DWGPREFIX": "C:/target/", "DWGNAME": "same.dxf"},
+            ]
+        )
+
+        def dispatch(command, params):
+            if command == "drawing-get-variables":
+                return next(documents)
+            return {}
+
+        client._dispatch = dispatch
+        self.assertEqual(
+            {"path": "C:/target/same.dxf"},
+            client.drawing_open("C:/target/same.dxf"),
+        )
+        self.assertEqual(4, len(raw_commands))
+
+    def test_bootstrap_refuses_same_named_document_in_different_directory(self):
+        client = FileIPCLiveMCPClient(
+            trigger=lambda: None,
+            raw_lisp_trigger=lambda command: None,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            document_settle_s=0,
+        )
+        client._dispatch = lambda command, params: (
+            {"DWGPREFIX": "C:/other/", "DWGNAME": "same.dxf"}
+            if command == "drawing-get-variables" else {}
+        )
+
+        with self.assertRaisesRegex(MCPToolError, "active drawing is"):
+            client.drawing_open("C:/target/same.dxf")
 
     def test_block_attribute_read_retries_one_timeout(self):
         client = FileIPCLiveMCPClient(trigger=lambda: None)
