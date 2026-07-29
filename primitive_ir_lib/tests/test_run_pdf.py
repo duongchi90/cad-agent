@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
+import pytest
 
 from primitive_ir_lib.run_pdf import run_pdf
 
@@ -136,6 +137,70 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
     assert manifest["pages"][0]["scale_label_candidates"][0]["scale_denominator"] == 40
     assert manifest["pages"][0]["scale_label_candidates"][0]["status"] == "needs_verification"
     assert "region_bbox_px" in manifest["pages"][0]["scale_label_candidates"][0]
+
+
+def test_run_pdf_materializes_review_only_child_ir_for_evidenced_view(tmp_path: Path):
+    pdf_path = tmp_path / "fixture.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=200, height=100)
+    page.draw_line((20, 20), (180, 20), color=(0, 0, 0), width=1)
+    document.save(str(pdf_path))
+    document.close()
+
+    def fake_run(image_path, output_path, scale_mm_per_px=None, preset="real_scan_tuned_v1",
+                 ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
+                 auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
+                 view_candidates_output_path=None, view_candidates_dpi=None):
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text(json.dumps({
+            "primitives": [], "cross_validations": [],
+            "calibration": {"method": "manual_override", "pixel_to_unit_scale": scale_mm_per_px},
+        }), encoding="utf-8")
+        if view_candidates_output_path is not None:
+            candidate = {
+                "source_text_id": "scale", "bbox_px": [70, 10, 100, 20],
+                "region_bbox_px": [20, 10, 180, 40], "scale_denominator": 10,
+                "pixel_to_unit_scale": 1.7638888889, "status": "needs_verification",
+                "dimension_evidence": {
+                    "text_primitive_id": "dim", "geometry_primitive_id": "line",
+                    "text_value": 100.0, "geometry_measured_length": 100.0,
+                    "delta_percent": 0.0,
+                },
+            }
+            overlap = {
+                **candidate,
+                "source_text_id": "scale-overlap",
+                "bbox_px": [75, 12, 105, 22],
+            }
+            Path(view_candidates_output_path).write_text(
+                json.dumps([candidate, overlap]),
+                encoding="utf-8",
+            )
+        return str(output_path)
+
+    with patch("primitive_ir_lib.run_pdf.run", side_effect=fake_run):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72,
+            auto_ocr_roi=True,
+        )
+
+    candidate = manifest["pages"][0]["scale_label_candidates"][0]
+    child = candidate["child_ir"]
+    child_path = output_dir / child
+    assert child_path.is_file()
+    assert json.loads(child_path.read_text(encoding="utf-8"))["calibration"]["pixel_to_unit_scale"] == pytest.approx(1.7638888889)
+    assert candidate["status"] == "needs_verification"
+    assert candidate["child_state"] == "needs_verification"
+    assert candidate["child_ir_sha256"]
+    assert candidate["child_image_sha256"]
+    assert manifest["pages"][0]["scale_label_candidates"][1]["child_state"] == "skipped_overlap"
+    sidecar = json.loads(
+        (output_dir / "primitive_ir" / "page_01.view_candidates.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert sidecar == manifest["pages"][0]["scale_label_candidates"]
 
 
 _TESTS = [

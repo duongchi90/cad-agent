@@ -12,6 +12,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -21,6 +22,76 @@ import fitz
 
 from .calibration_registry import get_verified_scale
 from .run_image import run
+
+
+def _candidate_crop_bbox(candidate: dict, width: int, height: int, padding_px: int = 12) -> tuple[int, int, int, int]:
+    boxes = [candidate["bbox_px"], candidate["region_bbox_px"]]
+    x0 = max(0, int(min(box[0] for box in boxes)) - padding_px)
+    y0 = max(0, int(min(box[1] for box in boxes)) - padding_px)
+    x1 = min(width, int(max(box[2] for box in boxes)) + padding_px)
+    y1 = min(height, int(max(box[3] for box in boxes)) + padding_px)
+    return x0, y0, x1, y1
+
+
+def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    return max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3])
+
+
+def _materialize_view_children(
+    candidates: list[dict],
+    rendered_path: Path,
+    output_dir: Path,
+    page_number: int,
+    preset: str,
+    merge_lines: bool,
+) -> None:
+    """Create review-only child IRs for non-overlapping evidenced candidates."""
+    evidenced = [candidate for candidate in candidates if candidate.get("dimension_evidence")]
+    if not evidenced:
+        return
+
+    import cv2
+
+    image = cv2.imread(str(rendered_path))
+    if image is None:
+        raise ValueError(f"Cannot read rendered page for view child IR: {rendered_path}")
+    height, width = image.shape[:2]
+    accepted_boxes: list[tuple[int, int, int, int]] = []
+    child_root = output_dir / "view_ir" / f"page_{page_number:02d}"
+    for index, candidate in enumerate(evidenced, start=1):
+        bbox = _candidate_crop_bbox(candidate, width, height)
+        if any(_boxes_overlap(bbox, other) for other in accepted_boxes):
+            candidate["child_state"] = "skipped_overlap"
+            continue
+        x0, y0, x1, y1 = bbox
+        if x1 <= x0 or y1 <= y0:
+            candidate["child_state"] = "skipped_invalid_bbox"
+            continue
+        accepted_boxes.append(bbox)
+        child_root.mkdir(parents=True, exist_ok=True)
+        child_image = child_root / f"view_{index:02d}.png"
+        child_ir = child_root / f"view_{index:02d}.json"
+        if not cv2.imwrite(str(child_image), image[y0:y1, x0:x1]):
+            raise ValueError(f"Cannot write view child image: {child_image}")
+        run(
+            image_path=str(child_image),
+            output_path=str(child_ir),
+            scale_mm_per_px=float(candidate["pixel_to_unit_scale"]),
+            preset=preset,
+            merge_lines=merge_lines,
+            auto_ocr_roi=True,
+        )
+        candidate["child_ir"] = str(child_ir.relative_to(output_dir)).replace("\\", "/")
+        candidate["child_image"] = str(child_image.relative_to(output_dir)).replace("\\", "/")
+        candidate["child_bbox_px"] = [x0, y0, x1, y1]
+        candidate["child_calibration_status"] = "needs_verification"
+        candidate["child_state"] = "needs_verification"
+        candidate["child_image_sha256"] = hashlib.sha256(
+            child_image.read_bytes()
+        ).hexdigest()
+        candidate["child_ir_sha256"] = hashlib.sha256(
+            child_ir.read_bytes()
+        ).hexdigest()
 
 
 def _configure_console_output() -> None:
@@ -97,6 +168,19 @@ def run_pdf(
                 view_candidates_dpi=dpi,
             )
             payload = json.loads(output_path.read_text(encoding="utf-8"))
+            scale_label_candidates = json.loads(view_candidates_path.read_text(encoding="utf-8"))
+            _materialize_view_children(
+                scale_label_candidates,
+                image_path,
+                output_dir,
+                index,
+                preset,
+                merge_lines,
+            )
+            view_candidates_path.write_text(
+                json.dumps(scale_label_candidates, indent=2) + "\n",
+                encoding="utf-8",
+            )
             manifest["pages"].append({
                 "page": index,
                 "rendered_png": str(image_path.relative_to(output_dir)),
@@ -105,7 +189,7 @@ def run_pdf(
                 "cross_validation_count": len(payload["cross_validations"]),
                 "calibration_method": payload["calibration"]["method"],
                 "scale_mm_per_px": payload["calibration"]["pixel_to_unit_scale"],
-                "scale_label_candidates": json.loads(view_candidates_path.read_text(encoding="utf-8")),
+                "scale_label_candidates": scale_label_candidates,
             })
     finally:
         document.close()

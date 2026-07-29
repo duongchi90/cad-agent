@@ -71,9 +71,10 @@ page stages. A changed source PDF is rejected by SHA-256 before any checkpoint
 is reused.
 
 Add `--auto-ocr-roi` to preserve per-page OCR scale-label candidates in the
-manifest. These candidates are review metadata only: a candidate such as
-`1:40` remains `needs_verification` and never overrides the approved manual
-scale automatically.
+manifest. Candidates with non-ambiguous dimension evidence can also produce a
+review-only child IR under `view_ir/`, cropped to that view and calibrated with
+the detected scale. The candidate and child remain `needs_verification`; they
+never override the approved manual scale or authorize production automatically.
 
 ## Agent advice and approved application
 
@@ -104,7 +105,10 @@ production DXF mutation require human approval.
 
 A PDF page can contain views with different scales such as `TL 1:40` and
 `TL 1:20`. PDF rendering records OCR scale-label candidates and the associated
-geometry region in its per-page manifest. A candidate remains
+geometry region in its per-page manifest. When dimension evidence is available
+and candidate regions do not overlap, the runner materializes a crop-local
+child IR and PNG under `view_ir/page_NN/` for visual review. Candidates without
+adequate evidence remain metadata-only. Every candidate and child remains
 `needs_verification`: it never replaces an approved calibration or authorizes
 DXF production automatically.
 
