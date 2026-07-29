@@ -187,8 +187,18 @@ class FileIPCLiveMCPClient:
                 # enough: it can be answered by the previously active drawing.
                 self._raw_lisp_trigger(
                     '(progn (vl-load-com) '
-                    '(setq mcp-open-doc (vla-open (vla-get-Documents (vlax-get-acad-object)) "'
-                    + normalized_path + '")) (vla-activate mcp-open-doc))'
+                    '(setq mcp-docs (vla-get-Documents (vlax-get-acad-object)) '
+                    'mcp-target-path (findfile "' + normalized_path + '") '
+                    'mcp-open-doc nil) '
+                    '(if (not mcp-target-path) '
+                    '(setq mcp-target-path "' + normalized_path + '")) '
+                    '(vlax-for mcp-candidate-doc mcp-docs '
+                    '(if (= (strcase (vla-get-FullName mcp-candidate-doc)) '
+                    '(strcase mcp-target-path)) '
+                    '(setq mcp-open-doc mcp-candidate-doc))) '
+                    '(if (not mcp-open-doc) '
+                    '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"))) '
+                    '(vla-activate mcp-open-doc))'
                 )
                 time.sleep(self._document_settle_s)
                 self._raw_lisp_trigger('(load "' + normalized_loader + '")')
