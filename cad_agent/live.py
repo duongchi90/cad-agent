@@ -37,6 +37,12 @@ def _build_result_dict(build: BuildResult) -> dict[str, Any]:
         "skipped_primitive_ids": build.skipped_primitive_ids,
         "entity_count": build.entity_count,
         "dimension_count": build.dimension_count,
+        "dimension_handle_by_cross_validation_id": (
+            build.dimension_handle_by_cross_validation_id
+        ),
+        "written_dimension_by_cross_validation_id": (
+            build.written_dimension_by_cross_validation_id
+        ),
         "component_handle_by_part_id": build.component_handle_by_part_id,
         "component_type_by_part_id": build.component_type_by_part_id,
         "skipped_part_ids": build.skipped_part_ids,

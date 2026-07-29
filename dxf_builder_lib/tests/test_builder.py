@@ -19,6 +19,7 @@ from primitive_ir_lib.models import (
 )
 
 from dxf_builder_lib.builder import build_dxf
+from dxf_builder_lib.reviewer import review_dxf
 from semantic_ir_lib.constraint_solving import SolvedPrimitive
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
 from primitive_ir_lib.models import CrossValidation
@@ -202,10 +203,20 @@ def test_confirmed_cross_validation_emits_native_dimension_when_enabled():
         result = build_dxf(doc, out_path, build_dimensions=True)
 
         assert result.dimension_count == 1
+        assert set(result.dimension_handle_by_cross_validation_id) == {
+            doc.cross_validations[0].id
+        }
         reopened = ezdxf.readfile(out_path)
         dimensions = [e for e in reopened.modelspace() if e.dxftype() == "DIMENSION"]
         assert len(dimensions) == 1
         assert dimensions[0].dxf.layer == "DIMENSIONS"
+        assert review_dxf(result).passed
+
+        dimensions[0].dxf.layer = "WRONG"
+        reopened.saveas(out_path)
+        failed = review_dxf(result)
+        assert failed.passed is False
+        assert any("expected layer" in item for item in failed.dimension_mismatches)
 
 
 def test_unverified_cross_validation_does_not_emit_dimension():

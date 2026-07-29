@@ -75,6 +75,8 @@ class ReviewResult:
     # --- round-trip INSERT (Semantic Component API, xem docstring module) ---
     component_checked_count: int = 0
     component_mismatches: List[ComponentMismatch] = field(default_factory=list)
+    dimension_checked_count: int = 0
+    dimension_mismatches: List[str] = field(default_factory=list)
 
     def format_report(self) -> str:
         """Report lỗi có cấu trúc, gom theo part_id — dùng khi debug thủ
@@ -89,6 +91,12 @@ class ReviewResult:
         )
         for m in self.mismatches:
             lines.append(f"    - {m}")
+        lines.append(
+            f"  dimensions: {self.dimension_checked_count} checked, "
+            f"{len(self.dimension_mismatches)} mismatch"
+        )
+        for mismatch in self.dimension_mismatches:
+            lines.append(f"    - {mismatch}")
         lines.append(
             f"  components (INSERT): {self.component_checked_count} checked, "
             f"{len(self.component_mismatches)} mismatch"
@@ -202,6 +210,51 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
 
     component_mismatches: List[ComponentMismatch] = []
     component_checked = 0
+    dimension_mismatches: List[str] = []
+    dimension_checked = 0
+
+    actual_dimension_count = sum(
+        1 for entity in doc.modelspace() if entity.dxftype() == "DIMENSION"
+    )
+    if actual_dimension_count != build_result.dimension_count:
+        dimension_mismatches.append(
+            "DIMENSION count mismatch: "
+            f"expected {build_result.dimension_count}, actual {actual_dimension_count}"
+        )
+    for validation_id, handle in (
+        build_result.dimension_handle_by_cross_validation_id.items()
+    ):
+        expected = build_result.written_dimension_by_cross_validation_id.get(
+            validation_id
+        )
+        entity = db.get(handle)
+        if expected is None:
+            dimension_mismatches.append(
+                f"{validation_id}: missing written dimension evidence"
+            )
+            continue
+        if entity is None:
+            dimension_mismatches.append(
+                f"{validation_id}: DIMENSION handle {handle!r} not found"
+            )
+            continue
+        dimension_checked += 1
+        if entity.dxftype() != "DIMENSION":
+            dimension_mismatches.append(
+                f"{validation_id}: expected DIMENSION, actual {entity.dxftype()}"
+            )
+            continue
+        if entity.dxf.layer != expected["layer"]:
+            dimension_mismatches.append(
+                f"{validation_id}: expected layer {expected['layer']!r}, "
+                f"actual {entity.dxf.layer!r}"
+            )
+        measurement = float(entity.get_measurement())
+        if abs(measurement - float(expected["measurement"])) > tolerance_mm:
+            dimension_mismatches.append(
+                f"{validation_id}: expected measurement "
+                f"{expected['measurement']}, actual {measurement}"
+            )
 
     for part_id, handle in build_result.component_handle_by_part_id.items():
         written = build_result.written_component_by_part_id.get(part_id)
@@ -304,9 +357,15 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
             ))
 
     return ReviewResult(
-        passed=(len(mismatches) == 0 and len(component_mismatches) == 0),
+        passed=(
+            len(mismatches) == 0
+            and len(component_mismatches) == 0
+            and len(dimension_mismatches) == 0
+        ),
         checked_count=checked,
         mismatches=mismatches,
         component_checked_count=component_checked,
         component_mismatches=component_mismatches,
+        dimension_checked_count=dimension_checked,
+        dimension_mismatches=dimension_mismatches,
     )

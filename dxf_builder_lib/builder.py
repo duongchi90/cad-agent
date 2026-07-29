@@ -73,6 +73,8 @@ class BuildResult:
     skipped_primitive_ids: List[str] = field(default_factory=list)
     entity_count: int = 0
     dimension_count: int = 0
+    dimension_handle_by_cross_validation_id: Dict[str, str] = field(default_factory=dict)
+    written_dimension_by_cross_validation_id: Dict[str, dict] = field(default_factory=dict)
     # --- Semantic API (mục 12.4, semantic_components.py) — chỉ điền khi gọi
     # build_dxf(..., build_components=True) VÀ có semantic_doc. Đứng SONG
     # SONG với hình học thô ở trên (layer COMP_*, KHÔNG thay thế) — xem
@@ -117,14 +119,19 @@ def _ensure_layer(doc, name: str, color: int) -> None:
         doc.layers.new(name=name, dxfattribs={"color": color})
 
 
-def _add_confirmed_dimensions(doc, msp, primitive_doc: PrimitiveIRDocument) -> int:
+def _add_confirmed_dimensions(
+    doc,
+    msp,
+    primitive_doc: PrimitiveIRDocument,
+) -> tuple[Dict[str, str], Dict[str, dict]]:
     """Emit only cross-validated line dimensions as native DXF DIMENSIONs."""
     lines = {
         prim.id: prim
         for prim in primitive_doc.primitives
         if prim.type == "line" and prim.geometry is not None
     }
-    count = 0
+    handles: Dict[str, str] = {}
+    written: Dict[str, dict] = {}
     for validation in primitive_doc.cross_validations:
         if validation.status != "confirmed":
             continue
@@ -153,8 +160,15 @@ def _add_confirmed_dimensions(doc, msp, primitive_doc: PrimitiveIRDocument) -> i
             dxfattribs={"layer": "DIMENSIONS"},
         )
         override.render()
-        count += 1
-    return count
+        dimension = override.dimension
+        handles[validation.id] = dimension.dxf.handle
+        written[validation.id] = {
+            "layer": "DIMENSIONS",
+            "measurement": length,
+            "geometry_primitive_id": validation.geometry_primitive_id,
+            "text_primitive_id": validation.text_primitive_id,
+        }
+    return handles, written
 
 
 def build_dxf(
@@ -268,7 +282,11 @@ def build_dxf(
         result.entity_count += 1
 
     if build_dimensions:
-        result.dimension_count = _add_confirmed_dimensions(doc, msp, primitive_doc)
+        (
+            result.dimension_handle_by_cross_validation_id,
+            result.written_dimension_by_cross_validation_id,
+        ) = _add_confirmed_dimensions(doc, msp, primitive_doc)
+        result.dimension_count = len(result.dimension_handle_by_cross_validation_id)
 
     if build_components and semantic_doc is not None:
         from .semantic_components import assemble_semantic_components
