@@ -101,18 +101,11 @@ production DXF mutation require human approval.
 
 ## Mixed-scale PDF sheets
 
-A PDF page can contain views with different scales such as `TL 1:40` and
-`TL 1:20`. A non-overlapping candidate with dimension evidence may produce a
-SHA-recorded child PNG/IR under `view_ir/page_NN/`; other candidates stay
-metadata-only. Every child remains `needs_verification`: it never replaces an
-approved calibration or authorizes DXF production.
+A PDF page may contain mixed scales (`TL 1:40`, `TL 1:20`). Candidates with
+dimension evidence may produce SHA-recorded child PNG/IR; all remain
+`needs_verification` and cannot override calibration or authorize DXF.
 
-For observed linear dimensions, run `fidelity-dimension-observe` first and
-review its nearby line evidence. An explicit hash-bound approval can then be
-passed to `fidelity-dimension-reconstruct` with a private base DXF; the command
-creates a revisioned `needs_review` DXF containing only the approved native
-`DIMENSION` entities. It does not support radius/diameter/angular dimensions
-and its output cannot enter Mechanical production review or repair.
+`fidelity-dimension-observe` records candidates; with hash-bound approval and a private base DXF, `fidelity-dimension-reconstruct` emits approved linear `DIMENSION`s in `needs_review`. Radius/diameter/angular and Mechanical production mappings remain unsupported.
 
 ## Canonical documentation
 
