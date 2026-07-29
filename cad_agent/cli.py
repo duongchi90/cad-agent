@@ -349,6 +349,22 @@ def _fidelity_dimension_observe_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_dimension_reconstruct_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_dimension_reconstruct
+
+    manifest_path = args.manifest.resolve()
+    output = run_fidelity_dimension_reconstruct(
+        args.input.resolve(),
+        manifest_path.parent,
+        read_fidelity_manifest(manifest_path),
+        args.approval.resolve(),
+        args.base_dxf.resolve(),
+        workspace_root=Path.cwd(),
+    )
+    print(output)
+    return 0
+
+
 def _fidelity_hatch_observe_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_hatch_observations
 
@@ -600,6 +616,11 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_dimension_observe = subcommands.add_parser("fidelity-dimension-observe", help="Write review-only dimension candidates")
     fidelity_dimension_observe.add_argument("--input", type=Path, required=True)
     fidelity_dimension_observe.add_argument("--manifest", type=Path, required=True)
+    fidelity_dimension_reconstruct = subcommands.add_parser("fidelity-dimension-reconstruct", help="Emit explicitly approved linear dimensions into a private review DXF")
+    fidelity_dimension_reconstruct.add_argument("--input", type=Path, required=True)
+    fidelity_dimension_reconstruct.add_argument("--manifest", type=Path, required=True)
+    fidelity_dimension_reconstruct.add_argument("--approval", type=Path, required=True)
+    fidelity_dimension_reconstruct.add_argument("--base-dxf", type=Path, required=True)
     fidelity_hatch_observe = subcommands.add_parser("fidelity-hatch-observe", help="Write review-only diagonal-stroke hatch candidates")
     fidelity_hatch_observe.add_argument("--input", type=Path, required=True)
     fidelity_hatch_observe.add_argument("--manifest", type=Path, required=True)
@@ -710,6 +731,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_table_text_observe_command(args)
         if args.command == "fidelity-dimension-observe":
             return _fidelity_dimension_observe_command(args)
+        if args.command == "fidelity-dimension-reconstruct":
+            return _fidelity_dimension_reconstruct_command(args)
         if args.command == "fidelity-hatch-observe":
             return _fidelity_hatch_observe_command(args)
         if args.command == "fidelity-dimension-review-index":

@@ -47,6 +47,7 @@ remain observations until a separate mapping design exists.
   "source": {"name": "drawing.pdf", "sha256": "...", "kind": "pdf"},
   "page": 1,
   "observation": {"path": "fidelity_dimension_observations/page_01.json", "sha256": "..."},
+  "base_dxf": {"path": "layout_dxf/page_01.dxf", "sha256": "..."},
   "approval_reference": "review-2026-07-29",
   "mappings": [
     {"candidate_id": "dimension-1", "line_evidence_id": "line-1"}

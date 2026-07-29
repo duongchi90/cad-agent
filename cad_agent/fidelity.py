@@ -8,6 +8,7 @@ or calibration can never be mistaken for CAD source geometry.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from collections import Counter
@@ -660,17 +661,219 @@ def run_fidelity_dimension_observations(source: Path, output_root: Path, manifes
             if not _DIMENSION_VALUE.fullmatch(content):
                 continue
             x0, y0, x1, y1 = (float(value) for value in text["bbox_px"])
-            nearby = [
-                line.id for line in raw.lines
-                if line.bbox_px[0] <= x1 + 30 and line.bbox_px[2] >= x0 - 30 and line.bbox_px[1] <= y1 + 30 and line.bbox_px[3] >= y0 - 30
+            nearby_lines = [
+                {
+                    "id": line.id,
+                    "p1_px": [line.p1_px[0], line.p1_px[1]],
+                    "p2_px": [line.p2_px[0], line.p2_px[1]],
+                    "bbox_px": list(line.bbox_px),
+                    "length_px": line.length_px(),
+                }
+                for line in raw.lines
+                if line.bbox_px[0] <= x1 + 30 and line.bbox_px[2] >= x0 - 30
+                and line.bbox_px[1] <= y1 + 30 and line.bbox_px[3] >= y0 - 30
             ][:12]
-            candidates.append({"text": text, "nearby_line_ids": nearby, "state": "needs_human_approval"})
+            candidates.append({
+                "text": text,
+                "nearby_line_ids": [line["id"] for line in nearby_lines],
+                "nearby_lines": nearby_lines,
+                "state": "needs_human_approval",
+            })
         output = observation_root / f"page_{number:02d}.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = {"schema_version": "fidelity-dimension-observation-1.0", "private_artifact": True, "state": "needs_human_approval" if candidates else "not_evaluated", "source": manifest["source"], "page": number, "source_render_sha256": sha256_file(rendered), "source_text_observation": _artifact(text_path, output_root), "candidates": candidates, "unresolved": ["no candidate is emitted as a DXF DIMENSION without explicit mapping approval"]}
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         outputs.append(output)
     return outputs
+
+
+def run_fidelity_dimension_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    approval_path: Path,
+    base_dxf: Path,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Emit explicitly approved linear dimension observations into a private DXF."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root) or not approval_path.is_file():
+        raise FidelityError("Dimension approval must reside inside the private fidelity output root.")
+    if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Dimension approval is invalid JSON.") from exc
+    if (
+        approval.get("schema_version") != "fidelity-dimension-approval-1.0"
+        or approval.get("private_artifact") is not True
+        or approval.get("state") != "approved-dimension-mappings"
+        or approval.get("source") != manifest.get("source")
+        or not str(approval.get("approval_reference", "")).strip()
+    ):
+        raise FidelityError("Dimension approval has an unsupported or incomplete schema.")
+
+    page_number = approval.get("page")
+    if not isinstance(page_number, int):
+        raise FidelityError("Dimension approval page must be an integer.")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Approved dimension page is absent from the fidelity manifest.")
+
+    def resolve_hash_bound_artifact(record: object, label: str) -> Path:
+        if not isinstance(record, dict):
+            raise FidelityError(f"Dimension approval is missing {label} provenance.")
+        relative = record.get("path")
+        expected_hash = record.get("sha256")
+        if not isinstance(relative, str) or Path(relative).is_absolute() or not isinstance(expected_hash, str):
+            raise FidelityError(f"Dimension approval {label} provenance is invalid.")
+        path = (output_root / relative).resolve()
+        if not _is_within(path, output_root) or not path.is_file():
+            raise FidelityError(f"Dimension approval {label} is outside or missing.")
+        if sha256_file(path) != expected_hash:
+            raise FidelityError(f"Dimension approval {label} no longer matches its hash.")
+        return path
+
+    observation_path = resolve_hash_bound_artifact(approval.get("observation"), "observation")
+    approved_base = resolve_hash_bound_artifact(approval.get("base_dxf"), "base DXF")
+    if approved_base.resolve() != base_dxf.resolve():
+        raise FidelityError("Dimension approval base DXF does not match the requested base DXF.")
+
+    try:
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Dimension observation is invalid JSON.") from exc
+    if (
+        observation.get("schema_version") != "fidelity-dimension-observation-1.0"
+        or observation.get("private_artifact") is not True
+        or observation.get("source") != manifest.get("source")
+        or observation.get("page") != page_number
+    ):
+        raise FidelityError("Dimension observation does not match the approval.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Dimension observation does not match the rendered page.")
+
+    candidates = {
+        item.get("text", {}).get("id"): item
+        for item in observation.get("candidates", [])
+        if isinstance(item, dict) and isinstance(item.get("text"), dict)
+    }
+    mappings = approval.get("mappings")
+    if not isinstance(mappings, list) or not mappings:
+        raise FidelityError("Dimension approval requires at least one mapping.")
+    selected: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    candidate_ids: set[str] = set()
+    line_ids: set[str] = set()
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            raise FidelityError("Dimension approval mappings must be objects.")
+        candidate_id = mapping.get("candidate_id")
+        line_evidence_id = mapping.get("line_evidence_id")
+        if not isinstance(candidate_id, str) or not isinstance(line_evidence_id, str):
+            raise FidelityError("Dimension mapping requires candidate_id and line_evidence_id.")
+        if candidate_id in candidate_ids or line_evidence_id in line_ids:
+            raise FidelityError("Dimension mappings must not reuse candidates or line evidence.")
+        candidate = candidates.get(candidate_id)
+        if candidate is None:
+            raise FidelityError(f"Unknown dimension candidate: {candidate_id}")
+        if mapping.get("dimension_kind", "linear") != "linear":
+            raise FidelityError("Only linear dimension mappings are supported.")
+        evidence = next((
+            item for item in candidate.get("nearby_lines", [])
+            if isinstance(item, dict) and item.get("id") == line_evidence_id
+        ), None)
+        if evidence is None:
+            raise FidelityError(f"Unknown line evidence for dimension candidate: {line_evidence_id}")
+        candidate_ids.add(candidate_id)
+        line_ids.add(line_evidence_id)
+        selected.append((mapping, candidate, evidence))
+
+    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    height_px = int(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf)
+    if "FIDELITY_DIMENSIONS" not in document.layers:
+        document.layers.new("FIDELITY_DIMENSIONS", dxfattribs={"color": 2})
+    model = document.modelspace()
+    emitted: list[dict[str, Any]] = []
+    for _, candidate, evidence in selected:
+        p1_px = evidence.get("p1_px")
+        p2_px = evidence.get("p2_px")
+        bbox = candidate["text"].get("bbox_px")
+        if (
+            not isinstance(p1_px, list) or len(p1_px) != 2
+            or not isinstance(p2_px, list) or len(p2_px) != 2
+            or not isinstance(bbox, list) or len(bbox) != 4
+        ):
+            raise FidelityError("Dimension line evidence has invalid pixel geometry.")
+        p1 = (float(p1_px[0]) * scale, (height_px - float(p1_px[1])) * scale)
+        p2 = (float(p2_px[0]) * scale, (height_px - float(p2_px[1])) * scale)
+        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        length = math.hypot(dx, dy)
+        if length <= 0:
+            raise FidelityError("Dimension line evidence has zero length.")
+        midpoint = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        normal = (-dy / length, dx / length)
+        text_center_px = ((float(bbox[0]) + float(bbox[2])) / 2.0, (float(bbox[1]) + float(bbox[3])) / 2.0)
+        line_center_px = ((float(p1_px[0]) + float(p2_px[0])) / 2.0, (float(p1_px[1]) + float(p2_px[1])) / 2.0)
+        side = normal[0] * (text_center_px[0] - line_center_px[0]) + normal[1] * (line_center_px[1] - text_center_px[1])
+        direction = 1.0 if side >= 0 else -1.0
+        offset = max(6.0, (float(bbox[3]) - float(bbox[1])) * scale * 1.5)
+        location = (midpoint[0] + normal[0] * direction * offset, midpoint[1] + normal[1] * direction * offset)
+        dimension = model.add_linear_dim(
+            base=location,
+            p1=p1,
+            p2=p2,
+            location=location,
+            angle=math.degrees(math.atan2(dy, dx)),
+            dxfattribs={"layer": "FIDELITY_DIMENSIONS"},
+        )
+        dimension.render()
+        emitted.append({
+            "candidate_id": candidate["text"]["id"],
+            "line_evidence_id": evidence["id"],
+            "text_value": candidate["text"].get("parsed_value"),
+            "measured_paper_length": length,
+            "dimension_handle": dimension.dimension.dxf.handle,
+        })
+
+    root_base = output_root / "dimension_reconstruction"
+    root = root_base / f"page_{page_number:02d}"
+    revision = 2
+    while root.exists():
+        root = output_root / f"dimension_reconstruction-r{revision}" / f"page_{page_number:02d}"
+        revision += 1
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    report = {
+        "state": "needs_review",
+        "profile": "fidelity-layout-dimension",
+        "page": page_number,
+        "source": manifest["source"],
+        "source_render_sha256": sha256_file(rendered),
+        "observation_sha256": sha256_file(observation_path),
+        "approval_sha256": sha256_file(approval_path),
+        "base_dxf_sha256": sha256_file(base_dxf),
+        "output_dxf_sha256": sha256_file(output),
+        "emitted_dimension_entities": len(emitted),
+        "mappings": emitted,
+        "unresolved": [
+            "native dimensions are a review candidate and require visual approval",
+            "only linear dimensions are supported",
+            "no model export or production AutoCAD mutation",
+        ],
+    }
+    (root / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return output
 
 
 def run_fidelity_linetype_reconstruct(

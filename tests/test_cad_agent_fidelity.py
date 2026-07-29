@@ -52,6 +52,128 @@ def _pdf(path: Path) -> None:
     document.close()
 
 
+def _dimension_pdf(path: Path) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.draw_line((20, 24), (200, 24), width=1.5)
+    page.insert_text((90, 52), "100", fontsize=18)
+    document.save(path)
+    document.close()
+
+
+def _dimension_reconstruction_fixture(tmp_path: Path):
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _dimension_pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+    observation_path = run_fidelity_dimension_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    candidate = observation["candidates"][0]
+    line = candidate["nearby_lines"][0]
+    base_dxf = output / "base.dxf"
+    base_dxf.write_bytes((output / "layout_dxf" / "page_01.dxf").read_bytes())
+    approval_path = output / "dimension-approval.json"
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-dimension-mappings",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": {
+            "path": str(observation_path.relative_to(output)).replace("\\\\", "/"),
+            "sha256": __import__("hashlib").sha256(observation_path.read_bytes()).hexdigest(),
+        },
+        "base_dxf": {
+            "path": str(base_dxf.relative_to(output)).replace("\\\\", "/"),
+            "sha256": __import__("hashlib").sha256(base_dxf.read_bytes()).hexdigest(),
+        },
+        "approval_reference": "approved-test",
+        "mappings": [{"candidate_id": candidate["text"]["id"], "line_evidence_id": line["id"]}],
+    }), encoding="utf-8")
+    return source, output, manifest, manifest_path, approval_path, base_dxf
+
+
+def test_dimension_observation_persists_stable_line_endpoint_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _dimension_pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+    observation = run_fidelity_dimension_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    payload = json.loads(observation.read_text(encoding="utf-8"))
+    assert payload["candidates"]
+    candidate = payload["candidates"][0]
+    assert candidate["nearby_lines"]
+    assert set(candidate["nearby_lines"][0]) >= {"id", "p1_px", "p2_px", "bbox_px", "length_px"}
+
+
+def test_dimension_reconstruction_emits_approved_native_dimension(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct
+
+    source, output, manifest, _, approval_path, base_dxf = _dimension_reconstruction_fixture(tmp_path)
+
+    result = run_fidelity_dimension_reconstruct(
+        source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+    )
+
+    report = json.loads((result.parent / "report.json").read_text(encoding="utf-8"))
+    assert report["state"] == "needs_review"
+    assert report["emitted_dimension_entities"] == 1
+    document = ezdxf.readfile(result)
+    assert len(list(document.modelspace().query("DIMENSION"))) == 1
+    assert list(document.modelspace().query("DIMENSION"))[0].dxf.layer == "FIDELITY_DIMENSIONS"
+
+
+def test_dimension_reconstruction_cli_writes_private_candidate(tmp_path: Path) -> None:
+    source, output, _, manifest_path, approval_path, base_dxf = _dimension_reconstruction_fixture(tmp_path)
+
+    assert main([
+        "fidelity-dimension-reconstruct",
+        "--input", str(source),
+        "--manifest", str(manifest_path),
+        "--approval", str(approval_path),
+        "--base-dxf", str(base_dxf),
+    ]) == 0
+    result = output / "dimension_reconstruction" / "page_01" / "layout.dxf"
+    assert result.is_file()
+    assert json.loads((result.parent / "report.json").read_text(encoding="utf-8"))["state"] == "needs_review"
+
+
+def test_dimension_reconstruction_rejects_tampered_observation_before_output(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct
+
+    source, output, manifest, _, approval_path, base_dxf = _dimension_reconstruction_fixture(tmp_path)
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    approval["observation"]["sha256"] = "0" * 64
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="observation no longer matches"):
+        run_fidelity_dimension_reconstruct(
+            source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+        )
+    assert not (output / "dimension_reconstruction").exists()
+
+
+def test_dimension_reconstruction_rejects_unknown_line_mapping(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct
+
+    source, output, manifest, _, approval_path, base_dxf = _dimension_reconstruction_fixture(tmp_path)
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    approval["mappings"][0]["line_evidence_id"] = "line-does-not-exist"
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="Unknown line evidence"):
+        run_fidelity_dimension_reconstruct(
+            source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+        )
+    assert not (output / "dimension_reconstruction").exists()
+
+
 def test_fidelity_pdf_writes_clean_paper_coordinate_layout_and_audit() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

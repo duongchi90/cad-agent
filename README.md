@@ -107,6 +107,13 @@ SHA-recorded child PNG/IR under `view_ir/page_NN/`; other candidates stay
 metadata-only. Every child remains `needs_verification`: it never replaces an
 approved calibration or authorizes DXF production.
 
+For observed linear dimensions, run `fidelity-dimension-observe` first and
+review its nearby line evidence. An explicit hash-bound approval can then be
+passed to `fidelity-dimension-reconstruct` with a private base DXF; the command
+creates a revisioned `needs_review` DXF containing only the approved native
+`DIMENSION` entities. It does not support radius/diameter/angular dimensions
+and its output cannot enter Mechanical production review or repair.
+
 ## Canonical documentation
 
 - Product and scope: `docs/PROJECT.md`
