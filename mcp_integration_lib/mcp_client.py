@@ -314,17 +314,32 @@ class FileIPCLiveMCPClient:
                 '(progn (vl-load-com) '
                 f'(setq mcp-dim-ent (handent "{entity_id}")) '
                 f'(setq mcp-dim-file (open "{lisp_path}" "w")) '
+                '(setq mcp-dim-value '
                 '(if mcp-dim-ent '
+                "(vl-catch-all-apply 'vla-get-Measurement "
+                '(list (vlax-ename->vla-object mcp-dim-ent))) '
+                'nil)) '
+                '(cond '
+                '((not mcp-dim-ent) '
+                '(write-line "ERROR:entity not found" mcp-dim-file)) '
+                '((vl-catch-all-error-p mcp-dim-value) '
                 '(write-line '
-                '(rtos (vla-get-Measurement '
-                '(vlax-ename->vla-object mcp-dim-ent)) 2 12) '
+                '(strcat "ERROR:" '
+                '(vl-catch-all-error-message mcp-dim-value)) '
                 'mcp-dim-file)) '
-                '(close mcp-dim-file))'
+                '(T (write-line (rtos mcp-dim-value 2 12) mcp-dim-file))) '
+                '(close mcp-dim-file) '
+                '(setq mcp-dim-file nil))'
             )
             deadline = time.time() + self._timeout
             while time.time() < deadline:
                 content = result.read_text(encoding="utf-8").strip()
                 if content:
+                    if content.startswith("ERROR:"):
+                        raise MCPToolError(
+                            "AutoCAD DIMENSION measurement failed: "
+                            + content.removeprefix("ERROR:")
+                        )
                     try:
                         return float(content)
                     except ValueError as exc:
@@ -336,7 +351,12 @@ class FileIPCLiveMCPClient:
                 "Timeout waiting for AutoCAD DIMENSION measurement"
             )
         finally:
-            result.unlink(missing_ok=True)
+            for _ in range(10):
+                try:
+                    result.unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    time.sleep(self._poll)
 
     def entity_erase(self, entity_id: str) -> None:
         self._dispatch("entity-erase", {"entity_id": entity_id})
