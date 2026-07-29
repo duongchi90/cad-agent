@@ -86,6 +86,13 @@ class VerificationContractTests(unittest.TestCase):
         self.assertLess(path_lookup, resolved_source)
         self.assertLess(resolved_source, default_path)
 
+    def test_live_autocad_suite_closes_disposable_drawings(self) -> None:
+        suite = (
+            ROOT / "mcp_integration_lib/tests/test_file_ipc_e2e.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("def _opened_disposable_drawing(", suite)
+        self.assertGreaterEqual(suite.count("with self._opened_disposable_drawing("), 5)
+
     def test_workflow_is_pinned_and_least_privilege(self) -> None:
         workflow = (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
         self.assertIn("permissions:\n  contents: read", workflow)

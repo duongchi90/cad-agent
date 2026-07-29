@@ -1,4 +1,5 @@
 """Opt-in real AutoCAD Phase 4 smoke test."""
+from contextlib import contextmanager
 import os
 import tempfile
 import unittest
@@ -43,21 +44,29 @@ class FileIPCEndToEndTests(unittest.TestCase):
             bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
         )
 
+    @contextmanager
+    def _opened_disposable_drawing(self, client, path):
+        client.drawing_open(path)
+        try:
+            yield
+        finally:
+            client.drawing_close(save_changes=False)
+
     def _repair_component_attribute(self, build, part_id, attribute):
         client = self._client()
-        client.drawing_open(build.output_path)
-        handle = build.component_handle_by_part_id[part_id]
-        expected = client.block_get_attributes(handle)[attribute]
-        client.block_update_attribute(handle, attribute, "wrong")
-        exported = build.output_path.replace(".dxf", "_roundtrip.dxf")
-        client.drawing_save_as_dxf(exported)
+        with self._opened_disposable_drawing(client, build.output_path):
+            handle = build.component_handle_by_part_id[part_id]
+            expected = client.block_get_attributes(handle)[attribute]
+            client.block_update_attribute(handle, attribute, "wrong")
+            exported = build.output_path.replace(".dxf", "_roundtrip.dxf")
+            client.drawing_save_as_dxf(exported)
         build.output_path = exported
         before = review_dxf(build)
         self.assertFalse(before.passed)
         self.assertEqual(1, repair_insert_components(build, before.component_mismatches).repaired_count)
-        client.drawing_open(build.output_path)
-        self.assertEqual(expected, client.block_get_attributes(build.component_handle_by_part_id[part_id])[attribute])
-        self.assertTrue(review_dxf(build).passed)
+        with self._opened_disposable_drawing(client, build.output_path):
+            self.assertEqual(expected, client.block_get_attributes(build.component_handle_by_part_id[part_id])[attribute])
+            self.assertTrue(review_dxf(build).passed)
 
     def test_remaining_components_round_trip_real_autocad(self):
         cases = [
@@ -100,16 +109,16 @@ class FileIPCEndToEndTests(unittest.TestCase):
         part_id = semantic.parts[0].id
         handle = build.component_handle_by_part_id[part_id]
         client = self._client()
-        client.drawing_open(build.output_path)
-        self.assertEqual(os.path.basename(path), client.drawing_get_variables(["DWGNAME"])["DWGNAME"])
-        self.assertEqual("INSERT", client.entity_get(handle)["type"])
-        self.assertEqual("COMP_FRAME_BEAM", build.written_component_by_part_id[part_id]["block_name"])
-        self.assertEqual(part_id, client.block_get_attributes(handle)["PART_ID"])
+        with self._opened_disposable_drawing(client, build.output_path):
+            self.assertEqual(os.path.basename(path), client.drawing_get_variables(["DWGNAME"])["DWGNAME"])
+            self.assertEqual("INSERT", client.entity_get(handle)["type"])
+            self.assertEqual("COMP_FRAME_BEAM", build.written_component_by_part_id[part_id]["block_name"])
+            self.assertEqual(part_id, client.block_get_attributes(handle)["PART_ID"])
 
-        client.block_update_attribute(handle, "PART_ID", "wrong")
-        self.assertEqual("wrong", client.block_get_attributes(handle)["PART_ID"])
-        saved_path = os.path.join(tmp, "beam_smoke_roundtrip.dxf")
-        client.drawing_save_as_dxf(saved_path)
+            client.block_update_attribute(handle, "PART_ID", "wrong")
+            self.assertEqual("wrong", client.block_get_attributes(handle)["PART_ID"])
+            saved_path = os.path.join(tmp, "beam_smoke_roundtrip.dxf")
+            client.drawing_save_as_dxf(saved_path)
         build.output_path = saved_path
         saved = ezdxf.readfile(saved_path).entitydb.get(handle)
         self.assertEqual("wrong", {a.dxf.tag: a.dxf.text for a in saved.attribs}["PART_ID"])
@@ -120,10 +129,10 @@ class FileIPCEndToEndTests(unittest.TestCase):
         self.assertEqual(1, repaired.repaired_count)
 
         new_handle = build.component_handle_by_part_id[part_id]
-        client.drawing_open(build.output_path)
-        self.assertEqual("INSERT", client.entity_get(new_handle)["type"])
-        self.assertEqual(part_id, client.block_get_attributes(new_handle)["PART_ID"])
-        self.assertTrue(review_dxf(build).passed)
+        with self._opened_disposable_drawing(client, build.output_path):
+            self.assertEqual("INSERT", client.entity_get(new_handle)["type"])
+            self.assertEqual(part_id, client.block_get_attributes(new_handle)["PART_ID"])
+            self.assertTrue(review_dxf(build).passed)
 
     def test_build_and_review_real_dxf(self):
         # AutoCAD keeps the active DXF locked on Windows. Use a disposable IPC
@@ -146,35 +155,35 @@ class FileIPCEndToEndTests(unittest.TestCase):
             )
             build = build_dxf(source, path)
             client = self._client()
-            client.drawing_open(path)
-            self.assertEqual(
-                os.path.basename(path),
-                client.drawing_get_variables(["DWGNAME"])["DWGNAME"],
-                "AutoCAD did not switch to the DXF requested for this smoke test",
-            )
-            self.assertIn(
-                build.handle_by_primitive_id["smoke"],
-                {entity["handle"] for entity in client.entity_list()},
-                "AutoCAD did not switch to the DXF requested for this smoke test",
-            )
-            review = review_dxf_live(build, client, open_drawing=False)
-            self.assertTrue(
-                review.passed,
-                {"mismatches": review.mismatches,
-                 "actual": client.entity_get(build.handle_by_primitive_id["smoke"])},
-            )
+            with self._opened_disposable_drawing(client, path):
+                self.assertEqual(
+                    os.path.basename(path),
+                    client.drawing_get_variables(["DWGNAME"])["DWGNAME"],
+                    "AutoCAD did not switch to the DXF requested for this smoke test",
+                )
+                self.assertIn(
+                    build.handle_by_primitive_id["smoke"],
+                    {entity["handle"] for entity in client.entity_list()},
+                    "AutoCAD did not switch to the DXF requested for this smoke test",
+                )
+                review = review_dxf_live(build, client, open_drawing=False)
+                self.assertTrue(
+                    review.passed,
+                    {"mismatches": review.mismatches,
+                     "actual": client.entity_get(build.handle_by_primitive_id["smoke"])},
+                )
 
-            # Deliberately replace the entity with incorrect geometry. This
-            # proves that review detects a real AutoCAD-side change and that
-            # repair can restore the expected primitive through File IPC.
-            client.entity_erase(build.handle_by_primitive_id["smoke"])
-            client.entity_create_line(0, 0, 99, 0, layer="0")
-            mismatched = review_dxf_live(build, client, open_drawing=False)
-            self.assertFalse(mismatched.passed)
-            repaired = repair_dxf_live(build, mismatched.mismatches, client)
-            self.assertEqual(1, repaired.repaired_count)
-            final = review_dxf_live(build, client, open_drawing=False)
-            self.assertTrue(final.passed, final.mismatches)
+                # Deliberately replace the entity with incorrect geometry. This
+                # proves that review detects a real AutoCAD-side change and that
+                # repair can restore the expected primitive through File IPC.
+                client.entity_erase(build.handle_by_primitive_id["smoke"])
+                client.entity_create_line(0, 0, 99, 0, layer="0")
+                mismatched = review_dxf_live(build, client, open_drawing=False)
+                self.assertFalse(mismatched.passed)
+                repaired = repair_dxf_live(build, mismatched.mismatches, client)
+                self.assertEqual(1, repaired.repaired_count)
+                final = review_dxf_live(build, client, open_drawing=False)
+                self.assertTrue(final.passed, final.mismatches)
 
     def test_native_dimension_round_trip_real_autocad(self):
         tmp = tempfile.mkdtemp(prefix="cad_agent_dimension_", dir="C:/temp")
@@ -212,9 +221,11 @@ class FileIPCEndToEndTests(unittest.TestCase):
             cross_validations=[validation],
         )
         build = build_dxf(source, path, build_dimensions=True)
-        review = review_dxf_live(build, self._client())
-        self.assertTrue(review.passed, review.mismatches)
-        self.assertEqual(review.dimension_checked, 1)
+        client = self._client()
+        with self._opened_disposable_drawing(client, path):
+            review = review_dxf_live(build, client, open_drawing=False)
+            self.assertTrue(review.passed, review.mismatches)
+            self.assertEqual(review.dimension_checked, 1)
 
     def test_same_named_drawings_in_different_directories_use_full_path_identity(self):
         first_dir = tempfile.mkdtemp(prefix="cad_agent_same_a_", dir="C:/temp")
@@ -229,19 +240,18 @@ class FileIPCEndToEndTests(unittest.TestCase):
         second.saveas(second_path)
 
         client = self._client()
-        client.drawing_open(first_path)
-        client.drawing_open(second_path)
-
-        variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
-        active = os.path.normcase(
-            os.path.normpath(
-                os.path.join(variables["DWGPREFIX"], variables["DWGNAME"])
-            )
-        )
-        self.assertEqual(os.path.normcase(os.path.normpath(second_path)), active)
-        open_paths = {
-            os.path.normcase(os.path.normpath(path))
-            for path in client.drawing_list_open_paths()
-        }
-        self.assertIn(os.path.normcase(os.path.normpath(second_path)), open_paths)
-        self.assertEqual({"CIRCLE"}, {entity["type"] for entity in client.entity_list()})
+        with self._opened_disposable_drawing(client, first_path):
+            with self._opened_disposable_drawing(client, second_path):
+                variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
+                active = os.path.normcase(
+                    os.path.normpath(
+                        os.path.join(variables["DWGPREFIX"], variables["DWGNAME"])
+                    )
+                )
+                self.assertEqual(os.path.normcase(os.path.normpath(second_path)), active)
+                open_paths = {
+                    os.path.normcase(os.path.normpath(path))
+                    for path in client.drawing_list_open_paths()
+                }
+                self.assertIn(os.path.normcase(os.path.normpath(second_path)), open_paths)
+                self.assertEqual({"CIRCLE"}, {entity["type"] for entity in client.entity_list()})
