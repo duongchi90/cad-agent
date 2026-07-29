@@ -1,5 +1,11 @@
 # Per-view Calibration Implementation Plan
 
+**Status:** Implemented; final candidate verification pending.
+
+The implementation materializes only non-overlapping candidates with dimension
+evidence, records child image/IR hashes, preserves `needs_verification`, and
+writes identical child metadata to the page manifest and candidate sidecar.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Detect scale labels in mixed-scale scanned drawing sheets and attach non-production per-view calibration candidates to Primitive IR.

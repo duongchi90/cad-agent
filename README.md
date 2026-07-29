@@ -70,11 +70,9 @@ Use `resume-pdf` with that manifest and the original PDF to retry only missing
 page stages. A changed source PDF is rejected by SHA-256 before any checkpoint
 is reused.
 
-Add `--auto-ocr-roi` to preserve per-page OCR scale-label candidates in the
-manifest. Candidates with non-ambiguous dimension evidence can also produce a
-review-only child IR under `view_ir/`, cropped to that view and calibrated with
-the detected scale. The candidate and child remain `needs_verification`; they
-never override the approved manual scale or authorize production automatically.
+Add `--auto-ocr-roi` to preserve scale-label candidates. Non-ambiguous
+dimension evidence may produce a crop-local child IR under `view_ir/`; both
+remain `needs_verification` and cannot authorize production automatically.
 
 ## Agent advice and approved application
 
@@ -104,13 +102,10 @@ production DXF mutation require human approval.
 ## Mixed-scale PDF sheets
 
 A PDF page can contain views with different scales such as `TL 1:40` and
-`TL 1:20`. PDF rendering records OCR scale-label candidates and the associated
-geometry region in its per-page manifest. When dimension evidence is available
-and candidate regions do not overlap, the runner materializes a crop-local
-child IR and PNG under `view_ir/page_NN/` for visual review. Candidates without
-adequate evidence remain metadata-only. Every candidate and child remains
-`needs_verification`: it never replaces an approved calibration or authorizes
-DXF production automatically.
+`TL 1:20`. A non-overlapping candidate with dimension evidence may produce a
+SHA-recorded child PNG/IR under `view_ir/page_NN/`; other candidates stay
+metadata-only. Every child remains `needs_verification`: it never replaces an
+approved calibration or authorizes DXF production.
 
 ## Canonical documentation
 
