@@ -111,12 +111,16 @@ def _run_dxf(primitive_path: Path, semantic_path: Path, output: Path, evidence_p
         semantic_doc=semantic,
         solved_primitives=solved_primitives,
         build_components=True,
+        build_dimensions=True,
     )
     review = review_dxf(built)
     if not review.passed:
         raise CommandError("Headless DXF review failed: " + "; ".join(review.mismatches))
     write_build_evidence(evidence_path, built)
-    return f"entities={built.entity_count}; components={built.component_count}; review=PASS"
+    return (
+        f"entities={built.entity_count}; dimensions={built.dimension_count}; "
+        f"components={built.component_count}; review=PASS"
+    )
 
 
 def run_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:

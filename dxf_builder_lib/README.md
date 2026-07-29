@@ -12,7 +12,7 @@ nhận).
 
 | File | Vai trò |
 |---|---|
-| `builder.py` | `build_dxf()` — build file `.dxf` thật từ `PrimitiveIRDocument` (Phase 1), có thể ghi đè toạ độ line bằng `solved_primitives` (Phase 2, `constraint_solving.solve_constraints()`) và suy layer theo `part_type` từ `SemanticIRDocument` (Phase 2) nếu có. Ghi `handle` CAD thật ngược lại lên chính `Primitive.handle`. |
+| `builder.py` | `build_dxf()` — build file `.dxf` thật từ `PrimitiveIRDocument`, có thể ghi đè toạ độ line bằng `solved_primitives`, suy layer theo `part_type`, và tùy chọn tạo native `DIMENSION` chỉ từ `cross_validations` có trạng thái `confirmed` (`build_dimensions=True`). Ghi `handle` CAD thật ngược lại lên chính `Primitive.handle`. |
 | `reviewer.py` | `review_dxf()` — Reviewer #1: đọc lại file `.dxf` vừa build bằng `ezdxf.readfile()`, tra theo `handle`, so khớp tuyệt đối với `written_geometry_by_primitive_id` mà `builder.py` trả về. Bắt lỗi round-trip/serialize, không phán đoán Pattern Recognition đúng/sai. |
 | `repair.py` | `repair_dxf()` — Repair #1: nhận `mismatches` từ `review_dxf()`, xoá entity bị lỗi theo handle và vẽ lại đúng từ `BuildResult.written_geometry_by_primitive_id`. Ghi đè vào đúng file gốc; caller chạy lại `review_dxf()` sau để xác nhận hết lỗi. |
 | `demo_pipeline.py` | Đọc `primitive_ir_demo_output.json` (Phase 1) + `semantic_ir_demo_output.json` (Phase 2) — 2 file độc lập, không cần chạy lại Phase 1/2 trong cùng tiến trình — tự chạy lại `prune_constraints()` + `solve_constraints()` để có toạ độ sạch, rồi build DXF → Reviewer #1 → Repair #1 (nếu có lỗi) → Reviewer #1 lần 2. |

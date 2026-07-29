@@ -36,6 +36,7 @@ def _build_result_dict(build: BuildResult) -> dict[str, Any]:
         "written_geometry_by_primitive_id": build.written_geometry_by_primitive_id,
         "skipped_primitive_ids": build.skipped_primitive_ids,
         "entity_count": build.entity_count,
+        "dimension_count": build.dimension_count,
         "component_handle_by_part_id": build.component_handle_by_part_id,
         "component_type_by_part_id": build.component_type_by_part_id,
         "skipped_part_ids": build.skipped_part_ids,

@@ -34,6 +34,7 @@ constraint_solving.py.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -71,6 +72,7 @@ class BuildResult:
     written_geometry_by_primitive_id: Dict[str, dict] = field(default_factory=dict)
     skipped_primitive_ids: List[str] = field(default_factory=list)
     entity_count: int = 0
+    dimension_count: int = 0
     # --- Semantic API (mục 12.4, semantic_components.py) — chỉ điền khi gọi
     # build_dxf(..., build_components=True) VÀ có semantic_doc. Đứng SONG
     # SONG với hình học thô ở trên (layer COMP_*, KHÔNG thay thế) — xem
@@ -115,6 +117,46 @@ def _ensure_layer(doc, name: str, color: int) -> None:
         doc.layers.new(name=name, dxfattribs={"color": color})
 
 
+def _add_confirmed_dimensions(doc, msp, primitive_doc: PrimitiveIRDocument) -> int:
+    """Emit only cross-validated line dimensions as native DXF DIMENSIONs."""
+    lines = {
+        prim.id: prim
+        for prim in primitive_doc.primitives
+        if prim.type == "line" and prim.geometry is not None
+    }
+    count = 0
+    for validation in primitive_doc.cross_validations:
+        if validation.status != "confirmed":
+            continue
+        line = lines.get(validation.geometry_primitive_id)
+        if line is None:
+            continue
+        start = line.geometry.start
+        end = line.geometry.end
+        dx, dy = end.x - start.x, end.y - start.y
+        length = math.hypot(dx, dy)
+        if length <= 0:
+            continue
+        # Place the dimension line on the outward normal, far enough from the
+        # measured line to remain legible without changing the measurement.
+        offset = max(length * 0.08, 5.0)
+        normal_x, normal_y = -dy / length, dx / length
+        midpoint = ((start.x + end.x) / 2, (start.y + end.y) / 2)
+        base = (midpoint[0] + normal_x * offset, midpoint[1] + normal_y * offset)
+        angle = math.degrees(math.atan2(dy, dx))
+        override = msp.add_linear_dim(
+            base=base,
+            p1=(start.x, start.y),
+            p2=(end.x, end.y),
+            location=base,
+            angle=angle,
+            dxfattribs={"layer": "DIMENSIONS"},
+        )
+        override.render()
+        count += 1
+    return count
+
+
 def build_dxf(
     primitive_doc: PrimitiveIRDocument,
     output_path: str,
@@ -122,6 +164,7 @@ def build_dxf(
     solved_primitives: Optional[Dict[str, object]] = None,
     dxf_version: str = "R2010",
     build_components: bool = False,
+    build_dimensions: bool = False,
 ) -> BuildResult:
     """Build 1 file DXF thật từ `primitive_doc`. Trả về `BuildResult` —
     không raise nếu 1 primitive không vẽ được (thiếu geometry/text_data),
@@ -157,6 +200,9 @@ def build_dxf(
     msp = doc.modelspace()
 
     result = BuildResult(output_path=output_path)
+
+    if build_dimensions:
+        _ensure_layer(doc, "DIMENSIONS", 2)
 
     for prim in primitive_doc.primitives:
         layer_name, color = _layer_for_primitive(prim, part_type_by_id)
@@ -220,6 +266,9 @@ def build_dxf(
         result.layer_by_primitive_id[prim.id] = layer_name
         result.written_geometry_by_primitive_id[prim.id] = written
         result.entity_count += 1
+
+    if build_dimensions:
+        result.dimension_count = _add_confirmed_dimensions(doc, msp, primitive_doc)
 
     if build_components and semantic_doc is not None:
         from .semantic_components import assemble_semantic_components

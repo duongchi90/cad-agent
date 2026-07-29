@@ -21,6 +21,7 @@ from primitive_ir_lib.models import (
 from dxf_builder_lib.builder import build_dxf
 from semantic_ir_lib.constraint_solving import SolvedPrimitive
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
+from primitive_ir_lib.models import CrossValidation
 
 try:
     import ezdxf  # noqa: F401
@@ -181,12 +182,62 @@ def test_primitive_missing_geometry_is_skipped_not_crashed():
     print("OK   test_primitive_missing_geometry_is_skipped_not_crashed")
 
 
+def test_confirmed_cross_validation_emits_native_dimension_when_enabled():
+    if not _HAS_EZDXF:
+        print("SKIP test_confirmed_cross_validation_emits_native_dimension_when_enabled — chưa cài ezdxf")
+        return
+    line = _line("l1", 0, 0, 100, 0)
+    doc = _doc(line)
+    doc.cross_validations = [CrossValidation(
+        text_primitive_id="t1",
+        geometry_primitive_id="l1",
+        status="confirmed",
+        text_value=100.0,
+        geometry_measured_length=100.0,
+        delta_percent=0.0,
+    )]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, "dimension.dxf")
+        result = build_dxf(doc, out_path, build_dimensions=True)
+
+        assert result.dimension_count == 1
+        reopened = ezdxf.readfile(out_path)
+        dimensions = [e for e in reopened.modelspace() if e.dxftype() == "DIMENSION"]
+        assert len(dimensions) == 1
+        assert dimensions[0].dxf.layer == "DIMENSIONS"
+
+
+def test_unverified_cross_validation_does_not_emit_dimension():
+    if not _HAS_EZDXF:
+        print("SKIP test_unverified_cross_validation_does_not_emit_dimension — chưa cài ezdxf")
+        return
+    line = _line("l1", 0, 0, 100, 0)
+    doc = _doc(line)
+    doc.cross_validations = [CrossValidation(
+        text_primitive_id="t1",
+        geometry_primitive_id="l1",
+        status="unverified",
+        text_value=100.0,
+    )]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, "no-dimension.dxf")
+        result = build_dxf(doc, out_path, build_dimensions=True)
+
+        assert result.dimension_count == 0
+        reopened = ezdxf.readfile(out_path)
+        assert not any(e.dxftype() == "DIMENSION" for e in reopened.modelspace())
+
+
 _TESTS = [
     test_missing_ezdxf_raises_clear_import_error,
     test_build_line_circle_text_assigns_handles_and_writes_file,
     test_layer_assigned_by_part_type_from_semantic_doc,
     test_solved_primitives_override_raw_coordinates,
     test_primitive_missing_geometry_is_skipped_not_crashed,
+    test_confirmed_cross_validation_emits_native_dimension_when_enabled,
+    test_unverified_cross_validation_does_not_emit_dimension,
 ]
 
 
