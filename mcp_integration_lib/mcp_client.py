@@ -6,6 +6,7 @@ import json
 import ctypes
 from ctypes import wintypes
 import ntpath
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -289,7 +290,53 @@ class FileIPCLiveMCPClient:
         self._dispatch("block-update-attribute", {"entity_id": entity_id, "tag": tag, "value": value})
 
     def entity_get(self, entity_id: str) -> Dict[str, Any]:
-        return self._dispatch("entity-get", {"entity_id": entity_id})
+        payload = self._dispatch("entity-get", {"entity_id": entity_id})
+        if (
+            str(payload.get("type", "")).upper() == "DIMENSION"
+            and "measurement" not in payload
+            and self._raw_lisp_trigger is not None
+        ):
+            payload["measurement"] = self._dimension_measurement(entity_id)
+        return payload
+
+    def _dimension_measurement(self, entity_id: str) -> float:
+        if not re.fullmatch(r"[0-9A-Fa-f]+", entity_id):
+            raise MCPToolError("DIMENSION measurement requires a valid handle")
+        token = uuid.uuid4().hex[:12]
+        result = (
+            self._dir
+            / f"autocad_mcp_dimension_measurement_{token}.txt"
+        )
+        lisp_path = str(result).replace("\\", "/").replace('"', '\\"')
+        result.touch()
+        try:
+            self._raw_lisp_trigger(
+                '(progn (vl-load-com) '
+                f'(setq mcp-dim-ent (handent "{entity_id}")) '
+                f'(setq mcp-dim-file (open "{lisp_path}" "w")) '
+                '(if mcp-dim-ent '
+                '(write-line '
+                '(rtos (vla-get-Measurement '
+                '(vlax-ename->vla-object mcp-dim-ent)) 2 12) '
+                'mcp-dim-file)) '
+                '(close mcp-dim-file))'
+            )
+            deadline = time.time() + self._timeout
+            while time.time() < deadline:
+                content = result.read_text(encoding="utf-8").strip()
+                if content:
+                    try:
+                        return float(content)
+                    except ValueError as exc:
+                        raise MCPToolError(
+                            "AutoCAD returned an invalid DIMENSION measurement"
+                        ) from exc
+                time.sleep(self._poll)
+            raise MCPTimeoutError(
+                "Timeout waiting for AutoCAD DIMENSION measurement"
+            )
+        finally:
+            result.unlink(missing_ok=True)
 
     def entity_erase(self, entity_id: str) -> None:
         self._dispatch("entity-erase", {"entity_id": entity_id})

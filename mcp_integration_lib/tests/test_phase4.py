@@ -83,6 +83,44 @@ class FileIPCClientTests(unittest.TestCase):
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {"path": "a.dxf"}}))
             self.assertEqual(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_open("a.dxf"), {"path": "a.dxf"})
 
+    def test_entity_get_reads_dimension_measurement_through_raw_lisp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+
+            def trigger():
+                command = json.loads(
+                    next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text()
+                )
+                result = ipc_dir / (
+                    f"autocad_mcp_result_{command['request_id']}.json"
+                )
+                result.write_text(
+                    json.dumps({
+                        "request_id": command["request_id"],
+                        "ok": True,
+                        "payload": {
+                            "type": "DIMENSION",
+                            "handle": "20",
+                            "layer": "DIMENSIONS",
+                        },
+                    })
+                )
+
+            def raw_lisp_trigger(_expression):
+                measurement = next(
+                    ipc_dir.glob("autocad_mcp_dimension_measurement_*.txt")
+                )
+                measurement.write_text("80.000000", encoding="utf-8")
+
+            client = FileIPCLiveMCPClient(
+                tmp,
+                trigger,
+                .1,
+                .001,
+                raw_lisp_trigger=raw_lisp_trigger,
+            )
+            self.assertEqual(client.entity_get("20")["measurement"], 80.0)
+
     def test_maps_drawing_save(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
