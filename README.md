@@ -105,7 +105,7 @@ A PDF page may contain mixed scales (`TL 1:40`, `TL 1:20`). Candidates with
 dimension evidence may produce SHA-recorded child PNG/IR; all remain
 `needs_verification` and cannot override calibration or authorize DXF.
 
-`fidelity-dimension-*` and `fidelity-table-text-*` require hash-bound approvals; they emit only approved linear `DIMENSION`s or table-cell `TEXT` into `needs_review` DXFs. Unapproved OCR, radius/diameter/angular mappings, and Mechanical production remain unsupported.
+`fidelity-dimension-*`, `fidelity-table-text-*`, and `fidelity-hatch-*` require hash-bound approvals; they emit only approved linear `DIMENSION`s, table-cell `TEXT`, or polygon `HATCH` entities into `needs_review` DXFs. Unapproved OCR, radius/diameter/angular mappings, and Mechanical production remain unsupported.
 
 ## Canonical documentation
 

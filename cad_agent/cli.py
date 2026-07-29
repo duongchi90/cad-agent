@@ -408,6 +408,36 @@ def _fidelity_hatch_observe_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_hatch_approval_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, write_fidelity_hatch_approval
+
+    manifest_path = args.manifest.resolve()
+    try:
+        mappings = json.loads(args.mappings.resolve().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CommandError("Hatch mappings file is invalid JSON.") from exc
+    if not isinstance(mappings, list):
+        raise CommandError("Hatch mappings file must contain a JSON list.")
+    write_fidelity_hatch_approval(
+        args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), args.page,
+        args.observation.resolve(), mappings, args.approval_reference, workspace_root=Path.cwd(),
+    )
+    print(manifest_path.parent / "fidelity_hatch_approvals" / f"page_{args.page:02d}.json")
+    return 0
+
+
+def _fidelity_hatch_reconstruct_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_hatch_reconstruct
+
+    manifest_path = args.manifest.resolve()
+    output = run_fidelity_hatch_reconstruct(
+        args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path),
+        args.approval.resolve(), args.base_dxf.resolve(), workspace_root=Path.cwd(),
+    )
+    print(output)
+    return 0
+
+
 def _fidelity_dimension_review_index_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, write_fidelity_dimension_review_index
 
@@ -670,6 +700,18 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_hatch_observe = subcommands.add_parser("fidelity-hatch-observe", help="Write review-only diagonal-stroke hatch candidates")
     fidelity_hatch_observe.add_argument("--input", type=Path, required=True)
     fidelity_hatch_observe.add_argument("--manifest", type=Path, required=True)
+    fidelity_hatch_approve = subcommands.add_parser("fidelity-hatch-approve", help="Approve explicit polygon boundaries for hatch candidates")
+    fidelity_hatch_approve.add_argument("--input", type=Path, required=True)
+    fidelity_hatch_approve.add_argument("--manifest", type=Path, required=True)
+    fidelity_hatch_approve.add_argument("--page", type=int, required=True)
+    fidelity_hatch_approve.add_argument("--observation", type=Path, required=True)
+    fidelity_hatch_approve.add_argument("--mappings", type=Path, required=True)
+    fidelity_hatch_approve.add_argument("--approval-reference", required=True)
+    fidelity_hatch_reconstruct = subcommands.add_parser("fidelity-hatch-reconstruct", help="Emit approved hatch boundaries into a private review DXF")
+    fidelity_hatch_reconstruct.add_argument("--input", type=Path, required=True)
+    fidelity_hatch_reconstruct.add_argument("--manifest", type=Path, required=True)
+    fidelity_hatch_reconstruct.add_argument("--approval", type=Path, required=True)
+    fidelity_hatch_reconstruct.add_argument("--base-dxf", type=Path, required=True)
     fidelity_dimension_review = subcommands.add_parser("fidelity-dimension-review-index", help="Write a private browser index for dimension candidates")
     fidelity_dimension_review.add_argument("--input", type=Path, required=True)
     fidelity_dimension_review.add_argument("--manifest", type=Path, required=True)
@@ -785,6 +827,10 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_dimension_reconstruct_command(args)
         if args.command == "fidelity-hatch-observe":
             return _fidelity_hatch_observe_command(args)
+        if args.command == "fidelity-hatch-approve":
+            return _fidelity_hatch_approval_command(args)
+        if args.command == "fidelity-hatch-reconstruct":
+            return _fidelity_hatch_reconstruct_command(args)
         if args.command == "fidelity-dimension-review-index":
             return _fidelity_dimension_review_index_command(args)
         if args.command == "fidelity-linetype-reconstruct":

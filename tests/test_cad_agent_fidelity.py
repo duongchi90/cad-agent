@@ -314,6 +314,18 @@ def test_hatch_observation_finds_a_cluster_of_diagonal_strokes() -> None:
     assert candidates[0]["state"] == "needs_review"
 
 
+def test_hatch_observation_assigns_stable_candidate_ids() -> None:
+    from cad_agent.fidelity import _observe_hatch_candidates
+
+    image = np.full((100, 100, 3), 255, dtype=np.uint8)
+    for offset in range(10, 80, 12):
+        cv2.line(image, (offset, 10), (offset + 25, 35), (0, 0, 0), 1)
+
+    candidate = _observe_hatch_candidates(image)[0]
+
+    assert candidate["id"] == "hatch-001"
+
+
 def test_linetype_reconstruction_is_hash_bound_and_changes_only_matching_horizontal_lines(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
@@ -607,6 +619,114 @@ def test_hatch_observation_cli_writes_private_sidecars(tmp_path: Path) -> None:
 
     assert main(["fidelity-hatch-observe", "--input", str(source), "--manifest", str(manifest_path)]) == 0
     assert (output / "fidelity_hatch_observations" / "page_01.json").is_file()
+
+
+def _hatch_reconstruction_fixture(tmp_path: Path):
+    from cad_agent.fidelity import sha256_file
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    base_dxf = output / "base.dxf"
+    base_dxf.write_bytes((output / page["artifacts"]["layout_dxf"]["artifact"]).read_bytes())
+    observation = output / "hatch-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-hatch-observation-1.0", "private_artifact": True,
+        "state": "needs_review", "source": manifest["source"], "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "candidates": [{"id": "hatch-1", "bbox_px": [10, 10, 140, 140], "diagonal_segment_count": 8, "state": "needs_review"}],
+    }), encoding="utf-8")
+    mappings = [{
+        "candidate_id": "hatch-1",
+        "boundary_px": [[20, 20], [120, 20], [120, 120], [20, 120]],
+        "angle": 45.0,
+        "scale": 1.0,
+    }]
+    return source, output, manifest, manifest_path, observation, base_dxf, mappings
+
+
+def test_hatch_approval_reconstructs_only_an_explicit_polygon(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_hatch_reconstruct, write_fidelity_hatch_approval
+
+    source, output, manifest, _, observation, base_dxf, mappings = _hatch_reconstruction_fixture(tmp_path)
+    approval = write_fidelity_hatch_approval(
+        source, output, manifest, 1, observation, base_dxf, mappings,
+        "approved-hatch-1", workspace_root=Path.cwd(),
+    )
+
+    assert approval["state"] == "approved-hatch-boundaries"
+    assert approval["base_dxf"]["sha256"]
+    result = run_fidelity_hatch_reconstruct(
+        source, output, manifest, output / "fidelity_hatch_approvals" / "page_01.json", base_dxf,
+        workspace_root=Path.cwd(),
+    )
+    document = ezdxf.readfile(result)
+    hatches = list(document.modelspace().query("HATCH"))
+    assert len(hatches) == 1
+    assert hatches[0].dxf.layer == "FIDELITY_HATCH"
+
+
+def test_hatch_reconstruction_rejects_changed_base_dxf(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_hatch_reconstruct, write_fidelity_hatch_approval
+
+    source, output, manifest, _, observation, base_dxf, mappings = _hatch_reconstruction_fixture(tmp_path)
+    write_fidelity_hatch_approval(
+        source, output, manifest, 1, observation, base_dxf, mappings,
+        "approved-hatch-1", workspace_root=Path.cwd(),
+    )
+    base_dxf.write_bytes(base_dxf.read_bytes() + b"\n")
+
+    with pytest.raises(FidelityError, match="base DXF"):
+        run_fidelity_hatch_reconstruct(
+            source, output, manifest, output / "fidelity_hatch_approvals" / "page_01.json", base_dxf,
+            workspace_root=Path.cwd(),
+        )
+    assert not (output / "hatch_reconstruction").exists()
+
+
+def test_hatch_reconstruction_revalidates_approved_polygon(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_hatch_reconstruct, write_fidelity_hatch_approval
+
+    source, output, manifest, _, observation, base_dxf, mappings = _hatch_reconstruction_fixture(tmp_path)
+    write_fidelity_hatch_approval(
+        source, output, manifest, 1, observation, base_dxf, mappings,
+        "approved-hatch-1", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_hatch_approvals" / "page_01.json"
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    approval["mappings"][0]["boundary_px"][0] = [500, 500]
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="candidate bbox"):
+        run_fidelity_hatch_reconstruct(
+            source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+        )
+    assert not (output / "hatch_reconstruction").exists()
+
+
+def test_hatch_approval_and_reconstruction_cli(tmp_path: Path) -> None:
+    source, output, _, manifest_path, observation, base_dxf, mappings = _hatch_reconstruction_fixture(tmp_path)
+    mappings_path = output / "hatch-mappings.json"
+    mappings_path.write_text(json.dumps(mappings), encoding="utf-8")
+
+    assert main([
+        "fidelity-hatch-approve", "--input", str(source), "--manifest", str(manifest_path),
+        "--page", "1", "--observation", str(observation), "--base-dxf", str(base_dxf),
+        "--mappings", str(mappings_path),
+        "--approval-reference", "approved-hatch-cli",
+    ]) == 0
+    approval_path = output / "fidelity_hatch_approvals" / "page_01.json"
+    assert approval_path.is_file()
+    assert main([
+        "fidelity-hatch-reconstruct", "--input", str(source), "--manifest", str(manifest_path),
+        "--approval", str(approval_path), "--base-dxf", str(base_dxf),
+    ]) == 0
+    assert (output / "hatch_reconstruction" / "page_01" / "layout.dxf").is_file()
 
 
 def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> None:

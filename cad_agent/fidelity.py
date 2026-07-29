@@ -463,6 +463,202 @@ def run_fidelity_hatch_observations(source: Path, output_root: Path, manifest: d
     return outputs
 
 
+def write_fidelity_hatch_approval(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    page_number: int,
+    observation_path: Path,
+    mappings: list[dict[str, Any]],
+    approval_reference: str,
+    *,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """Record explicit polygon boundaries for observed hatch candidates."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(observation_path, output_root) or not observation_path.is_file():
+        raise FidelityError("Hatch observation must reside inside the private fidelity output root.")
+    if not isinstance(page_number, int) or not isinstance(mappings, list) or not mappings:
+        raise FidelityError("Hatch approval requires a page number and at least one mapping.")
+    if not approval_reference.strip():
+        raise FidelityError("Hatch approval requires a non-empty approval reference.")
+    try:
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Hatch observation is invalid JSON.") from exc
+    if (
+        observation.get("schema_version") != "fidelity-hatch-observation-1.0"
+        or observation.get("private_artifact") is not True
+        or observation.get("state") != "needs_review"
+        or observation.get("source") != manifest.get("source")
+        or observation.get("page") != page_number
+    ):
+        raise FidelityError("Hatch observation is not valid for approval.")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Hatch approval page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Hatch observation does not match the rendered page.")
+    image = cv2.imread(str(rendered))
+    if image is None:
+        raise FidelityError("Cannot read rendered page for hatch approval.")
+    height, width = image.shape[:2]
+    candidates = {item.get("id"): item for item in observation.get("candidates", []) if isinstance(item, dict)}
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for mapping in mappings:
+        if not isinstance(mapping, dict) or not isinstance(mapping.get("candidate_id"), str):
+            raise FidelityError("Hatch mappings require candidate_id and boundary_px.")
+        candidate_id = mapping["candidate_id"]
+        if candidate_id in seen or candidate_id not in candidates:
+            raise FidelityError(f"Unknown or duplicate hatch candidate: {candidate_id}")
+        boundary = mapping.get("boundary_px")
+        if not isinstance(boundary, list) or len(boundary) < 3:
+            raise FidelityError("Hatch boundary requires at least three points.")
+        candidate_box = candidates[candidate_id].get("bbox_px")
+        if not isinstance(candidate_box, list) or len(candidate_box) != 4:
+            raise FidelityError(f"Hatch candidate has no valid bbox: {candidate_id}")
+        points: list[list[float]] = []
+        for point in boundary:
+            if not isinstance(point, list) or len(point) != 2 or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in point):
+                raise FidelityError("Hatch boundary points must be numeric [x, y] pairs.")
+            x, y = float(point[0]), float(point[1])
+            if not (0 <= x <= width and 0 <= y <= height):
+                raise FidelityError("Hatch boundary point is outside the rendered page.")
+            if not (float(candidate_box[0]) <= x <= float(candidate_box[2]) and float(candidate_box[1]) <= y <= float(candidate_box[3])):
+                raise FidelityError("Hatch boundary must remain inside its observed candidate bbox.")
+            points.append([x, y])
+        area = abs(sum(points[index][0] * points[(index + 1) % len(points)][1] - points[(index + 1) % len(points)][0] * points[index][1] for index in range(len(points))) / 2.0)
+        if area <= 1.0:
+            raise FidelityError("Hatch boundary polygon has zero area.")
+        angle = mapping.get("angle", 45.0)
+        scale = mapping.get("scale", 1.0)
+        if isinstance(angle, bool) or not isinstance(angle, (int, float)) or isinstance(scale, bool) or not isinstance(scale, (int, float)) or float(scale) <= 0:
+            raise FidelityError("Hatch angle and positive pattern scale are required.")
+        normalized.append({"candidate_id": candidate_id, "boundary_px": points, "angle": float(angle), "scale": float(scale)})
+        seen.add(candidate_id)
+    output = output_root / "fidelity_hatch_approvals" / f"page_{page_number:02d}.json"
+    if output.exists():
+        raise FidelityError(f"Hatch approval already exists: {output}")
+    payload = {
+        "schema_version": "fidelity-hatch-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-hatch-boundaries",
+        "source": manifest["source"],
+        "page": page_number,
+        "observation": _artifact(observation_path, output_root),
+        "approval_reference": approval_reference.strip(),
+        "mappings": normalized,
+        "unresolved": ["hatch fill remains a visual fidelity candidate", "no model export or production AutoCAD mutation"],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
+def run_fidelity_hatch_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    approval_path: Path,
+    base_dxf: Path,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Emit explicitly approved polygon boundaries as review-only DXF HATCHes."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root) or not approval_path.is_file():
+        raise FidelityError("Hatch approval must reside inside the private fidelity output root.")
+    if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
+        raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Hatch approval is invalid JSON.") from exc
+    if (
+        approval.get("schema_version") != "fidelity-hatch-approval-1.0"
+        or approval.get("private_artifact") is not True
+        or approval.get("state") != "approved-hatch-boundaries"
+        or approval.get("source") != manifest.get("source")
+    ):
+        raise FidelityError("Hatch approval has an unsupported schema.")
+    observation_record = approval.get("observation")
+    if not isinstance(observation_record, dict):
+        raise FidelityError("Hatch approval is missing observation provenance.")
+    observation_path = _safe_artifact_path(output_root, observation_record)
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    if (
+        observation.get("schema_version") != "fidelity-hatch-observation-1.0"
+        or observation.get("private_artifact") is not True
+        or observation.get("source") != manifest.get("source")
+        or observation.get("page") != approval.get("page")
+    ):
+        raise FidelityError("Hatch observation does not match its approval.")
+    page_number = approval.get("page")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Hatch approval page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Hatch observation does not match the rendered page.")
+    audit = json.loads(_safe_artifact_path(output_root, page["artifacts"]["layout_audit"]).read_text(encoding="utf-8"))
+    height_px = int(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    import ezdxf
+
+    document = ezdxf.readfile(base_dxf)
+    model = document.modelspace()
+    if "FIDELITY_HATCH" not in document.layers:
+        document.layers.new("FIDELITY_HATCH", dxfattribs={"color": 8})
+    candidates = {item.get("id"): item for item in observation.get("candidates", []) if isinstance(item, dict)}
+    mappings = approval.get("mappings")
+    if not isinstance(mappings, list) or not mappings:
+        raise FidelityError("Hatch approval requires mappings.")
+    emitted: list[dict[str, Any]] = []
+    for mapping in mappings:
+        candidate_id = mapping.get("candidate_id") if isinstance(mapping, dict) else None
+        if not isinstance(candidate_id, str) or candidate_id not in candidates:
+            raise FidelityError(f"Hatch approval references an unknown candidate: {candidate_id}")
+        boundary = mapping.get("boundary_px")
+        if not isinstance(boundary, list) or len(boundary) < 3:
+            raise FidelityError(f"Hatch mapping has an invalid boundary: {candidate_id}")
+        points = [(float(point[0]) * scale, (height_px - float(point[1])) * scale) for point in boundary]
+        hatch = model.add_hatch(dxfattribs={"layer": "FIDELITY_HATCH"})
+        hatch.paths.add_polyline_path(points, is_closed=True)
+        hatch.set_pattern_fill("ANSI31", scale=float(mapping.get("scale", 1.0)), angle=float(mapping.get("angle", 45.0)))
+        emitted.append({"candidate_id": candidate_id, "dimension": len(points), "hatch_handle": hatch.dxf.handle})
+    root_base = output_root / "hatch_reconstruction"
+    root = root_base / f"page_{page_number:02d}"
+    revision = 2
+    while root.exists():
+        root = output_root / f"hatch_reconstruction-r{revision}" / f"page_{page_number:02d}"
+        revision += 1
+    root.mkdir(parents=True)
+    output = root / "layout.dxf"
+    document.saveas(output)
+    report = {
+        "state": "needs_review",
+        "profile": "fidelity-layout-hatch",
+        "source": manifest["source"],
+        "page": page_number,
+        "source_render_sha256": sha256_file(rendered),
+        "observation_sha256": sha256_file(observation_path),
+        "approval_sha256": sha256_file(approval_path),
+        "base_dxf_sha256": sha256_file(base_dxf),
+        "output_dxf_sha256": sha256_file(output),
+        "emitted_hatch_entities": len(emitted),
+        "mappings": emitted,
+        "unresolved": ["hatch boundaries and pattern need visual review", "no model export or production AutoCAD mutation"],
+    }
+    (root / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return output
+
+
 def run_fidelity_text_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
     """Write hash-bound OCR candidates for later per-text review, never DXF text."""
     if _is_within(output_root, workspace_root):
@@ -1640,7 +1836,7 @@ def _observe_hatch_candidates(image: np.ndarray) -> list[dict[str, Any]]:
             key = (int((int(x0) + int(x1)) / 2) // 100, int((int(y0) + int(y1)) / 2) // 100)
             groups[key] = groups.get(key, 0) + 1
     height, width = image.shape[:2]
-    return [
+    candidates = [
         {
             "bbox_px": [column * 100, row * 100, min(width, (column + 1) * 100), min(height, (row + 1) * 100)],
             "diagonal_segment_count": count,
@@ -1649,6 +1845,7 @@ def _observe_hatch_candidates(image: np.ndarray) -> list[dict[str, Any]]:
         for (column, row), count in sorted(groups.items())
         if count >= 5
     ]
+    return [{"id": f"hatch-{index:03d}", **candidate} for index, candidate in enumerate(candidates, start=1)]
 
 
 def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
