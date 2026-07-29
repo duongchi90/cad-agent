@@ -437,6 +437,7 @@ def _fidelity_promote_command(args: argparse.Namespace) -> int:
             args.composed_page.resolve(),
             args.approval_reference,
             workspace_root=Path.cwd(),
+            revision=args.revision,
         )
     )
     return 0
@@ -639,6 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_promote.add_argument("--page", type=int, required=True)
     fidelity_promote.add_argument("--composed-page", type=Path, required=True)
     fidelity_promote.add_argument("--approval-reference", required=True)
+    fidelity_promote.add_argument("--revision", type=int, default=1)
     fidelity_mechanical_review = subcommands.add_parser(
         "fidelity-mechanical-review",
         help="Read-only AutoCAD Mechanical review of a promoted fidelity page",

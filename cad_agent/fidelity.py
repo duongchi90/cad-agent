@@ -1093,6 +1093,7 @@ def promote_fidelity_page(
     approval_reference: str,
     *,
     workspace_root: Path,
+    revision: int = 1,
 ) -> Path:
     """Promote one visually approved composition into the canonical checkpoint."""
     if _is_within(output_root, workspace_root):
@@ -1102,6 +1103,8 @@ def promote_fidelity_page(
     verify_source(manifest, source)
     if not approval_reference.strip():
         raise FidelityError("Fidelity promotion requires a non-empty visual approval reference.")
+    if revision < 1:
+        raise FidelityError("Fidelity promotion revision must be positive.")
     page = next(
         (item for item in manifest.get("pages", []) if item.get("page") == page_number),
         None,
@@ -1136,7 +1139,12 @@ def promote_fidelity_page(
     if matching_approval is None:
         raise FidelityError("Composed page is not bound to a current region approval.")
 
-    promotion_path = output_root / "fidelity_promotions" / f"page_{page_number:02d}.json"
+    suffix = "" if revision == 1 else f"-r{revision}"
+    promotion_path = (
+        output_root
+        / "fidelity_promotions"
+        / f"page_{page_number:02d}{suffix}.json"
+    )
     if promotion_path.exists():
         raise FidelityError(f"Fidelity promotion already exists: {promotion_path}")
     promotion = {
@@ -1145,6 +1153,7 @@ def promote_fidelity_page(
         "state": "approved_for_mechanical_review",
         "source": manifest["source"],
         "page": page_number,
+        "revision": revision,
         "visual_approval": {
             "approved": True,
             "reference": approval_reference.strip(),
@@ -1208,7 +1217,12 @@ def review_promoted_fidelity_page(
     expected = promotion["expected_structure"]
     passed = actual == expected
     variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME", "INSUNITS"])
-    report_path = output_root / "fidelity_mechanical_review" / f"page_{page_number:02d}.json"
+    promotion_suffix = promotion_path.stem.removeprefix(f"page_{page_number:02d}")
+    report_path = (
+        output_root
+        / "fidelity_mechanical_review"
+        / f"page_{page_number:02d}{promotion_suffix}.json"
+    )
     if report_path.exists():
         raise FidelityError(f"Fidelity Mechanical review already exists: {report_path}")
     report = {
