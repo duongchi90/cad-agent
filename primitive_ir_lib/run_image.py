@@ -90,6 +90,8 @@ def run(
     calibration_id: Optional[str] = None,
     view_candidates_output_path: Optional[str] = None,
     view_candidates_dpi: Optional[int] = None,
+    calibration_status: str = "verified",
+    calibration_source_sha256: Optional[str] = None,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -103,6 +105,10 @@ def run(
         raise ValueError("scale_mm_per_px phải lớn hơn 0")
     if scale_mm_per_px is None and not auto_calibrate:
         raise ValueError("Cần scale_mm_per_px hoặc bật auto_calibrate=True")
+    if calibration_status not in {"verified", "needs_verification"}:
+        raise ValueError(
+            "calibration_status must be verified or needs_verification"
+        )
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Không thấy ảnh đầu vào: {image_path}")
 
@@ -155,6 +161,8 @@ def run(
                 "Scale supplied via --scale-mm-per-px; verify against a known "
                 "dimension before using output for production DXF."
             ),
+            status=calibration_status,
+            source_sha256=calibration_source_sha256,
         )
     else:
         calibration = auto_estimate_calibration(raw_texts, raw_lines, image.shape[0], unit="mm")
@@ -165,6 +173,10 @@ def run(
                 "--scale-mm-per-px thủ công hoặc thêm --ocr-roi bao trùm 1 "
                 "kích thước đã biết."
             )
+        calibration.status = "needs_verification"
+        calibration.source_sha256 = calibration_source_sha256 or _sha256(
+            image_path
+        )
         print(
             "[run-image] CẢNH BÁO: scale được suy tự động "
             f"({calibration.pixel_to_unit_scale} mm/px, method="
@@ -197,7 +209,12 @@ def run(
         raw_texts=raw_texts,
         sha256=_sha256(image_path),
     )
-    document.cross_validations = cross_validate(raw_texts, raw_lines, calibration)
+    document.cross_validations = cross_validate(
+        raw_texts,
+        raw_lines,
+        calibration,
+        merge_collinear=False,
+    )
 
     output_dir = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(output_dir, exist_ok=True)

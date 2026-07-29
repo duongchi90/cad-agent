@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from primitive_ir_lib.models import (
-    CircleGeometry, LineGeometry, Point2D, Primitive, Trace,
+    Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
+    PrimitiveIRDocument, SourceDocument, Trace,
 )
 
 from semantic_ir_lib.constraint_detection import detect_circle_constraints, detect_constraints
+from semantic_ir_lib.io_utils import load_primitive_ir_document
 from semantic_ir_lib.pattern_recognition import build_parts_from_primitives
 from semantic_ir_lib.validator import validate_document
 
@@ -25,6 +31,31 @@ def _circle(id_, cx, cy, r) -> Primitive:
         trace=Trace(bbox_px=(0, 0, 10, 10)),
         geometry=CircleGeometry(center=Point2D(cx, cy), radius=r),
     )
+
+
+def test_semantic_loader_refuses_unverified_calibration(tmp_path):
+    document = PrimitiveIRDocument(
+        source_document=SourceDocument(
+            file_name="view.png",
+            page_index=0,
+            image_width_px=100,
+            image_height_px=100,
+        ),
+        calibration=Calibration(
+            unit="mm",
+            pixel_to_unit_scale=1.0,
+            origin_px=(0, 100),
+            method="title_block_scale",
+            status="needs_verification",
+            source_sha256="a" * 64,
+        ),
+        primitives=[_line("l1", 0, 0, 10, 0)],
+    )
+    path = tmp_path / "unverified.json"
+    path.write_text(json.dumps(document.to_dict()), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="needs_verification"):
+        load_primitive_ir_document(str(path))
 
 
 # ------------------------------------------------------- pattern_recognition --

@@ -90,7 +90,8 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
     def fake_run(image_path, output_path, scale_mm_per_px=None, preset="real_scan_tuned_v1",
                  ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
-                 view_candidates_output_path=None, view_candidates_dpi=None):
+                 view_candidates_output_path=None, view_candidates_dpi=None,
+                 calibration_status="verified", calibration_source_sha256=None):
         captured_calls.append(dict(
             auto_ocr_roi=auto_ocr_roi, auto_calibrate=auto_calibrate,
             calibration_registry_path=calibration_registry_path,
@@ -151,11 +152,17 @@ def test_run_pdf_materializes_review_only_child_ir_for_evidenced_view(tmp_path: 
     def fake_run(image_path, output_path, scale_mm_per_px=None, preset="real_scan_tuned_v1",
                  ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
-                 view_candidates_output_path=None, view_candidates_dpi=None):
+                 view_candidates_output_path=None, view_candidates_dpi=None,
+                 calibration_status="verified", calibration_source_sha256=None):
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
             "primitives": [], "cross_validations": [],
-            "calibration": {"method": "manual_override", "pixel_to_unit_scale": scale_mm_per_px},
+            "calibration": {
+                "method": "manual_override",
+                "pixel_to_unit_scale": scale_mm_per_px,
+                "status": calibration_status,
+                "source_sha256": calibration_source_sha256,
+            },
         }), encoding="utf-8")
         if view_candidates_output_path is not None:
             candidate = {
@@ -189,7 +196,10 @@ def test_run_pdf_materializes_review_only_child_ir_for_evidenced_view(tmp_path: 
     child = candidate["child_ir"]
     child_path = output_dir / child
     assert child_path.is_file()
-    assert json.loads(child_path.read_text(encoding="utf-8"))["calibration"]["pixel_to_unit_scale"] == pytest.approx(1.7638888889)
+    child_payload = json.loads(child_path.read_text(encoding="utf-8"))
+    assert child_payload["calibration"]["pixel_to_unit_scale"] == pytest.approx(1.7638888889)
+    assert child_payload["calibration"]["status"] == "needs_verification"
+    assert child_payload["calibration"]["source_sha256"] == candidate["child_image_sha256"]
     assert candidate["status"] == "needs_verification"
     assert candidate["child_state"] == "needs_verification"
     assert candidate["child_ir_sha256"]

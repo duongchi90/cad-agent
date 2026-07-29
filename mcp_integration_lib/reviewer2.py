@@ -16,6 +16,7 @@ class LiveReviewResult:
     passed: bool = True
     structural_checked: int = 0
     geometry_checked: int = 0
+    dimension_checked: int = 0
     geometry_degraded: bool = False
     mismatches: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -94,4 +95,57 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
         else:
             result.geometry_checked += 1
             _check_geometry(pid, written, actual, result)
+    actual_dimension_count = sum(
+        1
+        for entity in listed.values()
+        if str(entity.get("type", "")).upper() == "DIMENSION"
+    )
+    if actual_dimension_count != build_result.dimension_count:
+        result.mismatch(
+            "DIMENSION count mismatch: "
+            f"expected {build_result.dimension_count}, actual "
+            f"{actual_dimension_count}"
+        )
+    for validation_id, handle in (
+        build_result.dimension_handle_by_cross_validation_id.items()
+    ):
+        expected = build_result.written_dimension_by_cross_validation_id.get(
+            validation_id
+        )
+        if expected is None:
+            result.mismatch(
+                f"{validation_id}: missing written dimension evidence"
+            )
+            continue
+        entity = listed.get(str(handle))
+        if entity is None:
+            result.mismatch(
+                f"{validation_id}: DIMENSION handle {handle!r} not found"
+            )
+            continue
+        result.dimension_checked += 1
+        if str(entity.get("type", "")).upper() != "DIMENSION":
+            result.mismatch(
+                f"{validation_id}: expected DIMENSION type in AutoCAD"
+            )
+        if entity.get("layer") != expected.get("layer"):
+            result.mismatch(
+                f"{validation_id}: DIMENSION layer does not match build evidence"
+            )
+        if not attempt_geometry:
+            continue
+        try:
+            actual = client.entity_get(str(handle))
+        except (MCPTimeoutError, MCPToolError) as exc:
+            result.geometry_degraded = True
+            result.warnings.append(
+                f"{validation_id}: skipped DIMENSION measurement check ({exc})"
+            )
+            continue
+        actual_measurement = _actual(actual, "measurement")
+        if not _same(expected.get("measurement"), actual_measurement):
+            result.mismatch(
+                f"{validation_id}: DIMENSION measurement does not match build "
+                "evidence"
+            )
     return result

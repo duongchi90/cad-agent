@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 import tempfile
 
+import pytest
+
 from primitive_ir_lib.models import (
     Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
     PrimitiveIRDocument, SourceDocument, TextData, Trace,
@@ -241,6 +243,72 @@ def test_unverified_cross_validation_does_not_emit_dimension():
         assert not any(e.dxftype() == "DIMENSION" for e in reopened.modelspace())
 
 
+def test_confirmed_dimension_uses_the_same_solved_geometry_as_its_line():
+    if not _HAS_EZDXF:
+        return
+    line = _line("l1", 0, 0, 100, 0)
+    doc = _doc(line)
+    validation = CrossValidation(
+        text_primitive_id="t1",
+        geometry_primitive_id="l1",
+        status="confirmed",
+        text_value=80.0,
+        geometry_measured_length=100.0,
+        delta_percent=0.0,
+    )
+    doc.cross_validations = [validation]
+    solved = {
+        "l1": SolvedPrimitive(
+            primitive_id="l1",
+            start=Point2D(0, 0),
+            end=Point2D(80, 0),
+            displacement_mm=20.0,
+        )
+    }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, "solved-dimension.dxf")
+        result = build_dxf(
+            doc,
+            out_path,
+            solved_primitives=solved,
+            build_dimensions=True,
+        )
+        assert result.written_geometry_by_primitive_id["l1"]["end"] == (80, 0)
+        assert result.written_dimension_by_cross_validation_id[
+            validation.id
+        ]["measurement"] == 80.0
+        assert review_dxf(result).passed
+
+
+def test_build_refuses_unverified_calibration():
+    document = _doc(_line("l1", 0, 0, 10, 0))
+    document.calibration.status = "needs_verification"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="needs_verification"):
+            build_dxf(document, os.path.join(tmp, "must-not-exist.dxf"))
+
+
+def test_confirmed_dimension_refuses_missing_written_line():
+    document = _doc(_line("l1", 0, 0, 10, 0))
+    document.cross_validations = [
+        CrossValidation(
+            text_primitive_id="t1",
+            geometry_primitive_id="missing-line",
+            status="confirmed",
+            text_value=10.0,
+        )
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="missing-line"):
+            build_dxf(
+                document,
+                os.path.join(tmp, "must-not-exist.dxf"),
+                build_dimensions=True,
+            )
+
+
 _TESTS = [
     test_missing_ezdxf_raises_clear_import_error,
     test_build_line_circle_text_assigns_handles_and_writes_file,
@@ -249,6 +317,9 @@ _TESTS = [
     test_primitive_missing_geometry_is_skipped_not_crashed,
     test_confirmed_cross_validation_emits_native_dimension_when_enabled,
     test_unverified_cross_validation_does_not_emit_dimension,
+    test_confirmed_dimension_uses_the_same_solved_geometry_as_its_line,
+    test_build_refuses_unverified_calibration,
+    test_confirmed_dimension_refuses_missing_written_line,
 ]
 
 

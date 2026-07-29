@@ -28,6 +28,7 @@ ValidationStatus = Literal[
     "reviewer2_pass", "reviewer2_fail", "repaired",
 ]
 CrossValStatus = Literal["confirmed", "conflict", "unverified"]
+CalibrationStatus = Literal["verified", "needs_verification"]
 
 
 def new_id(prefix: str) -> str:
@@ -212,6 +213,8 @@ class Calibration:
     origin_px: tuple  # (x, y)
     method: Literal["known_dimension_reference", "title_block_scale", "manual_override"]
     reference_note: Optional[str] = None
+    status: CalibrationStatus = "verified"
+    source_sha256: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -219,9 +222,12 @@ class Calibration:
             "pixel_to_unit_scale": self.pixel_to_unit_scale,
             "origin_px": list(self.origin_px),
             "method": self.method,
+            "status": self.status,
         }
         if self.reference_note is not None:
             d["reference_note"] = self.reference_note
+        if self.source_sha256 is not None:
+            d["source_sha256"] = self.source_sha256
         return d
 
     def pixel_to_cad(self, px_x: float, px_y: float) -> Point2D:

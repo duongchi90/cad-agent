@@ -123,24 +123,26 @@ def _add_confirmed_dimensions(
     doc,
     msp,
     primitive_doc: PrimitiveIRDocument,
+    written_geometry_by_primitive_id: Dict[str, dict],
 ) -> tuple[Dict[str, str], Dict[str, dict]]:
-    """Emit only cross-validated line dimensions as native DXF DIMENSIONs."""
-    lines = {
-        prim.id: prim
-        for prim in primitive_doc.primitives
-        if prim.type == "line" and prim.geometry is not None
-    }
+    """Emit dimensions from the exact line geometry already written to DXF."""
     handles: Dict[str, str] = {}
     written: Dict[str, dict] = {}
     for validation in primitive_doc.cross_validations:
         if validation.status != "confirmed":
             continue
-        line = lines.get(validation.geometry_primitive_id)
-        if line is None:
-            continue
-        start = line.geometry.start
-        end = line.geometry.end
-        dx, dy = end.x - start.x, end.y - start.y
+        line = written_geometry_by_primitive_id.get(
+            validation.geometry_primitive_id
+        )
+        if line is None or line.get("type") != "line":
+            raise ValueError(
+                "Confirmed dimension references line "
+                f"{validation.geometry_primitive_id!r}, but that line was not "
+                "written to the DXF."
+            )
+        start = line["start"]
+        end = line["end"]
+        dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
         if length <= 0:
             continue
@@ -148,13 +150,13 @@ def _add_confirmed_dimensions(
         # measured line to remain legible without changing the measurement.
         offset = max(length * 0.08, 5.0)
         normal_x, normal_y = -dy / length, dx / length
-        midpoint = ((start.x + end.x) / 2, (start.y + end.y) / 2)
+        midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
         base = (midpoint[0] + normal_x * offset, midpoint[1] + normal_y * offset)
         angle = math.degrees(math.atan2(dy, dx))
         override = msp.add_linear_dim(
             base=base,
-            p1=(start.x, start.y),
-            p2=(end.x, end.y),
+            p1=start,
+            p2=end,
             location=base,
             angle=angle,
             dxfattribs={"layer": "DIMENSIONS"},
@@ -196,6 +198,11 @@ def build_dxf(
 
     Raise ImportError nếu chưa cài `ezdxf`.
     """
+    if primitive_doc.calibration.status != "verified":
+        raise ValueError(
+            "Primitive IR calibration is needs_verification; DXF build is "
+            "refused until a hash-bound approval marks it verified."
+        )
     try:
         import ezdxf
     except ImportError as exc:
@@ -285,7 +292,12 @@ def build_dxf(
         (
             result.dimension_handle_by_cross_validation_id,
             result.written_dimension_by_cross_validation_id,
-        ) = _add_confirmed_dimensions(doc, msp, primitive_doc)
+        ) = _add_confirmed_dimensions(
+            doc,
+            msp,
+            primitive_doc,
+            result.written_geometry_by_primitive_id,
+        )
         result.dimension_count = len(result.dimension_handle_by_cross_validation_id)
 
     if build_components and semantic_doc is not None:

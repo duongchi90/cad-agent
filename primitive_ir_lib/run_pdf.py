@@ -73,6 +73,7 @@ def _materialize_view_children(
         child_ir = child_root / f"view_{index:02d}.json"
         if not cv2.imwrite(str(child_image), image[y0:y1, x0:x1]):
             raise ValueError(f"Cannot write view child image: {child_image}")
+        child_image_sha256 = hashlib.sha256(child_image.read_bytes()).hexdigest()
         run(
             image_path=str(child_image),
             output_path=str(child_ir),
@@ -80,15 +81,15 @@ def _materialize_view_children(
             preset=preset,
             merge_lines=merge_lines,
             auto_ocr_roi=True,
+            calibration_status="needs_verification",
+            calibration_source_sha256=child_image_sha256,
         )
         candidate["child_ir"] = str(child_ir.relative_to(output_dir)).replace("\\", "/")
         candidate["child_image"] = str(child_image.relative_to(output_dir)).replace("\\", "/")
         candidate["child_bbox_px"] = [x0, y0, x1, y1]
         candidate["child_calibration_status"] = "needs_verification"
         candidate["child_state"] = "needs_verification"
-        candidate["child_image_sha256"] = hashlib.sha256(
-            child_image.read_bytes()
-        ).hexdigest()
+        candidate["child_image_sha256"] = child_image_sha256
         candidate["child_ir_sha256"] = hashlib.sha256(
             child_ir.read_bytes()
         ).hexdigest()

@@ -49,6 +49,17 @@
           "description": "known_dimension_reference: đo bằng 1 kích thước đã biết trên bản vẽ (đáng tin nhất, không phụ thuộc metadata scan). title_block_scale: đọc tỷ lệ ghi trong title block (vd 1:20) + DPI ảnh. manual_override: người dùng nhập tay khi 2 cách trên không khả dụng."
         },
         "reference_note": { "type": "string", "description": "Ghi chú kích thước/đối tượng nào đã dùng để calibrate, vd. 'Dùng kích thước 1700 ở view chính, witness-line đo được 812px'." }
+      },
+      "status": {
+        "type": "string",
+        "enum": ["verified", "needs_verification"],
+        "default": "verified",
+        "description": "Safety state for calibration. needs_verification cannot enter Semantic IR or DXF."
+      },
+      "source_sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "SHA-256 of the image or crop governed by this calibration."
       }
     },
 

@@ -107,10 +107,17 @@ def load_primitive_ir_document(path: str) -> PrimitiveIRDocument:
     )
 
     cal = data["calibration"]
+    if cal.get("status", "verified") != "verified":
+        raise ValueError(
+            "Primitive IR calibration is needs_verification; Semantic IR "
+            "assembly is refused until a hash-bound approval marks it verified."
+        )
     calibration = Calibration(
         unit=cal["unit"], pixel_to_unit_scale=cal["pixel_to_unit_scale"],
         origin_px=tuple(cal["origin_px"]), method=cal["method"],
         reference_note=cal.get("reference_note"),
+        status=cal.get("status", "verified"),
+        source_sha256=cal.get("source_sha256"),
     )
 
     primitives = [_primitive_from_dict(p) for p in data["primitives"]]

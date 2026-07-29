@@ -37,6 +37,28 @@ class Phase4Tests(unittest.TestCase):
         client.tamper("10", end=(2.0, 2.0))
         self.assertFalse(review_dxf_live(build, client).passed)
 
+    def test_live_review_checks_native_dimension_type_layer_and_measurement(self):
+        build, client = _pair(entity_get=True)
+        build.dimension_count = 1
+        build.dimension_handle_by_cross_validation_id = {"cv-1": "20"}
+        build.written_dimension_by_cross_validation_id = {
+            "cv-1": {"layer": "DIMENSIONS", "measurement": 80.0}
+        }
+        client.preload_entity(
+            "20",
+            "DIMENSION",
+            "DIMENSIONS",
+            {"measurement": 80.0},
+        )
+        passed = review_dxf_live(build, client)
+        self.assertTrue(passed.passed)
+        self.assertEqual(passed.dimension_checked, 1)
+
+        client.tamper("20", measurement=79.0)
+        failed = review_dxf_live(build, client)
+        self.assertFalse(failed.passed)
+        self.assertTrue(any("measurement" in item for item in failed.mismatches))
+
     def test_repair_restores_review_and_updates_handle(self):
         build, client = _pair()
         client._entities["10"].layer = "BAD"

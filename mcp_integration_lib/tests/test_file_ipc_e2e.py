@@ -10,6 +10,7 @@ from dxf_builder_lib.builder import build_dxf
 from primitive_ir_lib.models import (
     Calibration,
     CircleGeometry,
+    CrossValidation,
     LineGeometry,
     Point2D,
     Primitive,
@@ -174,6 +175,46 @@ class FileIPCEndToEndTests(unittest.TestCase):
             self.assertEqual(1, repaired.repaired_count)
             final = review_dxf_live(build, client, open_drawing=False)
             self.assertTrue(final.passed, final.mismatches)
+
+    def test_native_dimension_round_trip_real_autocad(self):
+        tmp = tempfile.mkdtemp(prefix="cad_agent_dimension_", dir="C:/temp")
+        path = os.path.join(tmp, "dimension_smoke.dxf")
+        line = Primitive(
+            id="dimension-line",
+            type="line",
+            source="phase4_smoke",
+            confidence=1.0,
+            trace=Trace(bbox_px=(0, 0, 80, 1)),
+            geometry=LineGeometry(start=Point2D(0, 0), end=Point2D(80, 0)),
+        )
+        validation = CrossValidation(
+            text_primitive_id="dimension-text",
+            geometry_primitive_id=line.id,
+            status="confirmed",
+            text_value=80.0,
+            geometry_measured_length=80.0,
+            delta_percent=0.0,
+        )
+        source = PrimitiveIRDocument(
+            source_document=SourceDocument(
+                file_name="dimension_smoke.png",
+                page_index=0,
+                image_width_px=80,
+                image_height_px=1,
+            ),
+            calibration=Calibration(
+                unit="mm",
+                pixel_to_unit_scale=1.0,
+                origin_px=(0, 0),
+                method="manual_override",
+            ),
+            primitives=[line],
+            cross_validations=[validation],
+        )
+        build = build_dxf(source, path, build_dimensions=True)
+        review = review_dxf_live(build, self._client())
+        self.assertTrue(review.passed, review.mismatches)
+        self.assertEqual(review.dimension_checked, 1)
 
     def test_same_named_drawings_in_different_directories_use_full_path_identity(self):
         first_dir = tempfile.mkdtemp(prefix="cad_agent_same_a_", dir="C:/temp")
