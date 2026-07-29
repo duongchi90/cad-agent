@@ -689,6 +689,37 @@ def test_hatch_reconstruction_rejects_changed_base_dxf(tmp_path: Path) -> None:
     assert not (output / "hatch_reconstruction").exists()
 
 
+def test_hatch_reconstruction_rejects_tampered_observation(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_hatch_reconstruct, write_fidelity_hatch_approval
+
+    source, output, manifest, _, observation, base_dxf, mappings = _hatch_reconstruction_fixture(tmp_path)
+    write_fidelity_hatch_approval(
+        source, output, manifest, 1, observation, base_dxf, mappings,
+        "approved-hatch-1", workspace_root=Path.cwd(),
+    )
+    observation.write_text(observation.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="no longer matches"):
+        run_fidelity_hatch_reconstruct(
+            source, output, manifest, output / "fidelity_hatch_approvals" / "page_01.json", base_dxf,
+            workspace_root=Path.cwd(),
+        )
+    assert not (output / "hatch_reconstruction").exists()
+
+
+def test_hatch_approval_rejects_duplicate_candidate_mapping(tmp_path: Path) -> None:
+    from cad_agent.fidelity import write_fidelity_hatch_approval
+
+    source, output, manifest, _, observation, base_dxf, mappings = _hatch_reconstruction_fixture(tmp_path)
+
+    with pytest.raises(FidelityError, match="duplicate hatch candidate"):
+        write_fidelity_hatch_approval(
+            source, output, manifest, 1, observation, base_dxf, mappings + mappings,
+            "approved-hatch-1", workspace_root=Path.cwd(),
+        )
+    assert not (output / "fidelity_hatch_approvals").exists()
+
+
 def test_hatch_reconstruction_revalidates_approved_polygon(tmp_path: Path) -> None:
     from cad_agent.fidelity import run_fidelity_hatch_reconstruct, write_fidelity_hatch_approval
 

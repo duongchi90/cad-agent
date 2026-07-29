@@ -420,7 +420,8 @@ def _fidelity_hatch_approval_command(args: argparse.Namespace) -> int:
         raise CommandError("Hatch mappings file must contain a JSON list.")
     write_fidelity_hatch_approval(
         args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path), args.page,
-        args.observation.resolve(), mappings, args.approval_reference, workspace_root=Path.cwd(),
+        args.observation.resolve(), args.base_dxf.resolve(), mappings, args.approval_reference,
+        workspace_root=Path.cwd(),
     )
     print(manifest_path.parent / "fidelity_hatch_approvals" / f"page_{args.page:02d}.json")
     return 0
@@ -705,6 +706,7 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_hatch_approve.add_argument("--manifest", type=Path, required=True)
     fidelity_hatch_approve.add_argument("--page", type=int, required=True)
     fidelity_hatch_approve.add_argument("--observation", type=Path, required=True)
+    fidelity_hatch_approve.add_argument("--base-dxf", type=Path, required=True)
     fidelity_hatch_approve.add_argument("--mappings", type=Path, required=True)
     fidelity_hatch_approve.add_argument("--approval-reference", required=True)
     fidelity_hatch_reconstruct = subcommands.add_parser("fidelity-hatch-reconstruct", help="Emit approved hatch boundaries into a private review DXF")
