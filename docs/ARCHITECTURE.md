@@ -113,6 +113,12 @@ compares the read-only AutoCAD type/layer signature, and records a page
 checkpoint. It never saves, repairs, or exports. Fidelity artifacts remain
 rejected by the ordinary Mechanical repair flow.
 
+The fidelity review extensions for OCR/table text, linear dimensions, dashed
+linetypes, and hatch fills are independently hash-bound. Their approval files
+bind the source observation and base DXF, and their outputs remain revisioned
+`needs_review` candidates. They do not authorize model export, production
+repair, or a visual-fidelity pass by themselves.
+
 ## Historical reference
 
 `CAD-Agent-Kien-Truc-v1_3.md` and `HANDOFF.md` preserve detailed implementation

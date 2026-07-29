@@ -40,8 +40,8 @@ the skips and the run used Python 3.12.
 | Primitive IR | Verified | Final Python 3.11 offline gate passed with zero skips; the approved private PDF, identified by SHA-256 below, completed Primitive IR for all nine pages. |
 | Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips; the approved private PDF completed all nine Semantic IR checkpoints. Assembly now uses raw detections for compound inference but persists only deterministic solver-ready constraints, reducing private page 1 from 538,983 raw relations to 3,693 retained constraints. |
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
-| Visual PDF-to-DXF fidelity | Verified for reviewable paper-layout and primary-linework scope | All nine delegated visual approvals were promoted into the fidelity manifest, and 9/9 promoted DXFs passed the dedicated read-only AutoCAD Mechanical review checkpoint. Text/font/OCR, hatch, linetype, table placement, model export, and true dimension semantics remain excluded. |
-| MCP/File IPC | Verified | Offline/fake IPC tests and all five `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027, including identical filenames under different directories. Active-document identity is full-path-bound. |
+| Visual PDF-to-DXF fidelity | Verified for reviewable paper-layout and primary-linework scope | All nine delegated visual approvals were promoted into the fidelity manifest, and 9/9 promoted DXFs passed the dedicated read-only AutoCAD Mechanical review checkpoint. OCR/font, hatch, linetype, table placement, and dimension extensions now have review-only approval/reconstruction paths, but remain non-authoritative CAD content; model export remains excluded. |
+| MCP/File IPC | Verified | Offline/fake IPC tests and the current six-test `autocad_mechanical` live gate passed on AutoCAD Mechanical 2027, including identical filenames under different directories and disposable-drawing cleanup. Active-document identity is full-path-bound. |
 | Agent advice/audit | Verified | Agent execution is non-mutating by default. Application is a separate step bound to a saved report SHA-256 and exact source/IR hashes; approved constraint drops trigger a new solve before DXF generation. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
 | Thin image/PDF orchestration CLI | Verified | `cad_agent` run/resume and run-pdf/resume-pdf produce SHA-bound staged DXF and build evidence. Separate Mechanical review/repair commands enforce evidence, approval, backup, and second-review boundaries. |
@@ -60,8 +60,25 @@ the skips and the run used Python 3.12.
 ## Next slice
 
 Maintain the SHA-bound private benchmark and run any future optimization against
-it. Production repair remains a separate human-approved operation with backup
-and a second live review; it was not requested or run here.
+it. Review-only fidelity extensions must be rerun against the private PDF before
+they can be considered for visual acceptance. Production repair remains a
+separate human-approved operation with backup and a second live review; it was
+not requested or run here.
+
+## Latest continuation evidence
+
+- Head: `c7ace1e165f20fdd01ae5ac36599990b9faa3c88`.
+- Offline gate: `scripts/verify.ps1` passed with `387 passed, 8 deselected`; the
+  unavailable-state probes recorded `2` real-data skips and `6` AutoCAD skips.
+- Live gate: with AutoCAD Mechanical 2027 and the local File IPC dispatcher,
+  `python -m pytest -m autocad_mechanical -ra -p no:cacheprovider` passed
+  `6 passed, 389 deselected` in `143.68s`. All smoke files were disposable
+  DXFs under `C:\temp`; each live test now closes its temporary drawing without
+  saving.
+- Fidelity hatch: commits `50e49a1`, `75b5b80`, and `939cc29` add stable
+  candidate IDs, hash-bound polygon approval, native review-only `HATCH`
+  reconstruction, and the corresponding CLI/design evidence. No production
+  AutoCAD mutation is authorized.
 
 ## First product milestone decision
 
