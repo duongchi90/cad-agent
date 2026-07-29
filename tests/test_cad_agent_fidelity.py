@@ -399,14 +399,108 @@ def test_table_text_reconstruction_emits_only_matched_cells(tmp_path: Path) -> N
     observation = output / "table-observation.json"
     observation.write_text(json.dumps({
         "schema_version": "fidelity-table-text-observation-1.0", "private_artifact": True,
-        "state": "needs_human_approval", "page": 1, "source_render_sha256": sha256_file(rendered),
+        "state": "needs_human_approval", "source": manifest["source"], "page": 1, "source_render_sha256": sha256_file(rendered),
         "candidates": [
-            {"cell_match_state": "matched", "cell_bbox_px": [10, 20, 80, 40], "text": {"content": "MATCH", "bbox_px": [15, 22, 60, 38]}},
-            {"cell_match_state": "needs_review", "cell_bbox_px": None, "text": {"content": "SKIP", "bbox_px": [100, 20, 160, 40]}},
+            {"id": "cell-match", "cell_match_state": "matched", "cell_bbox_px": [10, 20, 80, 40], "text": {"content": "MATCH", "bbox_px": [15, 22, 60, 38]}},
+            {"id": "cell-skip", "cell_match_state": "needs_review", "cell_bbox_px": None, "text": {"content": "SKIP", "bbox_px": [100, 20, 160, 40]}},
         ],
     }), encoding="utf-8")
-    result = run_fidelity_table_text_reconstruct(source, output, manifest, observation, base_dxf, workspace_root=Path.cwd())
+    from cad_agent.fidelity import write_fidelity_table_text_approval
+    write_fidelity_table_text_approval(
+        source, output, manifest, 1, observation, ["cell-match"], "approved-test", workspace_root=Path.cwd(),
+    )
+    approval = output / "fidelity_table_text_approvals" / "page_01.json"
+    result = run_fidelity_table_text_reconstruct(source, output, manifest, approval, base_dxf, workspace_root=Path.cwd())
     assert [entity.dxf.text for entity in ezdxf.readfile(result).modelspace().query("TEXT")] == ["MATCH"]
+
+
+def test_table_text_approval_is_hash_bound_and_selects_only_approved_cells(tmp_path: Path) -> None:
+    from cad_agent.fidelity import write_fidelity_table_text_approval
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+
+    observation = output / "table-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-table-text-observation-1.0", "private_artifact": True,
+        "state": "needs_human_approval", "source": manifest["source"], "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "candidates": [
+            {"id": "cell-1", "cell_match_state": "matched", "text": {"content": "MATCH", "bbox_px": [15, 22, 60, 38]}},
+            {"id": "cell-2", "cell_match_state": "matched", "text": {"content": "REVIEW", "bbox_px": [100, 22, 160, 38]}},
+        ],
+    }), encoding="utf-8")
+
+    approval = write_fidelity_table_text_approval(
+        source, output, manifest, 1, observation, ["cell-1"], "approved-cell-1", workspace_root=Path.cwd(),
+    )
+
+    assert approval["state"] == "approved-table-text-candidates"
+    assert approval["approved_candidate_ids"] == ["cell-1"]
+    assert approval["observation"]["sha256"] == sha256_file(observation)
+    assert (output / "fidelity_table_text_approvals" / "page_01.json").is_file()
+
+
+def test_table_text_reconstruction_cli_accepts_only_approval(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    base_dxf = output / page["artifacts"]["layout_dxf"]["artifact"]
+    from cad_agent.fidelity import sha256_file, write_fidelity_table_text_approval
+
+    observation = output / "table-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-table-text-observation-1.0", "private_artifact": True,
+        "state": "needs_human_approval", "source": manifest["source"], "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "candidates": [{"id": "cell-1", "cell_match_state": "matched", "text": {"content": "MATCH", "bbox_px": [15, 22, 60, 38]}}],
+    }), encoding="utf-8")
+    write_fidelity_table_text_approval(
+        source, output, manifest, 1, observation, ["cell-1"], "approved-test", workspace_root=Path.cwd(),
+    )
+    approval = output / "fidelity_table_text_approvals" / "page_01.json"
+
+    assert main([
+        "fidelity-table-text-reconstruct", "--input", str(source), "--manifest", str(manifest_path),
+        "--approval", str(approval), "--base-dxf", str(base_dxf),
+    ]) == 0
+    result = output / "table_text_reconstruction" / "page_01" / "layout.dxf"
+    assert result.is_file()
+
+
+def test_table_text_reconstruction_rejects_observation_without_approval(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    base_dxf = output / page["artifacts"]["layout_dxf"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+
+    observation = output / "legacy-table-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-table-text-observation-1.0", "private_artifact": True,
+        "state": "needs_human_approval", "source": manifest["source"], "page": 1,
+        "source_render_sha256": sha256_file(rendered), "candidates": [],
+    }), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="approval"):
+        run_fidelity_table_text_reconstruct(
+            source, output, manifest, observation, base_dxf, workspace_root=Path.cwd(),
+        )
 
 
 def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:

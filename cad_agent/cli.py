@@ -340,6 +340,40 @@ def _fidelity_table_text_observe_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_table_text_approval_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, write_fidelity_table_text_approval
+
+    manifest_path = args.manifest.resolve()
+    approval = write_fidelity_table_text_approval(
+        args.input.resolve(),
+        manifest_path.parent,
+        read_fidelity_manifest(manifest_path),
+        args.page,
+        args.observation.resolve(),
+        args.candidate_id,
+        args.approval_reference,
+        workspace_root=Path.cwd(),
+    )
+    print(manifest_path.parent / "fidelity_table_text_approvals" / f"page_{args.page:02d}.json")
+    return 0
+
+
+def _fidelity_table_text_reconstruct_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_table_text_reconstruct
+
+    manifest_path = args.manifest.resolve()
+    output = run_fidelity_table_text_reconstruct(
+        args.input.resolve(),
+        manifest_path.parent,
+        read_fidelity_manifest(manifest_path),
+        args.approval.resolve(),
+        args.base_dxf.resolve(),
+        workspace_root=Path.cwd(),
+    )
+    print(output)
+    return 0
+
+
 def _fidelity_dimension_observe_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_dimension_observations
 
@@ -613,6 +647,18 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_table_text_observe = subcommands.add_parser("fidelity-table-text-observe", help="Write review-only OCR candidates for observed table cells")
     fidelity_table_text_observe.add_argument("--input", type=Path, required=True)
     fidelity_table_text_observe.add_argument("--manifest", type=Path, required=True)
+    fidelity_table_text_approve = subcommands.add_parser("fidelity-table-text-approve", help="Approve selected matched table OCR candidates")
+    fidelity_table_text_approve.add_argument("--input", type=Path, required=True)
+    fidelity_table_text_approve.add_argument("--manifest", type=Path, required=True)
+    fidelity_table_text_approve.add_argument("--page", type=int, required=True)
+    fidelity_table_text_approve.add_argument("--observation", type=Path, required=True)
+    fidelity_table_text_approve.add_argument("--candidate-id", action="append", required=True)
+    fidelity_table_text_approve.add_argument("--approval-reference", required=True)
+    fidelity_table_text_reconstruct = subcommands.add_parser("fidelity-table-text-reconstruct", help="Emit approved table OCR into a private fidelity DXF")
+    fidelity_table_text_reconstruct.add_argument("--input", type=Path, required=True)
+    fidelity_table_text_reconstruct.add_argument("--manifest", type=Path, required=True)
+    fidelity_table_text_reconstruct.add_argument("--approval", type=Path, required=True)
+    fidelity_table_text_reconstruct.add_argument("--base-dxf", type=Path, required=True)
     fidelity_dimension_observe = subcommands.add_parser("fidelity-dimension-observe", help="Write review-only dimension candidates")
     fidelity_dimension_observe.add_argument("--input", type=Path, required=True)
     fidelity_dimension_observe.add_argument("--manifest", type=Path, required=True)
@@ -729,6 +775,10 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_text_observe_command(args)
         if args.command == "fidelity-table-text-observe":
             return _fidelity_table_text_observe_command(args)
+        if args.command == "fidelity-table-text-approve":
+            return _fidelity_table_text_approval_command(args)
+        if args.command == "fidelity-table-text-reconstruct":
+            return _fidelity_table_text_reconstruct_command(args)
         if args.command == "fidelity-dimension-observe":
             return _fidelity_dimension_observe_command(args)
         if args.command == "fidelity-dimension-reconstruct":

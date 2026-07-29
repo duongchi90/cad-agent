@@ -569,33 +569,131 @@ def run_fidelity_table_text_observations(source: Path, output_root: Path, manife
     return outputs
 
 
-def run_fidelity_table_text_reconstruct(
+def write_fidelity_table_text_approval(
     source: Path,
     output_root: Path,
     manifest: dict[str, Any],
+    page_number: int,
     observation_path: Path,
-    base_dxf: Path,
+    candidate_ids: list[str],
+    approval_reference: str,
     *,
     workspace_root: Path,
-) -> Path:
-    """Emit only cell-matched table OCR into a fresh private fidelity DXF."""
+) -> dict[str, Any]:
+    """Record explicit approval for matched table-cell OCR candidates."""
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
     if not _is_within(observation_path, output_root) or not observation_path.is_file():
         raise FidelityError("Table text observation must reside inside the private fidelity output root.")
+    if not isinstance(page_number, int) or not candidate_ids or len(set(candidate_ids)) != len(candidate_ids):
+        raise FidelityError("Table text approval requires unique candidate ids and a page number.")
+    if not approval_reference.strip():
+        raise FidelityError("Table text approval requires a non-empty approval reference.")
+    try:
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Table text observation is invalid JSON.") from exc
+    if (
+        observation.get("schema_version") != "fidelity-table-text-observation-1.0"
+        or observation.get("private_artifact") is not True
+        or observation.get("state") != "needs_human_approval"
+        or observation.get("source") != manifest.get("source")
+        or observation.get("page") != page_number
+    ):
+        raise FidelityError("Table text observation is not valid for approval.")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Table text approval page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if observation.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError("Table text observation does not match the rendered page.")
+    candidates = {item.get("id"): item for item in observation.get("candidates", []) if isinstance(item, dict)}
+    for candidate_id in candidate_ids:
+        candidate = candidates.get(candidate_id)
+        if candidate is None:
+            raise FidelityError(f"Unknown table text candidate: {candidate_id}")
+        if candidate.get("cell_match_state") != "matched":
+            raise FidelityError(f"Table text candidate is not a matched cell: {candidate_id}")
+    output = output_root / "fidelity_table_text_approvals" / f"page_{page_number:02d}.json"
+    if output.exists():
+        raise FidelityError(f"Table text approval already exists: {output}")
+    payload = {
+        "schema_version": "fidelity-table-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-table-text-candidates",
+        "source": manifest["source"],
+        "page": page_number,
+        "observation": _artifact(observation_path, output_root),
+        "approval_reference": approval_reference.strip(),
+        "approved_candidate_ids": candidate_ids,
+        "unresolved": [
+            "table text placement, height, and style remain reviewable",
+            "no table entity or production AutoCAD mutation",
+        ],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
+def run_fidelity_table_text_reconstruct(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    approval_path: Path,
+    base_dxf: Path,
+    *,
+    workspace_root: Path,
+) -> Path:
+    """Emit only explicitly approved table-cell OCR into a private fidelity DXF."""
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root) or not approval_path.is_file():
+        raise FidelityError("Table text approval must reside inside the private fidelity output root.")
     if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
         raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Table text approval is invalid JSON.") from exc
+    if (
+        approval.get("schema_version") != "fidelity-table-text-approval-1.0"
+        or approval.get("private_artifact") is not True
+        or approval.get("state") != "approved-table-text-candidates"
+        or approval.get("source") != manifest.get("source")
+    ):
+        raise FidelityError("Table text approval has an unsupported schema.")
+    observation_record = approval.get("observation")
+    if not isinstance(observation_record, dict):
+        raise FidelityError("Table text approval is missing observation provenance.")
+    observation_path = _safe_artifact_path(output_root, observation_record)
+    if sha256_file(observation_path) != observation_record.get("sha256"):
+        raise FidelityError("Table text observation no longer matches its approval hash.")
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
-    if observation.get("schema_version") != "fidelity-table-text-observation-1.0" or observation.get("private_artifact") is not True:
-        raise FidelityError("Table text observation has an unsupported schema.")
-    page_number = observation.get("page")
+    if (
+        observation.get("schema_version") != "fidelity-table-text-observation-1.0"
+        or observation.get("private_artifact") is not True
+        or observation.get("source") != manifest.get("source")
+        or observation.get("page") != approval.get("page")
+    ):
+        raise FidelityError("Table text observation does not match its approval.")
+    page_number = approval.get("page")
     page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
     if page is None:
         raise FidelityError("Table text observation page is absent from the fidelity manifest.")
     rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
     if observation.get("source_render_sha256") != sha256_file(rendered):
         raise FidelityError("Table text observation does not match the rendered page.")
+    approved_ids = approval.get("approved_candidate_ids")
+    if not isinstance(approved_ids, list) or not approved_ids or len(set(approved_ids)) != len(approved_ids):
+        raise FidelityError("Table text approval requires unique candidate ids.")
+    candidates_by_id = {
+        candidate.get("id"): candidate
+        for candidate in observation.get("candidates", [])
+        if isinstance(candidate, dict)
+    }
     audit = json.loads(_safe_artifact_path(output_root, page["artifacts"]["layout_audit"]).read_text(encoding="utf-8"))
     height_px = int(audit["source_page"]["render_height_px"])
     scale = float(page["pixel_to_paper_mm"]["used"])
@@ -604,9 +702,10 @@ def run_fidelity_table_text_reconstruct(
     document = ezdxf.readfile(base_dxf)
     model = document.modelspace()
     emitted = 0
-    for candidate in observation.get("candidates", []):
+    for candidate_id in approved_ids:
+        candidate = candidates_by_id.get(candidate_id)
         if not isinstance(candidate, dict) or candidate.get("cell_match_state") != "matched":
-            continue
+            raise FidelityError(f"Table text approval references an unmatched candidate: {candidate_id}")
         text = candidate.get("text", {})
         content, bbox = text.get("content"), text.get("bbox_px") if isinstance(text, dict) else (None, None)
         if not isinstance(content, str) or not content.strip() or not isinstance(bbox, list) or len(bbox) != 4:
@@ -625,7 +724,7 @@ def run_fidelity_table_text_reconstruct(
     root.mkdir(parents=True)
     output = root / "layout.dxf"
     document.saveas(output)
-    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-table-text", "source_render_sha256": sha256_file(rendered), "observation_sha256": sha256_file(observation_path), "base_dxf_sha256": sha256_file(base_dxf), "emitted_text_entities": emitted, "unresolved": ["table OCR text is candidate-only and requires visual review", "unmatched OCR is intentionally excluded"]}, indent=2) + "\n", encoding="utf-8")
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-table-text", "source_render_sha256": sha256_file(rendered), "approval_sha256": sha256_file(approval_path), "observation_sha256": sha256_file(observation_path), "base_dxf_sha256": sha256_file(base_dxf), "emitted_text_entities": emitted, "unresolved": ["table OCR text is candidate-only and requires visual review", "unmatched OCR is intentionally excluded"]}, indent=2) + "\n", encoding="utf-8")
     return output
 
 
