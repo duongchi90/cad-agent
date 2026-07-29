@@ -29,6 +29,7 @@ def _normalized_autocad_path(path: str) -> str:
 class MCPClient(Protocol):
     def drawing_open(self, path: str) -> Dict[str, Any]: ...
     def drawing_close(self, save_changes: bool = False) -> None: ...
+    def drawing_list_open_paths(self) -> List[str]: ...
     def drawing_save(self, path: Optional[str] = None) -> None: ...
     def drawing_save_as_dxf(self, path: str) -> None: ...
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]: ...
@@ -58,6 +59,7 @@ class FakeMCPClient:
         self._next_handle = 0x300
         self.opened_path: Optional[str] = None
         self.closed_without_save = False
+        self._open_paths: set[str] = set()
         self.fail_entity_get = fail_entity_get
 
     def _new_handle(self) -> str:
@@ -70,11 +72,17 @@ class FakeMCPClient:
 
     def drawing_open(self, path: str) -> Dict[str, Any]:
         self.opened_path = path
+        self._open_paths.add(_normalized_autocad_path(path))
         return {"ok": True, "payload": {"path": path, "entity_count": len(self._entities)}}
 
     def drawing_close(self, save_changes: bool = False) -> None:
         self.closed_without_save = not save_changes
+        if self.opened_path is not None:
+            self._open_paths.discard(_normalized_autocad_path(self.opened_path))
         self.opened_path = None
+
+    def drawing_list_open_paths(self) -> List[str]:
+        return sorted(self._open_paths)
 
     def drawing_save(self, path: Optional[str] = None) -> None: pass
 
@@ -229,6 +237,34 @@ class FileIPCLiveMCPClient:
             return
         self._dispatch("drawing-close", {"save_changes": save_changes})
 
+    def drawing_list_open_paths(self) -> List[str]:
+        if self._raw_lisp_trigger is None:
+            return self._dispatch("drawing-list-open-paths", {}).get("paths", [])
+        token = uuid.uuid4().hex[:12]
+        result = self._dir / f"autocad_mcp_open_documents_{token}.txt"
+        lisp_path = str(result).replace("\\", "/").replace('"', '\\"')
+        try:
+            self._raw_lisp_trigger(
+                '(progn (vl-load-com) '
+                f'(setq mcp-doc-file (open "{lisp_path}" "w")) '
+                '(vlax-for mcp-open-doc '
+                '(vla-get-Documents (vlax-get-acad-object)) '
+                '(write-line (vla-get-FullName mcp-open-doc) mcp-doc-file)) '
+                "(close mcp-doc-file))"
+            )
+            deadline = time.time() + self._timeout
+            while time.time() < deadline:
+                if result.is_file():
+                    return [
+                        line.strip()
+                        for line in result.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    ]
+                time.sleep(self._poll)
+            raise MCPTimeoutError("Timeout waiting for AutoCAD open-document list")
+        finally:
+            result.unlink(missing_ok=True)
+
     def drawing_save_as_dxf(self, path: str) -> None:
         self._dispatch("drawing-save-as-dxf", {"path": path.replace("\\", "/")})
 
@@ -316,6 +352,7 @@ class LiveMCPClient:
 
     def drawing_open(self, path: str): return self._invoke("drawing", "open", data={"path": path})
     def drawing_close(self, save_changes=False): self._invoke("drawing", "close", data={"save_changes": save_changes})
+    def drawing_list_open_paths(self): return self._invoke("drawing", "list_open_paths")["payload"]["paths"]
     def drawing_save(self, path=None): self._invoke("drawing", "save", data={"path": path} if path else {})
     def drawing_save_as_dxf(self, path): self._invoke("drawing", "save_as_dxf", data={"path": path})
     def drawing_get_variables(self, names): return self._invoke("drawing", "get_variables", data={"names": names})["payload"]

@@ -35,7 +35,7 @@ if _REPO_ROOT not in sys.path:
 
 _DEFAULT_PRIMITIVE_IR = os.path.join(_REPO_ROOT, "demo_output", "primitive_ir_demo_output.json")
 _DEFAULT_SEMANTIC_IR = os.path.join(_REPO_ROOT, "demo_output", "semantic_ir_demo_output.json")
-_DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "demo_output")
+_DEFAULT_OUTPUT_DIR = os.path.join(_REPO_ROOT, "output", "agent_runs")
 
 
 def _configure_console_output() -> None:
@@ -474,7 +474,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--output-dir", default=_DEFAULT_OUTPUT_DIR,
-        help=f"Thư mục lưu output (default: demo_output/)",
+        help="Thư mục lưu output (default: ignored output/agent_runs/)",
     )
     parser.add_argument(
         "--real-vision", action="store_true",

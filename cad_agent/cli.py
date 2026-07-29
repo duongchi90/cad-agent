@@ -33,8 +33,12 @@ def _refuse_fidelity_dxf(dxf: Path) -> None:
     """Keep private visual-fidelity artifacts out of Mechanical workflows."""
     from .fidelity import FIDELITY_MANIFEST_NAME
 
-    if (dxf.parent.parent / FIDELITY_MANIFEST_NAME).is_file():
-        raise CommandError("Fidelity layout DXFs are review-only and cannot enter Mechanical review or repair.")
+    for parent in dxf.resolve().parents:
+        if (parent / FIDELITY_MANIFEST_NAME).is_file():
+            raise CommandError(
+                "Fidelity layout DXFs are review-only and cannot enter "
+                "Mechanical review or repair."
+            )
 
 
 def _configure_console_output() -> None:

@@ -98,6 +98,11 @@ class _BrokenRepairClient(FakeMCPClient):
         return self._create("LINE", layer, {"start": (x1, y1), "end": (99.0, y2)})
 
 
+class _CloseFailureClient(_BrokenRepairClient):
+    def drawing_close(self, save_changes: bool = False) -> None:
+        return None
+
+
 def test_failed_second_review_does_not_save_and_reopens_backup() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -116,6 +121,35 @@ def test_failed_second_review_does_not_save_and_reopens_backup() -> None:
         assert client.closed_without_save is True
         assert report["rollback_state"] == "failed_drawing_closed_and_backup_reopened"
         assert client.opened_path == report["backup"]["dxf_path"]
+
+
+def test_rollback_is_not_complete_while_failed_original_remains_open() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _CloseFailureClient(fail_entity_get=False)
+        client.preload_entity(
+            "A",
+            "LINE",
+            "0",
+            {"start": (0.0, 0.0), "end": (99.0, 0.0)},
+        )
+
+        report = repair_live(
+            build,
+            client,
+            dxf,
+            evidence,
+            root / "backups",
+            "change-42",
+        )
+
+        assert report["save_state"] == "not_saved"
+        assert report["rollback_state"].startswith("rollback_failed:")
 
 
 def test_corrupt_backup_aborts_before_repair(

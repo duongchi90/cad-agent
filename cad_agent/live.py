@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import ntpath
 import shutil
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,10 @@ BUILD_EVIDENCE_SCHEMA_VERSION = "1.0"
 
 class LiveSafetyError(ValueError):
     """Raised when a live drawing operation cannot meet its safety contract."""
+
+
+def _normalized_document_path(path: str | Path) -> str:
+    return ntpath.normpath(str(path).replace("/", "\\")).casefold()
 
 
 def _build_result_dict(build: BuildResult) -> dict[str, Any]:
@@ -183,6 +188,17 @@ def repair_live(
     try:
         client.drawing_close(save_changes=False)
         client.drawing_open(backup["dxf_path"])
+        open_paths = {
+            _normalized_document_path(path)
+            for path in client.drawing_list_open_paths()
+        }
+        original_path = _normalized_document_path(dxf)
+        backup_path = _normalized_document_path(backup["dxf_path"])
+        if original_path in open_paths or backup_path not in open_paths:
+            raise LiveSafetyError(
+                "Rollback document verification failed: the modified original "
+                "is still open or the verified backup is absent."
+            )
         report["rollback_state"] = "failed_drawing_closed_and_backup_reopened"
     except Exception as exc:  # pragma: no cover - exercised by live transport failures
         report["rollback_state"] = f"rollback_failed: {exc}"

@@ -9,7 +9,12 @@ import pytest
 
 from agent_lib.io_utils import save_document
 from agent_lib.models import AgentAction, AgentReport
-from agent_lib.run import _apply_report_with_approval, _json_sha256, run
+from agent_lib.run import (
+    _DEFAULT_OUTPUT_DIR,
+    _apply_report_with_approval,
+    _json_sha256,
+    run,
+)
 
 _SHA = "a" * 64
 
@@ -143,6 +148,10 @@ def test_explicit_approval_applies_report_and_records_reference():
     assert audit["applied_action_set_sha256"] == _json_sha256(
         [report.actions[0].to_dict()]
     )
+
+
+def test_default_output_uses_ignored_runtime_tree():
+    assert Path(_DEFAULT_OUTPUT_DIR).parts[-2:] == ("output", "agent_runs")
 
 
 def test_runner_resolves_again_after_approved_constraint_drop_for_dxf():

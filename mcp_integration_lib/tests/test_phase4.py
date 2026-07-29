@@ -1,5 +1,6 @@
 import unittest
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -238,6 +239,28 @@ class FileIPCClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(MCPToolError, "active drawing is"):
             client.drawing_open("C:/target/same.dxf")
+
+    def test_raw_lisp_lists_open_document_full_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def raw_trigger(command):
+                match = re.search(r'\(open "([^"]+)" "w"\)', command)
+                self.assertIsNotNone(match)
+                Path(match.group(1)).write_text(
+                    "C:/work/a.dxf\nC:/work/b.dxf\n",
+                    encoding="utf-8",
+                )
+
+            client = FileIPCLiveMCPClient(
+                ipc_dir=tmp,
+                trigger=lambda: None,
+                raw_lisp_trigger=raw_trigger,
+                document_settle_s=0,
+            )
+
+            self.assertEqual(
+                ["C:/work/a.dxf", "C:/work/b.dxf"],
+                client.drawing_list_open_paths(),
+            )
 
     def test_block_attribute_read_retries_one_timeout(self):
         client = FileIPCLiveMCPClient(trigger=lambda: None)

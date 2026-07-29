@@ -33,7 +33,13 @@ from cad_agent.fidelity import (
     promote_fidelity_page,
     review_promoted_fidelity_page,
 )
-from cad_agent.cli import CommandError, _refuse_fidelity_dxf, main
+from cad_agent.cli import (
+    CommandError,
+    _mechanical_repair_command,
+    _mechanical_review_command,
+    _refuse_fidelity_dxf,
+    main,
+)
 from mcp_integration_lib.mcp_client import FakeMCPClient
 
 
@@ -94,13 +100,70 @@ def test_fidelity_manifest_rejects_repo_output_root(tmp_path: Path) -> None:
         new_fidelity_manifest(source, Path.cwd() / "output" / "private", 144, "approved-test", workspace_root=Path.cwd())
 
 
-def test_mechanical_boundary_refuses_a_fidelity_layout_dxf(tmp_path: Path) -> None:
-    dxf = tmp_path / "layout_dxf" / "page_01.dxf"
-    dxf.parent.mkdir()
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        Path("layout_dxf/page_01.dxf"),
+        Path("reconstruction_pages/page_01/layout.dxf"),
+        Path("reconstruction_candidates/page_01/main_view/geometry.dxf"),
+    ],
+)
+def test_mechanical_boundary_refuses_every_fidelity_dxf_depth(
+    tmp_path: Path,
+    relative_path: Path,
+) -> None:
+    dxf = tmp_path / relative_path
+    dxf.parent.mkdir(parents=True)
     dxf.write_text("0\nEOF\n", encoding="utf-8")
     (tmp_path / "fidelity-run-manifest.json").write_text("{}\n", encoding="utf-8")
     with pytest.raises(CommandError, match="cannot enter Mechanical"):
         _refuse_fidelity_dxf(dxf)
+
+
+def test_fidelity_signature_preserves_type_to_layer_association(tmp_path: Path) -> None:
+    from cad_agent.fidelity import _fidelity_dxf_signature, _live_entity_signature
+
+    dxf = tmp_path / "signature.dxf"
+    document = ezdxf.new("R2010")
+    document.modelspace().add_line((0, 0), (1, 0), dxfattribs={"layer": "A"})
+    document.modelspace().add_circle((0, 0), 1, dxfattribs={"layer": "B"})
+    document.saveas(dxf)
+
+    expected = _fidelity_dxf_signature(dxf)
+    swapped = _live_entity_signature(
+        [
+            {"type": "LINE", "layer": "B"},
+            {"type": "CIRCLE", "layer": "A"},
+        ]
+    )
+
+    assert expected["types"] == swapped["types"]
+    assert expected["layers"] == swapped["layers"]
+    assert expected != swapped
+
+
+@pytest.mark.parametrize(
+    "command",
+    [_mechanical_review_command, _mechanical_repair_command],
+)
+def test_ordinary_mechanical_commands_refuse_promoted_fidelity(
+    tmp_path: Path,
+    command,
+) -> None:
+    from types import SimpleNamespace
+
+    dxf = tmp_path / "reconstruction_pages" / "page_01" / "layout.dxf"
+    dxf.parent.mkdir(parents=True)
+    dxf.write_text("0\nEOF\n", encoding="utf-8")
+    (tmp_path / "fidelity-run-manifest.json").write_text("{}\n", encoding="utf-8")
+    args = SimpleNamespace(
+        dxf=dxf,
+        confirm_repair="APPLY",
+        approval_reference="test-approval",
+    )
+
+    with pytest.raises(CommandError, match="cannot enter Mechanical"):
+        command(args)
 
 
 def test_line_pattern_observation_is_sidecar_only() -> None:

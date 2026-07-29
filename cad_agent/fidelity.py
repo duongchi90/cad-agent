@@ -1053,16 +1053,24 @@ def _fidelity_dxf_signature(dxf: Path) -> dict[str, Any]:
     import ezdxf
 
     entities = list(ezdxf.readfile(dxf).modelspace())
+    type_layers = Counter(
+        f"{entity.dxftype()}|{str(entity.dxf.layer)}" for entity in entities
+    )
     return {
         "entity_count": len(entities),
         "types": dict(sorted(Counter(entity.dxftype() for entity in entities).items())),
         "layers": dict(
             sorted(Counter(str(entity.dxf.layer) for entity in entities).items())
         ),
+        "type_layers": dict(sorted(type_layers.items())),
     }
 
 
 def _live_entity_signature(entities: list[dict[str, Any]]) -> dict[str, Any]:
+    type_layers = Counter(
+        f"{str(entity.get('type', '')).upper()}|{str(entity.get('layer', ''))}"
+        for entity in entities
+    )
     return {
         "entity_count": len(entities),
         "types": dict(
@@ -1071,6 +1079,7 @@ def _live_entity_signature(entities: list[dict[str, Any]]) -> dict[str, Any]:
         "layers": dict(
             sorted(Counter(str(entity.get("layer", "")) for entity in entities).items())
         ),
+        "type_layers": dict(sorted(type_layers.items())),
     }
 
 
