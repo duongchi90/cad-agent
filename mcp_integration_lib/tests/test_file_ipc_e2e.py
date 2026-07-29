@@ -198,4 +198,9 @@ class FileIPCEndToEndTests(unittest.TestCase):
             )
         )
         self.assertEqual(os.path.normcase(os.path.normpath(second_path)), active)
+        open_paths = {
+            os.path.normcase(os.path.normpath(path))
+            for path in client.drawing_list_open_paths()
+        }
+        self.assertIn(os.path.normcase(os.path.normpath(second_path)), open_paths)
         self.assertEqual({"CIRCLE"}, {entity["type"] for entity in client.entity_list()})
