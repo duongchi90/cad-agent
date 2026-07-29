@@ -17,8 +17,9 @@ The same run also showed a single transient timeout on the read-only
 
 ## Design
 
-- After raw-LISP open, dispatcher load, and ping, query `DWGNAME` and require it
-  to match the requested path's basename case-insensitively.
+- After raw-LISP open, dispatcher load, and ping, query `DWGPREFIX` and
+  `DWGNAME`. Normalize their combined full path and require it to equal the
+  normalized requested full path case-insensitively.
 - If the wrong document is active, repeat the open/bootstrap sequence once.
 - If the second verification still mismatches, raise `MCPToolError` naming the
   requested and active documents.
@@ -28,8 +29,11 @@ The same run also showed a single transient timeout on the read-only
 
 ## Acceptance criteria
 
-1. Offline tests prove an active-document mismatch causes one retry.
+1. Offline tests prove an active-document mismatch, including the same
+   basename under another directory, causes one retry and then refusal.
 2. Offline tests prove a transient attribute-read timeout is retried once.
 3. Existing File IPC mapping tests pass.
 4. The previously intermittent live component round-trip passes.
-5. The complete AutoCAD Mechanical live gate passes on the final candidate.
+5. The complete AutoCAD Mechanical live gate, including two same-named
+   disposable drawings in different directories, passes on the final
+   candidate.

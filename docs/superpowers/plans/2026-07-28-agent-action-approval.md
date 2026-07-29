@@ -6,6 +6,12 @@
 
 **Implementation Head SHA:** `09c276cfcf8d9640bef9f605ffe2430f1f863195`
 
+**Hardening Head SHA:** `4656e9f148bcd90c43c9eba672fdd5977f8cc307`
+
+The hardening revision makes application a second step bound to a saved report
+and exact source/IR hashes, and recomputes the solve after approved constraint
+drops.
+
 **Verification command:** `scripts/verify.ps1`
 
 **Verification result:** `PASS` on the implementation Head SHA: 342 offline

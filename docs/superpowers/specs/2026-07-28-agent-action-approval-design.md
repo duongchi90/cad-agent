@@ -26,21 +26,23 @@ auditable operator approval while preserving the existing manual
 
 - `agent_lib.run.run()` generates and saves the Agent report but does not call
   `apply_agent_report()` by default.
-- Application requires both the literal confirmation
-  `--confirm-agent-actions APPLY` and a non-empty
-  `--agent-action-approval` reference. Supplying only one or any other literal
-  is rejected before report generation or IR mutation.
+- Application is a separate invocation against a saved report. It requires the
+  literal confirmation `--confirm-agent-actions APPLY`, a non-empty
+  `--agent-action-approval` reference, the saved report SHA-256, and the
+  approved source/Primitive IR/Semantic IR SHA-256 values. Any mismatch is
+  rejected before mutation.
 - The programmatic runner exposes the same two inputs. The approval gate is a
   small independently tested function that records whether application was
   requested, whether it occurred, the action count, the approval reference,
   and the application summary.
-- Every successful runner writes `agent_application.json` beside
-  `agent_report.json`. The application record is advisory/default-safe when no
-  approval was supplied and approval-bound when actions were applied.
+- Every successful runner writes `agent_application.json`. It records input,
+  report, action-set, applied-action-set, and saved-report hashes plus the
+  post-application solve status.
 - The synthetic demo remains non-mutating and writes the same application
   record. It demonstrates advice generation, not an implicit approval shortcut.
-- DXF generation uses the unchanged IR in the default path and the explicitly
-  approved mutated IR in the approved path.
+- DXF generation uses unchanged IR in the default path. After an approved
+  constraint mutation, pruning and solving run again and DXF generation uses
+  only the post-application solve result.
 - `agent_lib.batch_agent.apply_agent_report()` remains unchanged for callers
   that already provide their own approval and audit boundary.
 
@@ -59,8 +61,8 @@ auditable operator approval while preserving the existing manual
 1. Tests prove that the default gate never invokes `apply_agent_report()` and
    leaves every action unapplied.
 2. Tests prove that partial or invalid approval is rejected without mutation.
-3. Tests prove that `APPLY` plus a non-empty approval reference invokes the
-   existing application API and records approval evidence.
+3. Tests prove that `APPLY` plus the report/input hashes invokes the existing
+   application API and records approval evidence.
 4. The demo contains no automatic application path.
 5. Architecture/status documentation describes the approved advisory default.
 6. Focused tests and `scripts/verify.ps1` pass.

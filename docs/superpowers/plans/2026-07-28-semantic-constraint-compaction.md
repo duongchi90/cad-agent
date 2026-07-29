@@ -1,6 +1,6 @@
 # Semantic Constraint Compaction Implementation Plan
 
-**Status:** In progress
+**Status:** Completed on `4656e9f148bcd90c43c9eba672fdd5977f8cc307`
 
 **Base SHA:** `54f5cb92e56f0bdbc94ad08d38404e281cb46be5`
 
@@ -10,6 +10,7 @@
 2. Run the complete offline suite and Ruff.
 3. Benchmark approved private pages 1 and 5.
 4. Align architecture, package documentation, and repository hygiene.
-5. Commit the integrated candidate and run authoritative offline, private-data,
-   and AutoCAD Mechanical gates.
-6. Record final evidence and close the plan.
+5. Completed: committed the integrated candidate and ran authoritative
+   offline, private-data, and AutoCAD Mechanical gates.
+6. Completed: final evidence is recorded in `docs/STATUS.md` and the candidate
+   release record.

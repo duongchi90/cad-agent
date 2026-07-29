@@ -40,12 +40,12 @@ the skips and the run used Python 3.12.
 | Primitive IR | Verified | Final Python 3.11 offline gate passed with zero skips; the approved private PDF, identified by SHA-256 below, completed Primitive IR for all nine pages. |
 | Semantic IR | Verified | Final Python 3.11 offline gate passed with `python-solvespace` installed and zero offline skips; the approved private PDF completed all nine Semantic IR checkpoints. Assembly now uses raw detections for compound inference but persists only deterministic solver-ready constraints, reducing private page 1 from 538,983 raw relations to 3,693 retained constraints. |
 | DXF build/review/repair | Verified | Final Python 3.11 offline DXF tests passed; production AutoCAD Mechanical mutation is outside this state. |
-| Visual PDF-to-DXF fidelity | Partially verified | Delegated visual review accepted the paper layout and primary linework on all nine reconstruction overlays, and all nine DXFs opened read-only in AutoCAD Mechanical 2027. Text/font/OCR, hatch, linetype, table placement, and true dimension semantics remain excluded from authoritative fidelity. |
-| MCP/File IPC | Verified | Offline/fake IPC tests and all four `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027. Production drawing mutation remains separately gated by backup and human approval. |
-| Agent advice/audit | Verified | `run_agent()`, `agent_lib.run`, and the demo are non-mutating by default. Application requires literal `APPLY` plus a non-empty approval reference, and the runner writes a separate application audit. Focused, full offline, and advisory smoke gates passed on the implementation head below. |
+| Visual PDF-to-DXF fidelity | Verified for reviewable paper-layout and primary-linework scope | All nine delegated visual approvals were promoted into the fidelity manifest, and 9/9 promoted DXFs passed the dedicated read-only AutoCAD Mechanical review checkpoint. Text/font/OCR, hatch, linetype, table placement, model export, and true dimension semantics remain excluded. |
+| MCP/File IPC | Verified | Offline/fake IPC tests and all five `autocad_mechanical` live File IPC tests passed on AutoCAD Mechanical 2027, including identical filenames under different directories. Active-document identity is full-path-bound. |
+| Agent advice/audit | Verified | Agent execution is non-mutating by default. Application is a separate step bound to a saved report SHA-256 and exact source/IR hashes; approved constraint drops trigger a new solve before DXF generation. |
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
 | Thin image/PDF orchestration CLI | Verified | `cad_agent` run/resume and run-pdf/resume-pdf produce SHA-bound staged DXF and build evidence. Separate Mechanical review/repair commands enforce evidence, approval, backup, and second-review boundaries. |
-| Production repair safety loop | Partially verified | Fake-MCP tests cover refusal, backup, repair, second review, and rollback. A real AutoCAD Mechanical staged-DXF review passed; no production drawing repair was run. |
+| Production repair safety loop | Partially verified | Fake-MCP tests cover refusal, hash-verified backup, repair, second review, close-without-save rollback, and verified-backup reopen. A real staged-DXF review passed; no production drawing repair was requested or run. |
 
 ## Known production gates
 
@@ -70,8 +70,8 @@ and a second live review; it was not requested or run here.
 - Date: `2026-07-28`.
 - The approved nine-page private PDF completed Primitive IR, Semantic IR,
   optional audited Agent advice, staged/reconstructed DXF, headless structural
-  checks, delegated visual review, and read-only AutoCAD Mechanical 2027 load
-  checks with reproducible evidence.
+  checks, delegated visual promotion, and nine SHA-bound read-only AutoCAD
+  Mechanical 2027 review checkpoints.
 - The Agent path is advisory by default and has a separate explicit approval
   gate. No production drawing was mutated.
 - Deferred work does not block the reviewable milestone: the user explicitly
@@ -139,43 +139,43 @@ and a second live review; it was not requested or run here.
 - Hatch observation: `fidelity-hatch-observe` now writes SHA-bound, review-only diagonal-stroke sidecars. Its nine-page private rerun found six candidates only on pages 3, 5, and 9 (peak segment counts 20, 5, and 10); it found none on the other pages. No DXF `HATCH` entity or production mutation is emitted, and every candidate remains `needs_review` pending explicit boundary approval.
 - Remaining risk: all nine compositions remain `needs_review`, and broad layout approvals do not validate visual similarity. OCR text remains correctable and text placement/style needs review. Disciplined model-view reconstruction, true dimension semantics, verified linetypes/hatches, and table-cell placement still require visual review before they can be represented as authoritative CAD content.
 
-## Delegated-review fidelity refresh
+## Delegated-review fidelity promotion
 
 - State: **Verified** (reviewable paper-layout and primary-linework scope only)
 - Date: `2026-07-28`
-- Source: the approved private `202607092308.pdf`, SHA-256
+- Source: approved private PDF, SHA-256
   `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
-- Fresh private output: `C:\temp\cad-agent-fidelity-e48f3970-final-20260728`.
-  It contains all nine rendered pages, structural round-trip passes, overlays,
-  observations, SHA-bound `sheet_content` approvals, geometry candidates, and
-  composed page DXFs. The review authorization was delegated by the user on
-  2026-07-28; it is recorded in the new approval artifacts.
+- Private artifact identifier: source prefix `e48f3970`, final manifest SHA-256
+  `e36814340cb8ec32b71cefec67f454de29619632be30283d3bf77311fe0fe90d`.
+  The external root contains all nine rendered pages, structural round-trip
+  passes, overlays, observations, approvals, composed DXFs, promotions, and
+  Mechanical review reports.
 - OCR evidence: all 419 new OCR candidates exactly match the candidate text and
   pixel boxes in the previously approved set. Nine fresh text-approval files
   were created. Fresh DXF text reconstruction was intentionally not run because
   the user deferred the known Vietnamese preview-font correction.
-- Fresh private-data command:
-  `CAD_AGENT_FIDELITY_PDF=C:\Users\duong\Downloads\202607092308.pdf`,
-  `CAD_AGENT_FIDELITY_MANIFEST=C:\temp\cad-agent-fidelity-e48f3970-final-20260728\fidelity-run-manifest.json`, then
-  `python -m pytest tests\test_cad_agent_fidelity_real_data.py -ra -p no:cacheprovider`
-  -> `1 passed`.
-- Fresh live command: AutoCAD Mechanical 2027 HWND `787740` with
-  `mcp_dispatch.lsp` loaded; `python -m pytest -m autocad_mechanical -ra -p no:cacheprovider`
-  -> `4 passed, 338 deselected` in `69.93s`. The test writes only disposable
-  DXFs under `C:\temp`.
-- Fresh authoritative offline command:
+- Private-data command with `<private-pdf>` and `<private-fidelity-root>`
+  environment values plus `CAD_AGENT_FIDELITY_REQUIRE_RECONSTRUCTION=1`:
+  `python -m pytest tests\test_cad_agent_fidelity_real_data.py -ra -p
+  no:cacheprovider` -> `1 passed`. The gate validates 9/9 promotion and
+  Mechanical checkpoints.
+- Live command: AutoCAD Mechanical 2027 session `acad.exe`, HWND `787740`,
+  loaded File IPC dispatcher; `python -m pytest -m autocad_mechanical -ra -p
+  no:cacheprovider` -> `5 passed, 355 deselected` in `82.78s`. All live DXFs
+  were disposable.
+- Authoritative offline command:
   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1`
-  -> exit `0`; offline JUnit `tests=336; failures=0; errors=0; skipped=0`.
+  -> exit `0`; offline JUnit `tests=353; failures=0; errors=0; skipped=0`.
 - Delegated visual review: all nine `reconstruction_pages/page_XX/overlay.png`
   files were inspected on 2026-07-28. Red is source raster edge, cyan is
   reconstructed DXF edge, and green is overlap. The paper layout and primary
   vehicle/structure linework were accepted for review use on every page.
-- AutoCAD Mechanical load check: all nine
-  `reconstruction_pages/page_XX/layout.dxf` files opened successfully through
-  the live File IPC backend on HWND `787740`. Each reported seven consistent
-  top-level entities on layers `0`, `Defpoints`, `DIEM_NOI`, and
-  `COMP_DIEM_NOI`; the active page exposed blocks `COMP_NODE` and `GENAXEH`.
-  The check was read-only: no save, repair, or production mutation occurred.
+- Integrated promotion: all nine composed pages received a delegated visual
+  approval record and transitioned through
+  `approved_for_mechanical_review` to `mechanical_reviewed`. The dedicated
+  command compared each promoted type/layer signature with AutoCAD and wrote
+  nine SHA-bound reports. Every report records `save_performed=false` and
+  `repair_performed=false`.
 - Limit: this is not a production model or a claim of pixel-perfect fidelity.
   Text/font/OCR, hatch, linetype, table placement, and dimension semantics are
   outside the accepted primary-linework scope.
@@ -184,65 +184,61 @@ and a second live review; it was not requested or run here.
 
 - State: **Verified**
 - Date: `2026-07-28`
-- Implementation Head SHA: `09c276cfcf8d9640bef9f605ffe2430f1f863195`.
+- Hardened Head SHA: `4656e9f148bcd90c43c9eba672fdd5977f8cc307`.
 - Design and plan:
   `docs/superpowers/specs/2026-07-28-agent-action-approval-design.md`;
   `docs/superpowers/plans/2026-07-28-agent-action-approval.md`.
 - Safety behavior: the file runner and synthetic demo are advisory by default.
-  Applying a report requires `--confirm-agent-actions APPLY` plus a non-empty
-  `--agent-action-approval`; `agent_application.json` records the request,
-  result, action count, and approval reference.
-- Focused tests: all `agent_lib/tests` -> `70 passed`; this includes default
-  non-mutation, four invalid/partial approval cases, and explicitly approved
-  application.
+  Application is a second step requiring a saved report and SHA-256, literal
+  `APPLY`, an approval reference, and exact source/Primitive/Semantic IR hashes.
+  The audit records provenance/action hashes and the post-application solve
+  state. Approved constraint drops are solved again before DXF generation.
 - Advisory smoke: the real runner loaded the repository's 900x700 synthetic
   image and IR, produced 10 constraint-drop proposals, exited `0`, and recorded
   `application_requested=false` and `actions_applied=false` under
   `C:\temp\cad-agent-agent-gate-09c276c`.
-- Authoritative command:
-  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1`
-  -> exit `0`; offline JUnit `tests=342; failures=0; errors=0; skipped=0`.
-- Specialized unavailable-state probes remained safe: `real_data` reported two
-  expected skips and `autocad_mechanical` reported four expected skips. The
-  earlier approved private-PDF and live Mechanical results remain recorded in
-  the delegated-review fidelity refresh above.
+- Final authoritative command is recorded in the release candidate section:
+  353 offline tests, one private fidelity test, and five live AutoCAD
+  Mechanical tests all passed.
 - Boundary: this gate controls in-memory IR application only. It does not grant
   permission to repair or save a production AutoCAD drawing.
 
 ## Semantic constraint compaction evidence
 
-- State: **Partially verified** pending final candidate gates.
+- State: **Verified** on
+  `4656e9f148bcd90c43c9eba672fdd5977f8cc307`.
 - Date: `2026-07-28`.
 - Design and plan:
   `docs/superpowers/specs/2026-07-28-semantic-constraint-compaction-design.md`;
   `docs/superpowers/plans/2026-07-28-semantic-constraint-compaction.md`.
 - Behavior: assembly uses the complete detected set for compound inference and
   persists only `prune_constraints(...).kept` in Semantic IR.
-- Focused result: compound/pruning tests -> `26 passed`; full dirty-tree
-  offline run -> `343 passed, 6 deselected`; Ruff -> `PASS`.
+- Focused result: compound/pruning tests -> `26 passed`; final authoritative
+  offline run -> `353 passed, 7 deselected`; Ruff -> `PASS`.
 - Approved private page 1: 1,170 primitives, 1,187 parts, 3,693 retained
   constraints, Semantic assembly `34.002s`. The earlier raw count was 538,983.
 - Approved private page 5: 485 primitives, 495 parts, 1,392 retained
   constraints, Semantic assembly `5.758s`, matching the previously recorded
   pruning result.
-- Remaining gate: commit the integrated candidate, then rerun
-  `scripts/verify.ps1`, the approved private-data gate, and the live AutoCAD
-  Mechanical gate on that exact Head SHA.
+- Final private-data and live AutoCAD Mechanical gates passed on the same
+  candidate.
 
 ## File IPC active-document verification
 
-- State: **Partially verified** pending final candidate gates.
+- State: **Verified** on
+  `4656e9f148bcd90c43c9eba672fdd5977f8cc307`.
 - Date: `2026-07-28`.
 - Release-gate observation: the initial four-test AutoCAD Mechanical run had
   one transient `block-get-attributes` timeout followed by one wrong-document
   `Entity not found`; four later component subcases passed.
-- Root cause: raw-LISP document opening waited for a dispatcher ping but did
-  not verify that the requested `DWGNAME` was active.
-- Fix: `drawing_open()` now verifies `DWGNAME` and retries one mismatched open;
+- Root cause: raw-LISP document opening waited for a dispatcher ping and
+  originally verified only the basename.
+- Fix: `drawing_open()` verifies normalized `DWGPREFIX + DWGNAME`, retries one
+  mismatch, and rejects identical basenames under another directory.
   `block_get_attributes()` retries one timeout because it is read-only. No
   mutating command is retried.
-- Focused evidence: File IPC client tests -> `19 passed`; the isolated six-case
-  live component round-trip -> `1 passed` in `64.01s`.
+- Final live evidence: five tests passed in `82.78s`, including two disposable
+  `same-name.dxf` files in different directories.
 - Design and plan:
   `docs/superpowers/specs/2026-07-28-file-ipc-active-document-verification-design.md`;
   `docs/superpowers/plans/2026-07-28-file-ipc-active-document-verification.md`.
@@ -253,7 +249,12 @@ and a second live review; it was not requested or run here.
 - Date: `2026-07-22`
 - Implementation Head SHA: `ddf683431cabf4b4a12c3448aed0a20b7b54d429`
 - Design and plan: `docs/superpowers/specs/2026-07-22-mechanical-production-repair-design.md`; `docs/superpowers/plans/2026-07-22-mechanical-production-repair.md`
-- Safety behavior: `run` writes `build-evidence.json` bound to the staged DXF SHA-256. `mechanical-review` is read-only; `mechanical-repair` requires an approval reference, literal `--confirm-repair APPLY`, timestamped DXF/evidence backups, and a passing post-repair live review before save.
+- Safety behavior: `run` writes `build-evidence.json` bound to the staged DXF
+  SHA-256. `mechanical-review` is read-only; `mechanical-repair` requires an
+  approval reference, literal `--confirm-repair APPLY`, source/copy hash-verified
+  DXF/evidence backups, and a passing post-repair live review before save. A
+  failed review closes the modified drawing without save before reopening the
+  verified backup.
 - Focused tests: `tests/test_cad_agent_live.py` and `tests/test_cad_agent_cli.py` → `7 passed`; coverage includes missing approval refusal, backup creation, successful fake repair, and failed-second-review rollback.
 - Live staged review: `cad_agent mechanical-review` on a disposable DXF under `C:\temp` through AutoCAD Mechanical 2027 → `passed=true`, `structural_checked=10`, `geometry_checked=10`, no mismatch or degraded geometry check.
 - Authoritative command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` → exit `0`; offline JUnit `tests=299; failures=0; errors=0; skipped=0`; SHA-256 `80140e4ca6c7089742a8282ad0e9cea083ce167c110b91f11cbe3f0d485e3569`

@@ -1,6 +1,6 @@
 # Release Safety and Fidelity Promotion Plan
 
-**Status:** Implemented; final candidate verification pending
+**Status:** Completed on `4656e9f148bcd90c43c9eba672fdd5977f8cc307`
 
 ## Steps
 
