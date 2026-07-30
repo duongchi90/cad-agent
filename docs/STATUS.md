@@ -67,7 +67,7 @@ not requested or run here.
 
 ## Latest continuation evidence
 
-- Head: `c7ace1e165f20fdd01ae5ac36599990b9faa3c88`.
+- Head: `dae1f2c128c1b58eb84a400d15b53d9ada127916`.
 - Offline gate: `scripts/verify.ps1` passed with `387 passed, 8 deselected`; the
   unavailable-state probes recorded `2` real-data skips and `6` AutoCAD skips.
 - Live gate: with AutoCAD Mechanical 2027 and the local File IPC dispatcher,

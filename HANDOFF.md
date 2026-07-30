@@ -560,3 +560,14 @@ Live smoke test: bật `CAD_AGENT_FILE_IPC=1` và đặt
 `CAD_AGENT_AUTOCAD_HWND` bằng frame handle AutoCAD; trigger tự tìm child
 `MDIClient` trước khi gửi `(c:mcp-dispatch)`. Smoke test chỉ đọc entity list
 và đã PASS trên AutoCAD thật.
+
+
+## 2026-07-30 — Final Release Candidate (dae1f2c)
+
+Toàn bộ công việc từ ứng viên ban đầu d31087 đến HEAD hiện tại dae1f2c đã hoàn tất. Các thay đổi bao gồm:
+- Tái dựng trung thực fidelity (dimensions, linetypes, hatches) với cơ chế kiểm duyệt (approval gates).
+- Sửa các lỗi provenance, ID hợp lệ, và live dimensions measurement.
+- Khắc phục rò rỉ tài liệu AutoCAD (chỉ tái sử dụng active document chính xác, đóng các bản vẽ disposable).
+- Vượt qua 3 cổng tái duyệt: correctness, security ops, và requirements.
+
+Kết quả kiểm thử trên ứng viên cuối dae1f2c xác nhận toàn bộ 3 cổng (offline, private PDF, live AutoCAD Mechanical) đều xanh.
