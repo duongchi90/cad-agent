@@ -41,7 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Set
 
-from .builder import BuildResult
+from .builder import BuildResult, _ensure_unicode_text_style
 from .reviewer import ComponentMismatch
 
 _EXPECTED_DXFTYPE = {"line": "LINE", "circle": "CIRCLE", "arc": "ARC", "text": "TEXT"}
@@ -163,6 +163,7 @@ def repair_dxf(build_result: BuildResult, mismatches: List[str]) -> RepairResult
                     "height": written["height"],
                     "rotation": written["rotation_deg"],
                     "insert": written["insert"],
+                    "style": _ensure_unicode_text_style(doc),
                 },
             )
 
