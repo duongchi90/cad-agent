@@ -76,7 +76,7 @@ def extract_text_tesseract(
     image_bgr: np.ndarray,
     roi_boxes: Optional[List[Bbox]] = None,
     min_confidence: int = 40,
-    lang: str = "eng",
+    lang: str = "vie+eng",
     psm: int = 6,
 ) -> List[RawText]:
     """Tesseract trên toàn ảnh hoặc trên từng ROI đã khoanh (vd vùng title
@@ -84,12 +84,14 @@ def extract_text_tesseract(
     dùng hàm này cho ghi chú dài/số xoay, benchmark thật cho thấy thất bại
     nặng (xem mục 9.2 dòng "GHI CHÚ/YÊU CẦU KỸ THUẬT" và "số kích thước xoay").
 
-    LƯU Ý VẬN HÀNH: mặc định lang='eng' vì môi trường build package này chỉ
-    có gói 'eng' cài sẵn (kiểm tra bằng `tesseract --list-langs`). Với dữ
-    liệu thật có nhãn tiếng Việt trong title block (vd "SỐ LƯỢNG", "VẬT
-    LIỆU"), nên cài thêm `tesseract-ocr-vie` (`apt-get install
-    tesseract-ocr-vie`) và truyền lang='vie+eng'. Mã bản vẽ/số liệu thuần
-    (vd 'TP-TL-A001/07/26') không cần gói 'vie' vì không có dấu.
+    LƯU Ý VẬN HÀNH: mặc định lang='vie+eng' vì title block bản vẽ thật luôn
+    có nhãn tiếng Việt có dấu (vd "SỐ LƯỢNG", "VẬT LIỆU") — dùng 'eng' đơn
+    thuần khiến Tesseract đọc sai hoặc rỗng các nhãn này. Yêu cầu gói
+    `tesseract-ocr-vie` đã cài (`apt-get install tesseract-ocr-vie`, kiểm
+    tra bằng `tesseract --list-langs`). Với mã bản vẽ/số liệu thuần không
+    dấu (vd 'TP-TL-A001/07/26'), có thể truyền lang='eng' tường minh để OCR
+    nhanh hơn một chút, nhưng KHÔNG nên đặt làm mặc định vì sẽ tái diễn lỗi
+    này ở mọi title block khác có nhãn tiếng Việt.
     """
     if not roi_boxes:
         # Xác nhận bởi mục 4 báo cáo kiểm thử Phase 1 (18/07/2026): quét
