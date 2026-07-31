@@ -949,6 +949,85 @@ def test_region_quality_selects_filtered_geometry_only_when_f1_improves() -> Non
     assert [line.id for line in selected.lines] == ["main"]
 
 
+def test_table_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_path: Path) -> None:
+    """Bug: run_fidelity_table_text_reconstruct() dùng model.add_text() không
+    set dxfattribs['style'], nên TEXT rơi về style 'Standard' (font txt.shx)
+    -- không có glyph dấu tiếng Việt. Nội dung ô bảng thật (vd "VẬT LIỆU")
+    phải render đúng khi mở trong AutoCAD."""
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    base_dxf = output / page["artifacts"]["layout_dxf"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+    observation = output / "table-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-table-text-observation-1.0", "private_artifact": True,
+        "state": "needs_human_approval", "source": manifest["source"], "page": 1, "source_render_sha256": sha256_file(rendered),
+        "candidates": [
+            {"id": "cell-vn", "cell_match_state": "matched", "cell_bbox_px": [10, 20, 120, 40], "text": {"content": "VẬT LIỆU", "bbox_px": [15, 22, 100, 38]}},
+        ],
+    }), encoding="utf-8")
+    from cad_agent.fidelity import write_fidelity_table_text_approval
+    write_fidelity_table_text_approval(
+        source, output, manifest, 1, observation, ["cell-vn"], "approved-test", workspace_root=Path.cwd(),
+    )
+    approval = output / "fidelity_table_text_approvals" / "page_01.json"
+    result = run_fidelity_table_text_reconstruct(source, output, manifest, approval, base_dxf, workspace_root=Path.cwd())
+
+    saved = ezdxf.readfile(result)
+    entities = list(saved.modelspace().query("TEXT"))
+    assert [entity.dxf.text for entity in entities] == ["VẬT LIỆU"]
+    style_name = entities[0].dxf.style
+    assert style_name != "Standard", "TEXT tiếng Việt không được dùng style 'Standard' (txt.shx)"
+    style = saved.styles.get(style_name)
+    assert (style.dxf.font or "").lower().endswith(".ttf"), (
+        f"style '{style_name}' phải dùng font TTF Unicode, đang là {style.dxf.font!r}"
+    )
+
+
+def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cùng bug ở run_fidelity_text_reconstruct() (nhánh 'ghi chú dài' khác
+    với bảng) -- TEXT tiếng Việt phải dùng style TTF Unicode, không rơi về
+    'Standard'."""
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    outputs = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+    observation_path = outputs[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["candidates"], "fixture PDF phải có ít nhất 1 candidate OCR"
+    # ghi đè nội dung candidate đầu tiên thành tiếng Việt có dấu -- vẫn giữ
+    # nguyên cấu trúc/hash-binding thật do run_fidelity_text_observations tạo
+    observation["candidates"][0]["content"] = "SỐ LƯỢNG"
+    observation_path.write_text(json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    approved = write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path, [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
+    )
+    assert approved["approved_candidates"][0]["glyph_render"]["passed"] is True
+    text_dxf = run_fidelity_text_reconstruct(
+        source, output, manifest, output / "fidelity_text_approvals" / "page_01.json", workspace_root=Path.cwd(),
+    )
+
+    saved = ezdxf.readfile(text_dxf)
+    entities = list(saved.modelspace().query("TEXT"))
+    assert [entity.dxf.text for entity in entities] == ["SỐ LƯỢNG"]
+    style_name = entities[0].dxf.style
+    assert style_name != "Standard", "TEXT tiếng Việt không được dùng style 'Standard' (txt.shx)"
+    style = saved.styles.get(style_name)
+    assert (style.dxf.font or "").lower().endswith(".ttf"), (
+        f"style '{style_name}' phải dùng font TTF Unicode, đang là {style.dxf.font!r}"
+    )
+
+
 def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:
     from cad_agent.fidelity import _select_fidelity_geometry
 

@@ -29,6 +29,7 @@ from primitive_ir_lib.run_image import _configure_tesseract
 from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
 from primitive_ir_lib.table_extraction import build_cells, detect_grid
 from primitive_ir_lib.view_calibration import detect_view_candidates
+from dxf_builder_lib.builder import _ensure_unicode_text_style
 
 from .manifest import ManifestError, sha256_file, verify_source, write_manifest
 
@@ -962,7 +963,7 @@ def run_fidelity_table_text_reconstruct(
             continue
         x0, _, _, y1 = (float(value) for value in bbox)
         height = max(1.5, min(8.0, (float(bbox[3]) - float(bbox[1])) * scale))
-        entity = model.add_text(content.strip(), dxfattribs={"layer": "FIDELITY_TABLE_TEXT", "height": height})
+        entity = model.add_text(content.strip(), dxfattribs={"layer": "FIDELITY_TABLE_TEXT", "height": height, "style": _ensure_unicode_text_style(document)})
         entity.set_placement((x0 * scale, (height_px - y1) * scale))
         emitted += 1
     base_root = output_root / "table_text_reconstruction"
@@ -1484,7 +1485,7 @@ def run_fidelity_text_reconstruct(
             raise FidelityError("Text approval contains an invalid candidate.")
         x0, _, _, y1 = (float(value) for value in bbox)
         text_height = max(1.5, min(10.0, (float(bbox[3]) - float(bbox[1])) * scale))
-        entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height})
+        entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height, "style": _ensure_unicode_text_style(document)})
         entity.set_placement((x0 * scale, (height_px - y1) * scale))
         emitted += 1
     root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
