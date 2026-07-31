@@ -106,6 +106,33 @@ def test_confirmed_validation_references_a_serialized_line(tmp_path):
     )
 
 
+def test_run_image_passes_ocr_lang_override_to_tesseract(tmp_path):
+    """run() phải truyền lang xuống extract_text_tesseract khi người dùng
+    override qua --ocr-lang, thay vì luôn phụ thuộc default nội bộ."""
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(
+        str(image_path),
+        np.full((80, 140, 3), 255, dtype=np.uint8),
+    )
+
+    with patch(
+        "primitive_ir_lib.run_image.extract_text_tesseract",
+        return_value=[],
+    ) as mock_extract:
+        run(
+            image_path=str(image_path),
+            output_path=str(output_path),
+            scale_mm_per_px=1.0,
+            preset="default",
+            ocr_rois=[(0, 0, 140, 80)],
+            ocr_lang="eng",
+        )
+
+    _, kwargs = mock_extract.call_args
+    assert kwargs["lang"] == "eng"
+
+
 if __name__ == "__main__":
     test_run_image_writes_valid_primitive_ir_with_manual_scale()
     print("1/1 test PASS")

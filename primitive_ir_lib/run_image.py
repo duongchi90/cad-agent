@@ -83,6 +83,7 @@ def run(
     preset: str = "real_scan_tuned_v1",
     ocr_rois: Optional[List[Bbox]] = None,
     tesseract_cmd: Optional[str] = None,
+    ocr_lang: str = "vie+eng",
     merge_lines: bool = False,
     auto_ocr_roi: bool = False,
     auto_calibrate: bool = False,
@@ -127,7 +128,7 @@ def run(
     raw_texts = []
     if effective_rois:
         _configure_tesseract(tesseract_cmd)
-        raw_texts = extract_text_tesseract(image, roi_boxes=effective_rois)
+        raw_texts = extract_text_tesseract(image, roi_boxes=effective_rois, lang=ocr_lang)
 
     if view_candidates_output_path is not None:
         _configure_tesseract(tesseract_cmd)
@@ -136,6 +137,7 @@ def run(
             roi_boxes=[_title_block_roi(image.shape[1], image.shape[0])],
             min_confidence=10,
             psm=11,
+            lang=ocr_lang,
         )
         raw_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
 
@@ -254,6 +256,11 @@ def main() -> int:
                              "+ --calibration-id để ghi lại kết quả (status=needs_verification) "
                              "cho việc xác minh sau.")
     parser.add_argument("--tesseract-cmd", help="Đường dẫn tesseract.exe nếu không ở PATH")
+    parser.add_argument("--ocr-lang", default="vie+eng",
+                        help="Gói ngôn ngữ Tesseract (mặc định 'vie+eng' vì title block "
+                             "thật luôn có nhãn tiếng Việt có dấu). Yêu cầu đã cài "
+                             "tesseract-ocr-vie; kiểm tra bằng `tesseract --list-langs`. "
+                             "Truyền 'eng' nếu chỉ cần đọc mã bản vẽ/số liệu không dấu.")
     parser.add_argument("--merge-lines", action="store_true",
                         help="Bật merge + witness split trước khi assemble IR")
     args = parser.parse_args()
@@ -284,6 +291,7 @@ def main() -> int:
             preset=args.preset,
             ocr_rois=args.ocr_roi,
             tesseract_cmd=args.tesseract_cmd,
+            ocr_lang=args.ocr_lang,
             merge_lines=args.merge_lines,
         )
     except (FileNotFoundError, ValueError, pytesseract.TesseractNotFoundError) as exc:
