@@ -119,6 +119,25 @@ def _ensure_layer(doc, name: str, color: int) -> None:
         doc.layers.new(name=name, dxfattribs={"color": color})
 
 
+# Style TEXT dùng font TTF Unicode — bắt buộc cho mọi nhãn tiếng Việt có
+# dấu (vd "VẬT LIỆU", "SỐ LƯỢNG"). Style "Standard" mặc định của
+# ezdxf.new() (không setup=True) dùng font "txt" (txt.shx) — 1 font stroke
+# cơ bản của AutoCAD KHÔNG có glyph cho ký tự có dấu, khiến text hiển thị
+# sai/mất dấu khi mở trong AutoCAD. Đã xác nhận bằng reproduce trực tiếp:
+# doc.styles.get("Standard").dxf.font == "txt", bigfont == "".
+_UNICODE_TEXT_STYLE = "VN_UNICODE"
+_UNICODE_TEXT_FONT = "Arial.ttf"
+
+
+def _ensure_unicode_text_style(doc) -> str:
+    """Tạo (nếu chưa có) 1 text style trỏ tới font TTF Unicode và trả về
+    tên style đó. Idempotent — an toàn gọi nhiều lần (vd builder.py build
+    lần đầu, repair.py đọc lại file cũ rồi vẽ lại text sau repair)."""
+    if _UNICODE_TEXT_STYLE not in doc.styles:
+        doc.styles.add(_UNICODE_TEXT_STYLE, font=_UNICODE_TEXT_FONT)
+    return _UNICODE_TEXT_STYLE
+
+
 def _add_confirmed_dimensions(
     doc,
     msp,
@@ -265,6 +284,7 @@ def build_dxf(
                     "height": td.height,
                     "rotation": td.rotation_deg,
                     "insert": (td.position.x, td.position.y),
+                    "style": _ensure_unicode_text_style(doc),
                 },
             )
             written = {
