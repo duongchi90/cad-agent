@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set
 
 from .builder import BuildResult, _ensure_unicode_text_style
-from .reviewer import ComponentMismatch
+from .reviewer import ComponentMismatch, resolve_component_insert
 
 _EXPECTED_DXFTYPE = {"line": "LINE", "circle": "CIRCLE", "arc": "ARC", "text": "TEXT"}
 
@@ -270,7 +270,20 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
 
         # xoá entity cũ theo handle — entity có thể không còn trong db
         # nếu file đã bị sửa ngoài (bất thường), không crash
-        old_entity = db.get(handle)
+        old_entity, identity_source = resolve_component_insert(
+            db,
+            msp,
+            handle,
+            part_id,
+            expected_block_name=block_name,
+        )
+        if identity_source == "ambiguous":
+            result.skipped_part_ids.append(part_id)
+            result.skipped_count += 1
+            result.details.append(
+                f"{part_id}: BỎ QUA repair — PART_ID không duy nhất trong ModelSpace"
+            )
+            continue
         if old_entity is not None:
             msp.delete_entity(old_entity)
 

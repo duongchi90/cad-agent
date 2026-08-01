@@ -224,10 +224,17 @@ def merge_collinear_lines(
     Trả về danh sách RawLine mới (line đã gộp + line không đổi). Line đã gộp có
     id mới (tiền tố 'rawline-merged'), confidence = max của các line thành phần.
     """
+    witness_barriers: List[Tuple[Tuple[float, float], float]] = []
     if split_internal_witness_lines and image_bgr is not None:
         split_lines: List[RawLine] = []
         for line in raw_lines:
-            split_lines.extend(split_raw_line_at_internal_witness_lines(line, image_bgr))
+            pieces = split_raw_line_at_internal_witness_lines(line, image_bgr)
+            if len(pieces) > 1:
+                source_length = line.length_px()
+                witness_barriers.extend(
+                    (piece.p2_px, source_length) for piece in pieces[:-1]
+                )
+            split_lines.extend(pieces)
         raw_lines = split_lines
 
     n = len(raw_lines)
@@ -281,6 +288,29 @@ def merge_collinear_lines(
         cluster_lines = [raw_lines[i] for i in idxs]
         ref_angle, ref_x0, ref_y0 = angles[idxs[0]]
 
+        # A long Hough detection can be split at a real perpendicular witness,
+        # while shorter overlapping detections still span that boundary.  Use
+        # barriers from the longest source line in this collinear cluster and
+        # clip every overlapping segment at them before grouping.  This avoids
+        # transitive overlap re-joining the two dimension-chain pieces.
+        cluster_barrier_candidates = [
+            (point, source_length)
+            for point, source_length in witness_barriers
+            if _perp_distance_point_to_line(
+                point[0], point[1], ref_x0, ref_y0, ref_angle
+            ) <= perp_tol_px
+        ]
+        barrier_ts: List[float] = []
+        if cluster_barrier_candidates:
+            longest_source_length = max(
+                source_length for _, source_length in cluster_barrier_candidates
+            )
+            barrier_ts = sorted({
+                round(_project_point(point[0], point[1], ref_x0, ref_y0, ref_angle), 6)
+                for point, source_length in cluster_barrier_candidates
+                if source_length >= longest_source_length - 1e-6
+            })
+
         # chiếu 2 đầu mút mỗi line lên trục chung -> khoảng [t_min, t_max],
         # đồng thời giữ lại toạ độ pixel thật của điểm ứng với t_min/t_max
         # (cần cho tick-mark detection, vốn dò trên ảnh gốc chứ không phải
@@ -296,6 +326,20 @@ def merge_collinear_lines(
                 t_min, t_max, p_at_min, p_at_max = t2, t1, p2, p1
             segs.append((t_min, t_max, line, p_at_min, p_at_max))
         segs.sort(key=lambda s: s[0])
+
+        if barrier_ts:
+            clipped_segs = []
+            for t_min, t_max, line, _, _ in segs:
+                cuts = [t_min] + [
+                    barrier for barrier in barrier_ts
+                    if t_min + 1e-6 < barrier < t_max - 1e-6
+                ] + [t_max]
+                dx, dy = math.cos(ref_angle), math.sin(ref_angle)
+                for start, end in zip(cuts[:-1], cuts[1:]):
+                    p_start = (ref_x0 + dx * start, ref_y0 + dy * start)
+                    p_end = (ref_x0 + dx * end, ref_y0 + dy * end)
+                    clipped_segs.append((start, end, line, p_start, p_end))
+            segs = sorted(clipped_segs, key=lambda s: s[0])
 
         # tính trước danh sách text "sát trục" (trong hành lang perp_tol lateral)
         # cùng toạ độ chiếu tâm bbox của chúng lên trục này
@@ -332,10 +376,16 @@ def merge_collinear_lines(
         merged_groups: List[List[Tuple[float, float, RawLine, Tuple[float, float], Tuple[float, float]]]] = [[segs[0]]]
         for seg in segs[1:]:
             group = merged_groups[-1]
-            _, cur_max, _, _, cur_p_at_max = group[-1]
+            _, cur_max, _, _, cur_p_at_max = max(group, key=lambda item: item[1])
             seg_min, _, _, seg_p_at_min, _ = seg[0], seg[1], seg[2], seg[3], seg[4]
             gap = seg_min - cur_max
+            crosses_witness_barrier = any(
+                abs(cur_max - barrier) <= 1e-5 and abs(seg_min - barrier) <= 1e-5
+                for barrier in barrier_ts
+            )
             blocked = gap > gap_tol_px or (
+                crosses_witness_barrier
+                or
                 gap_blocked_by_tick_mark(cur_p_at_max, seg_p_at_min)
                 or gap_blocked_by_text(cur_max, seg_min)
             )

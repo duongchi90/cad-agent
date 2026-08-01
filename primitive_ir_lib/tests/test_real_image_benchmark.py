@@ -17,6 +17,8 @@ import pytest
 from primitive_ir_lib.geometry_extraction import extract_raw_geometry
 from primitive_ir_lib.line_merging import merge_collinear_lines
 from primitive_ir_lib.text_extraction import extract_text_tesseract
+from primitive_ir_lib.calibration import Calibration
+from primitive_ir_lib.cross_validation import cross_validate
 
 _IMAGE_ENV = "CAD_AGENT_REAL_IMAGE"
 _TESSERACT_ENV = "CAD_AGENT_TESSERACT_CMD"
@@ -43,34 +45,68 @@ def test_real_scan_2760_1525_boundary_survives_full_merge():
 
     image = cv2.imread(image_path)
     assert image is not None
-    assert image.shape[:2] == (900, 1600), image.shape
     _configure_tesseract()
 
-    # OCR is intentionally passed through even though this scan may misread
-    # 1525.  The witness boundary must still survive independently of OCR.
-    ocr_texts = extract_text_tesseract(
-        image, roi_boxes=[(620, 325, 860, 385)], min_confidence=0,
+    if image.shape[:2] == (900, 1600):
+        # OCR is intentionally passed through even though this scan may misread
+        # 1525.  The witness boundary must still survive independently of OCR.
+        ocr_texts = extract_text_tesseract(
+            image, roi_boxes=[(620, 325, 860, 385)], min_confidence=0, lang="eng",
+        )
+        geometry = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+        selected = [
+            line for line in geometry.lines
+            if abs(line.p2_px[1] - line.p1_px[1]) <= 3
+            and 340 <= (line.p1_px[1] + line.p2_px[1]) / 2 <= 370
+            and max(line.p1_px[0], line.p2_px[0]) >= 620
+            and min(line.p1_px[0], line.p2_px[0]) <= 860
+        ]
+        merged = merge_collinear_lines(
+            selected,
+            image_bgr=image,
+            blocking_texts=ocr_texts,
+            use_tick_mark_detection=False,
+        )
+        segments = sorted(
+            (round(min(line.p1_px[0], line.p2_px[0])),
+             round(max(line.p1_px[0], line.p2_px[0])))
+            for line in merged
+        )
+        assert segments == [(524, 777), (776, 917)], segments
+    elif image.shape[:2] == (1685, 2382):
+        # The local high-resolution page scan is the same TP-TL-A001/07/26
+        # drawing, with the dimension chain at a different pixel scale.
+        ocr_texts = extract_text_tesseract(
+            image, roi_boxes=[(650, 610, 1500, 690)], min_confidence=0, lang="eng",
+        )
+        geometry = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+        merged = merge_collinear_lines(
+            geometry.lines,
+            image_bgr=image,
+            blocking_texts=ocr_texts,
+            use_tick_mark_detection=True,
+        )
+        segments = sorted(
+            (round(min(line.p1_px[0], line.p2_px[0])),
+             round(max(line.p1_px[0], line.p2_px[0])))
+            for line in merged
+            if abs(line.p2_px[1] - line.p1_px[1]) <= 4
+            and 640 <= (line.p1_px[1] + line.p2_px[1]) / 2 <= 680
+            and line.length_px() > 10
+            and max(line.p1_px[0], line.p2_px[0]) >= 600
+            and min(line.p1_px[0], line.p2_px[0]) <= 1500
+        )
+        assert segments == [(669, 1147), (1147, 1415)], segments
+        assert any("2760" in text.content and "1525" in text.content for text in ocr_texts)
+    else:
+        raise AssertionError(f"unsupported approved private image shape: {image.shape}")
+
+    cross_validate(
+        ocr_texts,
+        merged,
+        Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 0), method="manual_override"),
+        merge_collinear=False,
     )
-    geometry = extract_raw_geometry(image, preset="real_scan_tuned_v1")
-    selected = [
-        line for line in geometry.lines
-        if abs(line.p2_px[1] - line.p1_px[1]) <= 3
-        and 340 <= (line.p1_px[1] + line.p2_px[1]) / 2 <= 370
-        and max(line.p1_px[0], line.p2_px[0]) >= 620
-        and min(line.p1_px[0], line.p2_px[0]) <= 860
-    ]
-    merged = merge_collinear_lines(
-        selected,
-        image_bgr=image,
-        blocking_texts=ocr_texts,
-        use_tick_mark_detection=False,
-    )
-    segments = sorted(
-        (round(min(line.p1_px[0], line.p2_px[0])),
-         round(max(line.p1_px[0], line.p2_px[0])))
-        for line in merged
-    )
-    assert segments == [(524, 777), (776, 917)], segments
 
 
 if __name__ == "__main__":

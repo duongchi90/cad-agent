@@ -52,10 +52,27 @@ class FileIPCEndToEndTests(unittest.TestCase):
         finally:
             client.drawing_close(save_changes=False)
 
+    def _rebind_component_handle(self, client, build, part_id):
+        """Resolve the current AutoCAD handle by the stable PART_ID attribute."""
+        candidates = []
+        for entity in client.entity_list():
+            if str(entity.get("type", "")).upper() != "INSERT":
+                continue
+            attributes = client.block_get_attributes(entity["handle"])
+            if attributes.get("PART_ID") == part_id:
+                candidates.append(entity["handle"])
+        self.assertEqual(
+            len(candidates),
+            1,
+            f"expected one live INSERT for PART_ID={part_id!r}, got {candidates!r}",
+        )
+        build.component_handle_by_part_id[part_id] = candidates[0]
+        return candidates[0]
+
     def _repair_component_attribute(self, build, part_id, attribute):
         client = self._client()
         with self._opened_disposable_drawing(client, build.output_path):
-            handle = build.component_handle_by_part_id[part_id]
+            handle = self._rebind_component_handle(client, build, part_id)
             expected = client.block_get_attributes(handle)[attribute]
             client.block_update_attribute(handle, attribute, "wrong")
             exported = build.output_path.replace(".dxf", "_roundtrip.dxf")
@@ -65,7 +82,8 @@ class FileIPCEndToEndTests(unittest.TestCase):
         self.assertFalse(before.passed)
         self.assertEqual(1, repair_insert_components(build, before.component_mismatches).repaired_count)
         with self._opened_disposable_drawing(client, build.output_path):
-            self.assertEqual(expected, client.block_get_attributes(build.component_handle_by_part_id[part_id])[attribute])
+            handle = self._rebind_component_handle(client, build, part_id)
+            self.assertEqual(expected, client.block_get_attributes(handle)[attribute])
             self.assertTrue(review_dxf(build).passed)
 
     def test_remaining_components_round_trip_real_autocad(self):
@@ -107,9 +125,9 @@ class FileIPCEndToEndTests(unittest.TestCase):
         )
         build = build_dxf(source, path, semantic_doc=semantic, build_components=True)
         part_id = semantic.parts[0].id
-        handle = build.component_handle_by_part_id[part_id]
         client = self._client()
         with self._opened_disposable_drawing(client, build.output_path):
+            handle = self._rebind_component_handle(client, build, part_id)
             self.assertEqual(os.path.basename(path), client.drawing_get_variables(["DWGNAME"])["DWGNAME"])
             self.assertEqual("INSERT", client.entity_get(handle)["type"])
             self.assertEqual("COMP_FRAME_BEAM", build.written_component_by_part_id[part_id]["block_name"])
@@ -128,8 +146,8 @@ class FileIPCEndToEndTests(unittest.TestCase):
         repaired = repair_insert_components(build, review_before.component_mismatches)
         self.assertEqual(1, repaired.repaired_count)
 
-        new_handle = build.component_handle_by_part_id[part_id]
         with self._opened_disposable_drawing(client, build.output_path):
+            new_handle = self._rebind_component_handle(client, build, part_id)
             self.assertEqual("INSERT", client.entity_get(new_handle)["type"])
             self.assertEqual(part_id, client.block_get_attributes(new_handle)["PART_ID"])
             self.assertTrue(review_dxf(build).passed)

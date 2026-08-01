@@ -121,6 +121,37 @@ def _dist3(a, b) -> float:
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
 
+def resolve_component_insert(db, modelspace, handle, part_id, expected_block_name=None):
+    """Resolve an INSERT by handle, then by one exact stable PART_ID match."""
+    entity = db.get(handle) if handle else None
+    if entity is not None and entity.dxftype() == "INSERT":
+        attributes = {
+            str(attribute.dxf.tag): str(attribute.dxf.text)
+            for attribute in entity.attribs
+        }
+        if attributes.get("PART_ID") == part_id:
+            return entity, "handle"
+
+    candidates = []
+    for candidate in modelspace:
+        if candidate.dxftype() != "INSERT":
+            continue
+        if expected_block_name is not None and candidate.dxf.name != expected_block_name:
+            continue
+        attributes = {
+            str(attribute.dxf.tag): str(attribute.dxf.text)
+            for attribute in candidate.attribs
+        }
+        if attributes.get("PART_ID") == part_id:
+            candidates.append(candidate)
+
+    if len(candidates) == 1:
+        return candidates[0], "part_id"
+    if len(candidates) > 1:
+        return None, "ambiguous"
+    return None, "missing"
+
+
 def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERANCE_MM) -> ReviewResult:
     """Đọc lại `build_result.output_path` và đối chiếu từng primitive đã
     build (theo handle) với `written_geometry_by_primitive_id`. Raise
@@ -265,13 +296,24 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
             ))
             continue
 
-        entity = db.get(handle)
+        entity, identity_source = resolve_component_insert(
+            db,
+            doc.modelspace(),
+            handle,
+            part_id,
+            expected_block_name=written["block_name"],
+        )
         if entity is None:
             component_mismatches.append(ComponentMismatch(
-                part_id=part_id, field="handle", expected=handle, actual=None,
+                part_id=part_id,
+                field=("identity_ambiguous" if identity_source == "ambiguous" else "handle"),
+                expected=handle, actual=None,
                 message=f"{part_id}: handle INSERT '{handle}' không tìm thấy sau khi đọc lại DXF",
             ))
             continue
+
+        if identity_source == "part_id":
+            build_result.component_handle_by_part_id[part_id] = entity.dxf.handle
 
         component_checked += 1
         dxftype = entity.dxftype()

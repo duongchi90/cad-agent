@@ -32,6 +32,8 @@ from cad_agent.fidelity import (
     run_fidelity_compose,
     promote_fidelity_page,
     review_promoted_fidelity_page,
+    write_fidelity_review_index,
+    write_fidelity_review_queue,
 )
 from cad_agent.cli import (
     CommandError,
@@ -929,6 +931,43 @@ def test_fidelity_cli_creates_private_baseline() -> None:
         assert (output / "fidelity_review" / "index.html").is_file()
         assert main(["fidelity-review-queue", "--input", str(source), "--manifest", str(output / "fidelity-run-manifest.json")]) == 0
         assert (output / "fidelity_review" / "queue.json").is_file()
+
+
+def test_fidelity_review_queue_exposes_hash_bound_advanced_states(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    records = {
+        "text": ("fidelity_text_observations", {"state": "needs_human_approval"}),
+        "table_text": ("fidelity_table_text_observations", {"state": "needs_human_approval"}),
+        "dimension": ("fidelity_dimension_observations", {"state": "needs_human_approval"}),
+        "hatch": ("fidelity_hatch_observations", {"state": "needs_review"}),
+        "linetype": ("linetype_reconstruction", {"state": "needs_review", "profile": "fidelity-layout-linetype"}),
+    }
+    for kind, (directory, payload) in records.items():
+        path = output / directory / "page_01" / ("report.json" if kind == "linetype" else "observation.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest_path = output / "fidelity-run-manifest.json"
+    queue_path = write_fidelity_review_queue(source, output, manifest, workspace_root=Path.cwd())
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert queue["state"] == "needs_review"
+    advanced = {item["kind"]: item for item in queue["items"][0]["advanced_reviews"]}
+    assert set(advanced) == set(records)
+    for item in advanced.values():
+        assert item["artifact"]["sha256"]
+        assert item["state"] in {"needs_human_approval", "needs_review"}
+        assert item["next_action"]
+
+    index = write_fidelity_review_index(source, output, manifest, workspace_root=Path.cwd())
+    html = index.read_text(encoding="utf-8")
+    assert "Advanced fidelity" in html
+    assert all(kind in html for kind in records)
+    assert manifest_path.is_file()
 
 
 def test_region_quality_selects_filtered_geometry_only_when_f1_improves() -> None:

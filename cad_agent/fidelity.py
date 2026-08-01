@@ -1804,6 +1804,52 @@ def review_promoted_fidelity_page(
     return report_path, passed
 
 
+def _advanced_fidelity_reviews(output_root: Path, page_number: int) -> list[dict[str, Any]]:
+    """Collect known advanced fidelity sidecars without promoting them."""
+    directories = {
+        "text": ("fidelity_text_observations", "fidelity_text_approvals", "text_reconstruction"),
+        "table_text": ("fidelity_table_text_observations", "fidelity_table_text_approvals", "table_text_reconstruction"),
+        "dimension": ("fidelity_dimension_observations", "dimension_reconstruction"),
+        "hatch": ("fidelity_hatch_observations", "fidelity_hatch_approvals", "hatch_reconstruction"),
+        "linetype": ("linetype_reconstruction",),
+    }
+    records: list[dict[str, Any]] = []
+    page_name = f"page_{page_number:02d}"
+    for kind, prefixes in directories.items():
+        paths: set[Path] = set()
+        for prefix in prefixes:
+            roots = [output_root / prefix]
+            roots.extend(sorted(output_root.glob(f"{prefix}-r*")))
+            for root in roots:
+                paths.update(root.glob(f"{page_name}.json"))
+                paths.update(root.glob(f"{page_name}/*.json"))
+        for path in sorted(path for path in paths if path.is_file()):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                state = payload.get("state", "unknown") if isinstance(payload, dict) else "invalid_artifact"
+            except (OSError, json.JSONDecodeError):
+                state = "invalid_artifact"
+            next_action = (
+                "run the bounded observation step"
+                if state == "not_run"
+                else "visually review the private candidate; no production action"
+            )
+            records.append({
+                "kind": kind,
+                "state": state,
+                "artifact": _artifact(path, output_root),
+                "next_action": next_action,
+            })
+        if not any(record["kind"] == kind for record in records):
+            records.append({
+                "kind": kind,
+                "state": "not_run",
+                "artifact": None,
+                "next_action": "run the bounded observation step",
+            })
+    return records
+
+
 def write_fidelity_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
     """Write a private static index linking the existing per-page review artifacts."""
     if _is_within(output_root, workspace_root):
@@ -1822,10 +1868,14 @@ def write_fidelity_review_index(source: Path, output_root: Path, manifest: dict[
         table_state = "not run"
         if observation.is_file():
             table_state = json.loads(observation.read_text(encoding="utf-8")).get("state", "unknown")
+        advanced = _advanced_fidelity_reviews(output_root, page["page"])
+        advanced_html = "<ul>" + "".join(
+            f"<li>{item['kind']}: {item['state']}</li>" for item in advanced
+        ) + "</ul>"
         rel_rendered = Path(os.path.relpath(rendered, index.parent)).as_posix()
         rel_overlay = Path(os.path.relpath(overlay, index.parent)).as_posix() if overlay else None
         overlay_html = f'<img src="{rel_overlay}" alt="overlay page {page["page"]}">' if rel_overlay else "<p>overlay not generated</p>"
-        cards.append(f'<section><h2>Page {page["page"]} <small>table: {table_state}</small></h2><div><figure><figcaption>PDF render</figcaption><img src="{rel_rendered}" alt="PDF page {page["page"]}"></figure><figure><figcaption>DXF overlay</figcaption>{overlay_html}</figure></div></section>')
+        cards.append(f'<section><h2>Page {page["page"]} <small>table: {table_state}</small></h2><h3>Advanced fidelity</h3>{advanced_html}<div><figure><figcaption>PDF render</figcaption><img src="{rel_rendered}" alt="PDF page {page["page"]}"></figure><figure><figcaption>DXF overlay</figcaption>{overlay_html}</figure></div></section>')
     index.parent.mkdir(parents=True, exist_ok=True)
     index.write_text("<!doctype html><meta charset='utf-8'><title>Private Fidelity Review</title><style>body{font:14px sans-serif;margin:20px;background:#f5f5f5}section{background:#fff;padding:12px;margin:12px 0}section>div{display:flex;gap:12px}figure{width:48%;margin:0}img{max-width:100%;border:1px solid #bbb}small{font-weight:normal;color:#666}</style><h1>Private fidelity review - needs review</h1>" + "\n".join(cards), encoding="utf-8")
     return index
@@ -1846,8 +1896,9 @@ def write_fidelity_review_queue(source: Path, output_root: Path, manifest: dict[
         table_state = "not_run"
         if observation.is_file():
             table_state = json.loads(observation.read_text(encoding="utf-8")).get("state", "unknown")
+        advanced_reviews = _advanced_fidelity_reviews(output_root, number)
         approvals = sorted((output_root / "region_approvals").glob(f"page_{number:02d}*.json")) if (output_root / "region_approvals").is_dir() else []
-        items.append({"page": number, "state": "needs_review", "priority": 1 if number == 5 else 2, "table_observation": table_state, "approved_region_records": [path.relative_to(output_root).as_posix() for path in approvals], "next_action": "reconstruct approved region" if approvals else "select and approve a reconstruction region"})
+        items.append({"page": number, "state": "needs_review", "priority": 1 if number == 5 else 2, "table_observation": table_state, "advanced_reviews": advanced_reviews, "approved_region_records": [path.relative_to(output_root).as_posix() for path in approvals], "next_action": "reconstruct approved region" if approvals else "select and approve a reconstruction region"})
     queue_path.parent.mkdir(parents=True, exist_ok=True)
     queue_path.write_text(json.dumps({"schema_version": "fidelity-review-queue-1.0", "private_artifact": True, "state": "needs_review", "items": items}, indent=2) + "\n", encoding="utf-8")
     return queue_path

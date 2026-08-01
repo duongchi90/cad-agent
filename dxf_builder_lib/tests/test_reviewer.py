@@ -206,12 +206,35 @@ def test_review_flags_insert_handle_not_found_after_tamper():
         build_result.component_handle_by_part_id[part_id] = "FFFFFF"
 
         review_result = review_dxf(build_result)
+        assert review_result.passed, review_result.format_report()
+        assert review_result.component_mismatches == []
+        assert build_result.component_handle_by_part_id[part_id] != "FFFFFF"
+    print("OK   test_review_rebinds_insert_by_part_id_after_stale_handle")
+
+
+def test_review_rejects_ambiguous_part_id_after_stale_handle():
+    if not _HAS_EZDXF:
+        print("SKIP test_review_rejects_ambiguous_part_id_after_stale_handle — chưa cài ezdxf")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        document = ezdxf.readfile(out_path)
+        written = build_result.written_component_by_part_id[part_id]
+        duplicate = document.modelspace().add_blockref(
+            written["block_name"], written["insert"],
+            dxfattribs={"layer": written["layer"]},
+        )
+        duplicate.add_auto_attribs(written["attribs"])
+        document.saveas(out_path)
+        build_result.component_handle_by_part_id[part_id] = "FFFFFF"
+
+        review_result = review_dxf(build_result)
         assert not review_result.passed
         assert any(
-            cm.part_id == part_id and cm.field == "handle" and "không tìm thấy" in cm.message
+            cm.part_id == part_id and cm.field == "identity_ambiguous"
             for cm in review_result.component_mismatches
         )
-    print("OK   test_review_flags_insert_handle_not_found_after_tamper")
+    print("OK   test_review_rejects_ambiguous_part_id_after_stale_handle")
 
 
 def test_review_flags_insert_missing_written_component():

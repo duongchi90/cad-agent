@@ -51,6 +51,32 @@ def test_merges_broken_witness_line_across_centerline_gap():
     assert merged[0].length_px() == 500.0
 
 
+def test_internal_witness_barrier_survives_overlapping_hough_segments():
+    """A long fused detection must not bridge its own witness split via overlaps."""
+    image = np.full((220, 420, 3), 255, dtype=np.uint8)
+    cv2.line(image, (20, 100), (380, 100), (0, 0, 0), 2)
+    cv2.line(image, (200, 78), (200, 122), (0, 0, 0), 1)
+
+    merged = merge_collinear_lines(
+        [
+            _line((20, 100), (380, 100), "long"),
+            _line((20, 100), (225, 100), "left-overlap"),
+            _line((195, 100), (380, 100), "right-overlap"),
+        ],
+        blocking_texts=[],
+        image_bgr=image,
+        use_tick_mark_detection=False,
+    )
+
+    segments = sorted(
+        (round(min(line.p1_px[0], line.p2_px[0])), round(max(line.p1_px[0], line.p2_px[0])))
+        for line in merged
+    )
+    assert len(segments) == 2, segments
+    assert segments[0][1] == segments[1][0]
+    assert abs(segments[0][1] - 200) <= 3
+
+
 def test_does_not_merge_across_dimension_chain_boundary():
     # 2 witness-line liền kề của 2760mm và 1525mm, gap ranh giới thật ~22px,
     # có text "1525" nằm ngay trong khoảng trống đó (đúng vị trí witness-line của chính nó bắt đầu)

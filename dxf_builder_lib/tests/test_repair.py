@@ -355,6 +355,34 @@ def test_repair_insert_fixes_missing_attrib():
     print("OK   test_repair_insert_fixes_missing_attrib")
 
 
+def test_repair_insert_replaces_part_id_match_when_handle_is_stale():
+    """A stale Mechanical handle must not make repair append a duplicate INSERT."""
+    if not _HAS_EZDXF:
+        print("SKIP test_repair_insert_replaces_part_id_match_when_handle_is_stale — chưa cài ezdxf")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        build_result.component_handle_by_part_id[part_id] = "FFFFFF"
+        mismatch = ComponentMismatch(
+            part_id, "attrib:LENGTH_MM", "500", "wrong", "forced stale-handle repair",
+        )
+
+        repair_result = repair_insert_components(build_result, [mismatch])
+        assert repair_result.repaired_count == 1
+        assert repair_result.skipped_count == 0
+
+        document = ezdxf.readfile(out_path)
+        inserts = [entity for entity in document.modelspace() if entity.dxftype() == "INSERT"]
+        matching = [
+            entity for entity in inserts
+            if {attribute.dxf.tag: attribute.dxf.text for attribute in entity.attribs}.get("PART_ID") == part_id
+        ]
+        assert len(matching) == 1
+        assert build_result.component_handle_by_part_id[part_id] == matching[0].dxf.handle
+        assert review_dxf(build_result).passed
+    print("OK   test_repair_insert_replaces_part_id_match_when_handle_is_stale")
+
+
 def test_repair_insert_multiple_parts_independently():
     """2 part (2 dầm khác nhau) cùng bị lỗi -> mỗi part phải được repair độc
     lập, không cái nào ảnh hưởng cái kia — tương tự
@@ -422,6 +450,7 @@ _TESTS = [
     test_repair_insert_fixes_block_name_mismatch,
     test_repair_insert_fixes_scale_and_rotation_mismatch,
     test_repair_insert_fixes_missing_attrib,
+    test_repair_insert_replaces_part_id_match_when_handle_is_stale,
     test_repair_insert_multiple_parts_independently,
 ]
 
