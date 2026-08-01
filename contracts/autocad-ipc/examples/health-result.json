@@ -1,0 +1,13 @@
+{
+  "request_id": "health-20260801-001",
+  "success": true,
+  "operation": "health",
+  "drawing_full_path": "C:\\temp\\sample.dwg",
+  "changed": false,
+  "entity_handles": [],
+  "warnings": [],
+  "errors": [],
+  "started_at": "2026-08-01T00:00:00Z",
+  "completed_at": "2026-08-01T00:00:01Z",
+  "payload": {}
+}
