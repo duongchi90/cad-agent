@@ -111,6 +111,32 @@ read-only Mechanical BOM extension is recorded separately below.
 - Remaining live gate: a future operator-controlled disposable-DXF AutoCAD
   session may promote the live marker from `NOT RUN` to `PASS` or `SKIP`.
 
+## AutoCAD .NET plugin — live BOM and legacy close continuation (2026-08-02)
+
+- State: **Verified for the Windows disposable-DXF live scope**. This
+  continuation promotes the Mechanical BOM live gate and removes the legacy
+  no-save close race without changing the external dispatcher or .NET plugin.
+- Managed BOM live gate: **PASS** on AutoCAD Mechanical 2027 using a fresh
+  session and a DXF created below `C:\temp`. The opt-in test passed health,
+  read-only review, `mechanical_bom` with two direct components (`COMP_EMPTY`
+  and `COMP_FRAME`), unchanged `DBMOD`, unchanged source hash, request/result
+  cleanup, and close-without-save (`1 passed, 5 deselected`).
+- Legacy close live smoke: **PASS** on a separate disposable DXF. The client
+  opened the drawing, read an entity, sent the queued no-save close command,
+  and the SHA-256 remained unchanged. No `Drawing is busy` error occurred.
+- Legacy aggregate context: the broader `test_file_ipc_e2e.py` run had
+  `4 passed, 7 failed`; the remaining failures were existing round-trip handle
+  assumptions after save/reopen (`Entity not found`), outside this close fix.
+- Regression/unit evidence: the no-save path now emits exactly
+  `(command-s "_.CLOSE" "_N")`; the save-enabled branch remains on its COM
+  save path. Focused Python tests passed `49` tests plus `18` subtests, and
+  Ruff passed.
+- Authoritative verifier: **PASS** on the integrated candidate with .NET
+  `68/68`, dotnet IPC JUnit `36/0/0/0`, offline JUnit `446/0/0/0`, lock and
+  environment contracts passed. Autodesk reference-conflict warnings remain
+  informational. No production/customer drawing was saved or modified; all
+  live fixtures were disposable files below `C:\temp`.
+
 ## Pre-foundation baseline
 
 | State | Date | Commit | Environment | Command | Result |
