@@ -23,6 +23,32 @@ collects unavailable-state probes for `real_data` and `autocad_mechanical` as ex
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
 Mechanical gate that was not separately executed remains `NOT RUN`.
 
+## AutoCAD .NET plugin — Option A
+
+- Candidate integration head: 176b565 on integration/autocad-dotnet-option-a.
+- State: **Partially verified**.
+- Scope completed: Windows-only AutoCAD Mechanical 2027 managed plugin scaffold,
+  versioned JSON/File IPC contracts, Mechanical no-op boundary, deterministic
+  read-only review core, isolated Python dotnet_ipc backend, and the four
+  command/dispatcher boundaries.
+- C# evidence: restore/build/test passed on Release x64 with 49 passed, 0
+  failed, 0 skipped; Autodesk reference-conflict warnings remain, and no
+  Autodesk DLL was copied to plugin output.
+- Python focused evidence: mcp_integration_lib/tests/test_dotnet_ipc.py passed
+  13 tests plus 12 subtests; the exact two-file Ruff gate passed.
+- Authoritative verifier: C# gates and lock-contract checks passed, but the full
+  Python gate is **BLOCKER** because the integration worktree environment lacks
+  the locked packages and has pip 24.0 where the lock requires 26.1.2.
+  Therefore the verifier exit is 1, not a pass.
+- AutoCAD .NET live gate: **NOT RUN**. AutoCAD Mechanical 2027 had an active
+  non-disposable Drawing1.dwg; no NETLOAD or command was sent to that session.
+- Safety boundary: no production save, repair, or mutation was added or run;
+  the existing dispatcher was not modified.
+- Evidence record: docs/reviews/2026-08-01-autocad-dotnet-live-review.md.
+- Remaining gate before merge: reproduce scripts\verify.ps1 in a lock-matching
+  Python 3.11 environment, then reassess the candidate. docs/STATUS.md is
+  updated here only after the final T08 review, by the PO.
+
 ## Pre-foundation baseline
 
 | State | Date | Commit | Environment | Command | Result |
