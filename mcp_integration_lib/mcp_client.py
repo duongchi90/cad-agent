@@ -140,12 +140,15 @@ class FileIPCLiveMCPClient:
                  timeout_s: float = 10.0, poll_interval_s: float = 0.1,
                  raw_lisp_trigger: Optional[Callable[[str], None]] = None,
                  bootstrap_lisp_path: Optional[str] = None,
-                 document_settle_s: float = 2.0) -> None:
+                 document_settle_s: float = 2.0,
+                 command_trigger: Optional[Callable[[str], None]] = None) -> None:
         self._dir, self._trigger = Path(ipc_dir), trigger
         self._timeout, self._poll = timeout_s, poll_interval_s
         self._raw_lisp_trigger = raw_lisp_trigger
         self._bootstrap_lisp_path = bootstrap_lisp_path
         self._document_settle_s = document_settle_s
+        self._command_trigger = command_trigger
+        self._active_drawing_path: Optional[str] = None
 
     def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         request_id = uuid.uuid4().hex[:12]
@@ -185,25 +188,39 @@ class FileIPCLiveMCPClient:
                 # AutoLISP namespace. Invoke AutoCAD's COM API, then load the
                 # dispatcher in the newly active document. A ping alone is not
                 # enough: it can be answered by the previously active drawing.
-                self._raw_lisp_trigger(
-                    '(progn (vl-load-com) '
-                    '(setq mcp-docs (vla-get-Documents (vlax-get-acad-object)) '
-                    'mcp-target-path (findfile "' + normalized_path + '") '
-                    'mcp-open-doc nil) '
-                    '(if (not mcp-target-path) '
-                    '(setq mcp-target-path "' + normalized_path + '")) '
-                    '(vlax-for mcp-candidate-doc mcp-docs '
-                    '(if (= (strcase (vla-get-FullName mcp-candidate-doc)) '
-                    '(strcase mcp-target-path)) '
-                    '(setq mcp-open-doc mcp-candidate-doc))) '
-                    '(if (not mcp-open-doc) '
-                    '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"))) '
-                    '(vla-activate mcp-open-doc))'
-                )
-                time.sleep(self._document_settle_s)
-                self._raw_lisp_trigger('(load "' + normalized_loader + '")')
-                time.sleep(self._document_settle_s)
-                self._wait_for_dispatcher()
+                try:
+                    self._raw_lisp_trigger(
+                        '(progn (vl-load-com) '
+                        '(setq mcp-docs (vla-get-Documents (vlax-get-acad-object)) '
+                        'mcp-target-path (findfile "' + normalized_path + '") '
+                        'mcp-open-doc nil) '
+                        '(if (not mcp-target-path) '
+                        '(setq mcp-target-path "' + normalized_path + '")) '
+                        '(vlax-for mcp-candidate-doc mcp-docs '
+                        '(if (= (strcase (vla-get-FullName mcp-candidate-doc)) '
+                        '(strcase mcp-target-path)) '
+                        '(setq mcp-open-doc mcp-candidate-doc))) '
+                        '(if (not mcp-open-doc) '
+                        '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"))) '
+                        '(vla-activate mcp-open-doc))'
+                    )
+                    time.sleep(self._document_settle_s)
+                    self._raw_lisp_trigger('(load "' + normalized_loader + '")')
+                    time.sleep(self._document_settle_s)
+                    self._wait_for_dispatcher()
+                except (MCPTimeoutError, MCPToolError):
+                    # After closing the last drawing AutoCAD may be on the
+                    # Start tab, where the document-scoped LISP namespace is
+                    # unavailable. A command-level OPEN creates the document
+                    # at the UI boundary; then the normal LISP bootstrap can
+                    # run in that newly active document.
+                    if self._command_trigger is None or attempt != 0:
+                        raise
+                    self._command_trigger('_.OPEN\r"' + normalized_path + '"')
+                    time.sleep(self._document_settle_s)
+                    self._raw_lisp_trigger('(load "' + normalized_loader + '")')
+                    time.sleep(self._document_settle_s)
+                    self._wait_for_dispatcher()
                 variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
                 active_path = _normalized_autocad_path(
                     ntpath.join(
@@ -212,6 +229,7 @@ class FileIPCLiveMCPClient:
                     )
                 )
                 if active_path == expected_path:
+                    self._active_drawing_path = expected_path
                     return {"path": path}
                 if attempt == 0:
                     time.sleep(self._poll)
@@ -219,7 +237,9 @@ class FileIPCLiveMCPClient:
                 "AutoCAD did not activate requested drawing "
                 f"{expected_path!r}; active drawing is {active_path!r}"
             )
-        return self._dispatch("drawing-open", {"path": path})
+        result = self._dispatch("drawing-open", {"path": path})
+        self._active_drawing_path = _normalized_autocad_path(path)
+        return result
 
     def _wait_for_dispatcher(self) -> None:
         deadline = time.time() + self._timeout
@@ -245,11 +265,36 @@ class FileIPCLiveMCPClient:
                     ":vlax-true))"
                 )
             else:
-                # Queue the command at AutoCAD's command boundary. Calling
-                # vla-close immediately after the File IPC result is written
-                # can race the still-active dispatcher and report Drawing is busy.
-                self._raw_lisp_trigger('(command-s "_.CLOSE" "_N")')
+                # Queue a real AutoCAD command at the command boundary. Calling
+                # command-s or vla-close from inside the dispatcher expression
+                # runs while the drawing is busy and leaves the document open.
+                if self._command_trigger is not None:
+                    self._command_trigger("_.CLOSE\r_N")
+                else:
+                    # Backward-compatible fallback for callers that only provide
+                    # a LISP trigger; live Windows callers should provide the
+                    # command-level trigger above.
+                    self._raw_lisp_trigger('(command-s "_.CLOSE" "_N")')
             time.sleep(self._document_settle_s)
+            expected_path = self._active_drawing_path
+            if self._command_trigger is not None and expected_path is not None:
+                # CLOSE is queued at AutoCAD's command boundary. Wait for the
+                # document itself to disappear before a caller opens the next
+                # DXF; a fixed sleep alone can leave a stale in-memory drawing
+                # active after SAVEAS.
+                deadline = time.time() + max(5.0, self._document_settle_s * 3.0)
+                while time.time() < deadline:
+                    try:
+                        open_paths = {
+                            _normalized_autocad_path(open_path)
+                            for open_path in self.drawing_list_open_paths()
+                        }
+                        if expected_path not in open_paths:
+                            break
+                    except (MCPTimeoutError, MCPToolError):
+                        pass
+                    time.sleep(self._poll)
+            self._active_drawing_path = None
             return
         self._dispatch("drawing-close", {"save_changes": save_changes})
 
@@ -283,6 +328,7 @@ class FileIPCLiveMCPClient:
 
     def drawing_save_as_dxf(self, path: str) -> None:
         self._dispatch("drawing-save-as-dxf", {"path": path.replace("\\", "/")})
+        self._active_drawing_path = _normalized_autocad_path(path)
 
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})
@@ -389,9 +435,9 @@ class FileIPCLiveMCPClient:
         return self._dispatch("create-text", {k: v for k, v in {"x": x, "y": y, "text": text, "height": height, "rotation": rotation, "layer": layer}.items() if v is not None})
 
 
-def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
-    """Return a trigger that types a complete AutoLISP expression in AutoCAD."""
-    def trigger(expression: str) -> None:
+def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
+    """Return a trigger that types text at AutoCAD's command boundary."""
+    def trigger(text: str) -> None:
         mdi_clients: List[int] = []
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def callback(child: int, _lparam: int) -> bool:
@@ -403,10 +449,26 @@ def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
             return True
         ctypes.windll.user32.EnumChildWindows(hwnd, callback_type(callback), 0)
         target = mdi_clients[0] if mdi_clients else hwnd
+        ctypes.windll.user32.ShowWindow(hwnd, 9)
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
         post = ctypes.windll.user32.PostMessageW
-        for ch in "\x1b\x1b" + expression + "\r":
+        for ch in "\x1b\x1b" + text + "\r":
             post(target, 0x0102, ord(ch), 0)
     return trigger
+
+
+def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
+    """Return a trigger that types a complete AutoLISP expression in AutoCAD."""
+    return _make_windows_text_trigger(hwnd)
+
+
+def make_windows_command_trigger(hwnd: int) -> Callable[[str], None]:
+    """Return a trigger that types an AutoCAD command sequence.
+
+    Use ``\r`` between command inputs, for example ``"_.CLOSE\r_N"``.
+    The final Enter is appended by the trigger.
+    """
+    return _make_windows_text_trigger(hwnd)
 
 
 def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:

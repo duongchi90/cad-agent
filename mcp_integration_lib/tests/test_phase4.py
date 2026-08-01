@@ -217,6 +217,50 @@ class FileIPCClientTests(unittest.TestCase):
 
         self.assertEqual(['(command-s "_.CLOSE" "_N")'], raw_commands)
 
+    def test_command_trigger_closes_without_save_at_command_boundary(self):
+        raw_commands = []
+        command_sequences = []
+        client = FileIPCLiveMCPClient(
+            raw_lisp_trigger=raw_commands.append,
+            command_trigger=command_sequences.append,
+            document_settle_s=0,
+        )
+
+        client.drawing_close(save_changes=False)
+
+        self.assertEqual(["_.CLOSE\r_N"], command_sequences)
+        self.assertEqual([], raw_commands)
+
+    def test_drawing_open_falls_back_to_command_when_start_tab_has_no_document(self):
+        raw_commands = []
+        command_sequences = []
+        client = FileIPCLiveMCPClient(
+            trigger=lambda: None,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+        ping_calls = 0
+
+        def dispatch(command, params):
+            nonlocal ping_calls
+            if command == "ping":
+                ping_calls += 1
+                if not command_sequences:
+                    raise MCPTimeoutError("Start tab has no dispatcher")
+                return {}
+            if command == "drawing-get-variables":
+                return {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+            return {}
+
+        client._dispatch = dispatch
+
+        assert client.drawing_open("C:/work/a.dxf") == {"path": "C:/work/a.dxf"}
+        self.assertEqual(['_.OPEN\r"C:/work/a.dxf"'], command_sequences)
+
     def test_raw_lisp_close_with_save_keeps_com_save_path(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(

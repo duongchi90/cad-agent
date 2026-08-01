@@ -22,6 +22,7 @@ from primitive_ir_lib.models import (
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
+    make_windows_command_trigger,
     make_windows_dispatch_trigger,
     make_windows_lisp_trigger,
 )
@@ -41,6 +42,7 @@ class FileIPCEndToEndTests(unittest.TestCase):
         return FileIPCLiveMCPClient(
             trigger=make_windows_dispatch_trigger(hwnd),
             raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
+            command_trigger=make_windows_command_trigger(hwnd),
             bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
         )
 

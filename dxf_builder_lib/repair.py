@@ -277,6 +277,22 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
             part_id,
             expected_block_name=block_name,
         )
+        if old_entity is None and identity_source == "missing":
+            # AutoCAD may rewrite the handle and a live repair may have a
+            # deliberately corrupted PART_ID. If exactly one INSERT still
+            # uses the expected block definition, it is the only safe repair
+            # target; duplicates remain fail-closed below.
+            block_candidates = [
+                candidate
+                for candidate in msp
+                if candidate.dxftype() == "INSERT"
+                and candidate.dxf.name == block_name
+            ]
+            if len(block_candidates) == 1:
+                old_entity = block_candidates[0]
+                identity_source = "unique_block"
+            elif len(block_candidates) > 1:
+                identity_source = "ambiguous"
         if identity_source == "ambiguous":
             result.skipped_part_ids.append(part_id)
             result.skipped_count += 1

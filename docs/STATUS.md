@@ -235,6 +235,35 @@ not requested or run here.
   production repair loop remains a separately human-approved operation with
   backup and second review.
 
+## Fidelity P1 live round-trip continuation (2026-08-02)
+
+- The live prerequisite was completed in a fresh AutoCAD Mechanical 2027
+  session by loading the declared `mcp_dispatch.lsp` through a startup script.
+  All live fixtures were disposable DXFs under `C:\\temp`; no production
+  drawing or `Drawing1.dwg` was opened, saved, or modified.
+- Live smoke: **PASS**, `1 passed`.
+- Live legacy round-trip: **PASS**, `5 passed, 7 subtests passed` in
+  `154.69s`. Coverage includes beam `PART_ID` tamper/save/reopen/repair,
+  primitive repair, native dimension inspection, six component repairs, and
+  same-name drawings in different directories.
+- Determinism fixes: command-boundary `CLOSE` with an open-document
+  postcondition, command-level `OPEN` fallback when AutoCAD is on the Start
+  tab, and a unique expected-block fallback that replaces a tampered component
+  instead of creating a duplicate. Ambiguous candidates still fail closed.
+- The final live run was performed after the dispatcher was loaded and a
+  transient AutoCAD Options modal was dismissed. The result is the acceptance
+  evidence for this candidate; the earlier bootstrap-only attempt remains a
+  historical failure record above.
+- Authoritative verifier on the final implementation: **PASS**, .NET `68/68`,
+  dotnet IPC JUnit `36/0/0/0`, offline JUnit `453/0/0/0`, unavailable probes
+  `2` and `7` skipped, with lock/environment/Ruff checks passing. Because this
+  verifier invocation intentionally did not attach to the interactive AutoCAD
+  session, its separate live marker is `NOT RUN`; the direct live result above
+  is the live acceptance evidence.
+- Remaining limits are unchanged: advanced fidelity sidecars still require
+  private-data review before visual acceptance, and production repair remains
+  separately human-approved with backup and second review.
+
 ## First product milestone decision
 
 - State: **Verified** for the reviewable-DXF scope defined in

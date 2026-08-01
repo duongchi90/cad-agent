@@ -383,6 +383,33 @@ def test_repair_insert_replaces_part_id_match_when_handle_is_stale():
     print("OK   test_repair_insert_replaces_part_id_match_when_handle_is_stale")
 
 
+def test_repair_insert_replaces_unique_block_when_part_id_was_tampered():
+    """A wrong PART_ID must not leave the corrupted INSERT beside the repair."""
+    if not _HAS_EZDXF:
+        print("SKIP test_repair_insert_replaces_unique_block_when_part_id_was_tampered â€” chÆ°a cÃ i ezdxf")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        corrupted = ezdxf.readfile(out_path)
+        entity = corrupted.entitydb.get(build_result.component_handle_by_part_id[part_id])
+        entity.attribs[0].dxf.text = "wrong"
+        corrupted.saveas(out_path)
+
+        mismatch = ComponentMismatch(
+            part_id, "attrib:PART_ID", part_id, "wrong", "forced PART_ID repair",
+        )
+        repair_result = repair_insert_components(build_result, [mismatch])
+
+        assert repair_result.repaired_count == 1
+        document = ezdxf.readfile(out_path)
+        inserts = [entity for entity in document.modelspace() if entity.dxftype() == "INSERT"]
+        assert len(inserts) == 1
+        attributes = {attribute.dxf.tag: attribute.dxf.text for attribute in inserts[0].attribs}
+        assert attributes["PART_ID"] == part_id
+        assert review_dxf(build_result).passed
+    print("OK   test_repair_insert_replaces_unique_block_when_part_id_was_tampered")
+
+
 def test_repair_insert_multiple_parts_independently():
     """2 part (2 dầm khác nhau) cùng bị lỗi -> mỗi part phải được repair độc
     lập, không cái nào ảnh hưởng cái kia — tương tự
@@ -451,6 +478,7 @@ _TESTS = [
     test_repair_insert_fixes_scale_and_rotation_mismatch,
     test_repair_insert_fixes_missing_attrib,
     test_repair_insert_replaces_part_id_match_when_handle_is_stale,
+    test_repair_insert_replaces_unique_block_when_part_id_was_tampered,
     test_repair_insert_multiple_parts_independently,
 ]
 
