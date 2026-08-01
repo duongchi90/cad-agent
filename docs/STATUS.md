@@ -23,7 +23,10 @@ collects unavailable-state probes for `real_data` and `autocad_mechanical` as ex
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
 Mechanical gate that was not separately executed remains `NOT RUN`.
 
-## AutoCAD .NET plugin — Option A
+## AutoCAD .NET plugin — Option A baseline (historical evidence)
+
+This subsection records the original Option A integration evidence. The current
+read-only Mechanical BOM extension is recorded separately below.
 
 - Candidate integration head: `4053c2a` on `integration/autocad-dotnet-option-a`.
 - State: **Verified for the managed disposable smoke scope**; the repository's
@@ -67,6 +70,44 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 - Remaining gate before merge: run the authoritative offline verifier on this
   exact candidate, review the final diff, and then integrate only the reviewed
   commit. No COM/ActiveX code was added to the plugin.
+
+## AutoCAD .NET plugin — Mechanical BOM 2A extension
+
+- Candidate integration head: `ac75d20` on `integration/mechanical-bom-readonly`.
+- Date: 2026-08-01.
+- State: **Partially verified**. The managed read-only implementation, IPC
+  contract, Python helper, unit tests, and authoritative offline verifier pass;
+  the live AutoCAD Mechanical gate is explicitly **NOT RUN**.
+- Scope: operation `mechanical_bom` reads direct ModelSpace `BlockReference`
+  inserts and direct `AttributeReference` values, returns deterministic
+  `component_count`/`components` payload data, and always reports
+  `changed=false`. It does not traverse nested blocks, mutate/save drawings,
+  create balloons, or use Mechanical SDK/COM/ActiveX/native APIs.
+- Contract evidence: schema remains `1.0`; `parameters` is exactly `{}`;
+  request/result examples and C#/Python validation are included under
+  `contracts/autocad-ipc/`.
+- C# evidence: Release x64 build/test passed with **58 passed, 0 failed, 0
+  skipped**. Existing Autodesk `MSB3277` reference-conflict warnings remain;
+  no Autodesk DLL was copied to plugin output.
+- Python evidence: focused .NET IPC/live-module run passed **22 tests and 18
+  subtests**, with one expected live prerequisite skip; the corrected
+  disposable fixture test passed and verifies nested inserts are excluded.
+- Authoritative verifier: **PASS** on `ac75d20` using the lock-matching Python
+  3.11 interpreter `D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe`:
+  C# **58/58**, dotnet IPC JUnit **36/0/0/0**, offline JUnit
+  **443/0/0/0**, real-data unavailable probe **2 skipped**, AutoCAD Mechanical
+  unavailable probe **7 skipped**, and Ruff/environment checks passed.
+- AutoCAD live marker: **NOT RUN** because `CAD_AGENT_FILE_IPC`, a live
+  AutoCAD HWND, and the declared File IPC bootstrap path were not available.
+  No AutoCAD process or `Drawing1.dwg` was touched; no live PASS is inferred
+  from build or unit tests.
+- Evidence records: `docs/superpowers/specs/2026-08-01-mechanical-bom-readonly-design.md`,
+  `docs/superpowers/plans/2026-08-01-mechanical-bom-readonly.md`, and the
+  task reports/review packages in the plan's ignored SDD workspace.
+- Remaining gate: complete the final whole-branch review, then merge this
+  reviewed candidate into `main` and push it. A future operator-controlled
+  disposable-DXF AutoCAD session may promote the live marker from `NOT RUN` to
+  `PASS` or `SKIP`.
 
 ## Pre-foundation baseline
 
