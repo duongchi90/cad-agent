@@ -71,6 +71,12 @@ public static class ContractValidator
             errors.Add("drawing_sha256 must be null or a 64-character hexadecimal SHA-256");
         }
 
+        if (request.Approval.HasValue
+            && request.Approval.Value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+        {
+            errors.Add("approval must be an object or null");
+        }
+
         if (request.Parameters is null)
         {
             errors.Add("parameters must be an object");
@@ -106,14 +112,25 @@ public static class ContractValidator
             errors.Add("operation is not supported");
         }
 
-        if (result.DrawingFullPath is not null && !TryNormalizeWindowsAbsolutePath(result.DrawingFullPath, out _))
+        if (result.DrawingFullPath is null)
         {
-            errors.Add("drawing_full_path must be null or a full absolute Windows path");
+            if (!string.Equals(result.Operation, "health", StringComparison.Ordinal))
+            {
+                errors.Add("drawing_full_path may be null only for health");
+            }
+        }
+        else if (!TryNormalizeWindowsAbsolutePath(result.DrawingFullPath, out _))
+        {
+            errors.Add("drawing_full_path must be a full absolute Windows path");
         }
 
         ValidateStringList(result.EntityHandles, "entity_handles", errors);
         ValidateStringList(result.Warnings, "warnings", errors);
         ValidateStringList(result.Errors, "errors", errors);
+        if (result.Payload is null)
+        {
+            errors.Add("payload must be an object when present");
+        }
         if (result.StartedAt == default)
         {
             errors.Add("started_at is required");
@@ -325,9 +342,12 @@ public static class ContractValidator
             return;
         }
 
-        if (values.Any(value => value is null))
+        if (values.Any(value => value is null
+            || (string.Equals(fieldName, "entity_handles", StringComparison.Ordinal) && value.Length == 0)))
         {
-            errors.Add($"{fieldName} must contain strings");
+            errors.Add(fieldName == "entity_handles"
+                ? $"{fieldName} must contain non-empty strings"
+                : $"{fieldName} must contain strings");
         }
     }
 }
