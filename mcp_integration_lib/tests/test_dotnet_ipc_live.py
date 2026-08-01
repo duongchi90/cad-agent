@@ -342,7 +342,7 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertEqual(2, bom["payload"]["component_count"])
                 components = bom["payload"]["components"]
                 self.assertEqual(
-                    ["COMP_FRAME", "COMP_EMPTY"],
+                    ["COMP_EMPTY", "COMP_FRAME"],
                     sorted(component["block_name"] for component in components),
                 )
                 self.assertNotIn(
