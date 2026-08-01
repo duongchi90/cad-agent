@@ -113,7 +113,11 @@ public sealed class ContractTests
         Assert.Equal(request.Operation, requestCopy.Operation);
         Assert.Equal(request.DrawingFullPath, requestCopy.DrawingFullPath);
         Assert.Equal(request.DrawingSha256, requestCopy.DrawingSha256);
-        Assert.Equal(request.Parameters!["handles"], requestCopy.Parameters!["handles"]);
+        var copiedHandles = requestCopy.Parameters!["handles"]
+            .EnumerateArray()
+            .Select(element => element.GetString()!)
+            .ToArray();
+        Assert.Equal(new[] { "AB12", "CD34" }, copiedHandles);
         Assert.Equal(result.RequestId, resultCopy.RequestId);
         Assert.Equal(result.Success, resultCopy.Success);
         Assert.Equal(result.EntityHandles!.Single(), resultCopy.EntityHandles!.Single());
