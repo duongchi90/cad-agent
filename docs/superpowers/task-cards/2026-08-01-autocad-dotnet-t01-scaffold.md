@@ -25,6 +25,7 @@ All existing Python, C#, schema, test, script, status, and architecture files ou
 ## Requirements
 
 - Set `TargetFramework=net10.0-windows`, `Platforms=x64`, `PlatformTarget=x64`, `OutputType=Library`, nullable and implicit usings.
+- Add only to `CadAgent.AutoCAD2027.Tests.csproj`: `Microsoft.NET.Test.Sdk` `18.6.0`, `xunit.v3` `3.2.2`, and `xunit.v3.runner.visualstudio` `3.2.2`, with test-runner assets private to the test project.
 - Use local `AcadDir` and `ArxSdkDir` properties; prefer `$(ArxSdkDir)\inc` and fall back to `$(AcadDir)`.
 - Reference only `AcCoreMgd`, `AcDbMgd`, and `AcMgd`, each with `<Private>false</Private>`.
 - Commit only `Directory.Build.props.example`; make local `Directory.Build.props` ignored.

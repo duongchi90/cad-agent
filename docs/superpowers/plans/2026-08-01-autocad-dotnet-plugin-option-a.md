@@ -24,6 +24,7 @@
 - Coders use Luna Extra High (`gpt-5.6-luna`, reasoning `xhigh`), run task-scoped tests, inspect their own diff, and commit; Coders do not merge.
 - AutoCAD live evidence is recorded only as `PASS`, `SKIP`, or `NOT RUN`; build/unit-test success never implies live success.
 - No task may alter image recognition, Primitive IR, Semantic IR, DXF Builder, or existing live dispatcher behavior.
+- The C# test project uses discoverable xUnit v3 tests with `Microsoft.NET.Test.Sdk` `18.6.0`, `xunit.v3` `3.2.2`, and `xunit.v3.runner.visualstudio` `3.2.2`; test files must not rely on uncalled static `RunAll()` methods.
 
 ## Base and Integration Policy
 
@@ -58,6 +59,7 @@ Only T02/T03 and T04/T05 are parallel groups. T06, T07, and T08 are sequential i
 **Interfaces:** Produces a buildable plugin/test solution and local `AcadDir`/`ArxSdkDir` properties consumed by every later C# task. It must not produce application behavior.
 
 - [ ] Create the solution and two projects with `TargetFramework=net10.0-windows`, x64 platform, library output, nullable and implicit usings.
+- [ ] Add `Microsoft.NET.Test.Sdk` `18.6.0`, `xunit.v3` `3.2.2`, and `xunit.v3.runner.visualstudio` `3.2.2` only to the test project, with runner assets private to the test project.
 - [ ] Add only `AcCoreMgd`, `AcDbMgd`, and `AcMgd` references, preferring `$(ArxSdkDir)\inc` and falling back to `$(AcadDir)`, with `<Private>false</Private>`.
 - [ ] Commit only the example local props file and ignore real `Directory.Build.props`, C# `bin/obj`, and local plugin outputs.
 - [ ] Run `dotnet restore autocad_plugin/CadAgent.AutoCAD2027.sln`.
@@ -78,6 +80,7 @@ Only T02/T03 and T04/T05 are parallel groups. T06, T07, and T08 are sequential i
 - [ ] Reject bad version, empty request id, relative path, unsupported operation, and invalid disposable parameters.
 - [ ] Implement `cadagent_dotnet_request_<request_id>.json`/`cadagent_dotnet_result_<request_id>.json` naming, atomic writes, bounded reads, and cleanup of only the current request.
 - [ ] Write failing tests for the invalid and round-trip cases, then implement the minimum passing behavior.
+- [ ] Mark each test as a discoverable xUnit v3 `[Fact]` method; do not leave a static `RunAll()`-only test suite.
 - [ ] Run `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64`.
 - [ ] Review the diff and commit the scoped task.
 
@@ -91,6 +94,7 @@ Only T02/T03 and T04/T05 are parallel groups. T06, T07, and T08 are sequential i
 **Interfaces:** Produces `IMechanicalAdapter`, `MechanicalCapabilityResult`, `MechanicalOperationRequest`, and `MechanicalOperationResult` for future adapters; the default implementation is unavailable and non-mutating.
 
 - [ ] Write tests proving `IsAvailable=false`, no supported operations, `not_supported`, and operation-name preservation.
+- [ ] Mark each test as a discoverable xUnit v3 `[Fact]` method; do not leave a static `RunAll()`-only test suite.
 - [ ] Implement the interface and no-op result without referencing COM, ActiveX, Mechanical SDK, C++, or native ARX.
 - [ ] Run `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64`.
 - [ ] Inspect the project dependency graph for absent Mechanical/native references.
@@ -107,6 +111,7 @@ Only T02/T03 and T04/T05 are parallel groups. T06, T07, and T08 are sequential i
 **Interfaces:** Consumes the contract models from T02 and produces full-path document identity plus read-only entity snapshots for T06.
 
 - [ ] Write pure tests for Windows path normalization, LINE/CIRCLE/ARC/TEXT/DIMENSION mapping, missing handle, and unsupported-type warning.
+- [ ] Mark each test as a discoverable xUnit v3 `[Fact]` method; do not leave a static `RunAll()`-only test suite.
 - [ ] Implement active-document identity using the full normalized path, never filename-only identity.
 - [ ] Read entities in a read-only transaction and expose handle/type/layer/basic geometry without save, erase, or mutation calls.
 - [ ] Run `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64`.
@@ -138,6 +143,7 @@ Only T02/T03 and T04/T05 are parallel groups. T06, T07, and T08 are sequential i
 **Interfaces:** Consumes T02–T05 boundaries and produces the four AutoCAD command registrations and operation dispatch behavior.
 
 - [ ] Write tests for command names, health result, request/result id preservation, document mismatch, close guard, unsupported operation, and error-to-result conversion.
+- [ ] Mark each test as a discoverable xUnit v3 `[Fact]` method; do not leave a static `RunAll()`-only test suite.
 - [ ] Register exactly `CADAGENT_HEALTH`, `CADAGENT_DISPATCH`, `CADAGENT_REVIEW`, and `CADAGENT_CLOSE_DISPOSABLE`.
 - [ ] Reject unsupported mutation/repair before any transaction; do not call save, save-as, erase, or mutation APIs.
 - [ ] Run focused C# tests and `dotnet build autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64`.

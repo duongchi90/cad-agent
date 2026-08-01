@@ -29,6 +29,7 @@ Contracts, JSON storage, Mechanical, Commands, Python, existing MCP code, projec
 - Return handle, AutoCAD type, layer, and supported geometry fields.
 - Return warnings for unsupported or missing entities without saving, erasing, or changing the document.
 - Keep pure payload mapping testable without launching AutoCAD.
+- Implement each test as a discoverable xUnit v3 `[Fact]` method; a static `RunAll()` method alone is not a passing test suite.
 
 ## Required verification
 

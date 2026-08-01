@@ -37,6 +37,7 @@ Commands, Drawing, Review, Mechanical, Python backend, existing MCP client, scri
 - Allow only `health`, `review`, and `close_disposable` operations; reject mutation/repair operations.
 - Use new filenames `cadagent_dotnet_request_<request_id>.json` and `cadagent_dotnet_result_<request_id>.json`.
 - Atomic writes and cleanup must be request-specific and deterministic.
+- Implement each test as a discoverable xUnit v3 `[Fact]` method; a static `RunAll()` method alone is not a passing test suite.
 
 ## Required verification
 

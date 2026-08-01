@@ -25,6 +25,8 @@ All contract, IPC, command, drawing, review, Python, project configuration, scri
 
 Implement `IMechanicalAdapter` with `IsAvailable`, `GetCapabilities()`, and `Execute(MechanicalOperationRequest request)`. `NoOpMechanicalAdapter` must return `IsAvailable=false`, an empty supported-operation list, and a `not_supported` result containing the requested operation name.
 
+Implement each test as a discoverable xUnit v3 `[Fact]` method; a static `RunAll()` method alone is not a passing test suite.
+
 ## Required verification
 
 ```powershell

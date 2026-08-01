@@ -31,6 +31,7 @@ All contracts, JSON storage, Drawing, Review, Mechanical, Python, project config
 - Close requires `disposable=true` and `save_changes=false`, then closes without save.
 - Reject unsupported repair/mutation operations before any transaction.
 - Never call `Save`, `SaveAs`, `Erase`, or mutation APIs in this slice.
+- Implement each test as a discoverable xUnit v3 `[Fact]` method; a static `RunAll()` method alone is not a passing test suite.
 
 ## Required verification
 
