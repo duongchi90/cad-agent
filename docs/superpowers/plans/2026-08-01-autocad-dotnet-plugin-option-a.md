@@ -24,7 +24,7 @@
 - Coders use Luna Extra High (`gpt-5.6-luna`, reasoning `xhigh`), run task-scoped tests, inspect their own diff, and commit; Coders do not merge.
 - AutoCAD live evidence is recorded only as `PASS`, `SKIP`, or `NOT RUN`; build/unit-test success never implies live success.
 - No task may alter image recognition, Primitive IR, Semantic IR, DXF Builder, or existing live dispatcher behavior.
-- The C# test project uses discoverable xUnit v3 tests with `Microsoft.NET.Test.Sdk` `18.6.0`, `xunit.v3` `3.2.2`, and `xunit.v3.runner.visualstudio` `3.2.2`; test files must not rely on uncalled static `RunAll()` methods.
+- The C# test project uses discoverable xUnit v3 tests with `Microsoft.NET.Test.Sdk` `18.6.0`, `xunit.v3` `3.2.2`, and the official VSTest adapter `xunit.runner.visualstudio` `3.1.5`; test files must not rely on uncalled static `RunAll()` methods.
 
 ## Base and Integration Policy
 
@@ -59,7 +59,7 @@ Only T02/T03 and T04/T05 are parallel groups. T06, T07, and T08 are sequential i
 **Interfaces:** Produces a buildable plugin/test solution and local `AcadDir`/`ArxSdkDir` properties consumed by every later C# task. It must not produce application behavior.
 
 - [ ] Create the solution and two projects with `TargetFramework=net10.0-windows`, x64 platform, library output, nullable and implicit usings.
-- [ ] Add `Microsoft.NET.Test.Sdk` `18.6.0`, `xunit.v3` `3.2.2`, and `xunit.v3.runner.visualstudio` `3.2.2` only to the test project, with runner assets private to the test project.
+- [ ] Add `Microsoft.NET.Test.Sdk` `18.6.0`, `xunit.v3` `3.2.2`, and `xunit.runner.visualstudio` `3.1.5` only to the test project, with runner assets private to the test project.
 - [ ] Add only `AcCoreMgd`, `AcDbMgd`, and `AcMgd` references, preferring `$(ArxSdkDir)\inc` and falling back to `$(AcadDir)`, with `<Private>false</Private>`.
 - [ ] Commit only the example local props file and ignore real `Directory.Build.props`, C# `bin/obj`, and local plugin outputs.
 - [ ] Run `dotnet restore autocad_plugin/CadAgent.AutoCAD2027.sln`.
