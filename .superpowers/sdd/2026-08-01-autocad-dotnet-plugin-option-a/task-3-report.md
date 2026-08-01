@@ -37,3 +37,9 @@ The production boundary exposes `IMechanicalAdapter`, `MechanicalCapabilityResul
 
 - The required focused test remains runner-blocked by the pre-existing test-project configuration. Resolving it would require a test SDK/adapter or project configuration change, which is explicitly forbidden for T03.
 - The build emits existing Autodesk/framework assembly conflict warnings; none originate from the four T03 source/test files.
+
+## Correction: discoverable xUnit v3 tests
+
+The test-only correction replaces the static `RunAll` method and helper assertions with four public xUnit v3 `[Fact]` methods in `NoOpMechanicalAdapterTests`. The methods now use xUnit assertions and are discoverable once the shared test SDK/package foundation is available. No production file or project configuration was modified.
+
+Current focused result after this correction: `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64` exits 1 during compilation with 9 `CS0246` errors for `Xunit`, `FactAttribute`, and `Fact`. The PO's T01 shared test SDK/package fix has not arrived in this worktree, so runtime discovery/execution cannot yet be verified and no pass count is claimed. This supersedes the earlier dependency-free/static-test wording above.

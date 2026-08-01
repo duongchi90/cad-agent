@@ -1,60 +1,46 @@
 using CadAgent.AutoCAD2027.Mechanical;
+using Xunit;
 
 namespace CadAgent.AutoCAD2027.Tests.Mechanical;
 
-public static class NoOpMechanicalAdapterTests
+public sealed class NoOpMechanicalAdapterTests
 {
-    public static void RunAll()
-    {
-        IsUnavailable();
-        ReportsNoSupportedOperations();
-        ReportsNotSupported();
-        PreservesTheRequestedOperationName();
-    }
-
-    public static void IsUnavailable()
+    [Fact]
+    public void IsUnavailable()
     {
         var adapter = new NoOpMechanicalAdapter();
 
-        Assert(!adapter.IsAvailable, "The no-op adapter must be unavailable.");
+        Assert.False(adapter.IsAvailable);
     }
 
-    public static void ReportsNoSupportedOperations()
+    [Fact]
+    public void ReportsNoSupportedOperations()
     {
         var adapter = new NoOpMechanicalAdapter();
 
         var capabilities = adapter.GetCapabilities();
 
-        Assert(capabilities.SupportedOperations.Count == 0,
-            "The no-op adapter must report no supported operations.");
+        Assert.Empty(capabilities.SupportedOperations);
     }
 
-    public static void ReportsNotSupported()
+    [Fact]
+    public void ReportsNotSupported()
     {
         var adapter = new NoOpMechanicalAdapter();
 
         var result = adapter.Execute(new MechanicalOperationRequest("bom.create"));
 
-        Assert(result.Status == "not_supported",
-            "The no-op adapter must report not_supported.");
+        Assert.Equal("not_supported", result.Status);
     }
 
-    public static void PreservesTheRequestedOperationName()
+    [Fact]
+    public void PreservesTheRequestedOperationName()
     {
         const string operationName = "bom.create";
         var adapter = new NoOpMechanicalAdapter();
 
         var result = adapter.Execute(new MechanicalOperationRequest(operationName));
 
-        Assert(result.OperationName == operationName,
-            "The no-op result must preserve the requested operation name.");
-    }
-
-    private static void Assert(bool condition, string message)
-    {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
-        }
+        Assert.Equal(operationName, result.OperationName);
     }
 }
