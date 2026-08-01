@@ -1,6 +1,6 @@
 # Mechanical BOM Live Gate and Legacy Close Design
 
-**Date:** 2026-08-02  
+**Date:** 2026-08-02
 **Scope:** Windows, AutoCAD Mechanical 2027, disposable DXF only
 
 ## Goal
