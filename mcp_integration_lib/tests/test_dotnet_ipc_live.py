@@ -34,6 +34,47 @@ def _live_prerequisites_available() -> bool:
     )
 
 
+def _add_mechanical_bom_fixture(drawing_document) -> None:
+    modelspace = drawing_document.modelspace()
+    modelspace.add_line((0, 0), (10, 0))
+    frame_block = drawing_document.blocks.new("COMP_FRAME")
+    frame_block.add_attdef("PART_ID", (0, 0), text="", height=1.0)
+    modelspace.add_blockref("COMP_FRAME", (0, 0)).add_auto_attribs(
+        {"PART_ID": "FRAME-001"}
+    )
+    empty_block = drawing_document.blocks.new("COMP_EMPTY")
+    empty_block.add_line((0, 0), (5, 0))
+    nested_block = drawing_document.blocks.new("COMP_NESTED")
+    nested_block.add_line((0, 0), (1, 0))
+    empty_block.add_blockref("COMP_NESTED", (0, 0))
+    modelspace.add_blockref("COMP_EMPTY", (20, 0))
+
+
+class MechanicalBomFixtureTests(unittest.TestCase):
+    def test_mechanical_bom_fixture_uses_direct_attributed_insert(self) -> None:
+        drawing_document = ezdxf.new("R2010")
+        _add_mechanical_bom_fixture(drawing_document)
+
+        modelspace_inserts = [
+            entity for entity in drawing_document.modelspace() if entity.dxftype() == "INSERT"
+        ]
+        self.assertEqual(
+            ["COMP_FRAME", "COMP_EMPTY"],
+            [insert.dxf.name for insert in modelspace_inserts],
+        )
+        frame_insert = next(
+            insert for insert in modelspace_inserts if insert.dxf.name == "COMP_FRAME"
+        )
+        self.assertEqual(
+            [("PART_ID", "FRAME-001")],
+            [(attribute.dxf.tag, attribute.dxf.text) for attribute in frame_insert.attribs],
+        )
+        self.assertNotIn(
+            "COMP_NESTED",
+            [insert.dxf.name for insert in modelspace_inserts],
+        )
+
+
 def _wait_for_disposable_drawing_release(
     drawing_path: Path,
     *,
@@ -189,24 +230,13 @@ class DisposableCleanupTests(unittest.TestCase):
 )
 @pytest.mark.autocad_mechanical
 class DotNetIPCLiveSmokeTests(unittest.TestCase):
-    def test_disposable_dxf_uses_dotnet_health_review_and_close(self) -> None:
+    def test_disposable_dxf_uses_dotnet_mechanical_bom_health_review_and_close(self) -> None:
         test_directory = Path(tempfile.mkdtemp(prefix="cad_agent_dotnet_live_", dir=r"C:\temp"))
         drawing_path = test_directory / "dotnet_live.dxf"
 
         try:
             drawing_document = ezdxf.new("R2010")
-            modelspace = drawing_document.modelspace()
-            modelspace.add_line((0, 0), (10, 0))
-            frame_block = drawing_document.blocks.new("COMP_FRAME")
-            frame_block.add_attdef("PART_ID", (0, 0), text="", height=1.0)
-            modelspace.add_auto_blockref(
-                "COMP_FRAME",
-                (0, 0),
-                {"PART_ID": "FRAME-001"},
-            )
-            empty_block = drawing_document.blocks.new("COMP_EMPTY")
-            empty_block.add_line((0, 0), (5, 0))
-            modelspace.add_blockref("COMP_EMPTY", (20, 0))
+            _add_mechanical_bom_fixture(drawing_document)
             drawing_document.saveas(drawing_path)
 
             expected_full_path = normalize_windows_absolute_path(str(drawing_path))
@@ -267,6 +297,10 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertEqual(
                     ["COMP_FRAME", "COMP_EMPTY"],
                     sorted(component["block_name"] for component in components),
+                )
+                self.assertNotIn(
+                    "COMP_NESTED",
+                    [component["block_name"] for component in components],
                 )
                 frame_component = next(
                     component for component in components if component["block_name"] == "COMP_FRAME"
