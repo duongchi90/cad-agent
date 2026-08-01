@@ -25,14 +25,16 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ## AutoCAD .NET plugin — Option A
 
-- Candidate integration head: `debffd3` on `integration/autocad-dotnet-option-a`.
-- State: **Partially verified**.
+- Candidate integration head: `4053c2a` on `integration/autocad-dotnet-option-a`.
+- State: **Verified for the managed disposable smoke scope**; the repository's
+  legacy-LISP aggregate marker remains a separate gate.
 - Scope completed: Windows-only AutoCAD Mechanical 2027 managed plugin scaffold,
   versioned JSON/File IPC contracts, Mechanical no-op boundary, deterministic
   read-only review core, isolated Python dotnet_ipc backend, and the four
   command/dispatcher boundaries, plus the Windows `CADAGENT_DISPATCH` trigger,
-  disposable .NET live-smoke harness, and deferred disposable-close fix.
-- C# evidence: restore/build/test passed on Release x64 with 50 passed, 0
+  disposable .NET live-smoke harness, and one-shot `Application.Idle`
+  disposable-close fix.
+- C# evidence: restore/build/test passed on Release x64 with 51 passed, 0
   failed, 0 skipped; Autodesk reference-conflict warnings remain, and no
   Autodesk DLL was copied to plugin output.
 - Python focused evidence: the .NET IPC focused suite passed 16 tests plus 18
@@ -45,24 +47,26 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   offline JUnit 439/0/0/0, unavailable probes 2 + 7 skipped, and full Ruff
   passed. The integration-local `.venv-py311` remains incomplete, so the
   successful command supplied `-PythonExe` explicitly.
-- Direct AutoCAD .NET smoke: **FAIL (close postcondition)**. On a fresh
-  disposable DXF, health, read-only review, and the IPC result passed, but an
-  independent open-document enumeration still contained
-  `C:\temp\cadagent_dotnet_live_20260801\dotnet_live.dxf` after the close
-  request; AutoCAD remained on that drawing. The DXF remained on disk.
+- Direct AutoCAD .NET smoke: **PASS** on a fresh disposable DXF in an isolated
+  AutoCAD Mechanical 2027 process. Health and read-only review succeeded for
+  handle `2F`; `close_disposable` returned
+  `closed_without_saving=true`; after an 8-second independent postcondition
+  check AutoCAD was back on `[Start]` and no longer had the DXF document open.
+  The DXF remained on disk and was not saved or mutated.
 - Automated AutoCAD live marker: **FAIL** when attempted with the legacy LISP
   dispatcher (`8 failed, 5 passed, 423 deselected`); the legacy close path
   reports `Automation Error. Drawing is busy`. The focused .NET live test
-  reported `1 passed, 3 deselected`, but its close result alone is not accepted
-  as proof of closure because the independent postcondition failed.
+  reported `1 passed, 3 deselected`; this is retained as historical evidence for
+  the legacy-LISP bootstrap failure and is separate from the direct managed
+  smoke above.
 - Safety boundary: no production save, repair, or mutation was added or run;
   the existing dispatcher was not modified.
 - Evidence records: `docs/reviews/2026-08-01-autocad-dotnet-live-review.md`,
   `docs/reviews/2026-08-01-autocad-dotnet-close-live-review.md`, and
   `docs/reviews/2026-08-01-autocad-dotnet-close-live-followup.md`.
-- Remaining gate before integration: establish a supported managed close
-  boundary that passes the independent active-document postcondition. Until
-  then this candidate remains **Partially verified** and must not be merged.
+- Remaining gate before merge: run the authoritative offline verifier on this
+  exact candidate, review the final diff, and then integrate only the reviewed
+  commit. No COM/ActiveX code was added to the plugin.
 
 ## Pre-foundation baseline
 
