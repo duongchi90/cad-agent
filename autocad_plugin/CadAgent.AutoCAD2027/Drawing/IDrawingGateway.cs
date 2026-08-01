@@ -1,0 +1,10 @@
+using CadAgent.AutoCAD2027.Review;
+
+namespace CadAgent.AutoCAD2027.Drawing;
+
+public interface IDrawingGateway
+{
+    string? ActiveDocumentFullPath { get; }
+
+    IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles);
+}
