@@ -1,7 +1,7 @@
 # AutoCAD .NET close live follow-up
 
 - Date: 2026-08-01
-- Candidate commit: `7823543`
+- Candidate commit: `debffd3` (T19 session-context experiment reverted)
 - Branch: `integration/autocad-dotnet-option-a`
 - Host: AutoCAD Mechanical 2027 on Windows
 - Scope: disposable DXF only; no production drawing mutation
@@ -20,6 +20,11 @@ returned. Independent verification after the request found:
 The same failure was reproduced across the deferred `SendStringToExecute`
 variants and the managed `ExecuteInApplicationContext` callback. Direct
 synchronous `CloseAndDiscard` previously raised `Drawing is busy`.
+
+The T19 experiment marked `CADAGENT_DISPATCH` with `CommandFlags.Session`.
+Its live run failed while waiting for AutoCAD to release the temporary DXF,
+and the session remained on `dotnet_live.dxf`; the commit was reverted as
+`debffd3`.
 
 ## Automated marker
 

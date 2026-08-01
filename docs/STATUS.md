@@ -25,7 +25,7 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ## AutoCAD .NET plugin — Option A
 
-- Candidate integration head: `7823543` on `integration/autocad-dotnet-option-a`.
+- Candidate integration head: `debffd3` on `integration/autocad-dotnet-option-a`.
 - State: **Partially verified**.
 - Scope completed: Windows-only AutoCAD Mechanical 2027 managed plugin scaffold,
   versioned JSON/File IPC contracts, Mechanical no-op boundary, deterministic
