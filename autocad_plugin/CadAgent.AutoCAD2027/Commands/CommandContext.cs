@@ -75,22 +75,23 @@ public sealed class CommandContext
     {
         var document = AcadApplication.DocumentManager.MdiActiveDocument
             ?? throw new InvalidOperationException("No active AutoCAD document is available.");
-        var documentManager = AcadApplication.DocumentManager;
         var editor = document.Editor;
         var gateway = new AutoCadDrawingGateway(document);
         var ipcDirectory = Environment.GetEnvironmentVariable(IpcDirectoryEnvironmentVariable);
         var store = new JsonFileStore(
             string.IsNullOrWhiteSpace(ipcDirectory) ? DefaultIpcDirectory : ipcDirectory);
+        var closeScheduler = new OneShotIdleCloseScheduler(
+            handler => AcadApplication.Idle += handler,
+            handler => AcadApplication.Idle -= handler,
+            document.CloseAndDiscard);
 
         return new CommandContext(
             store,
             gateway,
             // CADAGENT_DISPATCH persists the IPC result before invoking this scheduler.
-            // AutoCAD then runs the managed close callback in application context after
-            // the document-scoped command has returned and released its document lock.
-            () => documentManager.ExecuteInApplicationContext(
-                _ => document.CloseAndDiscard(),
-                null),
+            // AutoCAD raises Idle after the command has returned and released its
+            // document-scoped lock, so the one-shot callback can close safely.
+            closeScheduler.Schedule,
             message => editor.WriteMessage($"\n{message}"));
     }
 

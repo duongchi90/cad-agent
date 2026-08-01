@@ -85,7 +85,39 @@ public sealed class CommandGuardTests
     }
 
     [Fact]
-    public void DispatchPersistsCloseResultBeforeInvokingCloseScheduler()
+    public void OneShotIdleCloseSchedulerUnsubscribesBeforeClosingAndIgnoresLaterIdleEvents()
+    {
+        EventHandler? pendingIdle = null;
+        var events = new List<string>();
+        var scheduler = new OneShotIdleCloseScheduler(
+            handler =>
+            {
+                events.Add("subscribe");
+                pendingIdle = handler;
+            },
+            handler =>
+            {
+                Assert.Same(pendingIdle, handler);
+                events.Add("unsubscribe");
+                pendingIdle = null;
+            },
+            () => events.Add("close"));
+
+        scheduler.Schedule();
+        scheduler.Schedule();
+
+        Assert.Equal(new[] { "subscribe" }, events);
+        var idleCallback = pendingIdle;
+        Assert.NotNull(idleCallback);
+
+        idleCallback!(null, EventArgs.Empty);
+        idleCallback!(null, EventArgs.Empty);
+
+        Assert.Equal(new[] { "subscribe", "unsubscribe", "close" }, events);
+    }
+
+    [Fact]
+    public void DispatchPersistsCloseResultBeforeSchedulingOneShotCloseAfterCommandReturn()
     {
         const string requestId = "close-ordering";
         const string drawingPath = @"C:\drawings\sample.dwg";
@@ -111,18 +143,35 @@ public sealed class CommandGuardTests
 
         var closeCalls = 0;
         var schedulerSawPersistedResult = false;
-        Action? pendingClose = null;
+        var dispatchReturned = false;
+        var subscribeCalls = 0;
+        var unsubscribeCalls = 0;
+        EventHandler? pendingIdle = null;
+        var scheduler = new OneShotIdleCloseScheduler(
+            handler =>
+            {
+                subscribeCalls++;
+                schedulerSawPersistedResult = File.Exists(store.GetResultPath(requestId));
+                pendingIdle = handler;
+            },
+            handler =>
+            {
+                unsubscribeCalls++;
+                Assert.Same(pendingIdle, handler);
+                pendingIdle = null;
+            },
+            () =>
+            {
+                Assert.True(dispatchReturned);
+                closeCalls++;
+            });
         var context = new CommandContext(
             store,
             new SpyDrawingGateway
             {
                 ActiveDocumentFullPath = drawingPath
             },
-            () =>
-            {
-                schedulerSawPersistedResult = File.Exists(store.GetResultPath(requestId));
-                pendingClose = () => closeCalls++;
-            },
+            scheduler.Schedule,
             reports.Add,
             () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero));
 
@@ -132,11 +181,16 @@ public sealed class CommandGuardTests
         Assert.True(result.Success);
         Assert.True(result.Payload!["closed_without_saving"].GetBoolean());
         Assert.True(schedulerSawPersistedResult);
+        Assert.Equal(1, subscribeCalls);
         Assert.Equal(0, closeCalls);
-        Assert.NotNull(pendingClose);
+        Assert.NotNull(pendingIdle);
 
-        pendingClose!();
+        var idleCallback = pendingIdle;
+        dispatchReturned = true;
+        idleCallback!(null, EventArgs.Empty);
+        idleCallback!(null, EventArgs.Empty);
 
+        Assert.Equal(1, unsubscribeCalls);
         Assert.Equal(1, closeCalls);
     }
 
