@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- Copy this file to Directory.Build.props and customize local paths. -->
+    <AcadDir>C:\Program Files\Autodesk\AutoCAD 2027</AcadDir>
+    <ArxSdkDir>C:\Autodesk\ObjectARX 2027</ArxSdkDir>
+  </PropertyGroup>
+</Project>

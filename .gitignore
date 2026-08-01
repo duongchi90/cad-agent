@@ -34,3 +34,10 @@ dist/
 output/
 tmp/
 ErrorReports/
+
+# AutoCAD .NET local configuration and build output
+autocad_plugin/Directory.Build.props
+autocad_plugin/**/bin/
+autocad_plugin/**/obj/
+autocad_plugin/**/*.dll
+autocad_plugin/**/*.pdb

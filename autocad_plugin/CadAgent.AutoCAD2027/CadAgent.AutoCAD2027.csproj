@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <OutputType>Library</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Use a local Directory.Build.props when the SDK or installation path differs. -->
+    <AcadDir Condition="'$(AcadDir)' == '' and '$(ProgramFiles)' != ''">$(ProgramFiles)\Autodesk\AutoCAD 2027</AcadDir>
+    <AutodeskReferenceDir Condition="'$(ArxSdkDir)' != '' and Exists('$(ArxSdkDir)\inc')">$(ArxSdkDir)\inc</AutodeskReferenceDir>
+    <AutodeskReferenceDir Condition="'$(AutodeskReferenceDir)' == '' and '$(AcadDir)' != ''">$(AcadDir)</AutodeskReferenceDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="AcCoreMgd">
+      <HintPath>$(AutodeskReferenceDir)\AcCoreMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AcDbMgd">
+      <HintPath>$(AutodeskReferenceDir)\AcDbMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AcMgd">
+      <HintPath>$(AutodeskReferenceDir)\AcMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
