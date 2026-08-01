@@ -47,7 +47,7 @@ public sealed class CadAgentCommands
         ReportResult(context, context.CreateDispatcher().Dispatch(request));
     }
 
-    [CommandMethod("CADAGENT_DISPATCH", CommandFlags.Session)]
+    [CommandMethod("CADAGENT_DISPATCH")]
     public void Dispatch()
     {
         var context = _contextFactory();
