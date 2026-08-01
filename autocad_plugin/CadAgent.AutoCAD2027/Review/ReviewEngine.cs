@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Drawing;
+using CadAgent.AutoCAD2027.Ipc;
 
 namespace CadAgent.AutoCAD2027.Review;
 
@@ -180,26 +181,13 @@ public sealed class ReviewEngine
         }
 
         var candidate = path.Trim().Replace('/', '\\');
-        if (!Path.IsPathRooted(candidate))
-        {
-            return false;
-        }
-
-        try
-        {
-            normalized = Path.GetFullPath(candidate);
-            if (normalized.Length > 3)
-            {
-                normalized = normalized.TrimEnd('\\');
-            }
-
-            return true;
-        }
-        catch (ArgumentException)
+        if (!ContractValidator.TryNormalizeWindowsAbsolutePath(candidate, out normalized))
         {
             error = "The drawing_full_path is not a valid absolute path.";
             return false;
         }
+
+        return true;
     }
 
     private static ReviewResult Failure(

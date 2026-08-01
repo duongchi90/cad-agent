@@ -26,6 +26,22 @@ public sealed class ReviewEngineTests
         Assert.Equal(@"C:\drawings\Sample.dwg", result.DrawingFullPath);
     }
 
+    [Theory]
+    [InlineData(@"\drawings\Sample.dwg")]
+    [InlineData(@"C:drawings\Sample.dwg")]
+    public void RejectsWindowsPathsThatAreNotFullyQualified(string path)
+    {
+        Assert.Throws<ArgumentException>(() => ReviewEngine.NormalizeFullPath(path));
+    }
+
+    [Fact]
+    public void AcceptsUncPathsAsFullyQualifiedWindowsPaths()
+    {
+        const string path = @"\\server\share\drawings\Sample.dwg";
+
+        Assert.Equal(path, ReviewEngine.NormalizeFullPath(path));
+    }
+
     [Fact]
     public void DoesNotTreatTheSameFilenameInAnotherDirectoryAsTheActiveDrawing()
     {
