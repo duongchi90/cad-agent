@@ -27,7 +27,7 @@
 
 ## Base and Integration Policy
 
-The common starting commit is `d41b2fb2e1f4be3b8adbb952d3862c7f0c659162`. The PO creates `integration/autocad-dotnet-option-a` from this SHA. T01 starts from that SHA. After the PO reviews and cherry-picks T01, the PO records that integration branch SHA as the single WAVE 2 base and creates both WAVE 2 worktrees from it. The same rule is repeated at every parallel wave: all branches in that wave are created from the integration branch's current SHA before any Coder starts.
+The common starting commit is `14fa9fe` (`docs: plan parallel AutoCAD plugin tasks`), which includes the approved spec, implementation plan, and task cards. The PO creates `integration/autocad-dotnet-option-a` from this SHA. T01 starts from that SHA. After the PO reviews and cherry-picks T01, the PO records that integration branch SHA as the single WAVE 2 base and creates both WAVE 2 worktrees from it. The same rule is repeated at every parallel wave: all branches in that wave are created from the integration branch's current SHA before any Coder starts.
 
 The PO performs every cherry-pick into `integration/autocad-dotnet-option-a`, checks the Coder's commit and task tests, and resolves conflicts only by sending the Coder a correction task. The PO does not silently rewrite a Coder's commit.
 

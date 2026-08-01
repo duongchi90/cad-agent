@@ -2,7 +2,7 @@
 
 **Role:** Coder  
 **Model:** Luna Extra High (`gpt-5.6-luna`, reasoning `xhigh`)  
-**Base:** `d41b2fb2e1f4be3b8adbb952d3862c7f0c659162`  
+**Base:** `14fa9fe` (`docs: plan parallel AutoCAD plugin tasks`)  
 **Branch:** `codex/autocad-dotnet-t01-scaffold`  
 **Worktree:** `D:\cad-agent-master\cad-agent\.worktrees\autocad-dotnet-t01-scaffold`
 
