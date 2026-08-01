@@ -1,6 +1,6 @@
 # Fidelity, stable component identity, and real-image P1 design
 
-Date: 2026-08-02  
+Date: 2026-08-02
 Status: approved for implementation in the isolated `codex/fidelity-legacy-p1` worktree
 
 ## Context

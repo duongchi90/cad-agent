@@ -1,7 +1,7 @@
 # Implementation plan: fidelity, stable identity, and real-image P1
 
-Worktree: `D:\cad-agent-master\cad-agent\.worktrees\fidelity-legacy-p1`  
-Branch: `codex/fidelity-legacy-p1`  
+Worktree: `D:\cad-agent-master\cad-agent\.worktrees\fidelity-legacy-p1`
+Branch: `codex/fidelity-legacy-p1`
 Base: `d06da76`
 
 ## 1. Record design and baseline
