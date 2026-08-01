@@ -105,10 +105,9 @@ read-only Mechanical BOM extension is recorded separately below.
 - Evidence records: `docs/superpowers/specs/2026-08-01-mechanical-bom-readonly-design.md`,
   `docs/superpowers/plans/2026-08-01-mechanical-bom-readonly.md`, and the
   task reports/review packages in the plan's ignored SDD workspace.
-- Remaining gate: merge this reviewed candidate into `main` and push it. A
-  future operator-controlled
-  disposable-DXF AutoCAD session may promote the live marker from `NOT RUN` to
-  `PASS` or `SKIP`.
+- Integration: reviewed candidate merged into `main` and pushed as `1d9af6b`.
+- Remaining live gate: a future operator-controlled disposable-DXF AutoCAD
+  session may promote the live marker from `NOT RUN` to `PASS` or `SKIP`.
 
 ## Pre-foundation baseline
 
