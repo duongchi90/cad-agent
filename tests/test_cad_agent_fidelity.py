@@ -993,7 +993,7 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
     """Cùng bug ở run_fidelity_text_reconstruct() (nhánh 'ghi chú dài' khác
     với bảng) -- TEXT tiếng Việt phải dùng style TTF Unicode, không rơi về
     'Standard'."""
-    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\arial.ttf")
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
     _pdf(source)
