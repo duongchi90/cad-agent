@@ -25,22 +25,24 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ## AutoCAD .NET plugin — Option A
 
-- Candidate integration head: 176b565 on integration/autocad-dotnet-option-a.
+- Candidate integration head: `2a39349` on integration/autocad-dotnet-option-a.
 - State: **Partially verified**.
 - Scope completed: Windows-only AutoCAD Mechanical 2027 managed plugin scaffold,
   versioned JSON/File IPC contracts, Mechanical no-op boundary, deterministic
   read-only review core, isolated Python dotnet_ipc backend, and the four
-  command/dispatcher boundaries.
+  command/dispatcher boundaries, plus the Windows `CADAGENT_DISPATCH` trigger
+  and disposable .NET live-smoke harness.
 - C# evidence: restore/build/test passed on Release x64 with 49 passed, 0
   failed, 0 skipped; Autodesk reference-conflict warnings remain, and no
   Autodesk DLL was copied to plugin output.
-- Python focused evidence: mcp_integration_lib/tests/test_dotnet_ipc.py passed
-  13 tests plus 12 subtests; the exact two-file Ruff gate passed.
-- Authoritative verifier: **PASS** when run on commit `47c5e8c` with the
+- Python focused evidence: the .NET IPC focused suite passed 16 tests plus 18
+  subtests; the opt-in live module passed 2 offline cleanup tests and skipped
+  its one live test; the exact three-file Ruff gate passed.
+- Authoritative verifier: **PASS** when run on commit `2a39349` with the
   explicit lock-matching Python 3.11 interpreter
   `D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe`:
-  40/40 locked distributions, .NET 49/49, dotnet_ipc JUnit 25/0/0/0,
-  offline JUnit 428/0/0/0, unavailable probes 2 + 6 skipped, and full Ruff
+  40/40 locked distributions, .NET 49/49, dotnet_ipc JUnit 34/0/0/0,
+  offline JUnit 439/0/0/0, unavailable probes 2 + 7 skipped, and full Ruff
   passed. The integration-local `.venv-py311` remains incomplete, so the
   successful command supplied `-PythonExe` explicitly.
 - AutoCAD .NET live gate: **NOT RUN**. AutoCAD Mechanical 2027 had an active
@@ -48,10 +50,14 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 - Safety boundary: no production save, repair, or mutation was added or run;
   the existing dispatcher was not modified.
 - Evidence record: docs/reviews/2026-08-01-autocad-dotnet-live-review.md.
-- Remaining gate before a fully verified release: run the disposable AutoCAD
-  Mechanical live smoke test. Until then this candidate is offline-verified
+- Deferred review minor: fallback cleanup can mask an earlier setup error if
+  AutoCAD did not open the drawing; the path remains disposable-only and does
+  not close an arbitrary document.
+- Remaining gate before a fully verified release: manually NETLOAD the built
+  plugin and run the new disposable AutoCAD Mechanical live smoke test. Until
+  then this candidate is offline-verified
   but remains **Partially verified**. docs/STATUS.md is updated here only after
-  the final T08 review, by the PO.
+  the final T09 review, by the PO.
 
 ## Pre-foundation baseline
 
