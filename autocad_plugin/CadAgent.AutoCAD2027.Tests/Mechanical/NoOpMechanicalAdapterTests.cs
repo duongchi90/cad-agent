@@ -31,6 +31,10 @@ public sealed class NoOpMechanicalAdapterTests
         var result = adapter.Execute(new MechanicalOperationRequest("bom.create"));
 
         Assert.Equal("not_supported", result.Status);
+        Assert.False(result.Changed);
+        Assert.Empty(result.Components);
+        Assert.Empty(result.Warnings);
+        Assert.Empty(result.Errors);
     }
 
     [Fact]

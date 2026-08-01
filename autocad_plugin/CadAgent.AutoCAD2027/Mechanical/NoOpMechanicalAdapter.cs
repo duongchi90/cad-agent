@@ -8,5 +8,11 @@ public sealed class NoOpMechanicalAdapter : IMechanicalAdapter
         new(Array.Empty<string>());
 
     public MechanicalOperationResult Execute(MechanicalOperationRequest request) =>
-        new("not_supported", request.OperationName);
+        new(
+            "not_supported",
+            request.OperationName,
+            false,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<MechanicalComponentSnapshot>());
 }
