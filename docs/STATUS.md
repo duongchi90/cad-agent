@@ -25,7 +25,7 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ## AutoCAD .NET plugin — Option A
 
-- Candidate integration head: `00797d9` on `integration/autocad-dotnet-option-a`.
+- Candidate integration head: `7823543` on `integration/autocad-dotnet-option-a`.
 - State: **Partially verified**.
 - Scope completed: Windows-only AutoCAD Mechanical 2027 managed plugin scaffold,
   versioned JSON/File IPC contracts, Mechanical no-op boundary, deterministic
@@ -45,19 +45,24 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   offline JUnit 439/0/0/0, unavailable probes 2 + 7 skipped, and full Ruff
   passed. The integration-local `.venv-py311` remains incomplete, so the
   successful command supplied `-PythonExe` explicitly.
-- Direct AutoCAD .NET smoke: **PASS**. On a fresh disposable DXF, health,
-  read-only review, and `close_disposable` passed; AutoCAD returned to Start,
-  `closed_without_saving=true`, and the DXF remained on disk.
-- Automated AutoCAD live marker: **NOT RUN** because the full harness still
-  lacks `CAD_AGENT_FILE_IPC` and the legacy LISP path. The direct .NET smoke
-  is independently recorded as PASS.
+- Direct AutoCAD .NET smoke: **FAIL (close postcondition)**. On a fresh
+  disposable DXF, health, read-only review, and the IPC result passed, but an
+  independent open-document enumeration still contained
+  `C:\temp\cadagent_dotnet_live_20260801\dotnet_live.dxf` after the close
+  request; AutoCAD remained on that drawing. The DXF remained on disk.
+- Automated AutoCAD live marker: **FAIL** when attempted with the legacy LISP
+  dispatcher (`8 failed, 5 passed, 423 deselected`); the legacy close path
+  reports `Automation Error. Drawing is busy`. The focused .NET live test
+  reported `1 passed, 3 deselected`, but its close result alone is not accepted
+  as proof of closure because the independent postcondition failed.
 - Safety boundary: no production save, repair, or mutation was added or run;
   the existing dispatcher was not modified.
-- Evidence records: `docs/reviews/2026-08-01-autocad-dotnet-live-review.md` and
-  `docs/reviews/2026-08-01-autocad-dotnet-close-live-review.md`.
-- Remaining gate before a fully verified release: provide the legacy LISP path
-  and run the repository's full opt-in AutoCAD live marker on this candidate.
-  Until then this candidate remains **Partially verified**.
+- Evidence records: `docs/reviews/2026-08-01-autocad-dotnet-live-review.md`,
+  `docs/reviews/2026-08-01-autocad-dotnet-close-live-review.md`, and
+  `docs/reviews/2026-08-01-autocad-dotnet-close-live-followup.md`.
+- Remaining gate before integration: establish a supported managed close
+  boundary that passes the independent active-document postcondition. Until
+  then this candidate remains **Partially verified** and must not be merged.
 
 ## Pre-foundation baseline
 
