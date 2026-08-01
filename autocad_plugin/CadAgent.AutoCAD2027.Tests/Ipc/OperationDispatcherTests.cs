@@ -2,6 +2,7 @@ using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
+using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
 using Xunit;
 
@@ -75,6 +76,74 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void MechanicalBomReturnsSortedReadOnlyComponents()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\bom.dxf"
+        };
+        var mechanical = new FakeMechanicalAdapter(
+            new[]
+            {
+                Component(
+                    "A0",
+                    "SECOND"),
+                Component(
+                    "2F",
+                    "FIRST",
+                    Attribute("tag ", "B"),
+                    Attribute(" TAG", "A"),
+                    Attribute("QTY", "2"))
+            });
+        var dispatcher = CreateDispatcher(gateway, mechanicalAdapter: mechanical);
+
+        var result = dispatcher.Dispatch(Request(
+            "mechanical_bom",
+            "bom-request",
+            @"C:\temp\bom.dxf",
+            Parameters()));
+
+        Assert.True(result.Success);
+        Assert.Equal("mechanical_bom", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Equal(new[] { "2F", "A0" }, result.EntityHandles);
+        Assert.Equal(2, result.Payload!["component_count"].GetInt32());
+
+        var components = result.Payload["components"].EnumerateArray().ToArray();
+        Assert.Equal(new[] { "2F", "A0" }, components.Select(component => component.GetProperty("handle").GetString()));
+        Assert.Equal("FIRST", components[0].GetProperty("block_name").GetString());
+        Assert.Equal(
+            new[] { "QTY:2", "TAG:A", "TAG:B" },
+            components[0]
+                .GetProperty("attributes")
+                .EnumerateArray()
+                .Select(attribute => $"{attribute.GetProperty("tag").GetString()}:{attribute.GetProperty("value").GetString()}"));
+        Assert.Empty(components[1].GetProperty("attributes").EnumerateArray());
+        Assert.Equal(1, mechanical.ExecuteCallCount);
+    }
+
+    [Fact]
+    public void MechanicalBomRejectsAFullPathDocumentMismatchBeforeReadingMechanicalGateway()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\other\bom.dxf"
+        };
+        var mechanical = new FakeMechanicalAdapter(Array.Empty<MechanicalComponentSnapshot>());
+        var dispatcher = CreateDispatcher(gateway, mechanicalAdapter: mechanical);
+
+        var result = dispatcher.Dispatch(Request(
+            "mechanical_bom",
+            "mismatch-bom-request",
+            @"C:\temp\bom.dxf",
+            Parameters()));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors!, error => error.Contains("full path", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, mechanical.ExecuteCallCount);
+    }
+
+    [Fact]
     public void CloseDisposableRequiresTheNonSavingDisposableGuardBeforeClosing()
     {
         var closeCalls = 0;
@@ -142,12 +211,14 @@ public sealed class OperationDispatcherTests
 
     private static OperationDispatcher CreateDispatcher(
         StubDrawingGateway gateway,
-        Action? closeWithoutSaving = null) =>
+        Action? closeWithoutSaving = null,
+        IMechanicalAdapter? mechanicalAdapter = null) =>
         new(new CommandContext(
             new JsonFileStore(Path.Combine(Path.GetTempPath(), "cadagent-t06-tests", Guid.NewGuid().ToString("N"))),
             gateway,
             closeWithoutSaving ?? (() => { }),
-            clock: () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero)));
+            clock: () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
+            mechanicalAdapter: mechanicalAdapter));
 
     private static IpcRequest Request(
         string operation,
@@ -172,6 +243,15 @@ public sealed class OperationDispatcherTests
     private static EntitySnapshot Entity(string handle, string type) =>
         new(handle, type, "0", new Dictionary<string, JsonElement>(StringComparer.Ordinal));
 
+    private static MechanicalComponentSnapshot Component(
+        string handle,
+        string blockName,
+        params MechanicalAttributeSnapshot[] attributes) =>
+        new(handle, blockName, attributes);
+
+    private static MechanicalAttributeSnapshot Attribute(string tag, string value) =>
+        new(tag, value);
+
     private sealed class StubDrawingGateway : IDrawingGateway
     {
         public string? ActiveDocumentFullPath { get; init; }
@@ -191,6 +271,35 @@ public sealed class OperationDispatcherTests
             }
 
             return Entities;
+        }
+    }
+
+    private sealed class FakeMechanicalAdapter : IMechanicalAdapter
+    {
+        private readonly IReadOnlyList<MechanicalComponentSnapshot> _components;
+
+        public FakeMechanicalAdapter(IReadOnlyList<MechanicalComponentSnapshot> components)
+        {
+            _components = components;
+        }
+
+        public int ExecuteCallCount { get; private set; }
+
+        public bool IsAvailable => true;
+
+        public MechanicalCapabilityResult GetCapabilities() =>
+            new(new[] { "mechanical_bom" });
+
+        public MechanicalOperationResult Execute(MechanicalOperationRequest request)
+        {
+            ExecuteCallCount++;
+            return new(
+                "success",
+                request.OperationName,
+                false,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                _components);
         }
     }
 }

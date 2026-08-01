@@ -51,6 +51,36 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void AcceptsMechanicalBomOnlyWithEmptyParameters()
+    {
+        var request = ValidRequest("mechanical_bom");
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.True(validation.IsValid);
+    }
+
+    [Fact]
+    public void RejectsMechanicalBomWithUnsupportedParameters()
+    {
+        var request = ValidRequest("mechanical_bom") with
+        {
+            Parameters = new Dictionary<string, JsonElement>
+            {
+                ["filter"] = JsonSerializer.SerializeToElement("COMP_FRAME")
+            }
+        };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("mechanical_bom", StringComparison.OrdinalIgnoreCase)
+                && error.Contains("empty", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void AllowsNullDrawingPathOnlyForHealth()
     {
         var health = ValidRequest() with { DrawingFullPath = null };

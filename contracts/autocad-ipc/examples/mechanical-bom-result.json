@@ -1,0 +1,29 @@
+{
+  "request_id": "bom-001",
+  "success": true,
+  "operation": "mechanical_bom",
+  "drawing_full_path": "C:\\temp\\cadagent_bom_fixture.dxf",
+  "changed": false,
+  "entity_handles": [
+    "2F"
+  ],
+  "warnings": [],
+  "errors": [],
+  "started_at": "2026-08-01T10:00:00+00:00",
+  "completed_at": "2026-08-01T10:00:00+00:00",
+  "payload": {
+    "component_count": 1,
+    "components": [
+      {
+        "handle": "2F",
+        "block_name": "COMP_FRAME",
+        "attributes": [
+          {
+            "tag": "PART_ID",
+            "value": "FRAME-001"
+          }
+        ]
+      }
+    ]
+  }
+}

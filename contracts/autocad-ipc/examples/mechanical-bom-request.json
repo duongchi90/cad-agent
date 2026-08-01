@@ -1,0 +1,9 @@
+{
+  "request_id": "bom-001",
+  "schema_version": "1.0",
+  "operation": "mechanical_bom",
+  "drawing_full_path": "C:\\temp\\cadagent_bom_fixture.dxf",
+  "drawing_sha256": null,
+  "parameters": {},
+  "approval": null
+}

@@ -27,7 +27,8 @@
       "enum": [
         "health",
         "review",
-        "close_disposable"
+        "close_disposable",
+        "mechanical_bom"
       ]
     },
     "drawing_full_path": {
@@ -115,6 +116,28 @@
           },
           "parameters": {
             "$ref": "operations/close-disposable.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "mechanical_bom"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "operations/mechanical-bom.schema.json"
           }
         }
       }

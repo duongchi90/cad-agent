@@ -14,7 +14,8 @@ public static class ContractConstants
         {
             "health",
             "review",
-            "close_disposable"
+            "close_disposable",
+            "mechanical_bom"
         };
 }
 

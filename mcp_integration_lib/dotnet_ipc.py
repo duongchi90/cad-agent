@@ -26,7 +26,7 @@ JSON_SUFFIX = ".json"
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
-SUPPORTED_OPERATIONS = frozenset({"health", "review", "close_disposable"})
+SUPPORTED_OPERATIONS = frozenset({"health", "review", "close_disposable", "mechanical_bom"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _WM_CHAR = 0x0102
 _DOTNET_DISPATCH_COMMAND = "\x1b\x1bCADAGENT_DISPATCH\r"
@@ -368,6 +368,23 @@ class DotNetIPCClient:
             request_id=request_id,
         )
 
+    def mechanical_bom(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        request_id: str | None = None,
+        drawing_sha256: str | None = None,
+        approval: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "mechanical_bom",
+            drawing_full_path,
+            drawing_sha256=drawing_sha256,
+            parameters={},
+            approval=approval,
+            request_id=request_id,
+        )
+
     def _poll_result(
         self,
         result_file: Path,
@@ -425,6 +442,9 @@ class DotNetIPCClient:
         if operation == "health":
             if values:
                 raise ValueError("health parameters must be an empty object")
+        elif operation == "mechanical_bom":
+            if values:
+                raise ValueError("mechanical_bom parameters must be an empty object")
         elif operation == "review":
             handles = values.get("handles")
             if not isinstance(handles, list) or not handles:

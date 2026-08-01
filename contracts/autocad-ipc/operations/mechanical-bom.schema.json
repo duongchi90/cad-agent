@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/mechanical-bom.schema.json",
+  "title": "CadAgent AutoCAD .NET mechanical BOM parameters",
+  "type": "object",
+  "additionalProperties": false
+}

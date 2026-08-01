@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
+using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
 
 namespace CadAgent.AutoCAD2027.Ipc;
@@ -38,6 +39,7 @@ public sealed class OperationDispatcher
                 "health" => DispatchHealth(request, startedAt),
                 "review" => DispatchReview(request, startedAt),
                 "close_disposable" => DispatchCloseDisposable(request, startedAt),
+                "mechanical_bom" => DispatchMechanicalBom(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
             };
         }
@@ -145,6 +147,71 @@ public sealed class OperationDispatcher
             payload,
             startedAt);
     }
+
+    private IpcResult DispatchMechanicalBom(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var mechanicalResult = _context.MechanicalAdapter.Execute(
+            new MechanicalOperationRequest("mechanical_bom"));
+        var components = NormalizeMechanicalComponents(mechanicalResult.Components);
+        var errors = mechanicalResult.Errors.ToArray();
+        var success = string.Equals(mechanicalResult.Status, "success", StringComparison.Ordinal);
+        if (!success && errors.Length == 0)
+        {
+            errors = new[] { "mechanical_bom is not supported by the active adapter." };
+        }
+
+        var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["component_count"] = JsonSerializer.SerializeToElement(components.Count),
+            ["components"] = JsonSerializer.SerializeToElement(
+                components.Select(component => new
+                {
+                    handle = component.Handle,
+                    block_name = component.BlockName,
+                    attributes = component.Attributes.Select(attribute => new
+                    {
+                        tag = attribute.Tag,
+                        value = attribute.Value
+                    }).ToArray()
+                }).ToArray())
+        };
+
+        return CreateResult(
+            request.RequestId!,
+            "mechanical_bom",
+            activePath,
+            success,
+            changed: false,
+            components.Select(component => component.Handle),
+            mechanicalResult.Warnings,
+            errors,
+            payload,
+            startedAt);
+    }
+
+    private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
+        IReadOnlyList<MechanicalComponentSnapshot> components) =>
+        components
+            .Select(component => new MechanicalComponentSnapshot(
+                component.Handle,
+                component.BlockName,
+                component.Attributes
+                    .Select(attribute => new MechanicalAttributeSnapshot(
+                        NormalizeMechanicalTag(attribute.Tag),
+                        attribute.Value ?? string.Empty))
+                    .OrderBy(attribute => attribute.Tag, StringComparer.Ordinal)
+                    .ThenBy(attribute => attribute.Value, StringComparer.Ordinal)
+                    .ToArray()))
+            .OrderBy(component => component.Handle, StringComparer.Ordinal)
+            .ToArray();
+
+    private static string NormalizeMechanicalTag(string? tag) =>
+        (tag ?? string.Empty).Trim().ToUpperInvariant();
 
     private bool TryMatchActiveDocument(
         string? requestedPath,

@@ -6,6 +6,7 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
+using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
 using AcadApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -21,18 +22,22 @@ public sealed class CommandContext
         IDrawingGateway drawingGateway,
         Action closeWithoutSaving,
         Action<string>? report = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        IMechanicalAdapter? mechanicalAdapter = null)
     {
         Store = store ?? throw new ArgumentNullException(nameof(store));
         DrawingGateway = drawingGateway ?? throw new ArgumentNullException(nameof(drawingGateway));
         CloseWithoutSaving = closeWithoutSaving ?? throw new ArgumentNullException(nameof(closeWithoutSaving));
         Report = report ?? (_ => { });
         Clock = clock ?? (() => DateTimeOffset.UtcNow);
+        MechanicalAdapter = mechanicalAdapter ?? new NoOpMechanicalAdapter();
     }
 
     public JsonFileStore Store { get; }
 
     public IDrawingGateway DrawingGateway { get; }
+
+    public IMechanicalAdapter MechanicalAdapter { get; }
 
     public Action CloseWithoutSaving { get; }
 
@@ -92,10 +97,11 @@ public sealed class CommandContext
             // AutoCAD raises Idle after the command has returned and released its
             // document-scoped lock, so the one-shot callback can close safely.
             closeScheduler.Schedule,
-            message => editor.WriteMessage($"\n{message}"));
+            message => editor.WriteMessage($"\n{message}"),
+            mechanicalAdapter: new ManagedMechanicalAdapter(gateway));
     }
 
-    private sealed class AutoCadDrawingGateway : IDrawingGateway
+    private sealed class AutoCadDrawingGateway : IDrawingGateway, IMechanicalDrawingGateway
     {
         private readonly Document _document;
 
@@ -138,6 +144,68 @@ public sealed class CommandContext
 
             return snapshots;
         }
+
+        public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
+        {
+            var snapshots = new List<MechanicalComponentSnapshot>();
+            using var transaction = _document.TransactionManager.StartOpenCloseTransaction();
+            var blockTable = (BlockTable)transaction.GetObject(
+                _document.Database.BlockTableId,
+                OpenMode.ForRead);
+            var modelSpace = (BlockTableRecord)transaction.GetObject(
+                blockTable[BlockTableRecord.ModelSpace],
+                OpenMode.ForRead);
+
+            foreach (ObjectId objectId in modelSpace)
+            {
+                try
+                {
+                    if (transaction.GetObject(objectId, OpenMode.ForRead, false)
+                        is not BlockReference blockReference)
+                    {
+                        continue;
+                    }
+
+                    var attributes = new List<MechanicalAttributeSnapshot>();
+                    foreach (ObjectId attributeId in blockReference.AttributeCollection)
+                    {
+                        try
+                        {
+                            if (transaction.GetObject(attributeId, OpenMode.ForRead, false)
+                                is AttributeReference attributeReference)
+                            {
+                                attributes.Add(new(
+                                    NormalizeMechanicalTag(attributeReference.Tag),
+                                    attributeReference.TextString ?? string.Empty));
+                            }
+                        }
+                        catch (System.Exception)
+                        {
+                            // An unreadable direct attribute does not make the insert unreadable.
+                        }
+                    }
+
+                    snapshots.Add(new(
+                        blockReference.Handle.ToString().ToUpperInvariant(),
+                        blockReference.Name ?? string.Empty,
+                        attributes
+                            .OrderBy(attribute => attribute.Tag, StringComparer.Ordinal)
+                            .ThenBy(attribute => attribute.Value, StringComparer.Ordinal)
+                            .ToArray()));
+                }
+                catch (System.Exception)
+                {
+                    // Skip an unreadable direct ModelSpace insert and continue the read-only scan.
+                }
+            }
+
+            return snapshots
+                .OrderBy(snapshot => snapshot.Handle, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        private static string NormalizeMechanicalTag(string? tag) =>
+            (tag ?? string.Empty).Trim().ToUpperInvariant();
 
         private static bool TryParseHandle(string? value, out long handle)
         {

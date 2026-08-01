@@ -168,6 +168,47 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertEqual(r"C:\drawings\sample.dwg", request["drawing_full_path"])
             self.assertEqual({"handles": ["10", "A0"]}, request["parameters"])
 
+    def test_mechanical_bom_sends_empty_parameters_and_preserves_payload(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {
+                "component_count": 1,
+                "components": [
+                    {
+                        "handle": "2F",
+                        "block_name": "COMP_FRAME",
+                        "attributes": [{"tag": "PART_ID", "value": "FRAME-001"}],
+                    }
+                ],
+            }
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.mechanical_bom(r"C:\temp\bom.dxf", request_id="bom-001")
+
+            self.assertEqual("mechanical_bom", dispatcher.requests[0]["operation"])
+            self.assertEqual({}, dispatcher.requests[0]["parameters"])
+            self.assertEqual(payload, result["payload"])
+
+    def test_mechanical_bom_rejects_unsupported_parameters_before_trigger(self) -> None:
+        with TemporaryDirectory() as temporary:
+            trigger_calls = 0
+
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+
+            with self.assertRaisesRegex(ValueError, "mechanical_bom parameters"):
+                client.request(
+                    "mechanical_bom",
+                    r"C:\temp\bom.dxf",
+                    parameters={"filter": "COMP_FRAME"},
+                )
+
+            self.assertEqual(0, trigger_calls)
+
     def test_close_disposable_rejects_unsafe_flags_before_trigger(self) -> None:
         with TemporaryDirectory() as temporary:
             trigger_calls = 0

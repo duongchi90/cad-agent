@@ -195,7 +195,18 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
 
         try:
             drawing_document = ezdxf.new("R2010")
-            drawing_document.modelspace().add_line((0, 0), (10, 0))
+            modelspace = drawing_document.modelspace()
+            modelspace.add_line((0, 0), (10, 0))
+            frame_block = drawing_document.blocks.new("COMP_FRAME")
+            frame_block.add_attdef("PART_ID", (0, 0), text="", height=1.0)
+            modelspace.add_auto_blockref(
+                "COMP_FRAME",
+                (0, 0),
+                {"PART_ID": "FRAME-001"},
+            )
+            empty_block = drawing_document.blocks.new("COMP_EMPTY")
+            empty_block.add_line((0, 0), (5, 0))
+            modelspace.add_blockref("COMP_EMPTY", (20, 0))
             drawing_document.saveas(drawing_path)
 
             expected_full_path = normalize_windows_absolute_path(str(drawing_path))
@@ -241,6 +252,39 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertEqual([], review["errors"])
                 self.assertFalse(request_path(dotnet_client.ipc_dir, review_request_id).exists())
                 self.assertFalse(result_path(dotnet_client.ipc_dir, review_request_id).exists())
+
+                bom_request_id = "dotnet-live-mechanical-bom"
+                bom = dotnet_client.mechanical_bom(
+                    expected_full_path,
+                    request_id=bom_request_id,
+                )
+                self.assertTrue(bom["success"])
+                self.assertEqual(expected_full_path, bom["drawing_full_path"])
+                self.assertFalse(bom["changed"])
+                self.assertEqual([], bom["errors"])
+                self.assertEqual(2, bom["payload"]["component_count"])
+                components = bom["payload"]["components"]
+                self.assertEqual(
+                    ["COMP_FRAME", "COMP_EMPTY"],
+                    sorted(component["block_name"] for component in components),
+                )
+                frame_component = next(
+                    component for component in components if component["block_name"] == "COMP_FRAME"
+                )
+                self.assertEqual(
+                    [{"tag": "PART_ID", "value": "FRAME-001"}],
+                    frame_component["attributes"],
+                )
+                empty_component = next(
+                    component for component in components if component["block_name"] == "COMP_EMPTY"
+                )
+                self.assertEqual([], empty_component["attributes"])
+                self.assertEqual(
+                    [component["handle"] for component in components],
+                    bom["entity_handles"],
+                )
+                self.assertFalse(request_path(dotnet_client.ipc_dir, bom_request_id).exists())
+                self.assertFalse(result_path(dotnet_client.ipc_dir, bom_request_id).exists())
 
                 close_request_id = "dotnet-live-close"
                 close = dotnet_client.close_disposable(
