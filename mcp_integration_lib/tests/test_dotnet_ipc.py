@@ -6,7 +6,9 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+from mcp_integration_lib import dotnet_ipc
 from mcp_integration_lib.dotnet_ipc import (
     DEFAULT_IPC_DIR,
     REQUEST_PREFIX,
@@ -24,6 +26,59 @@ from mcp_integration_lib.dotnet_ipc import (
     result_filename,
     result_path,
 )
+
+
+class RecordingUser32:
+    def __init__(self) -> None:
+        self.class_names: dict[int, str] = {}
+        self.enum_calls: list[tuple[int, int]] = []
+        self.post_calls: list[tuple[int, int, int, int]] = []
+
+    def EnumChildWindows(self, hwnd, callback, lparam):
+        self.enum_calls.append((hwnd, lparam))
+        for child, class_name in ((101, "Palette"), (202, "MDIClient"), (303, "Other")):
+            self.class_names[child] = class_name
+            if not callback(child, lparam):
+                break
+
+    def GetClassNameW(self, child, buffer, _length):
+        buffer.value = self.class_names[child]
+        return len(buffer.value)
+
+    def PostMessageW(self, target, message, wparam, lparam):
+        self.post_calls.append((target, message, wparam, lparam))
+        return True
+
+
+class WindowsDotNetTriggerTests(unittest.TestCase):
+    def test_rejects_non_positive_or_non_integer_window_handles(self) -> None:
+        user32 = RecordingUser32()
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+        self.assertTrue(callable(factory))
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32, create=True) as get_user32:
+            for hwnd in (0, -1, None, "123", 1.5, True):
+                with self.subTest(hwnd=hwnd):
+                    with self.assertRaises(ValueError):
+                        factory(hwnd)
+
+        get_user32.assert_not_called()
+
+    def test_posts_exact_dispatch_message_sequence_to_mdi_child(self) -> None:
+        user32 = RecordingUser32()
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+        self.assertTrue(callable(factory))
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32, create=True):
+            trigger = factory(9001)
+            trigger()
+
+        command = "\x1b\x1bCADAGENT_DISPATCH\r"
+        self.assertEqual([(9001, 0)], user32.enum_calls)
+        self.assertEqual(
+            [(202, 0x0102, ord(character), 0) for character in command],
+            user32.post_calls,
+        )
 
 
 def _result(request: dict[str, object], payload: dict[str, object] | None = None) -> dict[str, object]:

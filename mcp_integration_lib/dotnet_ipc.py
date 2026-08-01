@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import ntpath
 import os
@@ -9,6 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,41 @@ _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 SUPPORTED_OPERATIONS = frozenset({"health", "review", "close_disposable"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+_WM_CHAR = 0x0102
+_DOTNET_DISPATCH_COMMAND = "\x1b\x1bCADAGENT_DISPATCH\r"
+
+
+def _get_user32() -> Any:
+    """Return the Win32 user32 API lazily so the trigger remains offline-testable."""
+
+    return ctypes.windll.user32
+
+
+def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
+    """Return a trigger that posts ``CADAGENT_DISPATCH`` to AutoCAD."""
+
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+
+    def trigger() -> None:
+        user32 = _get_user32()
+        mdi_clients: list[int] = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def callback(child: int, _lparam: int) -> bool:
+            name = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(child, name, len(name))
+            if name.value == "MDIClient":
+                mdi_clients.append(child)
+                return False
+            return True
+
+        user32.EnumChildWindows(hwnd, callback_type(callback), 0)
+        target = mdi_clients[0] if mdi_clients else hwnd
+        for character in _DOTNET_DISPATCH_COMMAND:
+            user32.PostMessageW(target, _WM_CHAR, ord(character), 0)
+
+    return trigger
 
 
 def get_ipc_dir(ipc_dir: str | os.PathLike[str] | None = None) -> Path:
@@ -484,6 +521,7 @@ __all__ = [
     "get_request_file_path",
     "get_result_file_name",
     "get_result_file_path",
+    "make_windows_dotnet_dispatch_trigger",
     "normalize_request_id",
     "normalize_windows_absolute_path",
     "read_json_bounded",
