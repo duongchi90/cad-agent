@@ -1,12 +1,15 @@
 using System.Text.Json;
 using Autodesk.AutoCAD.Runtime;
 using CadAgent.AutoCAD2027.Ipc;
+using CadAgent.AutoCAD2027.Review;
 
 namespace CadAgent.AutoCAD2027.Commands;
 
 public sealed class CadAgentCommands
 {
     private const string ManualHealthRequestId = "manual-health";
+    private const string ManualReviewRequestId = "manual-review";
+    private const string ManualCloseDisposableRequestId = "manual-close-disposable";
     private readonly Func<CommandContext> _contextFactory;
 
     public static IReadOnlyList<string> RegisteredCommandNames { get; } = new[]
@@ -85,15 +88,48 @@ public sealed class CadAgentCommands
     public void Review()
     {
         var context = _contextFactory();
-        context.Report("CADAGENT_REVIEW: submit a review request and run CADAGENT_DISPATCH.");
+        var startedAt = context.Clock();
+        var review = new ReviewEngine(context.DrawingGateway).Review(
+            new ReviewRequest(context.DrawingGateway.ActiveDocumentFullPath, Array.Empty<string>()));
+        var result = new IpcResult
+        {
+            RequestId = ManualReviewRequestId,
+            Success = review.Success,
+            Operation = "review",
+            DrawingFullPath = review.DrawingFullPath,
+            Changed = review.Changed,
+            EntityHandles = review.EntityHandles.ToList(),
+            Warnings = review.Warnings.ToList(),
+            Errors = review.Errors.ToList(),
+            StartedAt = startedAt,
+            CompletedAt = context.Clock(),
+            Payload = review.Payload.ToDictionary(
+                item => item.Key,
+                item => item.Value,
+                StringComparer.Ordinal)
+        };
+        ReportResult(context, result);
     }
 
     [CommandMethod("CADAGENT_CLOSE_DISPOSABLE")]
     public void CloseDisposable()
     {
         var context = _contextFactory();
-        context.Report(
-            "CADAGENT_CLOSE_DISPOSABLE: refused without a close_disposable request with disposable=true and save_changes=false.");
+        var request = new IpcRequest
+        {
+            RequestId = ManualCloseDisposableRequestId,
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = "close_disposable",
+            DrawingFullPath = context.DrawingGateway.ActiveDocumentFullPath,
+            DrawingSha256 = null,
+            Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["disposable"] = JsonSerializer.SerializeToElement(true),
+                ["save_changes"] = JsonSerializer.SerializeToElement(false)
+            },
+            Approval = null
+        };
+        ReportResult(context, context.CreateDispatcher().Dispatch(request));
     }
 
     private static void ReportResult(CommandContext context, IpcResult result)

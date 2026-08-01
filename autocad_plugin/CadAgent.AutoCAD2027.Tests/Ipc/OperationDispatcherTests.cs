@@ -26,6 +26,9 @@ public sealed class OperationDispatcherTests
         Assert.Equal(@"C:\drawings\sample.dwg", result.DrawingFullPath);
         Assert.False(result.Changed);
         Assert.Empty(result.Errors!);
+        Assert.Equal("1.0.0", result.Payload!["plugin_version"].GetString());
+        Assert.True(result.Payload["ipc_readable"].GetBoolean());
+        Assert.True(result.Payload["ipc_writable"].GetBoolean());
     }
 
     [Fact]

@@ -6,6 +6,8 @@ namespace CadAgent.AutoCAD2027.Ipc;
 
 public sealed class OperationDispatcher
 {
+    public const string PluginVersion = "1.0.0";
+
     private readonly CommandContext _context;
     private readonly ReviewEngine _reviewEngine;
 
@@ -79,8 +81,11 @@ public sealed class OperationDispatcher
         var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
         {
             ["host"] = JsonSerializer.SerializeToElement("AutoCAD Mechanical 2027"),
+            ["plugin_version"] = JsonSerializer.SerializeToElement(PluginVersion),
             ["active_document"] = JsonSerializer.SerializeToElement(activePath is not null),
             ["ipc_directory"] = JsonSerializer.SerializeToElement(_context.Store.IpcDirectory),
+            ["ipc_readable"] = JsonSerializer.SerializeToElement(true),
+            ["ipc_writable"] = JsonSerializer.SerializeToElement(true),
             ["read_only"] = JsonSerializer.SerializeToElement(true)
         };
 
