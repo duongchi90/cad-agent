@@ -15,7 +15,7 @@ public sealed class CommandContext
 {
     public const string IpcDirectoryEnvironmentVariable = "CAD_AGENT_DOTNET_IPC_DIR";
     public const string DefaultIpcDirectory = @"C:\temp";
-    public const string DeferredCloseCommand = "_.CLOSE _N ";
+    public const string DeferredCloseCommand = "_.CLOSE _N\n";
 
     public CommandContext(
         JsonFileStore store,

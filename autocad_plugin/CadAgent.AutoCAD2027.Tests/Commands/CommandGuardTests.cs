@@ -11,7 +11,7 @@ public sealed class CommandGuardTests
     [Fact]
     public void LiveCloseUsesTheExactDeferredAutoCadCloseCommand()
     {
-        Assert.Equal("_.CLOSE _N ", CommandContext.DeferredCloseCommand);
+        Assert.Equal("_.CLOSE _N\n", CommandContext.DeferredCloseCommand);
     }
 
     [Fact]
