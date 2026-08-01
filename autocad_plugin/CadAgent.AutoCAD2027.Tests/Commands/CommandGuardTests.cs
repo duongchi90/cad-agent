@@ -9,6 +9,12 @@ namespace CadAgent.AutoCAD2027.Tests.Commands;
 public sealed class CommandGuardTests
 {
     [Fact]
+    public void LiveCloseUsesTheExactDeferredAutoCadCloseCommand()
+    {
+        Assert.Equal("_.CLOSE _N ", CommandContext.DeferredCloseCommand);
+    }
+
+    [Fact]
     public void RegistersExactlyTheFourTaskCommands()
     {
         Assert.Equal(
