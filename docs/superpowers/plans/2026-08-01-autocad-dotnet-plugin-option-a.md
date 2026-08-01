@@ -43,6 +43,135 @@ T01 scaffold
 
 Only T02/T03 and T04/T05 are parallel groups. T06, T07, and T08 are sequential integration gates.
 
+## Task-by-Task Execution Details
+
+### Task 1: C# Solution and SDK Boundary
+
+**Files:**
+
+- Create: `autocad_plugin/CadAgent.AutoCAD2027.sln`
+- Create: `autocad_plugin/CadAgent.AutoCAD2027/CadAgent.AutoCAD2027.csproj`
+- Create: `autocad_plugin/CadAgent.AutoCAD2027.Tests/CadAgent.AutoCAD2027.Tests.csproj`
+- Create: `autocad_plugin/Directory.Build.props.example`
+- Modify: `.gitignore`
+
+**Interfaces:** Produces a buildable plugin/test solution and local `AcadDir`/`ArxSdkDir` properties consumed by every later C# task. It must not produce application behavior.
+
+- [ ] Create the solution and two projects with `TargetFramework=net10.0-windows`, x64 platform, library output, nullable and implicit usings.
+- [ ] Add only `AcCoreMgd`, `AcDbMgd`, and `AcMgd` references, preferring `$(ArxSdkDir)\inc` and falling back to `$(AcadDir)`, with `<Private>false</Private>`.
+- [ ] Commit only the example local props file and ignore real `Directory.Build.props`, C# `bin/obj`, and local plugin outputs.
+- [ ] Run `dotnet restore autocad_plugin/CadAgent.AutoCAD2027.sln`.
+- [ ] Run `dotnet build autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64` and inspect that Autodesk DLLs are not copied.
+- [ ] Review the diff and commit the scoped task.
+
+### Task 2: Shared IPC Contracts and Offline Primitives
+
+**Files:**
+
+- Create: `contracts/autocad-ipc/request.schema.json`, `result.schema.json`, operation schemas, and examples.
+- Create: `autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractModels.cs`, `ContractValidator.cs`, `JsonFileStore.cs`.
+- Create: `autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/ContractTests.cs`, `JsonFileStoreTests.cs`.
+
+**Interfaces:** Produces schema version `1.0`, C# DTOs/validation, and request-specific atomic file operations consumed by T05/T06.
+
+- [ ] Encode the required request/result fields and allow `drawing_full_path=null` only for `health`.
+- [ ] Reject bad version, empty request id, relative path, unsupported operation, and invalid disposable parameters.
+- [ ] Implement `cadagent_dotnet_request_<request_id>.json`/`cadagent_dotnet_result_<request_id>.json` naming, atomic writes, bounded reads, and cleanup of only the current request.
+- [ ] Write failing tests for the invalid and round-trip cases, then implement the minimum passing behavior.
+- [ ] Run `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64`.
+- [ ] Review the diff and commit the scoped task.
+
+### Task 3: Mechanical Capability Boundary
+
+**Files:**
+
+- Create: `autocad_plugin/CadAgent.AutoCAD2027/Mechanical/IMechanicalAdapter.cs`, `MechanicalModels.cs`, `NoOpMechanicalAdapter.cs`.
+- Create: `autocad_plugin/CadAgent.AutoCAD2027.Tests/Mechanical/NoOpMechanicalAdapterTests.cs`.
+
+**Interfaces:** Produces `IMechanicalAdapter`, `MechanicalCapabilityResult`, `MechanicalOperationRequest`, and `MechanicalOperationResult` for future adapters; the default implementation is unavailable and non-mutating.
+
+- [ ] Write tests proving `IsAvailable=false`, no supported operations, `not_supported`, and operation-name preservation.
+- [ ] Implement the interface and no-op result without referencing COM, ActiveX, Mechanical SDK, C++, or native ARX.
+- [ ] Run `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64`.
+- [ ] Inspect the project dependency graph for absent Mechanical/native references.
+- [ ] Review the diff and commit the scoped task.
+
+### Task 4: Drawing Reader and Read-only Review Core
+
+**Files:**
+
+- Create: `autocad_plugin/CadAgent.AutoCAD2027/Drawing/ActiveDocumentReader.cs`.
+- Create: `autocad_plugin/CadAgent.AutoCAD2027/Review/EntitySnapshot.cs`, `ReviewService.cs`.
+- Create: `autocad_plugin/CadAgent.AutoCAD2027.Tests/Drawing/ActiveDocumentPathTests.cs`, `Review/ReviewMappingTests.cs`.
+
+**Interfaces:** Consumes the contract models from T02 and produces full-path document identity plus read-only entity snapshots for T06.
+
+- [ ] Write pure tests for Windows path normalization, LINE/CIRCLE/ARC/TEXT/DIMENSION mapping, missing handle, and unsupported-type warning.
+- [ ] Implement active-document identity using the full normalized path, never filename-only identity.
+- [ ] Read entities in a read-only transaction and expose handle/type/layer/basic geometry without save, erase, or mutation calls.
+- [ ] Run `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64`.
+- [ ] Review the diff and commit the scoped task.
+
+### Task 5: Python dotnet_ipc Backend
+
+**Files:**
+
+- Create: `mcp_integration_lib/dotnet_ipc.py`.
+- Create: `mcp_integration_lib/tests/test_dotnet_ipc.py`.
+
+**Interfaces:** Produces `DotNetIPCClient.request`, `.health`, `.review`, and `.close_disposable` with injected trigger, bounded polling, new file prefix, and request-id preservation.
+
+- [ ] Write fake-dispatcher tests for health, review parameters, disposable-close guard, timeout, request-specific cleanup, and old `autocad_mcp_*` coexistence.
+- [ ] Implement only the new backend; do not modify `mcp_client.py`, `reviewer2.py`, or `repair2.py`.
+- [ ] Run `python -m pytest mcp_integration_lib/tests/test_dotnet_ipc.py -q -p no:cacheprovider`.
+- [ ] Run `python -m ruff check mcp_integration_lib/dotnet_ipc.py mcp_integration_lib/tests/test_dotnet_ipc.py`.
+- [ ] Review the diff and commit the scoped task.
+
+### Task 6: Commands and Operation Dispatcher
+
+**Files:**
+
+- Create: `autocad_plugin/CadAgent.AutoCAD2027/Commands/CadAgentCommands.cs`, `CommandContext.cs`.
+- Create: `autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs`.
+- Create: `autocad_plugin/CadAgent.AutoCAD2027.Tests/Commands/CommandGuardTests.cs`, `Ipc/OperationDispatcherTests.cs`.
+
+**Interfaces:** Consumes T02–T05 boundaries and produces the four AutoCAD command registrations and operation dispatch behavior.
+
+- [ ] Write tests for command names, health result, request/result id preservation, document mismatch, close guard, unsupported operation, and error-to-result conversion.
+- [ ] Register exactly `CADAGENT_HEALTH`, `CADAGENT_DISPATCH`, `CADAGENT_REVIEW`, and `CADAGENT_CLOSE_DISPOSABLE`.
+- [ ] Reject unsupported mutation/repair before any transaction; do not call save, save-as, erase, or mutation APIs.
+- [ ] Run focused C# tests and `dotnet build autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64`.
+- [ ] Review the diff and commit the scoped task.
+
+### Task 7: Authoritative Verification Integration
+
+**Files:**
+
+- Modify: `scripts/verify.ps1`.
+- Modify: `tests/test_verification_contract.py`.
+- Create: `tests/test_autocad_plugin_project.py`.
+
+**Interfaces:** Produces the only authoritative verifier entry point for the C# build/tests plus the existing Python gates; it does not update `docs/STATUS.md`.
+
+- [ ] Write contract tests proving C# restore/build/test is owned by `scripts/verify.ps1` and live absence is explicit skip/not pass.
+- [ ] Add Release x64 restore/build/test without weakening clean-tree, snapshot, Python, live-marker, Ruff, or diff checks.
+- [ ] Run `dotnet restore`, `dotnet build`, `dotnet test`, and `.\scripts\verify.ps1` from a clean task worktree.
+- [ ] Review the diff and commit the scoped task.
+
+### Task 8: AutoCAD Live Smoke and Final Review
+
+**Files:**
+
+- Create only when evidence is recorded: `docs/reviews/2026-08-01-autocad-dotnet-live-review.md`.
+
+**Interfaces:** Consumes the T07 integration artifact and produces live evidence; it does not change source, verification, or `docs/STATUS.md`.
+
+- [ ] Use manual NETLOAD in AutoCAD Mechanical 2027 and run `CADAGENT_HEALTH`.
+- [ ] Use a disposable DXF under `C:\temp`, run handle review, and close it without save.
+- [ ] Record exactly `PASS`, `SKIP`, or `NOT RUN` with prerequisite and evidence details.
+- [ ] Review the result independently for no production save, no repair path, and no changed old dispatcher.
+- [ ] Commit only the review record if one is needed.
+
 ## Dependency and Ownership Table
 
 | Task ID | Objective | Depends on | Branch | Worktree | Allowed files | Forbidden files | Parallel with | Mandatory tests | Completion condition |
