@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import time
@@ -248,6 +249,16 @@ class DotNetIPCClientTests(unittest.TestCase):
 
 
 class PathUtilityTests(unittest.TestCase):
+    def test_autocad_marker_is_scoped_to_live_smoke_class(self) -> None:
+        live_module = importlib.import_module(
+            "mcp_integration_lib.tests.test_dotnet_ipc_live"
+        )
+
+        self.assertNotIn("pytestmark", vars(live_module))
+        live_markers = getattr(live_module.DotNetIPCLiveSmokeTests, "pytestmark", [])
+        self.assertEqual(["autocad_mechanical"], [marker.name for marker in live_markers])
+        self.assertFalse(hasattr(live_module.DisposableCleanupTests, "pytestmark"))
+
     def test_request_and_result_names_use_the_new_prefix(self) -> None:
         request_id = "health-20260801-001"
 

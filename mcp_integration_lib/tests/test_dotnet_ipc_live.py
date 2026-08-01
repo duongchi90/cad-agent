@@ -25,9 +25,6 @@ from mcp_integration_lib.mcp_client import (
 )
 
 
-pytestmark = pytest.mark.autocad_mechanical
-
-
 def _live_prerequisites_available() -> bool:
     return (
         os.getenv("CAD_AGENT_FILE_IPC") == "1"
@@ -122,6 +119,7 @@ class DisposableCleanupTests(unittest.TestCase):
     _live_prerequisites_available(),
     "requires CAD_AGENT_FILE_IPC=1, CAD_AGENT_AUTOCAD_HWND, and CAD_AGENT_AUTOCAD_LISP_PATH",
 )
+@pytest.mark.autocad_mechanical
 class DotNetIPCLiveSmokeTests(unittest.TestCase):
     def test_disposable_dxf_uses_dotnet_health_review_and_close(self) -> None:
         test_directory = Path(tempfile.mkdtemp(prefix="cad_agent_dotnet_live_", dir=r"C:\temp"))
