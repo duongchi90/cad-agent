@@ -1,4 +1,9 @@
 using System.Text.Json;
+using System.Buffers.Binary;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
@@ -9,6 +14,37 @@ namespace CadAgent.AutoCAD2027.Tests.Commands;
 
 public sealed class CommandGuardTests
 {
+    [Fact]
+    public void DispatchCommandUsesSessionAndOtherCommandsDoNot()
+    {
+        var commandFlags = typeof(CadAgentCommands)
+            .GetMethods()
+            .Where(method => method.Name is nameof(CadAgentCommands.Health)
+                or nameof(CadAgentCommands.Dispatch)
+                or nameof(CadAgentCommands.Review)
+                or nameof(CadAgentCommands.CloseDisposable))
+            .ToDictionary(
+                method => method.Name,
+                ReadCommandFlags);
+
+        Assert.Equal(0x20, commandFlags[nameof(CadAgentCommands.Dispatch)] & 0x20);
+        Assert.Equal(0, commandFlags[nameof(CadAgentCommands.Health)] & 0x20);
+        Assert.Equal(0, commandFlags[nameof(CadAgentCommands.Review)] & 0x20);
+        Assert.Equal(0, commandFlags[nameof(CadAgentCommands.CloseDisposable)] & 0x20);
+    }
+
+    private static int ReadCommandFlags(MethodInfo method)
+    {
+        using var stream = File.OpenRead(method.Module.FullyQualifiedName);
+        using var peReader = new PEReader(stream);
+        var metadataReader = peReader.GetMetadataReader();
+        var methodDefinition = metadataReader.GetMethodDefinition(
+            MetadataTokens.MethodDefinitionHandle(method.MetadataToken));
+        var attribute = metadataReader.GetCustomAttribute(methodDefinition.GetCustomAttributes().Single());
+        var blob = metadataReader.GetBlobBytes(attribute.Value);
+        return BinaryPrimitives.ReadInt32LittleEndian(blob.AsSpan(blob.Length - sizeof(int)));
+    }
+
     [Fact]
     public void RegistersExactlyTheFourTaskCommands()
     {
