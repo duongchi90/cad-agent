@@ -3,6 +3,7 @@
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -31,6 +32,48 @@ def _live_prerequisites_available() -> bool:
         and bool(os.getenv("CAD_AGENT_AUTOCAD_HWND"))
         and bool(os.getenv("CAD_AGENT_AUTOCAD_LISP_PATH"))
     )
+
+
+def _wait_for_disposable_drawing_release(
+    drawing_path: Path,
+    *,
+    timeout_s: float = 20.0,
+    poll_interval_s: float = 0.1,
+    replace: Callable[[str | os.PathLike[str], str | os.PathLike[str]], None] = os.replace,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Wait until AutoCAD releases a disposable drawing before directory removal."""
+
+    if timeout_s <= 0:
+        raise ValueError("timeout_s must be positive")
+    if poll_interval_s < 0:
+        raise ValueError("poll_interval_s must not be negative")
+    if not drawing_path.exists():
+        return
+
+    probe_path = drawing_path.with_name(f"{drawing_path.name}.release-probe")
+    deadline = monotonic() + timeout_s
+    while True:
+        moved_to_probe = False
+        try:
+            replace(drawing_path, probe_path)
+            moved_to_probe = True
+            replace(probe_path, drawing_path)
+            return
+        except FileNotFoundError:
+            if moved_to_probe:
+                replace(probe_path, drawing_path)
+            return
+        except PermissionError as exc:
+            if moved_to_probe:
+                replace(probe_path, drawing_path)
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Timed out waiting for disposable drawing release: {drawing_path}"
+                ) from exc
+            sleep(min(poll_interval_s, remaining))
 
 
 @contextmanager
@@ -81,6 +124,31 @@ class _OpenThenRaise:
 
 
 class DisposableCleanupTests(unittest.TestCase):
+    def test_waits_until_disposable_drawing_is_released(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            drawing_path = Path(temporary_directory) / "dotnet_live.dxf"
+            drawing_path.write_text("disposable", encoding="utf-8")
+            attempts = 0
+
+            def replace_with_transient_lock(source: str, destination: str) -> None:
+                nonlocal attempts
+                if os.fspath(source) == os.fspath(drawing_path):
+                    attempts += 1
+                    if attempts < 3:
+                        raise PermissionError("drawing is still locked")
+                os.replace(source, destination)
+
+            _wait_for_disposable_drawing_release(
+                drawing_path,
+                timeout_s=1.0,
+                poll_interval_s=0.0,
+                replace=replace_with_transient_lock,
+                sleep=lambda _seconds: None,
+            )
+
+            self.assertEqual(3, attempts)
+            self.assertTrue(drawing_path.is_file())
+
     def test_closes_when_opening_raises_after_opening(self) -> None:
         drawing_path = r"C:\temp\disposable\dotnet_live.dxf"
         recorder = _CloseRecorder()
@@ -189,4 +257,5 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertFalse(request_path(dotnet_client.ipc_dir, close_request_id).exists())
                 self.assertFalse(result_path(dotnet_client.ipc_dir, close_request_id).exists())
         finally:
+            _wait_for_disposable_drawing_release(drawing_path)
             shutil.rmtree(test_directory)
