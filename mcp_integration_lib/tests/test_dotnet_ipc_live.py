@@ -55,6 +55,23 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _cleanup_disposable_fixture_directory(
+    test_directory: Path,
+    drawing_path: Path,
+    *,
+    original_sha256: str,
+) -> None:
+    try:
+        _wait_for_disposable_drawing_release(drawing_path)
+        if original_sha256:
+            if not drawing_path.is_file():
+                raise AssertionError(f"Disposable drawing was removed: {drawing_path}")
+            if original_sha256 != _sha256(drawing_path):
+                raise AssertionError(f"Disposable drawing changed: {drawing_path}")
+    finally:
+        shutil.rmtree(test_directory)
+
+
 class MechanicalBomFixtureTests(unittest.TestCase):
     def test_mechanical_bom_fixture_uses_direct_attributed_insert(self) -> None:
         drawing_document = ezdxf.new("R2010")
@@ -228,6 +245,22 @@ class DisposableCleanupTests(unittest.TestCase):
             recorder.calls,
         )
 
+    def test_fixture_directory_is_removed_when_integrity_assertion_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as parent_directory:
+            test_directory = Path(parent_directory) / "fixture"
+            test_directory.mkdir()
+            drawing_path = test_directory / "dotnet_live.dxf"
+            drawing_path.write_text("disposable", encoding="utf-8")
+
+            with self.assertRaises(AssertionError):
+                _cleanup_disposable_fixture_directory(
+                    test_directory,
+                    drawing_path,
+                    original_sha256="sha-does-not-match",
+                )
+
+            self.assertFalse(test_directory.exists())
+
 
 @unittest.skipUnless(
     _live_prerequisites_available(),
@@ -349,8 +382,8 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertFalse(request_path(dotnet_client.ipc_dir, close_request_id).exists())
                 self.assertFalse(result_path(dotnet_client.ipc_dir, close_request_id).exists())
         finally:
-            _wait_for_disposable_drawing_release(drawing_path)
-            if original_sha256:
-                self.assertTrue(drawing_path.is_file())
-                self.assertEqual(original_sha256, _sha256(drawing_path))
-            shutil.rmtree(test_directory)
+            _cleanup_disposable_fixture_directory(
+                test_directory,
+                drawing_path,
+                original_sha256=original_sha256,
+            )

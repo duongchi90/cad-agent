@@ -191,14 +191,22 @@ public sealed class ContractTests
             RepositoryFile("contracts/autocad-ipc/examples/mechanical-bom-request.json")));
         var result = ContractJson.DeserializeResult(File.ReadAllText(
             RepositoryFile("contracts/autocad-ipc/examples/mechanical-bom-result.json")));
+        var requestJson = ContractJson.Serialize(request);
+        var resultJson = ContractJson.Serialize(result);
+        var requestCopy = ContractJson.DeserializeRequest(requestJson);
+        var resultCopy = ContractJson.DeserializeResult(resultJson);
 
         Assert.True(ContractValidator.ValidateRequest(request).IsValid);
         Assert.True(ContractValidator.ValidateResult(result).IsValid);
-        Assert.Equal("mechanical_bom", request.Operation);
-        Assert.Equal("mechanical_bom", result.Operation);
-        Assert.Equal(request.DrawingFullPath, result.DrawingFullPath);
-        Assert.Equal(1, result.Payload!["component_count"].GetInt32());
-        var component = Assert.Single(result.Payload["components"].EnumerateArray());
+        Assert.True(ContractValidator.ValidateRequest(requestCopy).IsValid);
+        Assert.True(ContractValidator.ValidateResult(resultCopy).IsValid);
+        Assert.Equal("mechanical_bom", requestCopy.Operation);
+        Assert.Equal("mechanical_bom", resultCopy.Operation);
+        Assert.Equal(request.DrawingFullPath, requestCopy.DrawingFullPath);
+        Assert.Empty(requestCopy.Parameters!);
+        Assert.Equal(result.DrawingFullPath, resultCopy.DrawingFullPath);
+        Assert.Equal(1, resultCopy.Payload!["component_count"].GetInt32());
+        var component = Assert.Single(resultCopy.Payload["components"].EnumerateArray());
         Assert.Equal("2F", component.GetProperty("handle").GetString());
         Assert.Equal("COMP_FRAME", component.GetProperty("block_name").GetString());
         Assert.Equal(
@@ -221,7 +229,7 @@ public sealed class ContractTests
                 .GetProperty("pattern")
                 .GetString();
             Assert.NotNull(pattern);
-            Assert.Matches(pattern!, request.DrawingFullPath!);
+            Assert.Matches(pattern!, requestCopy.DrawingFullPath!);
         }
     }
 
