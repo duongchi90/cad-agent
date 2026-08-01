@@ -18,12 +18,12 @@
 
 ## Task 1: Mechanical BOM live gate
 
-**Files:** Existing `mcp_integration_lib/tests/test_dotnet_ipc_live.py`; no source changes.
+**Files:** Existing live test plus its ordering assertion; no production source changes.
 
-- [ ] Confirm AutoCAD is on `[Start]`, not a production drawing, and use the discovered window handle only if it remains unchanged.
-- [ ] Manually NETLOAD the current managed plugin DLL and load the external legacy LISP dispatcher only as the disposable-DXF bootstrap.
-- [ ] Run the opt-in BOM live test with `CAD_AGENT_FILE_IPC=1`, `CAD_AGENT_AUTOCAD_HWND`, and `CAD_AGENT_AUTOCAD_LISP_PATH`.
-- [ ] Record `PASS` only if health, review, BOM payload, unchanged `DBMOD`, unchanged DXF hash, request cleanup, and close-without-save all pass; otherwise record `NOT RUN`/`SKIP` with the exact prerequisite or failure.
+- [x] Confirm AutoCAD is on `[Start]`, not a production drawing, and use the discovered window handle only if it remains unchanged.
+- [x] NETLOAD the current managed plugin DLL and load the external legacy LISP dispatcher only as the disposable-DXF bootstrap.
+- [x] Run the opt-in BOM live test with `CAD_AGENT_FILE_IPC=1`, `CAD_AGENT_AUTOCAD_HWND`, and `CAD_AGENT_AUTOCAD_LISP_PATH`.
+- [x] Record `PASS`: the live test passed health, review, BOM payload, unchanged `DBMOD`, unchanged DXF hash, request cleanup, and close-without-save. The test's sorted expected block-name assertion was corrected from `FRAME, EMPTY` to `EMPTY, FRAME`.
 
 ## Task 2: Legacy close regression (TDD)
 
@@ -32,15 +32,15 @@
 - Modify: `mcp_integration_lib/mcp_client.py` (`FileIPCLiveMCPClient.drawing_close`).
 - Test: `mcp_integration_lib/tests/test_phase4.py` or a focused existing client test file.
 
-- [ ] Write a failing test with an injected raw-LISP trigger proving the no-save path sends exactly `(command-s "_.CLOSE" "_N")` and does not send `vla-close`.
-- [ ] Run the focused test and observe the expected failure against the current COM expression.
-- [ ] Replace only the raw no-save close expression with `(command-s "_.CLOSE" "_N")`; preserve the save-enabled branch and settle wait.
-- [ ] Run the focused test, the .NET/legacy IPC tests, Ruff, and `git diff --check`.
-- [ ] Review the diff for the exact two-file write-set and commit the fix.
+- [x] Write a failing test with an injected raw-LISP trigger proving the no-save path sends exactly `(command-s "_.CLOSE" "_N")` and does not send `vla-close`.
+- [x] Run the focused test and observe the expected failure against the current COM expression.
+- [x] Replace only the raw no-save close expression with `(command-s "_.CLOSE" "_N")`; preserve the save-enabled branch and settle wait.
+- [x] Run the focused test, the .NET/legacy IPC tests, Ruff, and `git diff --check`.
+- [x] Review and commit the production fix (`2d26986`); the focused live close smoke also passed on a disposable DXF with an unchanged hash.
 
 ## Task 3: Integration
 
-- [ ] Run `scripts/verify.ps1` with the lock-matching Python 3.11 interpreter.
+- [x] Run `scripts/verify.ps1` with the lock-matching Python 3.11 interpreter.
 - [ ] Review the final diff and merge the reviewed branch into `main`.
 - [ ] Push `main` and verify `HEAD == origin/main`.
-- [ ] Update `docs/STATUS.md` only with evidence actually obtained.
+- [ ] Update `docs/STATUS.md` only with evidence actually obtained after integration.
