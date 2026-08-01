@@ -238,12 +238,17 @@ class FileIPCLiveMCPClient:
 
     def drawing_close(self, save_changes: bool = False) -> None:
         if self._raw_lisp_trigger is not None:
-            save_flag = ":vlax-true" if save_changes else ":vlax-false"
-            self._raw_lisp_trigger(
-                "(progn (vl-load-com) "
-                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                f"{save_flag}))"
-            )
+            if save_changes:
+                self._raw_lisp_trigger(
+                    "(progn (vl-load-com) "
+                    "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
+                    ":vlax-true))"
+                )
+            else:
+                # Queue the command at AutoCAD's command boundary. Calling
+                # vla-close immediately after the File IPC result is written
+                # can race the still-active dispatcher and report Drawing is busy.
+                self._raw_lisp_trigger('(command-s "_.CLOSE" "_N")')
             time.sleep(self._document_settle_s)
             return
         self._dispatch("drawing-close", {"save_changes": save_changes})

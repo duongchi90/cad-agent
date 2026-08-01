@@ -206,6 +206,35 @@ class FileIPCClientTests(unittest.TestCase):
         self.assertIn('C:/work/a.dxf', raw_commands[0])
         self.assertEqual('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
 
+    def test_raw_lisp_close_queues_no_save_command_without_com_close(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            raw_lisp_trigger=raw_commands.append,
+            document_settle_s=0,
+        )
+
+        client.drawing_close(save_changes=False)
+
+        self.assertEqual(['(command-s "_.CLOSE" "_N")'], raw_commands)
+
+    def test_raw_lisp_close_with_save_keeps_com_save_path(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            raw_lisp_trigger=raw_commands.append,
+            document_settle_s=0,
+        )
+
+        client.drawing_close(save_changes=True)
+
+        self.assertEqual(
+            [
+                "(progn (vl-load-com) "
+                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
+                ":vlax-true))"
+            ],
+            raw_commands,
+        )
+
     def test_bootstrap_waits_for_dispatcher_ping(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
