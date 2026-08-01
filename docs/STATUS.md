@@ -194,6 +194,47 @@ not requested or run here.
   reconstruction, and the corresponding CLI/design evidence. No production
   AutoCAD mutation is authorized.
 
+## Fidelity, stable identity, and P1 continuation (2026-08-02)
+
+- Candidate implementation head: `aeaf950`. The specification and plan are
+  recorded in `docs/superpowers/specs/2026-08-02-fidelity-legacy-p1-design.md`
+  and `docs/superpowers/plans/2026-08-02-fidelity-legacy-p1.md`.
+- Stable component identity: review and repair now use an exact `PART_ID`
+  fallback when a saved/reopened INSERT handle changes. Ambiguous duplicate
+  identities fail closed; the live E2E helper rebinds the current handle before
+  inspection. This removes the old `Entity not found` assumption without
+  weakening the mismatch gate.
+- Advanced fidelity: text, table text, dimension, hatch, and linetype review
+  sidecars are now exposed as hash-bound per-page entries in the review index
+  and queue. Missing or invalid sidecars remain `not_run`/`invalid_artifact`,
+  and the overall fidelity state remains `needs_review`; no production CAD
+  mutation or model export is enabled by this change.
+- P1 local image gate: **PASS** for the workstation-local page scan
+  `bv (1)_p01.png`, SHA-256
+  `95fb77b16c61cac7a3463e9fc29d0883fb34fbf5ad92d311e9ee6c658a736918`.
+  The official real-image benchmark passed `1` test using Tesseract
+  `5.4.0.20240606`/`eng`; it found the expected `2760`/`1525` OCR region and
+  the overlapping Hough-line witness chain, with relative scale consistency
+  error about `1.46%`. The source image and report remain outside Git.
+- Focused evidence: DXF reviewer/repair suite `30 passed`; fidelity suite
+  `41 passed`; line-merging/tick suite `26 passed`; Ruff and `git diff --check`
+  passed.
+- Authoritative verifier: **PASS** on `aeaf950` with the lock-matching Python
+  3.11 interpreter: .NET `68/68`, dotnet IPC JUnit `36/0/0/0`, offline JUnit
+  `450/0/0/0`, unavailable probes `2` and `7` skipped, environment/lock/Ruff
+  checks passed. Autodesk reference-conflict warnings remain informational.
+- AutoCAD live session probe: **NOT RUN for acceptance**. An attempt against a
+  fresh AutoCAD Mechanical 2027 window with the declared dispatcher path gave
+  `2 passed, 10 failed`; all failures timed out waiting for the dispatcher
+  after the new session remained on `[Start]`. This is a session/bootstrap
+  prerequisite failure, not evidence that offline tests are live PASS. No
+  production drawing or `Drawing1.dwg` was opened, saved, or modified.
+- Remaining gates: run the live component round-trip only after a fresh
+  AutoCAD session has loaded and answered `mcp_dispatch.lsp`; advanced fidelity
+  sidecars still require private-data review before visual acceptance; the
+  production repair loop remains a separately human-approved operation with
+  backup and second review.
+
 ## First product milestone decision
 
 - State: **Verified** for the reviewable-DXF scope defined in
