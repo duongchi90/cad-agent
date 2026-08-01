@@ -15,7 +15,6 @@ public sealed class CommandContext
 {
     public const string IpcDirectoryEnvironmentVariable = "CAD_AGENT_DOTNET_IPC_DIR";
     public const string DefaultIpcDirectory = @"C:\temp";
-    public const string DeferredCloseCommand = "_.CLOSE\nN\n";
 
     public CommandContext(
         JsonFileStore store,
@@ -76,6 +75,7 @@ public sealed class CommandContext
     {
         var document = AcadApplication.DocumentManager.MdiActiveDocument
             ?? throw new InvalidOperationException("No active AutoCAD document is available.");
+        var documentManager = AcadApplication.DocumentManager;
         var editor = document.Editor;
         var gateway = new AutoCadDrawingGateway(document);
         var ipcDirectory = Environment.GetEnvironmentVariable(IpcDirectoryEnvironmentVariable);
@@ -85,7 +85,12 @@ public sealed class CommandContext
         return new CommandContext(
             store,
             gateway,
-            () => document.SendStringToExecute(DeferredCloseCommand, true, false, false),
+            // CADAGENT_DISPATCH persists the IPC result before invoking this scheduler.
+            // AutoCAD then runs the managed close callback in application context after
+            // the document-scoped command has returned and released its document lock.
+            () => documentManager.ExecuteInApplicationContext(
+                _ => document.CloseAndDiscard(),
+                null),
             message => editor.WriteMessage($"\n{message}"));
     }
 

@@ -129,7 +129,6 @@ public sealed class OperationDispatcher
             return Failure(request, new[] { error }, startedAt);
         }
 
-        _context.CloseWithoutSaving();
         var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
         {
             ["closed_without_saving"] = JsonSerializer.SerializeToElement(true)

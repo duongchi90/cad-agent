@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
@@ -8,12 +9,6 @@ namespace CadAgent.AutoCAD2027.Tests.Commands;
 
 public sealed class CommandGuardTests
 {
-    [Fact]
-    public void LiveCloseUsesTheExactDeferredAutoCadCloseCommand()
-    {
-        Assert.Equal("_.CLOSE\nN\n", CommandContext.DeferredCloseCommand);
-    }
-
     [Fact]
     public void RegistersExactlyTheFourTaskCommands()
     {
@@ -87,6 +82,62 @@ public sealed class CommandGuardTests
         var result = ContractJson.DeserializeResult(reports.Single());
         Assert.False(result.Success);
         Assert.NotEmpty(result.Errors!);
+    }
+
+    [Fact]
+    public void DispatchPersistsCloseResultBeforeInvokingCloseScheduler()
+    {
+        const string requestId = "close-ordering";
+        const string drawingPath = @"C:\drawings\sample.dwg";
+        var reports = new List<string>();
+        var store = new JsonFileStore(Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-t14-command-tests",
+            Guid.NewGuid().ToString("N")));
+        store.WriteRequest(new IpcRequest
+        {
+            RequestId = requestId,
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = "close_disposable",
+            DrawingFullPath = drawingPath,
+            DrawingSha256 = null,
+            Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["disposable"] = JsonSerializer.SerializeToElement(true),
+                ["save_changes"] = JsonSerializer.SerializeToElement(false)
+            },
+            Approval = null
+        });
+
+        var closeCalls = 0;
+        var schedulerSawPersistedResult = false;
+        Action? pendingClose = null;
+        var context = new CommandContext(
+            store,
+            new SpyDrawingGateway
+            {
+                ActiveDocumentFullPath = drawingPath
+            },
+            () =>
+            {
+                schedulerSawPersistedResult = File.Exists(store.GetResultPath(requestId));
+                pendingClose = () => closeCalls++;
+            },
+            reports.Add,
+            () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero));
+
+        new CadAgentCommands(() => context).Dispatch();
+
+        var result = store.ReadResult(requestId);
+        Assert.True(result.Success);
+        Assert.True(result.Payload!["closed_without_saving"].GetBoolean());
+        Assert.True(schedulerSawPersistedResult);
+        Assert.Equal(0, closeCalls);
+        Assert.NotNull(pendingClose);
+
+        pendingClose!();
+
+        Assert.Equal(1, closeCalls);
     }
 
     private static CommandContext CreateContext(

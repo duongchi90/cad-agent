@@ -81,6 +81,7 @@ public sealed class CadAgentCommands
         }
 
         context.Store.WriteResult(result);
+        ScheduleCloseAfterResultPersistence(context, result);
         context.Report($"CADAGENT_DISPATCH: request {requestId} completed (success={result.Success}).");
     }
 
@@ -129,11 +130,21 @@ public sealed class CadAgentCommands
             },
             Approval = null
         };
-        ReportResult(context, context.CreateDispatcher().Dispatch(request));
+        var result = context.CreateDispatcher().Dispatch(request);
+        ReportResult(context, result);
+        ScheduleCloseAfterResultPersistence(context, result);
     }
 
     private static void ReportResult(CommandContext context, IpcResult result)
     {
         context.Report(ContractJson.Serialize(result));
+    }
+
+    private static void ScheduleCloseAfterResultPersistence(CommandContext context, IpcResult result)
+    {
+        if (result.Success && string.Equals(result.Operation, "close_disposable", StringComparison.Ordinal))
+        {
+            context.CloseWithoutSaving();
+        }
     }
 }
