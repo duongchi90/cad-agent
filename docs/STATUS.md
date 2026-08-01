@@ -73,7 +73,7 @@ read-only Mechanical BOM extension is recorded separately below.
 
 ## AutoCAD .NET plugin — Mechanical BOM 2A extension
 
-- Candidate integration head: `ac75d20` on `integration/mechanical-bom-readonly`.
+- Candidate code head: `1ebb4db` on `integration/mechanical-bom-readonly`.
 - Date: 2026-08-01.
 - State: **Partially verified**. The managed read-only implementation, IPC
   contract, Python helper, unit tests, and authoritative offline verifier pass;
@@ -86,16 +86,17 @@ read-only Mechanical BOM extension is recorded separately below.
 - Contract evidence: schema remains `1.0`; `parameters` is exactly `{}`;
   request/result examples and C#/Python validation are included under
   `contracts/autocad-ipc/`.
-- C# evidence: Release x64 build/test passed with **58 passed, 0 failed, 0
+- C# evidence: Release x64 build/test passed with **68 passed, 0 failed, 0
   skipped**. Existing Autodesk `MSB3277` reference-conflict warnings remain;
   no Autodesk DLL was copied to plugin output.
-- Python evidence: focused .NET IPC/live-module run passed **22 tests and 18
-  subtests**, with one expected live prerequisite skip; the corrected
-  disposable fixture test passed and verifies nested inserts are excluded.
-- Authoritative verifier: **PASS** on `ac75d20` using the lock-matching Python
+- Python evidence: the .NET IPC suite passed **18 tests and 18 subtests**; the
+  live-module suite passed **5 offline tests** with one expected live
+  prerequisite skip. The fixture topology test passed; actual plugin nested
+  exclusion remains live **NOT RUN**.
+- Authoritative verifier: **PASS** on code head `1ebb4db` using the lock-matching Python
   3.11 interpreter `D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe`:
-  C# **58/58**, dotnet IPC JUnit **36/0/0/0**, offline JUnit
-  **443/0/0/0**, real-data unavailable probe **2 skipped**, AutoCAD Mechanical
+  C# **68/68**, dotnet IPC JUnit **36/0/0/0**, offline JUnit
+  **444/0/0/0**, real-data unavailable probe **2 skipped**, AutoCAD Mechanical
   unavailable probe **7 skipped**, and Ruff/environment checks passed.
 - AutoCAD live marker: **NOT RUN** because `CAD_AGENT_FILE_IPC`, a live
   AutoCAD HWND, and the declared File IPC bootstrap path were not available.
@@ -104,8 +105,8 @@ read-only Mechanical BOM extension is recorded separately below.
 - Evidence records: `docs/superpowers/specs/2026-08-01-mechanical-bom-readonly-design.md`,
   `docs/superpowers/plans/2026-08-01-mechanical-bom-readonly.md`, and the
   task reports/review packages in the plan's ignored SDD workspace.
-- Remaining gate: complete the final whole-branch review, then merge this
-  reviewed candidate into `main` and push it. A future operator-controlled
+- Remaining gate: merge this reviewed candidate into `main` and push it. A
+  future operator-controlled
   disposable-DXF AutoCAD session may promote the live marker from `NOT RUN` to
   `PASS` or `SKIP`.
 
