@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <OutputType>Library</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!--
+      This project is only for AutoCAD Mechanical 2027. AcadDir is the installed
+      root path; Autodesk names this machine's Mechanical installation generically
+      as AutoCAD 2027, so product/profile identity is declared and validated here.
+    -->
+    <AutoCADProduct Condition="'$(AutoCADProduct)' == ''">AutoCAD Mechanical</AutoCADProduct>
+    <AutoCADProductVersion Condition="'$(AutoCADProductVersion)' == ''">2027</AutoCADProductVersion>
+    <AutoCADProductProfile Condition="'$(AutoCADProductProfile)' == ''">Mechanical</AutoCADProductProfile>
+    <AutoCADProductBoundary Condition="'$(AutoCADProductBoundary)' == ''">$(AutoCADProduct) $(AutoCADProductVersion)</AutoCADProductBoundary>
+
+    <!-- Use a local Directory.Build.props when the SDK or installation path differs. -->
+    <AcadDir Condition="'$(AcadDir)' == '' and '$(ProgramFiles)' != ''">$(ProgramFiles)\Autodesk\AutoCAD 2027</AcadDir>
+    <AutodeskReferenceDir Condition="'$(ArxSdkDir)' != '' and Exists('$(ArxSdkDir)\inc')">$(ArxSdkDir)\inc</AutodeskReferenceDir>
+    <AutodeskReferenceDir Condition="'$(AutodeskReferenceDir)' == '' and '$(AcadDir)' != ''">$(AcadDir)</AutodeskReferenceDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="AcCoreMgd">
+      <HintPath>$(AutodeskReferenceDir)\AcCoreMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AcDbMgd">
+      <HintPath>$(AutodeskReferenceDir)\AcDbMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AcMgd">
+      <HintPath>$(AutodeskReferenceDir)\AcMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="ValidateAutoCADMechanicalBoundary" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(AutoCADProduct)' != 'AutoCAD Mechanical' Or '$(AutoCADProductVersion)' != '2027' Or '$(AutoCADProductProfile)' != 'Mechanical' Or '$(AutoCADProductBoundary)' != 'AutoCAD Mechanical 2027'"
+           Text="CadAgent.AutoCAD2027 targets AutoCAD Mechanical 2027 only. Set AutoCADProduct=AutoCAD Mechanical, AutoCADProductVersion=2027, AutoCADProductProfile=Mechanical, and AutoCADProductBoundary=AutoCAD Mechanical 2027." />
+  </Target>
+
+</Project>

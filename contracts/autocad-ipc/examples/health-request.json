@@ -1,0 +1,9 @@
+{
+  "request_id": "health-20260801-001",
+  "schema_version": "1.0",
+  "operation": "health",
+  "drawing_full_path": "C:\\temp\\sample.dwg",
+  "drawing_sha256": null,
+  "parameters": {},
+  "approval": null
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/close-disposable.schema.json",
+  "title": "CadAgent AutoCAD .NET disposable-close parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "disposable",
+    "save_changes"
+  ],
+  "properties": {
+    "disposable": {
+      "const": true
+    },
+    "save_changes": {
+      "const": false
+    }
+  }
+}

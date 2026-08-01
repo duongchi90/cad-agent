@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/result.schema.json",
+  "title": "CadAgent AutoCAD .NET IPC result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "success",
+    "operation",
+    "drawing_full_path",
+    "changed",
+    "entity_handles",
+    "warnings",
+    "errors",
+    "started_at",
+    "completed_at"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "operation": {
+      "enum": [
+        "health",
+        "review",
+        "close_disposable"
+      ]
+    },
+    "drawing_full_path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "pattern": "^(?:[A-Za-z]:[\\/]|\\\\)"
+    },
+    "changed": {
+      "type": "boolean"
+    },
+    "entity_handles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "review"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "close_disposable"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}

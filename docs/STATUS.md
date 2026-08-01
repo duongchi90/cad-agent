@@ -23,6 +23,51 @@ collects unavailable-state probes for `real_data` and `autocad_mechanical` as ex
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
 Mechanical gate that was not separately executed remains `NOT RUN`.
 
+## AutoCAD .NET plugin — Option A
+
+- Candidate integration head: `4053c2a` on `integration/autocad-dotnet-option-a`.
+- State: **Verified for the managed disposable smoke scope**; the repository's
+  legacy-LISP aggregate marker remains a separate gate.
+- Scope completed: Windows-only AutoCAD Mechanical 2027 managed plugin scaffold,
+  versioned JSON/File IPC contracts, Mechanical no-op boundary, deterministic
+  read-only review core, isolated Python dotnet_ipc backend, and the four
+  command/dispatcher boundaries, plus the Windows `CADAGENT_DISPATCH` trigger,
+  disposable .NET live-smoke harness, and one-shot `Application.Idle`
+  disposable-close fix.
+- C# evidence: restore/build/test passed on Release x64 with 51 passed, 0
+  failed, 0 skipped; Autodesk reference-conflict warnings remain, and no
+  Autodesk DLL was copied to plugin output.
+- Python focused evidence: the .NET IPC focused suite passed 16 tests plus 18
+  subtests; the opt-in live module passed 2 offline cleanup tests and skipped
+  its one live test; the exact three-file Ruff gate passed.
+- Authoritative verifier: **PASS** when run on commit `00797d9` with the
+  explicit lock-matching Python 3.11 interpreter
+  `D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe`:
+  40/40 locked distributions, .NET 50/50, dotnet_ipc JUnit 34/0/0/0,
+  offline JUnit 439/0/0/0, unavailable probes 2 + 7 skipped, and full Ruff
+  passed. The integration-local `.venv-py311` remains incomplete, so the
+  successful command supplied `-PythonExe` explicitly.
+- Direct AutoCAD .NET smoke: **PASS** on a fresh disposable DXF in an isolated
+  AutoCAD Mechanical 2027 process. Health and read-only review succeeded for
+  handle `2F`; `close_disposable` returned
+  `closed_without_saving=true`; after an 8-second independent postcondition
+  check AutoCAD was back on `[Start]` and no longer had the DXF document open.
+  The DXF remained on disk and was not saved or mutated.
+- Automated AutoCAD live marker: **FAIL** when attempted with the legacy LISP
+  dispatcher (`8 failed, 5 passed, 423 deselected`); the legacy close path
+  reports `Automation Error. Drawing is busy`. The focused .NET live test
+  reported `1 passed, 3 deselected`; this is retained as historical evidence for
+  the legacy-LISP bootstrap failure and is separate from the direct managed
+  smoke above.
+- Safety boundary: no production save, repair, or mutation was added or run;
+  the existing dispatcher was not modified.
+- Evidence records: `docs/reviews/2026-08-01-autocad-dotnet-live-review.md`,
+  `docs/reviews/2026-08-01-autocad-dotnet-close-live-review.md`, and
+  `docs/reviews/2026-08-01-autocad-dotnet-close-live-followup.md`.
+- Remaining gate before merge: run the authoritative offline verifier on this
+  exact candidate, review the final diff, and then integrate only the reviewed
+  commit. No COM/ActiveX code was added to the plugin.
+
 ## Pre-foundation baseline
 
 | State | Date | Commit | Environment | Command | Result |

@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <!-- Copy this file to Directory.Build.props and customize local paths. -->
+    <!-- The installed root is generically named, but this boundary is Mechanical 2027 only. -->
+    <AcadDir>C:\Program Files\Autodesk\AutoCAD 2027</AcadDir>
+    <ArxSdkDir>C:\Autodesk\ObjectARX 2027</ArxSdkDir>
+    <AutoCADProduct>AutoCAD Mechanical</AutoCADProduct>
+    <AutoCADProductVersion>2027</AutoCADProductVersion>
+    <AutoCADProductProfile>Mechanical</AutoCADProductProfile>
+    <AutoCADProductBoundary>AutoCAD Mechanical 2027</AutoCADProductBoundary>
+  </PropertyGroup>
+</Project>

@@ -26,28 +26,87 @@ if (-not $PythonExe) {
     $PythonExe = Join-Path $repoRoot ".venv-py311\Scripts\python.exe"
 }
 if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-    throw "Python environment not found: $PythonExe. Run scripts/bootstrap.ps1 first."
+    throw "BLOCKER: Python environment not found: $PythonExe. Run scripts/bootstrap.ps1 first."
 }
 
 $pythonVersion = (& $PythonExe -c "import sys; print(sys.version.split()[0])" | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $pythonVersion -notmatch '^3\.11\.\d+$') {
-    throw "Verification requires Python 3.11; found '$pythonVersion'."
+    throw "BLOCKER: verification requires Python 3.11; found '$pythonVersion'."
 }
+
+$dotnetSolution = Join-Path $repoRoot "autocad_plugin/CadAgent.AutoCAD2027.sln"
+if (-not (Test-Path -LiteralPath $dotnetSolution -PathType Leaf)) {
+    throw "BLOCKER: C# solution not found: $dotnetSolution"
+}
+$dotnetCommand = Get-Command "dotnet" -ErrorAction SilentlyContinue
+if (-not $dotnetCommand) {
+    throw "BLOCKER: .NET SDK executable 'dotnet' is not available on PATH."
+}
+
+function Invoke-DotNetGate {
+    param(
+        [string]$Name,
+        [string[]]$Arguments
+    )
+    & $dotnetCommand.Source @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "BLOCKER: $Name failed with exit code $LASTEXITCODE."
+    }
+}
+
+Invoke-DotNetGate -Name "dotnet restore" -Arguments @(
+    "restore",
+    $dotnetSolution
+)
+Invoke-DotNetGate -Name "dotnet build Release x64" -Arguments @(
+    "build",
+    $dotnetSolution,
+    "-c",
+    "Release",
+    "-p:Platform=x64"
+)
+
+$autodeskDllNames = @("AcCoreMgd.dll", "AcDbMgd.dll", "AcMgd.dll")
+$dotnetOutputRoots = @(
+    (Join-Path $repoRoot "autocad_plugin\CadAgent.AutoCAD2027\bin"),
+    (Join-Path $repoRoot "autocad_plugin\CadAgent.AutoCAD2027.Tests\bin")
+)
+$copiedAutodeskDlls = @(
+    foreach ($outputRoot in $dotnetOutputRoots) {
+        if (Test-Path -LiteralPath $outputRoot -PathType Container) {
+            Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
+                Where-Object { $autodeskDllNames -contains $_.Name }
+        }
+    }
+)
+if ($copiedAutodeskDlls.Count -ne 0) {
+    $copiedPaths = $copiedAutodeskDlls | ForEach-Object { $_.FullName }
+    throw "BLOCKER: Autodesk Managed DLLs copied to build output:`n$($copiedPaths -join "`n")"
+}
+Write-Host "AutoCAD DLL output check: no Autodesk Managed DLLs copied."
+
+Invoke-DotNetGate -Name "dotnet test Release x64" -Arguments @(
+    "test",
+    $dotnetSolution,
+    "-c",
+    "Release",
+    "-p:Platform=x64"
+)
 
 $lockFile = Join-Path $repoRoot "requirements\windows-py311.lock"
 & $PythonExe (Join-Path $repoRoot "scripts\lock_contract.py") check $lockFile
 if ($LASTEXITCODE -ne 0) {
-    throw "Dependency lock contract failed."
+    throw "BLOCKER: dependency lock contract failed."
 }
 & $PythonExe (Join-Path $repoRoot "scripts\check_environment.py") $lockFile
 if ($LASTEXITCODE -ne 0) {
-    throw "Installed environment does not match the dependency lock."
+    throw "BLOCKER: installed environment does not match the dependency lock; full Python suite cannot run."
 }
 
 $dependencyProbe = "from importlib.metadata import version; names = ['numpy', 'opencv-python', 'pytesseract', 'Pillow', 'pypdf', 'PyMuPDF', 'ezdxf', 'anthropic', 'python-solvespace', 'pytest', 'ruff']; print('; '.join(f'{name}={version(name)}' for name in names))"
 $dependencyVersions = (& $PythonExe -c $dependencyProbe | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) {
-    throw "Reading locked dependency versions failed."
+    throw "BLOCKER: reading locked dependency versions failed; full Python suite cannot run."
 }
 
 $tesseractPath = $env:CAD_AGENT_TESSERACT_CMD
@@ -60,11 +119,11 @@ if (-not $tesseractPath) {
     }
 }
 if (-not (Test-Path -LiteralPath $tesseractPath -PathType Leaf)) {
-    throw "Tesseract executable not found: $tesseractPath"
+    throw "BLOCKER: Tesseract executable not found: $tesseractPath"
 }
 $tesseractVersion = (& $tesseractPath --version 2>&1 | Select-Object -First 1 | Out-String).Trim()
 if ($tesseractVersion -ne "tesseract v5.4.0.20240606") {
-    throw "Verification requires Tesseract 5.4.0.20240606; found '$tesseractVersion'."
+    throw "BLOCKER: verification requires Tesseract 5.4.0.20240606; found '$tesseractVersion'."
 }
 
 function Get-RepositorySnapshot {
@@ -98,12 +157,13 @@ function Get-JUnitTotals {
 function Invoke-PytestGate {
     param(
         [string]$Name,
+        [string[]]$Targets,
         [string]$MarkerExpression,
         [string]$JUnitPath,
-        [ValidateSet("offline", "all-skipped")]
+        [ValidateSet("offline", "all-skipped", "live")]
         [string]$ExpectedState
     )
-    & $PythonExe -m pytest @testTargets -q -m $MarkerExpression -p no:cacheprovider `
+    & $PythonExe -m pytest @Targets -q -m $MarkerExpression -p no:cacheprovider `
         "--junitxml=$JUnitPath"
     if ($LASTEXITCODE -ne 0) {
         throw "$Name pytest gate failed with exit code $LASTEXITCODE."
@@ -118,14 +178,25 @@ function Invoke-PytestGate {
     if ($ExpectedState -eq "all-skipped" -and $totals.Skipped -ne $totals.Tests) {
         throw "$Name must report every collected test as skipped when prerequisites are absent."
     }
+    if ($ExpectedState -eq "live") {
+        if ($totals.Skipped -eq $totals.Tests) {
+            Write-Host "AutoCAD live marker: SKIP ($Name collected only skipped tests)."
+        } elseif ($totals.Skipped -ne 0) {
+            throw "$Name mixed passing and skipped tests; live marker is not authoritative."
+        } else {
+            Write-Host "AutoCAD live marker: PASS ($Name passed)."
+        }
+    }
     Write-Host "$Name JUnit: tests=$($totals.Tests) failures=$($totals.Failures) errors=$($totals.Errors) skipped=$($totals.Skipped)"
 }
 
 $snapshotBefore = Get-RepositorySnapshot
 $artifactDir = Join-Path $repoRoot ".artifacts\test-results"
 $junitPath = Join-Path $artifactDir "junit.xml"
+$dotnetIpcJunitPath = Join-Path $artifactDir "dotnet-ipc.xml"
 $realDataJunitPath = Join-Path $artifactDir "real-data-unavailable.xml"
 $autocadJunitPath = Join-Path $artifactDir "autocad-mechanical-unavailable.xml"
+$autocadLiveJunitPath = Join-Path $artifactDir "autocad-mechanical-live.xml"
 New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
 $tesseractDir = Split-Path -Parent $tesseractPath
@@ -142,8 +213,19 @@ $testTargets = @(
 
 Push-Location $repoRoot
 try {
+    $dotnetIpcTestTargets = @(
+        "mcp_integration_lib/tests/test_dotnet_ipc.py"
+    )
+    Invoke-PytestGate `
+        -Name "dotnet_ipc" `
+        -Targets $dotnetIpcTestTargets `
+        -MarkerExpression "not real_data and not autocad_mechanical" `
+        -JUnitPath $dotnetIpcJunitPath `
+        -ExpectedState "offline"
+
     Invoke-PytestGate `
         -Name "offline" `
+        -Targets $testTargets `
         -MarkerExpression "not real_data and not autocad_mechanical" `
         -JUnitPath $junitPath `
         -ExpectedState "offline"
@@ -165,11 +247,13 @@ try {
     try {
         Invoke-PytestGate `
             -Name "real_data unavailable-state probe" `
+            -Targets $testTargets `
             -MarkerExpression "real_data" `
             -JUnitPath $realDataJunitPath `
             -ExpectedState "all-skipped"
         Invoke-PytestGate `
             -Name "autocad_mechanical unavailable-state probe" `
+            -Targets $testTargets `
             -MarkerExpression "autocad_mechanical" `
             -JUnitPath $autocadJunitPath `
             -ExpectedState "all-skipped"
@@ -184,6 +268,22 @@ try {
         }
     }
 
+    $liveSessionReady = (
+        $env:CAD_AGENT_FILE_IPC -eq "1" -and
+        -not [string]::IsNullOrWhiteSpace($env:CAD_AGENT_AUTOCAD_HWND) -and
+        -not [string]::IsNullOrWhiteSpace($env:CAD_AGENT_AUTOCAD_LISP_PATH)
+    )
+    if ($liveSessionReady) {
+        Invoke-PytestGate `
+            -Name "autocad_mechanical live gate" `
+            -Targets $testTargets `
+            -MarkerExpression "autocad_mechanical" `
+            -JUnitPath $autocadLiveJunitPath `
+            -ExpectedState "live"
+    } else {
+        Write-Host "AutoCAD live marker: NOT RUN (no AutoCAD Mechanical session with File IPC prerequisites)."
+    }
+
     $lintTargets = @(
         "primitive_ir_lib",
         "semantic_ir_lib",
@@ -193,6 +293,14 @@ try {
         "tests",
         "scripts"
     )
+    $dotnetIpcLintTargets = @(
+        "mcp_integration_lib/dotnet_ipc.py",
+        "mcp_integration_lib/tests/test_dotnet_ipc.py"
+    )
+    & $PythonExe -m ruff check @dotnetIpcLintTargets
+    if ($LASTEXITCODE -ne 0) {
+        throw "Ruff failed for the dotnet_ipc gate with exit code $LASTEXITCODE."
+    }
     & $PythonExe -m ruff check @lintTargets
     if ($LASTEXITCODE -ne 0) {
         throw "Ruff failed with exit code $LASTEXITCODE."

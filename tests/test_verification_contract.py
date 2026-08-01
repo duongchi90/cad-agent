@@ -7,6 +7,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DOTNET_SOLUTION = "autocad_plugin/CadAgent.AutoCAD2027.sln"
+DOTNET_IPC_TEST = "mcp_integration_lib/tests/test_dotnet_ipc.py"
+DOTNET_IPC_SOURCE = "mcp_integration_lib/dotnet_ipc.py"
 CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
 SETUP_PYTHON_SHA = "ece7cb06caefa5fff74198d8649806c4678c61a1"
 UPLOAD_ARTIFACT_SHA = "b7c566a772e6b6bfb58ed0dc250532a479d7789f"
@@ -68,6 +71,61 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("Get-FileHash", script)
         self.assertIn("ls-files", script)
         self.assertIn('Write-Host "Tesseract: $tesseractPath ($tesseractVersion)"', script)
+
+    def test_verify_owns_release_x64_dotnet_solution_gates(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        self.assertIn(DOTNET_SOLUTION, script)
+        restore = script.index("dotnet restore")
+        build = script.index("dotnet build")
+        test = script.index("dotnet test")
+        self.assertLess(restore, build)
+        self.assertLess(build, test)
+        for command in ("dotnet restore", "dotnet build", "dotnet test"):
+            self.assertIn(command, script)
+        self.assertGreaterEqual(script.count('"-c"'), 2)
+        self.assertGreaterEqual(script.count('"Release"'), 2)
+        self.assertGreaterEqual(script.count('"-p:Platform=x64"'), 2)
+        self.assertIn("BLOCKER:", script)
+
+    def test_verify_runs_dotnet_ipc_gate_and_exact_ruff_targets(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        self.assertIn(DOTNET_IPC_TEST, script)
+        self.assertIn(DOTNET_IPC_SOURCE, script)
+        self.assertIn(
+            '"mcp_integration_lib/tests/test_dotnet_ipc.py"',
+            script,
+        )
+        self.assertIn(
+            '"mcp_integration_lib/dotnet_ipc.py"',
+            script,
+        )
+
+    def test_live_marker_is_explicit_and_not_inferred_from_dotnet_gates(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        live_gate = script.index('-Name "autocad_mechanical live gate"')
+        live_marker_branch = script.index('if ($ExpectedState -eq "live")')
+        self.assertIn('AutoCAD live marker: PASS', script)
+        self.assertIn('AutoCAD live marker: SKIP', script)
+        self.assertIn('AutoCAD live marker: NOT RUN', script)
+        self.assertIn('ExpectedState "live"', script)
+        self.assertIn("CAD_AGENT_FILE_IPC", script)
+        self.assertIn("CAD_AGENT_AUTOCAD_HWND", script)
+        self.assertIn("CAD_AGENT_AUTOCAD_LISP_PATH", script)
+        self.assertGreater(
+            script.index('AutoCAD live marker: PASS'),
+            live_marker_branch,
+        )
+        self.assertGreater(
+            script.index('AutoCAD live marker: SKIP'),
+            live_marker_branch,
+        )
+        self.assertGreater(script.index('AutoCAD live marker: NOT RUN'), live_gate)
+
+    def test_live_unavailability_is_not_reported_as_a_pass(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        not_run = script.index('AutoCAD live marker: NOT RUN')
+        self.assertIn("no AutoCAD Mechanical session", script[not_run - 400 : not_run + 200])
+        self.assertNotIn("AutoCAD live marker: PASS", script[not_run - 400 : not_run + 200])
 
     def test_verify_discovers_tesseract_with_bootstrap_precedence(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
