@@ -107,12 +107,12 @@
 
 | Task ID | Objective | Depends on | Branch | Allowed files | Forbidden files | Parallel with | Mandatory tests | Completion condition |
 |---|---|---|---|---|---|---|---|---|
-| T09 | Trigger `CADAGENT_DISPATCH` from Windows and test the .NET path on a disposable drawing | Integrated Option A head `8fd5dd4` | `codex/autocad-dotnet-t09-live-trigger` | `mcp_integration_lib/dotnet_ipc.py`, `mcp_integration_lib/tests/test_dotnet_ipc.py`, `mcp_integration_lib/tests/test_dotnet_ipc_live.py` | All C# files, `mcp_client.py`, `reviewer2.py`, `repair2.py`, `scripts/verify.ps1`, `docs/STATUS.md`, contracts, production drawings | None; sequential after the integration head | Focused pytest + Ruff; opt-in live test must be PASS, SKIP, or NOT RUN | Offline trigger tests and existing contract tests pass, live test is safe/disposable and explicitly marked, write-set/review clean. |
+| T09 | Trigger `CADAGENT_DISPATCH` from Windows and test the .NET path on a disposable drawing | Integrated Option A head `c5626cc` | `codex/autocad-dotnet-t09-live-trigger` | `mcp_integration_lib/dotnet_ipc.py`, `mcp_integration_lib/tests/test_dotnet_ipc.py`, `mcp_integration_lib/tests/test_dotnet_ipc_live.py` | All C# files, `mcp_client.py`, `reviewer2.py`, `repair2.py`, `scripts/verify.ps1`, `docs/STATUS.md`, contracts, production drawings | None; sequential after the integration head | Focused pytest + Ruff; opt-in live test must be PASS, SKIP, or NOT RUN | Offline trigger tests and existing contract tests pass, live test is safe/disposable and explicitly marked, write-set/review clean. |
 
 ## Wave schedule
 
 - **WAVE 5A:** PO writes this spec, plan, and task card; Coder T09 starts from
-  exact base `8fd5dd4` in its own branch/worktree.
+  exact base `c5626cc` in its own branch/worktree.
 - **WAVE 5B:** PO reviews T09 commit and runs focused offline verification.
 - **WAVE 5C:** If an operator-controlled disposable AutoCAD session is
   available, run the opt-in live test; otherwise record `NOT RUN` and keep the

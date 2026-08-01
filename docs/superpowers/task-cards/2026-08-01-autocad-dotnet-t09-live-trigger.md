@@ -4,7 +4,7 @@
 
 Implement the approved live-gate bridge for the AutoCAD .NET plugin. Work only
 in branch `codex/autocad-dotnet-t09-live-trigger` and its dedicated worktree.
-Start from base commit `8fd5dd4` on
+Start from base commit `c5626cc` on
 `integration/autocad-dotnet-option-a`.
 
 ## Allowed write-set
