@@ -23,12 +23,13 @@ collects unavailable-state probes for `real_data` and `autocad_mechanical` as ex
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
 Mechanical gate that was not separately executed remains `NOT RUN`.
 
-## AutoCAD .NET plugin — Option A baseline (historical evidence)
+## AutoCAD .NET plugin — Option A / phần cũ 1
 
-This subsection records the original Option A integration evidence. The current
+This subsection records the completed Windows-only managed .NET slice. The
 read-only Mechanical BOM extension is recorded separately below.
 
-- Candidate integration head: `4053c2a` on `integration/autocad-dotnet-option-a`.
+- Integrated into `main` at `bb1c6e9`; latest synchronized head:
+  `f69d6a0` on `main` and `origin/main`.
 - State: **Verified for the managed disposable smoke scope**; the repository's
   legacy-LISP aggregate marker remains a separate gate.
 - Scope completed: Windows-only AutoCAD Mechanical 2027 managed plugin scaffold,
@@ -43,13 +44,14 @@ read-only Mechanical BOM extension is recorded separately below.
 - Python focused evidence: the .NET IPC focused suite passed 16 tests plus 18
   subtests; the opt-in live module passed 2 offline cleanup tests and skipped
   its one live test; the exact three-file Ruff gate passed.
-- Authoritative verifier: **PASS** when run on commit `00797d9` with the
+- Authoritative verifier: **PASS** when run on commit `f69d6a0` with the
   explicit lock-matching Python 3.11 interpreter
   `D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe`:
-  40/40 locked distributions, .NET 50/50, dotnet_ipc JUnit 34/0/0/0,
-  offline JUnit 439/0/0/0, unavailable probes 2 + 7 skipped, and full Ruff
-  passed. The integration-local `.venv-py311` remains incomplete, so the
-  successful command supplied `-PythonExe` explicitly.
+  40/40 locked distributions, .NET 68/68, dotnet_ipc JUnit 36/0/0/0,
+  offline JUnit 444/0/0/0, unavailable probes 2 + 7 skipped, and full Ruff
+  passed. The verifier reports the current automated AutoCAD marker as
+  `NOT RUN` when live prerequisites are absent; this does not invalidate the
+  separately recorded managed disposable smoke.
 - Direct AutoCAD .NET smoke: **PASS** on a fresh disposable DXF in an isolated
   AutoCAD Mechanical 2027 process. Health and read-only review succeeded for
   handle `2F`; `close_disposable` returned
@@ -67,9 +69,9 @@ read-only Mechanical BOM extension is recorded separately below.
 - Evidence records: `docs/reviews/2026-08-01-autocad-dotnet-live-review.md`,
   `docs/reviews/2026-08-01-autocad-dotnet-close-live-review.md`, and
   `docs/reviews/2026-08-01-autocad-dotnet-close-live-followup.md`.
-- Remaining gate before merge: run the authoritative offline verifier on this
-  exact candidate, review the final diff, and then integrate only the reviewed
-  commit. No COM/ActiveX code was added to the plugin.
+- Completion: the reviewed candidate is integrated and pushed. No COM/ActiveX
+  code was added to the plugin. No production drawing or `Drawing1.dwg` was
+  opened, saved, or modified by this work.
 
 ## AutoCAD .NET plugin — Mechanical BOM 2A extension
 

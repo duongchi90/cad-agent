@@ -2,7 +2,7 @@
 
 **Ngày phê duyệt:** 2026-08-01  
 **Phạm vi hỗ trợ:** Windows, Python 3.11, AutoCAD Mechanical 2027, .NET 10, x64  
-**Trạng thái:** revised design; implementation pending
+**Trạng thái:** implemented and integrated into `main`; managed disposable smoke verified
 
 **Cập nhật:** bổ sung ranh giới môi trường SDK và Mechanical theo yêu cầu ngày 2026-08-01.
 
