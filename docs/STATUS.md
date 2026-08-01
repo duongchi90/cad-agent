@@ -36,18 +36,22 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   Autodesk DLL was copied to plugin output.
 - Python focused evidence: mcp_integration_lib/tests/test_dotnet_ipc.py passed
   13 tests plus 12 subtests; the exact two-file Ruff gate passed.
-- Authoritative verifier: C# gates and lock-contract checks passed, but the full
-  Python gate is **BLOCKER** because the integration worktree environment lacks
-  the locked packages and has pip 24.0 where the lock requires 26.1.2.
-  Therefore the verifier exit is 1, not a pass.
+- Authoritative verifier: **PASS** when run on commit `47c5e8c` with the
+  explicit lock-matching Python 3.11 interpreter
+  `D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe`:
+  40/40 locked distributions, .NET 49/49, dotnet_ipc JUnit 25/0/0/0,
+  offline JUnit 428/0/0/0, unavailable probes 2 + 6 skipped, and full Ruff
+  passed. The integration-local `.venv-py311` remains incomplete, so the
+  successful command supplied `-PythonExe` explicitly.
 - AutoCAD .NET live gate: **NOT RUN**. AutoCAD Mechanical 2027 had an active
   non-disposable Drawing1.dwg; no NETLOAD or command was sent to that session.
 - Safety boundary: no production save, repair, or mutation was added or run;
   the existing dispatcher was not modified.
 - Evidence record: docs/reviews/2026-08-01-autocad-dotnet-live-review.md.
-- Remaining gate before merge: reproduce scripts\verify.ps1 in a lock-matching
-  Python 3.11 environment, then reassess the candidate. docs/STATUS.md is
-  updated here only after the final T08 review, by the PO.
+- Remaining gate before a fully verified release: run the disposable AutoCAD
+  Mechanical live smoke test. Until then this candidate is offline-verified
+  but remains **Partially verified**. docs/STATUS.md is updated here only after
+  the final T08 review, by the PO.
 
 ## Pre-foundation baseline
 
