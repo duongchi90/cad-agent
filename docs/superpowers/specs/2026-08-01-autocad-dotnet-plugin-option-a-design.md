@@ -2,7 +2,20 @@
 
 **Ngày phê duyệt:** 2026-08-01  
 **Phạm vi hỗ trợ:** Windows, Python 3.11, AutoCAD Mechanical 2027, .NET 10, x64  
-**Trạng thái:** approved design; implementation pending
+**Trạng thái:** revised design; implementation pending
+
+**Cập nhật:** bổ sung ranh giới môi trường SDK và Mechanical theo yêu cầu ngày 2026-08-01.
+
+## Phân tách môi trường và mã nguồn
+
+Hai việc sau được quản lý riêng:
+
+1. Chuẩn hóa máy phát triển: Visual Studio 2026, .NET 10 SDK, workload `.NET desktop development`, ObjectARX SDK 2027 và tài liệu/SDK AutoCAD Mechanical 2027 được cài bên ngoài repository.
+2. Mã nguồn repository: chỉ chứa project Managed .NET, hợp đồng IPC, logic kiểm thử và cấu hình mẫu; không chứa source/headers/libs/COM type libraries của Autodesk.
+
+Máy hiện tại đã có .NET SDK 10.0.301, Visual Studio Community/Build Tools 2026 và AutoCAD Mechanical 2027. Nếu ObjectARX SDK chưa có ở máy, build có thể dùng ba DLL tương ứng từ thư mục AutoCAD đã cài; khi SDK được cài, cấu hình local sẽ ưu tiên bản trong `$(ArxSdkDir)\inc`.
+
+Repository sẽ track `Directory.Build.props.example` nhưng ignore `Directory.Build.props` thật. File local được phép đặt đường dẫn riêng cho `AcadDir` và `ArxSdkDir`; không ghi cứng đường dẫn cá nhân vào project hoặc commit.
 
 ## Mục tiêu
 
@@ -60,7 +73,9 @@ autocad_plugin/
 └── CadAgent.AutoCAD2027.Tests/
 ```
 
-Project chính có `TargetFramework=net10.0-windows`, `PlatformTarget=x64`, `OutputType=Library`. Ba reference AutoCAD là `accoremgd.dll`, `acdbmgd.dll`, `acmgd.dll`, lấy từ `C:\Program Files\Autodesk\AutoCAD 2027` bằng MSBuild property; cả ba đặt `Private=false`/`Copy Local=false`. Không tham chiếu AEC/Civil 3D SDK.
+Project chính có `TargetFramework=net10.0-windows`, `PlatformTarget=x64`, `OutputType=Library`, `Nullable=enable`, `ImplicitUsings=enable`, và không thêm suffix framework/runtime vào output path. Ba reference AutoCAD là `AcCoreMgd.dll`, `AcDbMgd.dll`, `AcMgd.dll`, lấy ưu tiên từ `$(ArxSdkDir)\inc` và fallback về `$(AcadDir)`; cả ba đặt `Private=false`/`Copy Local=false`. Không tham chiếu AEC/Civil 3D SDK.
+
+`CadAgent.AutoCAD2027.csproj` chỉ khai báo property mặc định an toàn khi các path local chưa được cấu hình; `Directory.Build.props.example` là nơi ghi ví dụ `AcadDir=C:\Program Files\Autodesk\AutoCAD 2027` và `ArxSdkDir=C:\Autodesk\ObjectARX 2027`. Không thêm `Directory.Build.props` thật vào Git.
 
 ## Hợp đồng JSON
 
@@ -133,6 +148,21 @@ Chuyển entity AutoCAD thành payload ổn định gồm handle, type, layer v�
 
 Chỉ tạo boundary/interface và trạng thái `not_supported` cho lát cắt đầu. Không có code mutation, không có `Save`, không có bypass approval/backup/second-review.
 
+### `Mechanical`
+
+Plugin chính chuẩn bị boundary Managed .NET nhưng không tham chiếu Mechanical ActiveX hoặc C++ SDK:
+
+```csharp
+public interface IMechanicalAdapter
+{
+    bool IsAvailable { get; }
+    MechanicalCapabilityResult GetCapabilities();
+    MechanicalOperationResult Execute(MechanicalOperationRequest request);
+}
+```
+
+Implementation mặc định `NoOpMechanicalAdapter` trả `IsAvailable=false`, không có operation được hỗ trợ và kết quả `not_supported`. Interface này giúp bổ sung AM command/ActiveX/Native adapter sau này mà không làm plugin cơ bản phụ thuộc Mechanical SDK. Chỉ tạo project Mechanical/Native riêng khi có yêu cầu thật như BOM, balloon, Part Reference, Mechanical Structure, Content Library hoặc liên kết hình chiếu.
+
 ### `Commands`
 
 Đăng ký bốn `CommandMethod` nêu trên, bắt lỗi thành result JSON hoặc thông báo Editor ngắn gọn. Command không chạy worker thread để chạm AutoCAD DB; mọi đọc entity thực hiện trong document context và transaction phù hợp.
@@ -155,7 +185,7 @@ Tạo request chuẩn, kích hoạt command `CADAGENT_DISPATCH` qua trigger Wind
 
 1. C# unit tests không cần AutoCAD: DTO round-trip, schema/version validation, absolute-path validation, operation allow-list, close-disposable guard và payload mapping thuần.
 2. Python contract tests: request/result round-trip, request id isolation, timeout/cleanup, fake dispatcher cho health/review và không ảnh hưởng dispatcher cũ.
-3. Build C# Release x64 với .NET 10 và reference AutoCAD 2027.
+3. Build C# Release x64 với .NET 10 và reference AutoCAD 2027; kiểm tra `Private=false` và output không chứa ba DLL Autodesk.
 4. `scripts\verify.ps1` restore/build/test C# rồi chạy các gate Python hiện tại; live AutoCAD marker vẫn là gate riêng.
 5. AutoCAD thật, khi có session: NETLOAD DLL thủ công, chạy `CADAGENT_HEALTH`, mở DXF disposable, chạy review theo handle, đóng không lưu và xác nhận file không bị sửa. Nếu không có session/plugin load được thì ghi `NOT RUN`, không coi là pass.
 
@@ -163,6 +193,8 @@ Tạo request chuẩn, kích hoạt command `CADAGENT_DISPATCH` qua trigger Wind
 
 - `autocad_plugin/CadAgent.AutoCAD2027.sln` build được Release x64 trên máy hiện tại.
 - Plugin chỉ tham chiếu ba DLL AutoCAD 2027 và không copy chúng vào output.
+- `Directory.Build.props.example` được commit, `Directory.Build.props` thật bị ignore, và không có ObjectARX/Mechanical SDK binary/source trong Git.
+- Có `IMechanicalAdapter` cùng `NoOpMechanicalAdapter`; plugin chính không tham chiếu ActiveX/COM hoặc C++ Mechanical SDK.
 - C# unit tests và Python contract tests pass offline.
 - `CADAGENT_HEALTH` đi qua backend JSON/File IPC và trả result có cùng `request_id`.
 - `CADAGENT_REVIEW` chỉ đọc được entity theo handle, không save.
