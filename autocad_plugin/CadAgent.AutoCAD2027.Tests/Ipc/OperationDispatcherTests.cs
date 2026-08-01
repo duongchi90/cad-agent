@@ -144,6 +144,125 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void MechanicalBomUsesUnavailableDefaultNoOpAdapter()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\bom.dxf"
+        };
+        var dispatcher = CreateDispatcher(gateway);
+
+        var result = dispatcher.Dispatch(Request(
+            "mechanical_bom",
+            "no-op-bom-request",
+            @"C:\temp\bom.dxf",
+            Parameters()));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors!, error => error.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(result.EntityHandles!);
+    }
+
+    [Fact]
+    public void MechanicalBomInvalidParametersBlockAdapterAndGatewayExecution()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\bom.dxf"
+        };
+        var mechanicalGateway = new RecordingMechanicalGateway(
+            new[] { Component("2F", "COMP_FRAME") });
+        var mechanical = new ManagedMechanicalAdapter(mechanicalGateway);
+        var dispatcher = CreateDispatcher(gateway, mechanicalAdapter: mechanical);
+
+        var result = dispatcher.Dispatch(Request(
+            "mechanical_bom",
+            "invalid-bom-request",
+            @"C:\temp\bom.dxf",
+            Parameters(("filter", JsonSerializer.SerializeToElement("COMP_FRAME")))));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors!, error => error.Contains("empty", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, mechanicalGateway.ReadCallCount);
+    }
+
+    [Fact]
+    public void MechanicalBomPropagatesGatewayWarningsThroughTheT02Boundary()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\bom.dxf"
+        };
+        var mechanicalWarnings = new List<string>();
+        var mechanicalGateway = new WarningingMechanicalGateway(
+            mechanicalWarnings,
+            new[] { Component("2F", "COMP_FRAME") });
+        var mechanical = new ManagedMechanicalAdapter(mechanicalGateway);
+        var dispatcher = CreateDispatcher(
+            gateway,
+            mechanicalAdapter: mechanical,
+            mechanicalWarnings: mechanicalWarnings);
+
+        var result = dispatcher.Dispatch(Request(
+            "mechanical_bom",
+            "warning-bom-request",
+            @"C:\temp\bom.dxf",
+            Parameters()));
+
+        Assert.True(result.Success);
+        Assert.Contains(result.Warnings!, warning => warning.Contains("direct attribute", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(result.Errors!);
+    }
+
+    [Fact]
+    public void MechanicalBomPropagatesAdapterWarningsAndErrors()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\bom.dxf"
+        };
+        var mechanical = new FakeMechanicalAdapter(
+            Array.Empty<MechanicalComponentSnapshot>(),
+            status: "failure",
+            warnings: new[] { "mechanical warning" },
+            errors: new[] { "mechanical error" });
+        var dispatcher = CreateDispatcher(gateway, mechanicalAdapter: mechanical);
+
+        var result = dispatcher.Dispatch(Request(
+            "mechanical_bom",
+            "warning-error-bom-request",
+            @"C:\temp\bom.dxf",
+            Parameters()));
+
+        Assert.False(result.Success);
+        Assert.Contains("mechanical warning", result.Warnings!);
+        Assert.Contains("mechanical error", result.Errors!);
+    }
+
+    [Fact]
+    public void MechanicalBomTransactionFailureBecomesFailureResult()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\bom.dxf"
+        };
+        var mechanicalGateway = new ThrowingMechanicalGateway(
+            new InvalidOperationException("mechanical transaction failed"));
+        var mechanical = new ManagedMechanicalAdapter(mechanicalGateway);
+        var dispatcher = CreateDispatcher(gateway, mechanicalAdapter: mechanical);
+
+        var result = dispatcher.Dispatch(Request(
+            "mechanical_bom",
+            "transaction-bom-request",
+            @"C:\temp\bom.dxf",
+            Parameters()));
+
+        Assert.False(result.Success);
+        Assert.Contains("mechanical transaction failed", result.Errors!);
+        Assert.Empty(result.EntityHandles!);
+    }
+
+    [Fact]
     public void CloseDisposableRequiresTheNonSavingDisposableGuardBeforeClosing()
     {
         var closeCalls = 0;
@@ -212,13 +331,15 @@ public sealed class OperationDispatcherTests
     private static OperationDispatcher CreateDispatcher(
         StubDrawingGateway gateway,
         Action? closeWithoutSaving = null,
-        IMechanicalAdapter? mechanicalAdapter = null) =>
+        IMechanicalAdapter? mechanicalAdapter = null,
+        ICollection<string>? mechanicalWarnings = null) =>
         new(new CommandContext(
             new JsonFileStore(Path.Combine(Path.GetTempPath(), "cadagent-t06-tests", Guid.NewGuid().ToString("N"))),
             gateway,
             closeWithoutSaving ?? (() => { }),
             clock: () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
-            mechanicalAdapter: mechanicalAdapter));
+            mechanicalAdapter: mechanicalAdapter,
+            mechanicalWarnings: mechanicalWarnings));
 
     private static IpcRequest Request(
         string operation,
@@ -277,10 +398,20 @@ public sealed class OperationDispatcherTests
     private sealed class FakeMechanicalAdapter : IMechanicalAdapter
     {
         private readonly IReadOnlyList<MechanicalComponentSnapshot> _components;
+        private readonly string _status;
+        private readonly IReadOnlyList<string> _warnings;
+        private readonly IReadOnlyList<string> _errors;
 
-        public FakeMechanicalAdapter(IReadOnlyList<MechanicalComponentSnapshot> components)
+        public FakeMechanicalAdapter(
+            IReadOnlyList<MechanicalComponentSnapshot> components,
+            string status = "success",
+            IReadOnlyList<string>? warnings = null,
+            IReadOnlyList<string>? errors = null)
         {
             _components = components;
+            _status = status;
+            _warnings = warnings ?? Array.Empty<string>();
+            _errors = errors ?? Array.Empty<string>();
         }
 
         public int ExecuteCallCount { get; private set; }
@@ -294,12 +425,63 @@ public sealed class OperationDispatcherTests
         {
             ExecuteCallCount++;
             return new(
-                "success",
+                _status,
                 request.OperationName,
                 false,
-                Array.Empty<string>(),
-                Array.Empty<string>(),
+                _warnings,
+                _errors,
                 _components);
         }
+    }
+
+    private sealed class RecordingMechanicalGateway : IMechanicalDrawingGateway
+    {
+        private readonly IReadOnlyList<MechanicalComponentSnapshot> _components;
+
+        public RecordingMechanicalGateway(IReadOnlyList<MechanicalComponentSnapshot> components)
+        {
+            _components = components;
+        }
+
+        public int ReadCallCount { get; private set; }
+
+        public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
+        {
+            ReadCallCount++;
+            return _components;
+        }
+    }
+
+    private sealed class WarningingMechanicalGateway : IMechanicalDrawingGateway
+    {
+        private readonly ICollection<string> _warnings;
+        private readonly IReadOnlyList<MechanicalComponentSnapshot> _components;
+
+        public WarningingMechanicalGateway(
+            ICollection<string> warnings,
+            IReadOnlyList<MechanicalComponentSnapshot> components)
+        {
+            _warnings = warnings;
+            _components = components;
+        }
+
+        public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
+        {
+            _warnings.Add("Skipped unreadable direct attribute on insert 2F.");
+            return _components;
+        }
+    }
+
+    private sealed class ThrowingMechanicalGateway : IMechanicalDrawingGateway
+    {
+        private readonly Exception _exception;
+
+        public ThrowingMechanicalGateway(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents() =>
+            throw _exception;
     }
 }

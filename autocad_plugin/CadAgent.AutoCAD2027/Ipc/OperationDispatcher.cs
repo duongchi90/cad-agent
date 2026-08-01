@@ -21,6 +21,7 @@ public sealed class OperationDispatcher
     public IpcResult Dispatch(IpcRequest? request)
     {
         var startedAt = _context.Clock();
+        _context.ClearMechanicalWarnings();
         if (request is null)
         {
             return ErrorToResult(null, new ArgumentNullException(nameof(request)), startedAt);
@@ -71,7 +72,7 @@ public sealed class OperationDispatcher
             success: false,
             changed: false,
             entityHandles: Array.Empty<string>(),
-            warnings: Array.Empty<string>(),
+            warnings: _context.MechanicalWarnings,
             errors: new[] { exception.Message },
             payload,
             started);
@@ -159,6 +160,9 @@ public sealed class OperationDispatcher
             new MechanicalOperationRequest("mechanical_bom"));
         var components = NormalizeMechanicalComponents(mechanicalResult.Components);
         var errors = mechanicalResult.Errors.ToArray();
+        var warnings = _context.MechanicalWarnings
+            .Concat(mechanicalResult.Warnings)
+            .ToArray();
         var success = string.Equals(mechanicalResult.Status, "success", StringComparison.Ordinal);
         if (!success && errors.Length == 0)
         {
@@ -188,7 +192,7 @@ public sealed class OperationDispatcher
             success,
             changed: false,
             components.Select(component => component.Handle),
-            mechanicalResult.Warnings,
+            warnings,
             errors,
             payload,
             startedAt);

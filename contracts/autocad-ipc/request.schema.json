@@ -37,7 +37,7 @@
         "null"
       ],
       "minLength": 1,
-      "pattern": "^(?:[A-Za-z]:[\\/]|\\\\)"
+      "pattern": "^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)"
     },
     "drawing_sha256": {
       "type": [

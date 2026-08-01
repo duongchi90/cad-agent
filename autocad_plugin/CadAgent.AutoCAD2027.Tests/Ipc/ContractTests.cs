@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CadAgent.AutoCAD2027.Ipc;
 using Xunit;
 
@@ -37,6 +38,34 @@ public sealed class ContractTests
 
         Assert.False(validation.IsValid);
         Assert.Contains(validation.Errors, error => error.Contains("drawing_full_path", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(@"C:\temp\x.dxf", true)]
+    [InlineData(@"C:/temp/x.dxf", true)]
+    [InlineData(@"\\server\share\x.dxf", true)]
+    [InlineData(@"\temp\x.dxf", false)]
+    public void RequestAndResultSchemasMatchOnlyWindowsAbsolutePathForms(
+        string path,
+        bool expected)
+    {
+        foreach (var schemaRelativePath in new[]
+        {
+            "request.schema.json",
+            "result.schema.json"
+        })
+        {
+            using var schema = JsonDocument.Parse(
+                File.ReadAllText(RepositoryFile($"contracts/autocad-ipc/{schemaRelativePath}")));
+            var pattern = schema.RootElement
+                .GetProperty("properties")
+                .GetProperty("drawing_full_path")
+                .GetProperty("pattern")
+                .GetString();
+
+            Assert.NotNull(pattern);
+            Assert.Equal(expected, Regex.IsMatch(path, pattern!));
+        }
     }
 
     [Fact]
@@ -153,6 +182,63 @@ public sealed class ContractTests
         Assert.Equal(result.EntityHandles!.Single(), resultCopy.EntityHandles!.Single());
         Assert.Equal(result.StartedAt, resultCopy.StartedAt);
         Assert.Equal(result.CompletedAt, resultCopy.CompletedAt);
+    }
+
+    [Fact]
+    public void MechanicalBomExamplesRoundTripWithPayloadAndValidate()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/mechanical-bom-request.json")));
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/mechanical-bom-result.json")));
+
+        Assert.True(ContractValidator.ValidateRequest(request).IsValid);
+        Assert.True(ContractValidator.ValidateResult(result).IsValid);
+        Assert.Equal("mechanical_bom", request.Operation);
+        Assert.Equal("mechanical_bom", result.Operation);
+        Assert.Equal(request.DrawingFullPath, result.DrawingFullPath);
+        Assert.Equal(1, result.Payload!["component_count"].GetInt32());
+        var component = Assert.Single(result.Payload["components"].EnumerateArray());
+        Assert.Equal("2F", component.GetProperty("handle").GetString());
+        Assert.Equal("COMP_FRAME", component.GetProperty("block_name").GetString());
+        Assert.Equal(
+            "FRAME-001",
+            Assert.Single(component.GetProperty("attributes").EnumerateArray())
+                .GetProperty("value")
+                .GetString());
+
+        foreach (var schemaRelativePath in new[]
+        {
+            "request.schema.json",
+            "result.schema.json"
+        })
+        {
+            using var schema = JsonDocument.Parse(
+                File.ReadAllText(RepositoryFile($"contracts/autocad-ipc/{schemaRelativePath}")));
+            var pattern = schema.RootElement
+                .GetProperty("properties")
+                .GetProperty("drawing_full_path")
+                .GetProperty("pattern")
+                .GetString();
+            Assert.NotNull(pattern);
+            Assert.Matches(pattern!, request.DrawingFullPath!);
+        }
+    }
+
+    private static string RepositoryFile(string relativePath)
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException($"Could not find repository file '{relativePath}'.");
     }
 
     private static IpcRequest ValidRequest(string operation = "health") => new()

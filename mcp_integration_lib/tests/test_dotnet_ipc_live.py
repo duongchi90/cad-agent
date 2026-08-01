@@ -1,5 +1,6 @@
 """Opt-in disposable AutoCAD Mechanical smoke test for the .NET IPC path."""
 
+import hashlib
 import os
 import shutil
 import tempfile
@@ -48,6 +49,10 @@ def _add_mechanical_bom_fixture(drawing_document) -> None:
     nested_block.add_line((0, 0), (1, 0))
     empty_block.add_blockref("COMP_NESTED", (0, 0))
     modelspace.add_blockref("COMP_EMPTY", (20, 0))
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class MechanicalBomFixtureTests(unittest.TestCase):
@@ -233,11 +238,13 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
     def test_disposable_dxf_uses_dotnet_mechanical_bom_health_review_and_close(self) -> None:
         test_directory = Path(tempfile.mkdtemp(prefix="cad_agent_dotnet_live_", dir=r"C:\temp"))
         drawing_path = test_directory / "dotnet_live.dxf"
+        original_sha256 = ""
 
         try:
             drawing_document = ezdxf.new("R2010")
             _add_mechanical_bom_fixture(drawing_document)
             drawing_document.saveas(drawing_path)
+            original_sha256 = _sha256(drawing_path)
 
             expected_full_path = normalize_windows_absolute_path(str(drawing_path))
             hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
@@ -283,12 +290,19 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertFalse(request_path(dotnet_client.ipc_dir, review_request_id).exists())
                 self.assertFalse(result_path(dotnet_client.ipc_dir, review_request_id).exists())
 
+                dbmod_before_values = legacy_client.drawing_get_variables(["DBMOD"])
+                self.assertIn("DBMOD", dbmod_before_values)
+                dbmod_before = dbmod_before_values["DBMOD"]
                 bom_request_id = "dotnet-live-mechanical-bom"
                 bom = dotnet_client.mechanical_bom(
                     expected_full_path,
                     request_id=bom_request_id,
                 )
+                dbmod_after_values = legacy_client.drawing_get_variables(["DBMOD"])
+                self.assertIn("DBMOD", dbmod_after_values)
+                dbmod_after = dbmod_after_values["DBMOD"]
                 self.assertTrue(bom["success"])
+                self.assertEqual(dbmod_before, dbmod_after)
                 self.assertEqual(expected_full_path, bom["drawing_full_path"])
                 self.assertFalse(bom["changed"])
                 self.assertEqual([], bom["errors"])
@@ -336,4 +350,7 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertFalse(result_path(dotnet_client.ipc_dir, close_request_id).exists())
         finally:
             _wait_for_disposable_drawing_release(drawing_path)
+            if original_sha256:
+                self.assertTrue(drawing_path.is_file())
+                self.assertEqual(original_sha256, _sha256(drawing_path))
             shutil.rmtree(test_directory)

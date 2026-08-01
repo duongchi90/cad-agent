@@ -17,13 +17,16 @@ public sealed class CommandContext
     public const string IpcDirectoryEnvironmentVariable = "CAD_AGENT_DOTNET_IPC_DIR";
     public const string DefaultIpcDirectory = @"C:\temp";
 
+    private readonly ICollection<string> _mechanicalWarnings;
+
     public CommandContext(
         JsonFileStore store,
         IDrawingGateway drawingGateway,
         Action closeWithoutSaving,
         Action<string>? report = null,
         Func<DateTimeOffset>? clock = null,
-        IMechanicalAdapter? mechanicalAdapter = null)
+        IMechanicalAdapter? mechanicalAdapter = null,
+        ICollection<string>? mechanicalWarnings = null)
     {
         Store = store ?? throw new ArgumentNullException(nameof(store));
         DrawingGateway = drawingGateway ?? throw new ArgumentNullException(nameof(drawingGateway));
@@ -31,6 +34,7 @@ public sealed class CommandContext
         Report = report ?? (_ => { });
         Clock = clock ?? (() => DateTimeOffset.UtcNow);
         MechanicalAdapter = mechanicalAdapter ?? new NoOpMechanicalAdapter();
+        _mechanicalWarnings = mechanicalWarnings ?? new List<string>();
     }
 
     public JsonFileStore Store { get; }
@@ -44,6 +48,10 @@ public sealed class CommandContext
     public Action<string> Report { get; }
 
     public Func<DateTimeOffset> Clock { get; }
+
+    internal IReadOnlyList<string> MechanicalWarnings => _mechanicalWarnings.ToArray();
+
+    internal void ClearMechanicalWarnings() => _mechanicalWarnings.Clear();
 
     public OperationDispatcher CreateDispatcher() => new(this);
 
@@ -81,7 +89,8 @@ public sealed class CommandContext
         var document = AcadApplication.DocumentManager.MdiActiveDocument
             ?? throw new InvalidOperationException("No active AutoCAD document is available.");
         var editor = document.Editor;
-        var gateway = new AutoCadDrawingGateway(document);
+        var mechanicalWarnings = new List<string>();
+        var gateway = new AutoCadDrawingGateway(document, mechanicalWarnings.Add);
         var ipcDirectory = Environment.GetEnvironmentVariable(IpcDirectoryEnvironmentVariable);
         var store = new JsonFileStore(
             string.IsNullOrWhiteSpace(ipcDirectory) ? DefaultIpcDirectory : ipcDirectory);
@@ -98,16 +107,19 @@ public sealed class CommandContext
             // document-scoped lock, so the one-shot callback can close safely.
             closeScheduler.Schedule,
             message => editor.WriteMessage($"\n{message}"),
-            mechanicalAdapter: new ManagedMechanicalAdapter(gateway));
+            mechanicalAdapter: new ManagedMechanicalAdapter(gateway),
+            mechanicalWarnings: mechanicalWarnings);
     }
 
     private sealed class AutoCadDrawingGateway : IDrawingGateway, IMechanicalDrawingGateway
     {
         private readonly Document _document;
+        private readonly Action<string> _mechanicalWarning;
 
-        public AutoCadDrawingGateway(Document document)
+        public AutoCadDrawingGateway(Document document, Action<string> mechanicalWarning)
         {
             _document = document ?? throw new ArgumentNullException(nameof(document));
+            _mechanicalWarning = mechanicalWarning ?? throw new ArgumentNullException(nameof(mechanicalWarning));
         }
 
         public string? ActiveDocumentFullPath => _document.Database?.Filename;
@@ -179,9 +191,12 @@ public sealed class CommandContext
                                     attributeReference.TextString ?? string.Empty));
                             }
                         }
-                        catch (System.Exception)
+                        catch (System.Exception exception)
+                            when (IsExpectedMechanicalObjectReadFailure(exception))
                         {
-                            // An unreadable direct attribute does not make the insert unreadable.
+                            _mechanicalWarning(
+                                $"Skipped unreadable direct attribute {attributeId} on insert {objectId}: "
+                                + exception.Message);
                         }
                     }
 
@@ -193,9 +208,12 @@ public sealed class CommandContext
                             .ThenBy(attribute => attribute.Value, StringComparer.Ordinal)
                             .ToArray()));
                 }
-                catch (System.Exception)
+                catch (System.Exception exception)
+                    when (IsExpectedMechanicalObjectReadFailure(exception))
                 {
-                    // Skip an unreadable direct ModelSpace insert and continue the read-only scan.
+                    _mechanicalWarning(
+                        $"Skipped unreadable direct ModelSpace insert {objectId}: "
+                        + exception.Message);
                 }
             }
 
@@ -203,6 +221,11 @@ public sealed class CommandContext
                 .OrderBy(snapshot => snapshot.Handle, StringComparer.Ordinal)
                 .ToArray();
         }
+
+        private static bool IsExpectedMechanicalObjectReadFailure(System.Exception exception) =>
+            exception is Autodesk.AutoCAD.Runtime.Exception
+                or InvalidOperationException
+                or ObjectDisposedException;
 
         private static string NormalizeMechanicalTag(string? tag) =>
             (tag ?? string.Empty).Trim().ToUpperInvariant();

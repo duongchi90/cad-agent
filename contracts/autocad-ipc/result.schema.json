@@ -40,7 +40,7 @@
         "null"
       ],
       "minLength": 1,
-      "pattern": "^(?:[A-Za-z]:[\\/]|\\\\)"
+      "pattern": "^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)"
     },
     "changed": {
       "type": "boolean"
