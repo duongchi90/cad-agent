@@ -26,6 +26,37 @@ PDF/image
 The current pixel-first path remains available as a draft/reference mode. It
 must not silently produce authoritative engineering geometry.
 
+## Generality boundary
+
+The architecture is drawing- and domain-neutral. MẠN is the first private
+fixture because it exposes station, elevation, chain, and raised-deck
+relationships clearly; it is not the source of the core data model and its
+numeric values must not be hard-coded into production code.
+
+The reusable core models generic concepts:
+
+- dimension kinds: linear, aligned, angular, radial, diameter, ordinate,
+  baseline, chain, reference, and tolerance-bearing dimensions;
+- attachment targets: endpoints, edges, centers, axes, named datums, repeated
+  axes, blocks, and view-local entities;
+- coordinate frames, transforms, shared datums, geometric relations,
+  constraints, provenance, conflicts, and release profiles;
+- editable geometry and review evidence independent of whether a drawing is a
+  ship, vehicle, machine, building, or another 2D engineering subject.
+
+Domain and drawing conventions belong in profiles, not in the core:
+
+- `DrawingProfile` defines units, annotation conventions, standard blocks,
+  domain aliases, and revision rules.
+- `ViewProfile` defines view axes, datum semantics, source region, view-local
+  entities, and explicitly shared datums.
+- A domain term such as `station`, `frame`, `axle`, or `gridline` resolves to a
+  generic named-axis or datum type through the selected profile.
+
+The MẠN fixture supplies an approved input register and expected output
+coordinates for regression. It must exercise the generic interfaces rather
+than add MẠN-specific branches.
+
 ## Problem and lessons from the MẠN slice
 
 The MẠN experiment showed that a globally calibrated pixel transform can
@@ -54,7 +85,8 @@ measured from pixels and dimensions were used only as a later check.
   approved measurements.
 - Produce a report showing confirmed dimensions, uncertain observations,
   solver residuals, unresolved regions, and source overlays.
-- Make one dimension-complete MẠN view the first acceptance slice.
+- Make one dimension-complete representative view the first acceptance slice;
+  use MẠN as the initial regression fixture.
 
 ## Non-goals and safety boundaries
 
@@ -65,8 +97,8 @@ measured from pixels and dimensions were used only as a later check.
 - Do not fabricate missing radii, diameters, angles, or material/profile sizes.
 - Do not make File IPC, AutoCAD LISP, or the .NET plugin the primary geometry
   engine. They remain application and review boundaries.
-- Do not expand immediately to all nine pages before the MẠN slice has stable
-  dimension and constraint evidence.
+- Do not expand immediately to all nine pages before the representative
+  dimension-first slice has stable dimension and constraint evidence.
 - Do not promote `ESTIMATED` or `UNRESOLVED` model-critical objects into an
   authoritative production result.
 - Do not change the existing production-repair approval and backup boundary.
@@ -174,17 +206,10 @@ Each drawing view gets a named technical coordinate system. It must identify:
 - shared or view-local entities;
 - transformation used only for image overlay.
 
-For the first MẠN slice, the approved model must encode:
-
-```text
-station 0..85
-station spacing = 500 mm
-station span = 42500 mm (derived as 85 x 500 mm)
-levels = 0, 850, 1450, 2100 mm
-raised bow/deck offset = 450 mm
-```
-
-The derived 42500 mm value must be reported as derived, not confused with a
+Repeated-axis and level data are profile inputs, not assumptions in the core.
+For any drawing, the profile/register must state whether an axis sequence is
+numbered, evenly spaced, chained, ordinate-based, or irregular. A derived
+overall value must be reported as derived and must not be confused with a
 separately printed overall dimension.
 
 Image rectification and overlay may use an affine or local piecewise transform
@@ -283,25 +308,46 @@ Use them for drawing activation, entity inspection, measurement, zoom, and
 read-only review. Primary geometry remains deterministic and reproducible in
 the builder.
 
-## Acceptance criteria for the first slice
+## Generic acceptance contract
 
-The MẠN view is accepted only when all of the following hold:
+Every dimension-first run is accepted only when all of the following hold:
 
-- the approved register contains the 500, 850, 600, 650, and 450 observations
-  with valid view/attachment evidence;
-- station coordinates are exactly `i * 500 mm` for `i = 0..85`;
-- levels are exactly 0, 850, 1450, and 2100 mm;
-- the raised bow/deck relation is exactly 450 mm;
-- the derived station span is reported as 42500 mm;
+- every driving dimension has valid value, unit, semantic kind, attachment,
+  view membership, and approval status;
+- every model-critical degree of freedom is exact or constrained by approved
+  evidence;
 - all approved dimensions measure back to their source values within the
-  configured solver tolerance;
-- dimension chains close without contradiction;
-- the output contains no model-critical `ESTIMATED` or `UNRESOLVED` entity;
-- source/CAD overlay confirms view membership, topology, and overall shape;
-- the report lists every candidate rejected, unresolved, estimated, or
-  dimensionally derived;
+  configured solver residual tolerance and source tolerance policy;
+- dimension chains, baseline/ordinate relations, and derived totals close
+  without contradiction;
+- shared datums are explicitly declared before cross-view constraints are
+  created;
+- no model-critical `ESTIMATED` or `UNRESOLVED` entity reaches an
+  authoritative release profile;
+- source/CAD overlay confirms view membership, topology, and overall shape
+  without using pixel residuals as an engineering measurement;
+- the report lists every rejected, unresolved, conflicted, estimated, derived,
+  and approved observation plus all solver residuals;
 - the DXF opens in AutoCAD Mechanical and remains editable without saving or
   mutating a production drawing.
+
+The solver residual tolerance is not the same as the physical accuracy of the
+source drawing. For example, a solver may satisfy an approved 850 mm equation
+within 0.01 mm while the drawing's unprinted source tolerance remains unknown.
+
+## MẠN regression fixture
+
+The first fixture uses the approved MẠN register, not MẠN-specific production
+logic. Its expected checks are:
+
+- axes 0..85 resolve to 86 axes and 85 intervals;
+- the approved interval value is 500 mm and the derived span is 42500 mm;
+- approved elevations resolve to 0, 850, 1450, and 2100 mm;
+- the raised bow/deck relation resolves to 450 mm;
+- all of the above are represented through generic repeated-axis, level, and
+  linear-distance contracts;
+- the fixture proves that manual-register input can run without OCR and that
+  a later OCR adapter can produce the same Dimension IR contract.
 
 ## Rollout
 
@@ -311,17 +357,19 @@ Define schemas, provenance states, approval records, manifest bindings, and
 dimension/constraint residual reports. Add synthetic tests for dimensions,
 attachments, conflicts, chain closure, and status transitions.
 
-### P1: MẠN vertical slice
+### P1: representative dimension-first vertical slice
 
-Implement station/elevation datums, the MẠN dimension register, constrained
-reconstruction, native dimensions, source overlay, and the AutoCAD read-only
-review. Use the supplied `190-2011-kccba.pdf` as private real-data evidence;
-keep it outside Git.
+Implement the generic repeated-axis/level/dimension path with a manually
+approved register. Use the supplied MẠN view as the first private regression
+fixture, while keeping all MẠN values in fixture data outside production logic
+and outside Git.
 
-### P2: additional views
+### P2: additional views and cross-view contracts
 
-Generalize the view model to B-B, C-C, DỌC TÂM, BOONG, and ĐÁY. Reuse shared
-station data only when the source explicitly supports that relationship.
+Apply the generic view/profile model to B-B, C-C, DỌC TÂM, BOONG, and ĐÁY.
+Reuse shared datums only when the source or an approval record explicitly
+supports that relationship. Add cross-view constraint checks as a reusable
+contract, not as MẠN-specific logic.
 
 ### P3: advanced fidelity
 
@@ -335,8 +383,9 @@ provenance and approval contracts are complete.
   dimension roles, provenance transitions, and Constraint IR generation.
 - Solver tests validate exact station/elevation equations, chain closure,
   underconstraint, overconstraint, and conflict reporting.
-- Golden MẠN tests validate exact station and level coordinates from an approved
-  fixture without depending on global pixel scale.
+- Golden fixture tests validate exact repeated-axis and level coordinates from
+  approved registers without depending on global pixel scale; MẠN is the first
+  such fixture.
 - Overlay tests validate that the solved CAD transform is used only for source
   comparison and does not alter model coordinates.
 - DXF tests reopen output and verify native dimensions, layers, provenance
@@ -347,6 +396,7 @@ provenance and approval contracts are complete.
 ## Definition of done for this design
 
 The design is ready for implementation after the user reviews this written
-specification. Implementation begins with P0 contracts and the P1 MẠN slice;
+specification. Implementation begins with P0 contracts and the P1
+representative slice, using MẠN as the first fixture;
 the current pixel-first path is not deleted until the new path has equivalent
 staging, review, and safety evidence.
