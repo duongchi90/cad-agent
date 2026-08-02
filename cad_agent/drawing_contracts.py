@@ -105,7 +105,10 @@ def _approval(value: object, *, contract: str, path: str = "approval") -> None:
 
 
 def _common(payload: dict[str, Any], *, contract: str, version: str, required: set[str]) -> None:
-    _keys(payload, contract=contract, required=required)
+    if "schema_version" not in payload:
+        _fail(contract, "missing required properties: schema_version")
+    if required != {"schema_version"}:
+        _keys(payload, contract=contract, required=required)
     if payload.get("schema_version") != version:
         _fail(contract, f"schema_version must be {version!r}")
     _id(payload.get("id", ""), contract=contract, path="id") if "id" in required else None
@@ -167,7 +170,17 @@ def _validate_expectations(value: object, *, contract: str) -> None:
         layout_item = _object(layout, contract=contract, path=f"setup_expectations.layouts[{index}]")
         _keys(layout_item, contract=contract, required={"name","viewport_scales","locked"})
         _string(layout_item["name"], contract=contract, path=f"setup_expectations.layouts[{index}].name")
-        _strings(layout_item["viewport_scales"], contract=contract, path=f"setup_expectations.layouts[{index}].viewport_scales")
+        scales = layout_item["viewport_scales"]
+        if not isinstance(scales, list) or not scales:
+            _fail(contract, f"setup_expectations.layouts[{index}].viewport_scales must be a non-empty list")
+        for scale in scales:
+            number = _number(
+                scale,
+                contract=contract,
+                path=f"setup_expectations.layouts[{index}].viewport_scales",
+            )
+            if number <= 0:
+                _fail(contract, "viewport scales must be positive")
         for scale in layout_item["viewport_scales"]:
             number = _number(scale, contract=contract, path=f"setup_expectations.layouts[{index}].viewport_scales")
             if number <= 0:
