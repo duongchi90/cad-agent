@@ -181,10 +181,6 @@ def _validate_expectations(value: object, *, contract: str) -> None:
             )
             if number <= 0:
                 _fail(contract, "viewport scales must be positive")
-        for scale in layout_item["viewport_scales"]:
-            number = _number(scale, contract=contract, path=f"setup_expectations.layouts[{index}].viewport_scales")
-            if number <= 0:
-                _fail(contract, "viewport scales must be positive")
         _bool(layout_item["locked"], contract=contract, path=f"setup_expectations.layouts[{index}].locked")
     font = _object(item["font_policy"], contract=contract, path="setup_expectations.font_policy")
     _keys(font, contract=contract, required={"selected_mode","new_drawing","legacy_compatibility"})
