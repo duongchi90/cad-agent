@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/drawing-setup-audit-1.0",
+  "title": "Drawing Setup Audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "drawing_full_path",
+    "drawing_sha256",
+    "changed",
+    "dbmod_before",
+    "dbmod_after",
+    "variables",
+    "current_layer",
+    "custom_properties",
+    "layers",
+    "styles",
+    "layouts",
+    "font_report"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "drawing-setup-audit-1.0"
+    },
+    "drawing_full_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "drawing_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "changed": {
+      "type": "boolean"
+    },
+    "dbmod_before": {
+      "type": "integer"
+    },
+    "dbmod_after": {
+      "type": "integer"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "current_layer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "custom_properties": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "layers": {
+      "type": "array"
+    },
+    "styles": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "layouts": {
+      "type": "array"
+    },
+    "font_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "missing",
+        "substituted"
+      ],
+      "properties": {
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "substituted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}
