@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/drawing-setup-evidence-1.0",
+  "title": "Drawing Setup Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "run_id",
+    "setup_plan_sha256",
+    "audit_sha256",
+    "drawing_profile_sha256",
+    "template_file_sha256",
+    "blockers",
+    "verified_by",
+    "approval_reference"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "drawing-setup-evidence-1.0"
+    },
+    "status": {
+      "enum": [
+        "SETUP_VERIFIED",
+        "NEEDS_REVIEW"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "setup_plan_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "audit_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "drawing_profile_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "template_file_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "blockers": {
+      "type": "array"
+    },
+    "verified_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "approval_reference": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
