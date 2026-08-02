@@ -33,6 +33,15 @@ CONTRACTS = {
 
 
 def assert_schema_accepts(schema: dict[str, object], value: object, path: str = "$") -> None:
+    for clause in schema.get("allOf", []):
+        condition = clause.get("if", {})
+        condition_properties = condition.get("properties", {})
+        matches = all(
+            value.get(key) == rule.get("const")
+            for key, rule in condition_properties.items()
+        ) if isinstance(value, dict) else False
+        if matches and "then" in clause:
+            assert_schema_accepts(clause["then"], value, path)
     if "const" in schema:
         assert value == schema["const"], path
     if "enum" in schema:
@@ -57,6 +66,8 @@ def assert_schema_accepts(schema: dict[str, object], value: object, path: str = 
         assert isinstance(value, list), path
         if "minItems" in schema:
             assert len(value) >= schema["minItems"], path
+        if "maxItems" in schema:
+            assert len(value) <= schema["maxItems"], path
         if isinstance(schema.get("items"), dict):
             for index, item in enumerate(value):
                 assert_schema_accepts(schema["items"], item, f"{path}[{index}]")
@@ -161,6 +172,23 @@ def test_empty_identifier_and_invalid_template_are_rejected(tmp_path: Path) -> N
     path.write_text(json.dumps(template), encoding="utf-8")
     with pytest.raises(DrawingContractError, match="file_name"):
         read_contract(path, contract="template_manifest")
+
+
+def test_verified_evidence_cannot_have_blockers(tmp_path: Path) -> None:
+    payload = json.loads((EXAMPLES / "drawing-setup-evidence.json").read_text(encoding="utf-8"))
+    payload["status"] = "SETUP_VERIFIED"
+    path = tmp_path / "verified-evidence.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(DrawingContractError, match="SETUP_VERIFIED"):
+        read_contract(path, contract="drawing_setup_evidence")
+
+    schema = json.loads(
+        (ROOT / "contracts" / "drawing-setup" / "drawing-setup-evidence.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    with pytest.raises(AssertionError):
+        assert_schema_accepts(schema, payload, path="drawing-setup-evidence.json")
 
 
 def test_ids_extensions_and_finite_numbers_are_strict(tmp_path: Path) -> None:
