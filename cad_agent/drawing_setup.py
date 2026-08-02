@@ -41,6 +41,7 @@ class _ImmutableDict(dict[str, Any]):
 
     __setitem__ = _immutable
     __delitem__ = _immutable
+    __ior__ = _immutable
     clear = _immutable
     pop = _immutable
     popitem = _immutable
@@ -120,6 +121,24 @@ def _looks_like_run_id(value: object) -> bool:
     return isinstance(value, str) and _ID_RE.fullmatch(value) is not None and "." not in value
 
 
+def _looks_like_template(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return False
+    try:
+        return Path(value).suffix.lower() == ".dwt"  # type: ignore[arg-type]
+    except TypeError:
+        return False
+
+
+def _order_contract_args(
+    values: tuple[object, ...],
+) -> tuple[object, object, object, object, object]:
+    definition_value, profile_value, domain_value, fourth, fifth = values
+    if _looks_like_template(fourth) and not _looks_like_template(fifth):
+        return definition_value, profile_value, domain_value, fifth, fourth
+    return definition_value, profile_value, domain_value, fourth, fifth
+
+
 def _resolve_positional(
     args: tuple[object, ...],
     *,
@@ -132,14 +151,25 @@ def _resolve_positional(
 ) -> tuple[str | None, ContractInput | None, ContractInput | None, ContractInput | None, ContractInput | None, str | os.PathLike[str] | None]:
     if not args:
         return run_id, definition_path, profile_path, domain_pack_path, template_manifest_path, template_path
-    if any(value is not None for value in (run_id, definition_path, profile_path, domain_pack_path, template_manifest_path, template_path)):
+    if any(value is not None for value in (definition_path, profile_path, domain_pack_path, template_manifest_path, template_path)):
         raise _fail("inconsistent input contract: do not mix positional and keyword inputs")
-    if len(args) != 6:
-        raise _fail("create_setup_plan requires six positional inputs or named inputs")
-    if _looks_like_run_id(args[0]):
-        run_value, definition_value, profile_value, domain_value, manifest_value, template_value = args
+    if len(args) == 5:
+        if run_id is None:
+            raise _fail("create_setup_plan requires run_id with five positional inputs")
+        definition_value, profile_value, domain_value, manifest_value, template_value = _order_contract_args(args)
+        run_value = run_id
+    elif len(args) == 6 and run_id is None:
+        if _looks_like_run_id(args[0]):
+            run_value = args[0]
+            ordered = _order_contract_args(args[1:])
+        elif _looks_like_run_id(args[-1]):
+            run_value = args[-1]
+            ordered = _order_contract_args(args[:-1])
+        else:
+            raise _fail("invalid run ID: positional inputs must include a run_id")
+        definition_value, profile_value, domain_value, manifest_value, template_value = ordered
     else:
-        definition_value, profile_value, domain_value, manifest_value, template_value, run_value = args
+        raise _fail("create_setup_plan requires five paths plus run_id or six positional inputs")
     if not isinstance(run_value, str):
         raise _fail("invalid run ID: run_id must be a string")
     return (
