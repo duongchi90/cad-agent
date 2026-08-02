@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$PythonExe = ""
+    [string]$PythonExe = "",
+    [switch]$SkipAutoCADDotNet
 )
 
 Set-StrictMode -Version Latest
@@ -34,64 +35,68 @@ if ($LASTEXITCODE -ne 0 -or $pythonVersion -notmatch '^3\.11\.\d+$') {
     throw "BLOCKER: verification requires Python 3.11; found '$pythonVersion'."
 }
 
-$dotnetSolution = Join-Path $repoRoot "autocad_plugin/CadAgent.AutoCAD2027.sln"
-if (-not (Test-Path -LiteralPath $dotnetSolution -PathType Leaf)) {
-    throw "BLOCKER: C# solution not found: $dotnetSolution"
-}
-$dotnetCommand = Get-Command "dotnet" -ErrorAction SilentlyContinue
-if (-not $dotnetCommand) {
-    throw "BLOCKER: .NET SDK executable 'dotnet' is not available on PATH."
-}
-
-function Invoke-DotNetGate {
-    param(
-        [string]$Name,
-        [string[]]$Arguments
-    )
-    & $dotnetCommand.Source @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "BLOCKER: $Name failed with exit code $LASTEXITCODE."
+if ($SkipAutoCADDotNet) {
+    Write-Host "AutoCAD .NET gate: NOT RUN (explicit -SkipAutoCADDotNet)."
+} else {
+    $dotnetSolution = Join-Path $repoRoot "autocad_plugin/CadAgent.AutoCAD2027.sln"
+    if (-not (Test-Path -LiteralPath $dotnetSolution -PathType Leaf)) {
+        throw "BLOCKER: C# solution not found: $dotnetSolution"
     }
-}
+    $dotnetCommand = Get-Command "dotnet" -ErrorAction SilentlyContinue
+    if (-not $dotnetCommand) {
+        throw "BLOCKER: .NET SDK executable 'dotnet' is not available on PATH."
+    }
 
-Invoke-DotNetGate -Name "dotnet restore" -Arguments @(
-    "restore",
-    $dotnetSolution
-)
-Invoke-DotNetGate -Name "dotnet build Release x64" -Arguments @(
-    "build",
-    $dotnetSolution,
-    "-c",
-    "Release",
-    "-p:Platform=x64"
-)
-
-$autodeskDllNames = @("AcCoreMgd.dll", "AcDbMgd.dll", "AcMgd.dll")
-$dotnetOutputRoots = @(
-    (Join-Path $repoRoot "autocad_plugin\CadAgent.AutoCAD2027\bin"),
-    (Join-Path $repoRoot "autocad_plugin\CadAgent.AutoCAD2027.Tests\bin")
-)
-$copiedAutodeskDlls = @(
-    foreach ($outputRoot in $dotnetOutputRoots) {
-        if (Test-Path -LiteralPath $outputRoot -PathType Container) {
-            Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
-                Where-Object { $autodeskDllNames -contains $_.Name }
+    function Invoke-DotNetGate {
+        param(
+            [string]$Name,
+            [string[]]$Arguments
+        )
+        & $dotnetCommand.Source @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "BLOCKER: $Name failed with exit code $LASTEXITCODE."
         }
     }
-)
-if ($copiedAutodeskDlls.Count -ne 0) {
-    $copiedPaths = $copiedAutodeskDlls | ForEach-Object { $_.FullName }
-    throw "BLOCKER: Autodesk Managed DLLs copied to build output:`n$($copiedPaths -join "`n")"
-}
-Write-Host "AutoCAD DLL output check: no Autodesk Managed DLLs copied."
 
-Invoke-DotNetGate -Name "dotnet test Release x64" -Arguments @(
-    "test",
-    $dotnetSolution,
-    "-c",
-    "Release",
-    "-p:Platform=x64"
-)
+    Invoke-DotNetGate -Name "dotnet restore" -Arguments @(
+        "restore",
+        $dotnetSolution
+    )
+    Invoke-DotNetGate -Name "dotnet build Release x64" -Arguments @(
+        "build",
+        $dotnetSolution,
+        "-c",
+        "Release",
+        "-p:Platform=x64"
+    )
+
+    $autodeskDllNames = @("AcCoreMgd.dll", "AcDbMgd.dll", "AcMgd.dll")
+    $dotnetOutputRoots = @(
+        (Join-Path $repoRoot "autocad_plugin\CadAgent.AutoCAD2027\bin"),
+        (Join-Path $repoRoot "autocad_plugin\CadAgent.AutoCAD2027.Tests\bin")
+    )
+    $copiedAutodeskDlls = @(
+        foreach ($outputRoot in $dotnetOutputRoots) {
+            if (Test-Path -LiteralPath $outputRoot -PathType Container) {
+                Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
+                    Where-Object { $autodeskDllNames -contains $_.Name }
+            }
+        }
+    )
+    if ($copiedAutodeskDlls.Count -ne 0) {
+        $copiedPaths = $copiedAutodeskDlls | ForEach-Object { $_.FullName }
+        throw "BLOCKER: Autodesk Managed DLLs copied to build output:`n$($copiedPaths -join "`n")"
+    }
+    Write-Host "AutoCAD DLL output check: no Autodesk Managed DLLs copied."
+
+    Invoke-DotNetGate -Name "dotnet test Release x64" -Arguments @(
+        "test",
+        $dotnetSolution,
+        "-c",
+        "Release",
+        "-p:Platform=x64"
+    )
+}
 
 $lockFile = Join-Path $repoRoot "requirements\windows-py311.lock"
 & $PythonExe (Join-Path $repoRoot "scripts\lock_contract.py") check $lockFile
