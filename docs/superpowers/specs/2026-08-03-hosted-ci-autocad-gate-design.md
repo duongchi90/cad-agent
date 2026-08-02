@@ -1,6 +1,6 @@
 # Hosted CI AutoCAD Gate Design
 
-**Date:** 2026-08-03  
+**Date:** 2026-08-03
 **Status:** Approved for implementation
 
 ## Context
