@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/drawing-profile-1.0",
+  "title": "Drawing Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "revision",
+    "status",
+    "supported_domains",
+    "supported_drawing_types",
+    "model",
+    "setup_expectations",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "drawing-profile-1.0"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "const": "APPROVED"
+    },
+    "supported_domains": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_drawing_types": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "scale",
+        "ucs"
+      ],
+      "properties": {
+        "unit": {
+          "const": "mm"
+        },
+        "scale": {
+          "const": "1:1"
+        },
+        "ucs": {
+          "const": "WORLD"
+        }
+      }
+    },
+    "setup_expectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variables",
+        "current_layer",
+        "required_layers",
+        "required_styles",
+        "layouts",
+        "font_policy"
+      ],
+      "properties": {
+        "variables": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "current_layer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_layers": {
+          "type": "array",
+          "minItems": 1
+        },
+        "required_styles": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "layouts": {
+          "type": "array",
+          "minItems": 1
+        },
+        "font_policy": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "approved_by"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved_by": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
