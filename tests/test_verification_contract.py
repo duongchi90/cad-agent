@@ -127,6 +127,27 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("no AutoCAD Mechanical session", script[not_run - 400 : not_run + 200])
         self.assertNotIn("AutoCAD live marker: PASS", script[not_run - 400 : not_run + 200])
 
+    def test_hosted_mode_explicitly_skips_only_autocad_dotnet_gate(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$SkipAutoCADDotNet", script)
+        self.assertIn(
+            "AutoCAD .NET gate: NOT RUN (explicit -SkipAutoCADDotNet).",
+            script,
+        )
+        self.assertIn(".\\scripts\\verify.ps1 -SkipAutoCADDotNet", workflow)
+        self.assertNotIn(
+            ".\\scripts\\verify.ps1\\n",
+            workflow.replace(".\\scripts\\verify.ps1 -SkipAutoCADDotNet", ""),
+        )
+
+        dotnet_gate = script.index('Invoke-DotNetGate -Name "dotnet restore"')
+        skip_marker = script.index(
+            "AutoCAD .NET gate: NOT RUN (explicit -SkipAutoCADDotNet)."
+        )
+        self.assertLess(skip_marker, dotnet_gate)
+
     def test_verify_discovers_tesseract_with_bootstrap_precedence(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
         environment_override = script.index(
