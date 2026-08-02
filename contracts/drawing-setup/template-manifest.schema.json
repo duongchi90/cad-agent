@@ -29,7 +29,7 @@
     },
     "file_name": {
       "type": "string",
-      "pattern": "^[^\\\\/]+\\.dwt$"
+      "pattern": "^[^\\\\/]+\\.[dD][wW][tT]$"
     },
     "file_sha256": {
       "type": "string",
