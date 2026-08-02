@@ -7,7 +7,7 @@ import pytest
 
 from cad_agent.drawing_contracts import DrawingContractError, canonical_json_sha256, read_contract
 
-from .drawing_setup_fixtures import (
+from drawing_setup_fixtures import (
     approved_definition,
     approved_domain_pack,
     approved_profile,
