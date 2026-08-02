@@ -192,5 +192,5 @@ def write_historical_v1_manifest(root: Path) -> Path:
         "approvals": {"calibration": {"approved": True, "reference": "ticket-123"}},
         "stages": stages,
     }
-    path.write_text(json.dumps(payload, encoding="utf-8"), encoding="utf-8")
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
