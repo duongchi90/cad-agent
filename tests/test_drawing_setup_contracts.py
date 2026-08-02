@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from drawing_setup_fixtures import (
     approved_definition,
     approved_domain_pack,
     approved_profile,
+    approved_setup_plan,
     approved_template_manifest,
 )
 
@@ -27,6 +30,61 @@ CONTRACTS = {
     "drawing-setup-audit.json": "drawing_setup_audit",
     "drawing-setup-evidence.json": "drawing_setup_evidence",
 }
+
+
+def assert_schema_accepts(schema: dict[str, object], value: object, path: str = "$") -> None:
+    if "const" in schema:
+        assert value == schema["const"], path
+    if "enum" in schema:
+        assert value in schema["enum"], path
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        assert isinstance(value, dict), path
+        required = schema.get("required", [])
+        missing = [key for key in required if key not in value]
+        assert not missing, f"{path}: missing {missing}"
+        properties = schema.get("properties", {}) or {}
+        additional = schema.get("additionalProperties", True)
+        if additional is False:
+            unknown = set(value) - set(properties)
+            assert not unknown, f"{path}: unknown {sorted(unknown)}"
+        for key, item in value.items():
+            if key in properties:
+                assert_schema_accepts(properties[key], item, f"{path}.{key}")
+            elif isinstance(additional, dict):
+                assert_schema_accepts(additional, item, f"{path}.{key}")
+    elif schema_type == "array":
+        assert isinstance(value, list), path
+        if "minItems" in schema:
+            assert len(value) >= schema["minItems"], path
+        if isinstance(schema.get("items"), dict):
+            for index, item in enumerate(value):
+                assert_schema_accepts(schema["items"], item, f"{path}[{index}]")
+    elif schema_type == "string":
+        assert isinstance(value, str), path
+        if "minLength" in schema:
+            assert len(value) >= schema["minLength"], path
+        if "pattern" in schema:
+            assert re.search(schema["pattern"], value), path
+    elif schema_type == "number":
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), path
+        assert math.isfinite(value), path
+    elif schema_type == "integer":
+        assert isinstance(value, int) and not isinstance(value, bool), path
+    elif schema_type == "boolean":
+        assert isinstance(value, bool), path
+    if "exclusiveMinimum" in schema:
+        assert value > schema["exclusiveMinimum"], path
+
+
+def test_schema_examples_match_their_closed_contracts() -> None:
+    for filename in sorted(CONTRACTS):
+        schema_path = ROOT / "contracts" / "drawing-setup" / filename.replace(
+            ".json", ".schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        payload = json.loads((EXAMPLES / filename).read_text(encoding="utf-8"))
+        assert_schema_accepts(schema, payload, path=filename)
 
 
 @pytest.mark.parametrize(("filename", "contract"), sorted(CONTRACTS.items()))
@@ -103,3 +161,21 @@ def test_empty_identifier_and_invalid_template_are_rejected(tmp_path: Path) -> N
     path.write_text(json.dumps(template), encoding="utf-8")
     with pytest.raises(DrawingContractError, match="file_name"):
         read_contract(path, contract="template_manifest")
+
+
+def test_ids_extensions_and_finite_numbers_are_strict(tmp_path: Path) -> None:
+    plan = approved_setup_plan()
+    plan["run_id"] = "RUN WITH SPACE"
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    with pytest.raises(DrawingContractError, match="run_id"):
+        read_contract(path, contract="drawing_setup_plan")
+
+    template = approved_template_manifest(file_sha256="a" * 64)
+    template["file_name"] = "template.DWT"
+    path = tmp_path / "template-uppercase.json"
+    path.write_text(json.dumps(template), encoding="utf-8")
+    assert read_contract(path, contract="template_manifest")["file_name"] == "template.DWT"
+
+    with pytest.raises(ValueError, match="finite"):
+        canonical_json_sha256({"value": float("nan")})
