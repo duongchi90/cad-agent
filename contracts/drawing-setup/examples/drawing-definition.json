@@ -1,0 +1,15 @@
+{
+  "schema_version": "drawing-definition-1.0",
+  "id": "DRAWDEF-SYNTHETIC-001",
+  "domain": "AUTOMOTIVE_CONVERSION",
+  "drawing_type": "GENERAL_ARRANGEMENT",
+  "purpose": "DESIGN_APPROVAL",
+  "source_mode": "RECONSTRUCT_FROM_APPROVED_SOURCE",
+  "revision": "01",
+  "release_profile": "REVIEW",
+  "status": "APPROVED",
+  "approval": {
+    "reference": "SYNTHETIC-APPROVAL-001",
+    "approved_by": "ENGINEER"
+  }
+}
