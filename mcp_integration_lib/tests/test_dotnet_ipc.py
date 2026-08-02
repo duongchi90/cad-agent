@@ -326,8 +326,15 @@ class PathUtilityTests(unittest.TestCase):
             request = request_path(ipc_dir, "one")
             result = result_path(ipc_dir, "one")
 
-            self.assertEqual(ipc_dir / "cadagent_dotnet_request_one.json", request)
-            self.assertEqual(ipc_dir / "cadagent_dotnet_result_one.json", result)
+            resolved_ipc_dir = ipc_dir.resolve()
+            self.assertEqual(
+                resolved_ipc_dir / "cadagent_dotnet_request_one.json",
+                request,
+            )
+            self.assertEqual(
+                resolved_ipc_dir / "cadagent_dotnet_result_one.json",
+                result,
+            )
 
     def test_normalizes_absolute_windows_paths_and_rejects_relative_paths(self) -> None:
         self.assertEqual(
