@@ -112,8 +112,9 @@ def _is_within(path: Path, parent: Path) -> bool:
 
 
 def _artifact(path: Path, output_root: Path) -> dict[str, str]:
+    relative_path = path.resolve().relative_to(output_root.resolve())
     return {
-        "artifact": str(path.relative_to(output_root)).replace("\\", "/"),
+        "artifact": relative_path.as_posix(),
         "sha256": sha256_file(path),
     }
 
