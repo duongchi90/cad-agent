@@ -171,6 +171,13 @@ def test_ids_extensions_and_finite_numbers_are_strict(tmp_path: Path) -> None:
     with pytest.raises(DrawingContractError, match="run_id"):
         read_contract(path, contract="drawing_setup_plan")
 
+    evidence = json.loads((EXAMPLES / "drawing-setup-evidence.json").read_text(encoding="utf-8"))
+    evidence["run_id"] = "RUN WITH SPACE"
+    path = tmp_path / "evidence.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(DrawingContractError, match="run_id"):
+        read_contract(path, contract="drawing_setup_evidence")
+
     template = approved_template_manifest(file_sha256="a" * 64)
     template["file_name"] = "template.DWT"
     path = tmp_path / "template-uppercase.json"
