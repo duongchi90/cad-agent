@@ -1,0 +1,82 @@
+{
+  "schema_version": "drawing-profile-1.0",
+  "id": "SYNTHETIC_A1",
+  "revision": "1.0",
+  "status": "APPROVED",
+  "supported_domains": [
+    "AUTOMOTIVE_CONVERSION"
+  ],
+  "supported_drawing_types": [
+    "GENERAL_ARRANGEMENT"
+  ],
+  "model": {
+    "unit": "mm",
+    "scale": "1:1",
+    "ucs": "WORLD"
+  },
+  "setup_expectations": {
+    "variables": {
+      "INSUNITS": 4,
+      "MEASUREMENT": 1,
+      "LTSCALE": 100,
+      "CELTSCALE": 1,
+      "PSLTSCALE": 1,
+      "MSLTSCALE": 1,
+      "DIMASSOC": 2,
+      "ANNOALLVISIBLE": 0
+    },
+    "current_layer": "0",
+    "required_layers": [
+      {
+        "name": "0",
+        "linetype": "Continuous",
+        "plottable": true
+      },
+      {
+        "name": "NET_CHINH",
+        "linetype": "Continuous",
+        "plottable": true
+      }
+    ],
+    "required_styles": {
+      "text": [
+        "VX_TEXT"
+      ],
+      "dimension": [
+        "VX_DIM_20"
+      ],
+      "mleader": [
+        "VX_MLEADER"
+      ],
+      "table": [
+        "VX_TABLE"
+      ]
+    },
+    "layouts": [
+      {
+        "name": "A1-01",
+        "viewport_scales": [
+          0.05
+        ],
+        "locked": true
+      }
+    ],
+    "font_policy": {
+      "selected_mode": "NEW_DRAWING",
+      "new_drawing": {
+        "approved_fonts": [
+          "Arial.ttf"
+        ],
+        "substitution_allowed": false
+      },
+      "legacy_compatibility": {
+        "preserve_source_styles": true,
+        "mapping_report_required": true
+      }
+    }
+  },
+  "approval": {
+    "reference": "SYNTHETIC-PROFILE-001",
+    "approved_by": "ENGINEER"
+  }
+}

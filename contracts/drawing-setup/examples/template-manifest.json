@@ -1,0 +1,14 @@
+{
+  "schema_version": "template-manifest-1.0",
+  "id": "VX_MECHANICAL_2027_TEMPLATE",
+  "revision": "1.0",
+  "file_name": "VX_MECHANICAL_2027_TEMPLATE.dwt",
+  "file_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "drawing_profile_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "embedded_settings_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "status": "APPROVED",
+  "approval": {
+    "reference": "SYNTHETIC-TEMPLATE-001",
+    "approved_by": "ENGINEER"
+  }
+}

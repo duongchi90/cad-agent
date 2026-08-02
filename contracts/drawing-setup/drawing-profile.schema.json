@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/drawing-profile-1.0",
+  "title": "Drawing Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "revision",
+    "status",
+    "supported_domains",
+    "supported_drawing_types",
+    "model",
+    "setup_expectations",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "drawing-profile-1.0"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "const": "APPROVED"
+    },
+    "supported_domains": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_drawing_types": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "scale",
+        "ucs"
+      ],
+      "properties": {
+        "unit": {
+          "const": "mm"
+        },
+        "scale": {
+          "const": "1:1"
+        },
+        "ucs": {
+          "const": "WORLD"
+        }
+      }
+    },
+    "setup_expectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variables",
+        "current_layer",
+        "required_layers",
+        "required_styles",
+        "layouts",
+        "font_policy"
+      ],
+      "properties": {
+        "variables": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "INSUNITS",
+            "MEASUREMENT",
+            "LTSCALE",
+            "CELTSCALE",
+            "PSLTSCALE",
+            "MSLTSCALE",
+            "DIMASSOC",
+            "ANNOALLVISIBLE"
+          ],
+          "properties": {
+            "INSUNITS": {
+              "type": "number"
+            },
+            "MEASUREMENT": {
+              "type": "number"
+            },
+            "LTSCALE": {
+              "type": "number"
+            },
+            "CELTSCALE": {
+              "type": "number"
+            },
+            "PSLTSCALE": {
+              "type": "number"
+            },
+            "MSLTSCALE": {
+              "type": "number"
+            },
+            "DIMASSOC": {
+              "type": "number"
+            },
+            "ANNOALLVISIBLE": {
+              "type": "number"
+            }
+          }
+        },
+        "current_layer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_layers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "linetype",
+              "plottable"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "linetype": {
+                "type": "string",
+                "minLength": 1
+              },
+              "plottable": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required_styles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "dimension",
+            "mleader",
+            "table"
+          ],
+          "properties": {
+            "text": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "dimension": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "mleader": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "table": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "layouts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "viewport_scales",
+              "locked"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "viewport_scales": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "locked": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "font_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "selected_mode",
+            "new_drawing",
+            "legacy_compatibility"
+          ],
+          "properties": {
+            "selected_mode": {
+              "enum": [
+                "NEW_DRAWING",
+                "LEGACY_COMPATIBILITY"
+              ]
+            },
+            "new_drawing": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "approved_fonts",
+                "substitution_allowed"
+              ],
+              "properties": {
+                "approved_fonts": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "substitution_allowed": {
+                  "const": false
+                }
+              }
+            },
+            "legacy_compatibility": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "preserve_source_styles",
+                "mapping_report_required"
+              ],
+              "properties": {
+                "preserve_source_styles": {
+                  "const": true
+                },
+                "mapping_report_required": {
+                  "const": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "approved_by"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved_by": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
