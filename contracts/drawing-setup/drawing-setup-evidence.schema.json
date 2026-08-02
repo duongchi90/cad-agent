@@ -28,7 +28,8 @@
     },
     "run_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
     },
     "setup_plan_sha256": {
       "type": "string",
