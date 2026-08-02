@@ -85,5 +85,25 @@
       "type": "string",
       "minLength": 1
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "SETUP_VERIFIED"
+          }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
 }
