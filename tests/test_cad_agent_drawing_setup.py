@@ -211,3 +211,27 @@ def test_run_id_input_contract_and_plan_references_are_strict(tmp_path: Path) ->
         plan["definition"]["id"] = "MUTATED"
     with pytest.raises(TypeError, match="immutable"):
         plan["setup_expectations"]["required_layers"].append({})
+
+
+def test_common_positional_input_orders_are_supported(tmp_path: Path) -> None:
+    paths = _write_approved_inputs(tmp_path)
+    plan = create_setup_plan(
+        paths["definition_path"],
+        paths["profile_path"],
+        paths["domain_pack_path"],
+        paths["template_manifest_path"],
+        paths["template_path"],
+        run_id="RUN-20260803-012",
+    )
+    assert plan["run_id"] == "RUN-20260803-012"
+
+    paths = _write_approved_inputs(tmp_path / "run-first")
+    plan = create_setup_plan(
+        "RUN-20260803-013",
+        paths["definition_path"],
+        paths["profile_path"],
+        paths["domain_pack_path"],
+        paths["template_path"],
+        paths["template_manifest_path"],
+    )
+    assert plan["run_id"] == "RUN-20260803-013"
