@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -30,10 +31,22 @@ class DrawingContractError(ValueError):
     """Raised when a Drawing Setup contract is absent, malformed, or unapproved."""
 
 
+def _assert_finite_json(value: object, *, path: str = "$") -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise DrawingContractError(f"{path} must contain only finite numbers")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _assert_finite_json(item, path=f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _assert_finite_json(item, path=f"{path}[{index}]")
+
+
 def canonical_json_sha256(payload: Mapping[str, object]) -> str:
     """Return SHA-256 for the canonical UTF-8 JSON representation of a mapping."""
     if not isinstance(payload, Mapping):
         raise TypeError("canonical JSON hashing requires a mapping")
+    _assert_finite_json(payload)
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -80,6 +93,8 @@ def _bool(value: object, *, contract: str, path: str) -> bool:
 def _number(value: object, *, contract: str, path: str) -> float | int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail(contract, f"{path} must be numeric")
+    if isinstance(value, float) and not math.isfinite(value):
+        _fail(contract, f"{path} must be finite")
     return value
 
 
@@ -238,7 +253,9 @@ def _validate_ref(value: object, *, contract: str, path: str, fields: set[str]) 
     for key in fields:
         if key.endswith("sha256") or key == "file_sha256":
             _sha(item[key], contract=contract, path=f"{path}.{key}")
-        elif key in {"id","revision"}:
+        elif key == "id":
+            _id(item[key], contract=contract, path=f"{path}.{key}")
+        elif key == "revision":
             _string(item[key], contract=contract, path=f"{path}.{key}")
 
 
@@ -246,7 +263,7 @@ def _validate_setup_plan(payload: dict[str, Any]) -> None:
     contract = "drawing_setup_plan"
     required = {"schema_version","run_id","state","definition","drawing_profile","domain_pack","template","setup_expectations"}
     _common(payload, contract=contract, version="drawing-setup-plan-1.0", required=required)
-    _string(payload["run_id"], contract=contract, path="run_id")
+    _id(payload["run_id"], contract=contract, path="run_id")
     if payload["state"] != "SETUP_PENDING":
         _fail(contract, "state must be SETUP_PENDING")
     _validate_ref(payload["definition"], contract=contract, path="definition", fields={"id","sha256"})
@@ -324,6 +341,8 @@ def _validate_blocker(value: object, *, contract: str, path: str) -> None:
         _fail(contract, f"{path}.expected must be JSON-compatible")
     if not isinstance(item["actual"], (str, int, float, bool, type(None), list, dict)):
         _fail(contract, f"{path}.actual must be JSON-compatible")
+    _assert_finite_json(item["expected"], path=f"{path}.expected")
+    _assert_finite_json(item["actual"], path=f"{path}.actual")
 
 
 def _validate_evidence(payload: dict[str, Any]) -> None:
@@ -333,7 +352,7 @@ def _validate_evidence(payload: dict[str, Any]) -> None:
     _keys(payload, contract=contract, required=required)
     if payload["status"] not in {"SETUP_VERIFIED","NEEDS_REVIEW"}:
         _fail(contract, "status must be SETUP_VERIFIED or NEEDS_REVIEW")
-    _string(payload["run_id"], contract=contract, path="run_id")
+    _id(payload["run_id"], contract=contract, path="run_id")
     for key in ("setup_plan_sha256","audit_sha256","drawing_profile_sha256","template_file_sha256"):
         _sha(payload[key], contract=contract, path=key)
     blockers = payload["blockers"]
