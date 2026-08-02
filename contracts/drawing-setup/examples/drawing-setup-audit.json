@@ -1,0 +1,61 @@
+{
+  "schema_version": "drawing-setup-audit-1.0",
+  "drawing_full_path": "SYNTHETIC_DISPOSABLE_DWG",
+  "drawing_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "changed": false,
+  "dbmod_before": 0,
+  "dbmod_after": 0,
+  "variables": {
+    "INSUNITS": 4,
+    "MEASUREMENT": 1,
+    "LTSCALE": 100,
+    "CELTSCALE": 1,
+    "PSLTSCALE": 1,
+    "MSLTSCALE": 1,
+    "DIMASSOC": 2,
+    "ANNOALLVISIBLE": 0
+  },
+  "current_layer": "0",
+  "custom_properties": {
+    "CAD_AGENT_SETTINGS_SHA256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "layers": [
+    {
+      "name": "0",
+      "linetype": "Continuous",
+      "plottable": true
+    },
+    {
+      "name": "NET_CHINH",
+      "linetype": "Continuous",
+      "plottable": true
+    }
+  ],
+  "styles": {
+    "text": [
+      "VX_TEXT"
+    ],
+    "dimension": [
+      "VX_DIM_20"
+    ],
+    "mleader": [
+      "VX_MLEADER"
+    ],
+    "table": [
+      "VX_TABLE"
+    ]
+  },
+  "layouts": [
+    {
+      "name": "A1-01",
+      "viewport_scales": [
+        0.05
+      ],
+      "locked": true
+    }
+  ],
+  "font_report": {
+    "missing": [],
+    "substituted": []
+  }
+}
