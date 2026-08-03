@@ -42,8 +42,8 @@ jobs:
       - name: Bootstrap locked environment
         run: .\scripts\bootstrap.ps1 -PythonExe python
 
-      - name: Run authoritative verification
-        run: .\scripts\verify.ps1
+      - name: Run hosted verification (AutoCAD .NET gate not run)
+        run: .\scripts\verify.ps1 -SkipAutoCADDotNet
 
       - name: Upload test evidence
         if: always()

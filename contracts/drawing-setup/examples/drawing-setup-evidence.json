@@ -1,0 +1,20 @@
+{
+  "schema_version": "drawing-setup-evidence-1.0",
+  "status": "NEEDS_REVIEW",
+  "run_id": "RUN-20260802-001",
+  "setup_plan_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "audit_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "drawing_profile_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "template_file_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "blockers": [
+    {
+      "code": "setup_incomplete",
+      "path": "variables.INSUNITS",
+      "expected": 4,
+      "actual": 0,
+      "severity": "error"
+    }
+  ],
+  "verified_by": "ENGINEER",
+  "approval_reference": "SYNTHETIC-EVIDENCE-001"
+}

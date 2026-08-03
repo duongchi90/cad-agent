@@ -1,0 +1,86 @@
+{
+  "schema_version": "drawing-setup-plan-1.0",
+  "run_id": "RUN-20260802-001",
+  "state": "SETUP_PENDING",
+  "definition": {
+    "id": "DRAWDEF-SYNTHETIC-001",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "drawing_profile": {
+    "id": "SYNTHETIC_A1",
+    "revision": "1.0",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "domain_pack": {
+    "id": "AUTOMOTIVE_CONVERSION_V1",
+    "revision": "1.0",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "template": {
+    "id": "VX_MECHANICAL_2027_TEMPLATE",
+    "revision": "1.0",
+    "file_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "embedded_settings_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "setup_expectations": {
+    "variables": {
+      "INSUNITS": 4,
+      "MEASUREMENT": 1,
+      "LTSCALE": 100,
+      "CELTSCALE": 1,
+      "PSLTSCALE": 1,
+      "MSLTSCALE": 1,
+      "DIMASSOC": 2,
+      "ANNOALLVISIBLE": 0
+    },
+    "current_layer": "0",
+    "required_layers": [
+      {
+        "name": "0",
+        "linetype": "Continuous",
+        "plottable": true
+      },
+      {
+        "name": "NET_CHINH",
+        "linetype": "Continuous",
+        "plottable": true
+      }
+    ],
+    "required_styles": {
+      "text": [
+        "VX_TEXT"
+      ],
+      "dimension": [
+        "VX_DIM_20"
+      ],
+      "mleader": [
+        "VX_MLEADER"
+      ],
+      "table": [
+        "VX_TABLE"
+      ]
+    },
+    "layouts": [
+      {
+        "name": "A1-01",
+        "viewport_scales": [
+          0.05
+        ],
+        "locked": true
+      }
+    ],
+    "font_policy": {
+      "selected_mode": "NEW_DRAWING",
+      "new_drawing": {
+        "approved_fonts": [
+          "Arial.ttf"
+        ],
+        "substitution_allowed": false
+      },
+      "legacy_compatibility": {
+        "preserve_source_styles": true,
+        "mapping_report_required": true
+      }
+    }
+  }
+}

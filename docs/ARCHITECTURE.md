@@ -74,6 +74,22 @@ Raw-LISP document activation is accepted only when the normalized full
 Each phase writes or accepts a stable artifact so a later phase can be rerun
 without reprocessing the original image.
 
+### Drawing Setup contracts and provenance
+
+The Drawing Initialization Gate adds orchestration and verification contracts
+for a Drawing Definition, Drawing Profile, Domain Pack, template manifest,
+setup plan, read-only setup audit, and setup evidence. Their configurable
+values and provenance are hash-bound. An authoritative drawing path must
+present `SETUP_VERIFIED` evidence before geometry creation; the existing
+image/PDF path remains `DRAFT_REFERENCE` until that separate dimension-first
+path exists.
+
+This is orchestration and verification behavior: it does not move CAD
+algorithms into `cad_agent` and does not replace the .NET/File IPC boundary.
+`cad_agent` validates contracts and evidence, while the AutoCAD-side audit
+continues through the existing File IPC boundary. Package ownership remains
+unchanged.
+
 ## Safety boundaries
 
 - Unverified calibration or ambiguous recognition stops at a human approval
@@ -123,3 +139,7 @@ repair, or a visual-fidelity pass by themselves.
 
 `CAD-Agent-Kien-Truc-v1_3.md` and `HANDOFF.md` preserve detailed implementation
 history. They are evidence, not the current status ledger.
+
+The approved design is
+`docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md`; the executing
+M2 record is `docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md`.

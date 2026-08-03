@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/drawing-definition-1.0",
+  "title": "Drawing Definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "domain",
+    "drawing_type",
+    "purpose",
+    "source_mode",
+    "revision",
+    "release_profile",
+    "status",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "drawing-definition-1.0"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1
+    },
+    "drawing_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "release_profile": {
+      "enum": [
+        "REVIEW",
+        "AUTHORITATIVE"
+      ]
+    },
+    "status": {
+      "const": "APPROVED"
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "approved_by"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved_by": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

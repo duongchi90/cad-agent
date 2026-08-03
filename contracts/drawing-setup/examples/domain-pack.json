@@ -1,0 +1,22 @@
+{
+  "schema_version": "domain-pack-1.0",
+  "id": "AUTOMOTIVE_CONVERSION_V1",
+  "revision": "1.0",
+  "status": "APPROVED",
+  "domains": [
+    "AUTOMOTIVE_CONVERSION"
+  ],
+  "drawing_types": [
+    "GENERAL_ARRANGEMENT"
+  ],
+  "vocabulary": [
+    "CHASSIS",
+    "CABIN",
+    "CARGO_BODY",
+    "SPECIAL_EQUIPMENT"
+  ],
+  "approval": {
+    "reference": "SYNTHETIC-DOMAIN-001",
+    "approved_by": "ENGINEER"
+  }
+}

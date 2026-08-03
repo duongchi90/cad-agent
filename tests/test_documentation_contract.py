@@ -77,6 +77,75 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("docs/QUALITY.md", project)
         self.assertIn("docs/superpowers/README.md", project)
 
+    def test_canonical_docs_route_the_m2_setup_gate_and_preserve_boundaries(self) -> None:
+        documents = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in ("docs/PROJECT.md", "docs/ARCHITECTURE.md", "docs/STATUS.md")
+        }
+        design = "docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md"
+        plan = "docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md"
+        for path, content in documents.items():
+            self.assertIn(design, content, f"{design!r} missing from {path}")
+            self.assertIn(plan, content, f"{plan!r} missing from {path}")
+
+        project = documents["docs/PROJECT.md"]
+        normalized_project = " ".join(project.split())
+        self.assertIn("Drawing Initialization Gate", project)
+        self.assertIn("configurable", project)
+        self.assertIn(
+            "The existing image/PDF pipeline remains `DRAFT_REFERENCE`; it cannot "
+            "become authoritative until a separate dimension-first path presents "
+            "hash-bound `SETUP_VERIFIED` evidence.",
+            normalized_project,
+        )
+
+        architecture = documents["docs/ARCHITECTURE.md"]
+        normalized_architecture = " ".join(architecture.split())
+        self.assertIn(
+            "Their configurable values and provenance are hash-bound. An "
+            "authoritative drawing path must present `SETUP_VERIFIED` evidence "
+            "before geometry creation; the existing image/PDF path remains "
+            "`DRAFT_REFERENCE` until that separate dimension-first path exists.",
+            normalized_architecture,
+        )
+        self.assertIn(
+            "does not move CAD algorithms into `cad_agent`", normalized_architecture
+        )
+        self.assertIn(
+            "does not replace the .NET/File IPC boundary", normalized_architecture
+        )
+
+        status = documents["docs/STATUS.md"]
+        m2_status = status.split("## M2 Drawing Initialization Gate", 1)[1].split(
+            "## AutoCAD .NET plugin", 1
+        )[0]
+        normalized_m2_status = " ".join(m2_status.split())
+        self.assertIn("1969dc9", m2_status)
+        self.assertIn(
+            "T2 Drawing Setup contracts and validation merged at `2b7a756`.",
+            normalized_m2_status,
+        )
+        self.assertIn(
+            "State: **Executing**. The approved M0-M8 rollout merged at `1969dc9`",
+            normalized_m2_status,
+        )
+        self.assertIn(
+            "Full M2 is still executing and has not produced `SETUP_VERIFIED` "
+            "acceptance.",
+            normalized_m2_status,
+        )
+        self.assertIn(
+            "required private-data gate is `NOT RUN`; the unavailable-state "
+            "`real_data` probe is `SKIP`; and the AutoCAD/.NET live gate is "
+            "`NOT RUN`.",
+            normalized_m2_status,
+        )
+        self.assertIn(
+            "Hosted evidence does not promote AutoCAD/.NET/private gates to "
+            "`PASS`.",
+            normalized_m2_status,
+        )
+
     def test_historical_documents_route_to_canonical_sources(self) -> None:
         for relative_path in ("HANDOFF.md", "CAD-Agent-Kien-Truc-v1_3.md"):
             opening = "\n".join(
