@@ -101,8 +101,13 @@ class DocumentationContractTests(unittest.TestCase):
 
         architecture = documents["docs/ARCHITECTURE.md"]
         normalized_architecture = " ".join(architecture.split())
-        self.assertIn("DRAFT_REFERENCE", architecture)
-        self.assertIn("SETUP_VERIFIED", architecture)
+        self.assertIn(
+            "Their configurable values and provenance are hash-bound. An "
+            "authoritative drawing path must present `SETUP_VERIFIED` evidence "
+            "before geometry creation; the existing image/PDF path remains "
+            "`DRAFT_REFERENCE` until that separate dimension-first path exists.",
+            normalized_architecture,
+        )
         self.assertIn(
             "does not move CAD algorithms into `cad_agent`", normalized_architecture
         )
@@ -116,7 +121,10 @@ class DocumentationContractTests(unittest.TestCase):
         )[0]
         normalized_m2_status = " ".join(m2_status.split())
         self.assertIn("1969dc9", m2_status)
-        self.assertIn("2b7a756", m2_status)
+        self.assertIn(
+            "T2 Drawing Setup contracts and validation merged at `2b7a756`.",
+            normalized_m2_status,
+        )
         self.assertIn(
             "State: **Executing**. The approved M0-M8 rollout merged at `1969dc9`",
             normalized_m2_status,
