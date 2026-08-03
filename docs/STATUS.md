@@ -23,6 +23,20 @@ collects unavailable-state probes for `real_data` and `autocad_mechanical` as ex
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
 Mechanical gate that was not separately executed remains `NOT RUN`.
 
+## M2 Drawing Initialization Gate
+
+- State: **Executing**. The approved M0-M8 rollout merged at `1969dc9`; the
+  complete design is `docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md`
+  and the execution record is
+  `docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md`.
+- T2 Drawing Setup contracts and validation merged at `2b7a756`. Full M2 is
+  still executing and has not produced `SETUP_VERIFIED` acceptance.
+- Hosted evidence does not promote AutoCAD/.NET/private gates to `PASS`.
+  For the current M2 candidate, the required private-data gate is `NOT RUN`;
+  the unavailable-state `real_data` probe is `SKIP`; and the AutoCAD/.NET live
+  gate is `NOT RUN`. No hosted or contract-only result is a substitute for
+  operator-controlled AutoCAD Mechanical evidence.
+
 ## AutoCAD .NET plugin — Option A / phần cũ 1
 
 This subsection records the completed Windows-only managed .NET slice. The
@@ -160,6 +174,7 @@ the skips and the run used Python 3.12.
 | Reproducible foundation | Verified | See the Foundation certificate and `docs/reviews/2026-07-22-reproducible-foundation.md`. |
 | Thin image/PDF orchestration CLI | Verified | `cad_agent` run/resume and run-pdf/resume-pdf produce SHA-bound staged DXF and build evidence. Separate Mechanical review/repair commands enforce evidence, approval, backup, and second-review boundaries. |
 | Production repair safety loop | Partially verified | Fake-MCP tests cover refusal, hash-verified backup, repair, second review, close-without-save rollback, and verified-backup reopen. A real staged-DXF review passed; no production drawing repair was requested or run. |
+| M2 Drawing Initialization Gate | Executing | The image/PDF pipeline remains `DRAFT_REFERENCE`. A separate dimension-first path must provide hash-bound `SETUP_VERIFIED` evidence before an authoritative drawing path can create geometry; current M2 private/live gates are `NOT RUN` or `SKIP` as recorded above. |
 
 ## Known production gates
 

@@ -77,6 +77,40 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("docs/QUALITY.md", project)
         self.assertIn("docs/superpowers/README.md", project)
 
+    def test_canonical_docs_route_the_m2_setup_gate_and_preserve_boundaries(self) -> None:
+        documents = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in ("docs/PROJECT.md", "docs/ARCHITECTURE.md", "docs/STATUS.md")
+        }
+        design = "docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md"
+        plan = "docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md"
+        for path, content in documents.items():
+            self.assertIn(design, content, f"{design!r} missing from {path}")
+            self.assertIn(plan, content, f"{plan!r} missing from {path}")
+
+        project = documents["docs/PROJECT.md"]
+        self.assertIn("Drawing Initialization Gate", project)
+        self.assertIn("configurable", project)
+
+        architecture = documents["docs/ARCHITECTURE.md"]
+        normalized_architecture = " ".join(architecture.split())
+        self.assertIn("DRAFT_REFERENCE", architecture)
+        self.assertIn("SETUP_VERIFIED", architecture)
+        self.assertIn(
+            "does not move CAD algorithms into `cad_agent`", normalized_architecture
+        )
+        self.assertIn(
+            "does not replace the .NET/File IPC boundary", normalized_architecture
+        )
+
+        status = documents["docs/STATUS.md"]
+        self.assertIn("1969dc9", status)
+        self.assertIn("2b7a756", status)
+        self.assertIn("Executing", status)
+        self.assertIn("SETUP_VERIFIED", status)
+        self.assertIn("NOT RUN", status)
+        self.assertIn("SKIP", status)
+
     def test_historical_documents_route_to_canonical_sources(self) -> None:
         for relative_path in ("HANDOFF.md", "CAD-Agent-Kien-Truc-v1_3.md"):
             opening = "\n".join(
