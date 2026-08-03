@@ -339,6 +339,8 @@ class PathUtilityTests(unittest.TestCase):
         self.assertNotIn("pytestmark", vars(live_module))
         live_markers = getattr(live_module.DotNetIPCLiveSmokeTests, "pytestmark", [])
         self.assertEqual(["autocad_mechanical"], [marker.name for marker in live_markers])
+        setup_markers = getattr(live_module.PersonalSetupLiveTests, "pytestmark", [])
+        self.assertEqual(["autocad_mechanical"], [marker.name for marker in setup_markers])
         self.assertFalse(hasattr(live_module.DisposableCleanupTests, "pytestmark"))
 
     def test_request_and_result_names_use_the_new_prefix(self) -> None:
