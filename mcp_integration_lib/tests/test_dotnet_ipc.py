@@ -190,6 +190,32 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertEqual({}, dispatcher.requests[0]["parameters"])
             self.assertEqual(payload, result["payload"])
 
+    def test_drawing_setup_audit_sends_empty_parameters_and_preserves_payload(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "changed": False,
+                "current_layer": "0",
+            }
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.drawing_setup_audit(
+                r"C:/temp/parts/../setup.dwg",
+                drawing_sha256="a" * 64,
+                request_id="setup-001",
+            )
+
+            request = dispatcher.requests[0]
+            self.assertEqual("drawing_setup_audit", request["operation"])
+            self.assertEqual(r"C:\temp\setup.dwg", request["drawing_full_path"])
+            self.assertEqual("a" * 64, request["drawing_sha256"])
+            self.assertEqual({}, request["parameters"])
+            self.assertIsNone(request["approval"])
+            self.assertEqual(payload, result["payload"])
+
     def test_mechanical_bom_rejects_unsupported_parameters_before_trigger(self) -> None:
         with TemporaryDirectory() as temporary:
             trigger_calls = 0

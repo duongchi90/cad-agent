@@ -257,6 +257,125 @@ def _drawing_setup_plan_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _normalize_drawing_setup_audit(
+    result: dict[str, Any],
+    drawing: Path,
+    drawing_sha256: str,
+) -> dict[str, Any]:
+    payload = result.get("payload")
+    if not isinstance(payload, dict):
+        raise CommandError("Drawing Setup audit result has no object payload.")
+
+    layers: list[dict[str, Any]] = []
+    for item in payload.get("layers", []):
+        if not isinstance(item, dict):
+            raise CommandError("Drawing Setup audit returned an invalid layer entry.")
+        try:
+            layers.append(
+                {
+                    "name": item["name"],
+                    "linetype": item["linetype"],
+                    "plottable": item["plottable"],
+                }
+            )
+        except KeyError as exc:
+            raise CommandError("Drawing Setup audit returned an incomplete layer entry.") from exc
+
+    source_styles = payload.get("styles")
+    if not isinstance(source_styles, dict):
+        raise CommandError("Drawing Setup audit returned no styles object.")
+    styles: dict[str, list[str]] = {}
+    for key in ("text", "dimension", "mleader", "table"):
+        values = source_styles.get(key)
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise CommandError(f"Drawing Setup audit returned invalid styles.{key}.")
+        styles[key] = list(values)
+
+    layouts: list[dict[str, Any]] = []
+    for item in payload.get("layouts", []):
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise CommandError("Drawing Setup audit returned an invalid layout entry.")
+        viewports = item.get("viewports", [])
+        if not isinstance(viewports, list):
+            raise CommandError("Drawing Setup audit returned invalid layout viewports.")
+        scales: list[float | int] = []
+        locked = True
+        for viewport in viewports:
+            if not isinstance(viewport, dict) or not isinstance(viewport.get("custom_scale"), (int, float)):
+                raise CommandError("Drawing Setup audit returned an invalid viewport scale.")
+            scales.append(viewport["custom_scale"])
+            locked = locked and viewport.get("locked") is True
+        layouts.append(
+            {
+                "name": item["name"],
+                "viewport_scales": scales,
+                "locked": locked,
+            }
+        )
+
+    variables = payload.get("variables")
+    current_layer = payload.get("current_layer")
+    custom_properties = payload.get("custom_properties")
+    if not isinstance(variables, dict) or not isinstance(current_layer, str):
+        raise CommandError("Drawing Setup audit returned invalid variables or current_layer.")
+    if not isinstance(custom_properties, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in custom_properties.items()
+    ):
+        raise CommandError("Drawing Setup audit returned invalid custom properties.")
+
+    return {
+        "schema_version": "drawing-setup-audit-1.0",
+        "drawing_full_path": str(drawing),
+        "drawing_sha256": drawing_sha256,
+        "changed": bool(result.get("changed", False) or payload.get("changed", False)),
+        "dbmod_before": payload.get("dbmod_before"),
+        "dbmod_after": payload.get("dbmod_after"),
+        "variables": variables,
+        "current_layer": current_layer,
+        "custom_properties": custom_properties,
+        "layers": layers,
+        "styles": styles,
+        "layouts": layouts,
+        "font_report": payload.get("font_report", {"missing": [], "substituted": []}),
+    }
+
+
+def _drawing_setup_audit_command(args: argparse.Namespace) -> int:
+    drawing = args.drawing.resolve()
+    if not drawing.is_file():
+        raise CommandError(f"Drawing does not exist: {drawing}")
+    if args.hwnd <= 0:
+        raise CommandError("--hwnd must be a positive AutoCAD window handle.")
+    if args.timeout_s <= 0:
+        raise CommandError("--timeout-s must be positive.")
+
+    from mcp_integration_lib.dotnet_ipc import (
+        DotNetIPCClient,
+        make_windows_dotnet_dispatch_trigger,
+    )
+
+    source_sha256 = sha256_file(drawing)
+    client = DotNetIPCClient(
+        ipc_dir=args.ipc_dir.resolve(),
+        trigger=make_windows_dotnet_dispatch_trigger(args.hwnd),
+        timeout_s=args.timeout_s,
+    )
+    result = client.drawing_setup_audit(
+        str(drawing),
+        drawing_sha256=source_sha256,
+    )
+    if sha256_file(drawing) != source_sha256:
+        raise CommandError(
+            "source_changed: Drawing changed during the read-only Drawing Setup audit."
+        )
+
+    audit = _normalize_drawing_setup_audit(result, drawing, source_sha256)
+    write_manifest(args.output, audit)
+    print(args.output)
+    return 0
+
+
 def _unsupported_drawing_setup_command(command: str) -> int:
     raise CommandError(
         f"unsupported_operation: {command} is registered but not implemented in this M2 task"
@@ -855,7 +974,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "drawing-setup-plan":
             return _drawing_setup_plan_command(args)
         if args.command == "drawing-setup-audit":
-            return _unsupported_drawing_setup_command("drawing-setup-audit")
+            return _drawing_setup_audit_command(args)
         if args.command == "drawing-setup-verify":
             return _unsupported_drawing_setup_command("drawing-setup-verify")
         if args.command == "fidelity-pdf":

@@ -10,6 +10,7 @@ import pytest
 from cad_agent.drawing_contracts import canonical_json_sha256, read_contract
 from cad_agent.cli import main
 from cad_agent.drawing_setup import DrawingSetupError, create_setup_plan
+from cad_agent.manifest import sha256_file
 from drawing_setup_fixtures import write_approved_setup_inputs
 
 
@@ -235,3 +236,136 @@ def test_drawing_setup_plan_cli_writes_pending_plan(tmp_path: Path) -> None:
     ]) == 0
 
     assert json.loads(output.read_text(encoding="utf-8"))["state"] == "SETUP_PENDING"
+
+
+def test_drawing_setup_audit_cli_writes_hash_bound_normalized_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drawing = tmp_path / "setup.dwg"
+    drawing.write_bytes(b"synthetic drawing")
+    output = tmp_path / "drawing-setup-audit.json"
+    calls: list[dict[str, object]] = []
+
+    class FakeSetupClient:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append({"init": kwargs})
+
+        def drawing_setup_audit(
+            self,
+            drawing_full_path: str,
+            *,
+            drawing_sha256: str,
+            request_id: str | None = None,
+        ) -> dict[str, object]:
+            calls.append(
+                {
+                    "drawing_full_path": drawing_full_path,
+                    "drawing_sha256": drawing_sha256,
+                    "request_id": request_id,
+                }
+            )
+            return {
+                "request_id": "setup-001",
+                "success": True,
+                "operation": "drawing_setup_audit",
+                "drawing_full_path": drawing_full_path,
+                "changed": False,
+                "entity_handles": [],
+                "warnings": [],
+                "errors": [],
+                "started_at": "2026-08-01T00:00:00Z",
+                "completed_at": "2026-08-01T00:00:01Z",
+                "payload": {
+                    "drawing_full_path": drawing_full_path,
+                    "dbmod_before": 0,
+                    "dbmod_after": 0,
+                    "changed": False,
+                    "variables": {
+                        "INSUNITS": 4,
+                        "MEASUREMENT": 1,
+                        "LTSCALE": 100.0,
+                        "CELTSCALE": 1.0,
+                        "PSLTSCALE": 1,
+                        "MSLTSCALE": 1,
+                        "DIMASSOC": 2,
+                        "ANNOALLVISIBLE": 0,
+                    },
+                    "current_layer": "0",
+                    "custom_properties": {"CAD_AGENT_SETTINGS_SHA256": "b" * 64},
+                    "layers": [
+                        {
+                            "name": "0",
+                            "linetype": "Continuous",
+                            "plottable": True,
+                            "color_index": 7,
+                        }
+                    ],
+                    "styles": {
+                        "text": ["VX_TEXT"],
+                        "dimension": ["VX_DIM_20"],
+                        "mleader": ["VX_MLEADER"],
+                        "table": ["VX_TABLE"],
+                    },
+                    "layouts": [
+                        {
+                            "name": "A1-01",
+                            "viewports": [{"handle": "1A", "custom_scale": 0.05, "locked": True}],
+                        }
+                    ],
+                },
+            }
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.DotNetIPCClient", FakeSetupClient
+    )
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        lambda _hwnd: lambda: None,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "1234",
+        "--ipc-dir", str(tmp_path / "ipc"),
+        "--output", str(output),
+    ]) == 0
+
+    audit = read_contract(output, contract="drawing_setup_audit")
+    assert audit["schema_version"] == "drawing-setup-audit-1.0"
+    assert audit["drawing_sha256"] == sha256_file(drawing)
+    assert audit["layers"] == [{"name": "0", "linetype": "Continuous", "plottable": True}]
+    assert audit["layouts"] == [{"name": "A1-01", "viewport_scales": [0.05], "locked": True}]
+    assert calls[1]["drawing_sha256"] == sha256_file(drawing)
+
+
+def test_drawing_setup_audit_cli_refuses_source_changed_during_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drawing = tmp_path / "setup.dwg"
+    drawing.write_bytes(b"before")
+
+    class MutatingSetupClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def drawing_setup_audit(self, drawing_full_path: str, **_kwargs: object) -> dict[str, object]:
+            Path(drawing_full_path).write_bytes(b"after")
+            return {"success": True}
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.DotNetIPCClient", MutatingSetupClient
+    )
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        lambda _hwnd: lambda: None,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "1234",
+        "--ipc-dir", str(tmp_path / "ipc"),
+        "--output", str(tmp_path / "audit.json"),
+    ]) == 2
+    assert not (tmp_path / "audit.json").exists()
