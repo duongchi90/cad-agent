@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from cad_agent.cli import main
 from cad_agent.drawing_contracts import canonical_json_sha256, read_contract
 from cad_agent.drawing_setup import DrawingSetupError, create_setup_plan
 from drawing_setup_fixtures import write_approved_setup_inputs
@@ -216,3 +217,80 @@ def test_create_setup_plan_surfaces_malformed_prevalidated_mapping_values(tmp_pa
 
     with pytest.raises(DrawingSetupError, match="profile"):
         _create_plan(run_id="RUN-20260803-011", definition=definition, profile=profile, domain_pack=domain_pack, template_manifest=template_manifest, template_file=template_file)
+
+
+def test_drawing_setup_plan_cli_writes_valid_pending_plan(tmp_path: Path) -> None:
+    inputs = write_approved_setup_inputs(tmp_path)
+    output = tmp_path / "drawing-setup-plan.json"
+
+    assert main([
+        "drawing-setup-plan",
+        "--run-id", "RUN-20260803-CLI",
+        "--definition", str(inputs.definition),
+        "--profile", str(inputs.profile),
+        "--domain-pack", str(inputs.domain_pack),
+        "--template-manifest", str(inputs.template_manifest),
+        "--template-file", str(inputs.template_file),
+        "--output", str(output),
+    ]) == 0
+
+    plan = read_contract(output, contract="drawing_setup_plan")
+    assert plan["run_id"] == "RUN-20260803-CLI"
+    assert plan["state"] == "SETUP_PENDING"
+
+
+def test_drawing_setup_plan_cli_refuses_invalid_contract_without_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    inputs = write_approved_setup_inputs(tmp_path)
+    profile = json.loads(inputs.profile.read_text(encoding="utf-8"))
+    profile["status"] = "DRAFT"
+    inputs.profile.write_text(json.dumps(profile), encoding="utf-8")
+    output = tmp_path / "drawing-setup-plan.json"
+
+    assert main([
+        "drawing-setup-plan",
+        "--run-id", "RUN-20260803-INVALID",
+        "--definition", str(inputs.definition),
+        "--profile", str(inputs.profile),
+        "--domain-pack", str(inputs.domain_pack),
+        "--template-manifest", str(inputs.template_manifest),
+        "--template-file", str(inputs.template_file),
+        "--output", str(output),
+    ]) == 2
+
+    assert "APPROVED" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [
+            "drawing-setup-audit",
+            "--drawing", "drawing.dwg",
+            "--hwnd", "123",
+            "--ipc-dir", "ipc",
+            "--output", "audit.json",
+        ],
+        [
+            "drawing-setup-verify",
+            "--plan", "plan.json",
+            "--audit", "audit.json",
+            "--verified-by", "ENGINEER",
+            "--approval-reference", "M2-001",
+            "--output", "evidence.json",
+        ],
+    ],
+)
+def test_deferred_drawing_setup_cli_boundaries_fail_explicitly_without_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    arguments: list[str],
+) -> None:
+    resolved = [str(tmp_path / value) if value.endswith((".dwg", ".json")) or value == "ipc" else value for value in arguments]
+    output = Path(resolved[resolved.index("--output") + 1])
+
+    assert main(resolved) == 2
+    assert "unsupported_operation" in capsys.readouterr().err
+    assert not output.exists()

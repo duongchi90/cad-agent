@@ -240,6 +240,33 @@ def _resume_pdf_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _drawing_setup_plan_command(args: argparse.Namespace) -> int:
+    from .drawing_contracts import read_contract
+    from .drawing_setup import create_setup_plan
+
+    output = args.output.resolve()
+    plan = create_setup_plan(
+        run_id=args.run_id,
+        definition=read_contract(args.definition.resolve(), contract="drawing_definition"),
+        profile=read_contract(args.profile.resolve(), contract="drawing_profile"),
+        domain_pack=read_contract(args.domain_pack.resolve(), contract="domain_pack"),
+        template_manifest=read_contract(
+            args.template_manifest.resolve(), contract="template_manifest"
+        ),
+        template_file=args.template_file.resolve(),
+    )
+    write_manifest(output, plan)
+    print(output)
+    return 0
+
+
+def _deferred_drawing_setup_command(args: argparse.Namespace) -> int:
+    owner = "Task 7" if args.command == "drawing-setup-audit" else "Task 8"
+    raise CommandError(
+        f"unsupported_operation: {args.command} is registered and will be wired by M2 {owner}"
+    )
+
+
 def _fidelity_pdf_command(args: argparse.Namespace) -> int:
     from .fidelity import FIDELITY_MANIFEST_NAME, new_fidelity_manifest, run_fidelity_pdf
 
@@ -644,6 +671,32 @@ def build_parser() -> argparse.ArgumentParser:
     resume_pdf = subcommands.add_parser("resume-pdf", help="Resume a validated staged PDF run")
     resume_pdf.add_argument("--manifest", type=Path, required=True)
     resume_pdf.add_argument("--input", type=Path, required=True)
+    drawing_setup_plan = subcommands.add_parser(
+        "drawing-setup-plan", help="Create an approved hash-bound Drawing Setup plan"
+    )
+    drawing_setup_plan.add_argument("--run-id", required=True)
+    drawing_setup_plan.add_argument("--definition", type=Path, required=True)
+    drawing_setup_plan.add_argument("--profile", type=Path, required=True)
+    drawing_setup_plan.add_argument("--domain-pack", type=Path, required=True)
+    drawing_setup_plan.add_argument("--template-manifest", type=Path, required=True)
+    drawing_setup_plan.add_argument("--template-file", type=Path, required=True)
+    drawing_setup_plan.add_argument("--output", type=Path, required=True)
+    drawing_setup_audit = subcommands.add_parser(
+        "drawing-setup-audit", help="Capture a read-only Drawing Setup audit"
+    )
+    drawing_setup_audit.add_argument("--drawing", type=Path, required=True)
+    drawing_setup_audit.add_argument("--hwnd", type=int, required=True)
+    drawing_setup_audit.add_argument("--ipc-dir", type=Path, required=True)
+    drawing_setup_audit.add_argument("--output", type=Path, required=True)
+    drawing_setup_audit.add_argument("--timeout-s", type=float, default=10.0)
+    drawing_setup_verify = subcommands.add_parser(
+        "drawing-setup-verify", help="Verify Drawing Setup audit evidence"
+    )
+    drawing_setup_verify.add_argument("--plan", type=Path, required=True)
+    drawing_setup_verify.add_argument("--audit", type=Path, required=True)
+    drawing_setup_verify.add_argument("--verified-by", required=True)
+    drawing_setup_verify.add_argument("--approval-reference", required=True)
+    drawing_setup_verify.add_argument("--output", type=Path, required=True)
     fidelity_pdf = subcommands.add_parser("fidelity-pdf", help="Create a private clean paper-coordinate PDF layout baseline")
     fidelity_pdf.add_argument("--input", type=Path, required=True)
     fidelity_pdf.add_argument("--output-dir", type=Path, required=True)
@@ -803,6 +856,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run_pdf_command(args)
         if args.command == "resume-pdf":
             return _resume_pdf_command(args)
+        if args.command == "drawing-setup-plan":
+            return _drawing_setup_plan_command(args)
+        if args.command in {"drawing-setup-audit", "drawing-setup-verify"}:
+            return _deferred_drawing_setup_command(args)
         if args.command == "fidelity-pdf":
             return _fidelity_pdf_command(args)
         if args.command == "fidelity-overlay":
