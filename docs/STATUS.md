@@ -39,7 +39,7 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ### M2 Drawing Initialization implementation continuation — 2026-08-03
 
-- Candidate implementation head: `3f570b6eade1814764f6b2107fd0f3dade419e5e`.
+- Candidate implementation head: `4d28b641016a4cd43e8a20cd14dc3440210ccb33`.
 - Implemented the read-only `drawing_setup_audit` .NET/File IPC operation,
   deterministic Python normalization, comparison/blocker/evidence gate, and
   `DRAFT_REFERENCE` classification for legacy image/PDF manifests.

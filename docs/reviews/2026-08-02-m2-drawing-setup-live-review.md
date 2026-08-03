@@ -2,7 +2,7 @@
 
 Date: 2026-08-03
 
-Candidate implementation head: `3f570b6eade1814764f6b2107fd0f3dade419e5e`
+Candidate implementation head: `4d28b641016a4cd43e8a20cd14dc3440210ccb33`
 
 ## Scope
 
@@ -10,6 +10,10 @@ This review covers the read-only `drawing_setup_audit` boundary, its Python
 artifact normalization, the setup comparison/evidence gate, and the opt-in
 AutoCAD Mechanical live test. No DWT, DWG, DXF, raw audit, customer data, or
 profile metadata was added to Git.
+
+The normalizer also excludes Model Space layouts without paper viewports from
+the viewport-only audit contract; this keeps the recorded layout list valid for
+comparison against approved paper-layout profile expectations.
 
 ## Offline evidence
 
