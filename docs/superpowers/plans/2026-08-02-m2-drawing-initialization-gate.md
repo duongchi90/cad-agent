@@ -16,6 +16,13 @@
 
 **Required gates:** `real_data` is not required for contract-only tasks and is `NOT RUN`; the final task requires an `autocad_mechanical` live run against disposable drawings and records `PASS`, `SKIP`, or `NOT RUN` exactly.
 
+**Current execution record (2026-08-03):** Tasks 1–9 and T10 Step 1 are
+implemented on the continuation branch. Authoritative offline/.NET evidence
+passes on the current candidate, while T10 operator-controlled live inputs,
+candidate-DWG/profile approval, and T11 independent review/closure remain
+pending. The live prerequisite guard now requires an existing disposable
+drawing and records missing input as an unavailable-state skip.
+
 **Goal:** Add a hash-bound Drawing Definition/Profile/Domain Pack/Template workflow and a read-only AutoCAD setup audit so every future authoritative drawing path, across configurable automotive-conversion jobs, must present `SETUP_VERIFIED` evidence before geometry can be created.
 
 **Architecture:** Python owns contract validation, profile/template provenance, setup-plan creation, comparison, blocker reporting, and evidence. The existing .NET plugin gains one deterministic read-only `drawing_setup_audit` operation through the current JSON/File IPC channel. DWT binaries and raw customer/candidate-DWG audits remain outside Git; Git stores schemas, code, synthetic examples, and only engineer-approved non-sensitive profile metadata.
@@ -363,7 +370,7 @@ Task 5 also creates `DrawingSetupFixtures.cs` with `VerifiedSnapshot(path)` retu
 
 **Interfaces:** Produces the approved design record and routes current documentation to M2. It changes no runtime behavior.
 
-- [ ] **Step 1: Write the failing documentation test**
+- [x] **Step 1: Write the failing documentation test**
 
 ```python
 def test_approved_complete_design_and_m2_plan_are_canonical() -> None:
@@ -376,13 +383,13 @@ def test_approved_complete_design_and_m2_plan_are_canonical() -> None:
     assert "DRAFT_REFERENCE" in architecture
 ```
 
-- [ ] **Step 2: Run the test and verify the missing-record failure**
+- [x] **Step 2: Run the test and verify the missing-record failure**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_documentation_contract.py::DocumentationContractTests -q -p no:cacheprovider`
 
 Expected: FAIL because the approved design/plan is not yet present in the repository and canonical docs do not route to it.
 
-- [ ] **Step 3: Add the approved records and concise routing text**
+- [x] **Step 3: Add the approved records and concise routing text**
 
 Add these architecture rules verbatim in substance:
 
@@ -393,13 +400,13 @@ Initialization is orchestration/verification behavior; it does not move CAD
 algorithms into cad_agent and does not replace the .NET/File IPC boundary.
 ```
 
-- [ ] **Step 4: Run the focused documentation test**
+- [x] **Step 4: Run the focused documentation test**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_documentation_contract.py -q -p no:cacheprovider`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md docs/superpowers/plans/2026-08-02-cad-agent-approved-design-rollout.md docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md docs/PROJECT.md docs/ARCHITECTURE.md tests/test_documentation_contract.py
@@ -418,7 +425,7 @@ git commit -m "docs: approve CAD Agent design and M2 plan"
 
 **Interfaces:** Produces `DrawingContractError`, `canonical_json_sha256()`, and `read_contract()` for every later task.
 
-- [ ] **Step 1: Write failing tests for exact versions, fields, and deterministic hashes**
+- [x] **Step 1: Write failing tests for exact versions, fields, and deterministic hashes**
 
 ```python
 def test_example_contracts_validate_and_hash_deterministically() -> None:
@@ -446,13 +453,13 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "contracts" / "drawing-setup" / "examples"
 ```
 
-- [ ] **Step 2: Run the tests and verify imports fail**
+- [x] **Step 2: Run the tests and verify imports fail**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_drawing_setup_contracts.py -q -p no:cacheprovider`
 
 Expected: FAIL with `ModuleNotFoundError: cad_agent.drawing_contracts`.
 
-- [ ] **Step 3: Implement canonical hashing and contract dispatch**
+- [x] **Step 3: Implement canonical hashing and contract dispatch**
 
 ```python
 def canonical_json_sha256(payload: Mapping[str, object]) -> str:
@@ -478,11 +485,11 @@ def read_contract(path: Path, *, contract: str) -> dict[str, object]:
 
 The explicit validators reject extra keys, wrong schema versions, empty IDs/revisions, non-64-character hashes, non-approved production profiles, non-mm/non-1:1 models, invalid viewport ratios, and missing approval references. They require both font-policy branches: new drawings use only engineer-approved fonts without implicit substitution, while legacy drawings preserve source styles and require a mapping report. Do not add a new runtime dependency on `jsonschema` in this task.
 
-- [ ] **Step 4: Add synthetic examples and assert every schema declares `additionalProperties: false`**
+- [x] **Step 4: Add synthetic examples and assert every schema declares `additionalProperties: false`**
 
 Use `SYNTHETIC_A1`, `VX_TEXT`, `VX_DIM_20`, and a 64-character repeated test hash. Examples contain no vehicle registration, customer name, private path, or real drawing geometry.
 
-- [ ] **Step 5: Run focused tests and Ruff**
+- [x] **Step 5: Run focused tests and Ruff**
 
 Run:
 
@@ -493,7 +500,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add contracts/drawing-setup cad_agent/drawing_contracts.py tests/drawing_setup_fixtures.py tests/test_drawing_setup_contracts.py
@@ -509,7 +516,7 @@ git commit -m "feat: add drawing setup contracts"
 
 **Interfaces:** Consumes validated contracts from Task 2. Produces `create_setup_plan()` and a `SETUP_PENDING` artifact bound to the DWT bytes, profile, domain pack, definition, and settings digest.
 
-- [ ] **Step 1: Write failing hash/refusal tests**
+- [x] **Step 1: Write failing hash/refusal tests**
 
 ```python
 def test_create_setup_plan_binds_every_input_hash(tmp_path: Path) -> None:
@@ -543,13 +550,13 @@ def test_changed_template_is_refused_before_plan_creation(tmp_path: Path) -> Non
         )
 ```
 
-- [ ] **Step 2: Run tests and verify the function is missing**
+- [x] **Step 2: Run tests and verify the function is missing**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_drawing_setup.py -q -p no:cacheprovider`
 
 Expected: FAIL importing `create_setup_plan`.
 
-- [ ] **Step 3: Implement immutable references and compatibility checks**
+- [x] **Step 3: Implement immutable references and compatibility checks**
 
 ```python
 def _artifact_ref(kind: str, identifier: str, revision: str, payload: Mapping[str, object]) -> dict[str, str]:
@@ -571,7 +578,7 @@ def _artifact_ref(kind: str, identifier: str, revision: str, payload: Mapping[st
 - the template file is a regular `.dwt` file and its current SHA-256 matches;
 - `embedded_settings_sha256` equals the digest of `profile.setup_expectations`.
 
-- [ ] **Step 4: Run focused tests and Ruff**
+- [x] **Step 4: Run focused tests and Ruff**
 
 Run:
 
@@ -582,7 +589,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add cad_agent/drawing_setup.py tests/test_cad_agent_drawing_setup.py
@@ -598,7 +605,7 @@ git commit -m "feat: bind drawing setup plans to approved inputs"
 
 **Interfaces:** Adds three thin orchestrator commands. It does not contain AutoCAD or recognition algorithms.
 
-- [ ] **Step 1: Write failing parser and output tests**
+- [x] **Step 1: Write failing parser and output tests**
 
 ```python
 def test_drawing_setup_plan_cli_writes_pending_plan(tmp_path: Path) -> None:
@@ -617,13 +624,13 @@ def test_drawing_setup_plan_cli_writes_pending_plan(tmp_path: Path) -> None:
     assert json.loads(output.read_text(encoding="utf-8"))["state"] == "SETUP_PENDING"
 ```
 
-- [ ] **Step 2: Run the test and verify argparse rejects the command**
+- [x] **Step 2: Run the test and verify argparse rejects the command**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_drawing_setup.py::test_drawing_setup_plan_cli_writes_pending_plan -q -p no:cacheprovider`
 
 Expected: FAIL because `drawing-setup-plan` is not registered.
 
-- [ ] **Step 3: Add exact command arguments and atomic JSON writes**
+- [x] **Step 3: Add exact command arguments and atomic JSON writes**
 
 Register:
 
@@ -636,13 +643,13 @@ drawing-setup-verify --plan --audit --verified-by --approval-reference --output
 
 Use the existing `write_manifest()` atomic writer for all three JSON artifacts. `drawing-setup-audit` is wired in Task 7; before that task, its handler may raise the explicit `unsupported_operation` error and its CLI test remains scoped to parser registration only.
 
-- [ ] **Step 4: Run focused CLI tests**
+- [x] **Step 4: Run focused CLI tests**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_drawing_setup.py tests\test_cad_agent_cli.py -q -p no:cacheprovider`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add cad_agent/cli.py tests/test_cad_agent_drawing_setup.py
@@ -663,7 +670,7 @@ git commit -m "feat: add drawing setup CLI boundaries"
 
 **Interfaces:** Produces `DrawingSetupSnapshot` and `IDrawingGateway.ReadDrawingSetup()`. It is a single read-only transaction plus system-variable reads.
 
-- [ ] **Step 1: Write failing deterministic-payload tests**
+- [x] **Step 1: Write failing deterministic-payload tests**
 
 ```csharp
 [Fact]
@@ -679,13 +686,13 @@ public void PayloadSortsLayersStylesLayoutsAndViewportsOrdinally()
 }
 ```
 
-- [ ] **Step 2: Run C# tests and verify types are missing**
+- [x] **Step 2: Run C# tests and verify types are missing**
 
 Run: `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64 --filter FullyQualifiedName~DrawingSetup`
 
 Expected: build failure because `DrawingSetupSnapshot` is undefined.
 
-- [ ] **Step 3: Implement normalized records**
+- [x] **Step 3: Implement normalized records**
 
 ```csharp
 public sealed record DrawingSetupSnapshot(
@@ -763,7 +770,7 @@ internal static class DrawingSetupFixtures
 }
 ```
 
-- [ ] **Step 4: Implement live collection without mutation**
+- [x] **Step 4: Implement live collection without mutation**
 
 In `AutoCadDrawingGateway.ReadDrawingSetup()`:
 
@@ -777,7 +784,7 @@ In `AutoCadDrawingGateway.ReadDrawingSetup()`:
 
 Do not call `UpgradeOpen`, `StartTransaction` with writes, `Save`, `Regen`, `SetSystemVariable`, or any entity mutation method.
 
-- [ ] **Step 5: Run focused C# tests and build**
+- [x] **Step 5: Run focused C# tests and build**
 
 Run:
 
@@ -788,7 +795,7 @@ dotnet build autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64
 
 Expected: PASS, with no Autodesk DLL copied to output.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add autocad_plugin/CadAgent.AutoCAD2027/DrawingSetup autocad_plugin/CadAgent.AutoCAD2027.Tests/DrawingSetup autocad_plugin/CadAgent.AutoCAD2027/Drawing/IDrawingGateway.cs autocad_plugin/CadAgent.AutoCAD2027/Drawing/NullDrawingGateway.cs autocad_plugin/CadAgent.AutoCAD2027/Commands/CommandContext.cs
@@ -812,7 +819,7 @@ git commit -m "feat: read AutoCAD drawing setup without mutation"
 
 **Interfaces:** Adds `drawing_setup_audit` compatibly to schema version `1.0`; existing operation shapes remain byte-for-byte compatible.
 
-- [ ] **Step 1: Write failing contract and dispatcher tests**
+- [x] **Step 1: Write failing contract and dispatcher tests**
 
 ```csharp
 [Fact]
@@ -832,13 +839,13 @@ public void DrawingSetupAuditRequiresEmptyParametersAndMatchingFullPath()
 }
 ```
 
-- [ ] **Step 2: Run focused tests and verify unsupported-operation failure**
+- [x] **Step 2: Run focused tests and verify unsupported-operation failure**
 
 Run: `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64 --filter "FullyQualifiedName~ContractTests|FullyQualifiedName~OperationDispatcherTests"`
 
 Expected: FAIL because the operation is not registered.
 
-- [ ] **Step 3: Add the operation to JSON schemas and C# validation**
+- [x] **Step 3: Add the operation to JSON schemas and C# validation**
 
 The request parameters schema is exactly:
 
@@ -853,13 +860,13 @@ The request parameters schema is exactly:
 
 The dispatcher first verifies the active full path, then calls `ReadDrawingSetup()`, returns its normalized payload, `changed=false`, no entity handles, and no save status. A path mismatch blocks the gateway call.
 
-- [ ] **Step 4: Run all C# tests**
+- [x] **Step 4: Run all C# tests**
 
 Run: `dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64`
 
 Expected: PASS with all existing health/review/close/BOM tests unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add contracts/autocad-ipc autocad_plugin/CadAgent.AutoCAD2027/Ipc autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc
@@ -877,7 +884,7 @@ git commit -m "feat: expose read-only drawing setup audit"
 
 **Interfaces:** Produces `DotNetIPCClient.drawing_setup_audit()` and completes the `drawing-setup-audit` command from Task 4.
 
-- [ ] **Step 1: Write failing fake-dispatcher tests**
+- [x] **Step 1: Write failing fake-dispatcher tests**
 
 ```python
 def test_drawing_setup_audit_uses_empty_parameters_and_preserves_payload() -> None:
@@ -890,13 +897,13 @@ def test_drawing_setup_audit_uses_empty_parameters_and_preserves_payload() -> No
         assert result["payload"]["dbmod_after"] == 0
 ```
 
-- [ ] **Step 2: Run focused tests and verify the method is missing**
+- [x] **Step 2: Run focused tests and verify the method is missing**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest mcp_integration_lib\tests\test_dotnet_ipc.py tests\test_cad_agent_drawing_setup.py -q -p no:cacheprovider`
 
 Expected: FAIL with missing method/unsupported operation.
 
-- [ ] **Step 3: Implement the thin client method**
+- [x] **Step 3: Implement the thin client method**
 
 ```python
 def drawing_setup_audit(
@@ -920,7 +927,7 @@ Add `drawing_setup_audit` to the dispatcher's supported-operation set and requir
 
 The CLI hashes the drawing before the request, executes the audit, hashes it again, refuses `source_changed` if the file changed, and writes a normalized `drawing-setup-audit-1.0` artifact that contains the source hash and IPC result payload.
 
-- [ ] **Step 4: Run focused Python tests and Ruff**
+- [x] **Step 4: Run focused Python tests and Ruff**
 
 Run:
 
@@ -931,7 +938,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add mcp_integration_lib/dotnet_ipc.py mcp_integration_lib/tests/test_dotnet_ipc.py cad_agent/cli.py tests/test_cad_agent_drawing_setup.py
@@ -947,7 +954,7 @@ git commit -m "feat: collect drawing setup audit through dotnet IPC"
 
 **Interfaces:** Produces `evaluate_setup_plan()` and `require_setup_verified()` for M3/M4.
 
-- [ ] **Step 1: Write failing pass/fail/stale-evidence tests**
+- [x] **Step 1: Write failing pass/fail/stale-evidence tests**
 
 ```python
 def test_matching_audit_becomes_setup_verified() -> None:
@@ -983,13 +990,13 @@ def test_setup_mismatch_returns_needs_review(mutation, code) -> None:
     assert code in {item["code"] for item in evidence["blockers"]}
 ```
 
-- [ ] **Step 2: Run tests and verify missing comparison behavior**
+- [x] **Step 2: Run tests and verify missing comparison behavior**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_drawing_setup.py -q -p no:cacheprovider`
 
 Expected: FAIL for undefined `evaluate_setup_plan`/`require_setup_verified`.
 
-- [ ] **Step 3: Implement exact comparisons and blocker output**
+- [x] **Step 3: Implement exact comparisons and blocker output**
 
 Required blocker codes for this milestone:
 
@@ -1008,11 +1015,11 @@ SETUP_BLOCKERS = {
 
 Each blocker includes `code`, `path`, `expected`, `actual`, and `severity`. `evaluate_setup_plan()` compares every required profile item, checks `dbmod_before == dbmod_after`, checks the audit drawing hash, and sets evidence hashes for the plan/audit/profile/template. It never changes the input mappings.
 
-- [ ] **Step 4: Make `drawing-setup-verify` write evidence even on mismatch**
+- [x] **Step 4: Make `drawing-setup-verify` write evidence even on mismatch**
 
 The command returns exit code `0` only for `SETUP_VERIFIED`; for `NEEDS_REVIEW` it atomically writes the evidence and returns exit code `2` with a concise blocker summary.
 
-- [ ] **Step 5: Run focused tests and Ruff**
+- [x] **Step 5: Run focused tests and Ruff**
 
 Run:
 
@@ -1023,7 +1030,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add cad_agent/drawing_setup.py cad_agent/cli.py tests/test_cad_agent_drawing_setup.py
@@ -1042,7 +1049,7 @@ git commit -m "feat: enforce drawing initialization gate"
 
 **Interfaces:** Existing commands keep working. New manifests explicitly say they are not authoritative; old on-disk manifests remain resumable.
 
-- [ ] **Step 1: Write failing classification and compatibility tests**
+- [x] **Step 1: Write failing classification and compatibility tests**
 
 ```python
 def test_new_image_manifest_is_draft_reference_only(tmp_path: Path) -> None:
@@ -1061,23 +1068,23 @@ def test_historical_manifest_without_release_fields_still_reads_as_draft(tmp_pat
     assert payload["authoritative_release_eligible"] is False
 ```
 
-- [ ] **Step 2: Run focused legacy tests and verify fields are absent**
+- [x] **Step 2: Run focused legacy tests and verify fields are absent**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_cli.py tests\test_cad_agent_pdf.py -q -p no:cacheprovider`
 
 Expected: FAIL on the new assertions.
 
-- [ ] **Step 3: Add defaults without changing stage behavior or schema version**
+- [x] **Step 3: Add defaults without changing stage behavior or schema version**
 
 New manifests write the three fields. Readers use `setdefault()` after validating the historical `1.0` shape so exact old checkpoints remain resumable. Do not require setup evidence for the legacy commands and do not label them authoritative.
 
-- [ ] **Step 4: Run image/PDF focused tests**
+- [x] **Step 4: Run image/PDF focused tests**
 
 Run: `& '.\.venv-py311\Scripts\python.exe' -m pytest tests\test_cad_agent_cli.py tests\test_cad_agent_pdf.py -q -p no:cacheprovider`
 
 Expected: PASS, including byte-identical resume for manifests created by the new code.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add cad_agent/manifest.py cad_agent/pdf.py tests/test_cad_agent_cli.py tests/test_cad_agent_pdf.py docs/ARCHITECTURE.md
@@ -1096,7 +1103,7 @@ git commit -m "feat: classify legacy reconstruction as draft reference"
 
 **Interfaces:** Produces live evidence and the first approved non-sensitive profile metadata. DWT/DWG binaries and raw audit JSON remain outside Git.
 
-- [ ] **Step 1: Add an opt-in live test with source and DBMOD invariants**
+- [x] **Step 1: Add an opt-in live test with source and DBMOD invariants**
 
 ```python
 @pytest.mark.autocad_mechanical
@@ -1177,7 +1184,7 @@ Before committing, verify `git status --short` contains no DWT, DWG, DXF, raw au
 
 **Interfaces:** Produces final M2 evidence and closes the plan. It does not add new behavior.
 
-- [ ] **Step 1: Run focused suites from a clean integration tree**
+- [x] **Step 1: Run focused suites from a clean integration tree**
 
 ```powershell
 dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64
@@ -1186,7 +1193,7 @@ dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests -c Release -p:Platform=x64
 
 Expected: PASS with zero unexpected warnings.
 
-- [ ] **Step 2: Run the authoritative verifier**
+- [x] **Step 2: Run the authoritative verifier**
 
 Run: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1`
 
@@ -1202,7 +1209,7 @@ Use three independent review packets from `docs/templates/`:
 
 Accept a finding only when it names scope, impact, evidence, and verification. Resolve all P0/P1 before closure.
 
-- [ ] **Step 4: Update status with exact evidence**
+- [x] **Step 4: Update status with exact evidence**
 
 Record the implementation Head SHA, commands, exit codes, test totals, live state, template/profile evidence identifiers, and remaining risks. Do not copy a local absolute path into `docs/STATUS.md`; identify external artifacts by SHA-256 and approved record name.
 
