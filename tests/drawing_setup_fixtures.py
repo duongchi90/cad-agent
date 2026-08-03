@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -153,14 +154,14 @@ def matching_setup_audit(plan: dict[str, object]) -> dict[str, object]:
         "changed": False,
         "dbmod_before": 0,
         "dbmod_after": 0,
-        "variables": dict(expectations["variables"]),
+        "variables": copy.deepcopy(expectations["variables"]),
         "current_layer": expectations["current_layer"],
         "custom_properties": {
             "CAD_AGENT_SETTINGS_SHA256": plan["template"]["embedded_settings_sha256"]
         },
-        "layers": list(expectations["required_layers"]),
-        "styles": dict(expectations["required_styles"]),
-        "layouts": list(expectations["layouts"]),
+        "layers": copy.deepcopy(expectations["required_layers"]),
+        "styles": copy.deepcopy(expectations["required_styles"]),
+        "layouts": copy.deepcopy(expectations["layouts"]),
         "font_report": {"missing": [], "substituted": []},
     }
 

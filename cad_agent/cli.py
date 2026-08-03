@@ -376,6 +376,29 @@ def _drawing_setup_audit_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _drawing_setup_verify_command(args: argparse.Namespace) -> int:
+    from .drawing_contracts import read_contract
+    from .drawing_setup import evaluate_setup_plan
+
+    plan = read_contract(args.plan, contract="drawing_setup_plan")
+    audit = read_contract(args.audit, contract="drawing_setup_audit")
+    evidence = evaluate_setup_plan(
+        plan,
+        audit,
+        verified_by=args.verified_by,
+        approval_reference=args.approval_reference,
+    )
+    write_manifest(args.output, evidence)
+    print(args.output)
+    if evidence["status"] != "SETUP_VERIFIED":
+        blockers = "; ".join(
+            f"{item['code']}:{item['path']}" for item in evidence["blockers"]
+        )
+        print(f"cad_agent: Drawing Setup needs review ({blockers})", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _unsupported_drawing_setup_command(command: str) -> int:
     raise CommandError(
         f"unsupported_operation: {command} is registered but not implemented in this M2 task"
@@ -976,7 +999,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "drawing-setup-audit":
             return _drawing_setup_audit_command(args)
         if args.command == "drawing-setup-verify":
-            return _unsupported_drawing_setup_command("drawing-setup-verify")
+            return _drawing_setup_verify_command(args)
         if args.command == "fidelity-pdf":
             return _fidelity_pdf_command(args)
         if args.command == "fidelity-overlay":

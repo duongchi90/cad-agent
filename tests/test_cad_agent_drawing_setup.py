@@ -9,7 +9,12 @@ import pytest
 
 from cad_agent.drawing_contracts import canonical_json_sha256, read_contract
 from cad_agent.cli import main
-from cad_agent.drawing_setup import DrawingSetupError, create_setup_plan
+from cad_agent.drawing_setup import (
+    DrawingSetupError,
+    create_setup_plan,
+    evaluate_setup_plan,
+    require_setup_verified,
+)
 from cad_agent.manifest import sha256_file
 from drawing_setup_fixtures import write_approved_setup_inputs
 
@@ -369,3 +374,119 @@ def test_drawing_setup_audit_cli_refuses_source_changed_during_audit(
         "--output", str(tmp_path / "audit.json"),
     ]) == 2
     assert not (tmp_path / "audit.json").exists()
+
+
+def test_matching_audit_becomes_setup_verified() -> None:
+    from drawing_setup_fixtures import approved_setup_plan, matching_setup_audit
+
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="ENGINEER",
+        approval_reference="M2-LIVE-001",
+    )
+
+    assert evidence["status"] == "SETUP_VERIFIED"
+    assert evidence["blockers"] == []
+    require_setup_verified(
+        evidence,
+        setup_plan_sha256=canonical_json_sha256(plan),
+        drawing_profile_sha256=plan["drawing_profile"]["sha256"],
+        template_file_sha256=plan["template"]["file_sha256"],
+    )
+
+
+def test_require_setup_verified_rejects_stale_bound_hash() -> None:
+    from drawing_setup_fixtures import approved_setup_plan, matching_setup_audit
+
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="ENGINEER",
+        approval_reference="M2-LIVE-001",
+    )
+    evidence["setup_plan_sha256"] = "0" * 64
+
+    with pytest.raises(DrawingSetupError, match="setup_plan_sha256"):
+        require_setup_verified(
+            evidence,
+            setup_plan_sha256=canonical_json_sha256(plan),
+            drawing_profile_sha256=plan["drawing_profile"]["sha256"],
+            template_file_sha256=plan["template"]["file_sha256"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        (("variables", "INSUNITS", 0), "setup_incomplete"),
+        (("styles", "dimstyle", "Standard"), "profile_hash_mismatch"),
+        (("viewports", "SIDE", False), "viewport_scale_mismatch"),
+        (("custom_properties", "CAD_AGENT_SETTINGS_SHA256", "bad"), "template_hash_mismatch"),
+    ],
+)
+def test_setup_mismatch_returns_needs_review(mutation: tuple[str, str, object], code: str) -> None:
+    from drawing_setup_fixtures import apply_test_mutation, approved_setup_plan, matching_setup_audit
+
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    apply_test_mutation(audit, mutation)
+
+    evidence = evaluate_setup_plan(
+        plan,
+        audit,
+        verified_by="ENGINEER",
+        approval_reference="M2-LIVE-001",
+    )
+
+    assert evidence["status"] == "NEEDS_REVIEW"
+    assert code in {item["code"] for item in evidence["blockers"]}
+
+
+def test_drawing_setup_verify_cli_writes_verified_evidence(tmp_path: Path) -> None:
+    from drawing_setup_fixtures import approved_setup_plan, matching_setup_audit
+
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    plan_path = tmp_path / "plan.json"
+    audit_path = tmp_path / "audit.json"
+    output = tmp_path / "evidence.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert main([
+        "drawing-setup-verify",
+        "--plan", str(plan_path),
+        "--audit", str(audit_path),
+        "--verified-by", "ENGINEER",
+        "--approval-reference", "M2-LIVE-001",
+        "--output", str(output),
+    ]) == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "SETUP_VERIFIED"
+
+
+def test_drawing_setup_verify_cli_persists_needs_review_evidence(tmp_path: Path) -> None:
+    from drawing_setup_fixtures import approved_setup_plan, matching_setup_audit
+
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    audit["dbmod_after"] = 1
+    plan_path = tmp_path / "plan.json"
+    audit_path = tmp_path / "audit.json"
+    output = tmp_path / "evidence.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert main([
+        "drawing-setup-verify",
+        "--plan", str(plan_path),
+        "--audit", str(audit_path),
+        "--verified-by", "ENGINEER",
+        "--approval-reference", "M2-LIVE-001",
+        "--output", str(output),
+    ]) == 2
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert evidence["status"] == "NEEDS_REVIEW"
+    assert any(item["code"] == "source_changed" for item in evidence["blockers"])
