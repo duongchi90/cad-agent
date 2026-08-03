@@ -39,12 +39,12 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ### M2 Drawing Initialization implementation continuation — 2026-08-03
 
-- Candidate implementation head: `8ddb3cc2c2f02c5c9d718e0e02ce7118f700d0e1`.
+- Candidate implementation head: `2ed26474059814068334074f3e1f6a9429ae13dd`.
 - Implemented the read-only `drawing_setup_audit` .NET/File IPC operation,
   deterministic Python normalization, comparison/blocker/evidence gate, and
   `DRAFT_REFERENCE` classification for legacy image/PDF manifests.
 - Fresh authoritative offline evidence: Release x64 C# build/test passed with
-  73/73 tests; `dotnet_ipc` JUnit passed 37/37; offline JUnit passed 514/514
+  73/73 tests; `dotnet_ipc` JUnit passed 37/37; offline JUnit passed 515/515
   with zero failures, errors, or unexpected skips. Existing Autodesk
   `MSB3277` reference-conflict warnings remain, and no Autodesk DLL was copied
   to build output.
@@ -55,6 +55,9 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 - No `SETUP_VERIFIED` evidence or approved template/profile metadata is claimed
   for this candidate. The implementation remains **Executing/Partially
   verified** until the operator-controlled AutoCAD gate passes.
+- The live-test prerequisite guard now requires an existing
+  `CAD_AGENT_M2_DISPOSABLE_DWG`; missing or removed disposable input is an
+  explicit unavailable-state skip instead of a runtime `KeyError`.
 - Review record: `docs/reviews/2026-08-02-m2-drawing-setup-live-review.md`.
 
 ## AutoCAD .NET plugin — Option A / phần cũ 1

@@ -2,7 +2,7 @@
 
 Date: 2026-08-03
 
-Candidate implementation head: `8ddb3ccc0ee85f1433d7fce1b55281439e0d1c27`
+Candidate implementation head: `2ed26474059814068334074f3e1f6a9429ae13dd`
 
 ## Scope
 
@@ -21,12 +21,15 @@ comparison against approved paper-layout profile expectations.
   conflict warnings (`MSB3277`) remain; no Autodesk DLL was copied to output.
 - C# tests: 73 passed, 0 failed, 0 skipped.
 - `dotnet_ipc` JUnit: 37 tests, 0 failures, 0 errors, 0 skipped.
-- Offline JUnit: 514 tests, 0 failures, 0 errors, 0 skipped; 18 subtests also
+- Offline JUnit: 515 tests, 0 failures, 0 errors, 0 skipped; 18 subtests also
   passed.
 - Private-data unavailable probe: 2 skipped as expected.
 - AutoCAD Mechanical unavailable probe: 8 skipped as expected.
 - The authoritative verifier completed successfully and preserved a clean
   repository snapshot.
+- The live prerequisite contract now requires an existing
+  `CAD_AGENT_M2_DISPOSABLE_DWG`, so a missing or removed disposable drawing is
+  reported as an unavailable-state skip rather than a runtime `KeyError`.
 
 ## Live gate state
 
