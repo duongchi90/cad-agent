@@ -79,19 +79,22 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   and its implementation plan is
   `docs/superpowers/plans/2026-08-03-personal-lean-pilot-gate-b-dimension-offline.md`.
   The offline implementation candidate is
-  `abe94b2fd4fdb0dbdb31264de69e538b54cc9059` on
+  `774d1ba` on
   `codex/personal-lean-pilot-rebaseline`.
 - Implemented scope: strict dimension plan/evidence contracts; approved
   driving lengths and explicit datum anchoring at the existing SolveSpace
   boundary; native editable DXF `DIMENSION` generation and read-back;
-  hash/provenance/Setup refusal; and one non-overwriting private-output CLI.
-  Successful offline evidence still fixes `acceptance=NOT_RUN`.
-- Focused Gate B offline run on 2026-08-03: **148 passed** with no failure.
+  hash/provenance/Setup refusal; immutable IR snapshots; post-review DXF hash
+  binding; a non-overwriting temporary-output publish; rogue-geometry refusal;
+  and one non-overwriting private-output CLI. Successful offline evidence still
+  fixes `acceptance=NOT_RUN`.
+- Focused Gate B offline run on 2026-08-03: **153 passed** with no failure.
   It covered contracts, orchestration, CLI, Drawing Setup, constraint solving,
-  native DXF building, and headless review.
+  native DXF building, and headless review, including mutation and
+  non-overwrite regressions.
 - Authoritative verifier on the candidate:
   `scripts/verify.ps1 -SkipAutoCADDotNet` exited `0`; dotnet_ipc JUnit was
-  `38/0/0/0`, offline JUnit was `596/0/0/0`, the `real_data`
+  `38/0/0/0`, offline JUnit was `601/0/0/0`, the `real_data`
   unavailable-state probe was `2/2` skipped, and the `autocad_mechanical`
   unavailable-state probe was `8/8` skipped. Python was 3.11.9, Ruff passed,
   and the required Tesseract version was present.
