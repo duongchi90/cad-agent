@@ -305,6 +305,10 @@ def _normalize_drawing_setup_audit(
                 raise CommandError("Drawing Setup audit returned an invalid viewport scale.")
             scales.append(viewport["custom_scale"])
             locked = locked and viewport.get("locked") is True
+        if not scales:
+            # Model Space has no paper viewport; the normalized contract tracks
+            # only layouts whose viewport scales can be compared to a profile.
+            continue
         layouts.append(
             {
                 "name": item["name"],

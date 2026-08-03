@@ -312,6 +312,7 @@ def test_drawing_setup_audit_cli_writes_hash_bound_normalized_audit(
                         "table": ["VX_TABLE"],
                     },
                     "layouts": [
+                        {"name": "Model", "viewports": []},
                         {
                             "name": "A1-01",
                             "viewports": [{"handle": "1A", "custom_scale": 0.05, "locked": True}],
