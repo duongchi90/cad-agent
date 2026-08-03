@@ -9,6 +9,7 @@ import unittest
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import ezdxf
 import pytest
@@ -32,6 +33,8 @@ def _live_prerequisites_available() -> bool:
         os.getenv("CAD_AGENT_FILE_IPC") == "1"
         and bool(os.getenv("CAD_AGENT_AUTOCAD_HWND"))
         and bool(os.getenv("CAD_AGENT_AUTOCAD_LISP_PATH"))
+        and bool(os.getenv("CAD_AGENT_M2_DISPOSABLE_DWG"))
+        and Path(os.environ["CAD_AGENT_M2_DISPOSABLE_DWG"]).is_file()
     )
 
 
@@ -53,6 +56,27 @@ def _add_mechanical_bom_fixture(drawing_document) -> None:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class LivePrerequisiteTests(unittest.TestCase):
+    def test_requires_existing_m2_disposable_drawing(self) -> None:
+        base_environment = {
+            "CAD_AGENT_FILE_IPC": "1",
+            "CAD_AGENT_AUTOCAD_HWND": "1234",
+            "CAD_AGENT_AUTOCAD_LISP_PATH": r"C:\approved\mcp_dispatch.lsp",
+        }
+        with patch.dict(os.environ, base_environment, clear=False):
+            os.environ.pop("CAD_AGENT_M2_DISPOSABLE_DWG", None)
+            self.assertFalse(_live_prerequisites_available())
+
+            with tempfile.TemporaryDirectory() as temporary:
+                drawing = Path(temporary) / "setup-audit.dwg"
+                drawing.write_bytes(b"disposable")
+                os.environ["CAD_AGENT_M2_DISPOSABLE_DWG"] = str(drawing)
+                self.assertTrue(_live_prerequisites_available())
+
+                drawing.unlink()
+                self.assertFalse(_live_prerequisites_available())
 
 
 def _cleanup_disposable_fixture_directory(
