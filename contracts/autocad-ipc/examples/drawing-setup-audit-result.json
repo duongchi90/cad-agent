@@ -1,0 +1,38 @@
+{
+  "request_id": "setup-20260801-001",
+  "success": true,
+  "operation": "drawing_setup_audit",
+  "drawing_full_path": "C:\\temp\\cadagent_setup_fixture.dwg",
+  "changed": false,
+  "entity_handles": [],
+  "warnings": [],
+  "errors": [],
+  "started_at": "2026-08-01T00:00:00Z",
+  "completed_at": "2026-08-01T00:00:01Z",
+  "payload": {
+    "drawing_full_path": "C:\\temp\\cadagent_setup_fixture.dwg",
+    "dbmod_before": 0,
+    "dbmod_after": 0,
+    "changed": false,
+    "variables": {
+      "INSUNITS": 4,
+      "MEASUREMENT": 1,
+      "LTSCALE": 1.0,
+      "CELTSCALE": 1.0,
+      "PSLTSCALE": 1,
+      "MSLTSCALE": 1,
+      "DIMASSOC": 2,
+      "ANNOALLVISIBLE": 1
+    },
+    "current_layer": "0",
+    "custom_properties": {},
+    "layers": [],
+    "styles": {
+      "text": [],
+      "dimension": [],
+      "mleader": [],
+      "table": []
+    },
+    "layouts": []
+  }
+}

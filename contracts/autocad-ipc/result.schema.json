@@ -31,7 +31,8 @@
         "health",
         "review",
         "close_disposable",
-        "mechanical_bom"
+        "mechanical_bom",
+        "drawing_setup_audit"
       ]
     },
     "drawing_full_path": {
@@ -120,6 +121,25 @@
         "properties": {
           "operation": {
             "const": "mechanical_bom"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "drawing_setup_audit"
           }
         },
         "required": [

@@ -4,6 +4,7 @@ using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
 using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
+using CadAgent.AutoCAD2027.Tests.DrawingSetup;
 using Xunit;
 
 namespace CadAgent.AutoCAD2027.Tests.Ipc;
@@ -30,6 +31,23 @@ public sealed class OperationDispatcherTests
         Assert.Equal("1.0.0", result.Payload!["plugin_version"].GetString());
         Assert.True(result.Payload["ipc_readable"].GetBoolean());
         Assert.True(result.Payload["ipc_writable"].GetBoolean());
+    }
+
+    [Fact]
+    public void DrawingSetupAuditRequiresEmptyParametersAndMatchingFullPath()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\setup.dwg",
+            DrawingSetup = DrawingSetupFixtures.VerifiedSnapshot(@"C:\temp\setup.dwg")
+        };
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "drawing_setup_audit", "setup-001", @"C:\temp\setup.dwg", Parameters()));
+
+        Assert.True(result.Success);
+        Assert.False(result.Changed);
+        Assert.Equal(0, result.Payload!["dbmod_after"].GetInt32());
+        Assert.Equal(1, gateway.ReadDrawingSetupCallCount);
     }
 
     [Fact]
@@ -383,6 +401,10 @@ public sealed class OperationDispatcherTests
 
         public int ReadEntitiesCallCount { get; private set; }
 
+        public DrawingSetupSnapshot? DrawingSetup { get; init; }
+
+        public int ReadDrawingSetupCallCount { get; private set; }
+
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
             ReadEntitiesCallCount++;
@@ -392,6 +414,12 @@ public sealed class OperationDispatcherTests
             }
 
             return Entities;
+        }
+
+        public DrawingSetupSnapshot ReadDrawingSetup()
+        {
+            ReadDrawingSetupCallCount++;
+            return DrawingSetup ?? throw new InvalidOperationException("Drawing setup fixture is missing.");
         }
     }
 

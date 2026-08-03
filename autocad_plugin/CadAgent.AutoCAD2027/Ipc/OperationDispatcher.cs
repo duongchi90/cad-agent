@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
+using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
 
@@ -41,6 +42,7 @@ public sealed class OperationDispatcher
                 "review" => DispatchReview(request, startedAt),
                 "close_disposable" => DispatchCloseDisposable(request, startedAt),
                 "mechanical_bom" => DispatchMechanicalBom(request, startedAt),
+                "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
             };
         }
@@ -194,6 +196,28 @@ public sealed class OperationDispatcher
             components.Select(component => component.Handle),
             warnings,
             errors,
+            payload,
+            startedAt);
+    }
+
+    private IpcResult DispatchDrawingSetupAudit(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var snapshot = _context.DrawingGateway.ReadDrawingSetup();
+        var payload = DrawingSetupPayload.Create(snapshot);
+        return CreateResult(
+            request.RequestId!,
+            "drawing_setup_audit",
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: Array.Empty<string>(),
+            warnings: _context.MechanicalWarnings,
+            errors: Array.Empty<string>(),
             payload,
             startedAt);
     }

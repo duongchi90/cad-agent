@@ -94,6 +94,11 @@ public static class ContractValidator
         {
             errors.Add("mechanical_bom parameters must be an empty object");
         }
+        else if (string.Equals(request.Operation, "drawing_setup_audit", StringComparison.Ordinal)
+            && request.Parameters.Count != 0)
+        {
+            errors.Add("drawing_setup_audit parameters must be an empty object");
+        }
         else if (string.Equals(request.Operation, "close_disposable", StringComparison.Ordinal))
         {
             ValidateDisposableParameters(request.Parameters, errors);

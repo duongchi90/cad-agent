@@ -28,7 +28,8 @@
         "health",
         "review",
         "close_disposable",
-        "mechanical_bom"
+        "mechanical_bom",
+        "drawing_setup_audit"
       ]
     },
     "drawing_full_path": {
@@ -138,6 +139,28 @@
           },
           "parameters": {
             "$ref": "operations/mechanical-bom.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "drawing_setup_audit"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "operations/drawing-setup-audit.schema.json"
           }
         }
       }

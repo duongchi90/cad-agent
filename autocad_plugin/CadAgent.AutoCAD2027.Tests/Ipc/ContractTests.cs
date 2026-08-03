@@ -90,6 +90,36 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void AcceptsDrawingSetupAuditOnlyWithEmptyParameters()
+    {
+        var request = ValidRequest("drawing_setup_audit");
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.True(validation.IsValid);
+    }
+
+    [Fact]
+    public void RejectsDrawingSetupAuditWithParameters()
+    {
+        var request = ValidRequest("drawing_setup_audit") with
+        {
+            Parameters = new Dictionary<string, JsonElement>
+            {
+                ["unexpected"] = JsonSerializer.SerializeToElement(true)
+            }
+        };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("drawing_setup_audit", StringComparison.OrdinalIgnoreCase)
+                && error.Contains("empty", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void RejectsMechanicalBomWithUnsupportedParameters()
     {
         var request = ValidRequest("mechanical_bom") with
@@ -231,6 +261,29 @@ public sealed class ContractTests
             Assert.NotNull(pattern);
             Assert.Matches(pattern!, requestCopy.DrawingFullPath!);
         }
+    }
+
+    [Fact]
+    public void DrawingSetupAuditExamplesRoundTripWithReadOnlyPayloadAndValidate()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/drawing-setup-audit-request.json")));
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/drawing-setup-audit-result.json")));
+        var requestCopy = ContractJson.DeserializeRequest(ContractJson.Serialize(request));
+        var resultCopy = ContractJson.DeserializeResult(ContractJson.Serialize(result));
+
+        Assert.True(ContractValidator.ValidateRequest(request).IsValid);
+        Assert.True(ContractValidator.ValidateResult(result).IsValid);
+        Assert.True(ContractValidator.ValidateRequest(requestCopy).IsValid);
+        Assert.True(ContractValidator.ValidateResult(resultCopy).IsValid);
+        Assert.Equal("drawing_setup_audit", requestCopy.Operation);
+        Assert.Equal("drawing_setup_audit", resultCopy.Operation);
+        Assert.False(resultCopy.Changed);
+        Assert.Equal(0, resultCopy.Payload!["dbmod_after"].GetInt32());
+        Assert.Equal(
+            result.DrawingFullPath,
+            resultCopy.DrawingFullPath);
     }
 
     private static string RepositoryFile(string relativePath)
