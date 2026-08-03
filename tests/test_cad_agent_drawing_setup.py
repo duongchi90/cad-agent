@@ -10,10 +10,19 @@ import pytest
 
 from cad_agent.cli import main
 from cad_agent.drawing_contracts import canonical_json_sha256, read_contract
-from cad_agent.drawing_setup import DrawingSetupError, create_setup_audit, create_setup_plan
+from cad_agent.drawing_setup import (
+    DrawingSetupError,
+    SETUP_BLOCKERS,
+    create_setup_audit,
+    create_setup_plan,
+    evaluate_setup_plan,
+    require_setup_verified,
+)
 from cad_agent.manifest import sha256_file
 from drawing_setup_fixtures import (
     approved_setup_plan,
+    apply_test_mutation,
+    matching_setup_audit,
     matching_setup_ipc_result,
     write_approved_setup_inputs,
 )
@@ -478,21 +487,281 @@ def test_drawing_setup_audit_cli_requires_a_regular_dwg_or_dxf(
     assert not output.exists()
 
 
-def test_deferred_drawing_setup_cli_boundaries_fail_explicitly_without_output(
+def test_matching_audit_becomes_setup_verified_without_mutating_inputs(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    arguments = [
-        "drawing-setup-verify",
-        "--plan", "plan.json",
-        "--audit", "audit.json",
-        "--verified-by", "ENGINEER",
-        "--approval-reference", "M2-001",
-        "--output", "evidence.json",
-    ]
-    resolved = [str(tmp_path / value) if value.endswith((".dwg", ".json")) or value == "ipc" else value for value in arguments]
-    output = Path(resolved[resolved.index("--output") + 1])
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    original_plan = copy.deepcopy(plan)
+    original_audit = copy.deepcopy(audit)
 
-    assert main(resolved) == 2
-    assert "unsupported_operation" in capsys.readouterr().err
-    assert not output.exists()
+    evidence = evaluate_setup_plan(
+        plan,
+        audit,
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+
+    assert evidence["status"] == "SETUP_VERIFIED"
+    assert evidence["blockers"] == []
+    assert evidence["setup_plan_sha256"] == canonical_json_sha256(plan)
+    assert evidence["audit_sha256"] == canonical_json_sha256(audit)
+    assert plan == original_plan
+    assert audit == original_audit
+    output = tmp_path / "evidence.json"
+    output.write_text(json.dumps(evidence), encoding="utf-8")
+    assert read_contract(output, contract="drawing_setup_evidence") == evidence
+    require_setup_verified(
+        evidence,
+        setup_plan_sha256=canonical_json_sha256(plan),
+        drawing_profile_sha256=plan["drawing_profile"]["sha256"],
+        template_file_sha256=plan["template"]["file_sha256"],
+    )
+
+
+def test_setup_blocker_vocabulary_is_closed() -> None:
+    assert SETUP_BLOCKERS == frozenset(
+        {
+            "source_changed",
+            "setup_incomplete",
+            "profile_missing",
+            "profile_hash_mismatch",
+            "template_hash_mismatch",
+            "font_substitution_risk",
+            "viewport_scale_mismatch",
+            "drawing_target_mismatch",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        (("variables", "INSUNITS", 0), "setup_incomplete"),
+        (("styles", "dimension", "Standard"), "profile_hash_mismatch"),
+        (("viewports", "A1-01", False), "viewport_scale_mismatch"),
+        (
+            ("custom_properties", "CAD_AGENT_SETTINGS_SHA256", "bad"),
+            "template_hash_mismatch",
+        ),
+    ],
+)
+def test_setup_mismatch_returns_needs_review_with_stable_blocker(
+    mutation: tuple[str, str, object], code: str
+) -> None:
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    apply_test_mutation(audit, mutation)
+
+    evidence = evaluate_setup_plan(
+        plan,
+        audit,
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+
+    assert evidence["status"] == "NEEDS_REVIEW"
+    blockers = evidence["blockers"]
+    assert code in {item["code"] for item in blockers}
+    assert blockers == sorted(blockers, key=lambda item: (item["code"], item["path"]))
+    assert all(set(item) == {"code", "path", "expected", "actual", "severity"} for item in blockers)
+    assert all(item["severity"] == "error" for item in blockers)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code", "path"),
+    [
+        (lambda audit: audit.__setitem__("changed", True), "source_changed", "changed"),
+        (lambda audit: audit.__setitem__("dbmod_after", 1), "source_changed", "dbmod_after"),
+        (
+            lambda audit: audit.__setitem__("current_layer", "WRONG"),
+            "setup_incomplete",
+            "current_layer",
+        ),
+        (
+            lambda audit: audit["layers"][0].__setitem__("linetype", "WRONG"),
+            "setup_incomplete",
+            "layers.0.linetype",
+        ),
+        (
+            lambda audit: audit["layouts"][0].__setitem__("viewport_scales", [1.0]),
+            "viewport_scale_mismatch",
+            "layouts.A1-01.viewport_scales",
+        ),
+        (
+            lambda audit: audit["font_report"]["missing"].append("missing.shx"),
+            "font_substitution_risk",
+            "font_report.missing",
+        ),
+    ],
+)
+def test_setup_comparison_covers_every_safety_category(
+    mutation: Any, code: str, path: str
+) -> None:
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    mutation(audit)
+
+    evidence = evaluate_setup_plan(
+        plan,
+        audit,
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+
+    assert any(item["code"] == code and item["path"] == path for item in evidence["blockers"])
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        (lambda audit: audit["styles"].pop("text"), "profile_missing"),
+        (
+            lambda audit: audit.__setitem__("drawing_full_path", "relative.dwg"),
+            "drawing_target_mismatch",
+        ),
+    ],
+)
+def test_setup_comparison_emits_remaining_closed_blocker_codes(
+    mutation: Any, code: str
+) -> None:
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    mutation(audit)
+
+    evidence = evaluate_setup_plan(
+        plan,
+        audit,
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+
+    assert code in {item["code"] for item in evidence["blockers"]}
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("setup_plan_sha256", "0" * 64),
+        ("drawing_profile_sha256", "1" * 64),
+        ("template_file_sha256", "2" * 64),
+    ],
+)
+def test_require_setup_verified_rejects_stale_evidence(argument: str, value: str) -> None:
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+    expected = {
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+    expected[argument] = value
+
+    with pytest.raises(DrawingSetupError, match="stale|mismatch"):
+        require_setup_verified(evidence, **expected)
+
+
+def test_require_setup_verified_rejects_status_or_blocker_downgrade() -> None:
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+    expected = {
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+
+    for mutation in (
+        {"status": "NEEDS_REVIEW"},
+        {
+            "blockers": [
+                {
+                    "code": "setup_incomplete",
+                    "path": "variables.INSUNITS",
+                    "expected": 4,
+                    "actual": 0,
+                    "severity": "error",
+                }
+            ]
+        },
+    ):
+        candidate = copy.deepcopy(evidence)
+        candidate.update(mutation)
+        with pytest.raises(DrawingSetupError, match="SETUP_VERIFIED|blocker"):
+            require_setup_verified(candidate, **expected)
+
+
+def test_drawing_setup_verify_cli_writes_verified_evidence(tmp_path: Path) -> None:
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    plan_path = tmp_path / "plan.json"
+    audit_path = tmp_path / "audit.json"
+    output = tmp_path / "evidence.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert main([
+        "drawing-setup-verify",
+        "--plan", str(plan_path),
+        "--audit", str(audit_path),
+        "--verified-by", "OWNER",
+        "--approval-reference", "LEAN-SETUP-001",
+        "--output", str(output),
+    ]) == 0
+    assert read_contract(output, contract="drawing_setup_evidence")["status"] == (
+        "SETUP_VERIFIED"
+    )
+
+
+def test_drawing_setup_verify_cli_writes_needs_review_before_returning_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    apply_test_mutation(audit, ("variables", "INSUNITS", 0))
+    plan_path = tmp_path / "plan.json"
+    audit_path = tmp_path / "audit.json"
+    output = tmp_path / "evidence.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert main([
+        "drawing-setup-verify",
+        "--plan", str(plan_path),
+        "--audit", str(audit_path),
+        "--verified-by", "OWNER",
+        "--approval-reference", "LEAN-SETUP-001",
+        "--output", str(output),
+    ]) == 2
+    assert read_contract(output, contract="drawing_setup_evidence")["status"] == "NEEDS_REVIEW"
+    assert "setup_incomplete" in capsys.readouterr().err
+
+
+def test_drawing_setup_verify_cli_refuses_to_overwrite_evidence(tmp_path: Path) -> None:
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    plan_path = tmp_path / "plan.json"
+    audit_path = tmp_path / "audit.json"
+    output = tmp_path / "evidence.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+    output.write_bytes(b"existing-evidence")
+
+    assert main([
+        "drawing-setup-verify",
+        "--plan", str(plan_path),
+        "--audit", str(audit_path),
+        "--verified-by", "OWNER",
+        "--approval-reference", "LEAN-SETUP-001",
+        "--output", str(output),
+    ]) == 2
+    assert output.read_bytes() == b"existing-evidence"

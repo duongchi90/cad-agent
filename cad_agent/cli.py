@@ -301,10 +301,33 @@ def _drawing_setup_audit_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _deferred_drawing_setup_command(args: argparse.Namespace) -> int:
-    raise CommandError(
-        f"unsupported_operation: {args.command} is registered and will be wired by M2 Task 8"
+def _drawing_setup_verify_command(args: argparse.Namespace) -> int:
+    from .drawing_contracts import read_contract
+    from .drawing_setup import evaluate_setup_plan
+
+    output = args.output.resolve()
+    if output.suffix.lower() != ".json":
+        raise CommandError("drawing-setup-verify output must be a .json file")
+    if output.exists():
+        raise CommandError(f"drawing-setup-verify output already exists: {output}")
+
+    evidence = evaluate_setup_plan(
+        read_contract(args.plan.resolve(), contract="drawing_setup_plan"),
+        read_contract(args.audit.resolve(), contract="drawing_setup_audit"),
+        verified_by=args.verified_by,
+        approval_reference=args.approval_reference,
     )
+    write_manifest(output, evidence)
+    print(output)
+    if evidence["status"] == "SETUP_VERIFIED":
+        return 0
+
+    blockers = evidence["blockers"]
+    summary = ", ".join(
+        f"{item['code']}:{item['path']}" for item in blockers if isinstance(item, dict)
+    )
+    print(f"cad_agent: drawing setup NEEDS_REVIEW: {summary}", file=sys.stderr)
+    return 2
 
 
 def _fidelity_pdf_command(args: argparse.Namespace) -> int:
@@ -901,7 +924,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "drawing-setup-audit":
             return _drawing_setup_audit_command(args)
         if args.command == "drawing-setup-verify":
-            return _deferred_drawing_setup_command(args)
+            return _drawing_setup_verify_command(args)
         if args.command == "fidelity-pdf":
             return _fidelity_pdf_command(args)
         if args.command == "fidelity-overlay":
