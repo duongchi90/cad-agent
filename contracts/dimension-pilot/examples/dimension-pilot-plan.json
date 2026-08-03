@@ -1,0 +1,57 @@
+{
+  "schema_version": "dimension-pilot-plan-1.0",
+  "pilot_id": "PILOT-SYNTHETIC-001",
+  "view_id": "SIDE",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "primitive_ir_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "semantic_ir_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "setup": {
+    "evidence_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "setup_plan_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "drawing_profile_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "template_file_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "measurement_tolerance_mm": 0.1,
+  "datum": {
+    "id": "DATUM-SIDE-001",
+    "origin_mm": [0.0, 0.0],
+    "origin_attachment": {
+      "primitive_id": "line-1",
+      "endpoint": "start"
+    },
+    "x_axis": [1.0, 0.0],
+    "y_axis": [0.0, 1.0],
+    "x_axis_primitive_id": "line-1",
+    "status": "APPROVED",
+    "approval": {
+      "approved_by": "OWNER",
+      "reference": "DATUM-APPROVAL-001"
+    }
+  },
+  "dimensions": [
+    {
+      "id": "DIM-001",
+      "kind": "linear",
+      "value_mm": 80.0,
+      "role": "driving",
+      "from": {
+        "primitive_id": "line-1",
+        "endpoint": "start"
+      },
+      "to": {
+        "primitive_id": "line-1",
+        "endpoint": "end"
+      },
+      "status": "APPROVED",
+      "approval": {
+        "approved_by": "OWNER",
+        "reference": "DIM-APPROVAL-001"
+      }
+    }
+  ],
+  "constraint_ids": [],
+  "approval": {
+    "approved_by": "OWNER",
+    "reference": "PILOT-APPROVAL-001"
+  }
+}
