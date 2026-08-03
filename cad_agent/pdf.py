@@ -36,6 +36,9 @@ def new_pdf_manifest(
         raise ManifestError("PDF run requires a non-empty calibration approval reference.")
     return {
         "schema_version": PDF_MANIFEST_SCHEMA_VERSION,
+        "release_profile": "DRAFT_REFERENCE",
+        "authoritative_release_eligible": False,
+        "drawing_setup_evidence": None,
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "pdf"},
         "configuration": {
             "scale_mm_per_px": scale_mm_per_px,
@@ -57,6 +60,9 @@ def read_pdf_manifest(path: Path) -> dict[str, Any]:
         raise ManifestError("Unsupported PDF run manifest schema version.")
     if not isinstance(manifest.get("pages"), list) or not isinstance(manifest.get("render"), dict):
         raise ManifestError("PDF run manifest is missing render or page checkpoints.")
+    manifest.setdefault("release_profile", "DRAFT_REFERENCE")
+    manifest.setdefault("authoritative_release_eligible", False)
+    manifest.setdefault("drawing_setup_evidence", None)
     return manifest
 
 

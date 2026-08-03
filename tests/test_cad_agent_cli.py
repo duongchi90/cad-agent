@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from cad_agent.cli import CommandError, _live_client, doctor_payload, main
+from cad_agent.manifest import new_manifest, read_manifest
 
 
 def _drawing(path: Path, offset: int = 0) -> None:
@@ -86,3 +87,25 @@ def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp
     assert captured["timeout_s"] == 60.0
     with pytest.raises(CommandError, match="timeout"):
         _live_client(42, dispatcher, timeout_s=0.0)
+
+
+def test_new_image_manifest_is_draft_reference_only(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.png"
+    source.write_bytes(b"image")
+
+    manifest = new_manifest(source, 0.5, "ticket-123")
+
+    assert manifest["release_profile"] == "DRAFT_REFERENCE"
+    assert manifest["authoritative_release_eligible"] is False
+    assert manifest["drawing_setup_evidence"] is None
+
+
+def test_historical_manifest_without_release_fields_still_reads_as_draft(tmp_path: Path) -> None:
+    from drawing_setup_fixtures import write_historical_v1_manifest
+
+    path = write_historical_v1_manifest(tmp_path)
+    payload = read_manifest(path)
+
+    assert payload["release_profile"] == "DRAFT_REFERENCE"
+    assert payload["authoritative_release_eligible"] is False
+    assert payload["drawing_setup_evidence"] is None

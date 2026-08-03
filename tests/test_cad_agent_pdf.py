@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz
 
 from cad_agent.cli import main
-from cad_agent.pdf import new_pdf_manifest, run_pdf_stages
+from cad_agent.pdf import new_pdf_manifest, read_pdf_manifest, run_pdf_stages
 
 
 def _pdf(path: Path, label: str = "A") -> None:
@@ -138,3 +138,31 @@ def test_pdf_cli_persists_auto_ocr_roi_choice() -> None:
         ]) == 0
         manifest = json.loads((output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
         assert manifest["configuration"]["auto_ocr_roi"] is True
+
+
+def test_new_pdf_manifest_is_draft_reference_only(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    _pdf(source)
+
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+
+    assert manifest["release_profile"] == "DRAFT_REFERENCE"
+    assert manifest["authoritative_release_eligible"] is False
+    assert manifest["drawing_setup_evidence"] is None
+
+
+def test_historical_pdf_manifest_without_release_fields_still_reads_as_draft(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    path = tmp_path / "pdf-run-manifest.json"
+    _pdf(source)
+    historical = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    historical.pop("release_profile")
+    historical.pop("authoritative_release_eligible")
+    historical.pop("drawing_setup_evidence")
+    path.write_text(json.dumps(historical), encoding="utf-8")
+
+    payload = read_pdf_manifest(path)
+
+    assert payload["release_profile"] == "DRAFT_REFERENCE"
+    assert payload["authoritative_release_eligible"] is False
+    assert payload["drawing_setup_evidence"] is None

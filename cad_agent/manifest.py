@@ -28,6 +28,9 @@ def sha256_file(path: Path) -> str:
 def new_manifest(source: Path, scale_mm_per_px: float, approval: str) -> dict[str, Any]:
     return {
         "schema_version": "1.0",
+        "release_profile": "DRAFT_REFERENCE",
+        "authoritative_release_eligible": False,
+        "drawing_setup_evidence": None,
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "image"},
         "configuration": {"scale_mm_per_px": scale_mm_per_px},
         "approvals": {"calibration": {"approved": True, "reference": approval}},
@@ -50,6 +53,9 @@ def read_manifest(path: Path) -> dict[str, Any]:
     for stage in STAGE_NAMES:
         if stage not in payload["stages"]:
             raise ManifestError(f"Run manifest is missing the {stage!r} stage.")
+    payload.setdefault("release_profile", "DRAFT_REFERENCE")
+    payload.setdefault("authoritative_release_eligible", False)
+    payload.setdefault("drawing_setup_evidence", None)
     return payload
 
 
