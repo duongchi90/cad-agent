@@ -96,6 +96,23 @@ algorithms into `cad_agent` and does not replace the .NET/File IPC boundary.
 continues through the existing File IPC boundary. Package ownership remains
 unchanged.
 
+### Personal Lean Dimension Pilot adapter
+
+The offline Dimension Pilot is a narrow adapter, not a second CAD pipeline.
+`cad_agent.dimension_pilot` validates the hash-bound approved plan and fresh
+`SETUP_VERIFIED` evidence, converts the approved datum frame to solver-local
+coordinates, and supplies approved driving lengths plus one explicit datum
+anchor to the existing `semantic_ir_lib` SolveSpace boundary. It does not infer
+attachments from proximity, OCR, or DWG content.
+
+Closed solved geometry is converted back to world coordinates and routed
+through the existing `dxf_builder_lib` native `DIMENSION` builder and headless
+read-back reviewer. The CLI keeps candidate DXF and evidence outputs outside
+the repository and always records Mechanical acceptance as `NOT_RUN`.
+Offline readiness does not reorder or bypass acceptance: Gate A Drawing Setup
+remains before Gate B dimension acceptance, and Gate C expansion remains after
+both.
+
 ## Safety boundaries
 
 - Unverified calibration or ambiguous recognition stops at a human approval
