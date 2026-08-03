@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import os
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -158,6 +160,75 @@ def _file_hash(path: Path, *, label: str) -> str:
         raise DimensionPilotError(f"Cannot hash {label}: {path}") from exc
 
 
+def _snapshot_file(path: Path, *, label: str) -> tuple[Path, str]:
+    """Read, hash, and stage one immutable input byte stream for loading."""
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise DimensionPilotError(f"Cannot snapshot {label}: {path}") from exc
+    digest = hashlib.sha256(payload).hexdigest()
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="cad-agent-dimension-",
+            suffix=".json",
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+    except OSError as exc:
+        try:
+            Path(temporary_name).unlink()
+        except (OSError, UnboundLocalError):
+            pass
+        raise DimensionPilotError(f"Cannot stage {label}: {path}") from exc
+    return Path(temporary_name), digest
+
+
+def _cleanup_snapshot(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _artifact_change_blockers(
+    *,
+    source_path: Path,
+    primitive_ir_path: Path,
+    semantic_ir_path: Path,
+    source_sha256: str,
+    primitive_ir_sha256: str,
+    semantic_ir_sha256: str,
+) -> list[dict[str, object]]:
+    comparisons = (
+        ("source_changed", "$.source_sha256", source_path, source_sha256, "source"),
+        (
+            "primitive_ir_changed",
+            "$.primitive_ir_sha256",
+            primitive_ir_path,
+            primitive_ir_sha256,
+            "Primitive IR",
+        ),
+        (
+            "semantic_ir_changed",
+            "$.semantic_ir_sha256",
+            semantic_ir_path,
+            semantic_ir_sha256,
+            "Semantic IR",
+        ),
+    )
+    blockers: list[dict[str, object]] = []
+    for code, path, artifact, expected, label in comparisons:
+        try:
+            actual: object = _file_hash(artifact, label=label)
+        except DimensionPilotError:
+            actual = None
+        if actual != expected:
+            blockers.append(_blocker(code, path, expected, actual))
+    return blockers
+
+
 def _mapping_hash(value: Mapping[str, object], *, label: str) -> str:
     try:
         return canonical_json_sha256(value)
@@ -280,6 +351,8 @@ def run_dimension_pilot(
     if output_dxf.exists():
         raise DimensionPilotError(f"Output already exists: {output_dxf}")
 
+    setup_plan = copy.deepcopy(dict(setup_plan))
+    setup_evidence = copy.deepcopy(dict(setup_evidence))
     plan_hash = _mapping_hash(validated_plan, label="Dimension Pilot plan")
     setup_plan_hash = _mapping_hash(setup_plan, label="Drawing Setup plan")
     setup_evidence_hash = _mapping_hash(
@@ -287,8 +360,21 @@ def run_dimension_pilot(
         label="Drawing Setup evidence",
     )
     source_hash = _file_hash(source_path, label="source")
-    primitive_hash = _file_hash(primitive_ir_path, label="Primitive IR")
-    semantic_hash = _file_hash(semantic_ir_path, label="Semantic IR")
+    primitive_snapshot: Path | None = None
+    semantic_snapshot: Path | None = None
+    try:
+        primitive_snapshot, primitive_hash = _snapshot_file(
+            primitive_ir_path,
+            label="Primitive IR",
+        )
+        semantic_snapshot, semantic_hash = _snapshot_file(
+            semantic_ir_path,
+            label="Semantic IR",
+        )
+    except DimensionPilotError:
+        _cleanup_snapshot(primitive_snapshot)
+        _cleanup_snapshot(semantic_snapshot)
+        raise
     evidence = _evidence_base(
         plan=validated_plan,
         plan_sha256=plan_hash,
@@ -301,41 +387,18 @@ def run_dimension_pilot(
     setup = validated_plan["setup"]
     blockers: list[dict[str, object]] = []
     comparisons = (
-        (
-            "source_changed",
-            "$.source_sha256",
-            validated_plan["source_sha256"],
-            source_hash,
-        ),
-        (
-            "primitive_ir_changed",
-            "$.primitive_ir_sha256",
-            validated_plan["primitive_ir_sha256"],
-            primitive_hash,
-        ),
-        (
-            "semantic_ir_changed",
-            "$.semantic_ir_sha256",
-            validated_plan["semantic_ir_sha256"],
-            semantic_hash,
-        ),
-        (
-            "setup_incomplete",
-            "$.setup.setup_plan_sha256",
-            setup["setup_plan_sha256"],
-            setup_plan_hash,
-        ),
-        (
-            "setup_evidence_changed",
-            "$.setup.evidence_sha256",
-            setup["evidence_sha256"],
-            setup_evidence_hash,
-        ),
+        ("source_changed", "$.source_sha256", validated_plan["source_sha256"], source_hash),
+        ("primitive_ir_changed", "$.primitive_ir_sha256", validated_plan["primitive_ir_sha256"], primitive_hash),
+        ("semantic_ir_changed", "$.semantic_ir_sha256", validated_plan["semantic_ir_sha256"], semantic_hash),
+        ("setup_incomplete", "$.setup.setup_plan_sha256", setup["setup_plan_sha256"], setup_plan_hash),
+        ("setup_evidence_changed", "$.setup.evidence_sha256", setup["evidence_sha256"], setup_evidence_hash),
     )
     for code, path, expected, actual in comparisons:
         if expected != actual:
             blockers.append(_blocker(code, path, expected, actual))
     if blockers:
+        _cleanup_snapshot(primitive_snapshot)
+        _cleanup_snapshot(semantic_snapshot)
         return _finish_blocked(evidence, blockers)
 
     try:
@@ -346,11 +409,29 @@ def run_dimension_pilot(
             template_file_sha256=setup["template_file_sha256"],
         )
     except DrawingSetupError:
+        _cleanup_snapshot(primitive_snapshot)
+        _cleanup_snapshot(semantic_snapshot)
         return _finish_blocked(evidence, _setup_blockers(setup_evidence))
 
-    primitive_document, semantic_document = _load_models(
-        primitive_ir_path,
-        semantic_ir_path,
+    try:
+        primitive_document, semantic_document = _load_models(
+            primitive_snapshot,
+            semantic_snapshot,
+        )
+    finally:
+        _cleanup_snapshot(primitive_snapshot)
+        _cleanup_snapshot(semantic_snapshot)
+    primitive_snapshot = None
+    semantic_snapshot = None
+    blockers.extend(
+        _artifact_change_blockers(
+            source_path=source_path,
+            primitive_ir_path=primitive_ir_path,
+            semantic_ir_path=semantic_ir_path,
+            source_sha256=source_hash,
+            primitive_ir_sha256=primitive_hash,
+            semantic_ir_sha256=semantic_hash,
+        )
     )
     if primitive_document.source_document.sha256 != validated_plan["source_sha256"]:
         blockers.append(
@@ -489,6 +570,20 @@ def run_dimension_pilot(
                 source_ref=dimension["approval"]["reference"],
             )
         )
+    covered_line_ids = {origin_primitive_id, x_axis_primitive_id}
+    for constraint in selected_constraints:
+        covered_line_ids.update(constraint.primitive_ids)
+    covered_line_ids.update(driving.primitive_id for driving in driving_lengths)
+    uncovered_line_ids = sorted(set(local_lines) - covered_line_ids)
+    if uncovered_line_ids:
+        blockers.append(
+            _blocker(
+                "underconstrained",
+                "$.primitive_ir.primitives",
+                "every LINE participates in the approved pilot model",
+                uncovered_line_ids,
+            )
+        )
     if blockers:
         return _finish_blocked(evidence, blockers)
 
@@ -575,17 +670,49 @@ def run_dimension_pilot(
         y_axis,
     )
     build_document = copy.deepcopy(primitive_document)
+    blockers.extend(
+        _artifact_change_blockers(
+            source_path=source_path,
+            primitive_ir_path=primitive_ir_path,
+            semantic_ir_path=semantic_ir_path,
+            source_sha256=source_hash,
+            primitive_ir_sha256=primitive_hash,
+            semantic_ir_sha256=semantic_hash,
+        )
+    )
+    if blockers:
+        return _finish_blocked(evidence, blockers)
+
+    temporary_dxf = output_dxf.with_suffix(output_dxf.suffix + ".tmp")
+    if temporary_dxf.exists():
+        raise DimensionPilotError(
+            f"Temporary DXF output already exists: {temporary_dxf}"
+        )
+    temporary_created = False
     try:
+        with temporary_dxf.open("x"):
+            pass
+        temporary_created = True
         built = build_dxf(
             build_document,
-            str(output_dxf),
+            str(temporary_dxf),
             semantic_doc=semantic_document,
             solved_primitives=world_solutions,
             build_dimensions=True,
             dimension_specs=dimension_specs,
         )
+        dxf_hash_before_review = _file_hash(
+            temporary_dxf,
+            label="temporary output DXF",
+        )
         review = review_dxf(built, tolerance_mm=tolerance)
+        dxf_hash_after_review = _file_hash(
+            temporary_dxf,
+            label="temporary output DXF",
+        )
     except (OSError, ValueError) as exc:
+        if temporary_created:
+            _cleanup_snapshot(temporary_dxf)
         raise DimensionPilotError("Dimension Pilot DXF build failed") from exc
 
     measurements: list[dict[str, object]] = []
@@ -608,6 +735,15 @@ def run_dimension_pilot(
             }
         )
     evidence["measurements"] = measurements
+    if dxf_hash_before_review != dxf_hash_after_review:
+        blockers.append(
+            _blocker(
+                "headless_review_failed",
+                "$.dxf_sha256",
+                dxf_hash_before_review,
+                dxf_hash_after_review,
+            )
+        )
     if not review.passed or len(measurements) != len(driving_lengths):
         blockers.append(
             _blocker(
@@ -617,10 +753,38 @@ def run_dimension_pilot(
                 review.format_report(),
             )
         )
+    blockers.extend(
+        _artifact_change_blockers(
+            source_path=source_path,
+            primitive_ir_path=primitive_ir_path,
+            semantic_ir_path=semantic_ir_path,
+            source_sha256=source_hash,
+            primitive_ir_sha256=primitive_hash,
+            semantic_ir_sha256=semantic_hash,
+        )
+    )
+    if blockers:
+        _cleanup_snapshot(temporary_dxf)
         return _finish_blocked(evidence, blockers, build_result=built)
 
+    if output_dxf.exists():
+        _cleanup_snapshot(temporary_dxf)
+        raise DimensionPilotError(f"Output already exists: {output_dxf}")
+    try:
+        os.rename(temporary_dxf, output_dxf)
+    except FileExistsError as exc:
+        _cleanup_snapshot(temporary_dxf)
+        raise DimensionPilotError(f"Output already exists: {output_dxf}") from exc
+    except OSError as exc:
+        _cleanup_snapshot(temporary_dxf)
+        raise DimensionPilotError(
+            f"Output already exists or could not be published: {output_dxf}"
+        ) from exc
+    temporary_created = False
+    built.output_path = str(output_dxf)
+
     evidence["offline_passed"] = True
-    evidence["dxf_sha256"] = _file_hash(output_dxf, label="output DXF")
+    evidence["dxf_sha256"] = dxf_hash_after_review
     evidence["blockers"] = []
     try:
         validated_evidence = validate_dimension_evidence(evidence)

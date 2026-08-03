@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -206,6 +207,115 @@ def test_underconstrained_or_conflicting_model_never_builds(
         item["code"] for item in run.evidence["blockers"]
     }
     assert not inputs.output_dxf.exists()
+
+
+def test_unreferenced_line_never_enters_a_closed_pilot_build(
+    tmp_path: Path,
+) -> None:
+    inputs = write_dimension_pilot_inputs(tmp_path)
+    primitive = json.loads(inputs.primitive_ir.read_text(encoding="utf-8"))
+    rogue = copy.deepcopy(primitive["primitives"][0])
+    rogue["id"] = "rogue-line"
+    rogue["geometry"]["start"] = {"x": 0.0, "y": 500.0}
+    rogue["geometry"]["end"] = {"x": 999.0, "y": 500.0}
+    primitive["primitives"].append(rogue)
+    _write_json(inputs.primitive_ir, primitive)
+    rebind_artifact_hashes(inputs)
+
+    run = run_with(inputs)
+
+    assert run.build_result is None
+    assert "underconstrained" in {
+        item["code"] for item in run.evidence["blockers"]
+    }
+    assert not inputs.output_dxf.exists()
+
+
+def test_primitive_ir_change_during_load_is_refused(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs = write_dimension_pilot_inputs(tmp_path)
+    original_load = dimension_pilot._load_models
+
+    def mutate_then_load(primitive_path, semantic_path):
+        primitive = json.loads(inputs.primitive_ir.read_text(encoding="utf-8"))
+        primitive["primitives"][0]["geometry"]["end"]["x"] = 120.0
+        _write_json(inputs.primitive_ir, primitive)
+        return original_load(primitive_path, semantic_path)
+
+    monkeypatch.setattr(dimension_pilot, "_load_models", mutate_then_load)
+    run = run_with(inputs)
+
+    assert [item["code"] for item in run.evidence["blockers"]] == [
+        "primitive_ir_changed"
+    ]
+    assert run.build_result is None
+
+
+def test_semantic_ir_change_during_load_is_refused(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs = write_dimension_pilot_inputs(tmp_path)
+    original_load = dimension_pilot._load_models
+
+    def mutate_then_load(primitive_path, semantic_path):
+        semantic = json.loads(inputs.semantic_ir.read_text(encoding="utf-8"))
+        semantic["schema_version"] = "mutated-during-run"
+        _write_json(inputs.semantic_ir, semantic)
+        return original_load(primitive_path, semantic_path)
+
+    monkeypatch.setattr(dimension_pilot, "_load_models", mutate_then_load)
+    run = run_with(inputs)
+
+    assert [item["code"] for item in run.evidence["blockers"]] == [
+        "semantic_ir_changed"
+    ]
+    assert run.build_result is None
+
+
+def test_dxf_changed_during_review_cannot_receive_offline_pass(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs = write_dimension_pilot_inputs(tmp_path)
+
+    def tamper_then_pass(built, **_kwargs):
+        Path(built.output_path).write_bytes(b"tampered-after-build")
+        return ReviewResult(
+            passed=True,
+            checked_count=1,
+            dimension_checked_count=1,
+            dimension_measurement_by_id={"DIM-001": 80.0},
+        )
+
+    monkeypatch.setattr(dimension_pilot, "review_dxf", tamper_then_pass)
+    run = run_with(inputs)
+
+    assert run.evidence["offline_passed"] is False
+    assert run.evidence["dxf_sha256"] is None
+    assert "headless_review_failed" in {
+        item["code"] for item in run.evidence["blockers"]
+    }
+
+
+def test_dxf_publish_refuses_a_concurrent_destination(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs = write_dimension_pilot_inputs(tmp_path)
+    original_build = dimension_pilot.build_dxf
+
+    def compete_then_build(document, output_path, **kwargs):
+        inputs.output_dxf.write_bytes(b"sentinel")
+        return original_build(document, output_path, **kwargs)
+
+    monkeypatch.setattr(dimension_pilot, "build_dxf", compete_then_build)
+
+    with pytest.raises(DimensionPilotError, match="already exists"):
+        run_with(inputs)
+    assert inputs.output_dxf.read_bytes() == b"sentinel"
 
     inputs = write_dimension_pilot_inputs(tmp_path / "conflict", conflicting=True)
     run = run_with(inputs)

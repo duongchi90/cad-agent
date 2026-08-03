@@ -101,4 +101,3 @@ def test_dimension_pilot_cli_reads_setup_evidence_strictly(
 
     assert main(dimension_pilot_cli_args(inputs)) == 2
     assert "drawing_setup_evidence" in capsys.readouterr().err
-
