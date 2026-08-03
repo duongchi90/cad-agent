@@ -60,6 +60,25 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   explicit unavailable-state skip instead of a runtime `KeyError`.
 - Review record: `docs/reviews/2026-08-02-m2-drawing-setup-live-review.md`.
 
+## M3 Dimension, Datum, Constraint IR
+
+- State: **Partially verified**. The approved offline-first design and execution
+  plan are recorded in
+  `docs/superpowers/specs/2026-08-03-m3-dimension-datum-constraint-design.md`
+  and `docs/superpowers/plans/2026-08-03-m3-dimension-datum-constraint.md`.
+- The implementation adds versioned dimension-first contracts, immutable
+  Dimension/Datum/Constraint IR, deterministic attachment and register hashes,
+  approval binding, and a fail-closed solver/report adapter. It does not open,
+  save, generate, or mutate DWG/DXF and does not call AutoCAD.
+- Focused M3 evidence on the continuation branch: contract/IR/solver tests
+  passed; Ruff and `git diff --check` passed for each scoped slice. Synthetic
+  fixtures are offline evidence only.
+- M2 live gate: **NOT RUN**. No M3 result promotes M2 evidence to
+  `SETUP_VERIFIED`; approved private drawing/profile/template evidence remains
+  absent.
+- `autocad_mechanical: **NOT RUN**`. M4 native CAD generation and render
+  feedback remain outside this slice.
+
 ## AutoCAD .NET plugin — Option A / phần cũ 1
 
 This subsection records the completed Windows-only managed .NET slice. The

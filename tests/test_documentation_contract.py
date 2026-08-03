@@ -9,6 +9,36 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationContractTests(unittest.TestCase):
+    def test_m3_exports_and_evidence_routes_are_present(self) -> None:
+        from semantic_ir_lib import (
+            ApprovalRegister,
+            ConstraintObservation,
+            DatumObservation,
+            DimensionObservation,
+            SolvedDrawingModel,
+            solve_authoritative_model,
+        )
+
+        for interface in (
+            ApprovalRegister,
+            ConstraintObservation,
+            DatumObservation,
+            DimensionObservation,
+            SolvedDrawingModel,
+            solve_authoritative_model,
+        ):
+            self.assertIsNotNone(interface)
+        self.assertTrue(
+            (ROOT / "docs/superpowers/specs/2026-08-03-m3-dimension-datum-constraint-design.md").is_file()
+        )
+        self.assertTrue(
+            (ROOT / "docs/superpowers/plans/2026-08-03-m3-dimension-datum-constraint.md").is_file()
+        )
+        status = (ROOT / "docs/STATUS.md").read_text(encoding="utf-8")
+        self.assertIn("M3 Dimension, Datum, Constraint IR", status)
+        self.assertIn("autocad_mechanical: **NOT RUN**", status)
+        self.assertIn("M2 live gate: **NOT RUN**", status)
+
     def test_status_is_evidence_based(self) -> None:
         status = (ROOT / "docs/STATUS.md").read_text(encoding="utf-8")
         self.assertIn("908d016", status)
