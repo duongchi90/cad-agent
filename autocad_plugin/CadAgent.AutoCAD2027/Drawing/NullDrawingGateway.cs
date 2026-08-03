@@ -1,4 +1,5 @@
 using CadAgent.AutoCAD2027.Review;
+using CadAgent.AutoCAD2027.DrawingSetup;
 
 namespace CadAgent.AutoCAD2027.Drawing;
 
@@ -11,4 +12,7 @@ public sealed class NullDrawingGateway : IDrawingGateway
         ArgumentNullException.ThrowIfNull(handles);
         return Array.Empty<EntitySnapshot>();
     }
+
+    public DrawingSetupSnapshot ReadDrawingSetup() =>
+        throw new InvalidOperationException("No active drawing is available for setup audit.");
 }

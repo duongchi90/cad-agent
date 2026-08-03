@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
+using CadAgent.AutoCAD2027.DrawingSetup;
 using CadAgent.AutoCAD2027.Ipc;
 using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
@@ -393,6 +394,9 @@ public sealed class OperationDispatcherTests
 
             return Entities;
         }
+
+        public DrawingSetupSnapshot ReadDrawingSetup() =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeMechanicalAdapter : IMechanicalAdapter

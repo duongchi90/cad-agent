@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
+using CadAgent.AutoCAD2027.DrawingSetup;
 using CadAgent.AutoCAD2027.Ipc;
 using CadAgent.AutoCAD2027.Review;
 using Xunit;
@@ -222,5 +223,8 @@ public sealed class CommandGuardTests
             LastHandles = handles.ToArray();
             return Array.Empty<EntitySnapshot>();
         }
+
+        public DrawingSetupSnapshot ReadDrawingSetup() =>
+            throw new NotSupportedException();
     }
 }
