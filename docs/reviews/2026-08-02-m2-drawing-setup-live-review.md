@@ -2,7 +2,7 @@
 
 Date: 2026-08-03
 
-Candidate implementation head: `4d28b641016a4cd43e8a20cd14dc3440210ccb33`
+Candidate implementation head: `8ddb3ccc0ee85f1433d7fce1b55281439e0d1c27`
 
 ## Scope
 
@@ -21,7 +21,7 @@ comparison against approved paper-layout profile expectations.
   conflict warnings (`MSB3277`) remain; no Autodesk DLL was copied to output.
 - C# tests: 73 passed, 0 failed, 0 skipped.
 - `dotnet_ipc` JUnit: 37 tests, 0 failures, 0 errors, 0 skipped.
-- Offline JUnit: 513 tests, 0 failures, 0 errors, 0 skipped; 18 subtests also
+- Offline JUnit: 514 tests, 0 failures, 0 errors, 0 skipped; 18 subtests also
   passed.
 - Private-data unavailable probe: 2 skipped as expected.
 - AutoCAD Mechanical unavailable probe: 8 skipped as expected.

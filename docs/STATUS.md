@@ -39,12 +39,12 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 
 ### M2 Drawing Initialization implementation continuation — 2026-08-03
 
-- Candidate implementation head: `4d28b641016a4cd43e8a20cd14dc3440210ccb33`.
+- Candidate implementation head: `8ddb3cc2c2f02c5c9d718e0e02ce7118f700d0e1`.
 - Implemented the read-only `drawing_setup_audit` .NET/File IPC operation,
   deterministic Python normalization, comparison/blocker/evidence gate, and
   `DRAFT_REFERENCE` classification for legacy image/PDF manifests.
 - Fresh authoritative offline evidence: Release x64 C# build/test passed with
-  73/73 tests; `dotnet_ipc` JUnit passed 37/37; offline JUnit passed 513/513
+  73/73 tests; `dotnet_ipc` JUnit passed 37/37; offline JUnit passed 514/514
   with zero failures, errors, or unexpected skips. Existing Autodesk
   `MSB3277` reference-conflict warnings remain, and no Autodesk DLL was copied
   to build output.
