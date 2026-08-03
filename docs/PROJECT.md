@@ -49,6 +49,17 @@ approvals, and test evidence.
 Each slice receives its own approved design, implementation plan, tests, and
 review gate.
 
+## Drawing Initialization Gate
+
+The configurable Drawing Initialization Gate is the required entry boundary for
+future authoritative drawing paths. It binds an approved Drawing Definition,
+Drawing Profile, Domain Pack, and template provenance to a read-only setup
+audit before any geometry is created. The existing image/PDF pipeline remains
+`DRAFT_REFERENCE`; it cannot become authoritative until a separate
+dimension-first path presents hash-bound `SETUP_VERIFIED` evidence. This gate
+does not make a source-specific vehicle or equipment configuration part of the
+core product contract.
+
 ## Non-goals
 
 - No GUI, web service, or VPS.
@@ -63,3 +74,5 @@ review gate.
 - Verified status: `docs/STATUS.md`
 - Quality and release gates: `docs/QUALITY.md`
 - Design/plan record policy: `docs/superpowers/README.md`
+- Approved complete design: `docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md`
+- M2 execution plan: `docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md`
