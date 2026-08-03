@@ -70,8 +70,12 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   Dimension/Datum/Constraint IR, deterministic attachment and register hashes,
   approval binding, and a fail-closed solver/report adapter. It does not open,
   save, generate, or mutate DWG/DXF and does not call AutoCAD.
-- Focused M3 evidence on the continuation branch: contract/IR/solver tests
-  passed; Ruff and `git diff --check` passed for each scoped slice. Synthetic
+- Verified implementation candidate: `9d91f28`. Focused M3 coverage passed
+  with **109 passed** across `semantic_ir_lib/tests` and the documentation
+  contract. The aggregate verifier passed with C# **73/73**, dotnet IPC
+  **37/0/0/0** plus 18 subtests, and offline JUnit **553/0/0/0**; Ruff and
+  `git diff --check` passed. The unavailable-state probes reported
+  `real_data` **2 SKIP** and `autocad_mechanical` **8 SKIP**. Synthetic
   fixtures are offline evidence only.
 - M2 live gate: **NOT RUN**. No M3 result promotes M2 evidence to
   `SETUP_VERIFIED`; approved private drawing/profile/template evidence remains
