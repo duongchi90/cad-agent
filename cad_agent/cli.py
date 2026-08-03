@@ -260,10 +260,50 @@ def _drawing_setup_plan_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _drawing_setup_audit_command(args: argparse.Namespace) -> int:
+    from mcp_integration_lib.dotnet_ipc import (
+        DotNetIPCClient,
+        DotNetIPCError,
+        make_windows_dotnet_dispatch_trigger,
+    )
+
+    from .drawing_setup import create_setup_audit
+
+    drawing = args.drawing.resolve()
+    if not drawing.is_file():
+        raise CommandError(f"drawing must be an existing regular file: {drawing}")
+    if drawing.suffix.lower() not in {".dwg", ".dxf"}:
+        raise CommandError("drawing-setup-audit accepts only a .dwg or .dxf drawing")
+    output = args.output.resolve()
+    if output.suffix.lower() != ".json":
+        raise CommandError("drawing-setup-audit output must be a .json file")
+    if output.exists():
+        raise CommandError(f"drawing-setup-audit output already exists: {output}")
+
+    before = sha256_file(drawing)
+    try:
+        result = DotNetIPCClient(
+            ipc_dir=args.ipc_dir,
+            timeout_s=args.timeout_s,
+            trigger=make_windows_dotnet_dispatch_trigger(args.hwnd),
+        ).drawing_setup_audit(drawing, drawing_sha256=before)
+    except DotNetIPCError as exc:
+        raise CommandError(f"drawing_setup_audit IPC failed: {exc}") from exc
+    try:
+        after = sha256_file(drawing)
+    except OSError as exc:
+        raise CommandError("source_changed: drawing became unavailable during setup audit") from exc
+    if after != before:
+        raise CommandError("source_changed: drawing changed during setup audit")
+
+    write_manifest(output, create_setup_audit(drawing, before, result))
+    print(output)
+    return 0
+
+
 def _deferred_drawing_setup_command(args: argparse.Namespace) -> int:
-    owner = "Task 7" if args.command == "drawing-setup-audit" else "Task 8"
     raise CommandError(
-        f"unsupported_operation: {args.command} is registered and will be wired by M2 {owner}"
+        f"unsupported_operation: {args.command} is registered and will be wired by M2 Task 8"
     )
 
 
@@ -858,7 +898,9 @@ def main(argv: list[str] | None = None) -> int:
             return _resume_pdf_command(args)
         if args.command == "drawing-setup-plan":
             return _drawing_setup_plan_command(args)
-        if args.command in {"drawing-setup-audit", "drawing-setup-verify"}:
+        if args.command == "drawing-setup-audit":
+            return _drawing_setup_audit_command(args)
+        if args.command == "drawing-setup-verify":
             return _deferred_drawing_setup_command(args)
         if args.command == "fidelity-pdf":
             return _fidelity_pdf_command(args)

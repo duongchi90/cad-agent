@@ -15,6 +15,7 @@ from mcp_integration_lib.dotnet_ipc import (
     REQUEST_PREFIX,
     RESULT_PREFIX,
     DotNetIPCClient,
+    DotNetIPCProtocolError,
     DotNetIPCResultError,
     DotNetIPCTimeoutError,
     atomic_write_json,
@@ -208,6 +209,46 @@ class DotNetIPCClientTests(unittest.TestCase):
                 )
 
             self.assertEqual(0, trigger_calls)
+
+    def test_drawing_setup_audit_uses_empty_parameters_and_preserves_hash(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {"dbmod_before": 0, "dbmod_after": 0, "changed": False}
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.drawing_setup_audit(
+                r"C:\temp\setup-lite.dwg",
+                drawing_sha256="a" * 64,
+                request_id="setup-lite-001",
+            )
+
+            request = dispatcher.requests[0]
+            self.assertEqual("drawing_setup_audit", request["operation"])
+            self.assertEqual({}, request["parameters"])
+            self.assertEqual("a" * 64, request["drawing_sha256"])
+            self.assertFalse(result["changed"])
+            self.assertEqual(payload, result["payload"])
+
+    def test_drawing_setup_audit_rejects_a_mutating_result(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                result = _result(request)
+                result["changed"] = True
+                result["entity_handles"] = ["2F"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), result)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "read-only"):
+                client.drawing_setup_audit(
+                    r"C:\temp\setup-lite.dwg",
+                    drawing_sha256="a" * 64,
+                )
 
     def test_close_disposable_rejects_unsafe_flags_before_trigger(self) -> None:
         with TemporaryDirectory() as temporary:

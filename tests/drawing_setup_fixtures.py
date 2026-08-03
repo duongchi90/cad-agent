@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -162,6 +163,27 @@ def matching_setup_audit(plan: dict[str, object]) -> dict[str, object]:
         "styles": dict(expectations["required_styles"]),
         "layouts": list(expectations["layouts"]),
         "font_report": {"missing": [], "substituted": []},
+    }
+
+
+def matching_setup_ipc_result(
+    plan: dict[str, object], drawing_full_path: str
+) -> dict[str, object]:
+    payload = copy.deepcopy(matching_setup_audit(plan))
+    for field in ("schema_version", "drawing_full_path", "drawing_sha256"):
+        payload.pop(field)
+    return {
+        "request_id": "setup-lite-001",
+        "success": True,
+        "operation": "drawing_setup_audit",
+        "drawing_full_path": drawing_full_path,
+        "changed": False,
+        "entity_handles": [],
+        "warnings": [],
+        "errors": [],
+        "started_at": "2026-08-03T02:00:00Z",
+        "completed_at": "2026-08-03T02:00:00Z",
+        "payload": payload,
     }
 
 

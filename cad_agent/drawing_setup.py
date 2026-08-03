@@ -1,4 +1,4 @@
-"""Create an approved, hash-bound Drawing Setup plan."""
+"""Create a hash-bound Drawing Setup plan and normalize read-only audit evidence."""
 
 from __future__ import annotations
 
@@ -14,7 +14,20 @@ from .manifest import sha256_file
 
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ACCEPTED_RELEASE_PROFILES = {"REVIEW", "AUTHORITATIVE"}
+_AUDIT_PAYLOAD_FIELDS = (
+    "changed",
+    "dbmod_before",
+    "dbmod_after",
+    "variables",
+    "current_layer",
+    "custom_properties",
+    "layers",
+    "styles",
+    "layouts",
+    "font_report",
+)
 
 
 class DrawingSetupError(DrawingContractError):
@@ -205,4 +218,58 @@ def create_setup_plan(
     return frozen
 
 
-__all__ = ["DrawingSetupError", "create_setup_plan"]
+def create_setup_audit(
+    drawing: Path,
+    drawing_sha256: str,
+    ipc_result: Mapping[str, object],
+) -> dict[str, object]:
+    """Normalize one successful read-only IPC result into the strict audit contract."""
+    drawing_path = Path(drawing).resolve()
+    if not isinstance(drawing_sha256, str) or _SHA256_RE.fullmatch(drawing_sha256) is None:
+        raise _fail("drawing SHA-256 must be 64 lowercase hexadecimal characters")
+    if not isinstance(ipc_result, Mapping) or ipc_result.get("success") is not True:
+        raise _fail("drawing setup audit requires a successful IPC result")
+    if ipc_result.get("operation") != "drawing_setup_audit":
+        raise _fail("IPC result operation must be drawing_setup_audit")
+
+    result_path = ipc_result.get("drawing_full_path")
+    if not isinstance(result_path, str) or Path(result_path).resolve() != drawing_path:
+        raise _fail("IPC drawing_full_path does not match the audited drawing")
+    if ipc_result.get("changed") is not False or ipc_result.get("entity_handles") != []:
+        raise _fail("drawing setup audit IPC result must be read-only")
+
+    payload = ipc_result.get("payload")
+    if not isinstance(payload, Mapping):
+        raise _fail("drawing setup audit IPC payload must be an object")
+    missing = [field for field in _AUDIT_PAYLOAD_FIELDS if field not in payload]
+    if missing:
+        raise _fail(f"drawing setup audit IPC payload is missing {', '.join(missing)}")
+
+    copied = {field: copy.deepcopy(payload[field]) for field in _AUDIT_PAYLOAD_FIELDS}
+    if copied["changed"] is not False:
+        raise _fail("drawing setup audit payload must be read-only")
+    dbmod_before = copied["dbmod_before"]
+    dbmod_after = copied["dbmod_after"]
+    if (
+        isinstance(dbmod_before, bool)
+        or not isinstance(dbmod_before, int)
+        or isinstance(dbmod_after, bool)
+        or not isinstance(dbmod_after, int)
+        or dbmod_before != dbmod_after
+    ):
+        raise _fail("drawing setup audit DBMOD values must be equal integers")
+
+    audit: dict[str, object] = {
+        "schema_version": "drawing-setup-audit-1.0",
+        "drawing_full_path": str(drawing_path),
+        "drawing_sha256": drawing_sha256,
+        **copied,
+    }
+    try:
+        json.dumps(audit, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise _fail("drawing setup audit IPC payload is not strict JSON") from exc
+    return audit
+
+
+__all__ = ["DrawingSetupError", "create_setup_audit", "create_setup_plan"]
