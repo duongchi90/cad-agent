@@ -6,7 +6,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .manifest import ManifestError, completed_artifact, sha256_file, verify_source, write_manifest
+from .manifest import (
+    ManifestError,
+    classify_draft_reference,
+    completed_artifact,
+    sha256_file,
+    verify_source,
+    write_manifest,
+)
 
 
 PDF_MANIFEST_SCHEMA_VERSION = "pdf-run-1.0"
@@ -34,7 +41,7 @@ def new_pdf_manifest(
         raise ManifestError("PDF DPI must be positive.")
     if not approval.strip():
         raise ManifestError("PDF run requires a non-empty calibration approval reference.")
-    return {
+    return classify_draft_reference({
         "schema_version": PDF_MANIFEST_SCHEMA_VERSION,
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "pdf"},
         "configuration": {
@@ -45,7 +52,7 @@ def new_pdf_manifest(
         "approvals": {"calibration": {"approved": True, "reference": approval.strip()}},
         "render": _stage(artifact="pdf/manifest.json"),
         "pages": [],
-    }
+    })
 
 
 def read_pdf_manifest(path: Path) -> dict[str, Any]:
@@ -57,7 +64,7 @@ def read_pdf_manifest(path: Path) -> dict[str, Any]:
         raise ManifestError("Unsupported PDF run manifest schema version.")
     if not isinstance(manifest.get("pages"), list) or not isinstance(manifest.get("render"), dict):
         raise ManifestError("PDF run manifest is missing render or page checkpoints.")
-    return manifest
+    return classify_draft_reference(manifest)
 
 
 def _write_page_stage(

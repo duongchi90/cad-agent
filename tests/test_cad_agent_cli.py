@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from cad_agent.cli import CommandError, _live_client, doctor_payload, main
+from cad_agent.manifest import ManifestError, new_manifest, read_manifest
 
 
 def _drawing(path: Path, offset: int = 0) -> None:
@@ -23,6 +24,71 @@ def test_doctor_reports_supported_contract() -> None:
     assert payload["supported"] == {"os": "windows", "python": "3.11", "tesseract": "5.4.0.20240606"}
     assert "ezdxf" in payload["packages"]
     assert "tesseract_present" in payload
+
+
+def test_new_image_manifest_is_draft_reference_only(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.png"
+    source.write_bytes(b"image")
+
+    manifest = new_manifest(source, 0.5, "ticket-123")
+
+    assert manifest["release_profile"] == "DRAFT_REFERENCE"
+    assert manifest["authoritative_release_eligible"] is False
+    assert manifest["drawing_setup_evidence"] is None
+
+
+def test_historical_image_manifest_reads_as_draft_reference(tmp_path: Path) -> None:
+    path = tmp_path / "run-manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "source": {"name": "drawing.png", "sha256": "a" * 64, "kind": "image"},
+                "configuration": {"scale_mm_per_px": 0.5},
+                "approvals": {
+                    "calibration": {"approved": True, "reference": "ticket-123"}
+                },
+                "stages": {
+                    stage: {
+                        "state": "pending",
+                        "artifact": None,
+                        "sha256": None,
+                        "details": None,
+                    }
+                    for stage in ("primitive_ir", "semantic_ir", "dxf")
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = read_manifest(path)
+
+    assert manifest["release_profile"] == "DRAFT_REFERENCE"
+    assert manifest["authoritative_release_eligible"] is False
+    assert manifest["drawing_setup_evidence"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("release_profile", "AUTHORITATIVE"),
+        ("authoritative_release_eligible", True),
+        ("drawing_setup_evidence", {"status": "SETUP_VERIFIED"}),
+    ],
+)
+def test_image_manifest_refuses_unsafe_release_claim(
+    tmp_path: Path, field: str, unsafe_value: object
+) -> None:
+    source = tmp_path / "drawing.png"
+    source.write_bytes(b"image")
+    manifest = new_manifest(source, 0.5, "ticket-123")
+    manifest[field] = unsafe_value
+    path = tmp_path / "run-manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match=field):
+        read_manifest(path)
 
 
 def test_run_and_resume_create_verified_checkpoints() -> None:

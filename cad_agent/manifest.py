@@ -11,10 +11,25 @@ from typing import Any
 
 STAGE_NAMES = ("primitive_ir", "semantic_ir", "dxf")
 MANIFEST_NAME = "run-manifest.json"
+_DRAFT_REFERENCE_FIELDS: dict[str, object] = {
+    "release_profile": "DRAFT_REFERENCE",
+    "authoritative_release_eligible": False,
+    "drawing_setup_evidence": None,
+}
 
 
 class ManifestError(ValueError):
     """Raised when an on-disk run manifest cannot safely be used."""
+
+
+def classify_draft_reference(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Apply safe legacy defaults and reject authoritative release claims."""
+    for name, expected in _DRAFT_REFERENCE_FIELDS.items():
+        actual = manifest.get(name, expected)
+        if actual != expected:
+            raise ManifestError(f"Legacy run manifest has unsafe {name}.")
+    manifest.update(_DRAFT_REFERENCE_FIELDS)
+    return manifest
 
 
 def sha256_file(path: Path) -> str:
@@ -26,7 +41,7 @@ def sha256_file(path: Path) -> str:
 
 
 def new_manifest(source: Path, scale_mm_per_px: float, approval: str) -> dict[str, Any]:
-    return {
+    return classify_draft_reference({
         "schema_version": "1.0",
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "image"},
         "configuration": {"scale_mm_per_px": scale_mm_per_px},
@@ -35,7 +50,7 @@ def new_manifest(source: Path, scale_mm_per_px: float, approval: str) -> dict[st
             stage: {"state": "pending", "artifact": None, "sha256": None, "details": None}
             for stage in STAGE_NAMES
         },
-    }
+    })
 
 
 def read_manifest(path: Path) -> dict[str, Any]:
@@ -50,7 +65,7 @@ def read_manifest(path: Path) -> dict[str, Any]:
     for stage in STAGE_NAMES:
         if stage not in payload["stages"]:
             raise ManifestError(f"Run manifest is missing the {stage!r} stage.")
-    return payload
+    return classify_draft_reference(payload)
 
 
 def write_manifest(path: Path, manifest: dict[str, Any]) -> None:

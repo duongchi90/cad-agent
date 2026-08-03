@@ -84,6 +84,12 @@ present `SETUP_VERIFIED` evidence before geometry creation; the existing
 image/PDF path remains `DRAFT_REFERENCE` until that separate dimension-first
 path exists.
 
+New image/PDF run manifests record `release_profile="DRAFT_REFERENCE"`,
+`authoritative_release_eligible=false`, and `drawing_setup_evidence=null`.
+Historical manifests that predate these fields receive the same safe defaults
+when read; an explicit conflicting release claim is rejected rather than
+silently downgraded.
+
 This is orchestration and verification behavior: it does not move CAD
 algorithms into `cad_agent` and does not replace the .NET/File IPC boundary.
 `cad_agent` validates contracts and evidence, while the AutoCAD-side audit
