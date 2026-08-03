@@ -157,6 +157,181 @@ public sealed class CommandContext
             return snapshots;
         }
 
+        public DrawingSetupSnapshot ReadDrawingSetup()
+        {
+            var dbmodBefore = ReadIntegerSystemVariable("DBMOD");
+            DrawingSetupSnapshot snapshot;
+            using (var transaction = _document.TransactionManager.StartOpenCloseTransaction())
+            {
+                var database = _document.Database;
+                snapshot = new DrawingSetupSnapshot(
+                    database.Filename,
+                    dbmodBefore,
+                    dbmodBefore,
+                    ReadIntegerSystemVariable("INSUNITS"),
+                    ReadIntegerSystemVariable("MEASUREMENT"),
+                    ReadDoubleSystemVariable("LTSCALE"),
+                    ReadDoubleSystemVariable("CELTSCALE"),
+                    ReadIntegerSystemVariable("PSLTSCALE"),
+                    ReadIntegerSystemVariable("MSLTSCALE"),
+                    ReadIntegerSystemVariable("DIMASSOC"),
+                    ReadIntegerSystemVariable("ANNOALLVISIBLE"),
+                    ReadCurrentLayer(transaction, database),
+                    ReadCustomProperties(database),
+                    ReadLayers(transaction, database),
+                    ReadTextStyles(transaction, database),
+                    ReadDictionaryStyles(transaction, database.MLeaderStyleDictionaryId, static (transaction, objectId) =>
+                        ((MLeaderStyle)transaction.GetObject(objectId, OpenMode.ForRead)).Name),
+                    ReadDimensionStyles(transaction, database),
+                    ReadDictionaryStyles(transaction, database.TableStyleDictionaryId, static (transaction, objectId) =>
+                        ((TableStyle)transaction.GetObject(objectId, OpenMode.ForRead)).Name),
+                    ReadLayouts(transaction, database));
+            }
+
+            var dbmodAfter = ReadIntegerSystemVariable("DBMOD");
+            if (dbmodAfter != dbmodBefore)
+            {
+                throw new InvalidOperationException(
+                    $"Drawing setup audit changed DBMOD from {dbmodBefore} to {dbmodAfter}.");
+            }
+
+            return snapshot with { DbModAfter = dbmodAfter };
+        }
+
+        private static int ReadIntegerSystemVariable(string name) =>
+            Convert.ToInt32(AcadApplication.GetSystemVariable(name), CultureInfo.InvariantCulture);
+
+        private static double ReadDoubleSystemVariable(string name) =>
+            Convert.ToDouble(AcadApplication.GetSystemVariable(name), CultureInfo.InvariantCulture);
+
+        private static string ReadCurrentLayer(Transaction transaction, Database database) =>
+            ((LayerTableRecord)transaction.GetObject(database.Clayer, OpenMode.ForRead)).Name;
+
+        private static IReadOnlyDictionary<string, string> ReadCustomProperties(Database database)
+        {
+            var properties = new Dictionary<string, string>(StringComparer.Ordinal);
+            var enumerator = database.SummaryInfo.CustomProperties;
+            while (enumerator.MoveNext())
+            {
+                var property = enumerator.Entry;
+                properties[property.Key.ToString() ?? string.Empty] =
+                    property.Value?.ToString() ?? string.Empty;
+            }
+
+            return properties;
+        }
+
+        private static IReadOnlyList<LayerSetupSnapshot> ReadLayers(
+            Transaction transaction,
+            Database database)
+        {
+            var snapshots = new List<LayerSetupSnapshot>();
+            var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
+            foreach (ObjectId objectId in table)
+            {
+                var layer = (LayerTableRecord)transaction.GetObject(objectId, OpenMode.ForRead);
+                var linetype = layer.LinetypeObjectId.IsNull
+                    ? string.Empty
+                    : ((LinetypeTableRecord)transaction.GetObject(
+                        layer.LinetypeObjectId,
+                        OpenMode.ForRead)).Name;
+                snapshots.Add(new(
+                    layer.Name,
+                    layer.Color.ColorIndex,
+                    linetype,
+                    (int)layer.LineWeight,
+                    layer.IsPlottable,
+                    layer.IsFrozen,
+                    layer.IsLocked));
+            }
+
+            return snapshots;
+        }
+
+        private static IReadOnlyList<TextStyleSetupSnapshot> ReadTextStyles(
+            Transaction transaction,
+            Database database)
+        {
+            var snapshots = new List<TextStyleSetupSnapshot>();
+            var table = (TextStyleTable)transaction.GetObject(database.TextStyleTableId, OpenMode.ForRead);
+            foreach (ObjectId objectId in table)
+            {
+                var style = (TextStyleTableRecord)transaction.GetObject(objectId, OpenMode.ForRead);
+                snapshots.Add(new(style.Name, style.FileName, style.BigFontFileName));
+            }
+
+            return snapshots;
+        }
+
+        private static IReadOnlyList<NamedStyleSnapshot> ReadDimensionStyles(
+            Transaction transaction,
+            Database database)
+        {
+            var snapshots = new List<NamedStyleSnapshot>();
+            var table = (DimStyleTable)transaction.GetObject(database.DimStyleTableId, OpenMode.ForRead);
+            foreach (ObjectId objectId in table)
+            {
+                snapshots.Add(new(((DimStyleTableRecord)transaction.GetObject(
+                    objectId,
+                    OpenMode.ForRead)).Name));
+            }
+
+            return snapshots;
+        }
+
+        private static IReadOnlyList<NamedStyleSnapshot> ReadDictionaryStyles(
+            Transaction transaction,
+            ObjectId dictionaryId,
+            Func<Transaction, ObjectId, string> readName)
+        {
+            var snapshots = new List<NamedStyleSnapshot>();
+            var dictionary = (DBDictionary)transaction.GetObject(dictionaryId, OpenMode.ForRead);
+            foreach (DBDictionaryEntry entry in dictionary)
+            {
+                snapshots.Add(new(readName(transaction, entry.Value)));
+            }
+
+            return snapshots;
+        }
+
+        private static IReadOnlyList<LayoutSetupSnapshot> ReadLayouts(
+            Transaction transaction,
+            Database database)
+        {
+            var snapshots = new List<LayoutSetupSnapshot>();
+            var dictionary = (DBDictionary)transaction.GetObject(database.LayoutDictionaryId, OpenMode.ForRead);
+            foreach (DBDictionaryEntry entry in dictionary)
+            {
+                var layout = (Layout)transaction.GetObject(entry.Value, OpenMode.ForRead);
+                var viewports = new List<ViewportSetupSnapshot>();
+                var block = (BlockTableRecord)transaction.GetObject(
+                    layout.BlockTableRecordId,
+                    OpenMode.ForRead);
+                foreach (ObjectId objectId in block)
+                {
+                    if (transaction.GetObject(objectId, OpenMode.ForRead, false) is Viewport viewport)
+                    {
+                        viewports.Add(new(
+                            viewport.Handle.ToString(),
+                            viewport.CustomScale,
+                            viewport.Locked));
+                    }
+                }
+
+                snapshots.Add(new(
+                    layout.LayoutName,
+                    layout.ModelType,
+                    layout.CanonicalMediaName,
+                    layout.PlotConfigurationName,
+                    layout.PlotType.ToString(),
+                    layout.CustomPrintScale.Numerator,
+                    layout.CustomPrintScale.Denominator,
+                    viewports));
+            }
+
+            return snapshots;
+        }
+
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
         {
             var snapshots = new List<MechanicalComponentSnapshot>();

@@ -11,4 +11,7 @@ public sealed class NullDrawingGateway : IDrawingGateway
         ArgumentNullException.ThrowIfNull(handles);
         return Array.Empty<EntitySnapshot>();
     }
+
+    public DrawingSetupSnapshot ReadDrawingSetup() =>
+        throw new NotSupportedException("Drawing setup audit is not available without AutoCAD.");
 }
