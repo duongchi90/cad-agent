@@ -330,6 +330,89 @@ def _drawing_setup_verify_command(args: argparse.Namespace) -> int:
     return 2
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _dimension_pilot_command(args: argparse.Namespace) -> int:
+    from .dimension_contracts import read_dimension_contract
+    from .dimension_pilot import run_dimension_pilot, write_dimension_evidence
+    from .drawing_contracts import read_contract
+
+    inputs = {
+        "plan": args.plan.resolve(),
+        "setup plan": args.setup_plan.resolve(),
+        "setup evidence": args.setup_evidence.resolve(),
+        "source": args.source.resolve(),
+        "Primitive IR": args.primitive_ir.resolve(),
+        "Semantic IR": args.semantic_ir.resolve(),
+    }
+    for label, path in inputs.items():
+        if not path.is_file():
+            raise CommandError(f"Dimension Pilot {label} must be an existing file: {path}")
+
+    output_dxf = args.output_dxf.resolve()
+    output_evidence = args.output_evidence.resolve()
+    if output_dxf.suffix.lower() != ".dxf":
+        raise CommandError("Dimension Pilot output-dxf must be a .dxf file")
+    if output_evidence.suffix.lower() != ".json":
+        raise CommandError("Dimension Pilot output-evidence must be a .json file")
+    for label, path in (
+        ("output-dxf", output_dxf),
+        ("output-evidence", output_evidence),
+    ):
+        if path.exists():
+            raise CommandError(f"Dimension Pilot {label} already exists: {path}")
+
+    repository = Path(__file__).resolve().parents[1]
+    if _is_within(output_dxf, repository) or _is_within(
+        output_evidence,
+        repository,
+    ):
+        raise CommandError("Dimension Pilot outputs must remain outside the repository")
+
+    plan = read_dimension_contract(inputs["plan"], contract="plan")
+    setup_plan = read_contract(
+        inputs["setup plan"],
+        contract="drawing_setup_plan",
+    )
+    setup_evidence = read_contract(
+        inputs["setup evidence"],
+        contract="drawing_setup_evidence",
+    )
+    run = run_dimension_pilot(
+        plan=plan,
+        setup_plan=setup_plan,
+        setup_evidence=setup_evidence,
+        source_path=inputs["source"],
+        primitive_ir_path=inputs["Primitive IR"],
+        semantic_ir_path=inputs["Semantic IR"],
+        output_dxf=output_dxf,
+    )
+    write_dimension_evidence(output_evidence, run.evidence)
+    if run.evidence["offline_passed"] is True:
+        print("cad_agent: dimension pilot OFFLINE PASS; acceptance=NOT_RUN")
+        return 0
+
+    codes = sorted(
+        {
+            str(item["code"])
+            for item in run.evidence["blockers"]
+            if isinstance(item, dict) and "code" in item
+        }
+    )
+    print(
+        "cad_agent: dimension pilot BLOCKED; acceptance=NOT_RUN; "
+        f"blockers={','.join(codes)}",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def _fidelity_pdf_command(args: argparse.Namespace) -> int:
     from .fidelity import FIDELITY_MANIFEST_NAME, new_fidelity_manifest, run_fidelity_pdf
 
@@ -760,6 +843,21 @@ def build_parser() -> argparse.ArgumentParser:
     drawing_setup_verify.add_argument("--verified-by", required=True)
     drawing_setup_verify.add_argument("--approval-reference", required=True)
     drawing_setup_verify.add_argument("--output", type=Path, required=True)
+    dimension_pilot = subcommands.add_parser(
+        "dimension-pilot-run",
+        help="Build and measure a hash-bound offline linear-dimension candidate",
+    )
+    for name in (
+        "plan",
+        "setup-plan",
+        "setup-evidence",
+        "source",
+        "primitive-ir",
+        "semantic-ir",
+        "output-dxf",
+        "output-evidence",
+    ):
+        dimension_pilot.add_argument(f"--{name}", type=Path, required=True)
     fidelity_pdf = subcommands.add_parser("fidelity-pdf", help="Create a private clean paper-coordinate PDF layout baseline")
     fidelity_pdf.add_argument("--input", type=Path, required=True)
     fidelity_pdf.add_argument("--output-dir", type=Path, required=True)
@@ -925,6 +1023,8 @@ def main(argv: list[str] | None = None) -> int:
             return _drawing_setup_audit_command(args)
         if args.command == "drawing-setup-verify":
             return _drawing_setup_verify_command(args)
+        if args.command == "dimension-pilot-run":
+            return _dimension_pilot_command(args)
         if args.command == "fidelity-pdf":
             return _fidelity_pdf_command(args)
         if args.command == "fidelity-overlay":

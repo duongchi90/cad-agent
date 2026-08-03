@@ -281,3 +281,25 @@ def write_dimension_pilot_inputs(
         output_dxf=root / "dimension-pilot.dxf",
         output_evidence=root / "dimension-pilot-evidence.json",
     )
+
+
+def dimension_pilot_cli_args(inputs: SimpleNamespace) -> list[str]:
+    return [
+        "dimension-pilot-run",
+        "--plan",
+        str(inputs.plan_path),
+        "--setup-plan",
+        str(inputs.setup_plan_path),
+        "--setup-evidence",
+        str(inputs.setup_evidence_path),
+        "--source",
+        str(inputs.source),
+        "--primitive-ir",
+        str(inputs.primitive_ir),
+        "--semantic-ir",
+        str(inputs.semantic_ir),
+        "--output-dxf",
+        str(inputs.output_dxf),
+        "--output-evidence",
+        str(inputs.output_evidence),
+    ]
