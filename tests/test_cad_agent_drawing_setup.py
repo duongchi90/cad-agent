@@ -191,16 +191,14 @@ def test_create_setup_plan_rejects_missing_non_regular_and_wrong_extension_templ
         _create_plan(run_id="RUN-20260803-008", definition=definition, profile=profile, domain_pack=domain_pack, template_manifest=template_manifest, template_file=wrong_extension)
 
 
-def test_create_setup_plan_rejects_symlinked_template(tmp_path: Path) -> None:
+def test_create_setup_plan_rejects_symlinked_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     definition, profile, domain_pack, template_manifest, template_file = _approved_mappings(tmp_path)
-    symlink = tmp_path / "linked-template.dwt"
-    try:
-        symlink.symlink_to(template_file)
-    except OSError as exc:
-        pytest.skip(f"symlink creation unavailable: {exc}")
+    monkeypatch.setattr(Path, "is_symlink", lambda _: True)
 
     with pytest.raises(DrawingSetupError, match="regular file"):
-        _create_plan(run_id="RUN-20260803-009", definition=definition, profile=profile, domain_pack=domain_pack, template_manifest=template_manifest, template_file=symlink)
+        _create_plan(run_id="RUN-20260803-009", definition=definition, profile=profile, domain_pack=domain_pack, template_manifest=template_manifest, template_file=template_file)
 
 
 @pytest.mark.parametrize("field", ["file_sha256", "drawing_profile_sha256", "embedded_settings_sha256"])
