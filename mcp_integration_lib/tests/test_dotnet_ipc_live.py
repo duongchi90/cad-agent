@@ -268,6 +268,45 @@ class DisposableCleanupTests(unittest.TestCase):
 )
 @pytest.mark.autocad_mechanical
 class DotNetIPCLiveSmokeTests(unittest.TestCase):
+    def test_live_drawing_setup_audit_is_read_only_and_deterministic(self) -> None:
+        drawing = Path(os.environ["CAD_AGENT_M2_DISPOSABLE_DWG"])
+        before = _sha256(drawing)
+        hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
+        dotnet_client = DotNetIPCClient(
+            ipc_dir=r"C:\temp",
+            trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+            timeout_s=30.0,
+        )
+        expected_full_path = normalize_windows_absolute_path(str(drawing))
+        audit_request_id = "m2-live-setup-audit"
+
+        audit = dotnet_client.drawing_setup_audit(
+            expected_full_path,
+            drawing_sha256=before,
+            request_id=audit_request_id,
+        )
+
+        self.assertTrue(audit["success"])
+        self.assertFalse(audit["changed"])
+        self.assertEqual(
+            audit["payload"]["dbmod_before"],
+            audit["payload"]["dbmod_after"],
+        )
+        self.assertEqual(expected_full_path, audit["drawing_full_path"])
+        self.assertEqual(before, _sha256(drawing))
+        self.assertFalse(request_path(dotnet_client.ipc_dir, audit_request_id).exists())
+        self.assertFalse(result_path(dotnet_client.ipc_dir, audit_request_id).exists())
+
+        close = dotnet_client.close_disposable(
+            expected_full_path,
+            disposable=True,
+            save_changes=False,
+            request_id="m2-live-setup-audit-close",
+        )
+        self.assertTrue(close["success"])
+        self.assertTrue(close["payload"]["closed_without_saving"])
+        self.assertEqual(before, _sha256(drawing))
+
     def test_disposable_dxf_uses_dotnet_mechanical_bom_health_review_and_close(self) -> None:
         test_directory = Path(tempfile.mkdtemp(prefix="cad_agent_dotnet_live_", dir=r"C:\temp"))
         drawing_path = test_directory / "dotnet_live.dxf"
