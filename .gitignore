@@ -41,3 +41,8 @@ autocad_plugin/**/bin/
 autocad_plugin/**/obj/
 autocad_plugin/**/*.dll
 autocad_plugin/**/*.pdb
+
+# Local AutoCAD inspection scratch files
+_tmp_*.lsp
+_tmp_*.scr
+_tmp_*.py
