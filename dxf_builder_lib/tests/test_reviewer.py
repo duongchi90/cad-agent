@@ -14,13 +14,15 @@ from __future__ import annotations
 import os
 import tempfile
 
+import pytest
+
 from primitive_ir_lib.models import (
     Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
     PrimitiveIRDocument, SourceDocument, Trace,
 )
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
 
-from dxf_builder_lib.builder import BuildResult, build_dxf
+from dxf_builder_lib.builder import BuildResult, NativeLinearDimensionSpec, build_dxf
 from dxf_builder_lib.reviewer import ComponentMismatch, review_dxf
 
 try:
@@ -173,6 +175,27 @@ def test_review_flags_layer_mismatch():
         assert not review_result.passed
         assert any("layer" in m for m in review_result.mismatches)
     print("OK   test_review_flags_layer_mismatch")
+
+
+def test_readback_rejects_geometry_outside_approved_tolerance():
+    document = _doc(_line("line-1", 0, 0, 81, 0))
+    spec = NativeLinearDimensionSpec("DIM-001", "line-1", 80.0, "PILOT-001")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        built = build_dxf(
+            document,
+            os.path.join(tmp, "pilot.dxf"),
+            build_dimensions=True,
+            dimension_specs=[spec],
+        )
+        review = review_dxf(built, tolerance_mm=0.1)
+
+        assert not review.passed
+        assert review.dimension_measurement_by_id["DIM-001"] == pytest.approx(81.0)
+        assert any(
+            "approved measurement" in item
+            for item in review.dimension_mismatches
+        )
 
 
 # ===================================================== INSERT round-trip ==
@@ -452,6 +475,7 @@ _TESTS = [
     test_review_flags_handle_not_found_after_tamper,
     test_review_flags_geometry_mismatch_after_manual_dxf_edit,
     test_review_flags_layer_mismatch,
+    test_readback_rejects_geometry_outside_approved_tolerance,
     # INSERT round-trip (Reviewer #1 mở rộng)
     test_review_insert_passes_on_correctly_built_component,
     test_review_flags_insert_handle_not_found_after_tamper,

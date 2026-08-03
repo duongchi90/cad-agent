@@ -77,6 +77,7 @@ class ReviewResult:
     component_mismatches: List[ComponentMismatch] = field(default_factory=list)
     dimension_checked_count: int = 0
     dimension_mismatches: List[str] = field(default_factory=list)
+    dimension_measurement_by_id: Dict[str, float] = field(default_factory=dict)
 
     def format_report(self) -> str:
         """Report lỗi có cấu trúc, gom theo part_id — dùng khi debug thủ
@@ -243,6 +244,7 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
     component_checked = 0
     dimension_mismatches: List[str] = []
     dimension_checked = 0
+    dimension_measurement_by_id: Dict[str, float] = {}
 
     actual_dimension_count = sum(
         1 for entity in doc.modelspace() if entity.dxftype() == "DIMENSION"
@@ -281,10 +283,17 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
                 f"actual {entity.dxf.layer!r}"
             )
         measurement = float(entity.get_measurement())
+        dimension_measurement_by_id[validation_id] = measurement
         if abs(measurement - float(expected["measurement"])) > tolerance_mm:
             dimension_mismatches.append(
                 f"{validation_id}: expected measurement "
                 f"{expected['measurement']}, actual {measurement}"
+            )
+        approved = expected.get("approved_value_mm")
+        if approved is not None and abs(measurement - float(approved)) > tolerance_mm:
+            dimension_mismatches.append(
+                f"{validation_id}: approved measurement {approved}, "
+                f"actual {measurement}, tolerance {tolerance_mm}"
             )
 
     for part_id, handle in build_result.component_handle_by_part_id.items():
@@ -410,4 +419,5 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
         component_mismatches=component_mismatches,
         dimension_checked_count=dimension_checked,
         dimension_mismatches=dimension_mismatches,
+        dimension_measurement_by_id=dimension_measurement_by_id,
     )
