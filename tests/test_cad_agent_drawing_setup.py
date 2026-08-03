@@ -157,7 +157,7 @@ def test_create_setup_plan_rejects_invalid_run_id(tmp_path: Path, run_id: object
         )
 
 
-@pytest.mark.parametrize("release_profile", ["DRAFT", "", None])
+@pytest.mark.parametrize("release_profile", ["DRAFT", "", None, [], {}])
 def test_create_setup_plan_requires_an_accepted_release_profile(
     tmp_path: Path, release_profile: object
 ) -> None:

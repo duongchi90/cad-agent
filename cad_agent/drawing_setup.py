@@ -143,7 +143,8 @@ def create_setup_plan(
 
     definition_domain = _value(definition, "domain", "definition")
     definition_type = _value(definition, "drawing_type", "definition")
-    if _value(definition, "release_profile", "definition") not in _ACCEPTED_RELEASE_PROFILES:
+    release_profile = _value(definition, "release_profile", "definition")
+    if not isinstance(release_profile, str) or release_profile not in _ACCEPTED_RELEASE_PROFILES:
         raise _fail("definition release profile is not accepted")
     if not _contains(_value(profile, "supported_domains", "drawing profile"), definition_domain, "drawing profile"):
         raise _fail("definition domain is not supported by the approved drawing profile")
