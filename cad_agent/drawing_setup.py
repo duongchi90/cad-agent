@@ -304,6 +304,13 @@ def evaluate_setup_plan(
         if key not in actual_variables or actual != expected:
             _add_setup_blocker(blockers, "setup_incomplete", f"variables.{key}", expected, actual)
 
+    expected_current_layer = expectations.get("current_layer")
+    actual_current_layer = audit.get("current_layer")
+    if not isinstance(expected_current_layer, str):
+        _add_setup_blocker(blockers, "profile_missing", "setup_expectations.current_layer", "string", expected_current_layer)
+    elif actual_current_layer != expected_current_layer:
+        _add_setup_blocker(blockers, "setup_incomplete", "current_layer", expected_current_layer, actual_current_layer)
+
     expected_layer_list = expectations.get("required_layers")
     actual_layer_list = audit.get("layers")
     if not isinstance(expected_layer_list, list):

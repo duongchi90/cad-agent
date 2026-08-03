@@ -419,6 +419,27 @@ def test_require_setup_verified_rejects_stale_bound_hash() -> None:
         )
 
 
+def test_setup_mismatch_returns_needs_review_when_current_layer_differs() -> None:
+    from drawing_setup_fixtures import approved_setup_plan, matching_setup_audit
+
+    plan = approved_setup_plan()
+    audit = matching_setup_audit(plan)
+    audit["current_layer"] = "WRONG_LAYER"
+
+    evidence = evaluate_setup_plan(
+        plan,
+        audit,
+        verified_by="ENGINEER",
+        approval_reference="M2-LIVE-001",
+    )
+
+    assert evidence["status"] == "NEEDS_REVIEW"
+    assert any(
+        item["code"] == "setup_incomplete" and item["path"] == "current_layer"
+        for item in evidence["blockers"]
+    )
+
+
 @pytest.mark.parametrize(
     ("mutation", "code"),
     [
