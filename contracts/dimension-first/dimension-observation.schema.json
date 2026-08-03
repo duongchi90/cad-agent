@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "value", "unit", "kind", "view_id", "from_ref", "to_ref", "role", "status", "provenance", "source_refs", "confidence", "tolerance_mm", "approval"],
+  "properties": {
+    "schema_version": {"const": "dimension-observation-1.0"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "value": {"type": "number", "exclusiveMinimum": 0},
+    "unit": {"enum": ["mm", "cm", "m", "in"]},
+    "kind": {"enum": ["horizontal_distance", "vertical_distance", "aligned_distance", "angular", "radial", "diameter", "chain", "baseline", "ordinate"]},
+    "view_id": {"type": "string", "minLength": 1},
+    "from_ref": {"type": "string", "minLength": 1},
+    "to_ref": {"type": "string", "minLength": 1},
+    "role": {"enum": ["driving", "reference", "inspection"]},
+    "status": {"enum": ["CANDIDATE", "APPROVED", "REJECTED", "UNRESOLVED"]},
+    "provenance": {"type": "string", "minLength": 1},
+    "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "tolerance_mm": {"type": "number", "minimum": 0},
+    "approval": {"type": "object", "additionalProperties": false, "required": ["approved_by", "reference"], "properties": {"approved_by": {"type": "string", "minLength": 1}, "reference": {"type": "string", "minLength": 1}}}
+  }
+}

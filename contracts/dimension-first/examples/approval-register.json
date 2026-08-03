@@ -1,0 +1,12 @@
+{
+  "schema_version": "approval-register-1.0",
+  "setup_evidence_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "dimensions_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "datums_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "constraints_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "approval_reference": "M3-FIXTURE-001",
+  "approved_by": "ENGINEER",
+  "approved_ids": ["DIM-001", "DATUM-LEFT", "CON-001"],
+  "rejected_ids": [],
+  "policy_version": "dimension-first-policy-1.0"
+}

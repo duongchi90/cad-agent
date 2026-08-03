@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "setup_evidence_sha256", "dimensions_sha256", "datums_sha256", "constraints_sha256", "approval_reference", "approved_by", "approved_ids", "rejected_ids", "policy_version"],
+  "properties": {
+    "schema_version": {"const": "approval-register-1.0"},
+    "setup_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "dimensions_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "datums_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "constraints_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "approval_reference": {"type": "string", "minLength": 1},
+    "approved_by": {"type": "string", "minLength": 1},
+    "approved_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "rejected_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "policy_version": {"type": "string", "minLength": 1}
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "model_id", "setup_evidence_sha256", "dimensions_sha256", "datums_sha256", "constraints_sha256", "solved_views"],
+  "properties": {
+    "schema_version": {"const": "solved-drawing-model-1.0"},
+    "model_id": {"type": "string", "minLength": 1},
+    "setup_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "dimensions_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "datums_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "constraints_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "solved_views": {"type": "object", "additionalProperties": {"type": "object"}}
+  }
+}

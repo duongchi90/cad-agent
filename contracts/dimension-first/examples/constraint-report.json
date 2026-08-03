@@ -1,0 +1,13 @@
+{
+  "schema_version": "constraint-report-1.0",
+  "model_id": "MODEL-FIXTURE-001",
+  "status": "SOLVED",
+  "setup_evidence_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "dimensions_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "datums_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "constraints_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "degrees_of_freedom": {"SIDE": 0},
+  "constraints": [{"id": "CON-001", "status": "SATISFIED", "residual_mm": 0.0, "tolerance_mm": 0.01, "conflict_set": []}],
+  "blockers": [],
+  "max_residual_mm": 0.0
+}

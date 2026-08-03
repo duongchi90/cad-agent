@@ -1,0 +1,17 @@
+{
+  "schema_version": "dimension-observation-1.0",
+  "id": "DIM-001",
+  "value": 500.0,
+  "unit": "mm",
+  "kind": "horizontal_distance",
+  "view_id": "SIDE",
+  "from_ref": "datum:DATUM-LEFT",
+  "to_ref": "datum:DATUM-RIGHT",
+  "role": "driving",
+  "status": "APPROVED",
+  "provenance": "MANUAL_APPROVED",
+  "source_refs": ["SRC-FIXTURE-001"],
+  "confidence": 1.0,
+  "tolerance_mm": 0.1,
+  "approval": {"approved_by": "ENGINEER", "reference": "M3-FIXTURE-001"}
+}

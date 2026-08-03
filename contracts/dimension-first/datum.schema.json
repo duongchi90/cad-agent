@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "kind", "view_id", "coordinate_role", "entity_ref", "source_refs", "status", "provenance", "approval"],
+  "properties": {
+    "schema_version": {"const": "datum-1.0"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "kind": {"enum": ["NAMED_POINT", "NAMED_AXIS", "CENTERLINE", "LEVEL", "ORIGIN"]},
+    "view_id": {"type": "string", "minLength": 1},
+    "coordinate_role": {"enum": ["X_ORIGIN", "Y_ORIGIN", "X_AXIS", "Y_AXIS", "REFERENCE"]},
+    "entity_ref": {"type": "string", "minLength": 1},
+    "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "status": {"enum": ["CANDIDATE", "APPROVED", "REJECTED", "UNRESOLVED"]},
+    "provenance": {"type": "string", "minLength": 1},
+    "approval": {"type": "object", "additionalProperties": false, "required": ["approved_by", "reference"], "properties": {"approved_by": {"type": "string", "minLength": 1}, "reference": {"type": "string", "minLength": 1}}}
+  }
+}

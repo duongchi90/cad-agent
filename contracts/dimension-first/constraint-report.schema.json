@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "model_id", "status", "setup_evidence_sha256", "dimensions_sha256", "datums_sha256", "constraints_sha256", "degrees_of_freedom", "constraints", "blockers", "max_residual_mm"],
+  "properties": {
+    "schema_version": {"const": "constraint-report-1.0"},
+    "model_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["SOLVED", "UNDERCONSTRAINED", "OVERCONSTRAINED", "CONFLICT", "NON_CONVERGENT", "NEEDS_REVIEW"]},
+    "setup_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "dimensions_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "datums_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "constraints_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "degrees_of_freedom": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "constraints": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["id", "status", "residual_mm", "tolerance_mm", "conflict_set"], "properties": {"id": {"type": "string"}, "status": {"type": "string"}, "residual_mm": {"type": "number"}, "tolerance_mm": {"type": "number", "minimum": 0}, "conflict_set": {"type": "array", "items": {"type": "string"}}}}},
+    "blockers": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["code", "path", "expected", "actual", "severity"], "properties": {"code": {"type": "string"}, "path": {"type": "string"}, "expected": {}, "actual": {}, "severity": {"enum": ["P0", "P1", "P2", "P3"]}}}},
+    "max_residual_mm": {"type": "number", "minimum": 0}
+  }
+}

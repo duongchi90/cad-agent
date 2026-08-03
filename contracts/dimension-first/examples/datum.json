@@ -1,0 +1,12 @@
+{
+  "schema_version": "datum-1.0",
+  "id": "DATUM-LEFT",
+  "kind": "NAMED_POINT",
+  "view_id": "SIDE",
+  "coordinate_role": "X_ORIGIN",
+  "entity_ref": "primitive:line-001:start",
+  "source_refs": ["SRC-FIXTURE-001"],
+  "status": "APPROVED",
+  "provenance": "MANUAL_APPROVED",
+  "approval": {"approved_by": "ENGINEER", "reference": "M3-FIXTURE-001"}
+}

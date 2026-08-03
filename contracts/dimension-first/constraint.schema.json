@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "kind", "refs", "tolerance_mm", "source_refs", "provenance", "status", "approval"],
+  "properties": {
+    "schema_version": {"const": "constraint-1.0"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "kind": {"enum": ["coincident", "horizontal", "vertical", "parallel", "perpendicular", "collinear", "equal_length", "distance", "angle", "radius", "diameter", "chain", "baseline", "ordinate"]},
+    "refs": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 1}},
+    "value": {"type": "number"},
+    "unit": {"enum": ["mm", "cm", "m", "in", "deg"]},
+    "tolerance_mm": {"type": "number", "minimum": 0},
+    "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "provenance": {"type": "string", "minLength": 1},
+    "status": {"enum": ["CANDIDATE", "APPROVED", "REJECTED", "UNRESOLVED"]},
+    "approval": {"type": "object", "additionalProperties": false, "required": ["approved_by", "reference"], "properties": {"approved_by": {"type": "string", "minLength": 1}, "reference": {"type": "string", "minLength": 1}}}
+  }
+}

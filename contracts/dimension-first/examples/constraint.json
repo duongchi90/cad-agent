@@ -1,0 +1,11 @@
+{
+  "schema_version": "constraint-1.0",
+  "id": "CON-001",
+  "kind": "parallel",
+  "refs": ["primitive:line-001", "primitive:line-002"],
+  "tolerance_mm": 0.01,
+  "source_refs": ["SRC-FIXTURE-001"],
+  "provenance": "MANUAL_APPROVED",
+  "status": "APPROVED",
+  "approval": {"approved_by": "ENGINEER", "reference": "M3-FIXTURE-001"}
+}
