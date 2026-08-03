@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from cad_agent.drawing_contracts import canonical_json_sha256, read_contract
+from cad_agent.cli import main
 from cad_agent.drawing_setup import DrawingSetupError, create_setup_plan
 from drawing_setup_fixtures import write_approved_setup_inputs
 
@@ -216,3 +217,21 @@ def test_create_setup_plan_surfaces_malformed_prevalidated_mapping_values(tmp_pa
 
     with pytest.raises(DrawingSetupError, match="profile"):
         _create_plan(run_id="RUN-20260803-011", definition=definition, profile=profile, domain_pack=domain_pack, template_manifest=template_manifest, template_file=template_file)
+
+
+def test_drawing_setup_plan_cli_writes_pending_plan(tmp_path: Path) -> None:
+    paths = write_approved_setup_inputs(tmp_path)
+    output = tmp_path / "drawing-setup-plan.json"
+
+    assert main([
+        "drawing-setup-plan",
+        "--run-id", "RUN-20260802-001",
+        "--definition", str(paths.definition),
+        "--profile", str(paths.profile),
+        "--domain-pack", str(paths.domain_pack),
+        "--template-manifest", str(paths.template_manifest),
+        "--template-file", str(paths.template_file),
+        "--output", str(output),
+    ]) == 0
+
+    assert json.loads(output.read_text(encoding="utf-8"))["state"] == "SETUP_PENDING"
