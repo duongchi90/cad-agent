@@ -253,6 +253,24 @@ def test_primitive_ir_change_during_load_is_refused(
     assert run.build_result is None
 
 
+def test_ir_loader_receives_immutable_snapshots(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs = write_dimension_pilot_inputs(tmp_path)
+    original_load = dimension_pilot._load_models
+
+    def assert_bytes_then_load(primitive_payload, semantic_payload):
+        assert isinstance(primitive_payload, bytes)
+        assert isinstance(semantic_payload, bytes)
+        return original_load(primitive_payload, semantic_payload)
+
+    monkeypatch.setattr(dimension_pilot, "_load_models", assert_bytes_then_load)
+    run = run_with(inputs)
+
+    assert run.evidence["offline_passed"] is True
+
+
 def test_semantic_ir_change_during_load_is_refused(
     tmp_path: Path,
     monkeypatch,
@@ -316,6 +334,25 @@ def test_dxf_publish_refuses_a_concurrent_destination(
     with pytest.raises(DimensionPilotError, match="already exists"):
         run_with(inputs)
     assert inputs.output_dxf.read_bytes() == b"sentinel"
+
+
+def test_dxf_changed_after_review_hash_cannot_receive_offline_pass(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs = write_dimension_pilot_inputs(tmp_path)
+    original_rename = dimension_pilot.os.rename
+
+    def tamper_then_publish(source, destination):
+        Path(source).write_bytes(b"tampered-after-review-hash")
+        return original_rename(source, destination)
+
+    monkeypatch.setattr(dimension_pilot.os, "rename", tamper_then_publish)
+
+    with pytest.raises(DimensionPilotError, match="published DXF changed"):
+        run_with(inputs)
+    assert not inputs.output_dxf.exists()
+
 
     inputs = write_dimension_pilot_inputs(tmp_path / "conflict", conflicting=True)
     run = run_with(inputs)

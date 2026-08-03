@@ -7,7 +7,6 @@ import hashlib
 import json
 import math
 import os
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,8 +19,8 @@ from semantic_ir_lib.constraint_solving import (
     solve_constraints,
 )
 from semantic_ir_lib.io_utils import (
-    load_primitive_ir_document,
-    load_semantic_ir_document,
+    load_primitive_ir_document_bytes,
+    load_semantic_ir_document_bytes,
 )
 
 from dxf_builder_lib.builder import (
@@ -160,32 +159,16 @@ def _file_hash(path: Path, *, label: str) -> str:
         raise DimensionPilotError(f"Cannot hash {label}: {path}") from exc
 
 
-def _snapshot_file(path: Path, *, label: str) -> tuple[Path, str]:
-    """Read, hash, and stage one immutable input byte stream for loading."""
+def _snapshot_file(path: Path, *, label: str) -> tuple[bytes, str]:
+    """Read and hash one immutable input byte stream for loading."""
     try:
         payload = path.read_bytes()
     except OSError as exc:
         raise DimensionPilotError(f"Cannot snapshot {label}: {path}") from exc
-    digest = hashlib.sha256(payload).hexdigest()
-    try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix="cad-agent-dimension-",
-            suffix=".json",
-        )
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-    except OSError as exc:
-        try:
-            Path(temporary_name).unlink()
-        except (OSError, UnboundLocalError):
-            pass
-        raise DimensionPilotError(f"Cannot stage {label}: {path}") from exc
-    return Path(temporary_name), digest
+    return payload, hashlib.sha256(payload).hexdigest()
 
 
-def _cleanup_snapshot(path: Path | None) -> None:
-    if path is None:
-        return
+def _cleanup_path(path: Path) -> None:
     try:
         path.unlink()
     except OSError:
@@ -237,13 +220,13 @@ def _mapping_hash(value: Mapping[str, object], *, label: str) -> str:
 
 
 def _load_models(
-    primitive_ir_path: Path,
-    semantic_ir_path: Path,
+    primitive_ir_payload: bytes,
+    semantic_ir_payload: bytes,
 ) -> tuple[PrimitiveIRDocument, object]:
     try:
         return (
-            load_primitive_ir_document(str(primitive_ir_path)),
-            load_semantic_ir_document(str(semantic_ir_path)),
+            load_primitive_ir_document_bytes(primitive_ir_payload),
+            load_semantic_ir_document_bytes(semantic_ir_payload),
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise DimensionPilotError("Cannot load validated Primitive/Semantic IR") from exc
@@ -360,21 +343,14 @@ def run_dimension_pilot(
         label="Drawing Setup evidence",
     )
     source_hash = _file_hash(source_path, label="source")
-    primitive_snapshot: Path | None = None
-    semantic_snapshot: Path | None = None
-    try:
-        primitive_snapshot, primitive_hash = _snapshot_file(
-            primitive_ir_path,
-            label="Primitive IR",
-        )
-        semantic_snapshot, semantic_hash = _snapshot_file(
-            semantic_ir_path,
-            label="Semantic IR",
-        )
-    except DimensionPilotError:
-        _cleanup_snapshot(primitive_snapshot)
-        _cleanup_snapshot(semantic_snapshot)
-        raise
+    primitive_payload, primitive_hash = _snapshot_file(
+        primitive_ir_path,
+        label="Primitive IR",
+    )
+    semantic_payload, semantic_hash = _snapshot_file(
+        semantic_ir_path,
+        label="Semantic IR",
+    )
     evidence = _evidence_base(
         plan=validated_plan,
         plan_sha256=plan_hash,
@@ -397,8 +373,6 @@ def run_dimension_pilot(
         if expected != actual:
             blockers.append(_blocker(code, path, expected, actual))
     if blockers:
-        _cleanup_snapshot(primitive_snapshot)
-        _cleanup_snapshot(semantic_snapshot)
         return _finish_blocked(evidence, blockers)
 
     try:
@@ -409,20 +383,12 @@ def run_dimension_pilot(
             template_file_sha256=setup["template_file_sha256"],
         )
     except DrawingSetupError:
-        _cleanup_snapshot(primitive_snapshot)
-        _cleanup_snapshot(semantic_snapshot)
         return _finish_blocked(evidence, _setup_blockers(setup_evidence))
 
-    try:
-        primitive_document, semantic_document = _load_models(
-            primitive_snapshot,
-            semantic_snapshot,
-        )
-    finally:
-        _cleanup_snapshot(primitive_snapshot)
-        _cleanup_snapshot(semantic_snapshot)
-    primitive_snapshot = None
-    semantic_snapshot = None
+    primitive_document, semantic_document = _load_models(
+        primitive_payload,
+        semantic_payload,
+    )
     blockers.extend(
         _artifact_change_blockers(
             source_path=source_path,
@@ -701,18 +667,14 @@ def run_dimension_pilot(
             build_dimensions=True,
             dimension_specs=dimension_specs,
         )
-        dxf_hash_before_review = _file_hash(
-            temporary_dxf,
-            label="temporary output DXF",
-        )
+        dxf_bytes_before_review = temporary_dxf.read_bytes()
+        dxf_hash_before_review = hashlib.sha256(dxf_bytes_before_review).hexdigest()
         review = review_dxf(built, tolerance_mm=tolerance)
-        dxf_hash_after_review = _file_hash(
-            temporary_dxf,
-            label="temporary output DXF",
-        )
+        dxf_bytes_after_review = temporary_dxf.read_bytes()
+        dxf_hash_after_review = hashlib.sha256(dxf_bytes_after_review).hexdigest()
     except (OSError, ValueError) as exc:
         if temporary_created:
-            _cleanup_snapshot(temporary_dxf)
+            _cleanup_path(temporary_dxf)
         raise DimensionPilotError("Dimension Pilot DXF build failed") from exc
 
     measurements: list[dict[str, object]] = []
@@ -764,27 +726,35 @@ def run_dimension_pilot(
         )
     )
     if blockers:
-        _cleanup_snapshot(temporary_dxf)
+        _cleanup_path(temporary_dxf)
         return _finish_blocked(evidence, blockers, build_result=built)
 
     if output_dxf.exists():
-        _cleanup_snapshot(temporary_dxf)
+        _cleanup_path(temporary_dxf)
         raise DimensionPilotError(f"Output already exists: {output_dxf}")
     try:
         os.rename(temporary_dxf, output_dxf)
     except FileExistsError as exc:
-        _cleanup_snapshot(temporary_dxf)
+        _cleanup_path(temporary_dxf)
         raise DimensionPilotError(f"Output already exists: {output_dxf}") from exc
     except OSError as exc:
-        _cleanup_snapshot(temporary_dxf)
+        _cleanup_path(temporary_dxf)
         raise DimensionPilotError(
             f"Output already exists or could not be published: {output_dxf}"
         ) from exc
     temporary_created = False
+    try:
+        published_hash = _file_hash(output_dxf, label="published output DXF")
+    except DimensionPilotError as exc:
+        _cleanup_path(output_dxf)
+        raise DimensionPilotError("Cannot verify published DXF") from exc
+    if published_hash != dxf_hash_after_review:
+        _cleanup_path(output_dxf)
+        raise DimensionPilotError("published DXF changed after review")
     built.output_path = str(output_dxf)
 
     evidence["offline_passed"] = True
-    evidence["dxf_sha256"] = dxf_hash_after_review
+    evidence["dxf_sha256"] = published_hash
     evidence["blockers"] = []
     try:
         validated_evidence = validate_dimension_evidence(evidence)
