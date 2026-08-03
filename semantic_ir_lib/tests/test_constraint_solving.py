@@ -16,7 +16,11 @@ from primitive_ir_lib.models import (
     SourceDocument, Trace,
 )
 
-from semantic_ir_lib.constraint_solving import solve_constraints
+from semantic_ir_lib.constraint_solving import (
+    DatumAnchor,
+    DrivingLengthConstraint,
+    solve_constraints,
+)
 from semantic_ir_lib.models import Constraint
 
 try:
@@ -165,6 +169,99 @@ def test_solver_capacity_guard_skips_construction_for_more_than_1000_unknowns(mo
     assert result.applied_constraint_count == 0
 
 
+def test_driving_length_and_datum_anchor_close_one_line_model():
+    line = _line("line-1", 0, 0, 100, 0)
+
+    result = solve_constraints(
+        _doc(line),
+        [],
+        driving_lengths=[
+            DrivingLengthConstraint(
+                id="DIM-001",
+                primitive_id="line-1",
+                value_mm=80.0,
+            )
+        ],
+        datum_anchor=DatumAnchor(
+            id="DATUM-001",
+            origin_primitive_id="line-1",
+            origin_endpoint="start",
+            x_axis_primitive_id="line-1",
+        ),
+    )
+
+    solved = result.solved_primitives["line-1"]
+    assert result.status == "okay"
+    assert result.dof == 6
+    assert result.model_dof == 0
+    assert result.applied_driving_length_count == 1
+    assert result.driving_length_residual_mm == {"DIM-001": 0.0}
+    assert math.hypot(
+        solved.end.x - solved.start.x,
+        solved.end.y - solved.start.y,
+    ) == pytest.approx(80.0)
+
+
+def test_two_conflicting_driving_lengths_report_both_ids():
+    line = _line("line-1", 0, 0, 100, 0)
+
+    result = solve_constraints(
+        _doc(line),
+        [],
+        driving_lengths=[
+            DrivingLengthConstraint("DIM-080", "line-1", 80.0),
+            DrivingLengthConstraint("DIM-100", "line-1", 100.0),
+        ],
+        datum_anchor=DatumAnchor(
+            "DATUM-001",
+            "line-1",
+            "start",
+            "line-1",
+        ),
+    )
+
+    assert result.status == "inconsistent"
+    assert {"DIM-080", "DIM-100"} <= set(result.conflict_constraint_ids)
+
+
+def test_disconnected_driven_line_remains_underconstrained():
+    lines = [
+        _line("line-1", 0, 0, 80, 0),
+        _line("line-2", 0, 20, 40, 20),
+    ]
+
+    result = solve_constraints(
+        _doc(*lines),
+        [],
+        driving_lengths=[
+            DrivingLengthConstraint("DIM-001", "line-1", 80.0),
+            DrivingLengthConstraint("DIM-002", "line-2", 40.0),
+        ],
+        datum_anchor=DatumAnchor(
+            "DATUM-001",
+            "line-1",
+            "start",
+            "line-1",
+        ),
+    )
+
+    assert result.status == "okay"
+    assert result.model_dof is not None
+    assert result.model_dof > 0
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
+def test_driving_length_rejects_nonpositive_or_nonfinite_value(value):
+    with pytest.raises(ValueError, match="finite positive"):
+        solve_constraints(
+            _doc(_line("line-1", 0, 0, 100, 0)),
+            [],
+            driving_lengths=[
+                DrivingLengthConstraint("DIM-001", "line-1", value)
+            ],
+        )
+
+
 _TESTS = [
     test_parallel_constraint_makes_lines_exactly_parallel,
     test_perpendicular_constraint_enforced,
@@ -174,6 +271,9 @@ _TESTS = [
     test_unsupported_and_missing_primitive_constraints_are_skipped,
     test_empty_constraints_solves_trivially_with_zero_relevant_primitives,
     test_solver_capacity_guard_skips_construction_for_more_than_1000_unknowns,
+    test_driving_length_and_datum_anchor_close_one_line_model,
+    test_two_conflicting_driving_lengths_report_both_ids,
+    test_disconnected_driven_line_remains_underconstrained,
 ]
 
 
