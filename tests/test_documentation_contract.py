@@ -89,8 +89,15 @@ class DocumentationContractTests(unittest.TestCase):
             self.assertIn(plan, content, f"{plan!r} missing from {path}")
 
         project = documents["docs/PROJECT.md"]
+        normalized_project = " ".join(project.split())
         self.assertIn("Drawing Initialization Gate", project)
         self.assertIn("configurable", project)
+        self.assertIn(
+            "The existing image/PDF pipeline remains `DRAFT_REFERENCE`; it cannot "
+            "become authoritative until a separate dimension-first path presents "
+            "hash-bound `SETUP_VERIFIED` evidence.",
+            normalized_project,
+        )
 
         architecture = documents["docs/ARCHITECTURE.md"]
         normalized_architecture = " ".join(architecture.split())
@@ -104,12 +111,32 @@ class DocumentationContractTests(unittest.TestCase):
         )
 
         status = documents["docs/STATUS.md"]
-        self.assertIn("1969dc9", status)
-        self.assertIn("2b7a756", status)
-        self.assertIn("Executing", status)
-        self.assertIn("SETUP_VERIFIED", status)
-        self.assertIn("NOT RUN", status)
-        self.assertIn("SKIP", status)
+        m2_status = status.split("## M2 Drawing Initialization Gate", 1)[1].split(
+            "## AutoCAD .NET plugin", 1
+        )[0]
+        normalized_m2_status = " ".join(m2_status.split())
+        self.assertIn("1969dc9", m2_status)
+        self.assertIn("2b7a756", m2_status)
+        self.assertIn(
+            "State: **Executing**. The approved M0-M8 rollout merged at `1969dc9`",
+            normalized_m2_status,
+        )
+        self.assertIn(
+            "Full M2 is still executing and has not produced `SETUP_VERIFIED` "
+            "acceptance.",
+            normalized_m2_status,
+        )
+        self.assertIn(
+            "required private-data gate is `NOT RUN`; the unavailable-state "
+            "`real_data` probe is `SKIP`; and the AutoCAD/.NET live gate is "
+            "`NOT RUN`.",
+            normalized_m2_status,
+        )
+        self.assertIn(
+            "Hosted evidence does not promote AutoCAD/.NET/private gates to "
+            "`PASS`.",
+            normalized_m2_status,
+        )
 
     def test_historical_documents_route_to_canonical_sources(self) -> None:
         for relative_path in ("HANDOFF.md", "CAD-Agent-Kien-Truc-v1_3.md"):
