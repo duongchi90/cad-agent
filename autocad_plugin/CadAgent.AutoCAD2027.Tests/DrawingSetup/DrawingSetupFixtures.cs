@@ -4,6 +4,17 @@ namespace CadAgent.AutoCAD2027.Tests.DrawingSetup;
 
 internal static class DrawingSetupFixtures
 {
+    public static DrawingSetupSnapshot VerifiedSnapshot(string drawingFullPath)
+    {
+        var source = UnsortedSnapshot();
+        return source with
+        {
+            DrawingFullPath = drawingFullPath,
+            Layers = source.Layers.OrderBy(layer => layer.Name, StringComparer.Ordinal).ToArray(),
+            TextStyles = source.TextStyles.OrderBy(style => style.Name, StringComparer.Ordinal).ToArray()
+        };
+    }
+
     public static DrawingSetupSnapshot UnsortedSnapshot(
         int dbModBefore = 0,
         int dbModAfter = 0)

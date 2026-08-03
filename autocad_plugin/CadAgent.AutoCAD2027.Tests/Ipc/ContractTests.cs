@@ -110,6 +110,27 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void AcceptsDrawingSetupAuditOnlyWithEmptyParameters()
+    {
+        var valid = ValidRequest("drawing_setup_audit");
+        var invalid = valid with
+        {
+            Parameters = new Dictionary<string, JsonElement>
+            {
+                ["mutate"] = JsonSerializer.SerializeToElement(true)
+            }
+        };
+
+        Assert.True(ContractValidator.ValidateRequest(valid).IsValid);
+        var validation = ContractValidator.ValidateRequest(invalid);
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("drawing_setup_audit", StringComparison.OrdinalIgnoreCase)
+                && error.Contains("empty", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void AllowsNullDrawingPathOnlyForHealth()
     {
         var health = ValidRequest() with { DrawingFullPath = null };
@@ -231,6 +252,51 @@ public sealed class ContractTests
             Assert.NotNull(pattern);
             Assert.Matches(pattern!, requestCopy.DrawingFullPath!);
         }
+    }
+
+    [Fact]
+    public void DrawingSetupAuditExamplesRoundTripWithReadOnlyPayloadAndValidate()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/drawing-setup-audit-request.json")));
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/drawing-setup-audit-result.json")));
+
+        Assert.True(ContractValidator.ValidateRequest(request).IsValid);
+        Assert.True(ContractValidator.ValidateResult(result).IsValid);
+        Assert.Equal("drawing_setup_audit", request.Operation);
+        Assert.Empty(request.Parameters!);
+        Assert.Equal("drawing_setup_audit", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.False(result.Payload!["changed"].GetBoolean());
+        Assert.Equal(0, result.Payload["dbmod_before"].GetInt32());
+        Assert.Equal(0, result.Payload["dbmod_after"].GetInt32());
+
+        using var operationSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/operations/drawing-setup-audit.schema.json")));
+        Assert.False(operationSchema.RootElement.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(0, operationSchema.RootElement.GetProperty("maxProperties").GetInt32());
+    }
+
+    [Fact]
+    public void RejectsAMutatingDrawingSetupAuditResult()
+    {
+        var source = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/drawing-setup-audit-result.json")));
+        var result = source with
+        {
+            Changed = true,
+            EntityHandles = new List<string> { "2F" }
+        };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("drawing_setup_audit", StringComparison.OrdinalIgnoreCase)
+                && error.Contains("read-only", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string RepositoryFile(string relativePath)

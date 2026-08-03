@@ -94,6 +94,11 @@ public static class ContractValidator
         {
             errors.Add("mechanical_bom parameters must be an empty object");
         }
+        else if (string.Equals(request.Operation, "drawing_setup_audit", StringComparison.Ordinal)
+            && request.Parameters.Count != 0)
+        {
+            errors.Add("drawing_setup_audit parameters must be an empty object");
+        }
         else if (string.Equals(request.Operation, "close_disposable", StringComparison.Ordinal))
         {
             ValidateDisposableParameters(request.Parameters, errors);
@@ -132,6 +137,11 @@ public static class ContractValidator
         ValidateStringList(result.EntityHandles, "entity_handles", errors);
         ValidateStringList(result.Warnings, "warnings", errors);
         ValidateStringList(result.Errors, "errors", errors);
+        if (string.Equals(result.Operation, "drawing_setup_audit", StringComparison.Ordinal)
+            && (result.Changed || (result.EntityHandles?.Count ?? 0) != 0))
+        {
+            errors.Add("drawing_setup_audit results must be read-only and contain no entity handles");
+        }
         if (result.Payload is null)
         {
             errors.Add("payload must be an object when present");
