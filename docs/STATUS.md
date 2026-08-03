@@ -37,6 +37,26 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   gate is `NOT RUN`. No hosted or contract-only result is a substitute for
   operator-controlled AutoCAD Mechanical evidence.
 
+### M2 Drawing Initialization implementation continuation — 2026-08-03
+
+- Candidate implementation head: `3f570b6eade1814764f6b2107fd0f3dade419e5e`.
+- Implemented the read-only `drawing_setup_audit` .NET/File IPC operation,
+  deterministic Python normalization, comparison/blocker/evidence gate, and
+  `DRAFT_REFERENCE` classification for legacy image/PDF manifests.
+- Fresh authoritative offline evidence: Release x64 C# build/test passed with
+  73/73 tests; `dotnet_ipc` JUnit passed 37/37; offline JUnit passed 513/513
+  with zero failures, errors, or unexpected skips. Existing Autodesk
+  `MSB3277` reference-conflict warnings remain, and no Autodesk DLL was copied
+  to build output.
+- Required private-data gate: **NOT RUN**. `real_data` unavailable probe:
+  **2 SKIP**. AutoCAD Mechanical unavailable probe: **8 SKIP**. The opt-in
+  setup live test selected 2 tests and skipped both because File IPC/session
+  variables and the disposable drawing were not supplied.
+- No `SETUP_VERIFIED` evidence or approved template/profile metadata is claimed
+  for this candidate. The implementation remains **Executing/Partially
+  verified** until the operator-controlled AutoCAD gate passes.
+- Review record: `docs/reviews/2026-08-02-m2-drawing-setup-live-review.md`.
+
 ## AutoCAD .NET plugin — Option A / phần cũ 1
 
 This subsection records the completed Windows-only managed .NET slice. The
