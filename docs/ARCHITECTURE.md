@@ -84,6 +84,23 @@ present `SETUP_VERIFIED` evidence before geometry creation; the existing
 image/PDF path remains `DRAFT_REFERENCE` until that separate dimension-first
 path exists.
 
+### Visual Supervisor contract boundary
+
+VS-T0 contract-only slice: the Visual Supervisor contract boundary is pure
+Python and does not execute a visual loop.
+
+The Visual Supervisor contract boundary is pure Python and contract-only in
+VS-T0. It defines dimension, comparison, independent visual review,
+repair-plan, region-verification, run-manifest, and run-scoped
+publication-authorization artifacts. Codex cannot self-approve visual fidelity
+or publication. No model call, image comparator, AutoCAD evidence operation,
+repair loop, or publisher is implemented by VS-T0; those remain later slices.
+
+The `visual_review` artifact is the only contract allowed to carry a visual
+verdict. Repair plans describe bounded operations but have no PASS or publish
+authority. Evidence hashes and gate contracts fail closed on stale or
+unresolved critical data.
+
 New image/PDF run manifests record `release_profile="DRAFT_REFERENCE"`,
 `authoritative_release_eligible=false`, and `drawing_setup_evidence=null`.
 Historical manifests that predate these fields receive the same safe defaults

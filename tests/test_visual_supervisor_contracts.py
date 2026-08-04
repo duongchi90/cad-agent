@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from cad_agent.visual_contracts import (
+    SUPPORTED_VISUAL_CONTRACTS,
+    VisualContractError,
+    read_visual_contract,
+    validate_visual_contract,
+)
+from tests.visual_supervisor_fixtures import (
+    valid_dimension_register,
+    valid_geometry_comparison,
+    valid_visual_review,
+    valid_visual_run_manifest,
+)
+
+
+def test_visual_run_manifest_validates_and_is_deep_copied() -> None:
+    source = valid_visual_run_manifest()
+    validated = validate_visual_contract(source, contract="visual_run_manifest")
+    assert validated == source
+    source["state"] = "MUTATED_BY_CALLER"
+    assert validated["state"] == "CREATED"
+
+
+def test_visual_run_manifest_rejects_unknown_state() -> None:
+    payload = valid_visual_run_manifest()
+    payload["state"] = "DONE_ENOUGH"
+    with pytest.raises(VisualContractError, match="state"):
+        validate_visual_contract(payload, contract="visual_run_manifest")
+
+
+def test_visual_run_manifest_rejects_unexpected_property() -> None:
+    payload = valid_visual_run_manifest()
+    payload["codex_says_ok"] = True
+    with pytest.raises(VisualContractError, match="Unexpected properties"):
+        validate_visual_contract(payload, contract="visual_run_manifest")
+
+
+def test_read_visual_contract_rejects_non_object_root(tmp_path: Path) -> None:
+    source = tmp_path / "manifest.json"
+    source.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    with pytest.raises(VisualContractError, match="root must be an object"):
+        read_visual_contract(source, contract="visual_run_manifest")
+
+
+def test_confirmed_driving_dimension_requires_both_attachments() -> None:
+    payload = valid_dimension_register()
+    del payload["dimensions"][0]["to_ref"]
+    with pytest.raises(VisualContractError, match="to_ref"):
+        validate_visual_contract(payload, contract="dimension_register")
+
+
+def test_unresolved_critical_dimension_requires_blocker_scope() -> None:
+    payload = valid_dimension_register()
+    dimension = payload["dimensions"][0]
+    dimension["role"] = "AMBIGUOUS"
+    dimension["status"] = "UNRESOLVED"
+    dimension["blocker_scope"] = []
+    payload["summary"] = {"confirmed": 0, "unresolved": 1, "conflicts": 0}
+    with pytest.raises(VisualContractError, match="blocker_scope"):
+        validate_visual_contract(payload, contract="dimension_register")
+
+
+def test_dimension_register_accepts_page_with_no_dimension_clusters() -> None:
+    payload = valid_dimension_register()
+    payload["coverage"] = {
+        "clusters_detected": 0,
+        "clusters_processed": 0,
+        "page_coverage_percent": 100.0,
+    }
+    payload["summary"] = {"confirmed": 0, "unresolved": 0, "conflicts": 0}
+    payload["dimensions"] = []
+    assert validate_visual_contract(payload, contract="dimension_register") == payload
+
+
+def test_unreadable_unresolved_dimension_accepts_null_value() -> None:
+    payload = valid_dimension_register()
+    dimension = payload["dimensions"][0]
+    dimension["value"] = None
+    dimension["role"] = "AMBIGUOUS"
+    dimension["status"] = "UNRESOLVED"
+    dimension["blocker_scope"] = ["SIDE-CABIN"]
+    payload["summary"] = {"confirmed": 0, "unresolved": 1, "conflicts": 0}
+    assert validate_visual_contract(payload, contract="dimension_register") == payload
+
+
+def test_confirmed_dimension_requires_numeric_value() -> None:
+    payload = valid_dimension_register()
+    payload["dimensions"][0]["value"] = None
+    with pytest.raises(VisualContractError, match="value"):
+        validate_visual_contract(payload, contract="dimension_register")
+
+
+def test_geometry_comparison_rejects_out_of_range_iou() -> None:
+    payload = valid_geometry_comparison()
+    payload["metrics"]["silhouette_iou"] = 1.1
+    with pytest.raises(VisualContractError, match="silhouette_iou"):
+        validate_visual_contract(payload, contract="geometry_comparison")
+
+
+def test_geometry_comparison_rejects_aligned_without_two_anchors() -> None:
+    payload = valid_geometry_comparison()
+    payload["alignment"]["anchor_ids"] = ["ONLY_ONE"]
+    with pytest.raises(VisualContractError, match="anchor_ids"):
+        validate_visual_contract(payload, contract="geometry_comparison")
+
+
+def test_geometry_comparison_rejects_non_finite_metric() -> None:
+    payload = valid_geometry_comparison()
+    payload["metrics"]["height_ratio_error"] = float("nan")
+    with pytest.raises(VisualContractError, match="finite"):
+        validate_visual_contract(payload, contract="geometry_comparison")
+
+
+def test_visual_review_rejects_free_form_verdict() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "LOOKS_GOOD"
+    with pytest.raises(VisualContractError, match="verdict"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_pass_rejects_findings() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "PASS"
+    with pytest.raises(VisualContractError, match="PASS"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_fail_requires_actionable_repair_intent() -> None:
+    payload = valid_visual_review()
+    payload["repair_intent"]["change"] = []
+    with pytest.raises(VisualContractError, match="change"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_needs_human_requires_requested_evidence_or_finding() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "NEEDS_HUMAN"
+    payload["findings"] = []
+    payload["repair_intent"]["requested_next_evidence"] = []
+    with pytest.raises(VisualContractError, match="NEEDS_HUMAN"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_pass_requires_info_severity() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "PASS"
+    payload["severity"] = "MAJOR"
+    payload["findings"] = []
+    payload["repair_intent"]["change"] = []
+    with pytest.raises(VisualContractError, match="PASS"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_fail_requires_major_or_critical_top_level_severity() -> None:
+    payload = valid_visual_review()
+    payload["severity"] = "INFO"
+    with pytest.raises(VisualContractError, match="FAIL"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_supported_visual_contract_registry_is_exact() -> None:
+    assert set(SUPPORTED_VISUAL_CONTRACTS) == {
+        "visual_run_manifest",
+        "dimension_register",
+        "geometry_comparison",
+        "visual_review",
+        "repair_plan",
+        "region_verification_register",
+        "auto_publish_authorization",
+    }

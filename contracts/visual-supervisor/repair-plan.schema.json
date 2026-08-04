@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/visual-supervisor/repair-plan.schema.json",
+  "title": "Codex Repair Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repair_id",
+    "source_review_id",
+    "run_id",
+    "target_drawing_sha256",
+    "operations",
+    "affected_regions",
+    "expected_improvements",
+    "must_not_worsen",
+    "rollback_candidate_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "repair-plan-1.0"},
+    "repair_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "source_review_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "target_drawing_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "target", "preserve_anchors", "constraint_refs"],
+        "properties": {
+          "operation": {
+            "enum": [
+              "MOVE_COMPONENT",
+              "ALIGN_COMPONENT",
+              "REPLACE_POLYLINE_SEGMENT",
+              "ADJUST_ARC",
+              "ADJUST_SPLINE_CONTROL_REGION",
+              "ADD_MISSING_FEATURE",
+              "REMOVE_EXTRA_FEATURE",
+              "REPLACE_WITH_APPROVED_BLOCK",
+              "CREATE_NATIVE_DIMENSION",
+              "REPAIR_NATIVE_DIMENSION"
+            ]
+          },
+          "target": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["stable_entity_id", "feature"],
+            "properties": {
+              "stable_entity_id": {"type": "string", "minLength": 1},
+              "feature": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+            }
+          },
+          "preserve_anchors": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+          },
+          "constraint_refs": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+          }
+        }
+      }
+    },
+    "affected_regions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+    },
+    "expected_improvements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "must_not_worsen": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "rollback_candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

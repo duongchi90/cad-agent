@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/visual-supervisor/auto-publish-authorization.schema.json",
+  "title": "Run-scoped Auto-publish Authorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authorization_id",
+    "run_id",
+    "policy",
+    "target_path",
+    "expected_initial_sha256",
+    "allowed_backup_root",
+    "single_use",
+    "expires_after_run",
+    "consumed",
+    "authorized_by",
+    "approval_reference",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"const": "auto-publish-authorization-1.0"},
+    "authorization_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "policy": {"const": "AUTO_PUBLISH_AFTER_ALL_GATES"},
+    "target_path": {"type": "string", "pattern": "^[A-Za-z]:[\\/].+"},
+    "expected_initial_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "allowed_backup_root": {"type": "string", "pattern": "^[A-Za-z]:[\\/].+"},
+    "single_use": {"const": true},
+    "expires_after_run": {"const": true},
+    "consumed": {"type": "boolean"},
+    "authorized_by": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "approval_reference": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "status": {"const": "APPROVED"}
+  }
+}

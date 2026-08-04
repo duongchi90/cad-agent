@@ -1,0 +1,29 @@
+{
+  "schema_version": "geometry-comparison-1.0",
+  "comparison_id": "GC-SIDE-CABIN-001",
+  "run_id": "RUN-VISUAL-SYNTHETIC-001",
+  "region_id": "SIDE-CABIN",
+  "reference_package_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+  "cad_render_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "mutation_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "alignment": {
+    "status": "ALIGNED",
+    "method": "VERIFIED_DATUM_SIMILARITY",
+    "anchor_ids": ["FRONT_AXLE_CENTER", "REAR_AXLE_CENTER"],
+    "transform_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "metrics": {
+    "silhouette_iou": 0.92,
+    "chamfer_distance_normalized": 0.02,
+    "hausdorff_p95_normalized": 0.03,
+    "centroid_offset_x_ratio": 0.01,
+    "centroid_offset_y_ratio": 0.01,
+    "width_ratio_error": 0.02,
+    "height_ratio_error": 0.02,
+    "missing_edge_ratio": 0.01,
+    "extra_edge_ratio": 0.01,
+    "connected_component_difference": 0
+  },
+  "trend": "IMPROVED",
+  "previous_comparison_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+}

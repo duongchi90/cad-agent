@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/visual-supervisor/visual-run-manifest.schema.json",
+  "title": "Visual Supervisor Run Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "state",
+    "authority",
+    "source",
+    "drawing",
+    "evidence_root",
+    "latest_mutation_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "visual-run-manifest-1.0"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "CREATED",
+        "SOURCE_NORMALIZED",
+        "DIMENSIONS_OBSERVED",
+        "DIMENSION_GATE_READY",
+        "DRAFT_GENERATED",
+        "REGIONS_CHECKING",
+        "REPAIRING",
+        "LOCAL_VISUAL_VERIFIED",
+        "GLOBAL_VERIFIED",
+        "PUBLISHING",
+        "POST_SAVE_VERIFYING",
+        "PUBLISHED",
+        "NEEDS_HUMAN",
+        "DIMENSION_CONFLICT",
+        "NO_VISUAL_IMPROVEMENT",
+        "EXECUTION_FAILED",
+        "PUBLISH_REFUSED",
+        "ROLLED_BACK"
+      ]
+    },
+    "authority": {
+      "type": "string",
+      "enum": ["DISPOSABLE_REVIEW", "AUTHORITATIVE_CANDIDATE"]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_type", "source_sha256", "page_ids"],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": ["IMAGE", "PDF"]
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "page_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          }
+        }
+      }
+    },
+    "drawing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["absolute_path", "initial_sha256"],
+      "properties": {
+        "absolute_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "initial_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "evidence_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "latest_mutation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

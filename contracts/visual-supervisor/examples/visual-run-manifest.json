@@ -1,0 +1,17 @@
+{
+  "schema_version": "visual-run-manifest-1.0",
+  "run_id": "RUN-VISUAL-SYNTHETIC-001",
+  "state": "CREATED",
+  "authority": "DISPOSABLE_REVIEW",
+  "source": {
+    "source_type": "PDF",
+    "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "page_ids": ["PAGE-001"]
+  },
+  "drawing": {
+    "absolute_path": "D:\\Synthetic\\drawing.dwg",
+    "initial_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "evidence_root": "runs/RUN-VISUAL-SYNTHETIC-001",
+  "latest_mutation_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+}
