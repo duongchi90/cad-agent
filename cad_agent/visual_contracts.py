@@ -208,6 +208,7 @@ def _validate_dimension_observer_evidence(
             geometry,
             contract=contract,
             required={"dimension_line", "extension_lines", "arrow_points"},
+            optional={"leader_lines"},
         )
         if geometry["dimension_line"] is not None:
             _validate_segment(
@@ -233,6 +234,16 @@ def _validate_dimension_observer_evidence(
                 contract=contract,
                 path=f"{path}.extension_geometry.arrow_points[{index}]",
             )
+        if "leader_lines" in geometry:
+            leader_lines = geometry["leader_lines"]
+            if not isinstance(leader_lines, list):
+                _fail(contract, f"{path}.extension_geometry.leader_lines must be a list")
+            for index, segment in enumerate(leader_lines):
+                _validate_segment(
+                    segment,
+                    contract=contract,
+                    path=f"{path}.extension_geometry.leader_lines[{index}]",
+                )
 
     if "attachment_candidates" in dimension:
         candidates = dimension["attachment_candidates"]

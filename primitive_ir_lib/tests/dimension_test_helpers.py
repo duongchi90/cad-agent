@@ -26,6 +26,24 @@ def synthetic_isolated_number_crop() -> np.ndarray:
     return image
 
 
+def synthetic_leader_annotation() -> np.ndarray:
+    image = np.full((180, 300, 3), 255, dtype=np.uint8)
+    cv2.line(image, (42, 125), (155, 50), (0, 0, 0), 2)
+    cv2.fillConvexPoly(
+        image,
+        np.array([[42, 125], [58, 114], [58, 136]], dtype=np.int32),
+        (0, 0, 0),
+    )
+    cv2.putText(image, "4500", (165, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+    return image
+
+
+def synthetic_diagonal_non_leader() -> np.ndarray:
+    image = np.full((180, 300, 3), 255, dtype=np.uint8)
+    cv2.line(image, (42, 125), (155, 50), (0, 0, 0), 2)
+    return image
+
+
 def synthetic_page_with_two_dimension_clusters_and_one_note() -> np.ndarray:
     page = np.full((420, 900, 3), 255, dtype=np.uint8)
     first = synthetic_horizontal_dimension()

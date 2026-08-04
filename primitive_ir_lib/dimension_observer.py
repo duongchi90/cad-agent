@@ -324,6 +324,7 @@ def _geometry_payload(geometry: DimensionGeometryEvidence) -> dict[str, object]:
         "dimension_line": segment_payload(geometry.dimension_line) if geometry.dimension_line else None,
         "extension_lines": [segment_payload(segment) for segment in geometry.extension_lines],
         "arrow_points": [[float(point[0]), float(point[1])] for point in geometry.arrow_points],
+        "leader_lines": [segment_payload(segment) for segment in geometry.leader_lines],
     }
 
 

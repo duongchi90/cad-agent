@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
+from cad_agent.visual_contracts import validate_visual_contract
 from primitive_ir_lib.dimension_observer import (
     DimensionCluster,
     DimensionObserverError,
@@ -19,6 +20,7 @@ from primitive_ir_lib.tests.dimension_test_helpers import (
     not_a_dimension_disposition,
     synthetic_horizontal_dimension,
     synthetic_isolated_number_crop,
+    synthetic_leader_annotation,
 )
 from primitive_ir_lib.text_extraction import RawText
 
@@ -163,6 +165,38 @@ def test_cross_angle_ocr_conflict_is_not_resolved_by_rotation_majority() -> None
         90.0,
         -90.0,
     ]
+
+
+def test_leader_lines_are_preserved_in_closed_observer_evidence() -> None:
+    image = synthetic_leader_annotation()
+    cluster = DimensionCluster(
+        cluster_id="DIMCLUSTER-LEADER",
+        bbox_px=(0, 0, image.shape[1], image.shape[0]),
+        member_boxes=(),
+    )
+    disposition = observe_dimension_cluster(
+        image,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+    )
+
+    assert len(disposition.observation["extension_geometry"]["leader_lines"]) == 1
+    register = build_dimension_register(
+        run_id="RUN-VS-T1-LEADER",
+        source_sha256="1" * 64,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        total_area_px=image.shape[0] * image.shape[1],
+        inspected_area_px=image.shape[0] * image.shape[1],
+        detected_cluster_ids=[cluster.cluster_id],
+        dispositions=[disposition],
+    )
+    assert validate_visual_contract(register, contract="dimension_register")["dimensions"][0][
+        "extension_geometry"
+    ]["leader_lines"]
 
 
 def test_critical_flag_is_independent_of_blocker_scope() -> None:

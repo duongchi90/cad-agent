@@ -43,6 +43,44 @@ def _is_vertical(segment: Segment, tolerance: float = 3.0) -> bool:
     return abs(segment[1][0] - segment[0][0]) <= tolerance
 
 
+def _is_diagonal(segment: Segment) -> bool:
+    dx = abs(segment[1][0] - segment[0][0])
+    dy = abs(segment[1][1] - segment[0][1])
+    if dx == 0.0 or dy == 0.0:
+        return False
+    angle = math.degrees(math.atan2(dy, dx))
+    return 15.0 <= angle <= 75.0
+
+
+def _endpoint_distance(first: Segment, second: Segment) -> float:
+    return min(
+        math.hypot(first_point[0] - second_point[0], first_point[1] - second_point[1])
+        for first_point in first
+        for second_point in second
+    )
+
+
+def _has_leader_marker(candidate: Segment, segments: list[Segment]) -> bool:
+    for marker in segments:
+        if marker == candidate or not _is_diagonal(marker):
+            continue
+        marker_length = _length(marker)
+        if 18.0 <= marker_length <= 55.0 and _endpoint_distance(candidate, marker) <= 8.0:
+            return True
+    return False
+
+
+def _detect_leader_lines(segments: list[Segment]) -> tuple[Segment, ...]:
+    diagonal_segments = [segment for segment in segments if _is_diagonal(segment)]
+    leaders: list[Segment] = []
+    for candidate in sorted(diagonal_segments, key=lambda item: (-_length(item), item)):
+        if any(_endpoint_distance(candidate, existing) <= 24.0 for existing in leaders):
+            continue
+        if _has_leader_marker(candidate, diagonal_segments):
+            leaders.append(candidate)
+    return tuple(leaders)
+
+
 def _hough_segments(binary: np.ndarray) -> list[Segment]:
     edges = cv2.Canny(binary, 50, 150, apertureSize=3)
     lines = cv2.HoughLinesP(
@@ -187,9 +225,17 @@ def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence
         10,
     )
     segments = _hough_segments(binary)
+    leader_lines = _detect_leader_lines(segments)
     dimension_line, kind_hint = _select_dimension_line(segments)
     if dimension_line is None:
-        return DimensionGeometryEvidence(None, (), (), (), None, 0.0)
+        return DimensionGeometryEvidence(
+            None,
+            (),
+            (),
+            leader_lines,
+            "LEADER_ANNOTATION" if leader_lines else None,
+            min(1.0, 0.35 + (0.25 if leader_lines else 0.0)),
+        )
 
     extension_lines = _detect_extension_lines(segments, dimension_line)
     if _is_horizontal(dimension_line) and len(extension_lines) >= 2:
@@ -212,13 +258,14 @@ def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence
         1.0,
         0.35
         + (0.25 if len(extension_lines) >= 2 else 0.12 if extension_lines else 0.0)
-        + (0.25 if len(arrow_points) >= 2 else 0.12 if arrow_points else 0.0),
+        + (0.25 if len(arrow_points) >= 2 else 0.12 if arrow_points else 0.0)
+        + (0.10 if leader_lines else 0.0),
     )
     return DimensionGeometryEvidence(
         dimension_line=dimension_line,
         extension_lines=extension_lines,
         arrow_points=arrow_points,
-        leader_lines=(),
+        leader_lines=leader_lines,
         kind_hint=kind_hint,
         confidence=confidence,
     )
