@@ -113,6 +113,56 @@ def _write_manifest(root: Path) -> Path:
     return path
 
 
+def _write_dimension_register(root: Path) -> Path:
+    path = root / "dimension-register.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "dimension-register-1.0",
+                "run_id": "RUN-001",
+                "source_sha256": "1" * 64,
+                "page_id": "PAGE-001",
+                "view_id": "SIDE",
+                "coverage": {
+                    "clusters_detected": 1,
+                    "clusters_processed": 1,
+                    "page_coverage_percent": 100.0,
+                },
+                "summary": {"confirmed": 1, "unresolved": 0, "conflicts": 0},
+                "dimensions": [
+                    {
+                        "id": "DIM-SIDE-001",
+                        "display_text": "4500",
+                        "value": 4500.0,
+                        "unit": "mm",
+                        "kind": "HORIZONTAL_DISTANCE",
+                        "role": "DRIVING",
+                        "status": "CONFIRMED",
+                        "critical": True,
+                        "from_ref": {
+                            "type": "DATUM",
+                            "id": "FRONT_AXLE_CENTER",
+                            "entity_handle": "A1",
+                        },
+                        "to_ref": {"type": "ENTITY", "id": "B2"},
+                        "source_evidence": {
+                            "crop_id": "DIMCLUSTER-001",
+                            "bbox": [100, 200, 600, 260],
+                            "crop_sha256": "5" * 64,
+                        },
+                        "text_confidence": 0.99,
+                        "attachment_confidence": 0.96,
+                        "blocker_scope": [],
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 class VisualEvidenceIPCAdapterTests(unittest.TestCase):
     def _client(self, ipc_dir: Path, trigger, *, request_id: str = "vs-t3-001", timeout_s: float = 1.0) -> DotNetIPCClient:
         return DotNetIPCClient(
@@ -292,6 +342,61 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
             manifest_path = _write_manifest(ipc_dir)
             with self.assertRaisesRegex(ValueError, "artifact_consumer"):
                 self._client(ipc_dir, lambda: None).visual_evidence_export(**self._kwargs(manifest_path))
+
+    def test_builds_datum_binding_from_register_and_rejects_register_race(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            manifest_path = _write_manifest(ipc_dir)
+            register_path = _write_dimension_register(ipc_dir)
+            kwargs = self._kwargs(manifest_path)
+            kwargs["dimension_register_path"] = register_path
+            kwargs["measurements"] = [
+                {
+                    "id": "MEASURE-001",
+                    "kind": "DISTANCE",
+                    "reference": {"type": "DATUM", "id": "FRONT_AXLE_CENTER"},
+                    "to_reference": {"type": "ENTITY", "id": "B2"},
+                }
+            ]
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    "A1",
+                    request["parameters"]["datum_bindings"][0]["entity_handle"],
+                )
+                payload = _write_valid_artifacts(
+                    ipc_dir,
+                    request["request_id"],
+                    manifest_sha256=request["parameters"]["visual_run_manifest_sha256"],
+                )
+                atomic_write_json(
+                    result_path(ipc_dir, request["request_id"]),
+                    {
+                        "request_id": request["request_id"],
+                        "success": True,
+                        "operation": request["operation"],
+                        "drawing_full_path": request["drawing_full_path"],
+                        "changed": False,
+                        "entity_handles": [],
+                        "warnings": [],
+                        "errors": [],
+                        "started_at": "2026-08-04T12:00:00Z",
+                        "completed_at": "2026-08-04T12:00:00Z",
+                        "payload": payload,
+                    },
+                )
+
+            def mutate_register(_result: Mapping[str, Any], _paths: Mapping[str, Path]) -> None:
+                register_path.write_bytes(register_path.read_bytes() + b"\n")
+
+            with self.assertRaisesRegex(Exception, "Dimension Register changed"):
+                self._client(ipc_dir, trigger).visual_evidence_export(
+                    **kwargs,
+                    artifact_consumer=mutate_register,
+                )
+            self.assertFalse((ipc_dir / "artifacts" / "vs-t3-001").exists())
 
     def test_scavenger_removes_only_stale_lease_free_directories(self) -> None:
         with TemporaryDirectory() as temporary:

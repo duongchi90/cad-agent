@@ -98,12 +98,27 @@ def _string_list(value: object, *, contract: str, path: str, min_items: int = 0)
     return value
 
 
-def _validate_reference(value: object, *, contract: str, path: str) -> None:
+def _validate_reference(
+    value: object,
+    *,
+    contract: str,
+    path: str,
+    allow_entity_handle: bool = False,
+) -> None:
     reference = _object(value, contract=contract, path=path)
-    _keys(reference, contract=contract, required={"type", "id"})
+    _keys(
+        reference,
+        contract=contract,
+        required={"type", "id"},
+        optional={"entity_handle"} if allow_entity_handle else None,
+    )
     if reference["type"] not in {"DATUM", "ENTITY", "FEATURE", "DIMENSION"}:
         _fail(contract, f"{path}.type is invalid")
     _identifier(reference["id"], contract=contract, path=f"{path}.id")
+    if "entity_handle" in reference:
+        if reference["type"] != "DATUM":
+            _fail(contract, f"{path}.entity_handle is only valid for DATUM references")
+        _identifier(reference["entity_handle"], contract=contract, path=f"{path}.entity_handle")
 
 
 def _validate_bbox(value: object, *, contract: str, path: str) -> None:
@@ -417,7 +432,12 @@ def _validate_dimension_register(payload: dict[str, Any]) -> None:
                     _fail(contract, f"{path} requires {reference_key}")
         for reference_key in ("from_ref", "to_ref"):
             if reference_key in dimension:
-                _validate_reference(dimension[reference_key], contract=contract, path=f"{path}.{reference_key}")
+                _validate_reference(
+                    dimension[reference_key],
+                    contract=contract,
+                    path=f"{path}.{reference_key}",
+                    allow_entity_handle=True,
+                )
         _bool(dimension["critical"], contract=contract, path=f"{path}.critical")
         source_evidence = _object(dimension["source_evidence"], contract=contract, path=f"{path}.source_evidence")
         _keys(source_evidence, contract=contract, required={"crop_id", "bbox", "crop_sha256"})

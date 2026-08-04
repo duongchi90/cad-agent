@@ -106,10 +106,13 @@ client, Codex bridge, publisher, or mutation-state store.
       `evidence_id`, `region_id`, `latest_mutation_sha256`,
       `visual_run_manifest_sha256`, `artifact_policy_version`,
       `artifact_directory`, `region`, `measurements`, and `datum_bindings`.
-      `DATUM` measurement references must resolve through a closed,
-      provenance-bound binding whose run, region, and manifest hash match the
-      request and whose approval is
-      `DIMENSION_REGISTER_CONFIRMED`.
+      The public Python adapter must not accept caller-supplied bindings. For
+      `DATUM` references it must require a validated, exact-byte-snapshotted
+      Dimension Register, verify register run/source/page scope, and derive
+      bindings only from confirmed register references carrying entity-handle
+      mappings. It must recheck register bytes before dispatch and before/after
+      artifact handoff; the wire binding remains closed and carries
+      `DIMENSION_REGISTER_CONFIRMED` as derived provenance.
 - [ ] Define a separate closed result-payload schema containing before/after
       drawing hashes, before/after DBMOD, session-state hashes,
       `transient_state_restored`, `captured_at_utc`, artifact descriptors, and

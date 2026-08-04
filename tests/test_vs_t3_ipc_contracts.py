@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import inspect
 from pathlib import Path
 
 import pytest
 
-from mcp_integration_lib.dotnet_ipc import DotNetIPCClient, DotNetIPCProtocolError
+from cad_agent.visual_evidence import (
+    VisualEvidenceError,
+    assert_dimension_register_unchanged,
+    build_dimension_register_datum_bindings,
+    snapshot_dimension_register,
+)
+from mcp_integration_lib.dotnet_ipc import (
+    DotNetIPCClient,
+    DotNetIPCProtocolError,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +123,49 @@ def valid_result(request: dict[str, object] | None = None) -> dict[str, object]:
         "started_at": "2026-08-04T00:00:00Z",
         "completed_at": "2026-08-04T00:00:02Z",
         "payload": valid_payload(),
+    }
+
+
+def dimension_register(*, status: str = "CONFIRMED", include_handles: bool = True) -> dict[str, object]:
+    from_ref: dict[str, object] = {"type": "DATUM", "id": "FRONT_AXLE_CENTER"}
+    to_ref: dict[str, object] = {"type": "DATUM", "id": "REAR_AXLE_CENTER"}
+    if include_handles:
+        from_ref["entity_handle"] = "A1"
+        to_ref["entity_handle"] = "B2"
+    return {
+        "schema_version": "dimension-register-1.0",
+        "run_id": "RUN-001",
+        "source_sha256": "1" * 64,
+        "page_id": "PAGE-001",
+        "view_id": "SIDE",
+        "coverage": {
+            "clusters_detected": 1,
+            "clusters_processed": 1,
+            "page_coverage_percent": 100.0,
+        },
+        "summary": {"confirmed": 1, "unresolved": 0, "conflicts": 0},
+        "dimensions": [
+            {
+                "id": "DIM-SIDE-001",
+                "display_text": "4500",
+                "value": 4500.0,
+                "unit": "mm",
+                "kind": "HORIZONTAL_DISTANCE",
+                "role": "DRIVING",
+                "status": status,
+                "critical": True,
+                "from_ref": from_ref,
+                "to_ref": to_ref,
+                "source_evidence": {
+                    "crop_id": "DIMCLUSTER-001",
+                    "bbox": [100, 200, 600, 260],
+                    "crop_sha256": "5" * 64,
+                },
+                "text_confidence": 0.99,
+                "attachment_confidence": 0.96,
+                "blocker_scope": [],
+            }
+        ],
     }
 
 
@@ -227,6 +281,103 @@ def test_python_validator_accepts_provenance_bound_datum_measurement() -> None:
         }
     ]
     assert DotNetIPCClient._validate_parameters("visual_evidence_export", parameters) == parameters
+
+
+def test_public_exporter_builds_datum_bindings_from_a_dimension_register_path() -> None:
+    signature = inspect.signature(DotNetIPCClient.visual_evidence_export)
+    assert "dimension_register_path" in signature.parameters
+    assert "datum_bindings" not in signature.parameters
+
+
+def test_dimension_register_snapshot_is_schema_validated_and_exactly_hashed(tmp_path: Path) -> None:
+    path = tmp_path / "dimension-register.json"
+    raw = (json.dumps(dimension_register(), sort_keys=True) + "\n").encode("utf-8")
+    path.write_bytes(raw)
+
+    snapshot_raw, validated, digest = snapshot_dimension_register(path)
+
+    assert snapshot_raw == raw
+    assert validated["run_id"] == "RUN-001"
+    assert digest == hashlib.sha256(raw).hexdigest()
+
+
+def test_dimension_register_freshness_rejects_bytes_changed_after_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "dimension-register.json"
+    raw = (json.dumps(dimension_register(), sort_keys=True) + "\n").encode("utf-8")
+    path.write_bytes(raw)
+    snapshot_raw, _validated, digest = snapshot_dimension_register(path)
+    path.write_bytes(raw + b"\n")
+
+    with pytest.raises(VisualEvidenceError, match="Dimension Register changed"):
+        assert_dimension_register_unchanged(path, snapshot_raw, digest)
+
+
+def test_dimension_register_builds_only_confirmed_scoped_bindings() -> None:
+    bindings = build_dimension_register_datum_bindings(
+        dimension_register(),
+        datum_ids={"FRONT_AXLE_CENTER", "REAR_AXLE_CENTER"},
+        run_id="RUN-001",
+        region_id="SIDE-CABIN",
+        manifest_sha256="b" * 64,
+        register_sha256="d" * 64,
+        source_sha256="1" * 64,
+        allowed_page_ids={"PAGE-001"},
+    )
+
+    assert [(item["id"], item["entity_handle"]) for item in bindings] == [
+        ("FRONT_AXLE_CENTER", "A1"),
+        ("REAR_AXLE_CENTER", "B2"),
+    ]
+    assert all(item["approval"] == "DIMENSION_REGISTER_CONFIRMED" for item in bindings)
+
+
+@pytest.mark.parametrize(
+    ("register", "message"),
+    [
+        (dimension_register(status="UNRESOLVED"), "CONFIRMED"),
+        (dimension_register(include_handles=False), "entity_handle"),
+    ],
+)
+def test_dimension_register_rejects_unapproved_or_unmapped_datums(
+    register: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        build_dimension_register_datum_bindings(
+            register,
+            datum_ids={"FRONT_AXLE_CENTER"},
+            run_id="RUN-001",
+            region_id="SIDE-CABIN",
+            manifest_sha256="b" * 64,
+            register_sha256="d" * 64,
+            source_sha256="1" * 64,
+            allowed_page_ids={"PAGE-001"},
+        )
+
+
+def test_dimension_register_scope_rejects_wrong_run_or_source() -> None:
+    register = dimension_register()
+    with pytest.raises(ValueError, match="run_id"):
+        build_dimension_register_datum_bindings(
+            {**register, "run_id": "OTHER-RUN"},
+            datum_ids={"FRONT_AXLE_CENTER"},
+            run_id="RUN-001",
+            region_id="SIDE-CABIN",
+            manifest_sha256="b" * 64,
+            register_sha256="d" * 64,
+            source_sha256="1" * 64,
+            allowed_page_ids={"PAGE-001"},
+        )
+    with pytest.raises(ValueError, match="source_sha256"):
+        build_dimension_register_datum_bindings(
+            register,
+            datum_ids={"FRONT_AXLE_CENTER"},
+            run_id="RUN-001",
+            region_id="SIDE-CABIN",
+            manifest_sha256="b" * 64,
+            register_sha256="d" * 64,
+            source_sha256="2" * 64,
+            allowed_page_ids={"PAGE-001"},
+        )
 
 
 def test_python_validator_rejects_unbound_datum_measurement() -> None:

@@ -43,13 +43,18 @@ internal static class AutoCadVisualEvidenceReader
 
         public bool Allows(string layer)
         {
+            if (!_layerStates.TryGetValue(layer, out var state))
+            {
+                throw new InvalidDataException(
+                    $"The VS-T3 layer state snapshot is missing layer '{layer}'.");
+            }
+
             if (_includeLayers.Count > 0 && !_includeLayers.Contains(layer))
             {
                 return false;
             }
 
-            if (_excludeLayers.Contains(layer)
-                || !_layerStates.TryGetValue(layer, out var state))
+            if (_excludeLayers.Contains(layer))
             {
                 return false;
             }
@@ -359,7 +364,8 @@ internal static class AutoCadVisualEvidenceReader
         Matrix3d transform,
         Transaction transaction,
         HashSet<ObjectId> blockStack,
-        RenderLayerPolicy layerPolicy)
+        RenderLayerPolicy layerPolicy,
+        string? parentEffectiveLayer = null)
     {
         var geometry = new Dictionary<string, object?>(StringComparer.Ordinal);
         switch (entity)
@@ -453,13 +459,25 @@ internal static class AutoCadVisualEvidenceReader
                         .Cast<ObjectId>()
                         .Select(objectId => transaction.GetObject(objectId, OpenMode.ForRead, false))
                         .OfType<Entity>()
-                        .Where(child => child.Visible && layerPolicy.Allows(child.Layer))
+                        .Where(child => child.Visible)
                         .Select(child =>
                         {
-                            var childGeometry = CreateGeometry(child, childTransform, transaction, blockStack, layerPolicy);
+                            var effectiveLayer = EffectiveLayer(child.Layer, block.Layer, parentEffectiveLayer);
+                            if (!layerPolicy.Allows(effectiveLayer))
+                            {
+                                return null;
+                            }
+
+                            var childGeometry = CreateGeometry(
+                                child,
+                                childTransform,
+                                transaction,
+                                blockStack,
+                                layerPolicy,
+                                effectiveLayer);
                             return child is BlockReference && !HasRenderableChildren(childGeometry)
                                 ? null
-                                : new NestedEntityProjection(GetEntityType(child), child.Layer, childGeometry);
+                                : new NestedEntityProjection(GetEntityType(child), effectiveLayer, childGeometry);
                         })
                         .Where(child => child is not null)
                         .Select(child => new
@@ -505,7 +523,11 @@ internal static class AutoCadVisualEvidenceReader
             && array.Length > 0;
     }
 
-    internal static bool IsConformalBasisForTesting(double xLength, double yLength, double dotProduct)
+    internal static bool IsConformalBasisForTesting(
+        double xLength,
+        double yLength,
+        double dotProduct,
+        double orientation = 1.0)
     {
         if (xLength < 1e-12 || yLength < 1e-12)
         {
@@ -514,7 +536,8 @@ internal static class AutoCadVisualEvidenceReader
 
         var scale = Math.Max(1.0, Math.Max(xLength, yLength));
         return Math.Abs(xLength - yLength) <= 1e-9 * scale
-            && Math.Abs(dotProduct) <= 1e-9 * scale * scale;
+            && Math.Abs(dotProduct) <= 1e-9 * scale * scale
+            && orientation > 1e-9 * scale * scale;
     }
 
     private static bool IsConformalTransform(Matrix3d transform)
@@ -523,8 +546,43 @@ internal static class AutoCadVisualEvidenceReader
         return IsConformalBasisForTesting(
             basis.Xaxis.Length,
             basis.Yaxis.Length,
-            basis.Xaxis.DotProduct(basis.Yaxis));
+            basis.Xaxis.DotProduct(basis.Yaxis),
+            basis.Xaxis.CrossProduct(basis.Yaxis).DotProduct(Vector3d.ZAxis));
     }
+
+    private static string EffectiveLayer(
+        string layer,
+        string? insertionLayer,
+        string? parentEffectiveLayer)
+    {
+        var normalizedInsertionLayer = insertionLayer?.Trim() ?? string.Empty;
+        if (normalizedInsertionLayer.Length == 0)
+        {
+            throw new InvalidDataException("A visible block reference has an empty layer name.");
+        }
+
+        var effectiveInsertionLayer = EffectiveLayer(
+            normalizedInsertionLayer,
+            parentEffectiveLayer);
+        return EffectiveLayer(layer, effectiveInsertionLayer);
+    }
+
+    private static string EffectiveLayer(string layer, string? parentEffectiveLayer)
+    {
+        var normalizedLayer = layer?.Trim() ?? string.Empty;
+        if (normalizedLayer.Length == 0)
+        {
+            throw new InvalidDataException("A visible entity has an empty layer name.");
+        }
+
+        return string.Equals(normalizedLayer, "0", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(parentEffectiveLayer)
+            ? parentEffectiveLayer!
+            : normalizedLayer;
+    }
+
+    internal static string EffectiveLayerForTesting(string layer, string? parentEffectiveLayer) =>
+        EffectiveLayer(layer, parentEffectiveLayer);
 
     internal static bool LayerPolicyAllowsForTesting(
         string layer,
@@ -542,6 +600,14 @@ internal static class AutoCadVisualEvidenceReader
             excludeLayers.ToHashSet(StringComparer.OrdinalIgnoreCase),
             states).Allows(layer);
     }
+
+    internal static bool LayerPolicyAllowsForTesting(
+        string layer,
+        IReadOnlyDictionary<string, SessionLayerSnapshot> layerStates) =>
+        new RenderLayerPolicy(
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            layerStates).Allows(layer);
 
     private static double TransformRadius(double radius, Matrix3d transform)
     {

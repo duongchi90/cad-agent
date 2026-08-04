@@ -57,11 +57,17 @@ Authority-boundary review:
   block references including transformed children, and sampled splines.
   Hatch boundaries and unknown visible entity types fail closed until an
   approved deterministic flattener exists. VS-T3 accepts `DATUM` measurements
-  only through provenance-bound `datum_bindings`; the binding must match the
-  request run/region/manifest and a confirmed dimension-register record before
-  the managed reader resolves its entity handle read-only. Non-conformal block
-  transforms fail closed. Include/exclude and Off/Frozen layer policy is shared
-  by top-level and nested block children, whose effective layer is emitted.
+  only through bindings derived by the trusted Python adapter from an exact,
+  schema-validated Dimension Register snapshot; caller-supplied approval,
+  register hash, or entity handle values are not accepted. The binding must
+  match the request run/region/manifest, register source/page scope, and a
+  confirmed register datum mapping before the managed reader resolves its
+  entity handle read-only. The register is rechecked before dispatch and
+  before/after artifact handoff. Non-conformal block transforms, including
+  reflections/negative orientation, fail closed. Include/exclude and
+  Off/Frozen layer policy is shared by top-level and nested block children,
+  whose effective layer is emitted; nested layer `0` inherits its insertion
+  layer and missing layer state fails explicitly.
   Floating viewport restoration is a no-op when already at the captured
   `CTAB`/`TILEMODE`/`CVPORT` tuple and propagates target-CVPORT errors instead
   of swallowing them.

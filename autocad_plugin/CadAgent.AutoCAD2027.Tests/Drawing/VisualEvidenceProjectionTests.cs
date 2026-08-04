@@ -23,6 +23,34 @@ public sealed class VisualEvidenceProjectionTests
             1,
             Math.Sqrt(2),
             1));
+        Assert.False(AutoCadVisualEvidenceReader.IsConformalBasisForTesting(
+            2,
+            2,
+            0,
+            -1));
+    }
+
+    [Fact]
+    public void EffectiveLayerZeroInheritsTheInsertionLayer()
+    {
+        Assert.Equal(
+            "CABIN",
+            AutoCadVisualEvidenceReader.EffectiveLayerForTesting("0", "CABIN"));
+        Assert.Equal(
+            "CHILD",
+            AutoCadVisualEvidenceReader.EffectiveLayerForTesting("CHILD", "CABIN"));
+        Assert.Equal(
+            "0",
+            AutoCadVisualEvidenceReader.EffectiveLayerForTesting("0", null));
+    }
+
+    [Fact]
+    public void MissingEffectiveLayerStateFailsClosedWithAnExplicitError()
+    {
+        Assert.Throws<InvalidDataException>(() =>
+            AutoCadVisualEvidenceReader.LayerPolicyAllowsForTesting(
+                "MISSING",
+                new Dictionary<string, SessionLayerSnapshot>()));
     }
 
     [Fact]

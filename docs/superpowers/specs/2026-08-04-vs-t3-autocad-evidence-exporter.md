@@ -153,13 +153,17 @@ Required request rules:
   a symlink or reparse point.
 - Measurement requests contain stable IDs and approved entity or datum
   references; they do not create native dimension entities. A `DATUM`
-  reference is valid only when its ID appears in `datum_bindings`. Each
-  binding is closed and provenance-bound to the same `run_id`, `region_id`,
-  and `visual_run_manifest_sha256`, and carries the confirmed
-  `dimension_register_sha256`, `dimension_id`, `entity_handle`, and
-  `approval: DIMENSION_REGISTER_CONFIRMED`. The managed reader resolves the
-  datum to that entity handle for read-only measurement only; it does not
-  create or modify the datum.
+  reference is valid only when its ID appears in `datum_bindings`. The trusted
+  Python orchestrator does not accept `datum_bindings`, approval strings,
+  register hashes, or entity handles from the caller. When a `DATUM` is
+  requested, it requires a `dimension_register_path`, snapshots the exact
+  register bytes, validates the Dimension Register contract, and derives each
+  closed binding from a `CONFIRMED` register dimension whose `DATUM` reference
+  carries the entity handle mapping. The register `run_id`, source hash, and
+  page ID must match the manifest scope. The register bytes are rechecked
+  before dispatch and before/after artifact handoff; any change fails closed.
+  The managed reader resolves the derived entity handle for read-only
+  measurement only; it does not create or modify the datum.
 - Missing or invalid `latest_mutation_sha256` or
   `visual_run_manifest_sha256` is a hard failure.
 
@@ -195,10 +199,14 @@ The operation must not:
 - return mutation handles or a mutation operation plan;
 - accept a managed-side claim that a mutation is manifest-authorized.
 
-Block references with a non-conformal transform (non-uniform scale or shear)
-are rejected before projection. VS-T3 does not preserve circles, arcs, or
-polyline bulges by applying an invalid radius/bulge approximation; flattening
-to an approved ellipse/point representation is outside this exporter.
+Block references with a non-conformal transform (non-uniform scale, shear, or
+reflection/negative orientation) are rejected before projection. VS-T3 does
+not preserve circles, arcs, or polyline bulges by applying an invalid
+radius/bulge approximation; flattening to an approved ellipse/point
+representation is outside this exporter. Layer include/exclude and
+Off/Frozen policy uses the AutoCAD effective layer at every nesting level;
+layer `0` inherits its insertion layer and a missing layer snapshot is an
+explicit failure.
 
 The result uses `changed=false` as a required assertion, not as an inferred
 default. Any inability to prove the invariant produces a failed result that

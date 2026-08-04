@@ -17,6 +17,9 @@ from typing import Any
 
 from cad_agent.visual_evidence import (
     VisualEvidenceError,
+    assert_dimension_register_unchanged,
+    build_dimension_register_datum_bindings,
+    snapshot_dimension_register,
     snapshot_visual_run_manifest,
     validate_visual_evidence_freshness,
 )
@@ -270,6 +273,33 @@ def _assert_vs_t3_manifest_unchanged(
         raise DotNetIPCProtocolError(str(exc)) from exc
     if current_raw != expected_raw or current_digest != expected_digest:
         raise DotNetIPCProtocolError("visual run manifest changed during evidence export")
+
+
+def _requested_datum_ids(measurements: Sequence[Mapping[str, Any]]) -> set[str]:
+    """Return DATUM ids requested by measurements without trusting their values."""
+
+    datum_ids: set[str] = set()
+    for measurement in measurements:
+        if not isinstance(measurement, Mapping):
+            continue
+        for name in ("reference", "to_reference"):
+            reference = measurement.get(name)
+            if not isinstance(reference, Mapping) or reference.get("type") != "DATUM":
+                continue
+            datum_id = reference.get("id")
+            if isinstance(datum_id, str):
+                datum_ids.add(datum_id)
+    return datum_ids
+
+
+def _assert_dimension_register_snapshot(
+    snapshot: tuple[Path, bytes, str],
+) -> None:
+    path, raw, digest = snapshot
+    try:
+        assert_dimension_register_unchanged(path, raw, digest)
+    except VisualEvidenceError as exc:
+        raise DotNetIPCProtocolError(str(exc)) from exc
 
 
 def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
@@ -630,7 +660,7 @@ class DotNetIPCClient:
         visual_run_manifest_path: str | os.PathLike[str],
         region: Mapping[str, Any],
         measurements: Sequence[Mapping[str, Any]],
-        datum_bindings: Sequence[Mapping[str, Any]] = (),
+        dimension_register_path: str | os.PathLike[str] | None = None,
         artifact_consumer: Callable[[Mapping[str, Any], Mapping[str, Path]], None] | None = None,
         artifact_directory: str | None = None,
         approval: Mapping[str, Any] | None = None,
@@ -644,7 +674,9 @@ class DotNetIPCClient:
         atomic evidence writer; it runs before Python removes the
         request-owned directory.  A timeout never implies that AutoCAD
         stopped working, so an active lease protects the directory from
-        cleanup.
+        cleanup.  DATUM bindings are derived here from one validated,
+        byte-snapshotted Dimension Register; callers cannot provide approval
+        strings, register hashes, or entity handles directly.
         """
 
         if not callable(artifact_consumer):
@@ -665,22 +697,15 @@ class DotNetIPCClient:
             "artifact_directory": normalized_artifact_directory,
             "region": dict(region),
             "measurements": [dict(measurement) for measurement in measurements],
-            "datum_bindings": [dict(binding) for binding in datum_bindings],
+            "datum_bindings": [],
         }
         normalized_path = self._validate_drawing_path("visual_evidence_export", drawing_full_path)
         normalized_sha256 = self._validate_sha256(drawing_sha256)
         normalized_manifest_sha256 = self._validate_sha256(visual_run_manifest_sha256)
-        normalized_parameters = self._validate_parameters("visual_evidence_export", parameters)
         if normalized_sha256 is None:
             raise ValueError("visual_evidence_export requires drawing_sha256")
         if normalized_manifest_sha256 is None:
             raise ValueError("visual_evidence_export requires visual_run_manifest_sha256")
-        self._validate_visual_evidence_datum_bindings(
-            normalized_parameters,
-            expected_run_id=run_id,
-            expected_region_id=region_id,
-            expected_manifest_sha256=normalized_manifest_sha256,
-        )
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
 
@@ -692,6 +717,43 @@ class DotNetIPCClient:
             latest_mutation_sha256=latest_mutation_sha256,
             expected_sha256=normalized_manifest_sha256,
         )
+        register_snapshot: tuple[Path, bytes, str] | None = None
+        datum_ids = _requested_datum_ids(measurements)
+        if datum_ids:
+            if dimension_register_path is None:
+                raise ValueError(
+                    "visual_evidence_export DATUM measurements require dimension_register_path"
+                )
+            register_path = Path(dimension_register_path)
+            register_raw, register, register_digest = snapshot_dimension_register(register_path)
+            source = manifest_before.get("source")
+            if not isinstance(source, Mapping):
+                raise ValueError("visual run manifest source scope is invalid")
+            source_sha256 = source.get("source_sha256")
+            page_ids = source.get("page_ids")
+            if not isinstance(source_sha256, str) or not isinstance(page_ids, list):
+                raise ValueError("visual run manifest source scope is invalid")
+            parameters["datum_bindings"] = build_dimension_register_datum_bindings(
+                register,
+                datum_ids=datum_ids,
+                run_id=run_id,
+                region_id=region_id,
+                manifest_sha256=normalized_manifest_sha256,
+                register_sha256=register_digest,
+                source_sha256=source_sha256,
+                allowed_page_ids={page_id for page_id in page_ids if isinstance(page_id, str)},
+            )
+            register_snapshot = (register_path, register_raw, register_digest)
+
+        normalized_parameters = self._validate_parameters("visual_evidence_export", parameters)
+        self._validate_visual_evidence_datum_bindings(
+            normalized_parameters,
+            expected_run_id=run_id,
+            expected_region_id=region_id,
+            expected_manifest_sha256=normalized_manifest_sha256,
+        )
+        if register_snapshot is not None:
+            _assert_dimension_register_snapshot(register_snapshot)
 
         request = {
             "request_id": actual_request_id,
@@ -730,8 +792,12 @@ class DotNetIPCClient:
             except VisualEvidenceError as exc:
                 raise DotNetIPCProtocolError(str(exc)) from exc
             _assert_vs_t3_manifest_unchanged(manifest_path, manifest_raw_before, manifest_digest_before)
+            if register_snapshot is not None:
+                _assert_dimension_register_snapshot(register_snapshot)
             artifact_consumer(result, artifact_paths)
             _assert_vs_t3_manifest_unchanged(manifest_path, manifest_raw_before, manifest_digest_before)
+            if register_snapshot is not None:
+                _assert_dimension_register_snapshot(register_snapshot)
             return result
         finally:
             cleanup_request_files(self.ipc_dir, actual_request_id)

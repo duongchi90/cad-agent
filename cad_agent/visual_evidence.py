@@ -77,6 +77,134 @@ def snapshot_visual_run_manifest(
     return raw, validated, hashlib.sha256(raw).hexdigest()
 
 
+def snapshot_dimension_register(
+    register_path: Path,
+) -> tuple[bytes, Mapping[str, object], str]:
+    """Read and validate one exact Dimension Register byte snapshot."""
+
+    path = Path(register_path)
+    if _path_contains_windows_reparse_point(path):
+        raise VisualEvidenceError(f"Dimension Register path contains a reparse point: {path}")
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw.decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VisualEvidenceError(f"Cannot snapshot Dimension Register: {path}") from exc
+    if not isinstance(payload, Mapping):
+        raise VisualEvidenceError("Dimension Register must be a JSON object")
+    try:
+        validated = validate_visual_contract(payload, contract="dimension_register")
+    except VisualContractError as exc:
+        raise VisualEvidenceError(str(exc)) from exc
+    return raw, validated, hashlib.sha256(raw).hexdigest()
+
+
+def assert_dimension_register_unchanged(
+    register_path: Path,
+    expected_raw: bytes,
+    expected_digest: str,
+) -> None:
+    """Reject any Dimension Register byte change across evidence handoff."""
+
+    path = Path(register_path)
+    if _path_contains_windows_reparse_point(path):
+        raise VisualEvidenceError("Dimension Register path contains a reparse point")
+    try:
+        current_raw = path.read_bytes()
+    except OSError as exc:
+        raise VisualEvidenceError("Cannot re-read Dimension Register") from exc
+    current_digest = hashlib.sha256(current_raw).hexdigest()
+    if current_raw != expected_raw or current_digest != expected_digest:
+        raise VisualEvidenceError("Dimension Register changed during evidence export")
+
+
+def build_dimension_register_datum_bindings(
+    register: Mapping[str, object],
+    *,
+    datum_ids: set[str],
+    run_id: str,
+    region_id: str,
+    manifest_sha256: str,
+    register_sha256: str,
+    source_sha256: str,
+    allowed_page_ids: set[str],
+) -> list[dict[str, str]]:
+    """Create wire bindings only from confirmed, mapped register references."""
+
+    if register.get("run_id") != run_id:
+        raise VisualEvidenceError("Dimension Register run_id does not match the request")
+    if register.get("source_sha256") != source_sha256:
+        raise VisualEvidenceError("Dimension Register source_sha256 does not match the manifest")
+    if register.get("page_id") not in allowed_page_ids:
+        raise VisualEvidenceError("Dimension Register page_id is outside the manifest source scope")
+    for name, value in (
+        ("visual_run_manifest_sha256", manifest_sha256),
+        ("dimension_register_sha256", register_sha256),
+    ):
+        if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+            raise VisualEvidenceError(f"{name} must be a lowercase SHA-256")
+
+    candidates: dict[str, list[tuple[str, str | None, str]]] = {datum_id: [] for datum_id in datum_ids}
+    dimensions = register.get("dimensions")
+    if not isinstance(dimensions, list):
+        raise VisualEvidenceError("Dimension Register dimensions must be an array")
+    for dimension in dimensions:
+        if not isinstance(dimension, Mapping):
+            raise VisualEvidenceError("Dimension Register dimension entries must be objects")
+        dimension_id = dimension.get("id")
+        status = dimension.get("status")
+        if not isinstance(dimension_id, str) or not isinstance(status, str):
+            raise VisualEvidenceError("Dimension Register dimension identity is invalid")
+        for reference_name in ("from_ref", "to_ref"):
+            reference = dimension.get(reference_name)
+            if not isinstance(reference, Mapping) or reference.get("type") != "DATUM":
+                continue
+            datum_id = reference.get("id")
+            if datum_id not in candidates:
+                continue
+            candidates[datum_id].append(
+                (
+                    dimension_id,
+                    reference.get("entity_handle")
+                    if isinstance(reference.get("entity_handle"), str)
+                    else None,
+                    status,
+                )
+            )
+
+    bindings: list[dict[str, str]] = []
+    for datum_id in sorted(datum_ids):
+        matches = candidates.get(datum_id, [])
+        confirmed = [match for match in matches if match[2] == "CONFIRMED"]
+        if not confirmed:
+            raise VisualEvidenceError(
+                f"Dimension Register datum '{datum_id}' is not CONFIRMED"
+            )
+        handles = {match[1] for match in confirmed if match[1] is not None}
+        if not handles:
+            raise VisualEvidenceError(
+                f"Dimension Register datum '{datum_id}' has no entity_handle mapping"
+            )
+        if len(handles) != 1:
+            raise VisualEvidenceError(
+                f"Dimension Register datum '{datum_id}' has conflicting entity_handle mappings"
+            )
+        dimension_id = min(match[0] for match in confirmed)
+        bindings.append(
+            {
+                "id": datum_id,
+                "entity_handle": next(iter(handles)),
+                "run_id": run_id,
+                "region_id": region_id,
+                "visual_run_manifest_sha256": manifest_sha256,
+                "dimension_register_sha256": register_sha256,
+                "dimension_id": dimension_id,
+                "approval": "DIMENSION_REGISTER_CONFIRMED",
+            }
+        )
+    return bindings
+
+
 def canonical_region_config_sha256(
     region_config: Mapping[str, object],
 ) -> str:
@@ -362,8 +490,11 @@ def _remove_tree_if_safe(path: Path) -> None:
 
 __all__ = [
     "VisualEvidenceError",
+    "assert_dimension_register_unchanged",
+    "build_dimension_register_datum_bindings",
     "canonical_region_config_sha256",
     "sha256_file",
+    "snapshot_dimension_register",
     "snapshot_visual_run_manifest",
     "validate_visual_evidence_freshness",
     "write_visual_evidence",
