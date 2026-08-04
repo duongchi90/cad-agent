@@ -1,0 +1,31 @@
+{
+  "schema_version": "dimension-pilot-evidence-1.0",
+  "pilot_id": "PILOT-SYNTHETIC-001",
+  "offline_passed": true,
+  "acceptance": "NOT_RUN",
+  "plan_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "setup_evidence_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "primitive_ir_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "semantic_ir_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "dxf_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "solver": {
+    "status": "okay",
+    "dof": 6,
+    "model_dof": 0,
+    "applied_constraint_count": 0,
+    "applied_dimension_count": 1,
+    "skipped_constraint_ids": [],
+    "conflict_ids": []
+  },
+  "measurements": [
+    {
+      "dimension_id": "DIM-001",
+      "approved_value_mm": 80.0,
+      "solved_value_mm": 80.0,
+      "readback_value_mm": 80.0,
+      "residual_mm": 0.0
+    }
+  ],
+  "blockers": []
+}

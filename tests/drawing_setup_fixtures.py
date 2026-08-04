@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -148,20 +149,41 @@ def matching_setup_audit(plan: dict[str, object]) -> dict[str, object]:
     expectations = plan["setup_expectations"]
     return {
         "schema_version": "drawing-setup-audit-1.0",
-        "drawing_full_path": "SYNTHETIC_DISPOSABLE_DWG",
+        "drawing_full_path": r"C:\temp\setup-lite.dwg",
         "drawing_sha256": "b" * 64,
         "changed": False,
         "dbmod_before": 0,
         "dbmod_after": 0,
-        "variables": dict(expectations["variables"]),
+        "variables": copy.deepcopy(expectations["variables"]),
         "current_layer": expectations["current_layer"],
         "custom_properties": {
             "CAD_AGENT_SETTINGS_SHA256": plan["template"]["embedded_settings_sha256"]
         },
-        "layers": list(expectations["required_layers"]),
-        "styles": dict(expectations["required_styles"]),
-        "layouts": list(expectations["layouts"]),
+        "layers": copy.deepcopy(expectations["required_layers"]),
+        "styles": copy.deepcopy(expectations["required_styles"]),
+        "layouts": copy.deepcopy(expectations["layouts"]),
         "font_report": {"missing": [], "substituted": []},
+    }
+
+
+def matching_setup_ipc_result(
+    plan: dict[str, object], drawing_full_path: str
+) -> dict[str, object]:
+    payload = copy.deepcopy(matching_setup_audit(plan))
+    for field in ("schema_version", "drawing_full_path", "drawing_sha256"):
+        payload.pop(field)
+    return {
+        "request_id": "setup-lite-001",
+        "success": True,
+        "operation": "drawing_setup_audit",
+        "drawing_full_path": drawing_full_path,
+        "changed": False,
+        "entity_handles": [],
+        "warnings": [],
+        "errors": [],
+        "started_at": "2026-08-03T02:00:00Z",
+        "completed_at": "2026-08-03T02:00:00Z",
+        "payload": payload,
     }
 
 

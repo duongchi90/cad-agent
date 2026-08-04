@@ -84,11 +84,34 @@ present `SETUP_VERIFIED` evidence before geometry creation; the existing
 image/PDF path remains `DRAFT_REFERENCE` until that separate dimension-first
 path exists.
 
+New image/PDF run manifests record `release_profile="DRAFT_REFERENCE"`,
+`authoritative_release_eligible=false`, and `drawing_setup_evidence=null`.
+Historical manifests that predate these fields receive the same safe defaults
+when read; an explicit conflicting release claim is rejected rather than
+silently downgraded.
+
 This is orchestration and verification behavior: it does not move CAD
 algorithms into `cad_agent` and does not replace the .NET/File IPC boundary.
 `cad_agent` validates contracts and evidence, while the AutoCAD-side audit
 continues through the existing File IPC boundary. Package ownership remains
 unchanged.
+
+### Personal Lean Dimension Pilot adapter
+
+The offline Dimension Pilot is a narrow adapter, not a second CAD pipeline.
+`cad_agent.dimension_pilot` validates the hash-bound approved plan and fresh
+`SETUP_VERIFIED` evidence, converts the approved datum frame to solver-local
+coordinates, and supplies approved driving lengths plus one explicit datum
+anchor to the existing `semantic_ir_lib` SolveSpace boundary. It does not infer
+attachments from proximity, OCR, or DWG content.
+
+Closed solved geometry is converted back to world coordinates and routed
+through the existing `dxf_builder_lib` native `DIMENSION` builder and headless
+read-back reviewer. The CLI keeps candidate DXF and evidence outputs outside
+the repository and always records Mechanical acceptance as `NOT_RUN`.
+Offline readiness does not reorder or bypass acceptance: Gate A Drawing Setup
+remains before Gate B dimension acceptance, and Gate C expansion remains after
+both.
 
 ## Safety boundaries
 

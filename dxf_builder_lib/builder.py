@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from primitive_ir_lib.models import Primitive, PrimitiveIRDocument
 
@@ -60,6 +60,14 @@ _LAYER_BY_PART_TYPE: Dict[str, Tuple[str, int]] = {
 }
 _DEFAULT_LAYER: Tuple[str, int] = ("UNCLASSIFIED", 8)
 _TEXT_LAYER: Tuple[str, int] = ("TEXT", 7)  # trắng/đen
+
+
+@dataclass(frozen=True)
+class NativeLinearDimensionSpec:
+    id: str
+    geometry_primitive_id: str
+    approved_value_mm: float | None
+    source_ref: str
 
 
 @dataclass
@@ -141,22 +149,20 @@ def _ensure_unicode_text_style(doc) -> str:
 def _add_confirmed_dimensions(
     doc,
     msp,
-    primitive_doc: PrimitiveIRDocument,
+    dimension_specs: Sequence[NativeLinearDimensionSpec],
     written_geometry_by_primitive_id: Dict[str, dict],
 ) -> tuple[Dict[str, str], Dict[str, dict]]:
     """Emit dimensions from the exact line geometry already written to DXF."""
     handles: Dict[str, str] = {}
     written: Dict[str, dict] = {}
-    for validation in primitive_doc.cross_validations:
-        if validation.status != "confirmed":
-            continue
+    for spec in dimension_specs:
         line = written_geometry_by_primitive_id.get(
-            validation.geometry_primitive_id
+            spec.geometry_primitive_id
         )
         if line is None or line.get("type") != "line":
             raise ValueError(
-                "Confirmed dimension references line "
-                f"{validation.geometry_primitive_id!r}, but that line was not "
+                "Dimension spec references line "
+                f"{spec.geometry_primitive_id!r}, but that line was not "
                 "written to the DXF."
             )
         start = line["start"]
@@ -164,6 +170,10 @@ def _add_confirmed_dimensions(
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
         if length <= 0:
+            if spec.approved_value_mm is not None:
+                raise ValueError(
+                    f"Dimension spec {spec.id!r} references zero-length LINE geometry."
+                )
             continue
         # Place the dimension line on the outward normal, far enough from the
         # measured line to remain legible without changing the measurement.
@@ -182,14 +192,50 @@ def _add_confirmed_dimensions(
         )
         override.render()
         dimension = override.dimension
-        handles[validation.id] = dimension.dxf.handle
-        written[validation.id] = {
+        handles[spec.id] = dimension.dxf.handle
+        written[spec.id] = {
             "layer": "DIMENSIONS",
             "measurement": length,
-            "geometry_primitive_id": validation.geometry_primitive_id,
-            "text_primitive_id": validation.text_primitive_id,
+            "approved_value_mm": spec.approved_value_mm,
+            "geometry_primitive_id": spec.geometry_primitive_id,
+            "source_ref": spec.source_ref,
         }
     return handles, written
+
+
+def _dimension_specs_from_cross_validations(
+    primitive_doc: PrimitiveIRDocument,
+) -> list[NativeLinearDimensionSpec]:
+    return [
+        NativeLinearDimensionSpec(
+            id=validation.id,
+            geometry_primitive_id=validation.geometry_primitive_id,
+            approved_value_mm=None,
+            source_ref=validation.text_primitive_id,
+        )
+        for validation in primitive_doc.cross_validations
+        if validation.status == "confirmed"
+    ]
+
+
+def _validate_explicit_dimension_specs(
+    dimension_specs: Sequence[NativeLinearDimensionSpec],
+) -> None:
+    ids: set[str] = set()
+    for spec in dimension_specs:
+        if not spec.id or spec.id in ids:
+            raise ValueError("explicit dimension spec ids must be non-empty and unique")
+        ids.add(spec.id)
+        value = spec.approved_value_mm
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(
+                f"dimension spec {spec.id!r} approved_value_mm must be finite positive"
+            )
 
 
 def build_dxf(
@@ -200,6 +246,7 @@ def build_dxf(
     dxf_version: str = "R2010",
     build_components: bool = False,
     build_dimensions: bool = False,
+    dimension_specs: Optional[Sequence[NativeLinearDimensionSpec]] = None,
 ) -> BuildResult:
     """Build 1 file DXF thật từ `primitive_doc`. Trả về `BuildResult` —
     không raise nếu 1 primitive không vẽ được (thiếu geometry/text_data),
@@ -222,6 +269,10 @@ def build_dxf(
             "Primitive IR calibration is needs_verification; DXF build is "
             "refused until a hash-bound approval marks it verified."
         )
+    if dimension_specs is not None:
+        if not build_dimensions:
+            raise ValueError("dimension_specs requires build_dimensions=True")
+        _validate_explicit_dimension_specs(dimension_specs)
     try:
         import ezdxf
     except ImportError as exc:
@@ -309,13 +360,18 @@ def build_dxf(
         result.entity_count += 1
 
     if build_dimensions:
+        active_dimension_specs = (
+            _dimension_specs_from_cross_validations(primitive_doc)
+            if dimension_specs is None
+            else list(dimension_specs)
+        )
         (
             result.dimension_handle_by_cross_validation_id,
             result.written_dimension_by_cross_validation_id,
         ) = _add_confirmed_dimensions(
             doc,
             msp,
-            primitive_doc,
+            active_dimension_specs,
             result.written_geometry_by_primitive_id,
         )
         result.dimension_count = len(result.dimension_handle_by_cross_validation_id)

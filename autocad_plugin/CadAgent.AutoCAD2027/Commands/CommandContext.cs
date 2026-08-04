@@ -5,6 +5,7 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using CadAgent.AutoCAD2027.Drawing;
+using CadAgent.AutoCAD2027.DrawingSetup;
 using CadAgent.AutoCAD2027.Ipc;
 using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
@@ -157,6 +158,154 @@ public sealed class CommandContext
             return snapshots;
         }
 
+        public DrawingSetupSnapshot ReadDrawingSetup()
+        {
+            var database = _document.Database
+                ?? throw new InvalidOperationException("The active document has no database.");
+            var dbModBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"));
+            var variables = new Dictionary<string, double>(StringComparer.Ordinal)
+            {
+                ["INSUNITS"] = ReadSystemNumber("INSUNITS"),
+                ["MEASUREMENT"] = ReadSystemNumber("MEASUREMENT"),
+                ["LTSCALE"] = ReadSystemNumber("LTSCALE"),
+                ["CELTSCALE"] = ReadSystemNumber("CELTSCALE"),
+                ["PSLTSCALE"] = ReadSystemNumber("PSLTSCALE"),
+                ["MSLTSCALE"] = ReadSystemNumber("MSLTSCALE"),
+                ["DIMASSOC"] = ReadSystemNumber("DIMASSOC"),
+                ["ANNOALLVISIBLE"] = ReadSystemNumber("ANNOALLVISIBLE")
+            };
+            var layers = new List<LayerSetupSnapshot>();
+            var textStyles = new List<TextStyleSetupSnapshot>();
+            var dimensionStyles = new List<string>();
+            var layouts = new List<LayoutSetupSnapshot>();
+            var missingFonts = new List<string>();
+            var substitutedFonts = new List<string>();
+            string currentLayer;
+            string[] mLeaderStyles;
+            string[] tableStyles;
+
+            using (var transaction = _document.TransactionManager.StartOpenCloseTransaction())
+            {
+                var layerTable = (LayerTable)transaction.GetObject(
+                    database.LayerTableId,
+                    OpenMode.ForRead);
+                foreach (ObjectId layerId in layerTable)
+                {
+                    var layer = (LayerTableRecord)transaction.GetObject(
+                        layerId,
+                        OpenMode.ForRead);
+                    var linetype = (LinetypeTableRecord)transaction.GetObject(
+                        layer.LinetypeObjectId,
+                        OpenMode.ForRead);
+                    layers.Add(new(layer.Name, linetype.Name, layer.IsPlottable));
+                }
+
+                var currentLayerRecord = (LayerTableRecord)transaction.GetObject(
+                    database.Clayer,
+                    OpenMode.ForRead);
+                currentLayer = currentLayerRecord.Name;
+
+                var textStyleTable = (TextStyleTable)transaction.GetObject(
+                    database.TextStyleTableId,
+                    OpenMode.ForRead);
+                foreach (ObjectId textStyleId in textStyleTable)
+                {
+                    var textStyle = (TextStyleTableRecord)transaction.GetObject(
+                        textStyleId,
+                        OpenMode.ForRead);
+                    var font = textStyle.FileName ?? string.Empty;
+                    var bigFont = textStyle.BigFontFileName ?? string.Empty;
+                    textStyles.Add(new(textStyle.Name, font, bigFont));
+                    InspectDeclaredFont(font, database, missingFonts, substitutedFonts);
+                    InspectDeclaredFont(bigFont, database, missingFonts, substitutedFonts);
+                }
+
+                var dimensionStyleTable = (DimStyleTable)transaction.GetObject(
+                    database.DimStyleTableId,
+                    OpenMode.ForRead);
+                foreach (ObjectId dimensionStyleId in dimensionStyleTable)
+                {
+                    var dimensionStyle = (DimStyleTableRecord)transaction.GetObject(
+                        dimensionStyleId,
+                        OpenMode.ForRead);
+                    dimensionStyles.Add(dimensionStyle.Name);
+                }
+
+                var layoutDictionary = (DBDictionary)transaction.GetObject(
+                    database.LayoutDictionaryId,
+                    OpenMode.ForRead);
+                foreach (DBDictionaryEntry entry in layoutDictionary)
+                {
+                    var layout = (Layout)transaction.GetObject(entry.Value, OpenMode.ForRead);
+                    if (layout.ModelType)
+                    {
+                        continue;
+                    }
+
+                    var viewportScales = new List<double>();
+                    var viewportsLocked = true;
+                    var paperSpaceViewportId = layout.GetViewports()
+                        .Cast<ObjectId>()
+                        .FirstOrDefault();
+                    var layoutBlock = (BlockTableRecord)transaction.GetObject(
+                        layout.BlockTableRecordId,
+                        OpenMode.ForRead);
+                    foreach (ObjectId entityId in layoutBlock)
+                    {
+                        if (entityId == paperSpaceViewportId
+                            || transaction.GetObject(entityId, OpenMode.ForRead, false)
+                            is not Viewport viewport
+                            || viewport.CustomScale <= 0)
+                        {
+                            continue;
+                        }
+
+                        viewportScales.Add(viewport.CustomScale);
+                        viewportsLocked &= viewport.Locked;
+                    }
+
+                    if (viewportScales.Count > 0)
+                    {
+                        layouts.Add(new(
+                            layout.LayoutName,
+                            viewportScales.OrderBy(scale => scale).ToArray(),
+                            viewportsLocked));
+                    }
+                }
+
+                mLeaderStyles = ReadDictionaryNames(
+                    transaction,
+                    database.MLeaderStyleDictionaryId);
+                tableStyles = ReadDictionaryNames(
+                    transaction,
+                    database.TableStyleDictionaryId);
+            }
+
+            var customProperties = ReadCustomProperties(database);
+            var dbModAfter = Convert.ToInt32(ReadSystemNumber("DBMOD"));
+            if (dbModBefore != dbModAfter)
+            {
+                throw new InvalidOperationException(
+                    $"Drawing setup audit changed DBMOD from {dbModBefore} to {dbModAfter}.");
+            }
+
+            return new DrawingSetupSnapshot(
+                database.Filename,
+                dbModBefore,
+                dbModAfter,
+                variables,
+                currentLayer,
+                customProperties,
+                layers.OrderBy(layer => layer.Name, StringComparer.Ordinal).ToArray(),
+                textStyles.OrderBy(style => style.Name, StringComparer.Ordinal).ToArray(),
+                dimensionStyles.OrderBy(name => name, StringComparer.Ordinal).ToArray(),
+                mLeaderStyles,
+                tableStyles,
+                layouts.OrderBy(layout => layout.Name, StringComparer.Ordinal).ToArray(),
+                missingFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray(),
+                substitutedFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        }
+
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
         {
             var snapshots = new List<MechanicalComponentSnapshot>();
@@ -229,6 +378,87 @@ public sealed class CommandContext
 
         private static string NormalizeMechanicalTag(string? tag) =>
             (tag ?? string.Empty).Trim().ToUpperInvariant();
+
+        private static double ReadSystemNumber(string name) =>
+            Convert.ToDouble(AcadApplication.GetSystemVariable(name), CultureInfo.InvariantCulture);
+
+        private static string[] ReadDictionaryNames(
+            Transaction transaction,
+            ObjectId dictionaryId)
+        {
+            if (dictionaryId.IsNull)
+            {
+                return Array.Empty<string>();
+            }
+
+            var dictionary = (DBDictionary)transaction.GetObject(dictionaryId, OpenMode.ForRead);
+            var names = new List<string>();
+            foreach (DBDictionaryEntry entry in dictionary)
+            {
+                _ = transaction.GetObject(entry.Value, OpenMode.ForRead);
+                names.Add(entry.Key);
+            }
+
+            return names.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        }
+
+        private static IReadOnlyDictionary<string, string> ReadCustomProperties(Database database)
+        {
+            var properties = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            var customProperties = database.SummaryInfo.CustomProperties;
+            while (customProperties.MoveNext())
+            {
+                var key = Convert.ToString(customProperties.Key, CultureInfo.InvariantCulture);
+                if (string.IsNullOrEmpty(key))
+                {
+                    continue;
+                }
+
+                properties[key] = Convert.ToString(customProperties.Value, CultureInfo.InvariantCulture)
+                    ?? string.Empty;
+            }
+
+            return properties;
+        }
+
+        private static void InspectDeclaredFont(
+            string declaredFont,
+            Database database,
+            ICollection<string> missingFonts,
+            ICollection<string> substitutedFonts)
+        {
+            if (string.IsNullOrWhiteSpace(declaredFont))
+            {
+                return;
+            }
+
+            string? resolvedPath;
+            try
+            {
+                resolvedPath = HostApplicationServices.Current.FindFile(
+                    declaredFont,
+                    database,
+                    FindFileHint.Default);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                missingFonts.Add(declaredFont);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(resolvedPath))
+            {
+                missingFonts.Add(declaredFont);
+                return;
+            }
+
+            var declaredName = Path.GetFileName(declaredFont);
+            var resolvedName = Path.GetFileName(resolvedPath);
+            if (!string.Equals(declaredName, resolvedName, StringComparison.OrdinalIgnoreCase))
+            {
+                substitutedFonts.Add($"{declaredFont} -> {resolvedName}");
+            }
+        }
 
         private static bool TryParseHandle(string? value, out long handle)
         {

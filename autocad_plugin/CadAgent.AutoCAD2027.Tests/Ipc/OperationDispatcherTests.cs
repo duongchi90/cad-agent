@@ -1,9 +1,11 @@
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
+using CadAgent.AutoCAD2027.DrawingSetup;
 using CadAgent.AutoCAD2027.Ipc;
 using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
+using CadAgent.AutoCAD2027.Tests.DrawingSetup;
 using Xunit;
 
 namespace CadAgent.AutoCAD2027.Tests.Ipc;
@@ -141,6 +143,75 @@ public sealed class OperationDispatcherTests
         Assert.False(result.Success);
         Assert.Contains(result.Errors!, error => error.Contains("full path", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(0, mechanical.ExecuteCallCount);
+    }
+
+    [Fact]
+    public void DrawingSetupAuditReturnsAReadOnlySnapshotForTheExactActivePath()
+    {
+        var path = @"C:\temp\setup-lite.dwg";
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            DrawingSetup = DrawingSetupFixtures.VerifiedSnapshot(path)
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "drawing_setup_audit",
+            "setup-lite-001",
+            path,
+            Parameters()));
+
+        Assert.True(result.Success);
+        Assert.Equal("drawing_setup_audit", result.Operation);
+        Assert.Equal(path, result.DrawingFullPath);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Empty(result.Warnings!);
+        Assert.Empty(result.Errors!);
+        Assert.False(result.Payload!["changed"].GetBoolean());
+        Assert.Equal(1, gateway.ReadDrawingSetupCallCount);
+    }
+
+    [Fact]
+    public void DrawingSetupAuditRejectsParametersBeforeReadingTheDrawing()
+    {
+        var path = @"C:\temp\setup-lite.dwg";
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            DrawingSetup = DrawingSetupFixtures.VerifiedSnapshot(path)
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "drawing_setup_audit",
+            "setup-lite-parameters",
+            path,
+            Parameters(("mutate", JsonSerializer.SerializeToElement(true)))));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors!, error => error.Contains("empty", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
+    }
+
+    [Fact]
+    public void DrawingSetupAuditRejectsSameNameUnderAnotherDirectoryBeforeReadingTheDrawing()
+    {
+        var activePath = @"C:\approved\setup-lite.dwg";
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = activePath,
+            DrawingSetup = DrawingSetupFixtures.VerifiedSnapshot(activePath)
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "drawing_setup_audit",
+            "setup-lite-mismatch",
+            @"C:\other\setup-lite.dwg",
+            Parameters()));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors!, error => error.Contains("full path", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
     }
 
     [Fact]
@@ -379,9 +450,13 @@ public sealed class OperationDispatcherTests
 
         public IReadOnlyList<EntitySnapshot> Entities { get; init; } = Array.Empty<EntitySnapshot>();
 
+        public DrawingSetupSnapshot? DrawingSetup { get; init; }
+
         public Exception? ExceptionToThrow { get; init; }
 
         public int ReadEntitiesCallCount { get; private set; }
+
+        public int ReadDrawingSetupCallCount { get; private set; }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
@@ -392,6 +467,13 @@ public sealed class OperationDispatcherTests
             }
 
             return Entities;
+        }
+
+        public DrawingSetupSnapshot ReadDrawingSetup()
+        {
+            ReadDrawingSetupCallCount++;
+            return DrawingSetup
+                ?? throw new InvalidOperationException("No drawing setup fixture was configured.");
         }
     }
 

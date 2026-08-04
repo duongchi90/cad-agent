@@ -37,6 +37,80 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   gate is `NOT RUN`. No hosted or contract-only result is a substitute for
   operator-controlled AutoCAD Mechanical evidence.
 
+## Personal Lean Pilot — Gate A Setup Lite
+
+- State: **Partially verified; Gate A remains open**. The personal-project
+  rebaseline is approved in
+  `docs/superpowers/specs/2026-08-03-personal-lean-pilot-rebaseline-design.md`;
+  its executable Gate A plan is
+  `docs/superpowers/plans/2026-08-03-personal-lean-pilot-gate-a-setup-lite.md`.
+- Offline implementation candidate: `579732a511e6775ed0b749a28f6627c7b92dba89`
+  on `codex/personal-lean-pilot-rebaseline`. It includes legacy
+  `DRAFT_REFERENCE` classification, the read-only Drawing Setup snapshot and
+  IPC operation, SHA-bound audit/verify CLI commands, deterministic blockers,
+  stale-evidence refusal, and the opt-in one-drawing live gate.
+- Focused unavailable-state run: the Drawing Setup, IPC, live-harness,
+  contract, and CLI suites reported `114 passed, 2 skipped, 18 subtests
+  passed`. The personal live test skipped because
+  `CAD_AGENT_LEAN_DISPOSABLE_DWG`, `CAD_AGENT_AUTOCAD_HWND`, and
+  `CAD_AGENT_DOTNET_IPC_DIR` were absent. This skip is not live acceptance.
+- Authoritative verifier on the implementation candidate: `scripts/verify.ps1
+  -SkipAutoCADDotNet` exited `0`; dotnet_ipc JUnit was `38/0/0/0`, offline
+  JUnit was `547/0/0/0`, the `real_data` unavailable-state probe was `2/2`
+  skipped, and the `autocad_mechanical` unavailable-state probe was `8/8`
+  skipped. Python was 3.11.9 and the required Tesseract version was present.
+  The AutoCAD .NET build/test gate is **NOT RUN** because `dotnet` is absent;
+  the AutoCAD live marker is also **NOT RUN**.
+- External acceptance prerequisites checked on 2026-08-03 were all absent:
+  owner-approved DWT, disposable DWG, AutoCAD HWND, plugin path, Drawing
+  Definition, and .NET IPC directory. Therefore the real three-command flow
+  and profile gate are **NOT RUN**. No personal profile metadata or live review
+  record was created, because approved values and a real run do not exist.
+- Acceptance consequence: no owner-approved disposable drawing has produced
+  hash-stable, DBMOD-stable `SETUP_VERIFIED` evidence. Gate A cannot be called
+  complete, and the legacy image/PDF path remains `DRAFT_REFERENCE` rather
+  than authoritative.
+
+## Personal Lean Pilot — Gate B offline dimension candidate
+
+- State: **Partially verified; Gate A remains open and Gate B acceptance is
+  NOT RUN**. The approved offline continuation is recorded in
+  `docs/superpowers/specs/2026-08-03-personal-lean-pilot-offline-continuation-design.md`
+  and its implementation plan is
+  `docs/superpowers/plans/2026-08-03-personal-lean-pilot-gate-b-dimension-offline.md`.
+  The offline implementation candidate is
+  `88bdb1c` on
+  `codex/personal-lean-pilot-rebaseline`.
+- Implemented scope: strict dimension plan/evidence contracts; approved
+  driving lengths and explicit datum anchoring at the existing SolveSpace
+  boundary; native editable DXF `DIMENSION` generation and read-back;
+  hash/provenance/Setup refusal; immutable IR byte snapshots; post-review and
+  post-publish DXF hash binding; a non-overwriting temporary-output publish;
+  rogue-geometry refusal; and one non-overwriting private-output CLI.
+  Successful offline evidence still fixes `acceptance=NOT_RUN`.
+- Focused Gate B offline run on 2026-08-03: **155 passed** with no failure.
+  It covered contracts, orchestration, CLI, Drawing Setup, constraint solving,
+  native DXF building, and headless review, including mutation and
+  non-overwrite regressions.
+- Authoritative verifier on the candidate:
+  `scripts/verify.ps1 -SkipAutoCADDotNet` exited `0`; dotnet_ipc JUnit was
+  `38/0/0/0`, offline JUnit was `603/0/0/0`, the `real_data`
+  unavailable-state probe was `2/2` skipped, and the `autocad_mechanical`
+  unavailable-state probe was `8/8` skipped. Python was 3.11.9, Ruff passed,
+  and the required Tesseract version was present.
+- Required gates not executed: the owner-approved compatible geometry export
+  is absent, so the private `real_data` constraint benchmark is **NOT RUN**;
+  Gate B private acceptance is **NOT RUN**; the AutoCAD .NET gate is **NOT
+  RUN**; and the AutoCAD Mechanical 2027 live gate is **NOT RUN** because no
+  qualifying session/prerequisites exist on this machine. Unavailable-state
+  `SKIP` results are not acceptance evidence.
+- Sample custody: an owner-provided DWG was hash-copied to a non-overwriting
+  custody location outside Git, and the source hash remained stable. Content
+  inspection, conversion, open, save, and mutation were all **NOT RUN**.
+- Acceptance consequence: the Gate A → Gate B → Gate C order is unchanged.
+  No `PERSONAL_VERIFIED`, `SETUP_VERIFIED` live outcome, or release outcome is
+  claimed by this offline candidate.
+
 ## AutoCAD .NET plugin — Option A / phần cũ 1
 
 This subsection records the completed Windows-only managed .NET slice. The

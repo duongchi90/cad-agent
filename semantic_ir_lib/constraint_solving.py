@@ -12,19 +12,18 @@ hiện, dùng làm input sạch cho DXF Builder (ezdxf) ở bước sau — trá
 đúng y nguyên sai số của ảnh scan vào bản vẽ CAD.
 
 CHIẾN LƯỢC KHỞI TẠO (quan trọng, đã test thật — xem ghi chú bên dưới):
-KHÔNG dùng `sys.dragged()` để "ghim" điểm — solvespace dùng dragged() như
-1 constraint CỨNG (dùng cho tương tác kéo-thả trong GUI), ghim TẤT CẢ điểm
-sẽ làm hệ INCONSISTENT ngay khi có 1 constraint chưa thoả mãn hoàn toàn
-(đã test thật, xem lịch sử phiên làm việc). Thay vào đó: khởi tạo mọi điểm
-tại đúng toạ độ mm đã đo (initial guess), KHÔNG ghim gì cả, để Newton-Raphson
-của solver tự hội tụ về nghiệm GẦN initial guess nhất thoả mãn constraint —
-đã test thật cho kết quả di chuyển tối thiểu (~dưới 1mm cho line lệch nhẹ).
+khởi tạo mọi điểm tại đúng toạ độ mm đã đo (initial guess), không ghim hàng
+loạt, để Newton-Raphson tự hội tụ về nghiệm gần nhất thoả mãn constraint.
+Chỉ khi caller cung cấp một `DatumAnchor` tường minh mới dùng `dragged()` cho
+đúng một điểm gốc và `horizontal()` cho trục X; cách này loại chuyển động cứng
+mà không khoá toàn bộ hình học.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal, Sequence, Tuple
 
 from primitive_ir_lib.models import Point2D, Primitive, PrimitiveIRDocument
 
@@ -50,6 +49,25 @@ class SolveResult:
     solved_primitives: Dict[str, SolvedPrimitive] = field(default_factory=dict)
     skipped_constraints: List[str] = field(default_factory=list)  # id constraint không áp dụng được
     applied_constraint_count: int = 0
+    model_dof: int | None = None
+    applied_driving_length_count: int = 0
+    driving_length_residual_mm: Dict[str, float] = field(default_factory=dict)
+    conflict_constraint_ids: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DrivingLengthConstraint:
+    id: str
+    primitive_id: str
+    value_mm: float
+
+
+@dataclass(frozen=True)
+class DatumAnchor:
+    id: str
+    origin_primitive_id: str
+    origin_endpoint: Literal["start", "end"]
+    x_axis_primitive_id: str
 
 
 def _closest_endpoint_pair(
@@ -79,6 +97,9 @@ def _closest_endpoint_pair(
 def solve_constraints(
     primitive_doc: PrimitiveIRDocument,
     constraints: List[Constraint],
+    *,
+    driving_lengths: Sequence[DrivingLengthConstraint] = (),
+    datum_anchor: DatumAnchor | None = None,
 ) -> SolveResult:
     """Entry point. `constraints` nên là output đã qua
     `constraint_pruning.prune_constraints()` — hàm này KHÔNG tự prune (tách
@@ -100,7 +121,39 @@ def solve_constraints(
         p.id: p for p in primitive_doc.primitives if p.type == "line" and p.geometry is not None
     }
 
+    driving_ids: set[str] = set()
+    for driving in driving_lengths:
+        if not driving.id or driving.id in driving_ids:
+            raise ValueError("driving length ids must be non-empty and unique")
+        driving_ids.add(driving.id)
+        if (
+            isinstance(driving.value_mm, bool)
+            or not isinstance(driving.value_mm, (int, float))
+            or not math.isfinite(driving.value_mm)
+            or driving.value_mm <= 0
+        ):
+            raise ValueError(f"driving length {driving.id} value_mm must be finite positive")
+        if driving.primitive_id not in line_by_id:
+            raise ValueError(
+                f"driving length {driving.id} references missing line {driving.primitive_id}"
+            )
+
+    if datum_anchor is not None:
+        if not datum_anchor.id:
+            raise ValueError("datum anchor id must be non-empty")
+        if datum_anchor.origin_endpoint not in {"start", "end"}:
+            raise ValueError("datum anchor origin_endpoint must be start or end")
+        if datum_anchor.origin_primitive_id not in line_by_id:
+            raise ValueError("datum anchor origin primitive must reference an existing line")
+        if datum_anchor.x_axis_primitive_id not in line_by_id:
+            raise ValueError("datum anchor x-axis primitive must reference an existing line")
+
     relevant_ids = {pid for c in constraints for pid in c.primitive_ids if pid in line_by_id}
+    relevant_ids.update(driving.primitive_id for driving in driving_lengths)
+    if datum_anchor is not None:
+        relevant_ids.update(
+            {datum_anchor.origin_primitive_id, datum_anchor.x_axis_primitive_id}
+        )
 
     # SolveSpace receives two point coordinates for every relevant line. Its
     # nonlinear solve is retried in three constraint orders below, so starting
@@ -136,7 +189,15 @@ def solve_constraints(
             line_handles_[pid] = sys_.add_line_2d(p_start, p_end, wp_)
 
         applied_ = 0
+        applied_driving_ = 0
         skipped_: List[str] = []
+        constraint_id_by_handle_: Dict[int, str] = {}
+
+        def _record_constraint(source_id: str, operation) -> None:
+            before = sys_.cons_len()
+            operation()
+            for handle in range(before + 1, sys_.cons_len() + 1):
+                constraint_id_by_handle_[handle] = source_id
 
         for c in ordered_constraints:
             if c.type not in _SUPPORTED_TYPES:
@@ -150,11 +211,11 @@ def solve_constraints(
             la, lb = line_handles_[a], line_handles_[b]
 
             if c.type == "parallel":
-                sys_.parallel(la, lb, wp_)
+                _record_constraint(c.id, lambda: sys_.parallel(la, lb, wp_))
             elif c.type == "perpendicular":
-                sys_.perpendicular(la, lb, wp_)
+                _record_constraint(c.id, lambda: sys_.perpendicular(la, lb, wp_))
             elif c.type == "equal_length":
-                sys_.equal(la, lb, wp_)
+                _record_constraint(c.id, lambda: sys_.equal(la, lb, wp_))
             elif c.type == "coincident_endpoint":
                 prim_a, prim_b = line_by_id[a], line_by_id[b]
                 which_a, which_b = _closest_endpoint_pair(
@@ -163,19 +224,52 @@ def solve_constraints(
                 )
                 pt_a = point_handles_[a][0] if which_a == "start" else point_handles_[a][1]
                 pt_b = point_handles_[b][0] if which_b == "start" else point_handles_[b][1]
-                sys_.coincident(pt_a, pt_b, wp_)
+                _record_constraint(c.id, lambda: sys_.coincident(pt_a, pt_b, wp_))
             elif c.type == "collinear":
                 # Chưa có constraint 'collinear' trực tiếp trong solvespace —
                 # dùng point-line coincident (đã có sẵn 'parallel' riêng ở 1
                 # Constraint khác cùng cặp, xem detect_constraints(): collinear
                 # luôn đi kèm parallel) + ép 1 điểm của line b nằm trên line a.
                 pt_b_start = point_handles_[b][0]
-                sys_.coincident(pt_b_start, la, wp_)
+                _record_constraint(c.id, lambda: sys_.coincident(pt_b_start, la, wp_))
 
             applied_ += 1
 
+        for driving in driving_lengths:
+            p_start, p_end = point_handles_[driving.primitive_id]
+            _record_constraint(
+                driving.id,
+                lambda p_start=p_start, p_end=p_end, driving=driving: sys_.distance(
+                    p_start,
+                    p_end,
+                    driving.value_mm,
+                    wp_,
+                ),
+            )
+            applied_driving_ += 1
+
+        if datum_anchor is not None:
+            origin_points = point_handles_[datum_anchor.origin_primitive_id]
+            origin_point = origin_points[0] if datum_anchor.origin_endpoint == "start" else origin_points[1]
+            _record_constraint(
+                f"{datum_anchor.id}.origin",
+                lambda: sys_.dragged(origin_point, wp_),
+            )
+            _record_constraint(
+                f"{datum_anchor.id}.x_axis",
+                lambda: sys_.horizontal(line_handles_[datum_anchor.x_axis_primitive_id], wp_),
+            )
+
         flag = sys_.solve()
-        return status_map.get(flag, f"unknown({flag})"), sys_, point_handles_, applied_, skipped_
+        return (
+            status_map.get(flag, f"unknown({flag})"),
+            sys_,
+            point_handles_,
+            applied_,
+            applied_driving_,
+            skipped_,
+            constraint_id_by_handle_,
+        )
 
     # THỬ NHIỀU THỨ TỰ áp constraint — đã test thật và xác nhận Newton-Raphson
     # của solvespace NHẠY VỚI THỨ TỰ constraint được thêm vào cho initial
@@ -200,10 +294,20 @@ def solve_constraints(
     sys = None
     point_handles: Dict[str, Tuple[object, object]] = {}
     applied = 0
+    applied_driving = 0
     skipped: List[str] = []
+    constraint_id_by_handle: Dict[int, str] = {}
 
     for attempt in attempts:
-        status, sys, point_handles, applied, skipped = _build_and_solve(attempt)
+        (
+            status,
+            sys,
+            point_handles,
+            applied,
+            applied_driving,
+            skipped,
+            constraint_id_by_handle,
+        ) = _build_and_solve(attempt)
         if status == "okay":
             break
 
@@ -223,10 +327,37 @@ def solve_constraints(
             displacement_mm=round(displacement, 4),
         )
 
+    residuals = {
+        driving.id: round(
+            abs(
+                math.hypot(
+                    solved[driving.primitive_id].end.x
+                    - solved[driving.primitive_id].start.x,
+                    solved[driving.primitive_id].end.y
+                    - solved[driving.primitive_id].start.y,
+                )
+                - driving.value_mm
+            ),
+            9,
+        )
+        for driving in driving_lengths
+    }
+    conflict_constraint_ids = sorted(
+        {
+            constraint_id_by_handle[handle]
+            for handle in sys.failures()
+            if handle in constraint_id_by_handle
+        }
+    )
+
     return SolveResult(
         status=status,
         dof=sys.dof(),
         solved_primitives=solved,
         skipped_constraints=skipped,
         applied_constraint_count=applied,
+        model_dof=max(0, sys.dof() - 6) if datum_anchor is not None else None,
+        applied_driving_length_count=applied_driving,
+        driving_length_residual_mm=residuals,
+        conflict_constraint_ids=conflict_constraint_ids,
     )

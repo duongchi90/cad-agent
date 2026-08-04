@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/dimension-pilot-plan-1.0",
+  "title": "Dimension Pilot Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "pilot_id",
+    "view_id",
+    "source_sha256",
+    "primitive_ir_sha256",
+    "semantic_ir_sha256",
+    "setup",
+    "measurement_tolerance_mm",
+    "datum",
+    "dimensions",
+    "constraint_ids",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": {"const": "dimension-pilot-plan-1.0"},
+    "pilot_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "view_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "primitive_ir_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "semantic_ir_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "setup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_sha256",
+        "setup_plan_sha256",
+        "drawing_profile_sha256",
+        "template_file_sha256"
+      ],
+      "properties": {
+        "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "setup_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "drawing_profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "template_file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "measurement_tolerance_mm": {"type": "number", "exclusiveMinimum": 0},
+    "datum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "origin_mm",
+        "origin_attachment",
+        "x_axis",
+        "y_axis",
+        "x_axis_primitive_id",
+        "status",
+        "approval"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+        "origin_mm": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number"}
+        },
+        "origin_attachment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["primitive_id", "endpoint"],
+          "properties": {
+            "primitive_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+            "endpoint": {"enum": ["start", "end"]}
+          }
+        },
+        "x_axis": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number"}
+        },
+        "y_axis": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number"}
+        },
+        "x_axis_primitive_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+        "status": {"const": "APPROVED"},
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approved_by", "reference"],
+          "properties": {
+            "approved_by": {"type": "string", "minLength": 1},
+            "reference": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "value_mm", "role", "from", "to", "status", "approval"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+          "kind": {"const": "linear"},
+          "value_mm": {"type": "number", "exclusiveMinimum": 0},
+          "role": {"const": "driving"},
+          "from": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["primitive_id", "endpoint"],
+            "properties": {
+              "primitive_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+              "endpoint": {"enum": ["start", "end"]}
+            }
+          },
+          "to": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["primitive_id", "endpoint"],
+            "properties": {
+              "primitive_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+              "endpoint": {"enum": ["start", "end"]}
+            }
+          },
+          "status": {"const": "APPROVED"},
+          "approval": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["approved_by", "reference"],
+            "properties": {
+              "approved_by": {"type": "string", "minLength": 1},
+              "reference": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "constraint_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approved_by", "reference"],
+      "properties": {
+        "approved_by": {"type": "string", "minLength": 1},
+        "reference": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

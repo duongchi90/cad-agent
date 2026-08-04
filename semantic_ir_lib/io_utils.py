@@ -93,12 +93,10 @@ def _primitive_from_dict(d: dict) -> Primitive:
     )
 
 
-def load_primitive_ir_document(path: str) -> PrimitiveIRDocument:
+def _primitive_ir_document_from_dict(data: dict) -> PrimitiveIRDocument:
     """Đọc file JSON Primitive IR (output Phase 1) và dựng lại thành
     PrimitiveIRDocument object thật — dùng làm input cho
     `semantic_ir_lib.assemble.build_semantic_document()`."""
-    data = load_document_dict(path)
-
     sd = data["source_document"]
     source_document = SourceDocument(
         file_name=sd["file_name"], page_index=sd["page_index"],
@@ -144,6 +142,19 @@ def load_primitive_ir_document(path: str) -> PrimitiveIRDocument:
     )
 
 
+def load_primitive_ir_document(path: str) -> PrimitiveIRDocument:
+    """Load a Primitive IR document from a JSON file."""
+    return _primitive_ir_document_from_dict(load_document_dict(path))
+
+
+def load_primitive_ir_document_bytes(payload: bytes) -> PrimitiveIRDocument:
+    """Load a Primitive IR document from one immutable JSON payload."""
+    data = json.loads(payload.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Primitive IR JSON root must be an object")
+    return _primitive_ir_document_from_dict(data)
+
+
 def _geometry_summary_from_dict(d: Optional[dict]) -> Optional[GeometrySummary]:
     if not d:
         return None
@@ -181,15 +192,13 @@ def _constraint_from_dict(d: dict) -> Constraint:
     )
 
 
-def load_semantic_ir_document(path: str) -> SemanticIRDocument:
+def _semantic_ir_document_from_dict(data: dict) -> SemanticIRDocument:
     """Đọc file JSON Semantic IR (output Phase 2, vd
     `demo_output/semantic_ir_demo_output.json`) và dựng lại thành
     `SemanticIRDocument` object thật (parts/constraints là dataclass thật,
     không phải dict thô) — cùng lý do với `load_primitive_ir_document()`:
     Phase 3 (DXF Builder) cần chạy ĐỘC LẬP với Phase 2, đọc file .json đã
     lưu từ lần chạy trước, không dùng chung object trong bộ nhớ."""
-    data = load_document_dict(path)
-
     ref_d = data["primitive_ir_ref"]
     primitive_ir_ref = PrimitiveIRRef(
         file_name=ref_d["file_name"],
@@ -206,3 +215,16 @@ def load_semantic_ir_document(path: str) -> SemanticIRDocument:
         constraints=constraints,
         schema_version=data.get("schema_version", "1.0.0"),
     )
+
+
+def load_semantic_ir_document(path: str) -> SemanticIRDocument:
+    """Load a Semantic IR document from a JSON file."""
+    return _semantic_ir_document_from_dict(load_document_dict(path))
+
+
+def load_semantic_ir_document_bytes(payload: bytes) -> SemanticIRDocument:
+    """Load a Semantic IR document from one immutable JSON payload."""
+    data = json.loads(payload.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Semantic IR JSON root must be an object")
+    return _semantic_ir_document_from_dict(data)

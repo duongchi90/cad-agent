@@ -240,6 +240,179 @@ def _resume_pdf_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _drawing_setup_plan_command(args: argparse.Namespace) -> int:
+    from .drawing_contracts import read_contract
+    from .drawing_setup import create_setup_plan
+
+    output = args.output.resolve()
+    plan = create_setup_plan(
+        run_id=args.run_id,
+        definition=read_contract(args.definition.resolve(), contract="drawing_definition"),
+        profile=read_contract(args.profile.resolve(), contract="drawing_profile"),
+        domain_pack=read_contract(args.domain_pack.resolve(), contract="domain_pack"),
+        template_manifest=read_contract(
+            args.template_manifest.resolve(), contract="template_manifest"
+        ),
+        template_file=args.template_file.resolve(),
+    )
+    write_manifest(output, plan)
+    print(output)
+    return 0
+
+
+def _drawing_setup_audit_command(args: argparse.Namespace) -> int:
+    from mcp_integration_lib.dotnet_ipc import (
+        DotNetIPCClient,
+        DotNetIPCError,
+        make_windows_dotnet_dispatch_trigger,
+    )
+
+    from .drawing_setup import create_setup_audit
+
+    drawing = args.drawing.resolve()
+    if not drawing.is_file():
+        raise CommandError(f"drawing must be an existing regular file: {drawing}")
+    if drawing.suffix.lower() not in {".dwg", ".dxf"}:
+        raise CommandError("drawing-setup-audit accepts only a .dwg or .dxf drawing")
+    output = args.output.resolve()
+    if output.suffix.lower() != ".json":
+        raise CommandError("drawing-setup-audit output must be a .json file")
+    if output.exists():
+        raise CommandError(f"drawing-setup-audit output already exists: {output}")
+
+    before = sha256_file(drawing)
+    try:
+        result = DotNetIPCClient(
+            ipc_dir=args.ipc_dir,
+            timeout_s=args.timeout_s,
+            trigger=make_windows_dotnet_dispatch_trigger(args.hwnd),
+        ).drawing_setup_audit(drawing, drawing_sha256=before)
+    except DotNetIPCError as exc:
+        raise CommandError(f"drawing_setup_audit IPC failed: {exc}") from exc
+    try:
+        after = sha256_file(drawing)
+    except OSError as exc:
+        raise CommandError("source_changed: drawing became unavailable during setup audit") from exc
+    if after != before:
+        raise CommandError("source_changed: drawing changed during setup audit")
+
+    write_manifest(output, create_setup_audit(drawing, before, result))
+    print(output)
+    return 0
+
+
+def _drawing_setup_verify_command(args: argparse.Namespace) -> int:
+    from .drawing_contracts import read_contract
+    from .drawing_setup import evaluate_setup_plan
+
+    output = args.output.resolve()
+    if output.suffix.lower() != ".json":
+        raise CommandError("drawing-setup-verify output must be a .json file")
+    if output.exists():
+        raise CommandError(f"drawing-setup-verify output already exists: {output}")
+
+    evidence = evaluate_setup_plan(
+        read_contract(args.plan.resolve(), contract="drawing_setup_plan"),
+        read_contract(args.audit.resolve(), contract="drawing_setup_audit"),
+        verified_by=args.verified_by,
+        approval_reference=args.approval_reference,
+    )
+    write_manifest(output, evidence)
+    print(output)
+    if evidence["status"] == "SETUP_VERIFIED":
+        return 0
+
+    blockers = evidence["blockers"]
+    summary = ", ".join(
+        f"{item['code']}:{item['path']}" for item in blockers if isinstance(item, dict)
+    )
+    print(f"cad_agent: drawing setup NEEDS_REVIEW: {summary}", file=sys.stderr)
+    return 2
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _dimension_pilot_command(args: argparse.Namespace) -> int:
+    from .dimension_contracts import read_dimension_contract
+    from .dimension_pilot import run_dimension_pilot, write_dimension_evidence
+    from .drawing_contracts import read_contract
+
+    inputs = {
+        "plan": args.plan.resolve(),
+        "setup plan": args.setup_plan.resolve(),
+        "setup evidence": args.setup_evidence.resolve(),
+        "source": args.source.resolve(),
+        "Primitive IR": args.primitive_ir.resolve(),
+        "Semantic IR": args.semantic_ir.resolve(),
+    }
+    for label, path in inputs.items():
+        if not path.is_file():
+            raise CommandError(f"Dimension Pilot {label} must be an existing file: {path}")
+
+    output_dxf = args.output_dxf.resolve()
+    output_evidence = args.output_evidence.resolve()
+    if output_dxf.suffix.lower() != ".dxf":
+        raise CommandError("Dimension Pilot output-dxf must be a .dxf file")
+    if output_evidence.suffix.lower() != ".json":
+        raise CommandError("Dimension Pilot output-evidence must be a .json file")
+    for label, path in (
+        ("output-dxf", output_dxf),
+        ("output-evidence", output_evidence),
+    ):
+        if path.exists():
+            raise CommandError(f"Dimension Pilot {label} already exists: {path}")
+
+    repository = Path(__file__).resolve().parents[1]
+    if _is_within(output_dxf, repository) or _is_within(
+        output_evidence,
+        repository,
+    ):
+        raise CommandError("Dimension Pilot outputs must remain outside the repository")
+
+    plan = read_dimension_contract(inputs["plan"], contract="plan")
+    setup_plan = read_contract(
+        inputs["setup plan"],
+        contract="drawing_setup_plan",
+    )
+    setup_evidence = read_contract(
+        inputs["setup evidence"],
+        contract="drawing_setup_evidence",
+    )
+    run = run_dimension_pilot(
+        plan=plan,
+        setup_plan=setup_plan,
+        setup_evidence=setup_evidence,
+        source_path=inputs["source"],
+        primitive_ir_path=inputs["Primitive IR"],
+        semantic_ir_path=inputs["Semantic IR"],
+        output_dxf=output_dxf,
+    )
+    write_dimension_evidence(output_evidence, run.evidence)
+    if run.evidence["offline_passed"] is True:
+        print("cad_agent: dimension pilot OFFLINE PASS; acceptance=NOT_RUN")
+        return 0
+
+    codes = sorted(
+        {
+            str(item["code"])
+            for item in run.evidence["blockers"]
+            if isinstance(item, dict) and "code" in item
+        }
+    )
+    print(
+        "cad_agent: dimension pilot BLOCKED; acceptance=NOT_RUN; "
+        f"blockers={','.join(codes)}",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def _fidelity_pdf_command(args: argparse.Namespace) -> int:
     from .fidelity import FIDELITY_MANIFEST_NAME, new_fidelity_manifest, run_fidelity_pdf
 
@@ -644,6 +817,47 @@ def build_parser() -> argparse.ArgumentParser:
     resume_pdf = subcommands.add_parser("resume-pdf", help="Resume a validated staged PDF run")
     resume_pdf.add_argument("--manifest", type=Path, required=True)
     resume_pdf.add_argument("--input", type=Path, required=True)
+    drawing_setup_plan = subcommands.add_parser(
+        "drawing-setup-plan", help="Create an approved hash-bound Drawing Setup plan"
+    )
+    drawing_setup_plan.add_argument("--run-id", required=True)
+    drawing_setup_plan.add_argument("--definition", type=Path, required=True)
+    drawing_setup_plan.add_argument("--profile", type=Path, required=True)
+    drawing_setup_plan.add_argument("--domain-pack", type=Path, required=True)
+    drawing_setup_plan.add_argument("--template-manifest", type=Path, required=True)
+    drawing_setup_plan.add_argument("--template-file", type=Path, required=True)
+    drawing_setup_plan.add_argument("--output", type=Path, required=True)
+    drawing_setup_audit = subcommands.add_parser(
+        "drawing-setup-audit", help="Capture a read-only Drawing Setup audit"
+    )
+    drawing_setup_audit.add_argument("--drawing", type=Path, required=True)
+    drawing_setup_audit.add_argument("--hwnd", type=int, required=True)
+    drawing_setup_audit.add_argument("--ipc-dir", type=Path, required=True)
+    drawing_setup_audit.add_argument("--output", type=Path, required=True)
+    drawing_setup_audit.add_argument("--timeout-s", type=float, default=10.0)
+    drawing_setup_verify = subcommands.add_parser(
+        "drawing-setup-verify", help="Verify Drawing Setup audit evidence"
+    )
+    drawing_setup_verify.add_argument("--plan", type=Path, required=True)
+    drawing_setup_verify.add_argument("--audit", type=Path, required=True)
+    drawing_setup_verify.add_argument("--verified-by", required=True)
+    drawing_setup_verify.add_argument("--approval-reference", required=True)
+    drawing_setup_verify.add_argument("--output", type=Path, required=True)
+    dimension_pilot = subcommands.add_parser(
+        "dimension-pilot-run",
+        help="Build and measure a hash-bound offline linear-dimension candidate",
+    )
+    for name in (
+        "plan",
+        "setup-plan",
+        "setup-evidence",
+        "source",
+        "primitive-ir",
+        "semantic-ir",
+        "output-dxf",
+        "output-evidence",
+    ):
+        dimension_pilot.add_argument(f"--{name}", type=Path, required=True)
     fidelity_pdf = subcommands.add_parser("fidelity-pdf", help="Create a private clean paper-coordinate PDF layout baseline")
     fidelity_pdf.add_argument("--input", type=Path, required=True)
     fidelity_pdf.add_argument("--output-dir", type=Path, required=True)
@@ -803,6 +1017,14 @@ def main(argv: list[str] | None = None) -> int:
             return _run_pdf_command(args)
         if args.command == "resume-pdf":
             return _resume_pdf_command(args)
+        if args.command == "drawing-setup-plan":
+            return _drawing_setup_plan_command(args)
+        if args.command == "drawing-setup-audit":
+            return _drawing_setup_audit_command(args)
+        if args.command == "drawing-setup-verify":
+            return _drawing_setup_verify_command(args)
+        if args.command == "dimension-pilot-run":
+            return _dimension_pilot_command(args)
         if args.command == "fidelity-pdf":
             return _fidelity_pdf_command(args)
         if args.command == "fidelity-overlay":

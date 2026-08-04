@@ -35,6 +35,17 @@ def _live_prerequisites_available() -> bool:
     )
 
 
+def _lean_setup_prerequisites_available() -> bool:
+    return all(
+        bool(os.getenv(name))
+        for name in (
+            "CAD_AGENT_LEAN_DISPOSABLE_DWG",
+            "CAD_AGENT_AUTOCAD_HWND",
+            "CAD_AGENT_DOTNET_IPC_DIR",
+        )
+    )
+
+
 def _add_mechanical_bom_fixture(drawing_document) -> None:
     modelspace = drawing_document.modelspace()
     modelspace.add_line((0, 0), (10, 0))
@@ -260,6 +271,48 @@ class DisposableCleanupTests(unittest.TestCase):
                 )
 
             self.assertFalse(test_directory.exists())
+
+
+@unittest.skipUnless(
+    _lean_setup_prerequisites_available(),
+    "requires CAD_AGENT_LEAN_DISPOSABLE_DWG, CAD_AGENT_AUTOCAD_HWND, "
+    "and CAD_AGENT_DOTNET_IPC_DIR",
+)
+@pytest.mark.autocad_mechanical
+class PersonalSetupLiveTests(unittest.TestCase):
+    def test_live_personal_setup_audit_is_read_only(self) -> None:
+        drawing = Path(os.environ["CAD_AGENT_LEAN_DISPOSABLE_DWG"]).resolve()
+        self.assertTrue(drawing.is_file(), f"Missing disposable drawing: {drawing}")
+        self.assertIn(drawing.suffix.lower(), {".dwg", ".dxf"})
+        hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
+        before = _sha256(drawing)
+        drawing_full_path = normalize_windows_absolute_path(str(drawing))
+        request_id = "lean-setup-live-001"
+        client = DotNetIPCClient(
+            ipc_dir=os.environ["CAD_AGENT_DOTNET_IPC_DIR"],
+            trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+            timeout_s=30.0,
+        )
+
+        result = client.drawing_setup_audit(
+            drawing_full_path,
+            drawing_sha256=before,
+            request_id=request_id,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(drawing_full_path, result["drawing_full_path"])
+        self.assertFalse(result["changed"])
+        self.assertEqual([], result["entity_handles"])
+        self.assertEqual([], result["errors"])
+        self.assertFalse(result["payload"]["changed"])
+        self.assertEqual(
+            result["payload"]["dbmod_before"],
+            result["payload"]["dbmod_after"],
+        )
+        self.assertEqual(before, _sha256(drawing))
+        self.assertFalse(request_path(client.ipc_dir, request_id).exists())
+        self.assertFalse(result_path(client.ipc_dir, request_id).exists())
 
 
 @unittest.skipUnless(

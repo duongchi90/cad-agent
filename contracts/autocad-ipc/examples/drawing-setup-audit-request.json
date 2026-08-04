@@ -1,0 +1,9 @@
+{
+  "request_id": "setup-lite-001",
+  "schema_version": "1.0",
+  "operation": "drawing_setup_audit",
+  "drawing_full_path": "C:\\temp\\setup-lite.dwg",
+  "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "parameters": {},
+  "approval": null
+}

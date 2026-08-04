@@ -5,9 +5,11 @@ import tempfile
 from pathlib import Path
 
 import fitz
+import pytest
 
 from cad_agent.cli import main
-from cad_agent.pdf import new_pdf_manifest, run_pdf_stages
+from cad_agent.manifest import ManifestError
+from cad_agent.pdf import new_pdf_manifest, read_pdf_manifest, run_pdf_stages
 
 
 def _pdf(path: Path, label: str = "A") -> None:
@@ -18,6 +20,66 @@ def _pdf(path: Path, label: str = "A") -> None:
         page.insert_text((50, 100), f"{label}-{index + 1}")
     document.save(path)
     document.close()
+
+
+def test_new_and_historical_pdf_manifests_are_draft_reference(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    source.write_bytes(b"pdf")
+    historical_path = tmp_path / "historical-pdf-run.json"
+    historical_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdf-run-1.0",
+                "source": {"name": "drawing.pdf", "sha256": "a" * 64, "kind": "pdf"},
+                "configuration": {
+                    "scale_mm_per_px": 0.5,
+                    "dpi": 300,
+                    "auto_ocr_roi": False,
+                },
+                "approvals": {
+                    "calibration": {"approved": True, "reference": "ticket-123"}
+                },
+                "render": {
+                    "state": "pending",
+                    "artifact": "pdf/manifest.json",
+                    "sha256": None,
+                    "details": None,
+                },
+                "pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    for manifest in (
+        new_pdf_manifest(source, 0.5, "ticket-123", 300),
+        read_pdf_manifest(historical_path),
+    ):
+        assert manifest["release_profile"] == "DRAFT_REFERENCE"
+        assert manifest["authoritative_release_eligible"] is False
+        assert manifest["drawing_setup_evidence"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("release_profile", "AUTHORITATIVE"),
+        ("authoritative_release_eligible", True),
+        ("drawing_setup_evidence", {"status": "SETUP_VERIFIED"}),
+    ],
+)
+def test_pdf_manifest_refuses_unsafe_release_claim(
+    tmp_path: Path, field: str, unsafe_value: object
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    source.write_bytes(b"pdf")
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 300)
+    manifest[field] = unsafe_value
+    path = tmp_path / "pdf-run-manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match=field):
+        read_pdf_manifest(path)
 
 
 def test_pdf_run_writes_page_checkpoints_and_resume_preserves_them() -> None:

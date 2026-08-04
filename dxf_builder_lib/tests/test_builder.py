@@ -20,7 +20,7 @@ from primitive_ir_lib.models import (
     PrimitiveIRDocument, SourceDocument, TextData, Trace,
 )
 
-from dxf_builder_lib.builder import build_dxf
+from dxf_builder_lib.builder import NativeLinearDimensionSpec, build_dxf
 from dxf_builder_lib.reviewer import review_dxf
 from semantic_ir_lib.constraint_solving import SolvedPrimitive
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
@@ -281,6 +281,100 @@ def test_confirmed_dimension_uses_the_same_solved_geometry_as_its_line():
         assert review_dxf(result).passed
 
 
+def test_approved_native_dimension_is_measured_against_approved_value():
+    document = _doc(_line("line-1", 0, 0, 80, 0))
+    spec = NativeLinearDimensionSpec(
+        id="DIM-001",
+        geometry_primitive_id="line-1",
+        approved_value_mm=80.0,
+        source_ref="PILOT-SYNTHETIC-001",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        output = os.path.join(tmp, "pilot.dxf")
+        built = build_dxf(
+            document,
+            output,
+            build_dimensions=True,
+            dimension_specs=[spec],
+        )
+        review = review_dxf(built, tolerance_mm=0.1)
+
+        assert review.passed
+        assert review.dimension_measurement_by_id["DIM-001"] == pytest.approx(80.0)
+        assert built.written_dimension_by_cross_validation_id["DIM-001"] == {
+            "layer": "DIMENSIONS",
+            "measurement": 80.0,
+            "approved_value_mm": 80.0,
+            "geometry_primitive_id": "line-1",
+            "source_ref": "PILOT-SYNTHETIC-001",
+        }
+
+
+def test_legacy_confirmed_cross_validation_path_remains_compatible():
+    document = _doc(_line("line-1", 0, 0, 50, 0))
+    validation = CrossValidation(
+        text_primitive_id="text-1",
+        geometry_primitive_id="line-1",
+        status="confirmed",
+        text_value=50.5,
+        geometry_measured_length=50.0,
+        delta_percent=1.0,
+    )
+    document.cross_validations = [validation]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        built = build_dxf(
+            document,
+            os.path.join(tmp, "legacy.dxf"),
+            build_dimensions=True,
+        )
+
+        assert built.dimension_count == 1
+        assert review_dxf(built).passed
+        assert built.written_dimension_by_cross_validation_id[validation.id][
+            "approved_value_mm"
+        ] is None
+        assert built.written_dimension_by_cross_validation_id[validation.id][
+            "source_ref"
+        ] == "text-1"
+
+
+@pytest.mark.parametrize("approved", [0.0, -1.0, float("nan"), float("inf")])
+def test_explicit_dimension_rejects_invalid_approved_value(approved):
+    document = _doc(_line("line-1", 0, 0, 50, 0))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="finite positive"):
+            build_dxf(
+                document,
+                os.path.join(tmp, "invalid.dxf"),
+                build_dimensions=True,
+                dimension_specs=[
+                    NativeLinearDimensionSpec(
+                        "DIM-001",
+                        "line-1",
+                        approved,
+                        "PILOT-001",
+                    )
+                ],
+            )
+
+
+def test_explicit_dimension_rejects_duplicate_ids():
+    document = _doc(_line("line-1", 0, 0, 50, 0))
+    spec = NativeLinearDimensionSpec("DIM-001", "line-1", 50.0, "PILOT-001")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="unique"):
+            build_dxf(
+                document,
+                os.path.join(tmp, "duplicate.dxf"),
+                build_dimensions=True,
+                dimension_specs=[spec, spec],
+            )
+
+
 def test_build_refuses_unverified_calibration():
     document = _doc(_line("l1", 0, 0, 10, 0))
     document.calibration.status = "needs_verification"
@@ -318,6 +412,9 @@ _TESTS = [
     test_confirmed_cross_validation_emits_native_dimension_when_enabled,
     test_unverified_cross_validation_does_not_emit_dimension,
     test_confirmed_dimension_uses_the_same_solved_geometry_as_its_line,
+    test_approved_native_dimension_is_measured_against_approved_value,
+    test_legacy_confirmed_cross_validation_path_remains_compatible,
+    test_explicit_dimension_rejects_duplicate_ids,
     test_build_refuses_unverified_calibration,
     test_confirmed_dimension_refuses_missing_written_line,
 ]

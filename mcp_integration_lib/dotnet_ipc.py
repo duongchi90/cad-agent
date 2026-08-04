@@ -26,7 +26,9 @@ JSON_SUFFIX = ".json"
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
-SUPPORTED_OPERATIONS = frozenset({"health", "review", "close_disposable", "mechanical_bom"})
+SUPPORTED_OPERATIONS = frozenset(
+    {"health", "review", "close_disposable", "mechanical_bom", "drawing_setup_audit"}
+)
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _WM_CHAR = 0x0102
 _DOTNET_DISPATCH_COMMAND = "\x1b\x1bCADAGENT_DISPATCH\r"
@@ -385,6 +387,22 @@ class DotNetIPCClient:
             request_id=request_id,
         )
 
+    def drawing_setup_audit(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        drawing_sha256: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "drawing_setup_audit",
+            drawing_full_path,
+            drawing_sha256=drawing_sha256,
+            parameters={},
+            approval=None,
+            request_id=request_id,
+        )
+
     def _poll_result(
         self,
         result_file: Path,
@@ -445,6 +463,9 @@ class DotNetIPCClient:
         elif operation == "mechanical_bom":
             if values:
                 raise ValueError("mechanical_bom parameters must be an empty object")
+        elif operation == "drawing_setup_audit":
+            if values:
+                raise ValueError("drawing_setup_audit parameters must be an empty object")
         elif operation == "review":
             handles = values.get("handles")
             if not isinstance(handles, list) or not handles:
@@ -512,6 +533,12 @@ class DotNetIPCClient:
             values = result[name]
             if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
                 raise DotNetIPCProtocolError(f"result {name} must be an array of strings")
+        if operation == "drawing_setup_audit" and (
+            result["changed"] is not False or result["entity_handles"]
+        ):
+            raise DotNetIPCProtocolError(
+                "drawing_setup_audit result must be read-only and contain no entity handles"
+            )
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:
                 raise DotNetIPCProtocolError(f"result {name} must be a non-empty string")

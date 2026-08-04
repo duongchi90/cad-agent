@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/dimension-pilot-evidence-1.0",
+  "title": "Dimension Pilot Offline Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "pilot_id",
+    "offline_passed",
+    "acceptance",
+    "plan_sha256",
+    "setup_evidence_sha256",
+    "source_sha256",
+    "primitive_ir_sha256",
+    "semantic_ir_sha256",
+    "dxf_sha256",
+    "solver",
+    "measurements",
+    "blockers"
+  ],
+  "properties": {
+    "schema_version": {"const": "dimension-pilot-evidence-1.0"},
+    "pilot_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "offline_passed": {"type": "boolean"},
+    "acceptance": {"const": "NOT_RUN"},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "setup_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "primitive_ir_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "semantic_ir_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "dxf_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "solver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "dof",
+        "model_dof",
+        "applied_constraint_count",
+        "applied_dimension_count",
+        "skipped_constraint_ids",
+        "conflict_ids"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["not_run", "okay", "inconsistent", "didnt_converge", "too_many_unknowns"]
+        },
+        "dof": {"type": "integer"},
+        "model_dof": {"type": ["integer", "null"]},
+        "applied_constraint_count": {"type": "integer"},
+        "applied_dimension_count": {"type": "integer"},
+        "skipped_constraint_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+        },
+        "conflict_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+        }
+      }
+    },
+    "measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dimension_id",
+          "approved_value_mm",
+          "solved_value_mm",
+          "readback_value_mm",
+          "residual_mm"
+        ],
+        "properties": {
+          "dimension_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+          "approved_value_mm": {"type": "number", "exclusiveMinimum": 0},
+          "solved_value_mm": {"type": "number", "exclusiveMinimum": 0},
+          "readback_value_mm": {"type": "number", "exclusiveMinimum": 0},
+          "residual_mm": {"type": "number"}
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "path", "expected", "actual"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "expected": {},
+          "actual": {}
+        }
+      }
+    }
+  }
+}

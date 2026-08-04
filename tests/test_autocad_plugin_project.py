@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -8,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOLUTION = ROOT / "autocad_plugin/CadAgent.AutoCAD2027.sln"
 PLUGIN_PROJECT = ROOT / "autocad_plugin/CadAgent.AutoCAD2027/CadAgent.AutoCAD2027.csproj"
 VERIFY_SCRIPT = ROOT / "scripts/verify.ps1"
+IPC_CONTRACTS = ROOT / "contracts/autocad-ipc"
 
 
 def _property(project: ET.Element, name: str) -> str | None:
@@ -63,3 +65,61 @@ def test_verifier_checks_build_outputs_for_autodesk_dll_copying() -> None:
         assert name in script
     assert "Get-ChildItem" in script
     assert "no Autodesk Managed DLLs copied" in script
+
+
+def test_drawing_setup_audit_ipc_contract_is_versioned_and_read_only() -> None:
+    request_schema = json.loads((IPC_CONTRACTS / "request.schema.json").read_text(encoding="utf-8"))
+    result_schema = json.loads((IPC_CONTRACTS / "result.schema.json").read_text(encoding="utf-8"))
+    operation_schema = json.loads(
+        (IPC_CONTRACTS / "operations/drawing-setup-audit.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    request_example = json.loads(
+        (IPC_CONTRACTS / "examples/drawing-setup-audit-request.json").read_text(encoding="utf-8")
+    )
+    result_example = json.loads(
+        (IPC_CONTRACTS / "examples/drawing-setup-audit-result.json").read_text(encoding="utf-8")
+    )
+
+    assert "drawing_setup_audit" in request_schema["properties"]["operation"]["enum"]
+    assert "drawing_setup_audit" in result_schema["properties"]["operation"]["enum"]
+    branch = next(
+        item
+        for item in request_schema["allOf"]
+        if item["if"]["properties"]["operation"].get("const") == "drawing_setup_audit"
+    )
+    assert branch["then"]["properties"]["parameters"]["$ref"] == (
+        "operations/drawing-setup-audit.schema.json"
+    )
+    result_branch = next(
+        item
+        for item in result_schema["allOf"]
+        if item["if"]["properties"]["operation"].get("const") == "drawing_setup_audit"
+    )
+    result_properties = result_branch["then"]["properties"]
+    assert result_properties["changed"]["const"] is False
+    assert result_properties["entity_handles"]["maxItems"] == 0
+    assert operation_schema["type"] == "object"
+    assert operation_schema["additionalProperties"] is False
+    assert operation_schema["maxProperties"] == 0
+    assert request_example["operation"] == "drawing_setup_audit"
+    assert request_example["parameters"] == {}
+    assert result_example["operation"] == "drawing_setup_audit"
+    assert result_example["changed"] is False
+    assert result_example["entity_handles"] == []
+
+    contract_models = (
+        ROOT / "autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractModels.cs"
+    ).read_text(encoding="utf-8")
+    validator = (
+        ROOT / "autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractValidator.cs"
+    ).read_text(encoding="utf-8")
+    dispatcher = (
+        ROOT / "autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs"
+    ).read_text(encoding="utf-8")
+    assert '"drawing_setup_audit"' in contract_models
+    assert "drawing_setup_audit parameters must be an empty object" in validator
+    assert "drawing_setup_audit results must be read-only" in validator
+    assert '"drawing_setup_audit" => DispatchDrawingSetupAudit' in dispatcher
+    assert "DrawingSetupPayload.Create(snapshot)" in dispatcher
