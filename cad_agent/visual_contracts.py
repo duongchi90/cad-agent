@@ -270,6 +270,18 @@ _FINDING_CATEGORIES = {
     "ANNOTATION_LAYOUT_MISMATCH",
     "SOURCE_TECHNICAL_CONFLICT",
 }
+_ALLOWED_REPAIR_OPERATIONS = {
+    "MOVE_COMPONENT",
+    "ALIGN_COMPONENT",
+    "REPLACE_POLYLINE_SEGMENT",
+    "ADJUST_ARC",
+    "ADJUST_SPLINE_CONTROL_REGION",
+    "ADD_MISSING_FEATURE",
+    "REMOVE_EXTRA_FEATURE",
+    "REPLACE_WITH_APPROVED_BLOCK",
+    "CREATE_NATIVE_DIMENSION",
+    "REPAIR_NATIVE_DIMENSION",
+}
 
 
 def _validate_geometry_comparison(payload: dict[str, Any]) -> None:
@@ -447,6 +459,70 @@ def _validate_visual_review(payload: dict[str, Any]) -> None:
         _fail(contract, "NEEDS_HUMAN verdict requires a finding or requested next evidence")
 
 
+def _validate_repair_plan(payload: dict[str, Any]) -> None:
+    contract = "repair_plan"
+    required = {
+        "schema_version",
+        "repair_id",
+        "source_review_id",
+        "run_id",
+        "target_drawing_sha256",
+        "operations",
+        "affected_regions",
+        "expected_improvements",
+        "must_not_worsen",
+        "rollback_candidate_sha256",
+    }
+    _keys(payload, contract=contract, required=required)
+    if payload["schema_version"] != "repair-plan-1.0":
+        _fail(contract, "schema_version must be 'repair-plan-1.0'")
+    for key in ("repair_id", "source_review_id", "run_id"):
+        _identifier(payload[key], contract=contract, path=key)
+    for key in ("target_drawing_sha256", "rollback_candidate_sha256"):
+        _sha256(payload[key], contract=contract, path=key)
+
+    operations = payload["operations"]
+    if not isinstance(operations, list) or not operations:
+        _fail(contract, "operations must be a non-empty list")
+    for index, raw_operation in enumerate(operations):
+        path = f"operations[{index}]"
+        operation = _object(raw_operation, contract=contract, path=path)
+        _keys(
+            operation,
+            contract=contract,
+            required={"operation", "target", "preserve_anchors", "constraint_refs"},
+        )
+        if operation["operation"] not in _ALLOWED_REPAIR_OPERATIONS:
+            _fail(contract, f"{path}.operation is not allowed")
+        target = _object(operation["target"], contract=contract, path=f"{path}.target")
+        _keys(target, contract=contract, required={"stable_entity_id", "feature"})
+        _string(target["stable_entity_id"], contract=contract, path=f"{path}.target.stable_entity_id")
+        _identifier(target["feature"], contract=contract, path=f"{path}.target.feature")
+        preserve_anchors = _string_list(
+            operation["preserve_anchors"],
+            contract=contract,
+            path=f"{path}.preserve_anchors",
+            min_items=1,
+        )
+        for anchor_index, anchor_id in enumerate(preserve_anchors):
+            _identifier(anchor_id, contract=contract, path=f"{path}.preserve_anchors[{anchor_index}]")
+        constraint_refs = _string_list(
+            operation["constraint_refs"],
+            contract=contract,
+            path=f"{path}.constraint_refs",
+        )
+        for constraint_index, constraint_ref in enumerate(constraint_refs):
+            _identifier(constraint_ref, contract=contract, path=f"{path}.constraint_refs[{constraint_index}]")
+
+    affected_regions = _string_list(
+        payload["affected_regions"], contract=contract, path="affected_regions", min_items=1
+    )
+    for index, region_id in enumerate(affected_regions):
+        _identifier(region_id, contract=contract, path=f"affected_regions[{index}]")
+    for key in ("expected_improvements", "must_not_worsen"):
+        _string_list(payload[key], contract=contract, path=key, min_items=1)
+
+
 def _validate_visual_run_manifest(payload: dict[str, Any]) -> None:
     contract = "visual_run_manifest"
     required = {
@@ -506,6 +582,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "dimension_register": _validate_dimension_register,
     "geometry_comparison": _validate_geometry_comparison,
     "visual_review": _validate_visual_review,
+    "repair_plan": _validate_repair_plan,
 }
 
 

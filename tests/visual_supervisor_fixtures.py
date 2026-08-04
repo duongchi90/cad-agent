@@ -148,3 +148,28 @@ def valid_visual_review() -> dict[str, Any]:
             "requested_next_evidence": [],
         },
     }
+
+
+def valid_repair_plan() -> dict[str, Any]:
+    return {
+        "schema_version": "repair-plan-1.0",
+        "repair_id": "RP-SIDE-CABIN-001",
+        "source_review_id": "VR-SIDE-CABIN-001",
+        "run_id": RUN_ID,
+        "target_drawing_sha256": DRAWING_SHA,
+        "operations": [
+            {
+                "operation": "ADJUST_SPLINE_CONTROL_REGION",
+                "target": {
+                    "stable_entity_id": "PART:CABIN_OUTER",
+                    "feature": "ROOF",
+                },
+                "preserve_anchors": ["CABIN_ROOF_FRONT", "CABIN_ROOF_REAR"],
+                "constraint_refs": ["DIM-SIDE-008"],
+            }
+        ],
+        "affected_regions": [REGION_ID, "SIDE-ANNOTATION-R02"],
+        "expected_improvements": ["height_ratio_error:DECREASE"],
+        "must_not_worsen": ["engineering_constraints", "centroid_offset_x_ratio"],
+        "rollback_candidate_sha256": DRAWING_SHA,
+    }
