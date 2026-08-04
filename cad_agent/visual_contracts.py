@@ -159,8 +159,8 @@ def _validate_dimension_register(payload: dict[str, Any]) -> None:
         _non_negative_integer(summary[key], contract=contract, path=f"summary.{key}")
 
     dimensions = payload["dimensions"]
-    if not isinstance(dimensions, list) or not dimensions:
-        _fail(contract, "dimensions must be a non-empty list")
+    if not isinstance(dimensions, list):
+        _fail(contract, "dimensions must be a list")
     disposition_counts = {"CONFIRMED": 0, "UNRESOLVED": 0, "CONFLICT": 0}
     for index, raw_dimension in enumerate(dimensions):
         path = f"dimensions[{index}]"
@@ -186,7 +186,6 @@ def _validate_dimension_register(payload: dict[str, Any]) -> None:
         )
         _identifier(dimension["id"], contract=contract, path=f"{path}.id")
         _string(dimension["display_text"], contract=contract, path=f"{path}.display_text")
-        _finite_number(dimension["value"], contract=contract, path=f"{path}.value")
         _string(dimension["unit"], contract=contract, path=f"{path}.unit")
         _string(dimension["kind"], contract=contract, path=f"{path}.kind")
         role = dimension["role"]
@@ -195,6 +194,11 @@ def _validate_dimension_register(payload: dict[str, Any]) -> None:
             _fail(contract, f"{path}.role is invalid")
         if status not in _DIMENSION_STATUSES:
             _fail(contract, f"{path}.status is invalid")
+        if dimension["value"] is None:
+            if status == "CONFIRMED":
+                _fail(contract, f"{path}.value is required for CONFIRMED dimensions")
+        else:
+            _finite_number(dimension["value"], contract=contract, path=f"{path}.value")
         if role == "CONFLICT" and status != "CONFLICT":
             _fail(contract, f"{path}.CONFLICT role requires CONFLICT status")
         if role == "AMBIGUOUS" and status == "CONFIRMED":
@@ -398,6 +402,10 @@ def _validate_visual_review(payload: dict[str, Any]) -> None:
         _fail(contract, "verdict is invalid")
     if payload["severity"] not in _SEVERITIES:
         _fail(contract, "severity is invalid")
+    if verdict == "PASS" and payload["severity"] != "INFO":
+        _fail(contract, "PASS verdict requires INFO severity")
+    if verdict == "FAIL" and payload["severity"] not in {"MAJOR", "CRITICAL"}:
+        _fail(contract, "FAIL verdict requires MAJOR or CRITICAL severity")
     confidence = _finite_number(payload["confidence"], contract=contract, path="confidence")
     if not 0.0 <= confidence <= 1.0:
         _fail(contract, "confidence must be between 0 and 1")

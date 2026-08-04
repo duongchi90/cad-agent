@@ -82,6 +82,7 @@
       "if": {"properties": {"verdict": {"const": "PASS"}}},
       "then": {
         "properties": {
+          "severity": {"const": "INFO"},
           "findings": {"maxItems": 0},
           "repair_intent": {"properties": {"change": {"maxItems": 0}}}
         }
@@ -91,6 +92,7 @@
       "if": {"properties": {"verdict": {"const": "FAIL"}}},
       "then": {
         "properties": {
+          "severity": {"enum": ["MAJOR", "CRITICAL"]},
           "findings": {
             "minItems": 1,
             "contains": {

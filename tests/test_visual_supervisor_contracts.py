@@ -66,6 +66,36 @@ def test_unresolved_critical_dimension_requires_blocker_scope() -> None:
         validate_visual_contract(payload, contract="dimension_register")
 
 
+def test_dimension_register_accepts_page_with_no_dimension_clusters() -> None:
+    payload = valid_dimension_register()
+    payload["coverage"] = {
+        "clusters_detected": 0,
+        "clusters_processed": 0,
+        "page_coverage_percent": 100.0,
+    }
+    payload["summary"] = {"confirmed": 0, "unresolved": 0, "conflicts": 0}
+    payload["dimensions"] = []
+    assert validate_visual_contract(payload, contract="dimension_register") == payload
+
+
+def test_unreadable_unresolved_dimension_accepts_null_value() -> None:
+    payload = valid_dimension_register()
+    dimension = payload["dimensions"][0]
+    dimension["value"] = None
+    dimension["role"] = "AMBIGUOUS"
+    dimension["status"] = "UNRESOLVED"
+    dimension["blocker_scope"] = ["SIDE-CABIN"]
+    payload["summary"] = {"confirmed": 0, "unresolved": 1, "conflicts": 0}
+    assert validate_visual_contract(payload, contract="dimension_register") == payload
+
+
+def test_confirmed_dimension_requires_numeric_value() -> None:
+    payload = valid_dimension_register()
+    payload["dimensions"][0]["value"] = None
+    with pytest.raises(VisualContractError, match="value"):
+        validate_visual_contract(payload, contract="dimension_register")
+
+
 def test_geometry_comparison_rejects_out_of_range_iou() -> None:
     payload = valid_geometry_comparison()
     payload["metrics"]["silhouette_iou"] = 1.1
@@ -114,6 +144,23 @@ def test_visual_review_needs_human_requires_requested_evidence_or_finding() -> N
     payload["findings"] = []
     payload["repair_intent"]["requested_next_evidence"] = []
     with pytest.raises(VisualContractError, match="NEEDS_HUMAN"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_pass_requires_info_severity() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "PASS"
+    payload["severity"] = "MAJOR"
+    payload["findings"] = []
+    payload["repair_intent"]["change"] = []
+    with pytest.raises(VisualContractError, match="PASS"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_fail_requires_major_or_critical_top_level_severity() -> None:
+    payload = valid_visual_review()
+    payload["severity"] = "INFO"
+    with pytest.raises(VisualContractError, match="FAIL"):
         validate_visual_contract(payload, contract="visual_review")
 
 

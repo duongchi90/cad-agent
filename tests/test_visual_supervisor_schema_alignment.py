@@ -48,6 +48,27 @@ def test_only_authorization_schema_contains_target_path() -> None:
     assert target_schemas == ["auto-publish-authorization.schema.json"]
 
 
+def _walk_schema_nodes(value: object, path: str = "schema") -> list[tuple[str, dict[str, object]]]:
+    nodes: list[tuple[str, dict[str, object]]] = []
+    if isinstance(value, dict):
+        nodes.append((path, value))
+        for key, nested in value.items():
+            nodes.extend(_walk_schema_nodes(nested, f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            nodes.extend(_walk_schema_nodes(nested, f"{path}[{index}]"))
+    return nodes
+
+
+def test_every_visual_schema_object_boundary_is_closed_recursively() -> None:
+    root = Path(__file__).resolve().parents[1] / "contracts" / "visual-supervisor"
+    for schema_path in sorted(root.glob("*.schema.json")):
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        for path, node in _walk_schema_nodes(schema, schema_path.name):
+            if node.get("type") == "object":
+                assert node.get("additionalProperties") is False, path
+
+
 def _mutate_nested(value: object) -> bool:
     if isinstance(value, dict):
         for nested in value.values():
