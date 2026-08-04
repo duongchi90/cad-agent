@@ -2,9 +2,10 @@
 
 Status: verified offline; AutoCAD Mechanical live gate not run.
 
-Verification commit:
+Verification target:
 
-`d9c10b41e0b6b113dd67ab6fb669cf504f4d9279`
+Final PR #30 head after the implementation fixes and verification rerun.
+The exact SHA is recorded with the final PR update.
 
 Command:
 
@@ -39,13 +40,23 @@ Authority-boundary review:
   current-state hash.
 - Success requires an artifact handoff consumer. A Python scavenger removes only
   lease-free request directories older than 24 hours.
-- AutoCAD snapshots and restores actual view, pickfirst, layer, layout, and
-  renderer state; the fingerprint includes the view and separate off/frozen
-  layer flags.
-- Region filtering is based on entity extents. The deterministic flattener
-  covers lines, circles, arcs, polylines, text, dimensions, block references,
-  hatches, and splines; unknown visible entity types fail closed. DATUM
-  measurements require an explicit approved `datum_bindings` mapping.
+- Python snapshots and validates the exact Visual Run Manifest bytes before
+  dispatch and before/after artifact handoff; any change to authority, state,
+  drawing identity, or other manifest fields fails closed even when the
+  mutation field is unchanged.
+- AutoCAD snapshots and restores typed renderer variables, actual view,
+  pickfirst selection, layout, and Model/Paper/floating-viewport identity.
+  Layer off/frozen flags are read-only snapshot/compare evidence; VS-T3 never
+  opens a layer for write or repairs layer drift.
+- Region filtering is based on entity extents. The deterministic projection
+  covers lines, circles, arcs, polylines including bulges, text, dimensions,
+  block references including transformed children, and sampled splines.
+  Hatch boundaries and unknown visible entity types fail closed until an
+  approved deterministic flattener exists. VS-T3 measurements are ENTITY-only;
+  DATUM resolution remains in the separate dimension-register contract.
+- Windows reparse points are rejected for manifest, drawing, artifact root,
+  request directories, parents, and artifact files; cleanup and scavenging use
+  the same component-by-component guard.
 - No visual verdict, repair plan, Codex authority, save, publish, or mutation executor is present in VS-T3.
 
 This record does not claim private-drawing or AutoCAD live acceptance.

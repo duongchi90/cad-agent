@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Drawing;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Review;
 using Xunit;
@@ -165,7 +166,20 @@ public sealed class VisualEvidenceProjectionTests
                 new Dictionary<string, JsonElement>
                 {
                     ["bounding_box"] = boundingBox,
-                    ["render_fallback"] = JsonSerializer.SerializeToElement("BOUNDING_BOX")
+                    ["children"] = JsonSerializer.SerializeToElement(new[]
+                    {
+                        new
+                        {
+                            type = "LINE",
+                            geometry = new
+                            {
+                                start_x = 40.0,
+                                start_y = 40.0,
+                                end_x = 70.0,
+                                end_y = 70.0
+                            }
+                        }
+                    })
                 }),
             new EntitySnapshot(
                 "4",
@@ -189,7 +203,13 @@ public sealed class VisualEvidenceProjectionTests
                     ["text_position_x"] = JsonSerializer.SerializeToElement(20.0),
                     ["text_position_y"] = JsonSerializer.SerializeToElement(30.0),
                     ["height"] = JsonSerializer.SerializeToElement(10.0),
-                    ["text"] = JsonSerializer.SerializeToElement("4500")
+                    ["text"] = JsonSerializer.SerializeToElement("4500"),
+                    ["xline1_x"] = JsonSerializer.SerializeToElement(20.0),
+                    ["xline1_y"] = JsonSerializer.SerializeToElement(40.0),
+                    ["xline2_x"] = JsonSerializer.SerializeToElement(80.0),
+                    ["xline2_y"] = JsonSerializer.SerializeToElement(40.0),
+                    ["dimline_x"] = JsonSerializer.SerializeToElement(50.0),
+                    ["dimline_y"] = JsonSerializer.SerializeToElement(30.0)
                 })
         };
 
@@ -197,5 +217,73 @@ public sealed class VisualEvidenceProjectionTests
         var png = AutoCadVisualEvidenceReader.RenderRegion(region, projected);
 
         Assert.True(png.Length > 100);
+    }
+
+    [Fact]
+    public void RendererPreservesPolylineBulgeAsCurvedPixels()
+    {
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,100,100],\"pixel_size\":[400,400],\"background\":\"WHITE\",\"include_layers\":[],\"exclude_layers\":[]}").RootElement;
+        var snapshots = new[]
+        {
+            new EntitySnapshot(
+                "BULGE",
+                "POLYLINE",
+                "0",
+                new Dictionary<string, JsonElement>
+                {
+                    ["vertices"] = JsonSerializer.SerializeToElement(new[]
+                    {
+                        new { x = 20.0, y = 50.0, bulge = 1.0 },
+                        new { x = 80.0, y = 50.0, bulge = 0.0 }
+                    }),
+                    ["closed"] = JsonSerializer.SerializeToElement(false)
+                })
+        };
+
+        var png = AutoCadVisualEvidenceReader.RenderRegion(
+            region,
+            VisualEvidenceProjection.ProjectEntities(snapshots));
+        using var bitmap = new Bitmap(new MemoryStream(png));
+        var offChordPixels = 0;
+        for (var x = 120; x <= 280; x++)
+        {
+            for (var y = 0; y < bitmap.Height; y++)
+            {
+                if (Math.Abs(y - 200) > 12 && bitmap.GetPixel(x, y).R < 100)
+                {
+                    offChordPixels++;
+                }
+            }
+        }
+
+        Assert.True(offChordPixels > 10);
+    }
+
+    [Fact]
+    public void RendererRejectsBoundingBoxPlaceholderForVisibleEntity()
+    {
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,100,100],\"pixel_size\":[320,320],\"background\":\"WHITE\",\"include_layers\":[],\"exclude_layers\":[]}").RootElement;
+        var boundingBox = JsonSerializer.SerializeToElement(new
+        {
+            min_x = 10.0,
+            min_y = 10.0,
+            max_x = 90.0,
+            max_y = 90.0
+        });
+        var snapshot = new EntitySnapshot(
+            "3",
+            "HATCH",
+            "0",
+            new Dictionary<string, JsonElement>
+            {
+                ["bounding_box"] = boundingBox,
+                ["render_fallback"] = JsonSerializer.SerializeToElement("BOUNDING_BOX")
+            });
+
+        var projected = VisualEvidenceProjection.ProjectEntities(new[] { snapshot });
+
+        Assert.Throws<InvalidDataException>(() => AutoCadVisualEvidenceReader.RenderRegion(region, projected));
     }
 }

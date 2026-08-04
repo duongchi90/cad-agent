@@ -17,8 +17,7 @@ public sealed record VisualEvidenceRequest(
     string ArtifactPolicyVersion,
     string ArtifactDirectory,
     JsonElement Region,
-    IReadOnlyList<JsonElement> Measurements,
-    IReadOnlyList<JsonElement> DatumBindings)
+    IReadOnlyList<JsonElement> Measurements)
 {
     public static VisualEvidenceRequest FromIpc(IpcRequest request)
     {
@@ -40,8 +39,7 @@ public sealed record VisualEvidenceRequest(
             parameters["artifact_policy_version"].GetString()!,
             parameters["artifact_directory"].GetString()!,
             parameters["region"].Clone(),
-            parameters["measurements"].EnumerateArray().Select(value => value.Clone()).ToArray(),
-            parameters["datum_bindings"].EnumerateArray().Select(value => value.Clone()).ToArray());
+            parameters["measurements"].EnumerateArray().Select(value => value.Clone()).ToArray());
     }
 }
 
@@ -69,38 +67,43 @@ public sealed record SessionViewSnapshot(
     double Twist,
     double LensLength);
 
+public sealed record SessionSpaceSnapshot(
+    string LayoutName,
+    int TileMode,
+    int Cvport,
+    string Kind);
+
 public sealed record SessionLayerSnapshot(bool IsOff, bool IsFrozen);
 
 public sealed record SessionStateSnapshot(
     string DrawingFullPath,
     string DocumentIdentity,
     string CurrentLayout,
-    bool ModelSpace,
-    int Cvport,
+    SessionSpaceSnapshot Space,
     string CurrentLayer,
     string ViewProperties,
     SessionViewSnapshot? CurrentView,
     IReadOnlyList<string> SelectionHandles,
     IReadOnlyDictionary<string, SessionLayerSnapshot> LayerStates,
-    IReadOnlyDictionary<string, string> RendererSystemVariables,
+    IReadOnlyDictionary<string, JsonElement> RendererSystemVariables,
     string FingerprintSha256)
 {
     public static SessionStateSnapshot Create(
         string drawingFullPath,
         string documentIdentity,
         string currentLayout,
-        bool modelSpace,
-        int cvport,
+        SessionSpaceSnapshot space,
         string currentLayer,
         string viewProperties,
         IEnumerable<string> selectionHandles,
         IReadOnlyDictionary<string, SessionLayerSnapshot> layerStates,
-        IReadOnlyDictionary<string, string> rendererSystemVariables,
+        IReadOnlyDictionary<string, JsonElement> rendererSystemVariables,
         SessionViewSnapshot? currentView = null)
     {
         ArgumentNullException.ThrowIfNull(selectionHandles);
         ArgumentNullException.ThrowIfNull(layerStates);
         ArgumentNullException.ThrowIfNull(rendererSystemVariables);
+        ArgumentNullException.ThrowIfNull(space);
 
         var normalizedPath = ContractValidator.NormalizeWindowsAbsolutePath(drawingFullPath);
         var canonical = new
@@ -108,8 +111,7 @@ public sealed record SessionStateSnapshot(
             drawing_full_path = normalizedPath,
             document_identity = documentIdentity,
             current_layout = currentLayout,
-            model_space = modelSpace,
-            cvport,
+            space,
             current_layer = currentLayer,
             view_properties = viewProperties,
             current_view = currentView,
@@ -128,8 +130,7 @@ public sealed record SessionStateSnapshot(
             normalizedPath,
             documentIdentity,
             currentLayout,
-            modelSpace,
-            cvport,
+            space,
             currentLayer,
             viewProperties,
             currentView,

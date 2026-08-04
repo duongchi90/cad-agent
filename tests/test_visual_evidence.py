@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -200,3 +202,26 @@ def test_writer_rejects_drawing_changed_after_result_before_atomic_promote() -> 
                     drawing_sha256_before_dispatch=drawing_sha,
                 )
         assert not (root / "runs" / RUN_ID / "iterations" / REGION_ID / "evidence-EVIDENCE-001").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point regression")
+def test_manifest_snapshot_rejects_a_junction_component() -> None:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        target = root / "target"
+        junction = root / "junction"
+        target.mkdir()
+        (target / "manifest.json").write_text(
+            json.dumps(valid_visual_run_manifest(), sort_keys=True),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.skip(f"mklink /J unavailable: {result.stderr.strip()}")
+        with pytest.raises(VisualEvidenceError, match="reparse point"):
+            snapshot_visual_run_manifest(junction / "manifest.json")

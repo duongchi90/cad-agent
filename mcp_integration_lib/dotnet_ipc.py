@@ -15,6 +15,12 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
+from cad_agent.visual_evidence import (
+    VisualEvidenceError,
+    snapshot_visual_run_manifest,
+    validate_visual_evidence_freshness,
+)
+
 SCHEMA_VERSION = "1.0"
 DEFAULT_IPC_DIR = Path(r"C:\temp")
 IPC_DIR_ENV_VAR = "CAD_AGENT_DOTNET_IPC_DIR"
@@ -46,6 +52,8 @@ SUPPORTED_OPERATIONS = frozenset(
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _WM_CHAR = 0x0102
 _DOTNET_DISPATCH_COMMAND = "\x1b\x1bCADAGENT_DISPATCH\r"
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 
 def _get_user32() -> Any:
@@ -125,12 +133,12 @@ def scavenge_visual_evidence_artifacts(
     if ttl_seconds <= 0:
         raise ValueError("ttl_seconds must be positive")
     root = Path(ipc_dir).resolve() / "artifacts"
-    if root.is_symlink() or not root.is_dir():
+    if _path_contains_windows_reparse_point(root) or not root.is_dir():
         return ()
     current = time.time() if now is None else float(now)
     removed: list[str] = []
     for candidate in list(root.iterdir()):
-        if candidate.is_symlink() or not candidate.is_dir():
+        if _path_contains_windows_reparse_point(candidate) or not candidate.is_dir():
             continue
         try:
             request_id = normalize_request_id(candidate.name)
@@ -194,10 +202,10 @@ def _claim_visual_evidence_lease(lease: Path):
 def _remove_tree_without_reparse(path: Path) -> None:
     """Delete a directory only when every component is a normal file/dir."""
 
-    if path.is_symlink() or not path.is_dir():
+    if _path_contains_windows_reparse_point(path) or not path.is_dir():
         raise OSError(f"unsafe artifact path: {path}")
     for child in path.iterdir():
-        if child.is_symlink():
+        if _path_contains_windows_reparse_point(child):
             raise OSError(f"reparse point in artifact path: {child}")
         if child.is_dir():
             _remove_tree_without_reparse(child)
@@ -206,6 +214,95 @@ def _remove_tree_without_reparse(path: Path) -> None:
         else:
             raise OSError(f"unsupported artifact path: {child}")
     path.rmdir()
+
+
+def _snapshot_vs_t3_manifest(
+    manifest_path: Path,
+    *,
+    drawing_full_path: str,
+    run_id: str,
+    latest_mutation_sha256: str,
+    expected_sha256: str,
+) -> tuple[bytes, Mapping[str, Any], str]:
+    """Snapshot the complete Visual Run Manifest before dispatch.
+
+    The managed AutoCAD side receives only the trusted values copied from this
+    snapshot.  Python keeps the complete byte snapshot so a later change to
+    authority, state, drawing identity, or any other manifest field cannot be
+    mistaken for an unchanged mutation hash.
+    """
+
+    candidate = Path(manifest_path)
+    if _path_contains_windows_reparse_point(candidate):
+        raise ValueError("visual run manifest path contains a reparse point")
+    try:
+        raw, manifest, digest = snapshot_visual_run_manifest(candidate)
+    except VisualEvidenceError as exc:
+        raise ValueError(str(exc)) from exc
+    if digest != expected_sha256:
+        raise ValueError("visual run manifest hash does not match the request")
+    if manifest.get("run_id") != run_id:
+        raise ValueError("visual run manifest run_id does not match the request")
+    if manifest.get("latest_mutation_sha256") != latest_mutation_sha256:
+        raise ValueError("visual run manifest latest_mutation_sha256 does not match the request")
+    try:
+        manifest_path_value = manifest["drawing"]["absolute_path"]
+        manifest_drawing_path = normalize_windows_absolute_path(manifest_path_value)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("visual run manifest drawing path is invalid") from exc
+    if manifest_drawing_path != drawing_full_path:
+        raise ValueError("visual run manifest drawing path does not match the request")
+    return raw, manifest, digest
+
+
+def _assert_vs_t3_manifest_unchanged(
+    manifest_path: Path,
+    expected_raw: bytes,
+    expected_digest: str,
+) -> None:
+    """Reject any manifest-byte change before or after evidence handoff."""
+
+    if _path_contains_windows_reparse_point(manifest_path):
+        raise DotNetIPCProtocolError("visual run manifest path contains a reparse point")
+    try:
+        current_raw, _manifest, current_digest = snapshot_visual_run_manifest(manifest_path)
+    except VisualEvidenceError as exc:
+        raise DotNetIPCProtocolError(str(exc)) from exc
+    if current_raw != expected_raw or current_digest != expected_digest:
+        raise DotNetIPCProtocolError("visual run manifest changed during evidence export")
+
+
+def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
+    """Return whether a path or any existing component is a Windows reparse point.
+
+    ``Path.is_symlink()`` does not reliably identify junctions and mount points.
+    The Win32 file attributes are checked component-by-component so a missing
+    child below a junction is still rejected.  On non-Windows platforms the
+    equivalent symlink walk keeps the offline implementation deterministic.
+    """
+
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    if os.name != "nt":
+        return any(component.is_symlink() for component in (candidate, *candidate.parents))
+
+    try:
+        get_attributes = ctypes.windll.kernel32.GetFileAttributesW
+        get_attributes.argtypes = [wintypes.LPCWSTR]
+        get_attributes.restype = wintypes.DWORD
+    except AttributeError:
+        return candidate.is_symlink()
+
+    components = list(candidate.parts)
+    current = Path(components[0])
+    for component in components[1:]:
+        current /= component
+        attributes = get_attributes(str(current))
+        if attributes != _INVALID_FILE_ATTRIBUTES and attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+            return True
+    attributes = get_attributes(str(current))
+    return attributes != _INVALID_FILE_ATTRIBUTES and bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 def normalize_windows_absolute_path(path: str | os.PathLike[str]) -> str:
@@ -258,6 +355,8 @@ def cleanup_request_files(
     """Delete only the request/result pair owned by ``request_id``."""
 
     for path in (request_path(ipc_dir, request_id), result_path(ipc_dir, request_id)):
+        if _path_contains_windows_reparse_point(path.parent):
+            continue
         try:
             path.unlink()
         except FileNotFoundError:
@@ -528,10 +627,10 @@ class DotNetIPCClient:
         region_id: str,
         latest_mutation_sha256: str,
         visual_run_manifest_sha256: str,
+        visual_run_manifest_path: str | os.PathLike[str],
         region: Mapping[str, Any],
         measurements: Sequence[Mapping[str, Any]],
         artifact_consumer: Callable[[Mapping[str, Any], Mapping[str, Path]], None] | None = None,
-        datum_bindings: Sequence[Mapping[str, Any]] = (),
         artifact_directory: str | None = None,
         approval: Mapping[str, Any] | None = None,
         request_id: str | None = None,
@@ -565,15 +664,26 @@ class DotNetIPCClient:
             "artifact_directory": normalized_artifact_directory,
             "region": dict(region),
             "measurements": [dict(measurement) for measurement in measurements],
-            "datum_bindings": [dict(binding) for binding in datum_bindings],
         }
         normalized_path = self._validate_drawing_path("visual_evidence_export", drawing_full_path)
         normalized_sha256 = self._validate_sha256(drawing_sha256)
+        normalized_manifest_sha256 = self._validate_sha256(visual_run_manifest_sha256)
         normalized_parameters = self._validate_parameters("visual_evidence_export", parameters)
         if normalized_sha256 is None:
             raise ValueError("visual_evidence_export requires drawing_sha256")
+        if normalized_manifest_sha256 is None:
+            raise ValueError("visual_evidence_export requires visual_run_manifest_sha256")
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
+
+        manifest_path = Path(visual_run_manifest_path)
+        manifest_raw_before, manifest_before, manifest_digest_before = _snapshot_vs_t3_manifest(
+            manifest_path,
+            drawing_full_path=normalized_path,
+            run_id=run_id,
+            latest_mutation_sha256=latest_mutation_sha256,
+            expected_sha256=normalized_manifest_sha256,
+        )
 
         request = {
             "request_id": actual_request_id,
@@ -602,7 +712,18 @@ class DotNetIPCClient:
                 actual_request_id,
                 normalized_artifact_directory,
             )
+            try:
+                validate_visual_evidence_freshness(
+                    result,
+                    manifest_digest_before,
+                    manifest_before,
+                    normalized_sha256,
+                )
+            except VisualEvidenceError as exc:
+                raise DotNetIPCProtocolError(str(exc)) from exc
+            _assert_vs_t3_manifest_unchanged(manifest_path, manifest_raw_before, manifest_digest_before)
             artifact_consumer(result, artifact_paths)
+            _assert_vs_t3_manifest_unchanged(manifest_path, manifest_raw_before, manifest_digest_before)
             return result
         finally:
             cleanup_request_files(self.ipc_dir, actual_request_id)
@@ -632,7 +753,7 @@ class DotNetIPCClient:
         if not isinstance(artifacts, list) or len(artifacts) != 3:
             raise DotNetIPCProtocolError("visual evidence must contain exactly three artifacts")
         expected_root = (self.ipc_dir / "artifacts" / request_id).resolve()
-        if expected_root.exists() and expected_root.is_symlink():
+        if _path_contains_windows_reparse_point(self.ipc_dir / "artifacts" / request_id):
             raise DotNetIPCProtocolError("visual evidence artifact directory must not be a symlink")
         if not expected_root.is_dir():
             raise DotNetIPCProtocolError("visual evidence artifact directory is missing")
@@ -655,12 +776,15 @@ class DotNetIPCClient:
                 or len(relative_parts) < 3
             ):
                 raise DotNetIPCProtocolError("visual evidence artifact path is unsafe or not request-owned")
-            path = (self.ipc_dir / Path(*relative_parts)).resolve()
+            raw_path = self.ipc_dir / Path(*relative_parts)
+            if _path_contains_windows_reparse_point(raw_path):
+                raise DotNetIPCProtocolError("visual evidence artifact path contains a reparse point")
+            path = raw_path.resolve()
             try:
                 path.relative_to(expected_root)
             except ValueError as exc:
                 raise DotNetIPCProtocolError("visual evidence artifact escapes request ownership") from exc
-            if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+            if _path_contains_windows_reparse_point(path):
                 raise DotNetIPCProtocolError("visual evidence artifact path contains a symlink")
             if not path.is_file():
                 raise DotNetIPCProtocolError("visual evidence artifact file is missing")
@@ -692,13 +816,15 @@ class DotNetIPCClient:
         try:
             self._validate_request_artifact_directory(artifact_directory, request_id)
             root = (self.ipc_dir / "artifacts" / request_id).resolve()
-            if not root.is_dir() or root.is_symlink():
+            if not root.is_dir() or _path_contains_windows_reparse_point(root):
                 return
             lease = root / "active.lease"
             if lease.exists():
                 return
             for child in root.iterdir():
-                if child.is_symlink() or child.is_file():
+                if _path_contains_windows_reparse_point(child):
+                    return
+                if child.is_file():
                     child.unlink()
                 elif child.is_dir():
                     # The exporter owns a flat directory. Refuse to recurse
@@ -804,7 +930,6 @@ class DotNetIPCClient:
             "artifact_directory",
             "region",
             "measurements",
-            "datum_bindings",
         }
         if set(parameters) != required:
             missing = sorted(required.difference(parameters))
@@ -899,30 +1024,12 @@ class DotNetIPCClient:
             if "to_reference" in measurement:
                 DotNetIPCClient._validate_visual_evidence_reference(measurement["to_reference"])
 
-        datum_bindings = parameters["datum_bindings"]
-        if not isinstance(datum_bindings, list) or len(datum_bindings) > 10000:
-            raise ValueError("parameters.datum_bindings must be an array of at most 10000 items")
-        datum_ids: set[str] = set()
-        for binding in datum_bindings:
-            if not isinstance(binding, Mapping) or set(binding) != {"id", "entity_handle"}:
-                raise ValueError("parameters.datum_bindings entries must be closed objects")
-            datum_id = binding["id"]
-            entity_handle = binding["entity_handle"]
-            if (
-                not isinstance(datum_id, str)
-                or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(datum_id)
-                or datum_id in datum_ids
-            ):
-                raise ValueError("parameters.datum_bindings ids must be unique stable identifiers")
-            if not isinstance(entity_handle, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(entity_handle):
-                raise ValueError("parameters.datum_bindings.entity_handle must be a stable identifier")
-            datum_ids.add(datum_id)
 
     @staticmethod
     def _validate_visual_evidence_reference(reference: Any) -> None:
         if not isinstance(reference, Mapping) or set(reference) != {"type", "id"}:
             raise ValueError("parameters.measurements references must be closed objects")
-        if reference["type"] not in {"ENTITY", "DATUM"}:
+        if reference["type"] != "ENTITY":
             raise ValueError("parameters.measurements reference type is unsupported")
         if not isinstance(reference["id"], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(reference["id"]):
             raise ValueError("parameters.measurements reference id must be a stable identifier")

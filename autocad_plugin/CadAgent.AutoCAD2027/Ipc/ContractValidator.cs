@@ -369,8 +369,7 @@ public static class ContractValidator
             "artifact_policy_version",
             "artifact_directory",
             "region",
-            "measurements",
-            "datum_bindings"
+            "measurements"
         };
         foreach (var missing in required.Except(parameters.Keys, StringComparer.Ordinal))
         {
@@ -429,15 +428,6 @@ public static class ContractValidator
             ValidateVisualEvidenceMeasurements(measurements, errors);
         }
 
-        if (!parameters.TryGetValue("datum_bindings", out var datumBindings)
-            || datumBindings.ValueKind != JsonValueKind.Array)
-        {
-            errors.Add("parameters.datum_bindings must be an array");
-        }
-        else
-        {
-            ValidateVisualEvidenceDatumBindings(datumBindings, errors);
-        }
     }
 
     private static void ValidateVisualEvidenceRegion(
@@ -545,50 +535,13 @@ public static class ContractValidator
             return;
         }
         ValidateClosedObject(reference, new HashSet<string>(StringComparer.Ordinal) { "type", "id" }, "measurement reference", errors);
-        if (!TryGetString(reference, "type", out var type) || type is not ("ENTITY" or "DATUM"))
+        if (!TryGetString(reference, "type", out var type) || type is not "ENTITY")
         {
             errors.Add("measurement reference type is unsupported");
         }
         if (!TryGetString(reference, "id", out var id) || !VisualEvidenceIdentifierPattern.IsMatch(id))
         {
             errors.Add("measurement reference id must be a stable identifier");
-        }
-    }
-
-    private static void ValidateVisualEvidenceDatumBindings(
-        JsonElement datumBindings,
-        ICollection<string> errors)
-    {
-        if (datumBindings.GetArrayLength() > 10000)
-        {
-            errors.Add("parameters.datum_bindings must contain at most 10000 items");
-        }
-
-        var ids = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var binding in datumBindings.EnumerateArray())
-        {
-            if (binding.ValueKind != JsonValueKind.Object)
-            {
-                errors.Add("parameters.datum_bindings entries must be objects");
-                continue;
-            }
-
-            ValidateClosedObject(
-                binding,
-                new HashSet<string>(StringComparer.Ordinal) { "id", "entity_handle" },
-                "parameters.datum_bindings entry",
-                errors);
-            if (!TryGetString(binding, "id", out var id)
-                || !VisualEvidenceIdentifierPattern.IsMatch(id)
-                || !ids.Add(id))
-            {
-                errors.Add("parameters.datum_bindings ids must be unique stable identifiers");
-            }
-            if (!TryGetString(binding, "entity_handle", out var entityHandle)
-                || !VisualEvidenceIdentifierPattern.IsMatch(entityHandle))
-            {
-                errors.Add("parameters.datum_bindings.entity_handle must be a stable identifier");
-            }
         }
     }
 

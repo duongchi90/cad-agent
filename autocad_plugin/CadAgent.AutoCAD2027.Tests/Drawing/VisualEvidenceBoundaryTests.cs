@@ -13,8 +13,7 @@ public sealed class VisualEvidenceBoundaryTests
             @"C:\drawings\sample.dwg",
             "doc-001",
             "Model",
-            true,
-            2,
+            new SessionSpaceSnapshot("Model", 1, 2, "MODEL_SPACE"),
             "0",
             "center=10,20;width=100;height=50;target=0,0,0;direction=0,0,1;twist=0;lens=50",
             new[] { "AB", "CD" },
@@ -23,13 +22,16 @@ public sealed class VisualEvidenceBoundaryTests
                 ["CABIN"] = new(false, false),
                 ["CENTER"] = new(true, false)
             },
-            new Dictionary<string, string> { ["BACKGROUNDCOLOR"] = "WHITE", ["UCSFOLLOW"] = "0" });
+            new Dictionary<string, JsonElement>
+            {
+                ["BACKGROUNDCOLOR"] = JsonSerializer.SerializeToElement("WHITE"),
+                ["UCSFOLLOW"] = JsonSerializer.SerializeToElement(0)
+            });
         var second = SessionStateSnapshot.Create(
             @"C:/drawings/parts/../sample.dwg",
             "doc-001",
             "Model",
-            true,
-            2,
+            new SessionSpaceSnapshot("Model", 1, 2, "MODEL_SPACE"),
             "0",
             "center=10,20;width=100;height=50;target=0,0,0;direction=0,0,1;twist=0;lens=50",
             new[] { "AB", "CD" },
@@ -38,7 +40,11 @@ public sealed class VisualEvidenceBoundaryTests
                 ["CENTER"] = new(true, false),
                 ["CABIN"] = new(false, false)
             },
-            new Dictionary<string, string> { ["UCSFOLLOW"] = "0", ["BACKGROUNDCOLOR"] = "WHITE" });
+            new Dictionary<string, JsonElement>
+            {
+                ["UCSFOLLOW"] = JsonSerializer.SerializeToElement(0),
+                ["BACKGROUNDCOLOR"] = JsonSerializer.SerializeToElement("WHITE")
+            });
 
         Assert.Equal(first.FingerprintSha256, second.FingerprintSha256);
     }
@@ -99,17 +105,40 @@ public sealed class VisualEvidenceBoundaryTests
         Assert.NotEqual(first.FingerprintSha256, second.FingerprintSha256);
     }
 
+    [Fact]
+    public void SessionStatePreservesTypedSystemVariablesAndFloatingViewportIdentity()
+    {
+        var state = SessionStateSnapshot.Create(
+            @"C:\drawings\sample.dwg",
+            "doc-001",
+            "Layout1",
+            new SessionSpaceSnapshot("Layout1", 0, 2, "PAPER_SPACE_FLOATING_VIEWPORT"),
+            "0",
+            "actual-view",
+            Array.Empty<string>(),
+            new Dictionary<string, SessionLayerSnapshot>(),
+            new Dictionary<string, JsonElement>
+            {
+                ["LTSCALE"] = JsonSerializer.SerializeToElement(2.5),
+                ["ANNOALLVISIBLE"] = JsonSerializer.SerializeToElement(1)
+            },
+            null);
+
+        Assert.Equal("PAPER_SPACE_FLOATING_VIEWPORT", state.Space.Kind);
+        Assert.Equal(JsonValueKind.Number, state.RendererSystemVariables["LTSCALE"].ValueKind);
+        Assert.Equal(2.5, state.RendererSystemVariables["LTSCALE"].GetDouble());
+    }
+
     private static SessionStateSnapshot CreateState(SessionViewSnapshot view) => SessionStateSnapshot.Create(
         @"C:\drawings\sample.dwg",
         "doc-001",
         "Model",
-        true,
-        2,
+        new SessionSpaceSnapshot("Model", 1, 2, "MODEL_SPACE"),
         "0",
         "actual-view",
         Array.Empty<string>(),
         new Dictionary<string, SessionLayerSnapshot>(),
-        new Dictionary<string, string>(),
+        new Dictionary<string, JsonElement>(),
         view);
 
     private static VisualEvidenceRequest Request(string path) => new(
@@ -123,7 +152,6 @@ public sealed class VisualEvidenceBoundaryTests
         "vs-t3-artifacts-1",
         "artifacts/REQ-001",
         JsonSerializer.SerializeToElement(new { }),
-        Array.Empty<JsonElement>(),
         Array.Empty<JsonElement>());
 
     private static VisualEvidenceSnapshot Snapshot(string path) => new(

@@ -77,7 +77,7 @@ internal static class AutoCadVisualEvidenceReader
                 throw new InvalidDataException("The VS-T3 measurement limit was exceeded.");
             }
 
-            var measurements = EvaluateMeasurements(request.Measurements, request.DatumBindings, projectedEntities);
+            var measurements = EvaluateMeasurements(request.Measurements, projectedEntities);
             var renderBytes = RenderRegion(request.Region, projectedEntities);
             var entityBytes = JsonSerializer.SerializeToUtf8Bytes(projectedEntities.Select(entity => new
             {
@@ -227,6 +227,11 @@ internal static class AutoCadVisualEvidenceReader
                 continue;
             }
 
+            if (!entity.Visible)
+            {
+                continue;
+            }
+
             if ((includeLayers.Count > 0 && !includeLayers.Contains(entity.Layer))
                 || excludeLayers.Contains(entity.Layer))
             {
@@ -253,16 +258,39 @@ internal static class AutoCadVisualEvidenceReader
                 continue;
             }
 
-            snapshots.Add(CreateSnapshot(entity, extents));
+            snapshots.Add(CreateSnapshot(entity, extents, transaction));
         }
 
         return snapshots;
     }
 
-    private static EntitySnapshot CreateSnapshot(Entity entity, Extents3d extents)
+    private static EntitySnapshot CreateSnapshot(
+        Entity entity,
+        Extents3d extents,
+        Transaction transaction)
     {
-        var geometry = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        var type = entity switch
+        var geometry = CreateGeometry(
+            entity,
+            Matrix3d.Identity,
+            transaction,
+            new HashSet<ObjectId>());
+        geometry["bounding_box"] = new
+        {
+            min_x = extents.MinPoint.X,
+            min_y = extents.MinPoint.Y,
+            max_x = extents.MaxPoint.X,
+            max_y = extents.MaxPoint.Y
+        };
+        var jsonGeometry = geometry.ToDictionary(
+            item => item.Key,
+            item => JsonSerializer.SerializeToElement(item.Value),
+            StringComparer.Ordinal);
+        return new EntitySnapshot(entity.Handle.ToString(), GetEntityType(entity), entity.Layer, jsonGeometry);
+    }
+
+    private static string GetEntityType(Entity entity)
+    {
+        return entity switch
         {
             Line => ReviewEntityTypes.Line,
             Circle => ReviewEntityTypes.Circle,
@@ -277,95 +305,166 @@ internal static class AutoCadVisualEvidenceReader
             _ => throw new InvalidDataException(
                 $"Entity '{entity.Handle}' has unsupported visible type '{entity.GetType().Name}'.")
         };
-        geometry["bounding_box"] = JsonSerializer.SerializeToElement(new
-        {
-            min_x = extents.MinPoint.X,
-            min_y = extents.MinPoint.Y,
-            max_x = extents.MaxPoint.X,
-            max_y = extents.MaxPoint.Y
-        });
+    }
 
+    private static Dictionary<string, object?> CreateGeometry(
+        Entity entity,
+        Matrix3d transform,
+        Transaction transaction,
+        HashSet<ObjectId> blockStack)
+    {
+        var geometry = new Dictionary<string, object?>(StringComparer.Ordinal);
         switch (entity)
         {
             case Line line:
-                AddPoint(geometry, "start", line.StartPoint);
-                AddPoint(geometry, "end", line.EndPoint);
+                AddPoint(geometry, "start", line.StartPoint.TransformBy(transform));
+                AddPoint(geometry, "end", line.EndPoint.TransformBy(transform));
                 break;
             case Circle circle:
-                AddPoint(geometry, "center", circle.Center);
-                geometry["radius"] = JsonSerializer.SerializeToElement(circle.Radius);
+                AddPoint(geometry, "center", circle.Center.TransformBy(transform));
+                geometry["radius"] = TransformRadius(circle.Radius, transform);
                 break;
             case Arc arc:
-                AddPoint(geometry, "center", arc.Center);
-                geometry["radius"] = JsonSerializer.SerializeToElement(arc.Radius);
-                geometry["start_angle"] = JsonSerializer.SerializeToElement(arc.StartAngle);
-                geometry["end_angle"] = JsonSerializer.SerializeToElement(arc.EndAngle);
+                var arcCenter = arc.Center.TransformBy(transform);
+                AddPoint(geometry, "center", arcCenter);
+                geometry["radius"] = TransformRadius(arc.Radius, transform);
+                var arcStart = new Point3d(
+                    arc.Center.X + Math.Cos(arc.StartAngle) * arc.Radius,
+                    arc.Center.Y + Math.Sin(arc.StartAngle) * arc.Radius,
+                    arc.Center.Z).TransformBy(transform);
+                var arcEnd = new Point3d(
+                    arc.Center.X + Math.Cos(arc.EndAngle) * arc.Radius,
+                    arc.Center.Y + Math.Sin(arc.EndAngle) * arc.Radius,
+                    arc.Center.Z).TransformBy(transform);
+                geometry["start_angle"] = Math.Atan2(arcStart.Y - arcCenter.Y, arcStart.X - arcCenter.X);
+                geometry["end_angle"] = Math.Atan2(arcEnd.Y - arcCenter.Y, arcEnd.X - arcCenter.X);
                 break;
             case DBText text:
-                AddPoint(geometry, "position", text.Position);
-                geometry["height"] = JsonSerializer.SerializeToElement(text.Height);
-                geometry["text"] = JsonSerializer.SerializeToElement(text.TextString);
-                geometry["rotation"] = JsonSerializer.SerializeToElement(text.Rotation);
+                AddPoint(geometry, "position", text.Position.TransformBy(transform));
+                geometry["height"] = TransformRadius(text.Height, transform);
+                geometry["text"] = text.TextString;
+                geometry["rotation"] = TransformAngle(text.Rotation, transform);
                 break;
             case Dimension dimension:
-                geometry["measurement"] = JsonSerializer.SerializeToElement(dimension.Measurement);
-                geometry["text"] = JsonSerializer.SerializeToElement(dimension.DimensionText);
-                AddPoint(geometry, "text_position", dimension.TextPosition);
-                geometry["height"] = JsonSerializer.SerializeToElement(20.0);
+                geometry["measurement"] = dimension.Measurement;
+                geometry["text"] = dimension.DimensionText;
+                AddPoint(geometry, "text_position", dimension.TextPosition.TransformBy(transform));
+                switch (dimension)
+                {
+                    case AlignedDimension aligned:
+                        AddPoint(geometry, "xline1", aligned.XLine1Point.TransformBy(transform));
+                        AddPoint(geometry, "xline2", aligned.XLine2Point.TransformBy(transform));
+                        AddPoint(geometry, "dimline", aligned.DimLinePoint.TransformBy(transform));
+                        break;
+                    case RotatedDimension rotated:
+                        AddPoint(geometry, "xline1", rotated.XLine1Point.TransformBy(transform));
+                        AddPoint(geometry, "xline2", rotated.XLine2Point.TransformBy(transform));
+                        AddPoint(geometry, "dimline", rotated.DimLinePoint.TransformBy(transform));
+                        break;
+                    default:
+                        throw new InvalidDataException(
+                            $"Dimension '{dimension.Handle}' has unsupported visible subtype '{dimension.GetType().Name}'.");
+                }
+                geometry["height"] = 20.0;
                 break;
             case Polyline polyline:
-                geometry["closed"] = JsonSerializer.SerializeToElement(polyline.Closed);
-                geometry["vertices"] = JsonSerializer.SerializeToElement(
-                    Enumerable.Range(0, polyline.NumberOfVertices)
+                geometry["closed"] = polyline.Closed;
+                geometry["vertices"] = Enumerable.Range(0, polyline.NumberOfVertices)
                         .Select(index => new
                         {
-                            x = polyline.GetPoint2dAt(index).X,
-                            y = polyline.GetPoint2dAt(index).Y,
+                            point = new Point3d(polyline.GetPoint2dAt(index).X, polyline.GetPoint2dAt(index).Y, 0).TransformBy(transform),
                             bulge = polyline.GetBulgeAt(index)
-                        }).ToArray());
+                        })
+                    .Select(value => new { x = value.point.X, y = value.point.Y, value.bulge })
+                    .ToArray();
                 break;
             case MText mtext:
-                AddPoint(geometry, "position", mtext.Location);
-                geometry["height"] = JsonSerializer.SerializeToElement(mtext.TextHeight);
-                geometry["text"] = JsonSerializer.SerializeToElement(mtext.Text);
-                geometry["rotation"] = JsonSerializer.SerializeToElement(mtext.Rotation);
+                AddPoint(geometry, "position", mtext.Location.TransformBy(transform));
+                geometry["height"] = TransformRadius(mtext.TextHeight, transform);
+                geometry["text"] = mtext.Text;
+                geometry["rotation"] = TransformAngle(mtext.Rotation, transform);
                 break;
             case BlockReference block:
-                AddPoint(geometry, "position", block.Position);
-                geometry["rotation"] = JsonSerializer.SerializeToElement(block.Rotation);
-                geometry["render_fallback"] = JsonSerializer.SerializeToElement("BOUNDING_BOX");
+                if (!blockStack.Add(block.BlockTableRecord))
+                {
+                    throw new InvalidDataException($"Block '{block.Handle}' contains a recursive block reference.");
+                }
+
+                try
+                {
+                    geometry["position"] = ToPointObject(block.Position.TransformBy(transform));
+                    geometry["rotation"] = TransformAngle(block.Rotation, transform);
+                    var childTransform = block.BlockTransform * transform;
+                    var blockRecord = (BlockTableRecord)transaction.GetObject(block.BlockTableRecord, OpenMode.ForRead);
+                    geometry["children"] = blockRecord
+                        .Cast<ObjectId>()
+                        .Select(objectId => transaction.GetObject(objectId, OpenMode.ForRead, false))
+                        .OfType<Entity>()
+                        .Where(child => child.Visible)
+                        .Select(child => new
+                        {
+                            type = GetEntityType(child),
+                            geometry = CreateGeometry(child, childTransform, transaction, blockStack)
+                        })
+                        .ToArray();
+                }
+                finally
+                {
+                    blockStack.Remove(block.BlockTableRecord);
+                }
                 break;
             case Hatch:
-            case Spline:
-                geometry["render_fallback"] = JsonSerializer.SerializeToElement("BOUNDING_BOX");
+                throw new InvalidDataException($"Hatch '{entity.Handle}' has no approved deterministic boundary flattener.");
+            case Spline spline:
+                geometry["sampled_points"] = Enumerable.Range(0, 65)
+                    .Select(index =>
+                    {
+                        var parameter = spline.StartParam
+                            + (spline.EndParam - spline.StartParam) * index / 64.0;
+                        var point = spline.GetPointAtParameter(parameter).TransformBy(transform);
+                        return new { x = point.X, y = point.Y };
+                    })
+                    .ToArray();
                 break;
+            default:
+                throw new InvalidDataException(
+                    $"Entity '{entity.Handle}' has unsupported visible type '{entity.GetType().Name}'.");
         }
 
-        return new EntitySnapshot(entity.Handle.ToString(), type, entity.Layer, geometry);
+        return geometry;
+    }
+
+    private static object ToPointObject(Point3d point) => new { x = point.X, y = point.Y };
+
+    private static double TransformRadius(double radius, Matrix3d transform)
+    {
+        var vector = new Vector3d(radius, 0, 0).TransformBy(transform);
+        return vector.Length;
+    }
+
+    private static double TransformAngle(double angle, Matrix3d transform)
+    {
+        var vector = new Vector3d(Math.Cos(angle), Math.Sin(angle), 0).TransformBy(transform);
+        return Math.Atan2(vector.Y, vector.X);
     }
 
     private static IReadOnlyList<object> EvaluateMeasurements(
         IReadOnlyList<JsonElement> requests,
-        IReadOnlyList<JsonElement> datumBindingRequests,
         IReadOnlyList<VisualEvidenceEntityRecord> entities)
     {
         var byId = entities.ToDictionary(entity => entity.StableId, StringComparer.Ordinal);
         var byHandle = entities.ToDictionary(entity => entity.Handle, StringComparer.OrdinalIgnoreCase);
-        var datumBindings = datumBindingRequests.ToDictionary(
-            binding => binding.GetProperty("id").GetString()!,
-            binding => binding.GetProperty("entity_handle").GetString()!,
-            StringComparer.Ordinal);
         return requests.Select(request =>
         {
             var projection = VisualEvidenceProjection.ProjectMeasurements(new[] { request })[0];
-            var first = ResolveReference(projection.Reference, byId, byHandle, datumBindings);
+            var first = ResolveReference(projection.Reference, byId, byHandle);
             var value = projection.Kind switch
             {
                 "RADIUS" => ReadRadius(first),
                 "DIAMETER" => ReadRadius(first) * 2,
                 "BOUNDING_BOX" => ReadBoundingBox(first),
-                 "DISTANCE" => ResolveDistance(projection, first, byId, byHandle, datumBindings),
-                 "ANGLE" => ResolveAngle(projection, first, byId, byHandle, datumBindings),
+                 "DISTANCE" => ResolveDistance(projection, first, byId, byHandle),
+                 "ANGLE" => ResolveAngle(projection, first, byId, byHandle),
                 _ => throw new InvalidDataException($"Unsupported measurement kind '{projection.Kind}'.")
             };
             return new
@@ -383,22 +482,10 @@ internal static class AutoCadVisualEvidenceReader
     private static VisualEvidenceEntityRecord ResolveReference(
         JsonElement reference,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byId,
-        IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle,
-        IReadOnlyDictionary<string, string> datumBindings)
+        IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle)
     {
         var type = reference.GetProperty("type").GetString();
         var id = reference.GetProperty("id").GetString()!;
-        if (string.Equals(type, "DATUM", StringComparison.Ordinal))
-        {
-            if (!datumBindings.TryGetValue(id, out var entityHandle))
-            {
-                throw new InvalidDataException($"The approved measurement datum reference '{id}' is unresolved.");
-            }
-
-            id = entityHandle;
-            type = "ENTITY";
-        }
-
         if (!string.Equals(type, "ENTITY", StringComparison.Ordinal))
         {
             throw new InvalidDataException($"The measurement datum reference '{id}' is unresolved.");
@@ -439,15 +526,14 @@ internal static class AutoCadVisualEvidenceReader
         VisualEvidenceMeasurementRecord measurement,
         VisualEvidenceEntityRecord first,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byId,
-        IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle,
-        IReadOnlyDictionary<string, string> datumBindings)
+        IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle)
     {
         if (measurement.ToReference is not JsonElement toReference)
         {
             throw new InvalidDataException($"Distance measurement '{measurement.Id}' has no to_reference.");
         }
 
-        var second = ResolveReference(toReference, byId, byHandle, datumBindings);
+        var second = ResolveReference(toReference, byId, byHandle);
         var firstPoint = RepresentativePoint(first);
         var secondPoint = RepresentativePoint(second);
         return Math.Sqrt(Math.Pow(firstPoint.X - secondPoint.X, 2) + Math.Pow(firstPoint.Y - secondPoint.Y, 2));
@@ -457,15 +543,14 @@ internal static class AutoCadVisualEvidenceReader
         VisualEvidenceMeasurementRecord measurement,
         VisualEvidenceEntityRecord first,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byId,
-        IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle,
-        IReadOnlyDictionary<string, string> datumBindings)
+        IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle)
     {
         if (measurement.ToReference is not JsonElement toReference)
         {
             throw new InvalidDataException($"Angle measurement '{measurement.Id}' has no to_reference.");
         }
 
-        var second = ResolveReference(toReference, byId, byHandle, datumBindings);
+        var second = ResolveReference(toReference, byId, byHandle);
         var firstPoint = RepresentativePoint(first);
         var secondPoint = RepresentativePoint(second);
         var angle = Math.Atan2(secondPoint.Y - firstPoint.Y, secondPoint.X - firstPoint.X);
@@ -545,21 +630,41 @@ internal static class AutoCadVisualEvidenceReader
             && entity.Geometry.TryGetValue("vertices", out var vertices)
             && vertices.ValueKind == JsonValueKind.Array)
         {
-            var points = vertices.EnumerateArray()
-                .Select(vertex => Transform(
-                    vertex.GetProperty("x").GetDouble(),
-                    vertex.GetProperty("y").GetDouble()))
-                .ToArray();
-            if (points.Length >= 2)
+            var values = vertices.EnumerateArray().ToArray();
+            if (values.Length >= 2)
             {
-                graphics.DrawLines(pen, points);
-                if (entity.Geometry.TryGetValue("closed", out var closed)
-                    && closed.ValueKind == JsonValueKind.True)
+                var closed = entity.Geometry.TryGetValue("closed", out var closedValue)
+                    && closedValue.ValueKind == JsonValueKind.True;
+                var segmentCount = closed ? values.Length : values.Length - 1;
+                for (var index = 0; index < segmentCount; index++)
                 {
-                    graphics.DrawLine(pen, points[^1], points[0]);
+                    var first = values[index];
+                    var second = values[(index + 1) % values.Length];
+                    var start = Transform(first.GetProperty("x").GetDouble(), first.GetProperty("y").GetDouble());
+                    var end = Transform(second.GetProperty("x").GetDouble(), second.GetProperty("y").GetDouble());
+                    var bulge = first.TryGetProperty("bulge", out var bulgeValue)
+                        ? bulgeValue.GetDouble()
+                        : 0.0;
+                    DrawBulgeSegment(graphics, pen, start, end, bulge);
                 }
             }
 
+            return;
+        }
+
+        if (entity.Type == "SPLINE"
+            && entity.Geometry.TryGetValue("sampled_points", out var sampledPoints)
+            && sampledPoints.ValueKind == JsonValueKind.Array)
+        {
+            var points = sampledPoints.EnumerateArray()
+                .Select(point => Transform(point.GetProperty("x").GetDouble(), point.GetProperty("y").GetDouble()))
+                .ToArray();
+            if (points.Length < 2)
+            {
+                throw new InvalidDataException($"Spline '{entity.StableId}' has too few sampled points.");
+            }
+
+            graphics.DrawLines(pen, points);
             return;
         }
 
@@ -600,45 +705,152 @@ internal static class AutoCadVisualEvidenceReader
                 var pixelHeight = Math.Max(6.0, modelHeight / (bbox[3] - bbox[1]) * height);
                 using var font = new System.Drawing.Font(FontFamily.GenericSansSerif, (float)pixelHeight, FontStyle.Regular, GraphicsUnit.Pixel);
                 using var brush = new SolidBrush(pen.Color);
-                graphics.DrawString(text.GetString(), font, brush, point);
+                var state = graphics.Save();
+                graphics.TranslateTransform(point.X, point.Y);
+                var rotation = entity.Geometry.TryGetValue("rotation", out var rotationValue)
+                    && rotationValue.ValueKind == JsonValueKind.Number
+                    ? (float)-RadiansToDegrees(rotationValue.GetDouble())
+                    : 0.0f;
+                graphics.RotateTransform(rotation);
+                graphics.DrawString(text.GetString(), font, brush, 0, 0);
+                graphics.Restore(state);
                 if (entity.Type != ReviewEntityTypes.Text && entity.Type != "MTEXT")
                 {
-                    DrawBoundingBox(graphics, pen, entity, Transform);
+                    DrawDimensionGeometry(graphics, pen, entity, Transform);
                 }
 
                 return;
             }
         }
 
-        if (entity.Geometry.TryGetValue("render_fallback", out var fallback)
-            && fallback.ValueKind == JsonValueKind.String
-            && fallback.GetString() == "BOUNDING_BOX")
+        if (entity.Geometry.TryGetValue("children", out var children)
+            && children.ValueKind == JsonValueKind.Array)
         {
-            DrawBoundingBox(graphics, pen, entity, Transform);
+            var index = 0;
+            foreach (var child in children.EnumerateArray())
+            {
+                if (child.ValueKind != JsonValueKind.Object
+                    || !child.TryGetProperty("type", out var childType)
+                    || childType.ValueKind != JsonValueKind.String
+                    || !child.TryGetProperty("geometry", out var childGeometry)
+                    || childGeometry.ValueKind != JsonValueKind.Object)
+                {
+                    throw new InvalidDataException($"Entity '{entity.StableId}' has an invalid block child render projection.");
+                }
+
+                var childMap = childGeometry.EnumerateObject()
+                    .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+                DrawEntity(
+                    graphics,
+                    pen,
+                    new VisualEvidenceEntityRecord(
+                        $"{entity.StableId}:CHILD:{index++}",
+                        entity.Handle,
+                        childType.GetString()!,
+                        entity.Layer,
+                        childMap),
+                    bbox,
+                    width,
+                    height);
+            }
+
             return;
         }
 
         throw new InvalidDataException($"Entity '{entity.StableId}' has no deterministic render projection.");
     }
 
-    private static void DrawBoundingBox(
+    private static void DrawBulgeSegment(
+        Graphics graphics,
+        Pen pen,
+        PointF start,
+        PointF end,
+        double bulge)
+    {
+        if (Math.Abs(bulge) < 1e-9)
+        {
+            graphics.DrawLine(pen, start, end);
+            return;
+        }
+
+        var dx = end.X - start.X;
+        var dy = end.Y - start.Y;
+        var chord = Math.Sqrt(dx * dx + dy * dy);
+        if (chord < 1e-6)
+        {
+            return;
+        }
+
+        var sweep = 4.0 * Math.Atan(bulge);
+        var radius = chord / (2.0 * Math.Sin(Math.Abs(sweep) / 2.0));
+        var midpoint = new PointF((start.X + end.X) / 2.0f, (start.Y + end.Y) / 2.0f);
+        var normalX = -dy / chord;
+        var normalY = dx / chord;
+        var offset = Math.Sqrt(Math.Max(0.0, radius * radius - (chord / 2.0) * (chord / 2.0)));
+        var center = new PointF(
+            (float)(midpoint.X + Math.Sign(bulge) * normalX * offset),
+            (float)(midpoint.Y + Math.Sign(bulge) * normalY * offset));
+        var startAngle = Math.Atan2(start.Y - center.Y, start.X - center.X) * 180.0 / Math.PI;
+        var sweepAngle = sweep * 180.0 / Math.PI;
+        var diameter = (float)(radius * 2.0);
+        graphics.DrawArc(
+            pen,
+            center.X - (float)radius,
+            center.Y - (float)radius,
+            diameter,
+            diameter,
+            (float)startAngle,
+            (float)sweepAngle);
+    }
+
+    private static void DrawDimensionGeometry(
         Graphics graphics,
         Pen pen,
         VisualEvidenceEntityRecord entity,
         Func<double, double, PointF> transform)
     {
-        if (!entity.Geometry.TryGetValue("bounding_box", out var box))
+        if (!entity.Geometry.TryGetValue("xline1_x", out var xline1X)
+            || !entity.Geometry.TryGetValue("xline1_y", out var xline1Y)
+            || !entity.Geometry.TryGetValue("xline2_x", out var xline2X)
+            || !entity.Geometry.TryGetValue("xline2_y", out var xline2Y)
+            || !entity.Geometry.TryGetValue("dimline_x", out var dimlineX)
+            || !entity.Geometry.TryGetValue("dimline_y", out var dimlineY))
         {
-            throw new InvalidDataException($"Entity '{entity.StableId}' has no bounding-box render metadata.");
+            throw new InvalidDataException($"Dimension '{entity.StableId}' has no deterministic dimension-line projection.");
         }
 
-        var min = transform(box.GetProperty("min_x").GetDouble(), box.GetProperty("min_y").GetDouble());
-        var max = transform(box.GetProperty("max_x").GetDouble(), box.GetProperty("max_y").GetDouble());
-        var left = Math.Min(min.X, max.X);
-        var top = Math.Min(min.Y, max.Y);
-        var right = Math.Max(min.X, max.X);
-        var bottom = Math.Max(min.Y, max.Y);
-        graphics.DrawRectangle(pen, left, top, Math.Max(1, right - left), Math.Max(1, bottom - top));
+        var first = transform(xline1X.GetDouble(), xline1Y.GetDouble());
+        var second = transform(xline2X.GetDouble(), xline2Y.GetDouble());
+        var dimensionPoint = transform(dimlineX.GetDouble(), dimlineY.GetDouble());
+        var offset = new PointF(dimensionPoint.X - ((first.X + second.X) / 2.0f), dimensionPoint.Y - ((first.Y + second.Y) / 2.0f));
+        var dimensionFirst = new PointF(first.X + offset.X, first.Y + offset.Y);
+        var dimensionSecond = new PointF(second.X + offset.X, second.Y + offset.Y);
+        graphics.DrawLine(pen, first, dimensionFirst);
+        graphics.DrawLine(pen, second, dimensionSecond);
+        graphics.DrawLine(pen, dimensionFirst, dimensionSecond);
+        DrawArrow(graphics, pen, dimensionFirst, dimensionSecond);
+        DrawArrow(graphics, pen, dimensionSecond, dimensionFirst);
+    }
+
+    private static void DrawArrow(Graphics graphics, Pen pen, PointF tip, PointF tail)
+    {
+        var dx = tail.X - tip.X;
+        var dy = tail.Y - tip.Y;
+        var length = Math.Sqrt(dx * dx + dy * dy);
+        if (length < 1e-6)
+        {
+            return;
+        }
+
+        var ux = dx / length;
+        var uy = dy / length;
+        var px = -uy;
+        var py = ux;
+        const double size = 7.0;
+        var left = new PointF((float)(tip.X + ux * size + px * size * 0.45), (float)(tip.Y + uy * size + py * size * 0.45));
+        var right = new PointF((float)(tip.X + ux * size - px * size * 0.45), (float)(tip.Y + uy * size - py * size * 0.45));
+        graphics.DrawLine(pen, tip, left);
+        graphics.DrawLine(pen, tip, right);
     }
 
     private static double RadiansToDegrees(double radians) => radians * 180 / Math.PI;
@@ -659,7 +871,7 @@ internal static class AutoCadVisualEvidenceReader
 
         var variables = RendererSystemVariableNames.ToDictionary(
             name => name,
-            name => Convert.ToString(AcadApplication.GetSystemVariable(name), CultureInfo.InvariantCulture) ?? string.Empty,
+            name => JsonSerializer.SerializeToElement(AcadApplication.GetSystemVariable(name)),
             StringComparer.Ordinal);
         var selectionHandles = new List<string>();
         var impliedSelection = document.Editor.SelectImplied();
@@ -673,8 +885,14 @@ internal static class AutoCadVisualEvidenceReader
             AcadApplication.GetSystemVariable("CLAYER"),
             CultureInfo.InvariantCulture) ?? string.Empty;
         var currentLayout = LayoutManager.Current.CurrentLayout;
-        var modelSpace = Convert.ToInt32(AcadApplication.GetSystemVariable("TILEMODE"), CultureInfo.InvariantCulture) != 0;
+        var tileMode = Convert.ToInt32(AcadApplication.GetSystemVariable("TILEMODE"), CultureInfo.InvariantCulture);
         var cvport = Convert.ToInt32(AcadApplication.GetSystemVariable("CVPORT"), CultureInfo.InvariantCulture);
+        var spaceKind = tileMode != 0
+            ? "MODEL_SPACE"
+            : cvport > 1
+                ? "PAPER_SPACE_FLOATING_VIEWPORT"
+                : "PAPER_SPACE";
+        var space = new SessionSpaceSnapshot(currentLayout, tileMode, cvport, spaceKind);
         using var currentView = document.Editor.GetCurrentView();
         var viewState = new SessionViewSnapshot(
             currentView.CenterPoint.X,
@@ -694,8 +912,7 @@ internal static class AutoCadVisualEvidenceReader
             database.Filename,
             $"DOCUMENT:{RuntimeHelpers.GetHashCode(document):X8}",
             currentLayout,
-            modelSpace,
-            cvport,
+            space,
             currentLayer,
             viewProperties,
             selectionHandles,
@@ -717,7 +934,7 @@ internal static class AutoCadVisualEvidenceReader
             LayoutManager.Current.CurrentLayout = snapshot.CurrentLayout;
         }
 
-        if (snapshot.ModelSpace)
+        if (snapshot.Space.Kind == "MODEL_SPACE")
         {
             document.Editor.SwitchToModelSpace();
         }
@@ -728,48 +945,38 @@ internal static class AutoCadVisualEvidenceReader
 
         foreach (var variable in snapshot.RendererSystemVariables)
         {
-            if (variable.Key is "TILEMODE" or "CVPORT" or "CLAYER")
+            if (variable.Key is not "ANNOALLVISIBLE")
             {
                 continue;
             }
 
-            AcadApplication.SetSystemVariable(variable.Key, variable.Value);
-        }
-
-        using (var transaction = document.Database.TransactionManager.StartOpenCloseTransaction())
-        {
-            var layerTable = (LayerTable)transaction.GetObject(document.Database.LayerTableId, OpenMode.ForRead);
-            foreach (var state in snapshot.LayerStates)
-            {
-                if (!layerTable.Has(state.Key))
-                {
-                    throw new InvalidOperationException($"The saved layer '{state.Key}' no longer exists.");
-                }
-
-                var layer = (LayerTableRecord)transaction.GetObject(layerTable[state.Key], OpenMode.ForRead);
-                var savedState = state.Value;
-                if (layer.IsOff == savedState.IsOff && layer.IsFrozen == savedState.IsFrozen)
-                {
-                    continue;
-                }
-
-                layer.UpgradeOpen();
-                layer.IsOff = savedState.IsOff;
-                layer.IsFrozen = savedState.IsFrozen;
-            }
-
-            transaction.Commit();
+            AcadApplication.SetSystemVariable(variable.Key, ToSystemVariableValue(variable.Value));
         }
 
         AcadApplication.SetSystemVariable("CLAYER", snapshot.CurrentLayer);
-        try
+        if (snapshot.Space.Kind == "PAPER_SPACE_FLOATING_VIEWPORT")
         {
-            AcadApplication.SetSystemVariable("CVPORT", snapshot.Cvport);
+            try
+            {
+                AcadApplication.SetSystemVariable("CVPORT", snapshot.Space.Cvport);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                // CVPORT can be read-only in a paper-space viewport. The view and
+                // layout checks below still prove the restored active viewport.
+            }
         }
-        catch (Autodesk.AutoCAD.Runtime.Exception)
+
+        if (snapshot.Space.Kind == "PAPER_SPACE")
         {
-            // CVPORT can be read-only in a paper-space viewport. The view and
-            // layout checks below still prove the restored active viewport.
+            try
+            {
+                AcadApplication.SetSystemVariable("CVPORT", 1);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                // CVPORT can be read-only in a paper-space viewport.
+            }
         }
 
         var ids = snapshot.SelectionHandles
@@ -802,6 +1009,19 @@ internal static class AutoCadVisualEvidenceReader
         AcadApplication.GetSystemVariable("DBMOD"),
         CultureInfo.InvariantCulture);
 
+    private static object ToSystemVariableValue(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Number when value.TryGetInt32(out var integer) => integer,
+            JsonValueKind.Number when value.TryGetDouble(out var number) => number,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new InvalidDataException("Unsupported system-variable value type in the session snapshot.")
+        };
+    }
+
     private static string HashFile(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -822,11 +1042,11 @@ internal static class AutoCadVisualEvidenceReader
     }
 
     private static void AddPoint(
-        IDictionary<string, JsonElement> geometry,
+        IDictionary<string, object?> geometry,
         string prefix,
         Point3d point)
     {
-        geometry[$"{prefix}_x"] = JsonSerializer.SerializeToElement(point.X);
-        geometry[$"{prefix}_y"] = JsonSerializer.SerializeToElement(point.Y);
+        geometry[$"{prefix}_x"] = point.X;
+        geometry[$"{prefix}_y"] = point.Y;
     }
 }

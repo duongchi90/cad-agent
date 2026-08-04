@@ -35,7 +35,6 @@ def valid_parameters() -> dict[str, object]:
                 "reference": {"type": "ENTITY", "id": "PART:CABIN_OUTER"},
             }
         ],
-        "datum_bindings": [],
     }
 
 
@@ -216,7 +215,6 @@ def test_python_validator_accepts_valid_vs_t3_parameters() -> None:
         "artifact_directory",
         "region",
         "measurements",
-        "datum_bindings",
     ],
 )
 def test_python_validator_rejects_missing_vs_t3_parameter(field: str) -> None:

@@ -13,8 +13,7 @@
     "artifact_policy_version",
     "artifact_directory",
     "region",
-    "measurements",
-    "datum_bindings"
+    "measurements"
   ],
   "properties": {
     "run_id": {
@@ -113,7 +112,7 @@
             "required": ["type", "id"],
             "properties": {
               "type": {
-                "enum": ["ENTITY", "DATUM"]
+                "const": "ENTITY"
               },
               "id": {
                 "$ref": "#/$defs/identifier"
@@ -126,26 +125,13 @@
             "required": ["type", "id"],
             "properties": {
               "type": {
-                "enum": ["ENTITY", "DATUM"]
+                "const": "ENTITY"
               },
               "id": {
                 "$ref": "#/$defs/identifier"
               }
             }
           }
-        }
-      }
-    },
-    "datum_bindings": {
-      "type": "array",
-      "maxItems": 10000,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "entity_handle"],
-        "properties": {
-          "id": {"$ref": "#/$defs/identifier"},
-          "entity_handle": {"$ref": "#/$defs/identifier"}
         }
       }
     }

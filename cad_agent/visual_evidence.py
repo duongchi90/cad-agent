@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 import hashlib
 import json
 import os
 import re
 import uuid
 from collections.abc import Mapping
+from ctypes import wintypes
 from pathlib import Path
 
 from .visual_contracts import VisualContractError, validate_visual_contract
@@ -18,10 +20,39 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _CAPTURED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 _MAX_TOTAL_BYTES = 32 * 1024 * 1024
 _MAX_BYTES = {"render": 8 * 1024 * 1024, "entity_map": 8 * 1024 * 1024, "measurements": 4 * 1024 * 1024}
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 
 class VisualEvidenceError(ValueError):
     """Raised when VS-T3 evidence cannot be accepted or persisted."""
+
+
+def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
+    """Return whether a path or existing parent is a Windows reparse point."""
+
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    if os.name != "nt":
+        return any(component.is_symlink() for component in (candidate, *candidate.parents))
+
+    try:
+        get_attributes = ctypes.windll.kernel32.GetFileAttributesW
+        get_attributes.argtypes = [wintypes.LPCWSTR]
+        get_attributes.restype = wintypes.DWORD
+    except AttributeError:
+        return candidate.is_symlink()
+
+    components = list(candidate.parts)
+    current = Path(components[0])
+    for component in components[1:]:
+        current /= component
+        attributes = get_attributes(str(current))
+        if attributes != _INVALID_FILE_ATTRIBUTES and attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+            return True
+    attributes = get_attributes(str(current))
+    return attributes != _INVALID_FILE_ATTRIBUTES and bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 def snapshot_visual_run_manifest(
@@ -30,6 +61,8 @@ def snapshot_visual_run_manifest(
     """Read and validate one exact manifest byte snapshot."""
 
     path = Path(manifest_path)
+    if _path_contains_windows_reparse_point(path):
+        raise VisualEvidenceError(f"Visual Run Manifest path contains a reparse point: {path}")
     try:
         raw = path.read_bytes()
         payload = json.loads(raw.decode("utf-8-sig"))
@@ -68,7 +101,7 @@ def sha256_file(path: Path) -> str:
     """Hash the exact current bytes of one drawing file."""
 
     candidate = Path(path)
-    if candidate.is_symlink() or not candidate.is_file():
+    if _path_contains_windows_reparse_point(candidate) or not candidate.is_file():
         raise VisualEvidenceError(f"drawing path is not a regular file: {candidate}")
     try:
         with candidate.open("rb") as stream:
@@ -200,6 +233,10 @@ def write_visual_evidence(
         raise VisualEvidenceError("verified request artifact paths are required")
 
     # Re-read exact bytes immediately before any final destination is created.
+    if _path_contains_windows_reparse_point(manifest_path):
+        raise VisualEvidenceError("Visual Run Manifest path contains a reparse point")
+    if _path_contains_windows_reparse_point(drawing_path):
+        raise VisualEvidenceError("drawing path contains a reparse point")
     current_raw = Path(manifest_path).read_bytes()
     if current_raw != raw_manifest:
         raise VisualEvidenceError("Visual Run Manifest changed before evidence promotion")
@@ -209,11 +246,15 @@ def write_visual_evidence(
     run_id = str(payload["run_id"])
     region_id = str(payload["region_id"])
     base = Path(evidence_root)
+    if _path_contains_windows_reparse_point(base):
+        raise VisualEvidenceError("evidence root contains a reparse point")
     if base.name == run_id:
         destination = base / "iterations" / region_id / f"evidence-{evidence_id}"
     else:
         destination = base / run_id / "iterations" / region_id / f"evidence-{evidence_id}"
     destination = destination.resolve()
+    if _path_contains_windows_reparse_point(destination.parent):
+        raise VisualEvidenceError("evidence destination parent contains a reparse point")
     if destination.exists():
         raise VisualEvidenceError("evidence destination already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -224,7 +265,7 @@ def write_visual_evidence(
         for artifact in payload["artifacts"]:  # type: ignore[union-attr]
             kind = str(artifact["kind"])
             source = Path(artifact_paths[kind])
-            if source.is_symlink() or not source.is_file():
+            if _path_contains_windows_reparse_point(source) or not source.is_file():
                 raise VisualEvidenceError(f"artifact source is unsafe or missing: {source}")
             data = source.read_bytes()
             if len(data) != artifact["byte_length"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]:
@@ -307,10 +348,12 @@ def _write_json_new(path: Path, value: object) -> None:
 
 
 def _remove_tree_if_safe(path: Path) -> None:
-    if not path.exists() or path.is_symlink():
+    if not path.exists() or _path_contains_windows_reparse_point(path):
         return
     for child in path.iterdir():
-        if child.is_symlink() or child.is_file():
+        if _path_contains_windows_reparse_point(child):
+            return
+        if child.is_file():
             child.unlink()
         elif child.is_dir():
             _remove_tree_if_safe(child)

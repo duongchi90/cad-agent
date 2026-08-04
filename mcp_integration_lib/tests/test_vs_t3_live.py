@@ -95,6 +95,7 @@ class VisualEvidenceAutoCADLiveTests(unittest.TestCase):
                 region_id="SIDE-CABIN",
                 latest_mutation_sha256=mutation_sha,
                 visual_run_manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                visual_run_manifest_path=manifest_path,
                 region={
                     "model_bbox_mm": [-100, -100, 1100, 100],
                     "pixel_size": [1600, 400],
@@ -103,7 +104,6 @@ class VisualEvidenceAutoCADLiveTests(unittest.TestCase):
                     "exclude_layers": [],
                 },
                 measurements=[],
-                datum_bindings=[],
                 artifact_consumer=consume,
                 request_id="vs-t3-live-001",
             )

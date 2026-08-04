@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 import unittest
 
+from mcp_integration_lib import dotnet_ipc
 from mcp_integration_lib.dotnet_ipc import (
     DotNetIPCClient,
     DotNetIPCTimeoutError,
@@ -27,7 +29,13 @@ REGION = {
 }
 
 
-def _write_valid_artifacts(ipc_dir: Path, request_id: str, *, unsafe: bool = False) -> dict[str, Any]:
+def _write_valid_artifacts(
+    ipc_dir: Path,
+    request_id: str,
+    *,
+    manifest_sha256: str,
+    unsafe: bool = False,
+) -> dict[str, Any]:
     root = ipc_dir / "artifacts" / request_id
     root.mkdir(parents=True)
     contents = {
@@ -67,7 +75,7 @@ def _write_valid_artifacts(ipc_dir: Path, request_id: str, *, unsafe: bool = Fal
         "dbmod_before": 0,
         "dbmod_after": 0,
         "latest_mutation_sha256": "b" * 64,
-        "visual_run_manifest_sha256": "c" * 64,
+        "visual_run_manifest_sha256": manifest_sha256,
         "region_config_sha256": "d" * 64,
         "session_state_sha256_before": "e" * 64,
         "session_state_sha256_after": "e" * 64,
@@ -75,6 +83,34 @@ def _write_valid_artifacts(ipc_dir: Path, request_id: str, *, unsafe: bool = Fal
         "captured_at_utc": "2026-08-04T12:00:00.000Z",
         "artifacts": descriptors,
     }
+
+
+def _write_manifest(root: Path) -> Path:
+    path = root / "visual-run-manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "visual-run-manifest-1.0",
+                "run_id": "RUN-001",
+                "state": "REGIONS_CHECKING",
+                "authority": "DISPOSABLE_REVIEW",
+                "source": {
+                    "source_type": "PDF",
+                    "source_sha256": "1" * 64,
+                    "page_ids": ["PAGE-001"],
+                },
+                "drawing": {
+                    "absolute_path": r"C:\drawings\sample.dwg",
+                    "initial_sha256": "a" * 64,
+                },
+                "evidence_root": "runs/RUN-001",
+                "latest_mutation_sha256": "b" * 64,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 class VisualEvidenceIPCAdapterTests(unittest.TestCase):
@@ -87,7 +123,7 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
             request_id_factory=lambda: request_id,
         )
 
-    def _kwargs(self) -> dict[str, Any]:
+    def _kwargs(self, manifest_path: Path) -> dict[str, Any]:
         return {
             "drawing_full_path": r"C:\drawings\sample.dwg",
             "drawing_sha256": "a" * 64,
@@ -95,15 +131,16 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
             "evidence_id": "EVIDENCE-001",
             "region_id": "SIDE-CABIN",
             "latest_mutation_sha256": "b" * 64,
-            "visual_run_manifest_sha256": "c" * 64,
+            "visual_run_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "visual_run_manifest_path": manifest_path,
             "region": REGION,
             "measurements": [],
-            "datum_bindings": [],
         }
 
     def test_sends_existing_root_envelope_and_hands_off_verified_artifacts(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
+            manifest_path = _write_manifest(ipc_dir)
             handed_off: dict[str, bytes] = {}
 
             def trigger() -> None:
@@ -113,7 +150,11 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
                 self.assertEqual("a" * 64, request["drawing_sha256"])
                 self.assertIn("latest_mutation_sha256", request["parameters"])
                 self.assertNotIn("latest_mutation_sha256", request)
-                payload = _write_valid_artifacts(ipc_dir, request["request_id"])
+                payload = _write_valid_artifacts(
+                    ipc_dir,
+                    request["request_id"],
+                    manifest_sha256=request["parameters"]["visual_run_manifest_sha256"],
+                )
                 atomic_write_json(
                     result_path(ipc_dir, request["request_id"]),
                     {
@@ -135,7 +176,7 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
                 handed_off.update({kind: path.read_bytes() for kind, path in paths.items()})
 
             result = self._client(ipc_dir, trigger).visual_evidence_export(
-                **self._kwargs(),
+                **self._kwargs(manifest_path),
                 artifact_consumer=consume,
             )
             self.assertEqual("EVIDENCE-001", result["payload"]["evidence_id"])
@@ -145,11 +186,17 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
     def test_rejects_unsafe_descriptor_and_cleans_request_artifacts(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
+            manifest_path = _write_manifest(ipc_dir)
 
             def trigger() -> None:
                 request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
                 request = json.loads(request_file.read_text(encoding="utf-8"))
-                payload = _write_valid_artifacts(ipc_dir, request["request_id"], unsafe=True)
+                payload = _write_valid_artifacts(
+                    ipc_dir,
+                    request["request_id"],
+                    manifest_sha256=request["parameters"]["visual_run_manifest_sha256"],
+                    unsafe=True,
+                )
                 atomic_write_json(
                     result_path(ipc_dir, request["request_id"]),
                     {
@@ -169,7 +216,47 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
 
             with self.assertRaisesRegex(Exception, "unsafe|request-owned"):
                 self._client(ipc_dir, trigger).visual_evidence_export(
-                    **self._kwargs(),
+                    **self._kwargs(manifest_path),
+                    artifact_consumer=lambda _result, _paths: None,
+                )
+            self.assertFalse((ipc_dir / "artifacts" / "vs-t3-001").exists())
+
+    def test_rejects_manifest_byte_race_before_artifact_handoff(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            manifest_path = _write_manifest(ipc_dir)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                payload = _write_valid_artifacts(
+                    ipc_dir,
+                    request["request_id"],
+                    manifest_sha256=request["parameters"]["visual_run_manifest_sha256"],
+                )
+                atomic_write_json(
+                    result_path(ipc_dir, request["request_id"]),
+                    {
+                        "request_id": request["request_id"],
+                        "success": True,
+                        "operation": request["operation"],
+                        "drawing_full_path": request["drawing_full_path"],
+                        "changed": False,
+                        "entity_handles": [],
+                        "warnings": [],
+                        "errors": [],
+                        "started_at": "2026-08-04T12:00:00Z",
+                        "completed_at": "2026-08-04T12:00:00Z",
+                        "payload": payload,
+                    },
+                )
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["state"] = "REPAIRING"
+                manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+            with self.assertRaisesRegex(Exception, "manifest changed"):
+                self._client(ipc_dir, trigger).visual_evidence_export(
+                    **self._kwargs(manifest_path),
                     artifact_consumer=lambda _result, _paths: None,
                 )
             self.assertFalse((ipc_dir / "artifacts" / "vs-t3-001").exists())
@@ -177,6 +264,7 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
     def test_timeout_leaves_an_active_lease_for_scavenger(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
+            manifest_path = _write_manifest(ipc_dir)
             lease_path = ipc_dir / "artifacts" / "vs-t3-001" / "active.lease"
             lease_stream = None
 
@@ -190,7 +278,7 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
             try:
                 with self.assertRaises(DotNetIPCTimeoutError):
                     self._client(ipc_dir, trigger, timeout_s=0.05).visual_evidence_export(
-                        **self._kwargs(),
+                        **self._kwargs(manifest_path),
                         artifact_consumer=lambda _result, _paths: None,
                     )
                 self.assertTrue(lease_path.exists())
@@ -201,8 +289,9 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
     def test_success_requires_an_artifact_handoff_consumer(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
+            manifest_path = _write_manifest(ipc_dir)
             with self.assertRaisesRegex(ValueError, "artifact_consumer"):
-                self._client(ipc_dir, lambda: None).visual_evidence_export(**self._kwargs())
+                self._client(ipc_dir, lambda: None).visual_evidence_export(**self._kwargs(manifest_path))
 
     def test_scavenger_removes_only_stale_lease_free_directories(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -234,6 +323,26 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
             self.assertFalse(stale.exists())
             self.assertTrue(fresh.exists())
             self.assertTrue(active.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse-point regression")
+    def test_reparse_helper_rejects_a_junction_component(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            junction = root / "junction"
+            target.mkdir()
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                self.skipTest(f"mklink /J unavailable: {result.stderr.strip()}")
+            helper = getattr(dotnet_ipc, "_path_contains_windows_reparse_point", None)
+            self.assertTrue(callable(helper))
+            self.assertTrue(helper(junction))
+            self.assertTrue(helper(junction / "child"))
 
 
 if __name__ == "__main__":
