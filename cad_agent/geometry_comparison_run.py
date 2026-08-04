@@ -87,6 +87,24 @@ def _verify_unchanged(path: Path, expected_sha256: str) -> bool:
     return path.is_file() and sha256_file(path) == expected_sha256
 
 
+def _snapshot_input(path: Path, snapshot_root: Path, filename: str, description: str) -> tuple[Path, str]:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise GeometryComparisonRunError(f"Cannot snapshot {description}: {path}") from exc
+    expected_sha256 = hashlib.sha256(data).hexdigest()
+    snapshot_path = snapshot_root / filename
+    try:
+        snapshot_path.write_bytes(data)
+    except OSError as exc:
+        raise GeometryComparisonRunError(f"Cannot write {description} snapshot") from exc
+    if sha256_file(snapshot_path) != expected_sha256:
+        raise GeometryComparisonRunError(f"{description} snapshot hash mismatch")
+    if not _verify_unchanged(path, expected_sha256):
+        raise GeometryComparisonRunError("an input changed during the run")
+    return snapshot_path, expected_sha256
+
+
 def _read_json(path: Path, description: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -156,7 +174,11 @@ def _read_anchors(path: Path) -> list[AnchorPair]:
 
 
 def _load_image(path: Path, description: str) -> np.ndarray:
-    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise GeometryComparisonRunError(f"Cannot read {description}: {path}") from exc
+    image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise GeometryComparisonRunError(f"Cannot decode {description}: {path}")
     if image.ndim not in {2, 3}:
@@ -344,22 +366,33 @@ def run_geometry_comparison(
     if output_path.exists():
         raise GeometryComparisonRunError(f"output directory already exists: {output_path}")
 
-    reference_image_sha256 = sha256_file(reference_path)
-    cad_render_sha256 = sha256_file(cad_path)
-    anchors_sha256 = sha256_file(anchors_path)
-    anchors = _read_anchors(anchors_path)
-    reference = _load_image(reference_path, "reference image")
-    cad = _load_image(cad_path, "CAD image")
+    snapshot_root = Path(tempfile.mkdtemp(prefix=".geometry-inputs-"))
+    try:
+        reference_snapshot, reference_image_sha256 = _snapshot_input(
+            reference_path, snapshot_root, "reference.input", "reference image"
+        )
+        cad_snapshot, cad_render_sha256 = _snapshot_input(
+            cad_path, snapshot_root, "cad.input", "CAD image"
+        )
+        anchors_snapshot, anchors_sha256 = _snapshot_input(
+            anchors_path, snapshot_root, "anchors.json", "anchor file"
+        )
+        anchors = _read_anchors(anchors_snapshot)
+        reference = _load_image(reference_snapshot, "reference image")
+        cad = _load_image(cad_snapshot, "CAD image")
+    finally:
+        shutil.rmtree(snapshot_root, ignore_errors=True)
     alignment_config = dict(_ALIGNMENT_CONFIG)
     alignment_config["source_is_photograph"] = source_is_photograph
-    if not all(
+    input_checks = tuple(
         _verify_unchanged(path, expected)
         for path, expected in (
             (reference_path, reference_image_sha256),
             (cad_path, cad_render_sha256),
             (anchors_path, anchors_sha256),
         )
-    ):
+    )
+    if not all(input_checks):
         raise GeometryComparisonRunError("an input changed during the run")
 
     if source_is_photograph:
@@ -499,6 +532,16 @@ def run_geometry_comparison(
         _write_json(temporary_root / "comparison-manifest.json", manifest)
         if output_path.exists():
             raise GeometryComparisonRunError(f"output directory already exists: {output_path}")
+        final_input_checks = tuple(
+            _verify_unchanged(path, expected)
+            for path, expected in (
+                (reference_path, reference_image_sha256),
+                (cad_path, cad_render_sha256),
+                (anchors_path, anchors_sha256),
+            )
+        )
+        if not all(final_input_checks):
+            raise GeometryComparisonRunError("an input changed during the run")
         os.replace(temporary_root, output_path)
     except Exception:
         shutil.rmtree(temporary_root, ignore_errors=True)

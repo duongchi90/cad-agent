@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import cad_agent.geometry_comparison_run as geometry_comparison_run_module
 from cad_agent.geometry_comparison_run import GeometryComparisonRunError, run_geometry_comparison
 from cad_agent.run_geometry_comparison import main as run_geometry_comparison_cli
 from cad_agent.manifest import sha256_file
@@ -78,6 +79,44 @@ def test_runner_rejects_source_changed_during_run(tmp_path: Path, monkeypatch) -
             anchors_path=anchors,
             output_dir=tmp_path / "changed-input",
         )
+
+
+def test_runner_rejects_input_mutated_after_metrics_before_commit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reference = write_mask(tmp_path / "reference.png", rectangle_mask())
+    cad = write_mask(tmp_path / "cad.png", rectangle_mask())
+    anchors = write_anchor_file(tmp_path / "anchors.json", identity_anchor_pairs())
+    original_write_json = geometry_comparison_run_module._write_json
+    original_verify_unchanged = geometry_comparison_run_module._verify_unchanged
+    checked_paths: list[Path] = []
+
+    def verify_unchanged(path: Path, expected_sha256: str) -> bool:
+        checked_paths.append(path)
+        return original_verify_unchanged(path, expected_sha256)
+
+    def write_json_then_mutate(path: Path, payload: object) -> None:
+        original_write_json(path, payload)
+        if path.name == "geometry-comparison.json":
+            reference.write_bytes(b"mutated-after-metrics")
+
+    monkeypatch.setattr(geometry_comparison_run_module, "_write_json", write_json_then_mutate)
+    monkeypatch.setattr(geometry_comparison_run_module, "_verify_unchanged", verify_unchanged)
+
+    output_dir = tmp_path / "mutated-after-metrics"
+    with pytest.raises(GeometryComparisonRunError, match="changed"):
+        run_geometry_comparison(
+            run_id="RUN-VS-T2-004",
+            region_id="SIDE-CABIN",
+            reference_image=reference,
+            cad_image=cad,
+            reference_package_sha256="5" * 64,
+            mutation_sha256="3" * 64,
+            anchors_path=anchors,
+            output_dir=output_dir,
+        )
+    assert not output_dir.exists()
+    assert checked_paths[-3:] == [reference, cad, anchors]
 
 
 def test_cli_writes_comparison_from_explicit_arguments(tmp_path: Path, capsys) -> None:
