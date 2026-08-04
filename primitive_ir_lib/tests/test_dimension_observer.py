@@ -20,6 +20,7 @@ from primitive_ir_lib.tests.dimension_test_helpers import (
     synthetic_horizontal_dimension,
     synthetic_isolated_number_crop,
 )
+from primitive_ir_lib.text_extraction import RawText
 
 
 def test_number_without_attachment_is_unresolved_and_ambiguous() -> None:
@@ -81,6 +82,87 @@ def test_text_and_geometry_clusters_both_receive_dispositions() -> None:
         and disposition.observation["extension_geometry"]["dimension_line"] is not None
         for disposition in dispositions
     )
+
+
+def test_rotated_ocr_candidate_is_fused_and_mapped_to_original_crop() -> None:
+    calls = 0
+
+    def rotated_reader(image: np.ndarray) -> list[RawText]:
+        nonlocal calls
+        calls += 1
+        if calls != 2:
+            return []
+        return [RawText(
+            id="rawtext-rotated-4500",
+            content="4500",
+            bbox_px=(20, 15, 100, 55),
+            rotation_deg=0.0,
+            confidence=0.95,
+            source="text_tesseract",
+            parsed_value=4500.0,
+            semantic_role="dimension_value",
+        )]
+
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=rotated_reader,
+    )
+
+    assert calls == 3
+    assert disposition.observation["value"] == 4500.0
+    assert disposition.observation["raw_text_candidates"] == ["4500"]
+    assert disposition.observation["ocr_evidence"] == [{
+        "id": "rawtext-rotated-4500-rot90",
+        "content": "4500",
+        "bbox": [15.0, 40.0, 55.0, 120.0],
+        "rotation_deg": 90.0,
+        "confidence": 0.95,
+        "source": "text_tesseract",
+    }]
+    assert disposition.observation["provenance"]["ocr_rotations_deg"] == [0.0, 90.0, -90.0]
+
+
+def test_cross_angle_ocr_conflict_is_not_resolved_by_rotation_majority() -> None:
+    values = ("4500", "4600", "4700")
+    calls = 0
+
+    def conflicting_reader(image: np.ndarray) -> list[RawText]:
+        nonlocal calls
+        value = values[calls]
+        calls += 1
+        numeric_value = float(value)
+        return [RawText(
+            id=f"rawtext-{value}",
+            content=value,
+            bbox_px=(20, 15, 100, 55),
+            rotation_deg=0.0,
+            confidence=0.90,
+            source="text_tesseract",
+            parsed_value=numeric_value,
+            semantic_role="dimension_value",
+        )]
+
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=conflicting_reader,
+    )
+
+    assert calls == 3
+    assert disposition.disposition == "CONFLICT"
+    assert disposition.observation["raw_text_candidates"] == ["4500", "4600", "4700"]
+    assert [item["rotation_deg"] for item in disposition.observation["ocr_evidence"]] == [
+        0.0,
+        90.0,
+        -90.0,
+    ]
 
 
 def test_critical_flag_is_independent_of_blocker_scope() -> None:

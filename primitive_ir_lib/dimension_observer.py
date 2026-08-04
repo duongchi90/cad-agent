@@ -22,6 +22,7 @@ OcrReader = Callable[[np.ndarray], Sequence[RawText]]
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ROLES = {"DRIVING", "REFERENCE", "DERIVED"}
+_OCR_ROTATIONS = (0.0, 90.0, -90.0)
 
 
 class DimensionObserverError(ValueError):
@@ -92,6 +93,76 @@ def _geometry_bbox(geometry: DimensionGeometryEvidence, *, width: int, height: i
     if x1 <= x0 or y1 <= y0:
         return None
     return (x0, y0, x1, y1)
+
+
+def _rotate_crop(crop: np.ndarray, rotation_deg: float) -> np.ndarray:
+    if rotation_deg == 0.0:
+        return crop
+    if rotation_deg == 90.0:
+        return cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
+    if rotation_deg == -90.0:
+        return cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    raise DimensionObserverError("unsupported OCR rotation")
+
+
+def _map_rotated_bbox(bbox: Bbox, *, width: int, height: int, rotation_deg: float) -> Bbox:
+    x0, y0, x1, y1 = bbox
+    corners = ((x0, y0), (x1, y0), (x0, y1), (x1, y1))
+    if rotation_deg == 0.0:
+        mapped = corners
+    elif rotation_deg == 90.0:
+        mapped = tuple((y, height - x) for x, y in corners)
+    elif rotation_deg == -90.0:
+        mapped = tuple((width - y, x) for x, y in corners)
+    else:
+        raise DimensionObserverError("unsupported OCR rotation")
+    mapped_x = [point[0] for point in mapped]
+    mapped_y = [point[1] for point in mapped]
+    return (
+        max(0, min(width, math.floor(min(mapped_x)))),
+        max(0, min(height, math.floor(min(mapped_y)))),
+        max(0, min(width, math.ceil(max(mapped_x)))),
+        max(0, min(height, math.ceil(max(mapped_y)))),
+    )
+
+
+def _read_multi_angle_ocr(
+    crop: np.ndarray,
+    *,
+    ocr_reader: OcrReader,
+) -> tuple[list[RawText], list[dict[str, object]]]:
+    height, width = crop.shape[:2]
+    raw_texts: list[RawText] = []
+    evidence: list[dict[str, object]] = []
+    for rotation_deg in _OCR_ROTATIONS:
+        rotated_texts = ocr_reader(_rotate_crop(crop, rotation_deg))
+        for raw_text in rotated_texts:
+            mapped_bbox = _map_rotated_bbox(
+                raw_text.bbox_px,
+                width=width,
+                height=height,
+                rotation_deg=rotation_deg,
+            )
+            normalized = RawText(
+                id=raw_text.id,
+                content=raw_text.content,
+                bbox_px=mapped_bbox,
+                rotation_deg=rotation_deg,
+                confidence=raw_text.confidence,
+                source=raw_text.source,
+                parsed_value=raw_text.parsed_value,
+                semantic_role=raw_text.semantic_role,
+            )
+            raw_texts.append(normalized)
+            evidence.append({
+                "id": f"{raw_text.id}-rot{int(rotation_deg)}",
+                "content": raw_text.content,
+                "bbox": [float(value) for value in mapped_bbox],
+                "rotation_deg": rotation_deg,
+                "confidence": float(raw_text.confidence),
+                "source": raw_text.source,
+            })
+    return raw_texts, evidence
 
 
 def detect_dimension_clusters(image_bgr: np.ndarray) -> list[DimensionCluster]:
@@ -292,7 +363,7 @@ def observe_dimension_cluster(
     bbox = _clip_bbox(cluster.bbox_px, width=width, height=height)
     x0, y0, x1, y1 = bbox
     crop = image_bgr[y0:y1, x0:x1]
-    raw_texts = list(ocr_reader(crop))
+    raw_texts, ocr_evidence = _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
     parsed, parsed_candidates, parse_reasons = _select_parsed_candidate(
         raw_texts,
         default_unit=default_unit,
@@ -333,6 +404,7 @@ def observe_dimension_cluster(
                 explicit_role=None,
                 blocker_scope=blocker_scope,
                 critical=critical,
+                ocr_evidence=ocr_evidence,
                 raw_texts=raw_texts,
                 page_id=page_id,
                 view_id=view_id,
@@ -357,6 +429,7 @@ def observe_dimension_cluster(
                 explicit_role=explicit_role,
                 blocker_scope=blocker_scope,
                 critical=critical,
+                ocr_evidence=ocr_evidence,
                 raw_texts=raw_texts,
                 page_id=page_id,
                 view_id=view_id,
@@ -391,6 +464,7 @@ def observe_dimension_cluster(
         explicit_role=explicit_role,
         blocker_scope=blocker_scope,
         critical=critical,
+        ocr_evidence=ocr_evidence,
         raw_texts=raw_texts,
         page_id=page_id,
         view_id=view_id,
@@ -416,6 +490,7 @@ def _make_observation(
     explicit_role: str | None,
     blocker_scope: Sequence[str],
     critical: bool,
+    ocr_evidence: Sequence[Mapping[str, object]],
     raw_texts: Sequence[RawText],
     page_id: str,
     view_id: str,
@@ -453,6 +528,7 @@ def _make_observation(
         "attachment_confidence": min(1.0, max(0.0, attachment_confidence)),
         "blocker_scope": list(blocker_scope),
         "raw_text_candidates": raw_candidates,
+        "ocr_evidence": [dict(item) for item in ocr_evidence],
         "symbol_text": parsed.symbol_text if parsed is not None else None,
         "tolerance": {
             "mode": parsed.tolerance_mode or "NONE" if parsed else "NONE",
@@ -469,6 +545,7 @@ def _make_observation(
                 if any(raw.source == "text_tesseract" for raw in raw_texts)
                 else "offline-ocr-reader"
             ),
+            "ocr_rotations_deg": list(_OCR_ROTATIONS),
             "observation_sha256": "0" * 64,
         },
     }

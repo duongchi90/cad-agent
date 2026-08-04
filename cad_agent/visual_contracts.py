@@ -141,6 +141,37 @@ def _validate_dimension_observer_evidence(
             contract=contract,
             path=f"{path}.raw_text_candidates",
         )
+    if "ocr_evidence" in dimension:
+        ocr_evidence = dimension["ocr_evidence"]
+        if not isinstance(ocr_evidence, list):
+            _fail(contract, f"{path}.ocr_evidence must be a list")
+        for index, raw_candidate in enumerate(ocr_evidence):
+            candidate_path = f"{path}.ocr_evidence[{index}]"
+            candidate = _object(raw_candidate, contract=contract, path=candidate_path)
+            _keys(
+                candidate,
+                contract=contract,
+                required={"id", "content", "bbox", "rotation_deg", "confidence", "source"},
+            )
+            _identifier(candidate["id"], contract=contract, path=f"{candidate_path}.id")
+            if not isinstance(candidate["content"], str):
+                _fail(contract, f"{candidate_path}.content must be a string")
+            _validate_bbox(candidate["bbox"], contract=contract, path=f"{candidate_path}.bbox")
+            rotation = _finite_number(
+                candidate["rotation_deg"],
+                contract=contract,
+                path=f"{candidate_path}.rotation_deg",
+            )
+            if rotation not in {-90.0, 0.0, 90.0}:
+                _fail(contract, f"{candidate_path}.rotation_deg is invalid")
+            confidence = _finite_number(
+                candidate["confidence"],
+                contract=contract,
+                path=f"{candidate_path}.confidence",
+            )
+            if not 0.0 <= confidence <= 1.0:
+                _fail(contract, f"{candidate_path}.confidence must be between 0 and 1")
+            _string(candidate["source"], contract=contract, path=f"{candidate_path}.source")
     if "symbol_text" in dimension:
         _nullable_non_empty_string(
             dimension["symbol_text"],
@@ -234,6 +265,7 @@ def _validate_dimension_observer_evidence(
             provenance,
             contract=contract,
             required={"observer_version", "ocr_engine", "observation_sha256"},
+            optional={"ocr_rotations_deg"},
         )
         _string(
             provenance["observer_version"],
@@ -250,6 +282,10 @@ def _validate_dimension_observer_evidence(
             contract=contract,
             path=f"{path}.provenance.observation_sha256",
         )
+        if "ocr_rotations_deg" in provenance:
+            rotations = provenance["ocr_rotations_deg"]
+            if rotations != [0.0, 90.0, -90.0]:
+                _fail(contract, f"{path}.provenance.ocr_rotations_deg is invalid")
 
 
 _DIMENSION_ROLES = {"DRIVING", "REFERENCE", "DERIVED", "AMBIGUOUS", "CONFLICT"}
@@ -331,6 +367,7 @@ def _validate_dimension_register(payload: dict[str, Any]) -> None:
                 "from_ref",
                 "to_ref",
                 "raw_text_candidates",
+                "ocr_evidence",
                 "symbol_text",
                 "tolerance",
                 "extension_geometry",
