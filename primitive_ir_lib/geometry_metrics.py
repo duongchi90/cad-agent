@@ -56,10 +56,25 @@ def _as_gray_uint8(image: np.ndarray) -> np.ndarray:
 
 
 def normalize_outline(image: np.ndarray) -> np.ndarray:
-    """Return a single-channel uint8 foreground mask containing only 0 and 255."""
+    """Return a deterministic, polarity-normalized foreground mask.
+
+    The image border is treated as background evidence.  A nearly uniform
+    black border means white foreground; a nearly uniform white border means
+    black foreground.  Ambiguous borders fail closed instead of guessing.
+    """
 
     gray = _as_gray_uint8(image)
-    return np.where(gray > 0, 255, 0).astype(np.uint8)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    border = np.concatenate(
+        (binary[0, :], binary[-1, :], binary[:, 0], binary[:, -1])
+    )
+    black_fraction = float(np.mean(border == 0))
+    white_fraction = float(np.mean(border == 255))
+    if black_fraction >= 0.98:
+        return binary.astype(np.uint8, copy=False)
+    if white_fraction >= 0.98:
+        return cv2.bitwise_not(binary)
+    raise GeometryMetricError("foreground polarity is ambiguous")
 
 
 def _edge_map(mask: np.ndarray) -> np.ndarray:
