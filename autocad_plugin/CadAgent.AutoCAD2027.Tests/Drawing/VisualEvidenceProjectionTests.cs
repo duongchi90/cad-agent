@@ -117,4 +117,85 @@ public sealed class VisualEvidenceProjectionTests
             }
         }
     }
+
+    [Fact]
+    public void RendererCoversLinePolylineBlockTextAndDimensionRecords()
+    {
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,100,100],\"pixel_size\":[320,320],\"background\":\"WHITE\",\"include_layers\":[],\"exclude_layers\":[]}").RootElement;
+        var boundingBox = JsonSerializer.SerializeToElement(new
+        {
+            min_x = 10.0,
+            min_y = 10.0,
+            max_x = 90.0,
+            max_y = 90.0
+        });
+        var snapshots = new[]
+        {
+            new EntitySnapshot(
+                "1",
+                "LINE",
+                "0",
+                new Dictionary<string, JsonElement>
+                {
+                    ["bounding_box"] = boundingBox,
+                    ["start_x"] = JsonSerializer.SerializeToElement(10.0),
+                    ["start_y"] = JsonSerializer.SerializeToElement(10.0),
+                    ["end_x"] = JsonSerializer.SerializeToElement(90.0),
+                    ["end_y"] = JsonSerializer.SerializeToElement(90.0)
+                }),
+            new EntitySnapshot(
+                "2",
+                "POLYLINE",
+                "0",
+                new Dictionary<string, JsonElement>
+                {
+                    ["bounding_box"] = boundingBox,
+                    ["vertices"] = JsonSerializer.SerializeToElement(new[]
+                    {
+                        new { x = 10.0, y = 10.0, bulge = 0.0 },
+                        new { x = 90.0, y = 10.0, bulge = 0.0 }
+                    }),
+                    ["closed"] = JsonSerializer.SerializeToElement(false)
+                }),
+            new EntitySnapshot(
+                "3",
+                "BLOCK_REFERENCE",
+                "0",
+                new Dictionary<string, JsonElement>
+                {
+                    ["bounding_box"] = boundingBox,
+                    ["render_fallback"] = JsonSerializer.SerializeToElement("BOUNDING_BOX")
+                }),
+            new EntitySnapshot(
+                "4",
+                "TEXT",
+                "0",
+                new Dictionary<string, JsonElement>
+                {
+                    ["bounding_box"] = boundingBox,
+                    ["position_x"] = JsonSerializer.SerializeToElement(20.0),
+                    ["position_y"] = JsonSerializer.SerializeToElement(20.0),
+                    ["height"] = JsonSerializer.SerializeToElement(10.0),
+                    ["text"] = JsonSerializer.SerializeToElement("CABIN")
+                }),
+            new EntitySnapshot(
+                "5",
+                "DIMENSION",
+                "0",
+                new Dictionary<string, JsonElement>
+                {
+                    ["bounding_box"] = boundingBox,
+                    ["text_position_x"] = JsonSerializer.SerializeToElement(20.0),
+                    ["text_position_y"] = JsonSerializer.SerializeToElement(30.0),
+                    ["height"] = JsonSerializer.SerializeToElement(10.0),
+                    ["text"] = JsonSerializer.SerializeToElement("4500")
+                })
+        };
+
+        var projected = VisualEvidenceProjection.ProjectEntities(snapshots);
+        var png = AutoCadVisualEvidenceReader.RenderRegion(region, projected);
+
+        Assert.True(png.Length > 100);
+    }
 }

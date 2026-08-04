@@ -17,7 +17,8 @@ public sealed record VisualEvidenceRequest(
     string ArtifactPolicyVersion,
     string ArtifactDirectory,
     JsonElement Region,
-    IReadOnlyList<JsonElement> Measurements)
+    IReadOnlyList<JsonElement> Measurements,
+    IReadOnlyList<JsonElement> DatumBindings)
 {
     public static VisualEvidenceRequest FromIpc(IpcRequest request)
     {
@@ -39,7 +40,8 @@ public sealed record VisualEvidenceRequest(
             parameters["artifact_policy_version"].GetString()!,
             parameters["artifact_directory"].GetString()!,
             parameters["region"].Clone(),
-            parameters["measurements"].EnumerateArray().Select(value => value.Clone()).ToArray());
+            parameters["measurements"].EnumerateArray().Select(value => value.Clone()).ToArray(),
+            parameters["datum_bindings"].EnumerateArray().Select(value => value.Clone()).ToArray());
     }
 }
 
@@ -53,6 +55,22 @@ public sealed record EvidenceArtifactDescriptor(
     int? Width = null,
     int? Height = null);
 
+public sealed record SessionViewSnapshot(
+    double CenterX,
+    double CenterY,
+    double Width,
+    double Height,
+    double TargetX,
+    double TargetY,
+    double TargetZ,
+    double DirectionX,
+    double DirectionY,
+    double DirectionZ,
+    double Twist,
+    double LensLength);
+
+public sealed record SessionLayerSnapshot(bool IsOff, bool IsFrozen);
+
 public sealed record SessionStateSnapshot(
     string DrawingFullPath,
     string DocumentIdentity,
@@ -61,8 +79,9 @@ public sealed record SessionStateSnapshot(
     int Cvport,
     string CurrentLayer,
     string ViewProperties,
+    SessionViewSnapshot? CurrentView,
     IReadOnlyList<string> SelectionHandles,
-    IReadOnlyDictionary<string, bool> LayerStates,
+    IReadOnlyDictionary<string, SessionLayerSnapshot> LayerStates,
     IReadOnlyDictionary<string, string> RendererSystemVariables,
     string FingerprintSha256)
 {
@@ -75,8 +94,9 @@ public sealed record SessionStateSnapshot(
         string currentLayer,
         string viewProperties,
         IEnumerable<string> selectionHandles,
-        IReadOnlyDictionary<string, bool> layerStates,
-        IReadOnlyDictionary<string, string> rendererSystemVariables)
+        IReadOnlyDictionary<string, SessionLayerSnapshot> layerStates,
+        IReadOnlyDictionary<string, string> rendererSystemVariables,
+        SessionViewSnapshot? currentView = null)
     {
         ArgumentNullException.ThrowIfNull(selectionHandles);
         ArgumentNullException.ThrowIfNull(layerStates);
@@ -92,9 +112,14 @@ public sealed record SessionStateSnapshot(
             cvport,
             current_layer = currentLayer,
             view_properties = viewProperties,
+            current_view = currentView,
             selection_handles = selectionHandles.ToArray(),
             layer_states = layerStates.OrderBy(item => item.Key, StringComparer.Ordinal)
-                .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),
+                .ToDictionary(item => item.Key, item => new
+                {
+                    is_off = item.Value.IsOff,
+                    is_frozen = item.Value.IsFrozen
+                }, StringComparer.Ordinal),
             renderer_system_variables = rendererSystemVariables.OrderBy(item => item.Key, StringComparer.Ordinal)
                 .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal)
         };
@@ -107,6 +132,7 @@ public sealed record SessionStateSnapshot(
             cvport,
             currentLayer,
             viewProperties,
+            currentView,
             selectionHandles.ToArray(),
             layerStates.OrderBy(item => item.Key, StringComparer.Ordinal)
                 .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,6 +14,7 @@ from mcp_integration_lib.dotnet_ipc import (
     DotNetIPCTimeoutError,
     atomic_write_json,
     result_path,
+    scavenge_visual_evidence_artifacts,
 )
 
 
@@ -96,6 +98,7 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
             "visual_run_manifest_sha256": "c" * 64,
             "region": REGION,
             "measurements": [],
+            "datum_bindings": [],
         }
 
     def test_sends_existing_root_envelope_and_hands_off_verified_artifacts(self) -> None:
@@ -165,7 +168,10 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
                 )
 
             with self.assertRaisesRegex(Exception, "unsafe|request-owned"):
-                self._client(ipc_dir, trigger).visual_evidence_export(**self._kwargs())
+                self._client(ipc_dir, trigger).visual_evidence_export(
+                    **self._kwargs(),
+                    artifact_consumer=lambda _result, _paths: None,
+                )
             self.assertFalse((ipc_dir / "artifacts" / "vs-t3-001").exists())
 
     def test_timeout_leaves_an_active_lease_for_scavenger(self) -> None:
@@ -183,11 +189,51 @@ class VisualEvidenceIPCAdapterTests(unittest.TestCase):
 
             try:
                 with self.assertRaises(DotNetIPCTimeoutError):
-                    self._client(ipc_dir, trigger, timeout_s=0.05).visual_evidence_export(**self._kwargs())
+                    self._client(ipc_dir, trigger, timeout_s=0.05).visual_evidence_export(
+                        **self._kwargs(),
+                        artifact_consumer=lambda _result, _paths: None,
+                    )
                 self.assertTrue(lease_path.exists())
             finally:
                 if lease_stream is not None:
                     lease_stream.close()
+
+    def test_success_requires_an_artifact_handoff_consumer(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            with self.assertRaisesRegex(ValueError, "artifact_consumer"):
+                self._client(ipc_dir, lambda: None).visual_evidence_export(**self._kwargs())
+
+    def test_scavenger_removes_only_stale_lease_free_directories(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            artifacts = ipc_dir / "artifacts"
+            artifacts.mkdir()
+            stale = artifacts / "stale-request"
+            fresh = artifacts / "fresh-request"
+            active = artifacts / "active-request"
+            for root in (stale, fresh, active):
+                root.mkdir()
+                (root / "entities.json").write_bytes(b"[]")
+            now = 2_000_000_000.0
+            old = now - 25 * 60 * 60
+            os.utime(stale, (old, old))
+            os.utime(fresh, (now - 60, now - 60))
+            os.utime(active, (old, old))
+            with (active / "active.lease").open("xb") as lease_stream:
+                lease_stream.write(b"held")
+                lease_stream.flush()
+                if os.name == "nt":
+                    import msvcrt
+
+                    lease_stream.seek(0)
+                    msvcrt.locking(lease_stream.fileno(), msvcrt.LK_NBLCK, 1)
+                removed = scavenge_visual_evidence_artifacts(ipc_dir, now=now)
+
+            self.assertEqual(("stale-request",), removed)
+            self.assertFalse(stale.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(active.exists())
 
 
 if __name__ == "__main__":

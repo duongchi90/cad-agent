@@ -269,7 +269,8 @@ public sealed class OperationDispatcherTests
                 ("artifact_policy_version", JsonSerializer.SerializeToElement(VisualEvidenceArtifactPolicy.Version)),
                 ("artifact_directory", JsonSerializer.SerializeToElement("artifacts/visual-request")),
                 ("region", region),
-                ("measurements", JsonSerializer.SerializeToElement(Array.Empty<object>()))),
+                ("measurements", JsonSerializer.SerializeToElement(Array.Empty<object>())),
+                ("datum_bindings", JsonSerializer.SerializeToElement(Array.Empty<object>()))),
             Approval = null
         });
 

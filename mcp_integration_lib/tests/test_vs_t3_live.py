@@ -103,6 +103,7 @@ class VisualEvidenceAutoCADLiveTests(unittest.TestCase):
                     "exclude_layers": [],
                 },
                 measurements=[],
+                datum_bindings=[],
                 artifact_consumer=consume,
                 request_id="vs-t3-live-001",
             )

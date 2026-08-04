@@ -18,7 +18,11 @@ public sealed class VisualEvidenceBoundaryTests
             "0",
             "center=10,20;width=100;height=50;target=0,0,0;direction=0,0,1;twist=0;lens=50",
             new[] { "AB", "CD" },
-            new Dictionary<string, bool> { ["CABIN"] = true, ["CENTER"] = false },
+            new Dictionary<string, SessionLayerSnapshot>
+            {
+                ["CABIN"] = new(false, false),
+                ["CENTER"] = new(true, false)
+            },
             new Dictionary<string, string> { ["BACKGROUNDCOLOR"] = "WHITE", ["UCSFOLLOW"] = "0" });
         var second = SessionStateSnapshot.Create(
             @"C:/drawings/parts/../sample.dwg",
@@ -29,7 +33,11 @@ public sealed class VisualEvidenceBoundaryTests
             "0",
             "center=10,20;width=100;height=50;target=0,0,0;direction=0,0,1;twist=0;lens=50",
             new[] { "AB", "CD" },
-            new Dictionary<string, bool> { ["CENTER"] = false, ["CABIN"] = true },
+            new Dictionary<string, SessionLayerSnapshot>
+            {
+                ["CENTER"] = new(true, false),
+                ["CABIN"] = new(false, false)
+            },
             new Dictionary<string, string> { ["UCSFOLLOW"] = "0", ["BACKGROUNDCOLOR"] = "WHITE" });
 
         Assert.Equal(first.FingerprintSha256, second.FingerprintSha256);
@@ -82,6 +90,28 @@ public sealed class VisualEvidenceBoundaryTests
         Assert.Contains(errors, error => error.Contains("latest_mutation_sha256", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void SessionStateFingerprintIncludesTheActualViewSnapshot()
+    {
+        var first = CreateState(new SessionViewSnapshot(10, 20, 100, 50, 0, 0, 0, 0, 0, 1, 0, 50));
+        var second = CreateState(new SessionViewSnapshot(11, 20, 100, 50, 0, 0, 0, 0, 0, 1, 0, 50));
+
+        Assert.NotEqual(first.FingerprintSha256, second.FingerprintSha256);
+    }
+
+    private static SessionStateSnapshot CreateState(SessionViewSnapshot view) => SessionStateSnapshot.Create(
+        @"C:\drawings\sample.dwg",
+        "doc-001",
+        "Model",
+        true,
+        2,
+        "0",
+        "actual-view",
+        Array.Empty<string>(),
+        new Dictionary<string, SessionLayerSnapshot>(),
+        new Dictionary<string, string>(),
+        view);
+
     private static VisualEvidenceRequest Request(string path) => new(
         path,
         new string('a', 64),
@@ -93,6 +123,7 @@ public sealed class VisualEvidenceBoundaryTests
         "vs-t3-artifacts-1",
         "artifacts/REQ-001",
         JsonSerializer.SerializeToElement(new { }),
+        Array.Empty<JsonElement>(),
         Array.Empty<JsonElement>());
 
     private static VisualEvidenceSnapshot Snapshot(string path) => new(

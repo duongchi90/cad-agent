@@ -64,6 +64,19 @@ def canonical_region_config_sha256(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def sha256_file(path: Path) -> str:
+    """Hash the exact current bytes of one drawing file."""
+
+    candidate = Path(path)
+    if candidate.is_symlink() or not candidate.is_file():
+        raise VisualEvidenceError(f"drawing path is not a regular file: {candidate}")
+    try:
+        with candidate.open("rb") as stream:
+            return hashlib.sha256(stream.read()).hexdigest()
+    except OSError as exc:
+        raise VisualEvidenceError(f"Cannot hash drawing file: {candidate}") from exc
+
+
 def validate_visual_evidence_freshness(
     evidence: Mapping[str, object],
     manifest_bytes_sha256: str,
@@ -159,16 +172,25 @@ def write_visual_evidence(
     evidence_result: Mapping[str, object],
     manifest_path: Path,
     evidence_id: str,
+    *,
+    drawing_path: Path,
+    drawing_sha256_before_dispatch: str,
 ) -> Path:
     """Copy verified request artifacts and atomically create one evidence package."""
 
     raw_manifest, manifest, manifest_hash = snapshot_visual_run_manifest(manifest_path)
-    drawing_hash = manifest["drawing"]["initial_sha256"]  # type: ignore[index]
+    expected_drawing_path = manifest["drawing"]["absolute_path"]  # type: ignore[index]
+    if not _same_windows_path(drawing_path, expected_drawing_path):
+        raise VisualEvidenceError("drawing path does not match the Visual Run Manifest")
+    if not _SHA256.fullmatch(drawing_sha256_before_dispatch):
+        raise VisualEvidenceError("drawing pre-dispatch hash must be a lowercase SHA-256")
+    if sha256_file(Path(drawing_path)) != drawing_sha256_before_dispatch:
+        raise VisualEvidenceError("drawing changed before evidence promotion started")
     validated = validate_visual_evidence_freshness(
         evidence_result,
         manifest_hash,
         manifest,
-        drawing_hash,
+        drawing_sha256_before_dispatch,
     )
     payload = validated.get("payload") if isinstance(validated.get("payload"), Mapping) else validated
     if not isinstance(payload, Mapping) or payload.get("evidence_id") != evidence_id:
@@ -181,6 +203,8 @@ def write_visual_evidence(
     current_raw = Path(manifest_path).read_bytes()
     if current_raw != raw_manifest:
         raise VisualEvidenceError("Visual Run Manifest changed before evidence promotion")
+    if sha256_file(Path(drawing_path)) != drawing_sha256_before_dispatch:
+        raise VisualEvidenceError("drawing changed before evidence promotion")
 
     run_id = str(payload["run_id"])
     region_id = str(payload["region_id"])
@@ -216,6 +240,8 @@ def write_visual_evidence(
         _write_json_new(temporary / "evidence-manifest.json", final_payload)
         if Path(manifest_path).read_bytes() != raw_manifest:
             raise VisualEvidenceError("Visual Run Manifest changed during evidence promotion")
+        if sha256_file(Path(drawing_path)) != drawing_sha256_before_dispatch:
+            raise VisualEvidenceError("drawing changed during evidence promotion")
         if destination.exists():
             raise VisualEvidenceError("evidence destination already exists")
         os.rename(temporary, destination)
@@ -261,6 +287,10 @@ def _safe_relative_path(value: str) -> bool:
 
 
 def _same_windows_path(left: object, right: object) -> bool:
+    if isinstance(left, Path):
+        left = str(left)
+    if isinstance(right, Path):
+        right = str(right)
     if not isinstance(left, str) or not isinstance(right, str):
         return False
     return os.path.normcase(os.path.normpath(left.replace("/", "\\"))) == os.path.normcase(
@@ -290,6 +320,7 @@ def _remove_tree_if_safe(path: Path) -> None:
 __all__ = [
     "VisualEvidenceError",
     "canonical_region_config_sha256",
+    "sha256_file",
     "snapshot_visual_run_manifest",
     "validate_visual_evidence_freshness",
     "write_visual_evidence",

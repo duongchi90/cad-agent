@@ -107,6 +107,107 @@ def normalize_request_id(request_id: str) -> str:
     return request_id
 
 
+def scavenge_visual_evidence_artifacts(
+    ipc_dir: str | os.PathLike[str],
+    *,
+    now: float | None = None,
+    ttl_seconds: float = 24 * 60 * 60,
+) -> tuple[str, ...]:
+    """Remove only old, lease-free VS-T3 request directories.
+
+    The managed exporter holds ``active.lease`` open with exclusive sharing.
+    A failed exclusive open therefore leaves a live AutoCAD operation alone on
+    Windows.  A directory without a lease is claimed with an exclusive create
+    before its contents are removed.  Reparse points, symlinks, unexpected
+    names, and fresh directories are never removed.
+    """
+
+    if ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be positive")
+    root = Path(ipc_dir).resolve() / "artifacts"
+    if root.is_symlink() or not root.is_dir():
+        return ()
+    current = time.time() if now is None else float(now)
+    removed: list[str] = []
+    for candidate in list(root.iterdir()):
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        try:
+            request_id = normalize_request_id(candidate.name)
+            age = current - candidate.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        if age < ttl_seconds:
+            continue
+
+        lease = candidate / "active.lease"
+        lease_handle = _claim_visual_evidence_lease(lease)
+        if lease_handle is None:
+            continue
+        try:
+            lease_handle.close()
+            lease_handle = None
+            lease.unlink(missing_ok=True)
+            _remove_tree_without_reparse(candidate)
+            removed.append(request_id)
+        except (FileExistsError, PermissionError, OSError):
+            continue
+        finally:
+            if lease_handle is not None:
+                try:
+                    lease_handle.close()
+                except OSError:
+                    pass
+    return tuple(removed)
+
+
+def _claim_visual_evidence_lease(lease: Path):
+    """Return an exclusively locked lease handle, or None when it is active."""
+
+    handle = None
+    try:
+        if lease.exists():
+            handle = lease.open("r+b", buffering=0)
+        else:
+            handle = lease.open("xb", buffering=0)
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except (FileExistsError, PermissionError, OSError):
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        return None
+
+
+def _remove_tree_without_reparse(path: Path) -> None:
+    """Delete a directory only when every component is a normal file/dir."""
+
+    if path.is_symlink() or not path.is_dir():
+        raise OSError(f"unsafe artifact path: {path}")
+    for child in path.iterdir():
+        if child.is_symlink():
+            raise OSError(f"reparse point in artifact path: {child}")
+        if child.is_dir():
+            _remove_tree_without_reparse(child)
+        elif child.is_file():
+            child.unlink()
+        else:
+            raise OSError(f"unsupported artifact path: {child}")
+    path.rmdir()
+
+
 def normalize_windows_absolute_path(path: str | os.PathLike[str]) -> str:
     """Normalize a full Windows path without accepting a relative path."""
 
@@ -430,6 +531,7 @@ class DotNetIPCClient:
         region: Mapping[str, Any],
         measurements: Sequence[Mapping[str, Any]],
         artifact_consumer: Callable[[Mapping[str, Any], Mapping[str, Path]], None] | None = None,
+        datum_bindings: Sequence[Mapping[str, Any]] = (),
         artifact_directory: str | None = None,
         approval: Mapping[str, Any] | None = None,
         request_id: str | None = None,
@@ -437,13 +539,17 @@ class DotNetIPCClient:
         """Capture bounded read-only evidence and hand verified artifacts to a consumer.
 
         The .NET side retains the request-owned artifact directory until this
-        method has validated and optionally copied every artifact.  The
-        callback is therefore the handoff boundary for the later atomic
-        evidence writer; it runs before Python removes the request-owned
-        directory.  A timeout never implies that AutoCAD stopped working, so
-        an active lease protects the directory from cleanup.
+        method has validated and copied or promoted every artifact.  The
+        callback is therefore the mandatory handoff boundary for the later
+        atomic evidence writer; it runs before Python removes the
+        request-owned directory.  A timeout never implies that AutoCAD
+        stopped working, so an active lease protects the directory from
+        cleanup.
         """
 
+        if not callable(artifact_consumer):
+            raise ValueError("visual_evidence_export requires an artifact_consumer handoff callback")
+        scavenge_visual_evidence_artifacts(self.ipc_dir)
         actual_request_id = normalize_request_id(
             request_id if request_id is not None else self.request_id_factory()
         )
@@ -459,6 +565,7 @@ class DotNetIPCClient:
             "artifact_directory": normalized_artifact_directory,
             "region": dict(region),
             "measurements": [dict(measurement) for measurement in measurements],
+            "datum_bindings": [dict(binding) for binding in datum_bindings],
         }
         normalized_path = self._validate_drawing_path("visual_evidence_export", drawing_full_path)
         normalized_sha256 = self._validate_sha256(drawing_sha256)
@@ -495,8 +602,7 @@ class DotNetIPCClient:
                 actual_request_id,
                 normalized_artifact_directory,
             )
-            if artifact_consumer is not None:
-                artifact_consumer(result, artifact_paths)
+            artifact_consumer(result, artifact_paths)
             return result
         finally:
             cleanup_request_files(self.ipc_dir, actual_request_id)
@@ -698,6 +804,7 @@ class DotNetIPCClient:
             "artifact_directory",
             "region",
             "measurements",
+            "datum_bindings",
         }
         if set(parameters) != required:
             missing = sorted(required.difference(parameters))
@@ -791,6 +898,25 @@ class DotNetIPCClient:
             DotNetIPCClient._validate_visual_evidence_reference(measurement["reference"])
             if "to_reference" in measurement:
                 DotNetIPCClient._validate_visual_evidence_reference(measurement["to_reference"])
+
+        datum_bindings = parameters["datum_bindings"]
+        if not isinstance(datum_bindings, list) or len(datum_bindings) > 10000:
+            raise ValueError("parameters.datum_bindings must be an array of at most 10000 items")
+        datum_ids: set[str] = set()
+        for binding in datum_bindings:
+            if not isinstance(binding, Mapping) or set(binding) != {"id", "entity_handle"}:
+                raise ValueError("parameters.datum_bindings entries must be closed objects")
+            datum_id = binding["id"]
+            entity_handle = binding["entity_handle"]
+            if (
+                not isinstance(datum_id, str)
+                or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(datum_id)
+                or datum_id in datum_ids
+            ):
+                raise ValueError("parameters.datum_bindings ids must be unique stable identifiers")
+            if not isinstance(entity_handle, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(entity_handle):
+                raise ValueError("parameters.datum_bindings.entity_handle must be a stable identifier")
+            datum_ids.add(datum_id)
 
     @staticmethod
     def _validate_visual_evidence_reference(reference: Any) -> None:

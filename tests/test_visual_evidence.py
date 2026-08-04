@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import pytest
 
@@ -15,11 +16,9 @@ from cad_agent.visual_evidence import (
     write_visual_evidence,
 )
 from tests.visual_supervisor_fixtures import (
-    DRAWING_SHA,
     MUTATION_SHA,
     REGION_ID,
     RUN_ID,
-    TARGET_PATH,
     valid_visual_run_manifest,
 )
 
@@ -33,7 +32,7 @@ REGION = {
 }
 
 
-def _evidence(artifact_paths: dict[str, Path]) -> dict[str, object]:
+def _evidence(artifact_paths: dict[str, Path], drawing_path: Path, drawing_sha: str) -> dict[str, object]:
     data = {
         "render": artifact_paths["render"].read_bytes(),
         "entity_map": artifact_paths["entity_map"].read_bytes(),
@@ -57,8 +56,8 @@ def _evidence(artifact_paths: dict[str, Path]) -> dict[str, object]:
         "run_id": RUN_ID,
         "evidence_id": "EVIDENCE-001",
         "region_id": REGION_ID,
-        "drawing_sha256_before": DRAWING_SHA,
-        "drawing_sha256_after": DRAWING_SHA,
+        "drawing_sha256_before": drawing_sha,
+        "drawing_sha256_after": drawing_sha,
         "dbmod_before": 0,
         "dbmod_after": 0,
         "latest_mutation_sha256": MUTATION_SHA,
@@ -74,7 +73,7 @@ def _evidence(artifact_paths: dict[str, Path]) -> dict[str, object]:
         "request_id": "REQ-001",
         "success": True,
         "operation": "visual_evidence_export",
-        "drawing_full_path": TARGET_PATH,
+        "drawing_full_path": str(drawing_path),
         "changed": False,
         "entity_handles": [],
         "warnings": [],
@@ -86,9 +85,14 @@ def _evidence(artifact_paths: dict[str, Path]) -> dict[str, object]:
     }
 
 
-def _prepare(tmp: Path) -> tuple[Path, dict[str, object], dict[str, Path]]:
+def _prepare(tmp: Path) -> tuple[Path, dict[str, object], dict[str, Path], Path, str]:
+    drawing_path = tmp / "drawing.dwg"
+    drawing_path.write_bytes(b"current drawing")
+    drawing_sha = hashlib.sha256(drawing_path.read_bytes()).hexdigest()
+    manifest_payload = valid_visual_run_manifest()
+    manifest_payload["drawing"]["absolute_path"] = str(drawing_path)  # type: ignore[index]
     manifest = tmp / "manifest.json"
-    manifest.write_text(json.dumps(valid_visual_run_manifest(), sort_keys=True), encoding="utf-8")
+    manifest.write_text(json.dumps(manifest_payload, sort_keys=True), encoding="utf-8")
     paths = {}
     for kind, name, data in (
         ("render", "cad-render.png", b"png"),
@@ -99,9 +103,9 @@ def _prepare(tmp: Path) -> tuple[Path, dict[str, object], dict[str, Path]]:
         path.write_bytes(data)
         paths[kind] = path
     raw, validated, digest = snapshot_visual_run_manifest(manifest)
-    evidence = _evidence(paths)
+    evidence = _evidence(paths, drawing_path, drawing_sha)
     evidence["payload"]["visual_run_manifest_sha256"] = digest  # type: ignore[index]
-    return manifest, evidence, paths
+    return manifest, evidence, paths, drawing_path, drawing_sha
 
 
 def test_manifest_snapshot_hashes_exact_bytes_and_validates_contract() -> None:
@@ -123,40 +127,76 @@ def test_region_hash_is_stable_for_object_property_order() -> None:
 
 def test_freshness_rejects_manifest_byte_hash_and_mutation_mismatch() -> None:
     with TemporaryDirectory() as temporary:
-        manifest_path, evidence, _ = _prepare(Path(temporary))
+        manifest_path, evidence, _, drawing_path, drawing_sha = _prepare(Path(temporary))
         raw, manifest, digest = snapshot_visual_run_manifest(manifest_path)
         with pytest.raises(VisualEvidenceError, match="byte hash"):
-            validate_visual_evidence_freshness(evidence, "0" * 64, manifest, DRAWING_SHA)
+            validate_visual_evidence_freshness(evidence, "0" * 64, manifest, drawing_sha)
         evidence["payload"]["latest_mutation_sha256"] = "9" * 64  # type: ignore[index]
         with pytest.raises(VisualEvidenceError, match="stale"):
-            validate_visual_evidence_freshness(evidence, digest, manifest, DRAWING_SHA)
+            validate_visual_evidence_freshness(evidence, digest, manifest, drawing_sha)
 
 
 def test_manifest_byte_race_is_rejected_and_no_destination_is_created() -> None:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
-        manifest_path, evidence, paths = _prepare(root)
+        manifest_path, evidence, paths, drawing_path, drawing_sha = _prepare(root)
         raw, manifest, digest = snapshot_visual_run_manifest(manifest_path)
         evidence["payload"]["visual_run_manifest_sha256"] = digest  # type: ignore[index]
         # Change bytes without changing latest_mutation_sha256.
         manifest_path.write_text(json.dumps({**manifest, "state": "REPAIRING"}), encoding="utf-8")
         with pytest.raises(VisualEvidenceError, match="byte hash"):
-            write_visual_evidence(root / "runs", evidence, manifest_path, "EVIDENCE-001")
+            write_visual_evidence(
+                root / "runs",
+                evidence,
+                manifest_path,
+                "EVIDENCE-001",
+                drawing_path=drawing_path,
+                drawing_sha256_before_dispatch=drawing_sha,
+            )
         assert not (root / "runs" / RUN_ID / "iterations" / REGION_ID / "evidence-EVIDENCE-001").exists()
 
 
 def test_writer_promotes_once_and_refuses_overwrite() -> None:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
-        manifest_path, evidence, paths = _prepare(root)
+        manifest_path, evidence, paths, drawing_path, drawing_sha = _prepare(root)
         destination = write_visual_evidence(
             root / "runs",
             evidence,
             manifest_path,
             "EVIDENCE-001",
+            drawing_path=drawing_path,
+            drawing_sha256_before_dispatch=drawing_sha,
         )
         assert destination.is_dir()
         assert (destination / "cad-render.png").read_bytes() == b"png"
         assert (destination / "evidence-manifest.json").is_file()
         with pytest.raises(VisualEvidenceError, match="already exists"):
-            write_visual_evidence(root / "runs", evidence, manifest_path, "EVIDENCE-001")
+            write_visual_evidence(
+                root / "runs",
+                evidence,
+                manifest_path,
+                "EVIDENCE-001",
+                drawing_path=drawing_path,
+                drawing_sha256_before_dispatch=drawing_sha,
+            )
+
+
+def test_writer_rejects_drawing_changed_after_result_before_atomic_promote() -> None:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        manifest_path, evidence, _, drawing_path, drawing_sha = _prepare(root)
+        with patch(
+            "cad_agent.visual_evidence.sha256_file",
+            side_effect=[drawing_sha, drawing_sha, "f" * 64],
+        ):
+            with pytest.raises(VisualEvidenceError, match="drawing changed"):
+                write_visual_evidence(
+                    root / "runs",
+                    evidence,
+                    manifest_path,
+                    "EVIDENCE-001",
+                    drawing_path=drawing_path,
+                    drawing_sha256_before_dispatch=drawing_sha,
+                )
+        assert not (root / "runs" / RUN_ID / "iterations" / REGION_ID / "evidence-EVIDENCE-001").exists()

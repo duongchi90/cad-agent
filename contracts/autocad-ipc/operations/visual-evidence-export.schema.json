@@ -13,7 +13,8 @@
     "artifact_policy_version",
     "artifact_directory",
     "region",
-    "measurements"
+    "measurements",
+    "datum_bindings"
   ],
   "properties": {
     "run_id": {
@@ -132,6 +133,19 @@
               }
             }
           }
+        }
+      }
+    },
+    "datum_bindings": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "entity_handle"],
+        "properties": {
+          "id": {"$ref": "#/$defs/identifier"},
+          "entity_handle": {"$ref": "#/$defs/identifier"}
         }
       }
     }
