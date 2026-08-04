@@ -5,11 +5,16 @@ import pytest
 from cad_agent.visual_contracts import (
     VisualContractError,
     require_dimension_gate_ready,
+    require_auto_publish_authorized,
     require_region_verified,
     validate_visual_contract,
 )
 from tests.visual_supervisor_fixtures import (
+    INITIAL_TARGET_SHA,
+    RUN_ID,
+    TARGET_PATH,
     valid_dimension_register,
+    valid_auto_publish_authorization,
     valid_region_verification_register,
     valid_repair_plan,
 )
@@ -79,3 +84,41 @@ def test_region_verified_rejects_unresolved_critical_items() -> None:
     payload["unresolved_critical_items"] = ["DIM-SIDE-014"]
     with pytest.raises(VisualContractError, match="unresolved"):
         require_region_verified(payload)
+
+
+def test_publish_authorization_requires_single_use_and_expiry() -> None:
+    payload = valid_auto_publish_authorization()
+    payload["single_use"] = False
+    with pytest.raises(VisualContractError, match="single_use"):
+        validate_visual_contract(payload, contract="auto_publish_authorization")
+
+
+def test_publish_authorization_rejects_consumed_permission() -> None:
+    payload = valid_auto_publish_authorization()
+    payload["consumed"] = True
+    with pytest.raises(VisualContractError, match="consumed"):
+        require_auto_publish_authorized(
+            payload,
+            run_id=RUN_ID,
+            target_path=TARGET_PATH,
+            target_sha256=INITIAL_TARGET_SHA,
+        )
+
+
+def test_publish_authorization_rejects_target_hash_mismatch() -> None:
+    with pytest.raises(VisualContractError, match="target SHA"):
+        require_auto_publish_authorized(
+            valid_auto_publish_authorization(),
+            run_id=RUN_ID,
+            target_path=TARGET_PATH,
+            target_sha256="9" * 64,
+        )
+
+
+def test_publish_authorization_accepts_exact_binding() -> None:
+    require_auto_publish_authorized(
+        valid_auto_publish_authorization(),
+        run_id=RUN_ID,
+        target_path=TARGET_PATH,
+        target_sha256=INITIAL_TARGET_SHA,
+    )

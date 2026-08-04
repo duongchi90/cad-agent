@@ -285,6 +285,8 @@ _ALLOWED_REPAIR_OPERATIONS = {
 _REGION_STATUSES = {"PENDING", "CHECKING", "FAILED", "NEEDS_REVIEW", "VERIFIED", "STALE"}
 _GATE_STATUSES = {"PASS", "FAIL", "NOT_RUN"}
 _CRITICALITIES = {"CRITICAL", "NORMAL"}
+_PUBLISH_POLICY = "AUTO_PUBLISH_AFTER_ALL_GATES"
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/].+")
 
 
 def _validate_geometry_comparison(payload: dict[str, Any]) -> None:
@@ -620,6 +622,87 @@ def require_region_verified(region: Mapping[str, object]) -> None:
         raise VisualContractError("region_verification_register: unresolved critical items remain")
 
 
+def _normalize_windows_path(value: object, *, contract: str, path: str) -> str:
+    text = _string(value, contract=contract, path=path)
+    if _WINDOWS_ABSOLUTE_PATH_RE.fullmatch(text) is None:
+        _fail(contract, f"{path} must be an absolute Windows path with a drive letter")
+    if any(character in text for character in "*?[]"):
+        _fail(contract, f"{path} must not contain wildcard characters")
+    segments = re.split(r"[\\/]", text)
+    if ".." in segments:
+        _fail(contract, f"{path} must not contain directory traversal")
+    normalized = text.replace("/", "\\")
+    while "\\\\" in normalized:
+        normalized = normalized.replace("\\\\", "\\")
+    if len(normalized) > 3:
+        normalized = normalized.rstrip("\\")
+    return normalized.casefold()
+
+
+def _validate_auto_publish_authorization(payload: dict[str, Any]) -> None:
+    contract = "auto_publish_authorization"
+    required = {
+        "schema_version",
+        "authorization_id",
+        "run_id",
+        "policy",
+        "target_path",
+        "expected_initial_sha256",
+        "allowed_backup_root",
+        "single_use",
+        "expires_after_run",
+        "consumed",
+        "authorized_by",
+        "approval_reference",
+        "status",
+    }
+    _keys(payload, contract=contract, required=required)
+    if payload["schema_version"] != "auto-publish-authorization-1.0":
+        _fail(contract, "schema_version must be 'auto-publish-authorization-1.0'")
+    for key in ("authorization_id", "run_id", "authorized_by", "approval_reference"):
+        _identifier(payload[key], contract=contract, path=key)
+    if payload["policy"] != _PUBLISH_POLICY:
+        _fail(contract, "policy is invalid")
+    target_path = _normalize_windows_path(payload["target_path"], contract=contract, path="target_path")
+    backup_root = _normalize_windows_path(
+        payload["allowed_backup_root"], contract=contract, path="allowed_backup_root"
+    )
+    if target_path == backup_root:
+        _fail(contract, "target_path and allowed_backup_root must differ")
+    _sha256(payload["expected_initial_sha256"], contract=contract, path="expected_initial_sha256")
+    if payload["single_use"] is not True:
+        _fail(contract, "single_use must be true")
+    if payload["expires_after_run"] is not True:
+        _fail(contract, "expires_after_run must be true")
+    _bool(payload["consumed"], contract=contract, path="consumed")
+    if payload["status"] != "APPROVED":
+        _fail(contract, "status must be APPROVED")
+
+
+def require_auto_publish_authorized(
+    authorization: Mapping[str, object],
+    *,
+    run_id: str,
+    target_path: str,
+    target_sha256: str,
+) -> None:
+    validated = validate_visual_contract(authorization, contract="auto_publish_authorization")
+    if validated["consumed"]:
+        raise VisualContractError("auto_publish_authorization: consumed authorization cannot be used")
+    if validated["run_id"] != run_id:
+        raise VisualContractError("auto_publish_authorization: run ID mismatch")
+    contract = "auto_publish_authorization"
+    actual_path = _normalize_windows_path(target_path, contract=contract, path="target_path")
+    authorized_path = _normalize_windows_path(
+        validated["target_path"], contract=contract, path="target_path"
+    )
+    if actual_path != authorized_path:
+        raise VisualContractError("auto_publish_authorization: target path mismatch")
+    _sha256(target_sha256, contract=contract, path="target_sha256")
+    if target_sha256 != validated["expected_initial_sha256"]:
+        raise VisualContractError("auto_publish_authorization: target SHA mismatch")
+
+
 def _validate_visual_run_manifest(payload: dict[str, Any]) -> None:
     contract = "visual_run_manifest"
     required = {
@@ -681,6 +764,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "visual_review": _validate_visual_review,
     "repair_plan": _validate_repair_plan,
     "region_verification_register": _validate_region_verification_register,
+    "auto_publish_authorization": _validate_auto_publish_authorization,
 }
 
 

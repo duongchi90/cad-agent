@@ -1,0 +1,15 @@
+{
+  "schema_version": "auto-publish-authorization-1.0",
+  "authorization_id": "AUTH-VISUAL-SYNTHETIC-001",
+  "run_id": "RUN-VISUAL-SYNTHETIC-001",
+  "policy": "AUTO_PUBLISH_AFTER_ALL_GATES",
+  "target_path": "D:\\Synthetic\\drawing.dwg",
+  "expected_initial_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+  "allowed_backup_root": "D:\\Synthetic\\Backups",
+  "single_use": true,
+  "expires_after_run": true,
+  "consumed": false,
+  "authorized_by": "OWNER",
+  "approval_reference": "APPROVAL-SYNTHETIC-001",
+  "status": "APPROVED"
+}

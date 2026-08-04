@@ -202,3 +202,21 @@ def valid_region_verification_register() -> dict[str, Any]:
         "unresolved_critical_items": [],
         "status": "VERIFIED",
     }
+
+
+def valid_auto_publish_authorization() -> dict[str, Any]:
+    return {
+        "schema_version": "auto-publish-authorization-1.0",
+        "authorization_id": "AUTH-VISUAL-SYNTHETIC-001",
+        "run_id": RUN_ID,
+        "policy": "AUTO_PUBLISH_AFTER_ALL_GATES",
+        "target_path": TARGET_PATH,
+        "expected_initial_sha256": INITIAL_TARGET_SHA,
+        "allowed_backup_root": BACKUP_ROOT,
+        "single_use": True,
+        "expires_after_run": True,
+        "consumed": False,
+        "authorized_by": "OWNER",
+        "approval_reference": "APPROVAL-SYNTHETIC-001",
+        "status": "APPROVED",
+    }
