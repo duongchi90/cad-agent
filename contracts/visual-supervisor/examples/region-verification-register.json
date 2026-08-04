@@ -1,0 +1,26 @@
+{
+  "schema_version": "region-verification-register-1.0",
+  "run_id": "RUN-VISUAL-SYNTHETIC-001",
+  "region_id": "SIDE-CABIN",
+  "view_id": "SIDE",
+  "criticality": "CRITICAL",
+  "source_crop": {
+    "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "crop_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "bbox": [100, 100, 700, 600]
+  },
+  "cad_evidence": {
+    "drawing_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "render_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "mutation_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "latest_mutation_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "expected_features": ["cabin_outline", "front_axle_centerline"],
+  "dimension_refs": ["DIM-SIDE-001"],
+  "entity_refs": ["PART:CABIN_OUTER"],
+  "geometry": {"status": "PASS", "comparison_sha256": "6666666666666666666666666666666666666666666666666666666666666666"},
+  "visual": {"status": "PASS", "review_sha256": "7777777777777777777777777777777777777777777777777777777777777777"},
+  "engineering": {"status": "PASS", "measurement_sha256": "6666666666666666666666666666666666666666666666666666666666666666"},
+  "unresolved_critical_items": [],
+  "status": "VERIFIED"
+}

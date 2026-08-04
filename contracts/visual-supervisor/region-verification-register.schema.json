@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/visual-supervisor/region-verification-register.schema.json",
+  "title": "Region Verification Register",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "region_id",
+    "view_id",
+    "criticality",
+    "source_crop",
+    "cad_evidence",
+    "expected_features",
+    "dimension_refs",
+    "entity_refs",
+    "geometry",
+    "visual",
+    "engineering",
+    "unresolved_critical_items",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"const": "region-verification-register-1.0"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "region_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "view_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "criticality": {"enum": ["CRITICAL", "NORMAL"]},
+    "source_crop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha256", "crop_sha256", "bbox"],
+      "properties": {
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "crop_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bbox": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {"type": "number"}
+        }
+      }
+    },
+    "cad_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["drawing_sha256", "render_sha256", "mutation_sha256", "latest_mutation_sha256"],
+      "properties": {
+        "drawing_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "render_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "mutation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "latest_mutation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "expected_features": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "dimension_refs": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+    },
+    "entity_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "comparison_sha256"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "NOT_RUN"]},
+        "comparison_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "review_sha256"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "NOT_RUN"]},
+        "review_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "engineering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "measurement_sha256"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "NOT_RUN"]},
+        "measurement_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "unresolved_critical_items": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+    },
+    "status": {"enum": ["PENDING", "CHECKING", "FAILED", "NEEDS_REVIEW", "VERIFIED", "STALE"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "VERIFIED"}}},
+      "then": {
+        "properties": {
+          "geometry": {"properties": {"status": {"const": "PASS"}}},
+          "visual": {"properties": {"status": {"const": "PASS"}}},
+          "engineering": {"properties": {"status": {"const": "PASS"}}},
+          "unresolved_critical_items": {"maxItems": 0}
+        }
+      }
+    }
+  ]
+}

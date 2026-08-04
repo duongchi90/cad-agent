@@ -173,3 +173,32 @@ def valid_repair_plan() -> dict[str, Any]:
         "must_not_worsen": ["engineering_constraints", "centroid_offset_x_ratio"],
         "rollback_candidate_sha256": DRAWING_SHA,
     }
+
+
+def valid_region_verification_register() -> dict[str, Any]:
+    return {
+        "schema_version": "region-verification-register-1.0",
+        "run_id": RUN_ID,
+        "region_id": REGION_ID,
+        "view_id": VIEW_ID,
+        "criticality": "CRITICAL",
+        "source_crop": {
+            "source_sha256": SOURCE_SHA,
+            "crop_sha256": REFERENCE_PACKAGE_SHA,
+            "bbox": [100, 100, 700, 600],
+        },
+        "cad_evidence": {
+            "drawing_sha256": DRAWING_SHA,
+            "render_sha256": RENDER_SHA,
+            "mutation_sha256": MUTATION_SHA,
+            "latest_mutation_sha256": MUTATION_SHA,
+        },
+        "expected_features": ["cabin_outline", "front_axle_centerline"],
+        "dimension_refs": ["DIM-SIDE-001"],
+        "entity_refs": ["PART:CABIN_OUTER"],
+        "geometry": {"status": "PASS", "comparison_sha256": COMPARISON_SHA},
+        "visual": {"status": "PASS", "review_sha256": REVIEW_SHA},
+        "engineering": {"status": "PASS", "measurement_sha256": COMPARISON_SHA},
+        "unresolved_critical_items": [],
+        "status": "VERIFIED",
+    }

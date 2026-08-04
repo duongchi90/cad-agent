@@ -282,6 +282,9 @@ _ALLOWED_REPAIR_OPERATIONS = {
     "CREATE_NATIVE_DIMENSION",
     "REPAIR_NATIVE_DIMENSION",
 }
+_REGION_STATUSES = {"PENDING", "CHECKING", "FAILED", "NEEDS_REVIEW", "VERIFIED", "STALE"}
+_GATE_STATUSES = {"PASS", "FAIL", "NOT_RUN"}
+_CRITICALITIES = {"CRITICAL", "NORMAL"}
 
 
 def _validate_geometry_comparison(payload: dict[str, Any]) -> None:
@@ -523,6 +526,100 @@ def _validate_repair_plan(payload: dict[str, Any]) -> None:
         _string_list(payload[key], contract=contract, path=key, min_items=1)
 
 
+def _validate_region_verification_register(payload: dict[str, Any]) -> None:
+    contract = "region_verification_register"
+    required = {
+        "schema_version",
+        "run_id",
+        "region_id",
+        "view_id",
+        "criticality",
+        "source_crop",
+        "cad_evidence",
+        "expected_features",
+        "dimension_refs",
+        "entity_refs",
+        "geometry",
+        "visual",
+        "engineering",
+        "unresolved_critical_items",
+        "status",
+    }
+    _keys(payload, contract=contract, required=required)
+    if payload["schema_version"] != "region-verification-register-1.0":
+        _fail(contract, "schema_version must be 'region-verification-register-1.0'")
+    for key in ("run_id", "region_id", "view_id"):
+        _identifier(payload[key], contract=contract, path=key)
+    if payload["criticality"] not in _CRITICALITIES:
+        _fail(contract, "criticality is invalid")
+
+    source_crop = _object(payload["source_crop"], contract=contract, path="source_crop")
+    _keys(source_crop, contract=contract, required={"source_sha256", "crop_sha256", "bbox"})
+    for key in ("source_sha256", "crop_sha256"):
+        _sha256(source_crop[key], contract=contract, path=f"source_crop.{key}")
+    _validate_bbox(source_crop["bbox"], contract=contract, path="source_crop.bbox")
+
+    cad_evidence = _object(payload["cad_evidence"], contract=contract, path="cad_evidence")
+    _keys(
+        cad_evidence,
+        contract=contract,
+        required={"drawing_sha256", "render_sha256", "mutation_sha256", "latest_mutation_sha256"},
+    )
+    for key in ("drawing_sha256", "render_sha256", "mutation_sha256", "latest_mutation_sha256"):
+        _sha256(cad_evidence[key], contract=contract, path=f"cad_evidence.{key}")
+
+    _string_list(payload["expected_features"], contract=contract, path="expected_features")
+    dimension_refs = _string_list(payload["dimension_refs"], contract=contract, path="dimension_refs")
+    for index, dimension_ref in enumerate(dimension_refs):
+        _identifier(dimension_ref, contract=contract, path=f"dimension_refs[{index}]")
+    _string_list(payload["entity_refs"], contract=contract, path="entity_refs")
+
+    for gate in ("geometry", "visual", "engineering"):
+        gate_payload = _object(payload[gate], contract=contract, path=gate)
+        hash_key = {
+            "geometry": "comparison_sha256",
+            "visual": "review_sha256",
+            "engineering": "measurement_sha256",
+        }[gate]
+        _keys(gate_payload, contract=contract, required={"status", hash_key})
+        if gate_payload["status"] not in _GATE_STATUSES:
+            _fail(contract, f"{gate}.status is invalid")
+        _sha256(gate_payload[hash_key], contract=contract, path=f"{gate}.{hash_key}")
+
+    unresolved = _string_list(
+        payload["unresolved_critical_items"],
+        contract=contract,
+        path="unresolved_critical_items",
+    )
+    for index, item in enumerate(unresolved):
+        _identifier(item, contract=contract, path=f"unresolved_critical_items[{index}]")
+    status = payload["status"]
+    if status not in _REGION_STATUSES:
+        _fail(contract, "status is invalid")
+    if status == "VERIFIED":
+        if cad_evidence["mutation_sha256"] != cad_evidence["latest_mutation_sha256"]:
+            _fail(contract, "VERIFIED region has stale render evidence")
+        for gate in ("geometry", "visual", "engineering"):
+            if payload[gate]["status"] != "PASS":
+                _fail(contract, f"VERIFIED region requires {gate} gate PASS")
+        if unresolved:
+            _fail(contract, "VERIFIED region has unresolved critical items")
+
+
+def require_region_verified(region: Mapping[str, object]) -> None:
+    validated = validate_visual_contract(region, contract="region_verification_register")
+    if validated["status"] != "VERIFIED":
+        raise VisualContractError("region_verification_register: status must be VERIFIED")
+    evidence = validated["cad_evidence"]
+    if evidence["mutation_sha256"] != evidence["latest_mutation_sha256"]:
+        raise VisualContractError("region_verification_register: render evidence is stale")
+    for gate in ("geometry", "visual", "engineering"):
+        if validated[gate]["status"] != "PASS":
+            raise VisualContractError(f"region_verification_register: {gate} gate must PASS")
+    if validated["unresolved_critical_items"]:
+        raise VisualContractError("region_verification_register: unresolved critical items remain")
+
+
 def _validate_visual_run_manifest(payload: dict[str, Any]) -> None:
     contract = "visual_run_manifest"
     required = {
@@ -583,6 +680,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "geometry_comparison": _validate_geometry_comparison,
     "visual_review": _validate_visual_review,
     "repair_plan": _validate_repair_plan,
+    "region_verification_register": _validate_region_verification_register,
 }
 
 
