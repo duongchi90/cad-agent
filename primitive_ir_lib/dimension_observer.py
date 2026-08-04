@@ -294,6 +294,29 @@ def observe_dimension_cluster(
     )
 
     raw_candidates = _raw_text_candidates(raw_texts)
+    if "conflicting_text_candidates" in parse_reasons:
+        return DimensionDisposition(
+            cluster_id=cluster.cluster_id,
+            disposition="CONFLICT",
+            observation=_make_observation(
+                cluster=cluster,
+                bbox=bbox,
+                crop=crop,
+                source_sha256=source_sha256,
+                parsed=None,
+                geometry=geometry,
+                attachment_candidates=attachment_candidates,
+                attachment_resolved=False,
+                explicit_role=None,
+                blocker_scope=blocker_scope,
+                raw_texts=raw_texts,
+                page_id=page_id,
+                view_id=view_id,
+                status_override="CONFLICT",
+                role_override="CONFLICT",
+            ),
+            reasons=tuple(sorted(set(parse_reasons + ("conflicting_authoritative_readings",)))),
+        )
     if parsed is None and not raw_candidates and geometry.dimension_line is None:
         return DimensionDisposition(
             cluster_id=cluster.cluster_id,
@@ -369,13 +392,15 @@ def _make_observation(
     raw_texts: Sequence[RawText],
     page_id: str,
     view_id: str,
+    status_override: str | None = None,
+    role_override: str | None = None,
 ) -> dict[str, object]:
     raw_candidates = _raw_text_candidates(raw_texts)
     display_text = parsed.display_text if parsed is not None else (raw_candidates[0] if raw_candidates else "")
     value = parsed.value if parsed is not None else None
     unit = parsed.unit if parsed is not None else None
-    status = "CONFIRMED" if parsed is not None and attachment_resolved and explicit_role else "UNRESOLVED"
-    role = explicit_role if explicit_role is not None else "AMBIGUOUS"
+    status = status_override or ("CONFIRMED" if parsed is not None and attachment_resolved and explicit_role else "UNRESOLVED")
+    role = role_override or (explicit_role if explicit_role is not None else "AMBIGUOUS")
     if status == "UNRESOLVED" and role not in _ROLES:
         role = "AMBIGUOUS"
     kind = (parsed.kind_hint if parsed and parsed.kind_hint else geometry.kind_hint) or "UNKNOWN"
