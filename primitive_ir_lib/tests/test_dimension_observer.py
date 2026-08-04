@@ -21,6 +21,7 @@ from primitive_ir_lib.tests.dimension_test_helpers import (
     synthetic_horizontal_dimension,
     synthetic_isolated_number_crop,
     synthetic_leader_annotation,
+    synthetic_page_with_two_unreadable_dimensions_and_note,
 )
 from primitive_ir_lib.text_extraction import RawText
 
@@ -84,6 +85,52 @@ def test_text_and_geometry_clusters_both_receive_dispositions() -> None:
         and disposition.observation["extension_geometry"]["dimension_line"] is not None
         for disposition in dispositions
     )
+
+
+def test_two_geometry_only_regions_each_get_disposition_and_register_accounting() -> None:
+    page = synthetic_page_with_two_unreadable_dimensions_and_note()
+    clusters = detect_dimension_clusters(page)
+    geometry_clusters = [cluster for cluster in clusters if cluster.bbox_px[1] >= 80]
+    dispositions = [
+        observe_dimension_cluster(
+            page,
+            cluster,
+            page_id="PAGE-001",
+            view_id="SIDE",
+            source_sha256="1" * 64,
+            ocr_reader=fake_ocr_unreadable,
+        )
+        for cluster in clusters
+    ]
+    dispositions_by_cluster = {
+        disposition.cluster_id: disposition for disposition in dispositions
+    }
+
+    register = build_dimension_register(
+        run_id="RUN-VS-T1-TWO-GEOMETRY",
+        source_sha256="1" * 64,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        total_area_px=page.shape[0] * page.shape[1],
+        inspected_area_px=page.shape[0] * page.shape[1],
+        detected_cluster_ids=[cluster.cluster_id for cluster in clusters],
+        dispositions=dispositions,
+    )
+
+    assert len(geometry_clusters) == 2
+    assert all(
+        dispositions_by_cluster[cluster.cluster_id].observation is not None
+        and dispositions_by_cluster[cluster.cluster_id].observation["extension_geometry"]["dimension_line"]
+        is not None
+        for cluster in geometry_clusters
+    )
+    assert len(dispositions) == len(clusters)
+    assert register["coverage"] == {
+        "clusters_detected": len(clusters),
+        "clusters_processed": len(clusters),
+        "page_coverage_percent": 100.0,
+    }
+    assert validate_visual_contract(register, contract="dimension_register") == register
 
 
 def test_rotated_ocr_candidate_is_fused_and_mapped_to_original_crop() -> None:

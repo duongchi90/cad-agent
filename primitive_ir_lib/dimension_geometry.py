@@ -101,6 +101,51 @@ def _hough_segments(binary: np.ndarray) -> list[Segment]:
     return segments
 
 
+def _segment_bbox(segment: Segment, *, padding: int = 18) -> tuple[int, int, int, int]:
+    xs = (segment[0][0], segment[1][0])
+    ys = (segment[0][1], segment[1][1])
+    return (
+        int(math.floor(min(xs))) - padding,
+        int(math.floor(min(ys))) - padding,
+        int(math.ceil(max(xs))) + padding,
+        int(math.ceil(max(ys))) + padding,
+    )
+
+
+def _boxes_near(first: tuple[int, int, int, int], second: tuple[int, int, int, int], *, tolerance: int) -> bool:
+    return not (
+        first[2] < second[0] - tolerance
+        or second[2] < first[0] - tolerance
+        or first[3] < second[1] - tolerance
+        or second[3] < first[1] - tolerance
+    )
+
+
+def _merge_nearby_boxes(
+    boxes: list[tuple[int, int, int, int]], *, tolerance: int
+) -> list[tuple[int, int, int, int]]:
+    merged: list[tuple[int, int, int, int]] = []
+    for candidate in sorted(boxes, key=lambda box: (box[1], box[0], box[3], box[2])):
+        current = candidate
+        changed = True
+        while changed:
+            changed = False
+            for index, existing in enumerate(merged):
+                if not _boxes_near(existing, current, tolerance=tolerance):
+                    continue
+                current = (
+                    min(existing[0], current[0]),
+                    min(existing[1], current[1]),
+                    max(existing[2], current[2]),
+                    max(existing[3], current[3]),
+                )
+                merged.pop(index)
+                changed = True
+                break
+        merged.append(current)
+    return sorted(merged, key=lambda box: (box[1], box[0], box[3], box[2]))
+
+
 def _select_dimension_line(segments: list[Segment]) -> tuple[Segment | None, str | None]:
     horizontal = [segment for segment in segments if _is_horizontal(segment)]
     vertical = [segment for segment in segments if _is_vertical(segment)]
@@ -271,4 +316,53 @@ def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence
     )
 
 
-__all__ = ["DimensionGeometryEvidence", "Point", "Segment", "detect_dimension_geometry"]
+def detect_dimension_geometry_regions(image_bgr: np.ndarray) -> tuple[tuple[int, int, int, int], ...]:
+    """Return deterministic page regions containing independent dimension geometry."""
+    if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim not in {2, 3}:
+        raise ValueError("image_bgr must be a grayscale or BGR image")
+    if image_bgr.size == 0:
+        return ()
+
+    gray = image_bgr if image_bgr.ndim == 2 else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    if gray.size == 0 or int(gray.max()) == int(gray.min()):
+        return ()
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        25,
+        10,
+    )
+    structural_segments = [
+        segment
+        for segment in _hough_segments(binary)
+        if (_is_horizontal(segment) or _is_vertical(segment)) and _length(segment) >= 40.0
+    ]
+    candidate_boxes = [_segment_bbox(segment) for segment in structural_segments]
+    height, width = gray.shape[:2]
+    regions: list[tuple[int, int, int, int]] = []
+    for left, top, right, bottom in _merge_nearby_boxes(candidate_boxes, tolerance=32):
+        clipped = (
+            max(0, left),
+            max(0, top),
+            min(width, right),
+            min(height, bottom),
+        )
+        if clipped[2] <= clipped[0] or clipped[3] <= clipped[1]:
+            continue
+        geometry = detect_dimension_geometry(image_bgr[clipped[1] : clipped[3], clipped[0] : clipped[2]])
+        if geometry.dimension_line is None or len(geometry.extension_lines) < 2:
+            continue
+        if clipped not in regions:
+            regions.append(clipped)
+    return tuple(sorted(regions, key=lambda box: (box[1], box[0], box[3], box[2])))
+
+
+__all__ = [
+    "DimensionGeometryEvidence",
+    "Point",
+    "Segment",
+    "detect_dimension_geometry",
+    "detect_dimension_geometry_regions",
+]

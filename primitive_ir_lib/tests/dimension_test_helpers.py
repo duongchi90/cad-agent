@@ -44,6 +44,27 @@ def synthetic_diagonal_non_leader() -> np.ndarray:
     return image
 
 
+def synthetic_page_with_two_unreadable_dimensions_and_note() -> np.ndarray:
+    page = np.full((360, 760, 3), 255, dtype=np.uint8)
+    cv2.putText(page, "TITLE NOTE", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2)
+    for x0, x1 in ((60, 300), (440, 680)):
+        y = 130
+        cv2.line(page, (x0, y), (x1, y), (0, 0, 0), 2)
+        cv2.line(page, (x0, y), (x0, 285), (0, 0, 0), 2)
+        cv2.line(page, (x1, y), (x1, 285), (0, 0, 0), 2)
+        cv2.fillConvexPoly(
+            page,
+            np.array([[x0, y], [x0 + 16, y - 7], [x0 + 16, y + 7]], dtype=np.int32),
+            (0, 0, 0),
+        )
+        cv2.fillConvexPoly(
+            page,
+            np.array([[x1, y], [x1 - 16, y - 7], [x1 - 16, y + 7]], dtype=np.int32),
+            (0, 0, 0),
+        )
+    return page
+
+
 def synthetic_page_with_two_dimension_clusters_and_one_note() -> np.ndarray:
     page = np.full((420, 900, 3), 255, dtype=np.uint8)
     first = synthetic_horizontal_dimension()
