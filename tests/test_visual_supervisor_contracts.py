@@ -13,6 +13,7 @@ from cad_agent.visual_contracts import (
 from tests.visual_supervisor_fixtures import (
     valid_dimension_register,
     valid_geometry_comparison,
+    valid_visual_review,
     valid_visual_run_manifest,
 )
 
@@ -83,3 +84,33 @@ def test_geometry_comparison_rejects_non_finite_metric() -> None:
     payload["metrics"]["height_ratio_error"] = float("nan")
     with pytest.raises(VisualContractError, match="finite"):
         validate_visual_contract(payload, contract="geometry_comparison")
+
+
+def test_visual_review_rejects_free_form_verdict() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "LOOKS_GOOD"
+    with pytest.raises(VisualContractError, match="verdict"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_pass_rejects_findings() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "PASS"
+    with pytest.raises(VisualContractError, match="PASS"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_fail_requires_actionable_repair_intent() -> None:
+    payload = valid_visual_review()
+    payload["repair_intent"]["change"] = []
+    with pytest.raises(VisualContractError, match="change"):
+        validate_visual_contract(payload, contract="visual_review")
+
+
+def test_visual_review_needs_human_requires_requested_evidence_or_finding() -> None:
+    payload = valid_visual_review()
+    payload["verdict"] = "NEEDS_HUMAN"
+    payload["findings"] = []
+    payload["repair_intent"]["requested_next_evidence"] = []
+    with pytest.raises(VisualContractError, match="NEEDS_HUMAN"):
+        validate_visual_contract(payload, contract="visual_review")

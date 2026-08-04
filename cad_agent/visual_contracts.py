@@ -257,6 +257,20 @@ _GEOMETRY_METRICS = (
     "connected_component_difference",
 )
 
+_VISUAL_VERDICTS = {"PASS", "FAIL", "NEEDS_HUMAN"}
+_SEVERITIES = {"INFO", "MINOR", "MAJOR", "CRITICAL"}
+_FINDING_CATEGORIES = {
+    "MISSING_FEATURE",
+    "EXTRA_FEATURE",
+    "TOPOLOGY_MISMATCH",
+    "POSITION_MISMATCH",
+    "PROPORTION_MISMATCH",
+    "SHAPE_MISMATCH",
+    "DIMENSION_MISMATCH",
+    "ANNOTATION_LAYOUT_MISMATCH",
+    "SOURCE_TECHNICAL_CONFLICT",
+}
+
 
 def _validate_geometry_comparison(payload: dict[str, Any]) -> None:
     contract = "geometry_comparison"
@@ -329,6 +343,110 @@ def _validate_geometry_comparison(payload: dict[str, Any]) -> None:
         _fail(contract, "FAILED alignment requires BASELINE trend")
 
 
+def _validate_visual_review(payload: dict[str, Any]) -> None:
+    contract = "visual_review"
+    required = {
+        "schema_version",
+        "review_id",
+        "run_id",
+        "region_id",
+        "iteration",
+        "reference_package_sha256",
+        "cad_render_sha256",
+        "mutation_sha256",
+        "geometry_comparison_sha256",
+        "verdict",
+        "severity",
+        "confidence",
+        "findings",
+        "repair_intent",
+    }
+    _keys(payload, contract=contract, required=required)
+    if payload["schema_version"] != "visual-review-1.0":
+        _fail(contract, "schema_version must be 'visual-review-1.0'")
+    for key in ("review_id", "run_id", "region_id"):
+        _identifier(payload[key], contract=contract, path=key)
+    iteration = _non_negative_integer(payload["iteration"], contract=contract, path="iteration")
+    if iteration < 1:
+        _fail(contract, "iteration must be at least 1")
+    for key in (
+        "reference_package_sha256",
+        "cad_render_sha256",
+        "mutation_sha256",
+        "geometry_comparison_sha256",
+    ):
+        _sha256(payload[key], contract=contract, path=key)
+    verdict = payload["verdict"]
+    if verdict not in _VISUAL_VERDICTS:
+        _fail(contract, "verdict is invalid")
+    if payload["severity"] not in _SEVERITIES:
+        _fail(contract, "severity is invalid")
+    confidence = _finite_number(payload["confidence"], contract=contract, path="confidence")
+    if not 0.0 <= confidence <= 1.0:
+        _fail(contract, "confidence must be between 0 and 1")
+
+    findings = payload["findings"]
+    if not isinstance(findings, list):
+        _fail(contract, "findings must be a list")
+    major_or_critical = False
+    for index, raw_finding in enumerate(findings):
+        path = f"findings[{index}]"
+        finding = _object(raw_finding, contract=contract, path=path)
+        _keys(
+            finding,
+            contract=contract,
+            required={"finding_id", "category", "feature", "severity", "description", "evidence_refs"},
+        )
+        _identifier(finding["finding_id"], contract=contract, path=f"{path}.finding_id")
+        if finding["category"] not in _FINDING_CATEGORIES:
+            _fail(contract, f"{path}.category is invalid")
+        _identifier(finding["feature"], contract=contract, path=f"{path}.feature")
+        finding_severity = finding["severity"]
+        if finding_severity not in _SEVERITIES:
+            _fail(contract, f"{path}.severity is invalid")
+        major_or_critical = major_or_critical or finding_severity in {"MAJOR", "CRITICAL"}
+        _string(finding["description"], contract=contract, path=f"{path}.description")
+        evidence_refs = _string_list(
+            finding["evidence_refs"], contract=contract, path=f"{path}.evidence_refs", min_items=1
+        )
+        for evidence_index, evidence_ref in enumerate(evidence_refs):
+            _string(evidence_ref, contract=contract, path=f"{path}.evidence_refs[{evidence_index}]")
+
+    repair_intent = _object(payload["repair_intent"], contract=contract, path="repair_intent")
+    _keys(
+        repair_intent,
+        contract=contract,
+        required={"change", "preserve", "required_measurements", "requested_next_evidence"},
+    )
+    change = _string_list(repair_intent["change"], contract=contract, path="repair_intent.change")
+    preserve = _string_list(repair_intent["preserve"], contract=contract, path="repair_intent.preserve")
+    required_measurements = _string_list(
+        repair_intent["required_measurements"],
+        contract=contract,
+        path="repair_intent.required_measurements",
+    )
+    requested_next_evidence = _string_list(
+        repair_intent["requested_next_evidence"],
+        contract=contract,
+        path="repair_intent.requested_next_evidence",
+    )
+    del required_measurements
+    if verdict == "PASS":
+        if findings:
+            _fail(contract, "PASS verdict requires empty findings")
+        if change:
+            _fail(contract, "PASS verdict requires empty repair_intent.change")
+    elif verdict == "FAIL":
+        if not major_or_critical:
+            _fail(contract, "FAIL verdict requires a MAJOR or CRITICAL finding")
+        if not change:
+            _fail(contract, "FAIL verdict requires non-empty repair_intent.change")
+        if not preserve:
+            _fail(contract, "FAIL verdict requires non-empty repair_intent.preserve")
+    elif not findings and not requested_next_evidence:
+        _fail(contract, "NEEDS_HUMAN verdict requires a finding or requested next evidence")
+
+
 def _validate_visual_run_manifest(payload: dict[str, Any]) -> None:
     contract = "visual_run_manifest"
     required = {
@@ -387,6 +505,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "visual_run_manifest": _validate_visual_run_manifest,
     "dimension_register": _validate_dimension_register,
     "geometry_comparison": _validate_geometry_comparison,
+    "visual_review": _validate_visual_review,
 }
 
 

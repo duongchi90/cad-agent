@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/visual-supervisor/visual-review.schema.json",
+  "title": "Independent Visual Review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "review_id",
+    "run_id",
+    "region_id",
+    "iteration",
+    "reference_package_sha256",
+    "cad_render_sha256",
+    "mutation_sha256",
+    "geometry_comparison_sha256",
+    "verdict",
+    "severity",
+    "confidence",
+    "findings",
+    "repair_intent"
+  ],
+  "properties": {
+    "schema_version": {"const": "visual-review-1.0"},
+    "review_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "region_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "iteration": {"type": "integer", "minimum": 1},
+    "reference_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cad_render_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mutation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "geometry_comparison_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "verdict": {"enum": ["PASS", "FAIL", "NEEDS_HUMAN"]},
+    "severity": {"enum": ["INFO", "MINOR", "MAJOR", "CRITICAL"]},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "category", "feature", "severity", "description", "evidence_refs"],
+        "properties": {
+          "finding_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+          "category": {
+            "enum": [
+              "MISSING_FEATURE",
+              "EXTRA_FEATURE",
+              "TOPOLOGY_MISMATCH",
+              "POSITION_MISMATCH",
+              "PROPORTION_MISMATCH",
+              "SHAPE_MISMATCH",
+              "DIMENSION_MISMATCH",
+              "ANNOTATION_LAYOUT_MISMATCH",
+              "SOURCE_TECHNICAL_CONFLICT"
+            ]
+          },
+          "feature": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+          "severity": {"enum": ["INFO", "MINOR", "MAJOR", "CRITICAL"]},
+          "description": {"type": "string", "minLength": 1},
+          "evidence_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "repair_intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["change", "preserve", "required_measurements", "requested_next_evidence"],
+      "properties": {
+        "change": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "preserve": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "required_measurements": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "requested_next_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verdict": {"const": "PASS"}}},
+      "then": {
+        "properties": {
+          "findings": {"maxItems": 0},
+          "repair_intent": {"properties": {"change": {"maxItems": 0}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"verdict": {"const": "FAIL"}}},
+      "then": {
+        "properties": {
+          "findings": {
+            "minItems": 1,
+            "contains": {
+              "properties": {
+                "severity": {"enum": ["MAJOR", "CRITICAL"]}
+              }
+            },
+            "minContains": 1
+          },
+          "repair_intent": {
+            "properties": {
+              "change": {"minItems": 1},
+              "preserve": {"minItems": 1}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"verdict": {"const": "NEEDS_HUMAN"}}},
+      "then": {
+        "anyOf": [
+          {"properties": {"findings": {"minItems": 1}}},
+          {"properties": {"repair_intent": {"properties": {"requested_next_evidence": {"minItems": 1}}}}}
+        ]
+      }
+    }
+  ]
+}

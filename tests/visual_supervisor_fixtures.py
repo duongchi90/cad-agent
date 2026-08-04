@@ -115,3 +115,36 @@ def valid_geometry_comparison() -> dict[str, Any]:
         "trend": "IMPROVED",
         "previous_comparison_sha256": COMPARISON_SHA,
     }
+
+
+def valid_visual_review() -> dict[str, Any]:
+    return {
+        "schema_version": "visual-review-1.0",
+        "review_id": "VR-SIDE-CABIN-001",
+        "run_id": RUN_ID,
+        "region_id": REGION_ID,
+        "iteration": 1,
+        "reference_package_sha256": REFERENCE_PACKAGE_SHA,
+        "cad_render_sha256": RENDER_SHA,
+        "mutation_sha256": MUTATION_SHA,
+        "geometry_comparison_sha256": COMPARISON_SHA,
+        "verdict": "FAIL",
+        "severity": "MAJOR",
+        "confidence": 0.94,
+        "findings": [
+            {
+                "finding_id": "FIND-001",
+                "category": "SHAPE_MISMATCH",
+                "feature": "CABIN_ROOF",
+                "severity": "MAJOR",
+                "description": "Roof contour is too high relative to the approved source.",
+                "evidence_refs": ["overlay.png", "difference-mask.png"],
+            }
+        ],
+        "repair_intent": {
+            "change": ["LOWER_CABIN_ROOF_MIDPOINT"],
+            "preserve": ["FRONT_AXLE_CENTER", "CABIN_BOTTOM_DATUM"],
+            "required_measurements": ["CABIN_MAX_HEIGHT"],
+            "requested_next_evidence": [],
+        },
+    }
