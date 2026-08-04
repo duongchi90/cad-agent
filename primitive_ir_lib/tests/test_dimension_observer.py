@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+import pytest
+
+from primitive_ir_lib.dimension_observer import (
+    DimensionCluster,
+    DimensionObserverError,
+    build_dimension_register,
+    observe_dimension_cluster,
+)
+from primitive_ir_lib.tests.dimension_test_helpers import (
+    fake_ocr_4500,
+    horizontal_dimension_cluster,
+    matching_horizontal_anchors,
+    not_a_dimension_disposition,
+    synthetic_horizontal_dimension,
+    synthetic_isolated_number_crop,
+)
+
+
+def test_number_without_attachment_is_unresolved_and_ambiguous() -> None:
+    image = synthetic_isolated_number_crop()
+    cluster = DimensionCluster(
+        cluster_id="DIMCLUSTER-001",
+        bbox_px=(0, 0, image.shape[1], image.shape[0]),
+        member_boxes=((20, 20, 100, 55),),
+    )
+    disposition = observe_dimension_cluster(
+        image,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+    )
+    assert disposition.observation is not None
+    assert disposition.observation["value"] == 4500.0
+    assert disposition.observation["role"] == "AMBIGUOUS"
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
+def test_resolved_attachment_without_explicit_role_remains_unresolved() -> None:
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=matching_horizontal_anchors(),
+        explicit_role=None,
+    )
+    assert disposition.observation["role"] == "AMBIGUOUS"
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "role_unresolved" in disposition.reasons
+
+
+def test_explicit_reference_role_may_confirm_resolved_observation() -> None:
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=matching_horizontal_anchors(),
+        explicit_role="REFERENCE",
+        default_unit="mm",
+    )
+    assert disposition.observation["role"] == "REFERENCE"
+    assert disposition.observation["status"] == "CONFIRMED"
+
+
+def test_register_rejects_missing_cluster_disposition() -> None:
+    with pytest.raises(DimensionObserverError, match="disposition"):
+        build_dimension_register(
+            run_id="RUN-VS-T1-001",
+            source_sha256="1" * 64,
+            page_id="PAGE-001",
+            view_id="SIDE",
+            total_area_px=10000,
+            inspected_area_px=10000,
+            detected_cluster_ids=["DIMCLUSTER-001", "DIMCLUSTER-002"],
+            dispositions=[not_a_dimension_disposition("DIMCLUSTER-001")],
+        )
