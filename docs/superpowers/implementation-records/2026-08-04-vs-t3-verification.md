@@ -1,16 +1,16 @@
 # VS-T3 AutoCAD Evidence Exporter Verification Record
 
-Status: verified offline; AutoCAD Mechanical live gate not run.
+Status: verified on the exact implementation/test head; AutoCAD Mechanical live gate not run.
 
 Verification target:
 
-Final PR #30 head after the implementation fixes and verification rerun.
-The exact SHA is recorded in the final PR update and CI check.
+PR #30 implementation/test head after the round-5 provenance fix.
+Verified commit SHA: `30620cb17bb050985db86dcc81f9992316690129`.
 
 Command:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1 -PythonExe 'D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe' -SkipAutoCADDotNet
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1 -PythonExe 'D:\cad-agent-master\cad-agent\.venv-py311\Scripts\python.exe'
 ```
 
 Observed result:
@@ -18,19 +18,24 @@ Observed result:
 - Exit code: `0`
 - Lock contract: PASS, 40 pinned and hashed distributions.
 - Environment contract: PASS, 40 locked distributions.
+- AutoCAD DLL output check: PASS; no Autodesk Managed DLLs copied.
 - IPC contract suite: 20 passed, 18 subtests passed.
 - Python IPC JUnit: 38 tests, 0 failures, 0 errors, 0 skipped.
-- Offline suite: 740 passed, 11 deselected, 18 subtests passed (758 total).
+- Offline suite: 749 passed, 11 deselected, 18 subtests passed (767 total).
 - Real-data unavailable probe: 2 skipped because private inputs were not configured.
 - AutoCAD Mechanical unavailable probe: 9 skipped because no live File IPC session was configured.
-- AutoCAD .NET gate in the canonical verifier: `NOT RUN` because
-  `-SkipAutoCADDotNet` was explicit.
+- AutoCAD .NET gate in the canonical verifier: PASS; 101 passed, 0 failed,
+  0 skipped.
 - AutoCAD live marker: `NOT RUN`; no AutoCAD Mechanical File IPC prerequisites were available.
 - Ruff: PASS on the affected Python files.
 - `git diff --check`: PASS.
-- Separate AutoCAD Mechanical 2027 .NET gate on the same implementation head:
-  restore exit `0`; Release x64 build exit `0` with 1 warning and 0 errors;
-  Release x64 test exit `0`, 99 passed, 0 failed, 0 skipped.
+- Explicit AutoCAD Mechanical 2027 .NET commands on the same implementation
+  head:
+  `dotnet restore autocad_plugin/CadAgent.AutoCAD2027.sln` exit `0`;
+  `dotnet build autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64 --no-restore`
+  exit `0` with 1 warning and 0 errors;
+  `dotnet test autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64 --no-build --no-restore`
+  exit `0`, 101 passed, 0 failed, 0 skipped.
 
 Authority-boundary review:
 
