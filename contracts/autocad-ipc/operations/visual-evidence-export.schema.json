@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/visual-evidence-export.schema.json",
+  "title": "CadAgent VS-T3 visual evidence export request parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "evidence_id",
+    "region_id",
+    "latest_mutation_sha256",
+    "visual_run_manifest_sha256",
+    "artifact_policy_version",
+    "artifact_directory",
+    "region",
+    "measurements",
+    "datum_bindings"
+  ],
+  "properties": {
+    "run_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "evidence_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "region_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "latest_mutation_sha256": {
+      "$ref": "#/$defs/lowercaseSha256"
+    },
+    "visual_run_manifest_sha256": {
+      "$ref": "#/$defs/lowercaseSha256"
+    },
+    "artifact_policy_version": {
+      "const": "vs-t3-artifacts-1"
+    },
+    "artifact_directory": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!\\\\)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_bbox_mm",
+        "pixel_size",
+        "background",
+        "include_layers",
+        "exclude_layers"
+      ],
+      "properties": {
+        "model_bbox_mm": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "number"
+          }
+        },
+        "pixel_size": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8192
+          }
+        },
+        "background": {
+          "enum": ["WHITE", "BLACK"]
+        },
+        "include_layers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "uniqueItems": true
+        },
+        "exclude_layers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "measurements": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "reference"],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "kind": {
+            "enum": ["DISTANCE", "ANGLE", "RADIUS", "DIAMETER", "BOUNDING_BOX"]
+          },
+          "reference": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "id"],
+            "properties": {
+              "type": {
+                "enum": ["ENTITY", "DATUM"]
+              },
+              "id": {
+                "$ref": "#/$defs/identifier"
+              }
+            }
+          },
+          "to_reference": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "id"],
+            "properties": {
+              "type": {
+                "enum": ["ENTITY", "DATUM"]
+              },
+              "id": {
+                "$ref": "#/$defs/identifier"
+              }
+            }
+          }
+        }
+      }
+    },
+    "datum_bindings": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "entity_handle",
+          "run_id",
+          "region_id",
+          "visual_run_manifest_sha256",
+          "dimension_register_sha256",
+          "dimension_id",
+          "approval"
+        ],
+        "properties": {
+          "id": {"$ref": "#/$defs/identifier"},
+          "entity_handle": {"$ref": "#/$defs/identifier"},
+          "run_id": {"$ref": "#/$defs/identifier"},
+          "region_id": {"$ref": "#/$defs/identifier"},
+          "visual_run_manifest_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+          "dimension_register_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+          "dimension_id": {"$ref": "#/$defs/identifier"},
+          "approval": {"const": "DIMENSION_REGISTER_CONFIRMED"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

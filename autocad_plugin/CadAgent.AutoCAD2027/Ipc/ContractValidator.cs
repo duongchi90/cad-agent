@@ -34,6 +34,15 @@ public static class ContractValidator
     private static readonly Regex Sha256Pattern =
         new("^[0-9a-fA-F]{64}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    private static readonly Regex VisualEvidenceIdentifierPattern =
+        new("^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex LowercaseSha256Pattern =
+        new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex VisualEvidenceCapturedAtPattern =
+        new("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     public static ContractValidationResult ValidateRequest(IpcRequest? request)
     {
         var errors = new List<string>();
@@ -103,6 +112,10 @@ public static class ContractValidator
         {
             ValidateDisposableParameters(request.Parameters, errors);
         }
+        else if (string.Equals(request.Operation, "visual_evidence_export", StringComparison.Ordinal))
+        {
+            ValidateVisualEvidenceParameters(request, errors);
+        }
 
         return new ContractValidationResult(errors);
     }
@@ -141,6 +154,17 @@ public static class ContractValidator
             && (result.Changed || (result.EntityHandles?.Count ?? 0) != 0))
         {
             errors.Add("drawing_setup_audit results must be read-only and contain no entity handles");
+        }
+        if (string.Equals(result.Operation, "visual_evidence_export", StringComparison.Ordinal))
+        {
+            if (result.Changed || (result.EntityHandles?.Count ?? 0) != 0)
+            {
+                errors.Add("visual_evidence_export results must be read-only and contain no entity handles");
+            }
+            if (result.Success)
+            {
+                ValidateVisualEvidencePayload(result.Payload, errors);
+            }
         }
         if (result.Payload is null)
         {
@@ -330,13 +354,464 @@ public static class ContractValidator
         }
     }
 
+    private static void ValidateVisualEvidenceParameters(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        var parameters = request.Parameters!;
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "run_id",
+            "evidence_id",
+            "region_id",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "artifact_policy_version",
+            "artifact_directory",
+            "region",
+            "measurements",
+            "datum_bindings"
+        };
+        foreach (var missing in required.Except(parameters.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"visual_evidence_export parameters are missing '{missing}'");
+        }
+        foreach (var unsupported in parameters.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"visual_evidence_export parameters contain unsupported field '{unsupported}'");
+        }
+
+        foreach (var name in new[] { "run_id", "evidence_id", "region_id" })
+        {
+            if (!TryGetString(parameters, name, out var value)
+                || !VisualEvidenceIdentifierPattern.IsMatch(value))
+            {
+                errors.Add($"parameters.{name} must be a stable identifier");
+            }
+        }
+        foreach (var name in new[] { "latest_mutation_sha256", "visual_run_manifest_sha256" })
+        {
+            if (!TryGetString(parameters, name, out var value)
+                || !LowercaseSha256Pattern.IsMatch(value))
+            {
+                errors.Add($"parameters.{name} must be a lowercase SHA-256");
+            }
+        }
+
+        if (!TryGetString(parameters, "artifact_policy_version", out var policy)
+            || !string.Equals(policy, "vs-t3-artifacts-1", StringComparison.Ordinal))
+        {
+            errors.Add("parameters.artifact_policy_version must be vs-t3-artifacts-1");
+        }
+        if (TryGetString(parameters, "artifact_directory", out var artifactDirectory)
+            && !IsSafeRelativePath(artifactDirectory))
+        {
+            errors.Add("parameters.artifact_directory must be a safe relative path");
+        }
+
+        if (!parameters.TryGetValue("region", out var region)
+            || region.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("parameters.region must be an object");
+        }
+        else
+        {
+            ValidateVisualEvidenceRegion(region, errors);
+        }
+
+        if (!parameters.TryGetValue("measurements", out var measurements)
+            || measurements.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add("parameters.measurements must be an array");
+        }
+        else
+        {
+            var datumBindingIds = ValidateVisualEvidenceDatumBindings(request, errors);
+            ValidateVisualEvidenceMeasurements(measurements, datumBindingIds, errors);
+        }
+    }
+
+    private static HashSet<string> ValidateVisualEvidenceDatumBindings(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        if (!request.Parameters!.TryGetValue("datum_bindings", out var bindings)
+            || bindings.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add("parameters.datum_bindings must be an array");
+            return ids;
+        }
+
+        if (bindings.GetArrayLength() > 10000)
+        {
+            errors.Add("parameters.datum_bindings must contain at most 10000 items");
+        }
+
+        foreach (var binding in bindings.EnumerateArray())
+        {
+            if (binding.ValueKind != JsonValueKind.Object)
+            {
+                errors.Add("parameters.datum_bindings entries must be objects");
+                continue;
+            }
+
+            var required = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "id",
+                "entity_handle",
+                "run_id",
+                "region_id",
+                "visual_run_manifest_sha256",
+                "dimension_register_sha256",
+                "dimension_id",
+                "approval"
+            };
+            ValidateClosedObject(binding, required, "parameters.datum_bindings entry", errors);
+
+            if (!TryGetString(binding, "id", out var id)
+                || !VisualEvidenceIdentifierPattern.IsMatch(id))
+            {
+                errors.Add("parameters.datum_bindings.id must be a stable identifier");
+            }
+            else if (!ids.Add(id))
+            {
+                errors.Add("parameters.datum_bindings ids must be unique");
+            }
+
+            foreach (var name in new[] { "entity_handle", "run_id", "region_id", "dimension_id" })
+            {
+                if (!TryGetString(binding, name, out var value)
+                    || !VisualEvidenceIdentifierPattern.IsMatch(value))
+                {
+                    errors.Add($"parameters.datum_bindings.{name} is invalid");
+                }
+            }
+
+            foreach (var name in new[] { "visual_run_manifest_sha256", "dimension_register_sha256" })
+            {
+                if (!TryGetString(binding, name, out var value)
+                    || !LowercaseSha256Pattern.IsMatch(value))
+                {
+                    errors.Add($"parameters.datum_bindings.{name} must be a lowercase SHA-256");
+                }
+            }
+
+            if (!TryGetString(binding, "approval", out var approval)
+                || !string.Equals(approval, "DIMENSION_REGISTER_CONFIRMED", StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.approval is not approved");
+            }
+
+            if (TryGetString(request.Parameters!, "run_id", out var requestRunId)
+                && TryGetString(binding, "run_id", out var bindingRunId)
+                && !string.Equals(requestRunId, bindingRunId, StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.run_id does not match the request");
+            }
+            if (TryGetString(request.Parameters!, "region_id", out var requestRegionId)
+                && TryGetString(binding, "region_id", out var bindingRegionId)
+                && !string.Equals(requestRegionId, bindingRegionId, StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.region_id does not match the request");
+            }
+            if (TryGetString(request.Parameters!, "visual_run_manifest_sha256", out var requestManifestSha256)
+                && TryGetString(binding, "visual_run_manifest_sha256", out var bindingManifestSha256)
+                && !string.Equals(requestManifestSha256, bindingManifestSha256, StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.visual_run_manifest_sha256 does not match the request");
+            }
+        }
+
+        return ids;
+    }
+
+    private static void ValidateVisualEvidenceRegion(
+        JsonElement region,
+        ICollection<string> errors)
+    {
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "model_bbox_mm",
+            "pixel_size",
+            "background",
+            "include_layers",
+            "exclude_layers"
+        };
+        ValidateClosedObject(region, required, "parameters.region", errors);
+        if (!TryGetArray(region, "model_bbox_mm", out var bbox) || bbox.GetArrayLength() != 4
+            || bbox.EnumerateArray().Any(value => value.ValueKind is not (JsonValueKind.Number)))
+        {
+            errors.Add("parameters.region.model_bbox_mm must contain four numbers");
+        }
+        if (!TryGetArray(region, "pixel_size", out var pixelSize) || pixelSize.GetArrayLength() != 2
+            || pixelSize.EnumerateArray().Any(value => value.ValueKind != JsonValueKind.Number
+                || !value.TryGetInt32(out var size) || size is < 1 or > 8192))
+        {
+            errors.Add("parameters.region.pixel_size must contain two positive integers");
+        }
+        if (!TryGetString(region, "background", out var background)
+            || background is not ("WHITE" or "BLACK"))
+        {
+            errors.Add("parameters.region.background is unsupported");
+        }
+        foreach (var field in new[] { "include_layers", "exclude_layers" })
+        {
+            if (!TryGetArray(region, field, out var layers)
+                || layers.EnumerateArray().Any(value => value.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(value.GetString())))
+            {
+                errors.Add($"parameters.region.{field} must contain layer names");
+            }
+            else
+            {
+                var values = layers.EnumerateArray().Select(value => value.GetString()!).ToArray();
+                if (values.Length != values.Distinct(StringComparer.Ordinal).Count())
+                {
+                    errors.Add($"parameters.region.{field} must contain unique layer names");
+                }
+            }
+        }
+    }
+
+    private static void ValidateVisualEvidenceMeasurements(
+        JsonElement measurements,
+        IReadOnlySet<string> datumBindingIds,
+        ICollection<string> errors)
+    {
+        if (measurements.GetArrayLength() > 10000)
+        {
+            errors.Add("parameters.measurements must contain at most 10000 items");
+        }
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var measurement in measurements.EnumerateArray())
+        {
+            if (measurement.ValueKind != JsonValueKind.Object)
+            {
+                errors.Add("parameters.measurements entries must be objects");
+                continue;
+            }
+            var required = new HashSet<string>(StringComparer.Ordinal) { "id", "kind", "reference" };
+            ValidateClosedObject(measurement, required, "parameters.measurements entry", errors, "to_reference");
+            if (!TryGetString(measurement, "id", out var id)
+                || !VisualEvidenceIdentifierPattern.IsMatch(id))
+            {
+                errors.Add("parameters.measurements.id must be a stable identifier");
+            }
+            else if (!ids.Add(id))
+            {
+                errors.Add("parameters.measurements ids must be unique");
+            }
+            if (!TryGetString(measurement, "kind", out var kind)
+                || kind is not ("DISTANCE" or "ANGLE" or "RADIUS" or "DIAMETER" or "BOUNDING_BOX"))
+            {
+                errors.Add("parameters.measurements.kind is unsupported");
+            }
+            if (!TryGetProperty(measurement, "reference", out var reference))
+            {
+                errors.Add("parameters.measurements.reference is required");
+            }
+            else
+            {
+                ValidateVisualEvidenceReference(reference, datumBindingIds, errors);
+            }
+            if (TryGetProperty(measurement, "to_reference", out var toReference))
+            {
+                ValidateVisualEvidenceReference(toReference, datumBindingIds, errors);
+            }
+        }
+    }
+
+    private static void ValidateVisualEvidenceReference(
+        JsonElement reference,
+        IReadOnlySet<string> datumBindingIds,
+        ICollection<string> errors)
+    {
+        if (reference.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("measurement references must be objects");
+            return;
+        }
+        ValidateClosedObject(reference, new HashSet<string>(StringComparer.Ordinal) { "type", "id" }, "measurement reference", errors);
+        if (!TryGetString(reference, "type", out var type) || type is not ("ENTITY" or "DATUM"))
+        {
+            errors.Add("measurement reference type is unsupported");
+        }
+        else if (type == "DATUM"
+            && (!TryGetString(reference, "id", out var datumId) || !datumBindingIds.Contains(datumId)))
+        {
+            errors.Add("measurement DATUM reference is not provenance-bound");
+        }
+
+        if (!TryGetString(reference, "id", out var id) || !VisualEvidenceIdentifierPattern.IsMatch(id))
+        {
+            errors.Add("measurement reference id must be a stable identifier");
+        }
+    }
+
+    private static void ValidateVisualEvidencePayload(
+        IReadOnlyDictionary<string, JsonElement>? payload,
+        ICollection<string> errors)
+    {
+        if (payload is null)
+        {
+            errors.Add("visual_evidence_export payload must be an object");
+            return;
+        }
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "run_id",
+            "evidence_id",
+            "region_id",
+            "drawing_sha256_before",
+            "drawing_sha256_after",
+            "dbmod_before",
+            "dbmod_after",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "region_config_sha256",
+            "session_state_sha256_before",
+            "session_state_sha256_after",
+            "transient_state_restored",
+            "captured_at_utc",
+            "artifacts"
+        };
+        foreach (var missing in required.Except(payload.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"visual evidence payload is missing '{missing}'");
+        }
+        foreach (var unsupported in payload.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"visual evidence payload contains unsupported field '{unsupported}'");
+        }
+        foreach (var name in new[] { "run_id", "evidence_id", "region_id" })
+        {
+            if (!TryGetString(payload, name, out var value) || !VisualEvidenceIdentifierPattern.IsMatch(value))
+            {
+                errors.Add($"visual evidence payload {name} is invalid");
+            }
+        }
+        foreach (var name in new[]
+        {
+            "drawing_sha256_before", "drawing_sha256_after", "latest_mutation_sha256",
+            "visual_run_manifest_sha256", "region_config_sha256", "session_state_sha256_before",
+            "session_state_sha256_after"
+        })
+        {
+            if (!TryGetString(payload, name, out var value) || !LowercaseSha256Pattern.IsMatch(value))
+            {
+                errors.Add($"visual evidence payload {name} is invalid");
+            }
+        }
+        if (TryGetString(payload, "drawing_sha256_before", out var before)
+            && TryGetString(payload, "drawing_sha256_after", out var after)
+            && !string.Equals(before, after, StringComparison.Ordinal))
+        {
+            errors.Add("visual evidence drawing hashes must be equal");
+        }
+        if (TryGetInt64(payload, "dbmod_before", out var dbmodBefore)
+            && TryGetInt64(payload, "dbmod_after", out var dbmodAfter)
+            && dbmodBefore != dbmodAfter)
+        {
+            errors.Add("visual evidence DBMOD values must be equal");
+        }
+        if (TryGetString(payload, "session_state_sha256_before", out var stateBefore)
+            && TryGetString(payload, "session_state_sha256_after", out var stateAfter)
+            && !string.Equals(stateBefore, stateAfter, StringComparison.Ordinal))
+        {
+            errors.Add("visual evidence session-state hashes must be equal");
+        }
+        if (!TryGetBoolean(payload, "transient_state_restored", out var restored) || !restored)
+        {
+            errors.Add("visual evidence transient state was not restored");
+        }
+        if (!TryGetString(payload, "captured_at_utc", out var capturedAt)
+            || !VisualEvidenceCapturedAtPattern.IsMatch(capturedAt))
+        {
+            errors.Add("visual evidence captured_at_utc must be RFC3339 UTC");
+        }
+        if (!TryGetProperty(payload, "artifacts", out var artifacts)
+            || artifacts.ValueKind != JsonValueKind.Array
+            || artifacts.GetArrayLength() != 3)
+        {
+            errors.Add("visual evidence must contain exactly three artifacts");
+        }
+        else
+        {
+            var kinds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var artifact in artifacts.EnumerateArray())
+            {
+                ValidateVisualEvidenceArtifact(artifact, kinds, errors);
+            }
+        }
+    }
+
+    private static bool TryGetString(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name,
+        out string value)
+    {
+        value = string.Empty;
+        return values.TryGetValue(name, out var element)
+            && element.ValueKind == JsonValueKind.String
+            && (value = element.GetString() ?? string.Empty).Length > 0;
+    }
+
+    private static bool TryGetString(JsonElement value, string name, out string text)
+    {
+        text = string.Empty;
+        return value.ValueKind == JsonValueKind.Object
+            && value.TryGetProperty(name, out var element)
+            && element.ValueKind == JsonValueKind.String
+            && (text = element.GetString() ?? string.Empty).Length > 0;
+    }
+
+    private static bool TryGetProperty(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name,
+        out JsonElement value) => values.TryGetValue(name, out value);
+
+    private static bool TryGetProperty(JsonElement value, string name, out JsonElement property)
+    {
+        property = default;
+        return value.ValueKind == JsonValueKind.Object
+            && value.TryGetProperty(name, out property);
+    }
+
+    private static bool TryGetArray(JsonElement value, string name, out JsonElement array)
+    {
+        array = default;
+        return TryGetProperty(value, name, out array) && array.ValueKind == JsonValueKind.Array;
+    }
+
+    private static bool TryGetInt64(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name,
+        out long number)
+    {
+        number = 0;
+        return values.TryGetValue(name, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt64(out number)
+            && number >= 0;
+    }
+
+    private static bool TryGetInt64(JsonElement value, string name, out long number)
+    {
+        number = 0;
+        return TryGetProperty(value, name, out var property)
+            && property.ValueKind == JsonValueKind.Number
+            && property.TryGetInt64(out number)
+            && number >= 0;
+    }
+
     private static bool TryGetBoolean(
-        IReadOnlyDictionary<string, JsonElement> parameters,
+        IReadOnlyDictionary<string, JsonElement> values,
         string name,
         out bool value)
     {
         value = false;
-        if (!parameters.TryGetValue(name, out var element)
+        if (!values.TryGetValue(name, out var element)
             || (element.ValueKind != JsonValueKind.True && element.ValueKind != JsonValueKind.False))
         {
             return false;
@@ -344,6 +819,93 @@ public static class ContractValidator
 
         value = element.GetBoolean();
         return true;
+    }
+
+    private static void ValidateClosedObject(
+        JsonElement value,
+        IReadOnlySet<string> required,
+        string displayName,
+        ICollection<string> errors,
+        params string[] optional)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{displayName} must be an object");
+            return;
+        }
+        var allowed = new HashSet<string>(required, StringComparer.Ordinal);
+        allowed.UnionWith(optional);
+        var present = value.EnumerateObject().Select(property => property.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var missing in required.Except(present, StringComparer.Ordinal))
+        {
+            errors.Add($"{displayName} is missing '{missing}'");
+        }
+        foreach (var unsupported in present.Except(allowed, StringComparer.Ordinal))
+        {
+            errors.Add($"{displayName} contains unsupported field '{unsupported}'");
+        }
+    }
+
+    private static bool IsSafeRelativePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || path[0] is '/' or '\\'
+            || (path.Length >= 2 && char.IsLetter(path[0]) && path[1] == ':'))
+        {
+            return false;
+        }
+        var parts = path.Replace('\\', '/').Split('/');
+        return parts.All(part => part is not ("" or "." or ".."));
+    }
+
+    private static void ValidateVisualEvidenceArtifact(
+        JsonElement artifact,
+        ISet<string> kinds,
+        ICollection<string> errors)
+    {
+        if (artifact.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("visual evidence artifacts must be objects");
+            return;
+        }
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "artifact_id", "kind", "relative_path", "sha256", "byte_length", "mime_type"
+        };
+        ValidateClosedObject(artifact, required, "visual evidence artifact", errors, "width", "height");
+        if (!TryGetString(artifact, "artifact_id", out var artifactId)
+            || !VisualEvidenceIdentifierPattern.IsMatch(artifactId))
+        {
+            errors.Add("visual evidence artifact_id is invalid");
+        }
+        if (!TryGetString(artifact, "kind", out var kind)
+            || kind is not ("render" or "entity_map" or "measurements"))
+        {
+            errors.Add("visual evidence artifact kind is unsupported");
+        }
+        else if (!kinds.Add(kind))
+        {
+            errors.Add("visual evidence artifact kinds must be unique");
+        }
+        if (TryGetString(artifact, "relative_path", out var relativePath)
+            && !IsSafeRelativePath(relativePath))
+        {
+            errors.Add("visual evidence artifact path is unsafe");
+        }
+        if (!TryGetString(artifact, "sha256", out var hash) || !LowercaseSha256Pattern.IsMatch(hash))
+        {
+            errors.Add("visual evidence artifact hash is invalid");
+        }
+        if (!TryGetInt64(artifact, "byte_length", out var byteLength)
+            || byteLength is < 1 or > 33554432)
+        {
+            errors.Add("visual evidence artifact byte_length is invalid");
+        }
+        if (!TryGetString(artifact, "mime_type", out var mimeType)
+            || mimeType is not ("image/png" or "application/json"))
+        {
+            errors.Add("visual evidence artifact MIME type is unsupported");
+        }
     }
 
     private static void ValidateStringList(

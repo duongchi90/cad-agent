@@ -91,10 +91,10 @@ public sealed class CommandContext
             ?? throw new InvalidOperationException("No active AutoCAD document is available.");
         var editor = document.Editor;
         var mechanicalWarnings = new List<string>();
-        var gateway = new AutoCadDrawingGateway(document, mechanicalWarnings.Add);
         var ipcDirectory = Environment.GetEnvironmentVariable(IpcDirectoryEnvironmentVariable);
         var store = new JsonFileStore(
             string.IsNullOrWhiteSpace(ipcDirectory) ? DefaultIpcDirectory : ipcDirectory);
+        var gateway = new AutoCadDrawingGateway(document, mechanicalWarnings.Add, store.IpcDirectory);
         var closeScheduler = new OneShotIdleCloseScheduler(
             handler => AcadApplication.Idle += handler,
             handler => AcadApplication.Idle -= handler,
@@ -116,11 +116,18 @@ public sealed class CommandContext
     {
         private readonly Document _document;
         private readonly Action<string> _mechanicalWarning;
+        private readonly string _ipcDirectory;
 
-        public AutoCadDrawingGateway(Document document, Action<string> mechanicalWarning)
+        public AutoCadDrawingGateway(
+            Document document,
+            Action<string> mechanicalWarning,
+            string ipcDirectory)
         {
             _document = document ?? throw new ArgumentNullException(nameof(document));
             _mechanicalWarning = mechanicalWarning ?? throw new ArgumentNullException(nameof(mechanicalWarning));
+            _ipcDirectory = string.IsNullOrWhiteSpace(ipcDirectory)
+                ? throw new ArgumentException("The IPC directory is required.", nameof(ipcDirectory))
+                : ipcDirectory;
         }
 
         public string? ActiveDocumentFullPath => _document.Database?.Filename;
@@ -305,6 +312,9 @@ public sealed class CommandContext
                 missingFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray(),
                 substitutedFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         }
+
+        public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
+            AutoCadVisualEvidenceReader.Export(_document, request, _ipcDirectory, DateTimeOffset.UtcNow);
 
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
         {

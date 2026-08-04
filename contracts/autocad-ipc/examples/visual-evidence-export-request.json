@@ -1,0 +1,35 @@
+{
+  "request_id": "REQ-VS-T3-001",
+  "schema_version": "1.0",
+  "operation": "visual_evidence_export",
+  "drawing_full_path": "D:\\project\\vehicle.dwg",
+  "drawing_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "parameters": {
+    "run_id": "RUN-001",
+    "evidence_id": "EV-SIDE-CABIN-001",
+    "region_id": "SIDE-CABIN",
+    "latest_mutation_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "visual_run_manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "artifact_policy_version": "vs-t3-artifacts-1",
+    "artifact_directory": "artifacts/REQ-VS-T3-001",
+    "region": {
+      "model_bbox_mm": [0, 0, 2400, 2200],
+      "pixel_size": [1600, 1200],
+      "background": "WHITE",
+      "include_layers": ["CABIN", "CENTER"],
+      "exclude_layers": ["TEXT", "DIM"]
+    },
+    "measurements": [
+      {
+        "id": "MEASURE-001",
+        "kind": "DISTANCE",
+        "reference": {
+          "type": "ENTITY",
+          "id": "PART:CABIN_OUTER"
+        }
+      }
+    ],
+    "datum_bindings": []
+  },
+  "approval": null
+}

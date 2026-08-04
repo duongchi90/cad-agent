@@ -131,7 +131,8 @@ the existing envelope intact.
       "include_layers": ["CABIN", "CENTER"],
       "exclude_layers": ["TEXT", "DIM"]
     },
-    "measurements": []
+    "measurements": [],
+    "datum_bindings": []
   },
   "approval": null
 }
@@ -151,7 +152,18 @@ Required request rules:
   IPC artifact root; it may not be absolute, contain `..`, or resolve through
   a symlink or reparse point.
 - Measurement requests contain stable IDs and approved entity or datum
-  references; they do not create native dimension entities.
+  references; they do not create native dimension entities. A `DATUM`
+  reference is valid only when its ID appears in `datum_bindings`. The trusted
+  Python orchestrator does not accept `datum_bindings`, approval strings,
+  register hashes, or entity handles from the caller. When a `DATUM` is
+  requested, it requires a `dimension_register_path`, snapshots the exact
+  register bytes, validates the Dimension Register contract, and derives each
+  closed binding from a `CONFIRMED` register dimension whose `DATUM` reference
+  carries the entity handle mapping. The register `run_id`, source hash, and
+  page ID must match the manifest scope. The register bytes are rechecked
+  before dispatch and before/after artifact handoff; any change fails closed.
+  The managed reader resolves the derived entity handle for read-only
+  measurement only; it does not create or modify the datum.
 - Missing or invalid `latest_mutation_sha256` or
   `visual_run_manifest_sha256` is a hard failure.
 
@@ -169,7 +181,10 @@ The managed operation must perform the following sequence:
 5. Read entities with read-only database access in deterministic order.
 6. Resolve and collect only the requested measurements.
 7. Render the fixed Model Space region with the requested pixel size and
-   controlled layer set.
+   controlled layer set. Include/exclude rules and Off/Frozen layer state are
+   applied uniformly to top-level entities and nested block children; a
+   missing layer state fails closed. Nested entity-map records carry their
+   effective layer.
 8. Restore and verify the transient AutoCAD session state.
 9. Capture `DBMOD` and the source drawing SHA-256 after the operation.
 10. Return success only when every read-only invariant is proven.
@@ -183,6 +198,15 @@ The operation must not:
 - create dimension, block, or other CAD entities;
 - return mutation handles or a mutation operation plan;
 - accept a managed-side claim that a mutation is manifest-authorized.
+
+Block references with a non-conformal transform (non-uniform scale, shear, or
+reflection/negative orientation) are rejected before projection. VS-T3 does
+not preserve circles, arcs, or polyline bulges by applying an invalid
+radius/bulge approximation; flattening to an approved ellipse/point
+representation is outside this exporter. Layer include/exclude and
+Off/Frozen policy uses the AutoCAD effective layer at every nesting level;
+layer `0` inherits its insertion layer and a missing layer snapshot is an
+explicit failure.
 
 The result uses `changed=false` as a required assertion, not as an inferred
 default. Any inability to prove the invariant produces a failed result that
@@ -217,6 +241,14 @@ equality fails the operation and triggers temporary-artifact cleanup.
 The session-state hashes are a session safety proof. They are separate from
 the drawing hash and are not a mutation authority or a substitute for
 `latest_mutation_sha256`.
+
+Restoration must not blindly switch away from an already-correct floating
+viewport. The reader first compares the current `CTAB`/`TILEMODE`/`CVPORT`
+tuple with the snapshot and leaves the space untouched when it already
+matches. If a floating viewport or paper space must be restored, the target
+`CVPORT` is set and any AutoCAD error is propagated as an export failure; it
+must not be swallowed merely because `CVPORT` can be read-only in some UI
+states.
 
 ## 6. Artifact transport over File IPC
 

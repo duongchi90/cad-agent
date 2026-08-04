@@ -82,8 +82,16 @@
             "required": ["type", "id"],
             "properties": {
               "type": {"type": "string", "enum": ["DATUM", "ENTITY", "FEATURE", "DIMENSION"]},
-              "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
-            }
+              "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+              "entity_handle": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+            },
+            "allOf": [
+              {
+                "if": {"properties": {"type": {"const": "DATUM"}}, "required": ["type"]},
+                "then": {},
+                "else": {"not": {"required": ["entity_handle"]}}
+              }
+            ]
           },
           "to_ref": {
             "type": "object",
@@ -91,8 +99,16 @@
             "required": ["type", "id"],
             "properties": {
               "type": {"type": "string", "enum": ["DATUM", "ENTITY", "FEATURE", "DIMENSION"]},
-              "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
-            }
+              "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+              "entity_handle": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+            },
+            "allOf": [
+              {
+                "if": {"properties": {"type": {"const": "DATUM"}}, "required": ["type"]},
+                "then": {},
+                "else": {"not": {"required": ["entity_handle"]}}
+              }
+            ]
           },
           "source_evidence": {
             "type": "object",

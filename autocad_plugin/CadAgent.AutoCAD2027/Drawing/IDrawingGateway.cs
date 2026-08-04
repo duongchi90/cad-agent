@@ -10,4 +10,6 @@ public interface IDrawingGateway
     IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles);
 
     DrawingSetupSnapshot ReadDrawingSetup();
+
+    VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request);
 }

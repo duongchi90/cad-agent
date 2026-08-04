@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
+using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.DrawingSetup;
 using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
@@ -43,6 +44,7 @@ public sealed class OperationDispatcher
                 "close_disposable" => DispatchCloseDisposable(request, startedAt),
                 "mechanical_bom" => DispatchMechanicalBom(request, startedAt),
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
+                "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
             };
         }
@@ -218,6 +220,34 @@ public sealed class OperationDispatcher
             warnings: Array.Empty<string>(),
             errors: Array.Empty<string>(),
             payload: DrawingSetupPayload.Create(snapshot),
+            startedAt);
+    }
+
+    private IpcResult DispatchVisualEvidenceExport(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var evidenceRequest = VisualEvidenceRequest.FromIpc(request);
+        var snapshot = _context.DrawingGateway.ReadVisualEvidence(evidenceRequest);
+        var boundaryErrors = VisualEvidenceReadOnlyBoundary.Validate(evidenceRequest, snapshot);
+        if (boundaryErrors.Count != 0)
+        {
+            return Failure(request, boundaryErrors, startedAt);
+        }
+
+        return CreateResult(
+            request.RequestId!,
+            "visual_evidence_export",
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: Array.Empty<string>(),
+            warnings: Array.Empty<string>(),
+            errors: Array.Empty<string>(),
+            payload: VisualEvidencePayload.Create(snapshot),
             startedAt);
     }
 

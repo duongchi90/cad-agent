@@ -24,8 +24,16 @@
       "role": "DRIVING",
       "status": "CONFIRMED",
       "critical": true,
-      "from_ref": {"type": "DATUM", "id": "FRONT_AXLE_CENTER"},
-      "to_ref": {"type": "DATUM", "id": "REAR_AXLE_CENTER"},
+      "from_ref": {
+        "type": "DATUM",
+        "id": "FRONT_AXLE_CENTER",
+        "entity_handle": "A1"
+      },
+      "to_ref": {
+        "type": "DATUM",
+        "id": "REAR_AXLE_CENTER",
+        "entity_handle": "B2"
+      },
       "source_evidence": {
         "crop_id": "DIMCLUSTER-001",
         "bbox": [100, 200, 600, 260],

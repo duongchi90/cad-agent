@@ -299,6 +299,130 @@ public sealed class ContractTests
                 && error.Contains("read-only", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void VisualEvidenceExamplesRoundTripThroughTheClosedEnvelope()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/visual-evidence-export-request.json")));
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/visual-evidence-export-result.json")));
+
+        Assert.True(ContractValidator.ValidateRequest(request).IsValid);
+        Assert.True(ContractValidator.ValidateResult(result).IsValid);
+        Assert.Equal("visual_evidence_export", request.Operation);
+        Assert.Null(request.Approval);
+        Assert.Equal("EV-SIDE-CABIN-001", request.Parameters!["evidence_id"].GetString());
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Equal(
+            "2026-08-04T00:00:02Z",
+            result.Payload!["captured_at_utc"].GetString());
+    }
+
+    [Fact]
+    public void RejectsVisualEvidenceFieldsOutsideTheExistingRequestEnvelope()
+    {
+        var json = ContractJson.Serialize(ValidRequest("visual_evidence_export"));
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement.EnumerateObject()
+            .Where(property => property.Name != "parameters")
+            .ToDictionary(property => property.Name, property => property.Value);
+        root["latest_mutation_sha256"] = JsonSerializer.SerializeToElement(new string('a', 64));
+
+        var invalidJson = JsonSerializer.Serialize(root);
+
+        Assert.Throws<JsonException>(() => ContractJson.DeserializeRequest(invalidJson));
+    }
+
+    [Fact]
+    public void RejectsVisualEvidenceWithMissingParameters()
+    {
+        var request = ValidRequest("visual_evidence_export") with
+        {
+            DrawingSha256 = new string('c', 64),
+            Parameters = new Dictionary<string, JsonElement>
+            {
+                ["run_id"] = JsonSerializer.SerializeToElement("RUN-001")
+            }
+        };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("evidence_id", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsMutatingVisualEvidenceResult()
+    {
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/visual-evidence-export-result.json"))) with
+        {
+            Changed = true,
+            EntityHandles = new List<string> { "2F" }
+        };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("visual_evidence_export", StringComparison.Ordinal)
+                && error.Contains("read-only", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AllowsVisualEvidenceFailureWithoutInventingAnAcceptedPayload()
+    {
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/visual-evidence-export-result.json"))) with
+        {
+            Success = false,
+            Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+            Errors = new List<string> { "active document mismatch" }
+        };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.True(validation.IsValid);
+    }
+
+    [Fact]
+    public void AcceptsOnlyProvenanceBoundDatumMeasurementReferences()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/visual-evidence-export-request.json")));
+        var parameters = request.Parameters!.ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters["measurements"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                id = "MEASURE-AXLE",
+                kind = "DISTANCE",
+                reference = new { type = "DATUM", id = "FRONT_AXLE_CENTER" },
+                to_reference = new { type = "ENTITY", id = "PART:CABIN_OUTER" }
+            }
+        });
+        parameters["datum_bindings"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                id = "FRONT_AXLE_CENTER",
+                entity_handle = "A1",
+                run_id = "RUN-001",
+                region_id = "SIDE-CABIN",
+                visual_run_manifest_sha256 = new string('b', 64),
+                dimension_register_sha256 = new string('d', 64),
+                dimension_id = "DIM-SIDE-001",
+                approval = "DIMENSION_REGISTER_CONFIRMED"
+            }
+        });
+
+        var validation = ContractValidator.ValidateRequest(request with { Parameters = parameters });
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+    }
+
     private static string RepositoryFile(string relativePath)
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);

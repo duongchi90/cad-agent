@@ -105,7 +105,14 @@ client, Codex bridge, publisher, or mutation-state store.
 - [ ] Define a closed request-parameters schema containing `run_id`,
       `evidence_id`, `region_id`, `latest_mutation_sha256`,
       `visual_run_manifest_sha256`, `artifact_policy_version`,
-      `artifact_directory`, `region`, and `measurements`.
+      `artifact_directory`, `region`, `measurements`, and `datum_bindings`.
+      The public Python adapter must not accept caller-supplied bindings. For
+      `DATUM` references it must require a validated, exact-byte-snapshotted
+      Dimension Register, verify register run/source/page scope, and derive
+      bindings only from confirmed register references carrying entity-handle
+      mappings. It must recheck register bytes before dispatch and before/after
+      artifact handoff; the wire binding remains closed and carries
+      `DIMENSION_REGISTER_CONFIRMED` as derived provenance.
 - [ ] Define a separate closed result-payload schema containing before/after
       drawing hashes, before/after DBMOD, session-state hashes,
       `transient_state_restored`, `captured_at_utc`, artifact descriptors, and
@@ -178,6 +185,13 @@ session restoration are explicit and testable.
       ordering of included layers, entity records, and measurements.
 - [ ] Implement fixed Model Space bounding-box rendering with explicit pixel
       size, background, and include/exclude layers.
+- [ ] Apply include/exclude and layer Off/Frozen policy uniformly to
+      top-level entities and nested block children; reject missing layer
+      state and include the effective child layer in nested entity records.
+- [ ] Reject non-conformal block transforms before projection so circles,
+      arcs, and polyline bulges are never represented with invalid radius or
+      bulge approximations. Add uniform, non-uniform, shear, and nested-basis
+      regression coverage.
 - [ ] Implement deterministic entity-map projection containing stable IDs,
       type/layer, bounding box, geometry metadata, and handle only as
       read-only identity metadata.
@@ -206,6 +220,11 @@ session restoration are explicit and testable.
 - [ ] Add dispatcher mapping for exactly `visual_evidence_export`.
 - [ ] Ensure render failures, unresolved references, DBMOD changes, source hash
       changes, and session-state restore failures produce no accepted evidence.
+- [ ] Restore floating viewport state deterministically: compare the current
+      `CTAB`/`TILEMODE`/`CVPORT` tuple first, avoid changing an already-correct
+      viewport, and propagate any target-`CVPORT` restore error instead of
+      swallowing it. Add fault-injection coverage for selection, view, and
+      floating-viewport restoration after an exception.
 - [ ] Run focused managed tests, then Release build and test commands.
 - [ ] Commit as `feat: implement deterministic VS-T3 evidence projection`.
 

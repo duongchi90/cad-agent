@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/visual-evidence-export-result.schema.json",
+  "title": "CadAgent VS-T3 visual evidence export result payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "evidence_id",
+    "region_id",
+    "drawing_sha256_before",
+    "drawing_sha256_after",
+    "dbmod_before",
+    "dbmod_after",
+    "latest_mutation_sha256",
+    "visual_run_manifest_sha256",
+    "region_config_sha256",
+    "session_state_sha256_before",
+    "session_state_sha256_after",
+    "transient_state_restored",
+    "captured_at_utc",
+    "artifacts"
+  ],
+  "properties": {
+    "run_id": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/identifier"
+    },
+    "evidence_id": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/identifier"
+    },
+    "region_id": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/identifier"
+    },
+    "drawing_sha256_before": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+    },
+    "drawing_sha256_after": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+    },
+    "dbmod_before": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "dbmod_after": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "latest_mutation_sha256": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+    },
+    "visual_run_manifest_sha256": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+    },
+    "region_config_sha256": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+    },
+    "session_state_sha256_before": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+    },
+    "session_state_sha256_after": {
+      "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+    },
+    "transient_state_restored": {
+      "const": true
+    },
+    "captured_at_utc": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "kind",
+        "relative_path",
+        "sha256",
+        "byte_length",
+        "mime_type"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "visual-evidence-export.schema.json#/$defs/identifier"
+        },
+        "kind": {
+          "enum": ["render", "entity_map", "measurements"]
+        },
+        "relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?!/)(?!\\\\)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+        },
+        "sha256": {
+          "$ref": "visual-evidence-export.schema.json#/$defs/lowercaseSha256"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 33554432
+        },
+        "mime_type": {
+          "enum": ["image/png", "application/json"]
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        }
+      }
+    }
+  }
+}

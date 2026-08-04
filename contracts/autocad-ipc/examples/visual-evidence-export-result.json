@@ -1,0 +1,56 @@
+{
+  "request_id": "REQ-VS-T3-001",
+  "success": true,
+  "operation": "visual_evidence_export",
+  "drawing_full_path": "D:\\project\\vehicle.dwg",
+  "changed": false,
+  "entity_handles": [],
+  "warnings": [],
+  "errors": [],
+  "started_at": "2026-08-04T00:00:00Z",
+  "completed_at": "2026-08-04T00:00:02Z",
+  "payload": {
+    "run_id": "RUN-001",
+    "evidence_id": "EV-SIDE-CABIN-001",
+    "region_id": "SIDE-CABIN",
+    "drawing_sha256_before": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "drawing_sha256_after": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "dbmod_before": 0,
+    "dbmod_after": 0,
+    "latest_mutation_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "visual_run_manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "region_config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "session_state_sha256_before": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "session_state_sha256_after": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "transient_state_restored": true,
+    "captured_at_utc": "2026-08-04T00:00:02Z",
+    "artifacts": [
+      {
+        "artifact_id": "cad-render",
+        "kind": "render",
+        "relative_path": "artifacts/REQ-VS-T3-001/cad-render.png",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "byte_length": 123456,
+        "mime_type": "image/png",
+        "width": 1600,
+        "height": 1200
+      },
+      {
+        "artifact_id": "entity-map",
+        "kind": "entity_map",
+        "relative_path": "artifacts/REQ-VS-T3-001/entities.json",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 42,
+        "mime_type": "application/json"
+      },
+      {
+        "artifact_id": "measurements",
+        "kind": "measurements",
+        "relative_path": "artifacts/REQ-VS-T3-001/measurements.json",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "byte_length": 42,
+        "mime_type": "application/json"
+      }
+    ]
+  }
+}
