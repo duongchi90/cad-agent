@@ -464,7 +464,14 @@ internal static class AutoCadVisualEvidenceReader
             name => name,
             name => Convert.ToString(AcadApplication.GetSystemVariable(name), CultureInfo.InvariantCulture) ?? string.Empty,
             StringComparer.Ordinal);
-        var selectionHandles = Array.Empty<string>();
+        var selectionHandles = new List<string>();
+        var impliedSelection = document.Editor.SelectImplied();
+        if (impliedSelection.Status == PromptStatus.OK && impliedSelection.Value is not null)
+        {
+            selectionHandles.AddRange(
+                impliedSelection.Value.GetObjectIds()
+                    .Select(objectId => objectId.Handle.ToString().ToUpperInvariant()));
+        }
         var currentLayer = Convert.ToString(
             AcadApplication.GetSystemVariable("CLAYER"),
             CultureInfo.InvariantCulture) ?? string.Empty;
