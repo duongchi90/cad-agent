@@ -15,4 +15,7 @@ public sealed class NullDrawingGateway : IDrawingGateway
 
     public DrawingSetupSnapshot ReadDrawingSetup() =>
         throw new InvalidOperationException("No active drawing is available for setup audit.");
+
+    public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
+        throw new InvalidOperationException("No active drawing is available for visual evidence export.");
 }

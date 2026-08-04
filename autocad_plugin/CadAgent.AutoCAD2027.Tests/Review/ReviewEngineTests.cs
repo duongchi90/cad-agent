@@ -203,5 +203,8 @@ public sealed class ReviewEngineTests
 
         public DrawingSetupSnapshot ReadDrawingSetup() =>
             throw new NotSupportedException();
+
+        public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
+            throw new NotSupportedException();
     }
 }

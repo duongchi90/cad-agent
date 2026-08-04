@@ -475,6 +475,9 @@ public sealed class OperationDispatcherTests
             return DrawingSetup
                 ?? throw new InvalidOperationException("No drawing setup fixture was configured.");
         }
+
+        public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeMechanicalAdapter : IMechanicalAdapter

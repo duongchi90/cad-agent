@@ -306,6 +306,9 @@ public sealed class CommandContext
                 substitutedFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         }
 
+        public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
+            throw new NotSupportedException("VS-T3 visual evidence export is not implemented yet.");
+
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
         {
             var snapshots = new List<MechanicalComponentSnapshot>();
