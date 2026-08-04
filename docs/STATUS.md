@@ -26,15 +26,15 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 ## Visual Supervisor VS-T0 contract-only slice (2026-08-04)
 
 - State: **Partially verified; contract-only slice complete**.
-- Implementation head SHA: `a0a1df2b67486ce4a2f6b318758023901e985528`.
+- Implementation head SHA: `0a8c9830ee33967a11b774584383caea9d1fde33`.
 - Scope is limited to pure-Python validators, closed JSON schemas, fixtures,
   and policy helpers for run manifests, dimensions, geometry comparison,
   independent visual review, repair plans, region verification, and
   run-scoped authorization.
 - Contract inventory: 7 validators, 7 schemas, and 7 synthetic examples.
-- Focused VS-T0 suite: **49 passed**. Authoritative `scripts/verify.ps1`
+- Focused VS-T0 suite: **55 passed**. Authoritative `scripts/verify.ps1`
   passed on the implementation head; .NET was 76/76, dotnet IPC was
-  38/0/0/0, and offline JUnit was 640/0/0/0.
+  38/0/0/0, and offline JUnit was 646/0/0/0.
 - `real_data: NOT RUN`; `autocad_mechanical: NOT RUN`; `OpenAI API: NOT RUN`.
 - No visual model review, image processing/comparator runtime, AutoCAD
   evidence operation, repair loop, Codex bridge runtime, or publication
