@@ -57,6 +57,13 @@ def test_homography_requires_photograph_flag() -> None:
     assert result.status == "FAILED"
 
 
+def test_homography_requires_boolean_photograph_flag() -> None:
+    result = estimate_photograph_alignment(
+        four_perspective_anchors(), source_is_photograph=1  # type: ignore[arg-type]
+    )
+    assert result.status == "FAILED"
+
+
 def test_homography_accepts_exactly_four_noncollinear_anchors() -> None:
     result = estimate_photograph_alignment(
         four_perspective_anchors(), source_is_photograph=True

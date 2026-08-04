@@ -226,7 +226,7 @@ def estimate_photograph_alignment(
     if failure is not None:
         return failure
     assert items is not None
-    if not source_is_photograph:
+    if source_is_photograph is not True:
         return _failed(
             "FAILED_PHOTOGRAPH_HOMOGRAPHY",
             tuple(item.anchor_id for item in items),
