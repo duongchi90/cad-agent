@@ -17,6 +17,13 @@ _ALLOWED_AUTHORITIES = {
     "STABLE_ENTITY",
     "VISUAL_FEATURE",
 }
+_AUTHORITY_TIERS = {
+    "DATUM": 4,
+    "DRIVING_DIMENSION": 3,
+    "STABLE_ENTITY": 2,
+    "VISUAL_FEATURE": 1,
+}
+_MIN_VISUAL_FEATURE_CONFIDENCE = 0.8
 
 
 @dataclass(frozen=True)
@@ -100,7 +107,21 @@ def _validated_anchors(
             return None, _failed(method, anchor_ids, "duplicate reference points are not allowed")
         if len(np.unique(cad_points, axis=0)) != len(validated):
             return None, _failed(method, anchor_ids, "duplicate CAD points are not allowed")
-    return validated, None
+    eligible = [
+        item
+        for item in validated
+        if item.authority != "VISUAL_FEATURE"
+        or item.confidence >= _MIN_VISUAL_FEATURE_CONFIDENCE
+    ]
+    if not eligible:
+        return None, _failed(
+            method,
+            anchor_ids,
+            "no anchors meet the approved authority and confidence policy",
+        )
+    highest_tier = max(_AUTHORITY_TIERS[item.authority] for item in eligible)
+    selected = [item for item in eligible if _AUTHORITY_TIERS[item.authority] == highest_tier]
+    return selected, None
 
 
 def _rank(points: np.ndarray) -> int:

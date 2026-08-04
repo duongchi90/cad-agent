@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from primitive_ir_lib.geometry_alignment import (
+    AnchorPair,
     estimate_photograph_alignment,
     estimate_similarity_alignment,
     warp_to_reference,
@@ -47,6 +48,57 @@ def test_similarity_fit_refuses_reflection_and_three_point_nonuniform_mapping() 
 def test_similarity_fit_is_deterministic() -> None:
     source = identity_anchor_pairs()
     assert estimate_similarity_alignment(source) == estimate_similarity_alignment(source)
+
+
+def test_similarity_fit_rejects_only_low_confidence_visual_features() -> None:
+    weak_visual = [
+        AnchorPair(
+            anchor_id,
+            item.reference_px,
+            item.cad_px,
+            "VISUAL_FEATURE",
+            0.2,
+        )
+        for anchor_id, item in zip(("V1", "V2", "V3"), identity_anchor_pairs())
+    ]
+
+    result = estimate_similarity_alignment(weak_visual)
+
+    assert result.status == "FAILED"
+    assert "confidence" in " ".join(result.reasons).lower()
+
+
+def test_similarity_fit_uses_highest_authority_tier_only() -> None:
+    datum = identity_anchor_pairs()[:2]
+    lower_authority = [
+        AnchorPair("C", (40.0, 120.0), (340.0, 220.0), "DRIVING_DIMENSION", 1.0),
+        AnchorPair("D", (190.0, 45.0), (490.0, 145.0), "STABLE_ENTITY", 1.0),
+        AnchorPair("V", (115.0, 82.0), (15.0, 282.0), "VISUAL_FEATURE", 0.1),
+    ]
+
+    result = estimate_similarity_alignment([*datum, *lower_authority])
+
+    assert result.status == "ALIGNED"
+    assert result.anchor_ids == ("A", "B")
+    assert result.residual_rms_px == pytest.approx(0.0, abs=1e-6)
+
+
+def test_similarity_fit_accepts_high_confidence_visual_features_when_unopposed() -> None:
+    visual = [
+        AnchorPair(
+            item.anchor_id,
+            item.reference_px,
+            item.cad_px,
+            "VISUAL_FEATURE",
+            0.95,
+        )
+        for item in identity_anchor_pairs()
+    ]
+
+    result = estimate_similarity_alignment(visual)
+
+    assert result.status == "ALIGNED"
+    assert result.anchor_ids == ("A", "B", "C")
 
 
 def test_homography_requires_photograph_flag() -> None:
