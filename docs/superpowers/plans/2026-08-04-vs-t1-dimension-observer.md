@@ -6,44 +6,44 @@
 
 **Planning base SHA:** `2932febe5e95b042b202a767604d2143e6a6cc4f`
 
-**Implementation base:** Create `task/vs-t1-dimension-observer` from the fresh integrated `main` at the start of execution. Record the actual SHA in the PR body before changing code.
+**Implementation base:** Create `task/vs-t1-dimension-observer` from fresh integrated `main` and record that exact SHA before changing code.
 
-**Goal:** Build an offline, deterministic Dimension Observer that detects every source dimension cluster, parses values and symbols, records attachment evidence and role/status, and emits a validated `dimension_register` without inventing values or authoritative attachments.
+**Goal:** Build an offline Dimension Observer that accounts for every detected source dimension cluster, parses values and symbols, records attachment evidence, and emits a validated `dimension_register` without inventing values or authoritative attachments.
 
-**Architecture:** Keep recognition algorithms in `primitive_ir_lib`; `cad_agent` only coordinates files, hashes, contract validation, and artifact writing. Reuse `detect_text_candidate_rois()`, `extract_text_tesseract()`, `RawText`, OpenCV, NumPy, Tesseract, `canonical_json_sha256()`, `sha256_file()`, and the integrated VS-T0 `dimension_register` validator. No OpenAI API or AutoCAD call is made in VS-T1.
+**Architecture:** Recognition stays in `primitive_ir_lib`; `cad_agent` only snapshots files, hashes artifacts, validates contracts, and writes outputs. Reuse `detect_text_candidate_rois()`, `extract_text_tesseract()`, `RawText`, OpenCV, NumPy, Tesseract, `canonical_json_sha256()`, `sha256_file()`, and the integrated VS-T0 validator. No OpenAI API or AutoCAD call is allowed in VS-T1.
 
-**Tech Stack:** Windows, Python 3.11, OpenCV 5, NumPy 2, Tesseract 5.4.0.20240606, pytest, existing Visual Supervisor contracts.
+**Tech Stack:** Windows, Python 3.11, OpenCV 5, NumPy 2, Tesseract 5.4.0.20240606, pytest.
 
 ## Global Constraints
 
-- Do not add a second image/PDF pipeline or duplicate Primitive IR orchestration.
+- Do not create another image/PDF pipeline.
 - Do not infer Model Space coordinates or authoritative scale from pixels.
-- A numeric OCR result without valid attachment remains `UNRESOLVED`.
+- A readable number without valid attachments remains `UNRESOLVED`.
+- Only explicit profile metadata may assign role `DRIVING`.
 - Only `CONFIRMED` plus `DRIVING` with valid `from_ref` and `to_ref` may later control geometry.
-- `REFERENCE` and `DERIVED` are observation/checking roles only.
-- Critical `AMBIGUOUS`, `CONFLICT`, or `UNRESOLVED` observations list their affected `blocker_scope`.
-- Every detected cluster gets exactly one disposition: `CONFIRMED`, `UNRESOLVED`, `CONFLICT`, or explicit `NOT_A_DIMENSION` in observer evidence.
-- `NOT_A_DIMENSION` evidence is audit-only and is not inserted into `dimension_register.dimensions`.
-- Do not fabricate unreadable numbers: use `value: null` and preserve the original display text.
-- Source images, crops, OCR outputs, customer data, and run directories remain outside Git.
-- Synthetic tests generate images in memory or under pytest temporary directories.
-- Every code task begins with a failing focused test and ends with focused tests, `git diff --check`, diff inspection, and a bounded commit.
-- `real_data`, OpenAI API, and AutoCAD Mechanical remain `NOT RUN` for this slice.
+- Critical unresolved or conflicting observations declare `blocker_scope`.
+- Every detected cluster receives exactly one observer disposition: `CONFIRMED`, `UNRESOLVED`, `CONFLICT`, or `NOT_A_DIMENSION`.
+- `NOT_A_DIMENSION` remains in observer evidence but is excluded from `dimension_register.dimensions`.
+- Unreadable numeric content uses `value: null`; never substitute a guessed value.
+- Source images, crops, OCR outputs, customer data, and run directories stay outside Git.
+- Synthetic tests create images in memory or temporary directories.
+- Every task begins with a failing focused test and ends with focused tests, `git diff --check`, diff inspection, and a bounded commit.
+- `real_data`, OpenAI API, and AutoCAD Mechanical remain `NOT RUN`.
 
 ---
 
 ## File Structure
 
-### New recognition files
+### Recognition
 
-- `primitive_ir_lib/dimension_symbols.py` — parse numbers, decimal separators, diameter/radius/angular/repetition symbols, tolerances, and unit hints.
-- `primitive_ir_lib/dimension_geometry.py` — detect dimension-line, extension-line, arrowhead, and leader candidates inside one crop.
-- `primitive_ir_lib/dimension_observer.py` — cluster records, OCR candidate fusion, attachment scoring, role/status classification, and coverage accounting.
+- `primitive_ir_lib/dimension_symbols.py` — numeric, symbol, repetition, unit, and tolerance parsing.
+- `primitive_ir_lib/dimension_geometry.py` — dimension line, extension line, arrowhead, and leader evidence.
+- `primitive_ir_lib/dimension_observer.py` — stable clusters, OCR fusion, attachment scoring, disposition, role/status, and coverage.
 
-### New orchestration files
+### Orchestration
 
-- `cad_agent/dimension_observer_run.py` — hash-bound file runner, crop/evidence writer, Dimension Register assembly, atomic JSON output, and contract validation.
-- `cad_agent/run_dimension_observer.py` — CLI wrapper; no recognition logic.
+- `cad_agent/dimension_observer_run.py` — immutable source snapshot, evidence/crop writer, register assembly, atomic output.
+- `cad_agent/run_dimension_observer.py` — CLI only.
 
 ### Tests
 
@@ -53,9 +53,9 @@
 - `tests/test_dimension_observer_run.py`
 - `tests/test_dimension_register_runtime_policy.py`
 
-### Contract amendment
+## Contract Amendment
 
-VS-T1 needs evidence fields approved in the design but absent from the initial runtime schema. Extend the existing `dimension-register-1.0` observation object with these **optional** fields without changing existing field meanings:
+Extend the existing `dimension-register-1.0` observation with optional evidence fields. Existing VS-T0 payloads remain valid; meanings of existing fields do not change.
 
 ```json
 {
@@ -85,12 +85,12 @@ VS-T1 needs evidence fields approved in the design but absent from the initial r
   "provenance": {
     "observer_version": "dimension-observer-1.0",
     "ocr_engine": "tesseract-5.4.0.20240606",
-    "observation_sha256": "<64 lowercase hex>"
+    "observation_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
   }
 }
 ```
 
-All newly introduced object boundaries remain closed. Existing VS-T0 examples remain valid.
+Every new object is closed with `additionalProperties: false`. Validate finite coordinates, exact 64-character lowercase hashes, confidence in `[0, 1]`, and tolerance modes `NONE`, `SYMMETRIC`, `LIMITS`, `PLUS_MINUS`.
 
 ## Stable Interfaces
 
@@ -113,7 +113,7 @@ class ParsedDimensionText:
 
 
 def parse_dimension_text(text: str, *, default_unit: str = "mm") -> ParsedDimensionText:
-    """Parse one OCR/Vision text candidate without inventing unreadable values."""
+    """Parse one candidate without inventing unreadable values."""
 ```
 
 ```python
@@ -135,13 +135,13 @@ class DimensionGeometryEvidence:
 
 
 def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence:
-    """Detect controlled line/arrow/leader evidence inside one source crop."""
+    """Detect controlled geometry evidence in one crop."""
 ```
 
 ```python
 # primitive_ir_lib/dimension_observer.py
-from dataclasses import dataclass
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 import numpy as np
 
 Bbox = tuple[int, int, int, int]
@@ -151,13 +151,6 @@ class DimensionCluster:
     cluster_id: str
     bbox_px: Bbox
     member_boxes: tuple[Bbox, ...]
-
-@dataclass(frozen=True)
-class AttachmentCandidate:
-    from_ref: Mapping[str, str]
-    to_ref: Mapping[str, str]
-    confidence: float
-    evidence: tuple[str, ...]
 
 @dataclass(frozen=True)
 class DimensionDisposition:
@@ -170,7 +163,7 @@ OcrReader = Callable[[np.ndarray], Sequence[object]]
 
 
 def detect_dimension_clusters(image_bgr: np.ndarray) -> list[DimensionCluster]:
-    """Return stable reading-order clusters; do not run OCR here."""
+    """Return stable reading-order clusters without running OCR."""
 
 
 def observe_dimension_cluster(
@@ -183,7 +176,7 @@ def observe_dimension_cluster(
     ocr_reader: OcrReader,
     semantic_anchors: Sequence[Mapping[str, object]] = (),
 ) -> DimensionDisposition:
-    """Return exactly one disposition for one detected cluster."""
+    """Return exactly one disposition for the supplied cluster."""
 
 
 def build_dimension_register(
@@ -193,14 +186,14 @@ def build_dimension_register(
     page_id: str,
     view_id: str,
     page_coverage_percent: float,
+    detected_cluster_ids: Sequence[str],
     dispositions: Sequence[DimensionDisposition],
 ) -> dict[str, object]:
-    """Assemble a VS-T0-compatible register and count every cluster disposition."""
+    """Reject missing/duplicate dispositions and return a VS-T0 register."""
 ```
 
 ```python
 # cad_agent/dimension_observer_run.py
-from collections.abc import Callable, Sequence
 from pathlib import Path
 
 
@@ -215,12 +208,12 @@ def run_dimension_observer(
     tesseract_cmd: str | None = None,
     semantic_anchors_path: Path | None = None,
 ) -> Path:
-    """Write crops, observer evidence, and validated dimension-register.json atomically."""
+    """Write crops, observer evidence, and dimension-register.json atomically."""
 ```
 
 ---
 
-### Task 1: Extend Dimension Register evidence fields
+### Task 1: Extend the Dimension Register Evidence Surface
 
 **Files:**
 - Modify: `cad_agent/visual_contracts.py`
@@ -230,11 +223,7 @@ def run_dimension_observer(
 - Modify: `tests/test_visual_supervisor_contracts.py`
 - Modify: `tests/test_visual_supervisor_schema_alignment.py`
 
-**Interfaces:**
-- Consumes: `validate_visual_contract(payload, contract="dimension_register")`.
-- Produces: optional evidence fields listed above; no new authority state.
-
-- [ ] **Step 1: Write failing schema/validator tests**
+- [ ] **Step 1: Write failing tests**
 
 ```python
 def test_dimension_register_accepts_closed_observer_evidence_fields() -> None:
@@ -243,7 +232,7 @@ def test_dimension_register_accepts_closed_observer_evidence_fields() -> None:
     assert validate_visual_contract(payload, contract="dimension_register") == payload
 
 
-def test_attachment_candidate_rejects_out_of_range_confidence() -> None:
+def test_attachment_candidate_rejects_invalid_confidence() -> None:
     payload = valid_dimension_register()
     evidence = valid_dimension_observer_evidence()
     evidence["attachment_candidates"][0]["confidence"] = 1.1
@@ -252,7 +241,7 @@ def test_attachment_candidate_rejects_out_of_range_confidence() -> None:
         validate_visual_contract(payload, contract="dimension_register")
 
 
-def test_dimension_observer_evidence_rejects_unknown_property() -> None:
+def test_observer_provenance_is_closed() -> None:
     payload = valid_dimension_register()
     evidence = valid_dimension_observer_evidence()
     evidence["provenance"]["codex_guess"] = True
@@ -261,46 +250,34 @@ def test_dimension_observer_evidence_rejects_unknown_property() -> None:
         validate_visual_contract(payload, contract="dimension_register")
 ```
 
-- [ ] **Step 2: Run and verify RED**
-
-Run:
+- [ ] **Step 2: Verify RED**
 
 ```powershell
 python -m pytest tests/test_visual_supervisor_contracts.py tests/test_visual_supervisor_schema_alignment.py -q -p no:cacheprovider
 ```
 
-Expected: failure because the optional fields are rejected.
+- [ ] **Step 3: Implement matching validator/schema support**
 
-- [ ] **Step 3: Implement minimal closed validation and matching schema**
+Add only the optional evidence fields listed above. Preserve all existing role, status, value, and attachment rules.
 
-Validate finite coordinates, confidence in `[0, 1]`, exact SHA-256, exact tolerance modes `NONE|SYMMETRIC|LIMITS|PLUS_MINUS`, and exact attachment reference shape. Do not require these fields for legacy synthetic examples.
-
-- [ ] **Step 4: Run GREEN and inspect**
+- [ ] **Step 4: Verify GREEN and commit**
 
 ```powershell
 python -m pytest tests/test_visual_supervisor_contracts.py tests/test_visual_supervisor_schema_alignment.py -q -p no:cacheprovider
 git diff --check
-```
-
-- [ ] **Step 5: Commit**
-
-```powershell
 git add cad_agent/visual_contracts.py contracts/visual-supervisor tests/visual_supervisor_fixtures.py tests/test_visual_supervisor_contracts.py tests/test_visual_supervisor_schema_alignment.py
 git commit -m "feat: extend dimension register observation evidence"
 ```
 
 ---
 
-### Task 2: Parse dimension values, symbols, repetition, and tolerances
+### Task 2: Parse Values, Symbols, Repetition, and Tolerances
 
 **Files:**
 - Create: `primitive_ir_lib/dimension_symbols.py`
 - Create: `primitive_ir_lib/tests/test_dimension_symbols.py`
 
-**Interfaces:**
-- Produces: `ParsedDimensionText`, `parse_dimension_text()`.
-
-- [ ] **Step 1: Write failing parser tests**
+- [ ] **Step 1: Write failing tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -313,7 +290,7 @@ git commit -m "feat: extend dimension register observation evidence"
         ("45°", 45.0, "ANGULAR", "°", None),
     ],
 )
-def test_parse_dimension_text_forms(text, value, kind, symbol, repeat_count) -> None:
+def test_parse_dimension_forms(text, value, kind, symbol, repeat_count) -> None:
     parsed = parse_dimension_text(text)
     assert parsed.value == value
     assert parsed.kind_hint == kind
@@ -329,13 +306,13 @@ def test_parse_symmetric_tolerance() -> None:
     assert parsed.tolerance_lower == -0.2
 
 
-def test_unreadable_text_returns_null_value() -> None:
+def test_ambiguous_ocr_does_not_replace_letters_with_digits() -> None:
     parsed = parse_dimension_text("8O?O")
     assert parsed.value is None
     assert parsed.confidence < 0.5
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [ ] **Step 2: Verify RED**
 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_dimension_symbols.py -q -p no:cacheprovider
@@ -343,9 +320,9 @@ python -m pytest primitive_ir_lib/tests/test_dimension_symbols.py -q -p no:cache
 
 - [ ] **Step 3: Implement deterministic parsing**
 
-Use Unicode normalization, decimal-comma normalization only between digits, anchored regular expressions, and finite-number checks. Do not globally replace `O` with `0`; ambiguous OCR remains unreadable.
+Use Unicode normalization, decimal-comma normalization only between digits, anchored regular expressions, and finite-number checks. Do not globally replace `O` with `0`.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [ ] **Step 4: Verify GREEN and commit**
 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_dimension_symbols.py -q -p no:cacheprovider
@@ -356,22 +333,16 @@ git commit -m "feat: parse dimension text and tolerances"
 
 ---
 
-### Task 3: Detect dimension geometry inside a crop
+### Task 3: Detect Dimension Geometry in a Crop
 
 **Files:**
 - Create: `primitive_ir_lib/dimension_geometry.py`
 - Create: `primitive_ir_lib/tests/test_dimension_geometry.py`
 
-**Interfaces:**
-- Consumes: BGR crop `np.ndarray`.
-- Produces: `DimensionGeometryEvidence`.
-
-- [ ] **Step 1: Write synthetic failing tests**
-
-Generate white images with OpenCV, draw two extension lines, one dimension line, and filled triangular arrowheads. Assert the detector returns one main line, two extensions, two arrow points, finite coordinates, and stable output across two calls.
+- [ ] **Step 1: Write failing synthetic tests**
 
 ```python
-def test_detect_horizontal_dimension_geometry_is_deterministic() -> None:
+def test_horizontal_dimension_geometry_is_deterministic() -> None:
     image = synthetic_horizontal_dimension()
     first = detect_dimension_geometry(image)
     second = detect_dimension_geometry(image.copy())
@@ -380,11 +351,17 @@ def test_detect_horizontal_dimension_geometry_is_deterministic() -> None:
     assert len(first.extension_lines) == 2
     assert len(first.arrow_points) == 2
     assert first.kind_hint == "HORIZONTAL_DISTANCE"
+
+
+def test_blank_crop_has_no_false_dimension() -> None:
+    image = np.full((80, 240, 3), 255, dtype=np.uint8)
+    evidence = detect_dimension_geometry(image)
+    assert evidence.dimension_line is None
+    assert evidence.extension_lines == ()
+    assert evidence.arrow_points == ()
 ```
 
-Also test a leader line and a blank crop.
-
-- [ ] **Step 2: Run RED**
+- [ ] **Step 2: Verify RED**
 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_dimension_geometry.py -q -p no:cacheprovider
@@ -392,9 +369,9 @@ python -m pytest primitive_ir_lib/tests/test_dimension_geometry.py -q -p no:cach
 
 - [ ] **Step 3: Implement controlled detection**
 
-Use grayscale, adaptive threshold, `cv2.HoughLinesP`, line-length/orientation grouping, and contour-based triangular arrowhead candidates. Sort every output by `(y, x)` or endpoint order. Never infer scale or semantic attachment here.
+Use grayscale, adaptive threshold, `cv2.HoughLinesP`, orientation grouping, and contour-based triangular arrowhead candidates. Sort outputs by canonical endpoint order. Never infer scale or semantic attachment here.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [ ] **Step 4: Verify GREEN and commit**
 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_dimension_geometry.py -q -p no:cacheprovider
@@ -405,21 +382,17 @@ git commit -m "feat: detect source dimension geometry"
 
 ---
 
-### Task 4: Detect clusters and produce one disposition per cluster
+### Task 4: Detect Clusters and Produce One Disposition Per Cluster
 
 **Files:**
 - Create: `primitive_ir_lib/dimension_observer.py`
 - Create: `primitive_ir_lib/tests/test_dimension_observer.py`
 - Modify: `primitive_ir_lib/text_extraction.py`
 
-**Interfaces:**
-- Consumes: `detect_text_candidate_rois()`, `parse_dimension_text()`, `detect_dimension_geometry()`.
-- Produces: cluster/disposition types and `build_dimension_register()`.
-
-- [ ] **Step 1: Write failing cluster-accounting tests**
+- [ ] **Step 1: Write failing accounting and attachment tests**
 
 ```python
-def test_every_detected_cluster_has_exactly_one_disposition() -> None:
+def test_every_cluster_has_one_disposition() -> None:
     image = synthetic_page_with_two_dimension_clusters_and_one_note()
     clusters = detect_dimension_clusters(image)
     dispositions = [
@@ -438,31 +411,65 @@ def test_every_detected_cluster_has_exactly_one_disposition() -> None:
 
 
 def test_number_without_attachment_is_unresolved() -> None:
-    disposition = observe_dimension_cluster(...)
+    image = synthetic_isolated_number_crop()
+    cluster = DimensionCluster(
+        cluster_id="DIMCLUSTER-001",
+        bbox_px=(0, 0, image.shape[1], image.shape[0]),
+        member_boxes=((20, 20, 80, 50),),
+    )
+    disposition = observe_dimension_cluster(
+        image,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=(),
+    )
+    assert disposition.observation is not None
     assert disposition.observation["value"] == 4500.0
     assert disposition.observation["status"] == "UNRESOLVED"
-    assert "attachment" in disposition.reasons
+    assert "attachment_unresolved" in disposition.reasons
 
 
-def test_non_dimension_text_is_audited_but_not_registered() -> None:
-    register = build_dimension_register(...)
+def test_register_rejects_missing_cluster_disposition() -> None:
+    with pytest.raises(DimensionObserverError, match="disposition"):
+        build_dimension_register(
+            run_id="RUN-VS-T1-001",
+            source_sha256="1" * 64,
+            page_id="PAGE-001",
+            view_id="SIDE",
+            page_coverage_percent=100.0,
+            detected_cluster_ids=["DIMCLUSTER-001", "DIMCLUSTER-002"],
+            dispositions=[not_a_dimension_disposition("DIMCLUSTER-001")],
+        )
+
+
+def test_non_dimension_is_audited_but_not_registered() -> None:
+    register = build_dimension_register(
+        run_id="RUN-VS-T1-001",
+        source_sha256="1" * 64,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        page_coverage_percent=100.0,
+        detected_cluster_ids=["DIMCLUSTER-001"],
+        dispositions=[not_a_dimension_disposition("DIMCLUSTER-001")],
+    )
     assert register["coverage"]["clusters_processed"] == 1
     assert register["dimensions"] == []
 ```
 
-- [ ] **Step 2: Run RED**
+- [ ] **Step 2: Verify RED**
 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_dimension_observer.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 3: Implement deterministic cluster IDs and OCR fusion**
+- [ ] **Step 3: Implement stable IDs and OCR fusion**
 
-Cluster ID is derived from page/view plus canonical bbox order, not random UUID. Crop OCR at rotations `0`, `90`, `-90`; select a value only when parses agree or one candidate strictly dominates by confidence. Preserve all candidate texts in observer evidence.
+Cluster IDs derive from page/view and canonical bbox order. OCR rotations are `0`, `90`, and `-90`. Accept a parsed value only when candidates agree or one candidate has at least `0.15` higher confidence. Preserve candidate texts in observer evidence.
 
 - [ ] **Step 4: Implement attachment scoring**
-
-Score only supplied semantic anchors and detected extension endpoints. Exact scoring:
 
 ```text
 0.45 endpoint proximity
@@ -471,18 +478,17 @@ Score only supplied semantic anchors and detected extension endpoints. Exact sco
 0.10 anchor confidence
 ```
 
-A resolved pair requires score `>= 0.85`, second-best margin `>= 0.10`, distinct references, and geometry confidence `>= 0.70`. Otherwise keep candidate list and status `UNRESOLVED`.
+Resolve only when score is at least `0.85`, second-best margin is at least `0.10`, references are distinct, and geometry confidence is at least `0.70`.
 
 - [ ] **Step 5: Implement role/status policy**
 
-- resolved value + known kind + valid attachments + no conflict: `CONFIRMED`;
-- no valid attachment or unreadable value: `UNRESOLVED`;
-- two authoritative anchor/value interpretations: `CONFLICT`;
-- default role is `AMBIGUOUS` until profile rules explicitly classify it;
-- role may become `REFERENCE` or `DERIVED` from explicit supplied metadata;
-- never infer `DRIVING` solely from placement or font size.
+- valid value, known kind, resolved attachments, no conflict: `CONFIRMED`;
+- unreadable value or unresolved attachment: `UNRESOLVED`;
+- competing authoritative interpretations: `CONFLICT`;
+- default role: `AMBIGUOUS`;
+- `DRIVING`, `REFERENCE`, or `DERIVED` require explicit profile metadata.
 
-- [ ] **Step 6: Run GREEN and commit**
+- [ ] **Step 6: Verify GREEN and commit**
 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_dimension_observer.py primitive_ir_lib/tests/test_dimension_symbols.py primitive_ir_lib/tests/test_dimension_geometry.py -q -p no:cacheprovider
@@ -493,21 +499,19 @@ git commit -m "feat: observe and classify dimension clusters"
 
 ---
 
-### Task 5: Add the hash-bound file runner and CLI
+### Task 5: Add the Hash-Bound Runner and CLI
 
 **Files:**
 - Create: `cad_agent/dimension_observer_run.py`
 - Create: `cad_agent/run_dimension_observer.py`
 - Create: `tests/test_dimension_observer_run.py`
 
-**Interfaces:**
-- Consumes: observer functions, `validate_visual_contract()`, `sha256_file()`.
-- Produces: `<output_dir>/dimension-register.json`, `<output_dir>/observer-evidence.json`, and `<output_dir>/crops/*.png`.
-
 - [ ] **Step 1: Write failing runner tests**
 
+The runner must accept an injectable OCR reader for focused tests while the CLI uses Tesseract.
+
 ```python
-def test_runner_writes_validated_register_and_hash_bound_evidence(tmp_path: Path) -> None:
+def test_runner_writes_validated_hash_bound_register(tmp_path: Path) -> None:
     source = write_synthetic_dimension_page(tmp_path / "source.png")
     register_path = run_dimension_observer(
         run_id="RUN-VS-T1-001",
@@ -515,32 +519,52 @@ def test_runner_writes_validated_register_and_hash_bound_evidence(tmp_path: Path
         page_id="PAGE-001",
         view_id="SIDE",
         output_dir=tmp_path / "run",
-        tesseract_cmd="FAKE-INJECTED-BY-TEST",
+        ocr_reader=fake_page_ocr_reader,
     )
     register = read_visual_contract(register_path, contract="dimension_register")
     assert register["source_sha256"] == sha256_file(source)
     assert (register_path.parent / "observer-evidence.json").is_file()
 
 
-def test_runner_refuses_existing_nonempty_output_directory(tmp_path: Path) -> None:
+def test_runner_refuses_nonempty_output_directory(tmp_path: Path) -> None:
+    source = write_synthetic_dimension_page(tmp_path / "source.png")
     output = tmp_path / "run"
     output.mkdir()
     (output / "unrelated.txt").write_text("keep", encoding="utf-8")
     with pytest.raises(DimensionObserverRunError, match="non-empty"):
-        run_dimension_observer(...)
+        run_dimension_observer(
+            run_id="RUN-VS-T1-001",
+            source_image=source,
+            page_id="PAGE-001",
+            view_id="SIDE",
+            output_dir=output,
+            ocr_reader=fake_page_ocr_reader,
+        )
 ```
 
-Use dependency injection for OCR in unit tests; do not require the Tesseract executable in the focused suite.
+Update the stable runner signature to include:
 
-- [ ] **Step 2: Run RED**
+```python
+ocr_reader: OcrReader | None = None
+```
+
+- [ ] **Step 2: Verify RED**
 
 ```powershell
 python -m pytest tests/test_dimension_observer_run.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 3: Implement immutable input snapshot and atomic output**
+- [ ] **Step 3: Implement immutable input and atomic output**
 
-Read source bytes once, hash those exact bytes, decode from the snapshot, write all artifacts under a temporary sibling directory, validate the register, hash every artifact into `observer-evidence.json`, then rename the directory atomically. Reject changed source bytes before final rename.
+Read source bytes once, hash those bytes, decode the snapshot, write under a temporary sibling directory, validate the register, hash all artifacts, confirm source bytes did not change, then rename atomically. Reject existing nonempty outputs.
+
+Required outputs:
+
+```text
+dimension-register.json
+observer-evidence.json
+crops/<cluster-id>.png
+```
 
 - [ ] **Step 4: Add CLI**
 
@@ -548,9 +572,7 @@ Read source bytes once, hash those exact bytes, decode from the snapshot, write 
 python -m cad_agent.run_dimension_observer --run-id RUN-VS-T1-001 --source page.png --page-id PAGE-001 --view-id SIDE --output D:\runs\RUN-VS-T1-001\dimensions\SIDE
 ```
 
-CLI errors return nonzero and never partially replace an existing output directory.
-
-- [ ] **Step 5: Run GREEN and commit**
+- [ ] **Step 5: Verify GREEN and commit**
 
 ```powershell
 python -m pytest tests/test_dimension_observer_run.py primitive_ir_lib/tests/test_dimension_observer.py -q -p no:cacheprovider
@@ -561,7 +583,7 @@ git commit -m "feat: add offline dimension observer runner"
 
 ---
 
-### Task 6: Enforce runtime gate and documentation boundaries
+### Task 6: Enforce Runtime Policy and Record Status
 
 **Files:**
 - Create: `tests/test_dimension_register_runtime_policy.py`
@@ -569,42 +591,42 @@ git commit -m "feat: add offline dimension observer runner"
 - Modify: `docs/STATUS.md`
 - Modify: `tests/test_documentation_contract.py`
 
-- [ ] **Step 1: Add failing policy tests**
+- [ ] **Step 1: Add policy tests**
 
-Test all of these:
+Prove:
 
-- zero clusters plus 100% coverage passes;
-- detected cluster without disposition cannot pass coverage;
-- numeric value with unresolved attachment does not become `CONFIRMED`;
-- critical unresolved item blocks only listed regions;
-- `NOT_A_DIMENSION` clusters remain in observer evidence but not register dimensions;
-- no code path assigns `DRIVING` without explicit profile metadata.
+- zero detected clusters with 100% coverage is valid;
+- a missing or duplicate cluster disposition is rejected;
+- readable numeric text with unresolved attachment cannot become `CONFIRMED`;
+- critical unresolved observations block only declared scopes;
+- `NOT_A_DIMENSION` remains auditable outside the register;
+- no observer code assigns `DRIVING` without explicit profile metadata.
 
-- [ ] **Step 2: Run RED, implement minimal policy fixes, run GREEN**
+- [ ] **Step 2: Run focused verification**
 
 ```powershell
 python -m pytest tests/test_dimension_register_runtime_policy.py tests/test_dimension_observer_run.py primitive_ir_lib/tests/test_dimension_observer.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 3: Update canonical docs truthfully**
+- [ ] **Step 3: Update canonical documentation**
 
-Record:
+Record exactly:
 
 ```text
-VS-T1 state: Partially verified — offline synthetic observer only.
+VS-T1: Partially verified — offline synthetic Dimension Observer only.
 OpenAI API: NOT RUN.
 real_data: NOT RUN.
 AutoCAD Mechanical: NOT RUN.
 No authoritative geometry or publication permission is created.
 ```
 
-- [ ] **Step 4: Run the full verifier**
+- [ ] **Step 4: Run the authoritative verifier**
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-Expected: exit `0`; record exact test counts and final head SHA. Do not convert unavailable private/live gates to PASS.
+Record final head SHA and exact counts. Do not promote unavailable gates.
 
 - [ ] **Step 5: Final inspection and commit**
 
@@ -619,15 +641,15 @@ git commit -m "docs: record VS-T1 dimension observer gate"
 ## Acceptance Checklist
 
 - [ ] Every detected cluster has one auditable disposition.
-- [ ] Empty pages are representable without fake dimensions.
+- [ ] Empty pages require no fake dimensions.
 - [ ] Unreadable values remain `null`.
 - [ ] Number-only observations without attachments remain `UNRESOLVED`.
-- [ ] Attachment candidates, extension geometry, parser provenance, and confidence are recorded.
+- [ ] Attachment candidates, extension geometry, provenance, and confidence are recorded.
 - [ ] No pixel coordinate becomes authoritative Model Space geometry.
-- [ ] Output register validates through the integrated VS-T0 contract.
-- [ ] Focused tests and `scripts/verify.ps1` pass on the final head.
-- [ ] Private, OpenAI API, and AutoCAD gates remain honestly `NOT RUN`.
+- [ ] Output validates through the integrated VS-T0 contract.
+- [ ] Focused tests and `scripts/verify.ps1` pass on final head.
+- [ ] Private, OpenAI API, and AutoCAD gates remain `NOT RUN`.
 
 ## Execution Mode
 
-Implement VS-T1 on its own branch/worktree. VS-T2 may run in parallel because its primary write set is disjoint. A single integration reviewer must review both before VS-T6 consumes their outputs.
+Run VS-T1 in an isolated branch/worktree. VS-T2 may run in parallel because its runtime write set is disjoint. A single integration reviewer reviews both before VS-T6 consumes them.
