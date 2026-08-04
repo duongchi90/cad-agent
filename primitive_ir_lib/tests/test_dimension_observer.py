@@ -40,6 +40,40 @@ def test_number_without_attachment_is_unresolved_and_ambiguous() -> None:
     assert "attachment_unresolved" in disposition.reasons
 
 
+def test_critical_flag_is_independent_of_blocker_scope() -> None:
+    image = synthetic_isolated_number_crop()
+    cluster = DimensionCluster(
+        cluster_id="DIMCLUSTER-001",
+        bbox_px=(0, 0, image.shape[1], image.shape[0]),
+        member_boxes=((20, 20, 100, 55),),
+    )
+
+    critical_without_scope = observe_dimension_cluster(
+        image,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        critical=True,
+    )
+    noncritical_with_scope = observe_dimension_cluster(
+        image,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        critical=False,
+        blocker_scope=["SIDE-CABIN"],
+    )
+
+    assert critical_without_scope.observation["critical"] is True
+    assert critical_without_scope.observation["blocker_scope"] == []
+    assert noncritical_with_scope.observation["critical"] is False
+    assert noncritical_with_scope.observation["blocker_scope"] == ["SIDE-CABIN"]
+
+
 def test_resolved_attachment_without_explicit_role_remains_unresolved() -> None:
     disposition = observe_dimension_cluster(
         synthetic_horizontal_dimension(),

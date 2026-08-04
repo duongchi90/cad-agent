@@ -82,6 +82,7 @@ def test_critical_unresolved_observation_blocks_declared_scope() -> None:
         view_id="SIDE",
         source_sha256="1" * 64,
         ocr_reader=fake_ocr_4500,
+        critical=True,
         blocker_scope=["SIDE-CABIN"],
     )
     register = build_dimension_register(

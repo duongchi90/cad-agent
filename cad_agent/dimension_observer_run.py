@@ -180,6 +180,7 @@ def run_dimension_observer(
                     explicit_role=profile_entry.get("role"),
                     default_unit=profile["default_unit"],
                     blocker_scope=profile_entry.get("blocker_scope", ()),
+                    critical=profile_entry.get("critical", False),
                 )
             )
 

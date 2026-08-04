@@ -255,6 +255,7 @@ def observe_dimension_cluster(
     explicit_role: str | None = None,
     default_unit: str | None = None,
     blocker_scope: Sequence[str] = (),
+    critical: bool = False,
 ) -> DimensionDisposition:
     """Return exactly one auditable disposition for a supplied cluster."""
     _validate_identifier(page_id, "page_id")
@@ -262,6 +263,8 @@ def observe_dimension_cluster(
     _validate_hash(source_sha256, "source_sha256")
     if explicit_role is not None and explicit_role not in _ROLES:
         raise DimensionObserverError("explicit_role must be DRIVING, REFERENCE, or DERIVED")
+    if not isinstance(critical, bool):
+        raise DimensionObserverError("critical must be boolean")
     if not isinstance(cluster.cluster_id, str) or not cluster.cluster_id:
         raise DimensionObserverError("cluster_id must be non-empty")
 
@@ -309,6 +312,7 @@ def observe_dimension_cluster(
                 attachment_resolved=False,
                 explicit_role=None,
                 blocker_scope=blocker_scope,
+                critical=critical,
                 raw_texts=raw_texts,
                 page_id=page_id,
                 view_id=view_id,
@@ -332,6 +336,7 @@ def observe_dimension_cluster(
                 attachment_resolved=False,
                 explicit_role=explicit_role,
                 blocker_scope=blocker_scope,
+                critical=critical,
                 raw_texts=raw_texts,
                 page_id=page_id,
                 view_id=view_id,
@@ -365,6 +370,7 @@ def observe_dimension_cluster(
         attachment_resolved=attachment_resolved,
         explicit_role=explicit_role,
         blocker_scope=blocker_scope,
+        critical=critical,
         raw_texts=raw_texts,
         page_id=page_id,
         view_id=view_id,
@@ -389,6 +395,7 @@ def _make_observation(
     attachment_resolved: bool,
     explicit_role: str | None,
     blocker_scope: Sequence[str],
+    critical: bool,
     raw_texts: Sequence[RawText],
     page_id: str,
     view_id: str,
@@ -416,7 +423,7 @@ def _make_observation(
         "kind": kind,
         "role": role,
         "status": status,
-        "critical": bool(blocker_scope),
+        "critical": critical,
         "source_evidence": {
             "crop_id": cluster.cluster_id,
             "bbox": [float(value) for value in bbox],
