@@ -13,6 +13,7 @@ from cad_agent.visual_contracts import (
 )
 from tests.visual_supervisor_fixtures import (
     valid_dimension_register,
+    valid_dimension_observer_evidence,
     valid_geometry_comparison,
     valid_visual_review,
     valid_visual_run_manifest,
@@ -93,6 +94,45 @@ def test_confirmed_dimension_requires_numeric_value() -> None:
     payload = valid_dimension_register()
     payload["dimensions"][0]["value"] = None
     with pytest.raises(VisualContractError, match="value"):
+        validate_visual_contract(payload, contract="dimension_register")
+
+
+def test_unreadable_observation_accepts_empty_text_null_value_and_unit() -> None:
+    payload = valid_dimension_register()
+    item = payload["dimensions"][0]
+    item.update({
+        "display_text": "",
+        "value": None,
+        "unit": None,
+        "role": "AMBIGUOUS",
+        "status": "UNRESOLVED",
+        "blocker_scope": ["SIDE-CABIN"],
+        "raw_text_candidates": [],
+    })
+    payload["summary"] = {"confirmed": 0, "unresolved": 1, "conflicts": 0}
+    assert validate_visual_contract(payload, contract="dimension_register") == payload
+
+
+def test_confirmed_observation_requires_text_value_and_unit() -> None:
+    for field, invalid in (("display_text", ""), ("value", None), ("unit", None)):
+        payload = valid_dimension_register()
+        payload["dimensions"][0][field] = invalid
+        with pytest.raises(VisualContractError, match=field):
+            validate_visual_contract(payload, contract="dimension_register")
+
+
+def test_dimension_register_accepts_closed_observer_evidence_fields() -> None:
+    payload = valid_dimension_register()
+    payload["dimensions"][0].update(valid_dimension_observer_evidence())
+    assert validate_visual_contract(payload, contract="dimension_register") == payload
+
+
+def test_observer_evidence_rejects_unknown_property() -> None:
+    payload = valid_dimension_register()
+    evidence = valid_dimension_observer_evidence()
+    evidence["provenance"]["codex_guess"] = True
+    payload["dimensions"][0].update(evidence)
+    with pytest.raises(VisualContractError, match="Unexpected properties"):
         validate_visual_contract(payload, contract="dimension_register")
 
 

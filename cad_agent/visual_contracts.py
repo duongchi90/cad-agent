@@ -50,6 +50,12 @@ def _string(value: object, *, contract: str, path: str) -> str:
     return value
 
 
+def _nullable_non_empty_string(value: object, *, contract: str, path: str) -> str | None:
+    if value is None:
+        return None
+    return _string(value, contract=contract, path=path)
+
+
 def _identifier(value: object, *, contract: str, path: str) -> str:
     text = _string(value, contract=contract, path=path)
     if _ID_RE.fullmatch(text) is None:
@@ -105,6 +111,192 @@ def _validate_bbox(value: object, *, contract: str, path: str) -> None:
         _fail(contract, f"{path} must contain exactly four numbers")
     for index, item in enumerate(value):
         _finite_number(item, contract=contract, path=f"{path}[{index}]")
+
+
+def _validate_point(value: object, *, contract: str, path: str) -> None:
+    if not isinstance(value, list) or len(value) != 2:
+        _fail(contract, f"{path} must contain exactly two numbers")
+    for index, item in enumerate(value):
+        _finite_number(item, contract=contract, path=f"{path}[{index}]")
+
+
+def _validate_segment(value: object, *, contract: str, path: str) -> None:
+    if not isinstance(value, list) or len(value) != 2:
+        _fail(contract, f"{path} must contain exactly two points")
+    for index, point in enumerate(value):
+        _validate_point(point, contract=contract, path=f"{path}[{index}]")
+
+
+def _validate_nullable_number(value: object, *, contract: str, path: str) -> None:
+    if value is not None:
+        _finite_number(value, contract=contract, path=path)
+
+
+def _validate_dimension_observer_evidence(
+    dimension: dict[str, Any], *, contract: str, path: str
+) -> None:
+    if "raw_text_candidates" in dimension:
+        _string_list(
+            dimension["raw_text_candidates"],
+            contract=contract,
+            path=f"{path}.raw_text_candidates",
+        )
+    if "ocr_evidence" in dimension:
+        ocr_evidence = dimension["ocr_evidence"]
+        if not isinstance(ocr_evidence, list):
+            _fail(contract, f"{path}.ocr_evidence must be a list")
+        for index, raw_candidate in enumerate(ocr_evidence):
+            candidate_path = f"{path}.ocr_evidence[{index}]"
+            candidate = _object(raw_candidate, contract=contract, path=candidate_path)
+            _keys(
+                candidate,
+                contract=contract,
+                required={"id", "content", "bbox", "rotation_deg", "confidence", "source"},
+            )
+            _identifier(candidate["id"], contract=contract, path=f"{candidate_path}.id")
+            if not isinstance(candidate["content"], str):
+                _fail(contract, f"{candidate_path}.content must be a string")
+            _validate_bbox(candidate["bbox"], contract=contract, path=f"{candidate_path}.bbox")
+            rotation = _finite_number(
+                candidate["rotation_deg"],
+                contract=contract,
+                path=f"{candidate_path}.rotation_deg",
+            )
+            if rotation not in {-90.0, 0.0, 90.0}:
+                _fail(contract, f"{candidate_path}.rotation_deg is invalid")
+            confidence = _finite_number(
+                candidate["confidence"],
+                contract=contract,
+                path=f"{candidate_path}.confidence",
+            )
+            if not 0.0 <= confidence <= 1.0:
+                _fail(contract, f"{candidate_path}.confidence must be between 0 and 1")
+            _string(candidate["source"], contract=contract, path=f"{candidate_path}.source")
+    if "symbol_text" in dimension:
+        _nullable_non_empty_string(
+            dimension["symbol_text"],
+            contract=contract,
+            path=f"{path}.symbol_text",
+        )
+
+    if "tolerance" in dimension:
+        tolerance = _object(dimension["tolerance"], contract=contract, path=f"{path}.tolerance")
+        _keys(
+            tolerance,
+            contract=contract,
+            required={"mode", "upper", "lower", "unit"},
+        )
+        if tolerance["mode"] not in {"NONE", "SYMMETRIC", "LIMITS", "PLUS_MINUS"}:
+            _fail(contract, f"{path}.tolerance.mode is invalid")
+        _validate_nullable_number(
+            tolerance["upper"], contract=contract, path=f"{path}.tolerance.upper"
+        )
+        _validate_nullable_number(
+            tolerance["lower"], contract=contract, path=f"{path}.tolerance.lower"
+        )
+        _nullable_non_empty_string(
+            tolerance["unit"], contract=contract, path=f"{path}.tolerance.unit"
+        )
+
+    if "extension_geometry" in dimension:
+        geometry = _object(
+            dimension["extension_geometry"],
+            contract=contract,
+            path=f"{path}.extension_geometry",
+        )
+        _keys(
+            geometry,
+            contract=contract,
+            required={"dimension_line", "extension_lines", "arrow_points"},
+            optional={"leader_lines"},
+        )
+        if geometry["dimension_line"] is not None:
+            _validate_segment(
+                geometry["dimension_line"],
+                contract=contract,
+                path=f"{path}.extension_geometry.dimension_line",
+            )
+        extension_lines = geometry["extension_lines"]
+        if not isinstance(extension_lines, list):
+            _fail(contract, f"{path}.extension_geometry.extension_lines must be a list")
+        for index, segment in enumerate(extension_lines):
+            _validate_segment(
+                segment,
+                contract=contract,
+                path=f"{path}.extension_geometry.extension_lines[{index}]",
+            )
+        arrow_points = geometry["arrow_points"]
+        if not isinstance(arrow_points, list):
+            _fail(contract, f"{path}.extension_geometry.arrow_points must be a list")
+        for index, point in enumerate(arrow_points):
+            _validate_point(
+                point,
+                contract=contract,
+                path=f"{path}.extension_geometry.arrow_points[{index}]",
+            )
+        if "leader_lines" in geometry:
+            leader_lines = geometry["leader_lines"]
+            if not isinstance(leader_lines, list):
+                _fail(contract, f"{path}.extension_geometry.leader_lines must be a list")
+            for index, segment in enumerate(leader_lines):
+                _validate_segment(
+                    segment,
+                    contract=contract,
+                    path=f"{path}.extension_geometry.leader_lines[{index}]",
+                )
+
+    if "attachment_candidates" in dimension:
+        candidates = dimension["attachment_candidates"]
+        if not isinstance(candidates, list):
+            _fail(contract, f"{path}.attachment_candidates must be a list")
+        for index, raw_candidate in enumerate(candidates):
+            candidate_path = f"{path}.attachment_candidates[{index}]"
+            candidate = _object(raw_candidate, contract=contract, path=candidate_path)
+            _keys(
+                candidate,
+                contract=contract,
+                required={"from_ref", "to_ref", "confidence", "evidence"},
+            )
+            _validate_reference(
+                candidate["from_ref"], contract=contract, path=f"{candidate_path}.from_ref"
+            )
+            _validate_reference(
+                candidate["to_ref"], contract=contract, path=f"{candidate_path}.to_ref"
+            )
+            confidence = _finite_number(
+                candidate["confidence"], contract=contract, path=f"{candidate_path}.confidence"
+            )
+            if not 0.0 <= confidence <= 1.0:
+                _fail(contract, f"{candidate_path}.confidence must be between 0 and 1")
+            _string_list(candidate["evidence"], contract=contract, path=f"{candidate_path}.evidence")
+
+    if "provenance" in dimension:
+        provenance = _object(dimension["provenance"], contract=contract, path=f"{path}.provenance")
+        _keys(
+            provenance,
+            contract=contract,
+            required={"observer_version", "ocr_engine", "observation_sha256"},
+            optional={"ocr_rotations_deg"},
+        )
+        _string(
+            provenance["observer_version"],
+            contract=contract,
+            path=f"{path}.provenance.observer_version",
+        )
+        _string(
+            provenance["ocr_engine"],
+            contract=contract,
+            path=f"{path}.provenance.ocr_engine",
+        )
+        _sha256(
+            provenance["observation_sha256"],
+            contract=contract,
+            path=f"{path}.provenance.observation_sha256",
+        )
+        if "ocr_rotations_deg" in provenance:
+            rotations = provenance["ocr_rotations_deg"]
+            if rotations != [0.0, 90.0, -90.0]:
+                _fail(contract, f"{path}.provenance.ocr_rotations_deg is invalid")
 
 
 _DIMENSION_ROLES = {"DRIVING", "REFERENCE", "DERIVED", "AMBIGUOUS", "CONFLICT"}
@@ -182,18 +374,34 @@ def _validate_dimension_register(payload: dict[str, Any]) -> None:
                 "attachment_confidence",
                 "blocker_scope",
             },
-            optional={"from_ref", "to_ref"},
+            optional={
+                "from_ref",
+                "to_ref",
+                "raw_text_candidates",
+                "ocr_evidence",
+                "symbol_text",
+                "tolerance",
+                "extension_geometry",
+                "attachment_candidates",
+                "provenance",
+            },
         )
         _identifier(dimension["id"], contract=contract, path=f"{path}.id")
-        _string(dimension["display_text"], contract=contract, path=f"{path}.display_text")
-        _string(dimension["unit"], contract=contract, path=f"{path}.unit")
-        _string(dimension["kind"], contract=contract, path=f"{path}.kind")
         role = dimension["role"]
         status = dimension["status"]
         if role not in _DIMENSION_ROLES:
             _fail(contract, f"{path}.role is invalid")
         if status not in _DIMENSION_STATUSES:
             _fail(contract, f"{path}.status is invalid")
+        if not isinstance(dimension["display_text"], str):
+            _fail(contract, f"{path}.display_text must be a string")
+        if status == "CONFIRMED" and dimension["display_text"] == "":
+            _fail(contract, f"{path}.display_text is required for CONFIRMED dimensions")
+        if dimension["unit"] is not None:
+            _string(dimension["unit"], contract=contract, path=f"{path}.unit")
+        elif status == "CONFIRMED":
+            _fail(contract, f"{path}.unit is required for CONFIRMED dimensions")
+        _string(dimension["kind"], contract=contract, path=f"{path}.kind")
         if dimension["value"] is None:
             if status == "CONFIRMED":
                 _fail(contract, f"{path}.value is required for CONFIRMED dimensions")
@@ -227,6 +435,7 @@ def _validate_dimension_register(payload: dict[str, Any]) -> None:
             _identifier(region_id, contract=contract, path=f"{path}.blocker_scope[{blocker_index}]")
         if dimension["critical"] and status in {"UNRESOLVED", "CONFLICT"} and not blocker_scope:
             _fail(contract, f"{path}.blocker_scope is required for a critical unresolved/conflicting dimension")
+        _validate_dimension_observer_evidence(dimension, contract=contract, path=path)
         disposition_counts[status] += 1
 
     for key, expected in (("confirmed", "CONFIRMED"), ("unresolved", "UNRESOLVED"), ("conflicts", "CONFLICT")):
