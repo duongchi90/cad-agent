@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import cv2
+import numpy as np
 import pytest
 
 from primitive_ir_lib.dimension_observer import (
     DimensionCluster,
     DimensionObserverError,
     build_dimension_register,
+    detect_dimension_clusters,
     observe_dimension_cluster,
 )
 from primitive_ir_lib.tests.dimension_test_helpers import (
     fake_ocr_4500,
+    fake_ocr_unreadable,
     horizontal_dimension_cluster,
     matching_horizontal_anchors,
     not_a_dimension_disposition,
@@ -38,6 +42,45 @@ def test_number_without_attachment_is_unresolved_and_ambiguous() -> None:
     assert disposition.observation["role"] == "AMBIGUOUS"
     assert disposition.observation["status"] == "UNRESOLVED"
     assert "attachment_unresolved" in disposition.reasons
+
+
+def test_text_and_geometry_clusters_both_receive_dispositions() -> None:
+    page = np.full((300, 700, 3), 255, dtype=np.uint8)
+    cv2.putText(page, "TITLE NOTE", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2)
+    cv2.line(page, (260, 135), (610, 135), (0, 0, 0), 2)
+    cv2.line(page, (260, 135), (260, 270), (0, 0, 0), 2)
+    cv2.line(page, (610, 135), (610, 270), (0, 0, 0), 2)
+    cv2.fillConvexPoly(
+        page,
+        np.array([[260, 135], [276, 128], [276, 142]], dtype=np.int32),
+        (0, 0, 0),
+    )
+    cv2.fillConvexPoly(
+        page,
+        np.array([[610, 135], [594, 128], [594, 142]], dtype=np.int32),
+        (0, 0, 0),
+    )
+
+    clusters = detect_dimension_clusters(page)
+    dispositions = [
+        observe_dimension_cluster(
+            page,
+            cluster,
+            page_id="PAGE-001",
+            view_id="SIDE",
+            source_sha256="1" * 64,
+            ocr_reader=fake_ocr_unreadable,
+        )
+        for cluster in clusters
+    ]
+
+    assert len(clusters) >= 2
+    assert len(dispositions) == len(clusters)
+    assert any(
+        disposition.observation is not None
+        and disposition.observation["extension_geometry"]["dimension_line"] is not None
+        for disposition in dispositions
+    )
 
 
 def test_critical_flag_is_independent_of_blocker_scope() -> None:

@@ -76,6 +76,24 @@ def _merge_boxes(boxes: Sequence[Bbox]) -> list[Bbox]:
     return sorted(merged, key=lambda box: (box[1], box[0], box[3], box[2]))
 
 
+def _geometry_bbox(geometry: DimensionGeometryEvidence, *, width: int, height: int) -> Bbox | None:
+    points: list[tuple[float, float]] = []
+    for segment in (geometry.dimension_line, *geometry.extension_lines, *geometry.leader_lines):
+        if segment is not None:
+            points.extend(segment)
+    points.extend(geometry.arrow_points)
+    if not points:
+        return None
+    padding = 14
+    x0 = max(0, math.floor(min(point[0] for point in points)) - padding)
+    y0 = max(0, math.floor(min(point[1] for point in points)) - padding)
+    x1 = min(width, math.ceil(max(point[0] for point in points)) + padding)
+    y1 = min(height, math.ceil(max(point[1] for point in points)) + padding)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return (x0, y0, x1, y1)
+
+
 def detect_dimension_clusters(image_bgr: np.ndarray) -> list[DimensionCluster]:
     """Return stable reading-order candidate clusters without running OCR."""
     if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim not in {2, 3}:
@@ -83,11 +101,13 @@ def detect_dimension_clusters(image_bgr: np.ndarray) -> list[DimensionCluster]:
     if image_bgr.size == 0:
         return []
     height, width = image_bgr.shape[:2]
-    boxes = _merge_boxes(detect_text_candidate_rois(image_bgr))
-    if not boxes:
-        geometry = detect_dimension_geometry(image_bgr)
-        if geometry.dimension_line is not None:
-            boxes = [(0, 0, width, height)]
+    text_boxes = detect_text_candidate_rois(image_bgr)
+    geometry = detect_dimension_geometry(image_bgr)
+    geometry_box = _geometry_bbox(geometry, width=width, height=height)
+    candidate_boxes = [*text_boxes]
+    if geometry_box is not None:
+        candidate_boxes.append(geometry_box)
+    boxes = _merge_boxes(candidate_boxes)
     return [
         DimensionCluster(
             cluster_id=f"DIMCLUSTER-{index:03d}",
