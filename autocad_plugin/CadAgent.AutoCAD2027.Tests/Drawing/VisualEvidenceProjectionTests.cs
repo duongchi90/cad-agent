@@ -9,6 +9,46 @@ namespace CadAgent.AutoCAD2027.Tests.Drawing;
 public sealed class VisualEvidenceProjectionTests
 {
     [Fact]
+    public void NonConformalBlockBasisIsRejected()
+    {
+        Assert.True(AutoCadVisualEvidenceReader.IsConformalBasisForTesting(
+            2,
+            2,
+            0));
+        Assert.False(AutoCadVisualEvidenceReader.IsConformalBasisForTesting(
+            2,
+            3,
+            0));
+        Assert.False(AutoCadVisualEvidenceReader.IsConformalBasisForTesting(
+            1,
+            Math.Sqrt(2),
+            1));
+    }
+
+    [Fact]
+    public void LayerPolicyRejectsHiddenExcludedAndNestedChildLayers()
+    {
+        Assert.True(AutoCadVisualEvidenceReader.LayerPolicyAllowsForTesting(
+            "CABIN",
+            isOff: false,
+            isFrozen: false,
+            new[] { "CABIN" },
+            Array.Empty<string>()));
+        Assert.False(AutoCadVisualEvidenceReader.LayerPolicyAllowsForTesting(
+            "CABIN",
+            isOff: true,
+            isFrozen: false,
+            new[] { "CABIN" },
+            Array.Empty<string>()));
+        Assert.False(AutoCadVisualEvidenceReader.LayerPolicyAllowsForTesting(
+            "TEXT",
+            isOff: false,
+            isFrozen: false,
+            Array.Empty<string>(),
+            new[] { "TEXT" }));
+    }
+
+    [Fact]
     public void RegionHashIsIndependentOfJsonPropertyOrder()
     {
         var first = JsonDocument.Parse(
@@ -171,6 +211,7 @@ public sealed class VisualEvidenceProjectionTests
                         new
                         {
                             type = "LINE",
+                            layer = "0",
                             geometry = new
                             {
                                 start_x = 40.0,

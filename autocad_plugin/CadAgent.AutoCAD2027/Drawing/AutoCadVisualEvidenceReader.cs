@@ -17,6 +17,47 @@ namespace CadAgent.AutoCAD2027.Drawing;
 
 internal static class AutoCadVisualEvidenceReader
 {
+    private sealed record NestedEntityProjection(
+        string Type,
+        string Layer,
+        Dictionary<string, object?> Geometry);
+
+    private sealed class RenderLayerPolicy
+    {
+        private readonly IReadOnlySet<string> _includeLayers;
+        private readonly IReadOnlySet<string> _excludeLayers;
+        private readonly IReadOnlyDictionary<string, SessionLayerSnapshot> _layerStates;
+
+        public RenderLayerPolicy(
+            IReadOnlySet<string> includeLayers,
+            IReadOnlySet<string> excludeLayers,
+            IReadOnlyDictionary<string, SessionLayerSnapshot> layerStates)
+        {
+            _includeLayers = includeLayers;
+            _excludeLayers = excludeLayers;
+            _layerStates = layerStates.ToDictionary(
+                item => item.Key,
+                item => item.Value,
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        public bool Allows(string layer)
+        {
+            if (_includeLayers.Count > 0 && !_includeLayers.Contains(layer))
+            {
+                return false;
+            }
+
+            if (_excludeLayers.Contains(layer)
+                || !_layerStates.TryGetValue(layer, out var state))
+            {
+                return false;
+            }
+
+            return !state.IsOff && !state.IsFrozen;
+        }
+    }
+
     private static readonly string[] RendererSystemVariableNames =
     {
         "TILEMODE",
@@ -65,7 +106,7 @@ internal static class AutoCadVisualEvidenceReader
             store = RequestOwnedArtifactStore.Create(ipcDirectory, requestId, request.ArtifactDirectory);
             lease = store.AcquireLease();
 
-            var entities = ReadModelSpaceEntities(database, request.Region);
+            var entities = ReadModelSpaceEntities(database, request.Region, stateBefore.LayerStates);
             var projectedEntities = VisualEvidenceProjection.ProjectEntities(entities);
             if (projectedEntities.Count > VisualEvidenceArtifactPolicy.MaxEntityRecords)
             {
@@ -77,7 +118,7 @@ internal static class AutoCadVisualEvidenceReader
                 throw new InvalidDataException("The VS-T3 measurement limit was exceeded.");
             }
 
-            var measurements = EvaluateMeasurements(request.Measurements, projectedEntities);
+            var measurements = EvaluateMeasurements(request.Measurements, request.DatumBindings, projectedEntities);
             var renderBytes = RenderRegion(request.Region, projectedEntities);
             var entityBytes = JsonSerializer.SerializeToUtf8Bytes(projectedEntities.Select(entity => new
             {
@@ -196,7 +237,8 @@ internal static class AutoCadVisualEvidenceReader
 
     private static IReadOnlyList<EntitySnapshot> ReadModelSpaceEntities(
         Database database,
-        JsonElement region)
+        JsonElement region,
+        IReadOnlyDictionary<string, SessionLayerSnapshot> layerStates)
     {
         var includeLayers = region.GetProperty("include_layers")
             .EnumerateArray()
@@ -214,6 +256,7 @@ internal static class AutoCadVisualEvidenceReader
         {
             throw new InvalidDataException("The VS-T3 region bounding box must have positive width and height.");
         }
+        var layerPolicy = new RenderLayerPolicy(includeLayers, excludeLayers, layerStates);
         var snapshots = new List<EntitySnapshot>();
         using var transaction = database.TransactionManager.StartOpenCloseTransaction();
         var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
@@ -227,13 +270,7 @@ internal static class AutoCadVisualEvidenceReader
                 continue;
             }
 
-            if (!entity.Visible)
-            {
-                continue;
-            }
-
-            if ((includeLayers.Count > 0 && !includeLayers.Contains(entity.Layer))
-                || excludeLayers.Contains(entity.Layer))
+            if (!entity.Visible || !layerPolicy.Allows(entity.Layer))
             {
                 continue;
             }
@@ -258,22 +295,32 @@ internal static class AutoCadVisualEvidenceReader
                 continue;
             }
 
-            snapshots.Add(CreateSnapshot(entity, extents, transaction));
+            var snapshot = CreateSnapshot(entity, extents, transaction, layerPolicy);
+            if (snapshot is not null)
+            {
+                snapshots.Add(snapshot);
+            }
         }
 
         return snapshots;
     }
 
-    private static EntitySnapshot CreateSnapshot(
+    private static EntitySnapshot? CreateSnapshot(
         Entity entity,
         Extents3d extents,
-        Transaction transaction)
+        Transaction transaction,
+        RenderLayerPolicy layerPolicy)
     {
         var geometry = CreateGeometry(
             entity,
             Matrix3d.Identity,
             transaction,
-            new HashSet<ObjectId>());
+            new HashSet<ObjectId>(),
+            layerPolicy);
+        if (entity is BlockReference && !HasRenderableChildren(geometry))
+        {
+            return null;
+        }
         geometry["bounding_box"] = new
         {
             min_x = extents.MinPoint.X,
@@ -311,7 +358,8 @@ internal static class AutoCadVisualEvidenceReader
         Entity entity,
         Matrix3d transform,
         Transaction transaction,
-        HashSet<ObjectId> blockStack)
+        HashSet<ObjectId> blockStack,
+        RenderLayerPolicy layerPolicy)
     {
         var geometry = new Dictionary<string, object?>(StringComparer.Ordinal);
         switch (entity)
@@ -395,16 +443,30 @@ internal static class AutoCadVisualEvidenceReader
                     geometry["position"] = ToPointObject(block.Position.TransformBy(transform));
                     geometry["rotation"] = TransformAngle(block.Rotation, transform);
                     var childTransform = block.BlockTransform * transform;
+                    if (!IsConformalTransform(childTransform))
+                    {
+                        throw new InvalidDataException(
+                            $"Block '{block.Handle}' has a non-conformal transform; VS-T3 fails closed rather than flattening circles, arcs, or bulges incorrectly.");
+                    }
                     var blockRecord = (BlockTableRecord)transaction.GetObject(block.BlockTableRecord, OpenMode.ForRead);
                     geometry["children"] = blockRecord
                         .Cast<ObjectId>()
                         .Select(objectId => transaction.GetObject(objectId, OpenMode.ForRead, false))
                         .OfType<Entity>()
-                        .Where(child => child.Visible)
+                        .Where(child => child.Visible && layerPolicy.Allows(child.Layer))
+                        .Select(child =>
+                        {
+                            var childGeometry = CreateGeometry(child, childTransform, transaction, blockStack, layerPolicy);
+                            return child is BlockReference && !HasRenderableChildren(childGeometry)
+                                ? null
+                                : new NestedEntityProjection(GetEntityType(child), child.Layer, childGeometry);
+                        })
+                        .Where(child => child is not null)
                         .Select(child => new
                         {
-                            type = GetEntityType(child),
-                            geometry = CreateGeometry(child, childTransform, transaction, blockStack)
+                            type = child!.Type,
+                            layer = child.Layer,
+                            geometry = child.Geometry
                         })
                         .ToArray();
                 }
@@ -436,6 +498,51 @@ internal static class AutoCadVisualEvidenceReader
 
     private static object ToPointObject(Point3d point) => new { x = point.X, y = point.Y };
 
+    private static bool HasRenderableChildren(Dictionary<string, object?> geometry)
+    {
+        return geometry.TryGetValue("children", out var children)
+            && children is Array array
+            && array.Length > 0;
+    }
+
+    internal static bool IsConformalBasisForTesting(double xLength, double yLength, double dotProduct)
+    {
+        if (xLength < 1e-12 || yLength < 1e-12)
+        {
+            return false;
+        }
+
+        var scale = Math.Max(1.0, Math.Max(xLength, yLength));
+        return Math.Abs(xLength - yLength) <= 1e-9 * scale
+            && Math.Abs(dotProduct) <= 1e-9 * scale * scale;
+    }
+
+    private static bool IsConformalTransform(Matrix3d transform)
+    {
+        var basis = transform.CoordinateSystem3d;
+        return IsConformalBasisForTesting(
+            basis.Xaxis.Length,
+            basis.Yaxis.Length,
+            basis.Xaxis.DotProduct(basis.Yaxis));
+    }
+
+    internal static bool LayerPolicyAllowsForTesting(
+        string layer,
+        bool isOff,
+        bool isFrozen,
+        IEnumerable<string> includeLayers,
+        IEnumerable<string> excludeLayers)
+    {
+        var states = new Dictionary<string, SessionLayerSnapshot>(StringComparer.OrdinalIgnoreCase)
+        {
+            [layer] = new SessionLayerSnapshot(isOff, isFrozen)
+        };
+        return new RenderLayerPolicy(
+            includeLayers.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            excludeLayers.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            states).Allows(layer);
+    }
+
     private static double TransformRadius(double radius, Matrix3d transform)
     {
         var vector = new Vector3d(radius, 0, 0).TransformBy(transform);
@@ -450,21 +557,25 @@ internal static class AutoCadVisualEvidenceReader
 
     private static IReadOnlyList<object> EvaluateMeasurements(
         IReadOnlyList<JsonElement> requests,
+        IReadOnlyList<JsonElement> datumBindingValues,
         IReadOnlyList<VisualEvidenceEntityRecord> entities)
     {
         var byId = entities.ToDictionary(entity => entity.StableId, StringComparer.Ordinal);
         var byHandle = entities.ToDictionary(entity => entity.Handle, StringComparer.OrdinalIgnoreCase);
+        var datumBindings = datumBindingValues.ToDictionary(
+            binding => binding.GetProperty("id").GetString()!,
+            StringComparer.Ordinal);
         return requests.Select(request =>
         {
             var projection = VisualEvidenceProjection.ProjectMeasurements(new[] { request })[0];
-            var first = ResolveReference(projection.Reference, byId, byHandle);
+            var first = ResolveReference(projection.Reference, datumBindings, byId, byHandle);
             var value = projection.Kind switch
             {
                 "RADIUS" => ReadRadius(first),
                 "DIAMETER" => ReadRadius(first) * 2,
                 "BOUNDING_BOX" => ReadBoundingBox(first),
-                 "DISTANCE" => ResolveDistance(projection, first, byId, byHandle),
-                 "ANGLE" => ResolveAngle(projection, first, byId, byHandle),
+                "DISTANCE" => ResolveDistance(projection, first, datumBindings, byId, byHandle),
+                "ANGLE" => ResolveAngle(projection, first, datumBindings, byId, byHandle),
                 _ => throw new InvalidDataException($"Unsupported measurement kind '{projection.Kind}'.")
             };
             return new
@@ -481,14 +592,24 @@ internal static class AutoCadVisualEvidenceReader
 
     private static VisualEvidenceEntityRecord ResolveReference(
         JsonElement reference,
+        IReadOnlyDictionary<string, JsonElement> datumBindings,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byId,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle)
     {
         var type = reference.GetProperty("type").GetString();
         var id = reference.GetProperty("id").GetString()!;
-        if (!string.Equals(type, "ENTITY", StringComparison.Ordinal))
+        if (string.Equals(type, "DATUM", StringComparison.Ordinal))
         {
-            throw new InvalidDataException($"The measurement datum reference '{id}' is unresolved.");
+            if (!datumBindings.TryGetValue(id, out var binding))
+            {
+                throw new InvalidDataException($"The measurement datum reference '{id}' is not provenance-bound.");
+            }
+
+            id = binding.GetProperty("entity_handle").GetString()!;
+        }
+        else if (!string.Equals(type, "ENTITY", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"The measurement reference '{id}' has an unsupported type.");
         }
 
         if (byId.TryGetValue(id, out var stable)
@@ -525,6 +646,7 @@ internal static class AutoCadVisualEvidenceReader
     private static double ResolveDistance(
         VisualEvidenceMeasurementRecord measurement,
         VisualEvidenceEntityRecord first,
+        IReadOnlyDictionary<string, JsonElement> datumBindings,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byId,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle)
     {
@@ -533,7 +655,7 @@ internal static class AutoCadVisualEvidenceReader
             throw new InvalidDataException($"Distance measurement '{measurement.Id}' has no to_reference.");
         }
 
-        var second = ResolveReference(toReference, byId, byHandle);
+        var second = ResolveReference(toReference, datumBindings, byId, byHandle);
         var firstPoint = RepresentativePoint(first);
         var secondPoint = RepresentativePoint(second);
         return Math.Sqrt(Math.Pow(firstPoint.X - secondPoint.X, 2) + Math.Pow(firstPoint.Y - secondPoint.Y, 2));
@@ -542,6 +664,7 @@ internal static class AutoCadVisualEvidenceReader
     private static double ResolveAngle(
         VisualEvidenceMeasurementRecord measurement,
         VisualEvidenceEntityRecord first,
+        IReadOnlyDictionary<string, JsonElement> datumBindings,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byId,
         IReadOnlyDictionary<string, VisualEvidenceEntityRecord> byHandle)
     {
@@ -550,7 +673,7 @@ internal static class AutoCadVisualEvidenceReader
             throw new InvalidDataException($"Angle measurement '{measurement.Id}' has no to_reference.");
         }
 
-        var second = ResolveReference(toReference, byId, byHandle);
+        var second = ResolveReference(toReference, datumBindings, byId, byHandle);
         var firstPoint = RepresentativePoint(first);
         var secondPoint = RepresentativePoint(second);
         var angle = Math.Atan2(secondPoint.Y - firstPoint.Y, secondPoint.X - firstPoint.X);
@@ -732,6 +855,8 @@ internal static class AutoCadVisualEvidenceReader
                 if (child.ValueKind != JsonValueKind.Object
                     || !child.TryGetProperty("type", out var childType)
                     || childType.ValueKind != JsonValueKind.String
+                    || !child.TryGetProperty("layer", out var childLayer)
+                    || childLayer.ValueKind != JsonValueKind.String
                     || !child.TryGetProperty("geometry", out var childGeometry)
                     || childGeometry.ValueKind != JsonValueKind.Object)
                 {
@@ -747,7 +872,7 @@ internal static class AutoCadVisualEvidenceReader
                         $"{entity.StableId}:CHILD:{index++}",
                         entity.Handle,
                         childType.GetString()!,
-                        entity.Layer,
+                        childLayer.GetString()!,
                         childMap),
                     bbox,
                     width,
@@ -858,7 +983,7 @@ internal static class AutoCadVisualEvidenceReader
     private static SessionStateSnapshot CaptureSessionState(Document document)
     {
         var database = document.Database;
-        var layerStates = new Dictionary<string, SessionLayerSnapshot>(StringComparer.Ordinal);
+        var layerStates = new Dictionary<string, SessionLayerSnapshot>(StringComparer.OrdinalIgnoreCase);
         using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
         {
             var layerTable = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
@@ -885,14 +1010,7 @@ internal static class AutoCadVisualEvidenceReader
             AcadApplication.GetSystemVariable("CLAYER"),
             CultureInfo.InvariantCulture) ?? string.Empty;
         var currentLayout = LayoutManager.Current.CurrentLayout;
-        var tileMode = Convert.ToInt32(AcadApplication.GetSystemVariable("TILEMODE"), CultureInfo.InvariantCulture);
-        var cvport = Convert.ToInt32(AcadApplication.GetSystemVariable("CVPORT"), CultureInfo.InvariantCulture);
-        var spaceKind = tileMode != 0
-            ? "MODEL_SPACE"
-            : cvport > 1
-                ? "PAPER_SPACE_FLOATING_VIEWPORT"
-                : "PAPER_SPACE";
-        var space = new SessionSpaceSnapshot(currentLayout, tileMode, cvport, spaceKind);
+        var space = CaptureSessionSpace();
         using var currentView = document.Editor.GetCurrentView();
         var viewState = new SessionViewSnapshot(
             currentView.CenterPoint.X,
@@ -934,11 +1052,16 @@ internal static class AutoCadVisualEvidenceReader
             LayoutManager.Current.CurrentLayout = snapshot.CurrentLayout;
         }
 
-        if (snapshot.Space.Kind == "MODEL_SPACE")
+        var currentSpace = CaptureSessionSpace();
+        if (!currentSpace.Equals(snapshot.Space)
+            && snapshot.Space.Kind == "MODEL_SPACE"
+            && currentSpace.Kind != "MODEL_SPACE")
         {
             document.Editor.SwitchToModelSpace();
         }
-        else
+        else if (!currentSpace.Equals(snapshot.Space)
+            && snapshot.Space.Kind != "MODEL_SPACE"
+            && currentSpace.Kind == "MODEL_SPACE")
         {
             document.Editor.SwitchToPaperSpace();
         }
@@ -954,29 +1077,16 @@ internal static class AutoCadVisualEvidenceReader
         }
 
         AcadApplication.SetSystemVariable("CLAYER", snapshot.CurrentLayer);
-        if (snapshot.Space.Kind == "PAPER_SPACE_FLOATING_VIEWPORT")
+        var restoredSpace = CaptureSessionSpace();
+        if (snapshot.Space.Kind == "PAPER_SPACE_FLOATING_VIEWPORT"
+            && restoredSpace.Cvport != snapshot.Space.Cvport)
         {
-            try
-            {
-                AcadApplication.SetSystemVariable("CVPORT", snapshot.Space.Cvport);
-            }
-            catch (Autodesk.AutoCAD.Runtime.Exception)
-            {
-                // CVPORT can be read-only in a paper-space viewport. The view and
-                // layout checks below still prove the restored active viewport.
-            }
+            AcadApplication.SetSystemVariable("CVPORT", snapshot.Space.Cvport);
         }
 
-        if (snapshot.Space.Kind == "PAPER_SPACE")
+        if (snapshot.Space.Kind == "PAPER_SPACE" && restoredSpace.Cvport != 1)
         {
-            try
-            {
-                AcadApplication.SetSystemVariable("CVPORT", 1);
-            }
-            catch (Autodesk.AutoCAD.Runtime.Exception)
-            {
-                // CVPORT can be read-only in a paper-space viewport.
-            }
+            AcadApplication.SetSystemVariable("CVPORT", 1);
         }
 
         var ids = snapshot.SelectionHandles
@@ -1003,6 +1113,19 @@ internal static class AutoCadVisualEvidenceReader
             view.LensLength = snapshot.CurrentView.LensLength;
             document.Editor.SetCurrentView(view);
         }
+    }
+
+    private static SessionSpaceSnapshot CaptureSessionSpace()
+    {
+        var currentLayout = LayoutManager.Current.CurrentLayout;
+        var tileMode = Convert.ToInt32(AcadApplication.GetSystemVariable("TILEMODE"), CultureInfo.InvariantCulture);
+        var cvport = Convert.ToInt32(AcadApplication.GetSystemVariable("CVPORT"), CultureInfo.InvariantCulture);
+        var spaceKind = tileMode != 0
+            ? "MODEL_SPACE"
+            : cvport > 1
+                ? "PAPER_SPACE_FLOATING_VIEWPORT"
+                : "PAPER_SPACE";
+        return new SessionSpaceSnapshot(currentLayout, tileMode, cvport, spaceKind);
     }
 
     private static long ReadDbMod() => Convert.ToInt64(

@@ -23,7 +23,8 @@ Observed result:
 - Offline suite: 737 passed, 11 deselected, 18 subtests passed (755 total).
 - Real-data unavailable probe: 2 skipped because private inputs were not configured.
 - AutoCAD Mechanical unavailable probe: 9 skipped because no live File IPC session was configured.
-- AutoCAD .NET gate: `NOT RUN` because `-SkipAutoCADDotNet` was explicit.
+- AutoCAD .NET gate in the canonical verifier: `NOT RUN` because
+  `-SkipAutoCADDotNet` was explicit.
 - AutoCAD live marker: `NOT RUN`; no AutoCAD Mechanical File IPC prerequisites were available.
 - Ruff: PASS on the affected Python files.
 - `git diff --check`: PASS.
@@ -55,8 +56,15 @@ Authority-boundary review:
   covers lines, circles, arcs, polylines including bulges, text, dimensions,
   block references including transformed children, and sampled splines.
   Hatch boundaries and unknown visible entity types fail closed until an
-  approved deterministic flattener exists. VS-T3 measurements are ENTITY-only;
-  DATUM resolution remains in the separate dimension-register contract.
+  approved deterministic flattener exists. VS-T3 accepts `DATUM` measurements
+  only through provenance-bound `datum_bindings`; the binding must match the
+  request run/region/manifest and a confirmed dimension-register record before
+  the managed reader resolves its entity handle read-only. Non-conformal block
+  transforms fail closed. Include/exclude and Off/Frozen layer policy is shared
+  by top-level and nested block children, whose effective layer is emitted.
+  Floating viewport restoration is a no-op when already at the captured
+  `CTAB`/`TILEMODE`/`CVPORT` tuple and propagates target-CVPORT errors instead
+  of swallowing them.
 - Windows reparse points are rejected for manifest, drawing, artifact root,
   request directories, parents, and artifact files; cleanup and scavenging use
   the same component-by-component guard.

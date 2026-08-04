@@ -369,7 +369,8 @@ public static class ContractValidator
             "artifact_policy_version",
             "artifact_directory",
             "region",
-            "measurements"
+            "measurements",
+            "datum_bindings"
         };
         foreach (var missing in required.Except(parameters.Keys, StringComparer.Ordinal))
         {
@@ -425,9 +426,104 @@ public static class ContractValidator
         }
         else
         {
-            ValidateVisualEvidenceMeasurements(measurements, errors);
+            var datumBindingIds = ValidateVisualEvidenceDatumBindings(request, errors);
+            ValidateVisualEvidenceMeasurements(measurements, datumBindingIds, errors);
+        }
+    }
+
+    private static HashSet<string> ValidateVisualEvidenceDatumBindings(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        if (!request.Parameters!.TryGetValue("datum_bindings", out var bindings)
+            || bindings.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add("parameters.datum_bindings must be an array");
+            return ids;
         }
 
+        if (bindings.GetArrayLength() > 10000)
+        {
+            errors.Add("parameters.datum_bindings must contain at most 10000 items");
+        }
+
+        foreach (var binding in bindings.EnumerateArray())
+        {
+            if (binding.ValueKind != JsonValueKind.Object)
+            {
+                errors.Add("parameters.datum_bindings entries must be objects");
+                continue;
+            }
+
+            var required = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "id",
+                "entity_handle",
+                "run_id",
+                "region_id",
+                "visual_run_manifest_sha256",
+                "dimension_register_sha256",
+                "dimension_id",
+                "approval"
+            };
+            ValidateClosedObject(binding, required, "parameters.datum_bindings entry", errors);
+
+            if (!TryGetString(binding, "id", out var id)
+                || !VisualEvidenceIdentifierPattern.IsMatch(id))
+            {
+                errors.Add("parameters.datum_bindings.id must be a stable identifier");
+            }
+            else if (!ids.Add(id))
+            {
+                errors.Add("parameters.datum_bindings ids must be unique");
+            }
+
+            foreach (var name in new[] { "entity_handle", "run_id", "region_id", "dimension_id" })
+            {
+                if (!TryGetString(binding, name, out var value)
+                    || !VisualEvidenceIdentifierPattern.IsMatch(value))
+                {
+                    errors.Add($"parameters.datum_bindings.{name} is invalid");
+                }
+            }
+
+            foreach (var name in new[] { "visual_run_manifest_sha256", "dimension_register_sha256" })
+            {
+                if (!TryGetString(binding, name, out var value)
+                    || !LowercaseSha256Pattern.IsMatch(value))
+                {
+                    errors.Add($"parameters.datum_bindings.{name} must be a lowercase SHA-256");
+                }
+            }
+
+            if (!TryGetString(binding, "approval", out var approval)
+                || !string.Equals(approval, "DIMENSION_REGISTER_CONFIRMED", StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.approval is not approved");
+            }
+
+            if (TryGetString(request.Parameters!, "run_id", out var requestRunId)
+                && TryGetString(binding, "run_id", out var bindingRunId)
+                && !string.Equals(requestRunId, bindingRunId, StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.run_id does not match the request");
+            }
+            if (TryGetString(request.Parameters!, "region_id", out var requestRegionId)
+                && TryGetString(binding, "region_id", out var bindingRegionId)
+                && !string.Equals(requestRegionId, bindingRegionId, StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.region_id does not match the request");
+            }
+            if (TryGetString(request.Parameters!, "visual_run_manifest_sha256", out var requestManifestSha256)
+                && TryGetString(binding, "visual_run_manifest_sha256", out var bindingManifestSha256)
+                && !string.Equals(requestManifestSha256, bindingManifestSha256, StringComparison.Ordinal))
+            {
+                errors.Add("parameters.datum_bindings.visual_run_manifest_sha256 does not match the request");
+            }
+        }
+
+        return ids;
     }
 
     private static void ValidateVisualEvidenceRegion(
@@ -480,6 +576,7 @@ public static class ContractValidator
 
     private static void ValidateVisualEvidenceMeasurements(
         JsonElement measurements,
+        IReadOnlySet<string> datumBindingIds,
         ICollection<string> errors)
     {
         if (measurements.GetArrayLength() > 10000)
@@ -516,17 +613,18 @@ public static class ContractValidator
             }
             else
             {
-                ValidateVisualEvidenceReference(reference, errors);
+                ValidateVisualEvidenceReference(reference, datumBindingIds, errors);
             }
             if (TryGetProperty(measurement, "to_reference", out var toReference))
             {
-                ValidateVisualEvidenceReference(toReference, errors);
+                ValidateVisualEvidenceReference(toReference, datumBindingIds, errors);
             }
         }
     }
 
     private static void ValidateVisualEvidenceReference(
         JsonElement reference,
+        IReadOnlySet<string> datumBindingIds,
         ICollection<string> errors)
     {
         if (reference.ValueKind != JsonValueKind.Object)
@@ -535,10 +633,16 @@ public static class ContractValidator
             return;
         }
         ValidateClosedObject(reference, new HashSet<string>(StringComparer.Ordinal) { "type", "id" }, "measurement reference", errors);
-        if (!TryGetString(reference, "type", out var type) || type is not "ENTITY")
+        if (!TryGetString(reference, "type", out var type) || type is not ("ENTITY" or "DATUM"))
         {
             errors.Add("measurement reference type is unsupported");
         }
+        else if (type == "DATUM"
+            && (!TryGetString(reference, "id", out var datumId) || !datumBindingIds.Contains(datumId)))
+        {
+            errors.Add("measurement DATUM reference is not provenance-bound");
+        }
+
         if (!TryGetString(reference, "id", out var id) || !VisualEvidenceIdentifierPattern.IsMatch(id))
         {
             errors.Add("measurement reference id must be a stable identifier");

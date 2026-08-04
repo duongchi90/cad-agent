@@ -21,6 +21,7 @@ def valid_parameters() -> dict[str, object]:
         "visual_run_manifest_sha256": "b" * 64,
         "artifact_policy_version": "vs-t3-artifacts-1",
         "artifact_directory": "artifacts/REQ-VS-T3-001",
+        "datum_bindings": [],
         "region": {
             "model_bbox_mm": [0, 0, 2400, 2200],
             "pixel_size": [1600, 1200],
@@ -203,6 +204,45 @@ def test_python_validator_accepts_valid_vs_t3_parameters() -> None:
     assert client._validate_parameters("visual_evidence_export", valid_parameters()) == valid_parameters()
 
 
+def test_python_validator_accepts_provenance_bound_datum_measurement() -> None:
+    parameters = valid_parameters()
+    parameters["datum_bindings"] = [
+        {
+            "id": "FRONT_AXLE_CENTER",
+            "entity_handle": "A1",
+            "run_id": "RUN-001",
+            "region_id": "SIDE-CABIN",
+            "visual_run_manifest_sha256": "b" * 64,
+            "dimension_register_sha256": "d" * 64,
+            "dimension_id": "DIM-SIDE-001",
+            "approval": "DIMENSION_REGISTER_CONFIRMED",
+        }
+    ]
+    parameters["measurements"] = [
+        {
+            "id": "MEASURE-001",
+            "kind": "DISTANCE",
+            "reference": {"type": "DATUM", "id": "FRONT_AXLE_CENTER"},
+            "to_reference": {"type": "ENTITY", "id": "PART:CABIN_OUTER"},
+        }
+    ]
+    assert DotNetIPCClient._validate_parameters("visual_evidence_export", parameters) == parameters
+
+
+def test_python_validator_rejects_unbound_datum_measurement() -> None:
+    parameters = valid_parameters()
+    parameters["measurements"] = [
+        {
+            "id": "MEASURE-001",
+            "kind": "DISTANCE",
+            "reference": {"type": "DATUM", "id": "UNAPPROVED"},
+            "to_reference": {"type": "ENTITY", "id": "PART:CABIN_OUTER"},
+        }
+    ]
+    with pytest.raises(ValueError, match="(?i)datum"):
+        DotNetIPCClient._validate_parameters("visual_evidence_export", parameters)
+
+
 @pytest.mark.parametrize(
     "field",
     [
@@ -215,6 +255,7 @@ def test_python_validator_accepts_valid_vs_t3_parameters() -> None:
         "artifact_directory",
         "region",
         "measurements",
+        "datum_bindings",
     ],
 )
 def test_python_validator_rejects_missing_vs_t3_parameter(field: str) -> None:

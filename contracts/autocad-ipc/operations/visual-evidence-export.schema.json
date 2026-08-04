@@ -13,7 +13,8 @@
     "artifact_policy_version",
     "artifact_directory",
     "region",
-    "measurements"
+    "measurements",
+    "datum_bindings"
   ],
   "properties": {
     "run_id": {
@@ -112,7 +113,7 @@
             "required": ["type", "id"],
             "properties": {
               "type": {
-                "const": "ENTITY"
+                "enum": ["ENTITY", "DATUM"]
               },
               "id": {
                 "$ref": "#/$defs/identifier"
@@ -125,13 +126,41 @@
             "required": ["type", "id"],
             "properties": {
               "type": {
-                "const": "ENTITY"
+                "enum": ["ENTITY", "DATUM"]
               },
               "id": {
                 "$ref": "#/$defs/identifier"
               }
             }
           }
+        }
+      }
+    },
+    "datum_bindings": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "entity_handle",
+          "run_id",
+          "region_id",
+          "visual_run_manifest_sha256",
+          "dimension_register_sha256",
+          "dimension_id",
+          "approval"
+        ],
+        "properties": {
+          "id": {"$ref": "#/$defs/identifier"},
+          "entity_handle": {"$ref": "#/$defs/identifier"},
+          "run_id": {"$ref": "#/$defs/identifier"},
+          "region_id": {"$ref": "#/$defs/identifier"},
+          "visual_run_manifest_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+          "dimension_register_sha256": {"$ref": "#/$defs/lowercaseSha256"},
+          "dimension_id": {"$ref": "#/$defs/identifier"},
+          "approval": {"const": "DIMENSION_REGISTER_CONFIRMED"}
         }
       }
     }

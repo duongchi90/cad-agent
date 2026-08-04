@@ -17,7 +17,8 @@ public sealed record VisualEvidenceRequest(
     string ArtifactPolicyVersion,
     string ArtifactDirectory,
     JsonElement Region,
-    IReadOnlyList<JsonElement> Measurements)
+    IReadOnlyList<JsonElement> Measurements,
+    IReadOnlyList<JsonElement> DatumBindings)
 {
     public static VisualEvidenceRequest FromIpc(IpcRequest request)
     {
@@ -39,7 +40,8 @@ public sealed record VisualEvidenceRequest(
             parameters["artifact_policy_version"].GetString()!,
             parameters["artifact_directory"].GetString()!,
             parameters["region"].Clone(),
-            parameters["measurements"].EnumerateArray().Select(value => value.Clone()).ToArray());
+            parameters["measurements"].EnumerateArray().Select(value => value.Clone()).ToArray(),
+            parameters["datum_bindings"].EnumerateArray().Select(value => value.Clone()).ToArray());
     }
 }
 

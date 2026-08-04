@@ -630,6 +630,7 @@ class DotNetIPCClient:
         visual_run_manifest_path: str | os.PathLike[str],
         region: Mapping[str, Any],
         measurements: Sequence[Mapping[str, Any]],
+        datum_bindings: Sequence[Mapping[str, Any]] = (),
         artifact_consumer: Callable[[Mapping[str, Any], Mapping[str, Path]], None] | None = None,
         artifact_directory: str | None = None,
         approval: Mapping[str, Any] | None = None,
@@ -664,6 +665,7 @@ class DotNetIPCClient:
             "artifact_directory": normalized_artifact_directory,
             "region": dict(region),
             "measurements": [dict(measurement) for measurement in measurements],
+            "datum_bindings": [dict(binding) for binding in datum_bindings],
         }
         normalized_path = self._validate_drawing_path("visual_evidence_export", drawing_full_path)
         normalized_sha256 = self._validate_sha256(drawing_sha256)
@@ -673,6 +675,12 @@ class DotNetIPCClient:
             raise ValueError("visual_evidence_export requires drawing_sha256")
         if normalized_manifest_sha256 is None:
             raise ValueError("visual_evidence_export requires visual_run_manifest_sha256")
+        self._validate_visual_evidence_datum_bindings(
+            normalized_parameters,
+            expected_run_id=run_id,
+            expected_region_id=region_id,
+            expected_manifest_sha256=normalized_manifest_sha256,
+        )
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
 
@@ -930,6 +938,7 @@ class DotNetIPCClient:
             "artifact_directory",
             "region",
             "measurements",
+            "datum_bindings",
         }
         if set(parameters) != required:
             missing = sorted(required.difference(parameters))
@@ -1024,15 +1033,79 @@ class DotNetIPCClient:
             if "to_reference" in measurement:
                 DotNetIPCClient._validate_visual_evidence_reference(measurement["to_reference"])
 
+        DotNetIPCClient._validate_visual_evidence_datum_bindings_shape(parameters["datum_bindings"])
+
+        binding_ids = {
+            binding["id"]
+            for binding in parameters["datum_bindings"]
+            if isinstance(binding, Mapping) and isinstance(binding.get("id"), str)
+        }
+        for measurement in measurements:
+            for name in ("reference", "to_reference"):
+                reference = measurement.get(name)
+                if isinstance(reference, Mapping) and reference.get("type") == "DATUM":
+                    if reference.get("id") not in binding_ids:
+                        raise ValueError("measurement DATUM reference is not provenance-bound")
+
 
     @staticmethod
     def _validate_visual_evidence_reference(reference: Any) -> None:
         if not isinstance(reference, Mapping) or set(reference) != {"type", "id"}:
             raise ValueError("parameters.measurements references must be closed objects")
-        if reference["type"] != "ENTITY":
+        if reference["type"] not in {"ENTITY", "DATUM"}:
             raise ValueError("parameters.measurements reference type is unsupported")
         if not isinstance(reference["id"], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(reference["id"]):
             raise ValueError("parameters.measurements reference id must be a stable identifier")
+
+    @staticmethod
+    def _validate_visual_evidence_datum_bindings_shape(bindings: Any) -> None:
+        if not isinstance(bindings, list) or len(bindings) > 10000:
+            raise ValueError("parameters.datum_bindings must be an array of at most 10000 items")
+        required = {
+            "id",
+            "entity_handle",
+            "run_id",
+            "region_id",
+            "visual_run_manifest_sha256",
+            "dimension_register_sha256",
+            "dimension_id",
+            "approval",
+        }
+        seen: set[str] = set()
+        for binding in bindings:
+            if not isinstance(binding, Mapping) or set(binding) != required:
+                raise ValueError("parameters.datum_bindings entries must be closed provenance objects")
+            for name in ("id", "entity_handle", "run_id", "region_id", "dimension_id"):
+                value = binding[name]
+                if not isinstance(value, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(value):
+                    raise ValueError(f"parameters.datum_bindings.{name} is invalid")
+            for name in ("visual_run_manifest_sha256", "dimension_register_sha256"):
+                value = binding[name]
+                if not isinstance(value, str) or not _LOWERCASE_SHA256_PATTERN.fullmatch(value):
+                    raise ValueError(f"parameters.datum_bindings.{name} must be a lowercase SHA-256")
+            if binding["approval"] != "DIMENSION_REGISTER_CONFIRMED":
+                raise ValueError("parameters.datum_bindings.approval is not approved")
+            if binding["id"] in seen:
+                raise ValueError("parameters.datum_bindings ids must be unique")
+            seen.add(binding["id"])
+
+    @staticmethod
+    def _validate_visual_evidence_datum_bindings(
+        parameters: Mapping[str, Any],
+        *,
+        expected_run_id: str,
+        expected_region_id: str,
+        expected_manifest_sha256: str,
+    ) -> None:
+        for binding in parameters["datum_bindings"]:
+            if binding["run_id"] != expected_run_id:
+                raise ValueError("parameters.datum_bindings.run_id does not match the request")
+            if binding["region_id"] != expected_region_id:
+                raise ValueError("parameters.datum_bindings.region_id does not match the request")
+            if binding["visual_run_manifest_sha256"] != expected_manifest_sha256:
+                raise ValueError(
+                    "parameters.datum_bindings.visual_run_manifest_sha256 does not match the request"
+                )
 
     @staticmethod
     def _validate_result(

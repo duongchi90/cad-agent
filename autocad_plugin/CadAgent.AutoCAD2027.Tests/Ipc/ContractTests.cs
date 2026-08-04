@@ -387,6 +387,42 @@ public sealed class ContractTests
         Assert.True(validation.IsValid);
     }
 
+    [Fact]
+    public void AcceptsOnlyProvenanceBoundDatumMeasurementReferences()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/visual-evidence-export-request.json")));
+        var parameters = request.Parameters!.ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters["measurements"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                id = "MEASURE-AXLE",
+                kind = "DISTANCE",
+                reference = new { type = "DATUM", id = "FRONT_AXLE_CENTER" },
+                to_reference = new { type = "ENTITY", id = "PART:CABIN_OUTER" }
+            }
+        });
+        parameters["datum_bindings"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                id = "FRONT_AXLE_CENTER",
+                entity_handle = "A1",
+                run_id = "RUN-001",
+                region_id = "SIDE-CABIN",
+                visual_run_manifest_sha256 = new string('b', 64),
+                dimension_register_sha256 = new string('d', 64),
+                dimension_id = "DIM-SIDE-001",
+                approval = "DIMENSION_REGISTER_CONFIRMED"
+            }
+        });
+
+        var validation = ContractValidator.ValidateRequest(request with { Parameters = parameters });
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+    }
+
     private static string RepositoryFile(string relativePath)
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);

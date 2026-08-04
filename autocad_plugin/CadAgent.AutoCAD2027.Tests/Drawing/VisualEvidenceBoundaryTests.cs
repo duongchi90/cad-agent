@@ -152,6 +152,7 @@ public sealed class VisualEvidenceBoundaryTests
         "vs-t3-artifacts-1",
         "artifacts/REQ-001",
         JsonSerializer.SerializeToElement(new { }),
+        Array.Empty<JsonElement>(),
         Array.Empty<JsonElement>());
 
     private static VisualEvidenceSnapshot Snapshot(string path) => new(
