@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import ntpath
 import os
@@ -415,6 +416,193 @@ class DotNetIPCClient:
             approval=None,
             request_id=request_id,
         )
+
+    def visual_evidence_export(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        drawing_sha256: str,
+        run_id: str,
+        evidence_id: str,
+        region_id: str,
+        latest_mutation_sha256: str,
+        visual_run_manifest_sha256: str,
+        region: Mapping[str, Any],
+        measurements: Sequence[Mapping[str, Any]],
+        artifact_consumer: Callable[[Mapping[str, Any], Mapping[str, Path]], None] | None = None,
+        artifact_directory: str | None = None,
+        approval: Mapping[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture bounded read-only evidence and hand verified artifacts to a consumer.
+
+        The .NET side retains the request-owned artifact directory until this
+        method has validated and optionally copied every artifact.  The
+        callback is therefore the handoff boundary for the later atomic
+        evidence writer; it runs before Python removes the request-owned
+        directory.  A timeout never implies that AutoCAD stopped working, so
+        an active lease protects the directory from cleanup.
+        """
+
+        actual_request_id = normalize_request_id(
+            request_id if request_id is not None else self.request_id_factory()
+        )
+        normalized_artifact_directory = artifact_directory or f"artifacts/{actual_request_id}"
+        self._validate_request_artifact_directory(normalized_artifact_directory, actual_request_id)
+        parameters = {
+            "run_id": run_id,
+            "evidence_id": evidence_id,
+            "region_id": region_id,
+            "latest_mutation_sha256": latest_mutation_sha256,
+            "visual_run_manifest_sha256": visual_run_manifest_sha256,
+            "artifact_policy_version": _VS_T3_ARTIFACT_POLICY,
+            "artifact_directory": normalized_artifact_directory,
+            "region": dict(region),
+            "measurements": [dict(measurement) for measurement in measurements],
+        }
+        normalized_path = self._validate_drawing_path("visual_evidence_export", drawing_full_path)
+        normalized_sha256 = self._validate_sha256(drawing_sha256)
+        normalized_parameters = self._validate_parameters("visual_evidence_export", parameters)
+        if normalized_sha256 is None:
+            raise ValueError("visual_evidence_export requires drawing_sha256")
+        if approval is not None and not isinstance(approval, Mapping):
+            raise ValueError("approval must be an object or null")
+
+        request = {
+            "request_id": actual_request_id,
+            "schema_version": SCHEMA_VERSION,
+            "operation": "visual_evidence_export",
+            "drawing_full_path": normalized_path,
+            "drawing_sha256": normalized_sha256,
+            "parameters": normalized_parameters,
+            "approval": dict(approval) if approval is not None else None,
+        }
+        request_file = request_path(self.ipc_dir, actual_request_id)
+        result_file = result_path(self.ipc_dir, actual_request_id)
+        result_file.unlink(missing_ok=True)
+        try:
+            atomic_write_json(request_file, request, max_bytes=self.max_read_bytes)
+            if self.trigger is None:
+                raise DotNetIPCError("File IPC requires an AutoCAD dispatcher trigger")
+            self.trigger()
+            result = self._poll_result(result_file, actual_request_id, "visual_evidence_export")
+            if result["success"] is not True:
+                errors = result.get("errors", [])
+                message = "; ".join(str(error) for error in errors) if errors else "request failed"
+                raise DotNetIPCResultError(message, result=result)
+            artifact_paths = self._verify_visual_evidence_artifacts(
+                result,
+                actual_request_id,
+                normalized_artifact_directory,
+            )
+            if artifact_consumer is not None:
+                artifact_consumer(result, artifact_paths)
+            return result
+        finally:
+            cleanup_request_files(self.ipc_dir, actual_request_id)
+            self._cleanup_request_artifacts_if_lease_free(
+                normalized_artifact_directory,
+                actual_request_id,
+            )
+
+    @staticmethod
+    def _validate_request_artifact_directory(artifact_directory: str, request_id: str) -> None:
+        if not isinstance(artifact_directory, str):
+            raise ValueError("artifact_directory must be a string")
+        parts = artifact_directory.replace("\\", "/").split("/")
+        if parts != ["artifacts", request_id]:
+            raise ValueError("artifact_directory must be exactly artifacts/<request_id>")
+
+    def _verify_visual_evidence_artifacts(
+        self,
+        result: Mapping[str, Any],
+        request_id: str,
+        artifact_directory: str,
+    ) -> dict[str, Path]:
+        payload = result.get("payload")
+        if not isinstance(payload, Mapping):
+            raise DotNetIPCProtocolError("visual evidence result payload must be an object")
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, list) or len(artifacts) != 3:
+            raise DotNetIPCProtocolError("visual evidence must contain exactly three artifacts")
+        expected_root = (self.ipc_dir / "artifacts" / request_id).resolve()
+        if expected_root.exists() and expected_root.is_symlink():
+            raise DotNetIPCProtocolError("visual evidence artifact directory must not be a symlink")
+        if not expected_root.is_dir():
+            raise DotNetIPCProtocolError("visual evidence artifact directory is missing")
+
+        paths: dict[str, Path] = {}
+        total_bytes = 0
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                raise DotNetIPCProtocolError("visual evidence artifact descriptor must be an object")
+            kind = artifact.get("kind")
+            if kind not in {"render", "entity_map", "measurements"}:
+                raise DotNetIPCProtocolError("visual evidence artifact kind is unsupported")
+            relative_path = artifact.get("relative_path")
+            if not isinstance(relative_path, str):
+                raise DotNetIPCProtocolError("visual evidence artifact path must be a string")
+            relative_parts = relative_path.replace("\\", "/").split("/")
+            if (
+                any(part in {"", ".", ".."} for part in relative_parts)
+                or relative_parts[:2] != ["artifacts", request_id]
+                or len(relative_parts) < 3
+            ):
+                raise DotNetIPCProtocolError("visual evidence artifact path is unsafe or not request-owned")
+            path = (self.ipc_dir / Path(*relative_parts)).resolve()
+            try:
+                path.relative_to(expected_root)
+            except ValueError as exc:
+                raise DotNetIPCProtocolError("visual evidence artifact escapes request ownership") from exc
+            if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+                raise DotNetIPCProtocolError("visual evidence artifact path contains a symlink")
+            if not path.is_file():
+                raise DotNetIPCProtocolError("visual evidence artifact file is missing")
+            byte_length = artifact.get("byte_length")
+            if type(byte_length) is not int or byte_length < 1 or byte_length > 32 * 1024 * 1024:
+                raise DotNetIPCProtocolError("visual evidence artifact byte_length is invalid")
+            max_bytes = 8 * 1024 * 1024 if kind == "render" else 8 * 1024 * 1024 if kind == "entity_map" else 4 * 1024 * 1024
+            if byte_length > max_bytes:
+                raise DotNetIPCProtocolError("visual evidence artifact exceeds its kind limit")
+            data = path.read_bytes()
+            if len(data) != byte_length:
+                raise DotNetIPCProtocolError("visual evidence artifact byte length does not match its descriptor")
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != artifact.get("sha256"):
+                raise DotNetIPCProtocolError("visual evidence artifact SHA-256 does not match its descriptor")
+            total_bytes += len(data)
+            if total_bytes > 32 * 1024 * 1024:
+                raise DotNetIPCProtocolError("visual evidence artifacts exceed the total byte limit")
+            paths[kind] = path
+        if set(paths) != {"render", "entity_map", "measurements"}:
+            raise DotNetIPCProtocolError("visual evidence artifact kinds must be unique and complete")
+        return paths
+
+    def _cleanup_request_artifacts_if_lease_free(
+        self,
+        artifact_directory: str,
+        request_id: str,
+    ) -> None:
+        try:
+            self._validate_request_artifact_directory(artifact_directory, request_id)
+            root = (self.ipc_dir / "artifacts" / request_id).resolve()
+            if not root.is_dir() or root.is_symlink():
+                return
+            lease = root / "active.lease"
+            if lease.exists():
+                return
+            for child in root.iterdir():
+                if child.is_symlink() or child.is_file():
+                    child.unlink()
+                elif child.is_dir():
+                    # The exporter owns a flat directory. Refuse to recurse
+                    # into an unexpected tree during best-effort cleanup.
+                    return
+            root.rmdir()
+        except (FileNotFoundError, OSError, ValueError):
+            # Cleanup is deliberately best-effort; the 24-hour scavenger is
+            # responsible for orphaned lease-free directories.
+            return
 
     def _poll_result(
         self,
