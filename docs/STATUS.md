@@ -23,6 +23,19 @@ collects unavailable-state probes for `real_data` and `autocad_mechanical` as ex
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
 Mechanical gate that was not separately executed remains `NOT RUN`.
 
+## Visual Supervisor VS-T0 contract-only slice (2026-08-04)
+
+- State: **Contract implementation complete; aggregate verification pending**.
+- Implementation head SHA: `PENDING_FRESH_VERIFICATION`.
+- Scope is limited to pure-Python validators, closed JSON schemas, fixtures,
+  and policy helpers for run manifests, dimensions, geometry comparison,
+  independent visual review, repair plans, region verification, and
+  run-scoped authorization.
+- `real_data: NOT RUN`; `autocad_mechanical: NOT RUN`; `OpenAI API: NOT RUN`.
+- No visual model review, image processing/comparator runtime, AutoCAD
+  evidence operation, repair loop, Codex bridge runtime, or publication
+  mutation is implemented in VS-T0.
+
 ## M2 Drawing Initialization Gate
 
 - State: **Executing**. The approved M0-M8 rollout merged at `1969dc9`; the

@@ -766,6 +766,17 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "region_verification_register": _validate_region_verification_register,
     "auto_publish_authorization": _validate_auto_publish_authorization,
 }
+SUPPORTED_VISUAL_CONTRACTS = tuple(sorted(_VALIDATORS))
+
+__all__ = [
+    "SUPPORTED_VISUAL_CONTRACTS",
+    "VisualContractError",
+    "read_visual_contract",
+    "require_auto_publish_authorized",
+    "require_dimension_gate_ready",
+    "require_region_verified",
+    "validate_visual_contract",
+]
 
 
 def validate_visual_contract(

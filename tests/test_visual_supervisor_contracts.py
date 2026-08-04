@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from cad_agent.visual_contracts import (
+    SUPPORTED_VISUAL_CONTRACTS,
     VisualContractError,
     read_visual_contract,
     validate_visual_contract,
@@ -114,3 +115,15 @@ def test_visual_review_needs_human_requires_requested_evidence_or_finding() -> N
     payload["repair_intent"]["requested_next_evidence"] = []
     with pytest.raises(VisualContractError, match="NEEDS_HUMAN"):
         validate_visual_contract(payload, contract="visual_review")
+
+
+def test_supported_visual_contract_registry_is_exact() -> None:
+    assert set(SUPPORTED_VISUAL_CONTRACTS) == {
+        "visual_run_manifest",
+        "dimension_register",
+        "geometry_comparison",
+        "visual_review",
+        "repair_plan",
+        "region_verification_register",
+        "auto_publish_authorization",
+    }

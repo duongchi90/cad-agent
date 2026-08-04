@@ -26,3 +26,45 @@ def test_visual_run_manifest_schema_closes_nested_objects() -> None:
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert schema["properties"]["source"]["additionalProperties"] is False
     assert schema["properties"]["drawing"]["additionalProperties"] is False
+
+
+def test_only_visual_review_schema_contains_verdict_property() -> None:
+    root = Path(__file__).resolve().parents[1] / "contracts" / "visual-supervisor"
+    verdict_schemas = []
+    for schema_path in sorted(root.glob("*.schema.json")):
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        if "verdict" in schema.get("properties", {}):
+            verdict_schemas.append(schema_path.name)
+    assert verdict_schemas == ["visual-review.schema.json"]
+
+
+def test_only_authorization_schema_contains_target_path() -> None:
+    root = Path(__file__).resolve().parents[1] / "contracts" / "visual-supervisor"
+    target_schemas = []
+    for schema_path in sorted(root.glob("*.schema.json")):
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        if "target_path" in schema.get("properties", {}):
+            target_schemas.append(schema_path.name)
+    assert target_schemas == ["auto-publish-authorization.schema.json"]
+
+
+def _mutate_nested(value: object) -> bool:
+    if isinstance(value, dict):
+        for nested in value.values():
+            if isinstance(nested, list):
+                nested.append("MUTATED_AFTER_VALIDATION")
+                return True
+            if isinstance(nested, dict) and _mutate_nested(nested):
+                return True
+    return False
+
+
+def test_validation_deep_copies_every_visual_example() -> None:
+    root = Path(__file__).resolve().parents[1]
+    example_root = root / "contracts" / "visual-supervisor" / "examples"
+    for example_path in sorted(example_root.glob("*.json")):
+        payload = json.loads(example_path.read_text(encoding="utf-8"))
+        validated = validate_visual_contract(payload, contract=example_path.stem.replace("-", "_"))
+        if not _mutate_nested(validated):
+            validated["status"] = "MUTATED_AFTER_VALIDATION"
+        assert validated != payload

@@ -265,6 +265,18 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("--agent-action-approval", architecture)
         self.assertIn("agent_application.json", architecture)
 
+    def test_visual_supervisor_t0_documentation_preserves_contract_boundaries(self) -> None:
+        architecture = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+        status = (ROOT / "docs/STATUS.md").read_text(encoding="utf-8")
+        for term in (
+            "Visual Supervisor contract boundary",
+            "Codex cannot self-approve",
+            "VS-T0 contract-only",
+        ):
+            self.assertIn(term, architecture)
+        for term in ("real_data: NOT RUN", "autocad_mechanical: NOT RUN", "OpenAI API: NOT RUN"):
+            self.assertIn(term, status)
+
 
 if __name__ == "__main__":
     unittest.main()
