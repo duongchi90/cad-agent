@@ -14,6 +14,7 @@ from primitive_ir_lib.dimension_observer import (
 )
 from primitive_ir_lib.tests.dimension_test_helpers import (
     fake_ocr_4500,
+    fake_ocr_unreadable_leader,
     fake_ocr_unreadable,
     horizontal_dimension_cluster,
     matching_horizontal_anchors,
@@ -21,6 +22,7 @@ from primitive_ir_lib.tests.dimension_test_helpers import (
     synthetic_horizontal_dimension,
     synthetic_isolated_number_crop,
     synthetic_leader_annotation,
+    synthetic_unreadable_leader_geometry,
     synthetic_page_with_two_unreadable_dimensions_and_note,
 )
 from primitive_ir_lib.text_extraction import RawText
@@ -244,6 +246,32 @@ def test_leader_lines_are_preserved_in_closed_observer_evidence() -> None:
     assert validate_visual_contract(register, contract="dimension_register")["dimensions"][0][
         "extension_geometry"
     ]["leader_lines"]
+
+
+def test_unreadable_leader_ocr_is_unresolved_with_null_value_and_leader_evidence() -> None:
+    image = synthetic_unreadable_leader_geometry()
+    cluster = DimensionCluster(
+        cluster_id="DIMCLUSTER-UNREADABLE-LEADER",
+        bbox_px=(0, 0, image.shape[1], image.shape[0]),
+        member_boxes=(),
+    )
+
+    disposition = observe_dimension_cluster(
+        image,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_unreadable_leader,
+    )
+
+    assert disposition.disposition == "UNRESOLVED"
+    assert disposition.observation is not None
+    assert disposition.observation["value"] is None
+    assert disposition.observation["unit"] is None
+    assert disposition.observation["raw_text_candidates"] == ["8O?O"]
+    assert disposition.observation["extension_geometry"]["dimension_line"] is None
+    assert disposition.observation["extension_geometry"]["leader_lines"]
 
 
 def test_critical_flag_is_independent_of_blocker_scope() -> None:

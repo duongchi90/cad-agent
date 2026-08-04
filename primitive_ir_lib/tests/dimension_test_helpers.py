@@ -38,6 +38,17 @@ def synthetic_leader_annotation() -> np.ndarray:
     return image
 
 
+def synthetic_unreadable_leader_geometry() -> np.ndarray:
+    image = np.full((180, 300, 3), 255, dtype=np.uint8)
+    cv2.line(image, (42, 125), (155, 50), (0, 0, 0), 2)
+    cv2.fillConvexPoly(
+        image,
+        np.array([[42, 125], [58, 114], [58, 136]], dtype=np.int32),
+        (0, 0, 0),
+    )
+    return image
+
+
 def synthetic_diagonal_non_leader() -> np.ndarray:
     image = np.full((180, 300, 3), 255, dtype=np.uint8)
     cv2.line(image, (42, 125), (155, 50), (0, 0, 0), 2)
@@ -124,6 +135,20 @@ def fake_ocr_unreadable(image_bgr: np.ndarray) -> list[RawText]:
         bbox_px=(20, 15, 100, 55),
         rotation_deg=0.0,
         confidence=0.0,
+        source="text_tesseract",
+        parsed_value=None,
+        semantic_role="unknown",
+    )]
+
+
+def fake_ocr_unreadable_leader(image_bgr: np.ndarray) -> list[RawText]:
+    del image_bgr
+    return [RawText(
+        id="rawtext-unreadable-leader",
+        content="8O?O",
+        bbox_px=(165, 35, 250, 70),
+        rotation_deg=0.0,
+        confidence=0.20,
         source="text_tesseract",
         parsed_value=None,
         semantic_role="unknown",

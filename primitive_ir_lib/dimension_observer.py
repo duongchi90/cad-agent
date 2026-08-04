@@ -418,7 +418,7 @@ def observe_dimension_cluster(
             ),
             reasons=tuple(sorted(set(parse_reasons + ("unreadable_observation",)))),
         )
-    if parsed is None and raw_candidates and geometry.dimension_line is None:
+    if parsed is None and raw_candidates and geometry.dimension_line is None and not geometry.leader_lines:
         return DimensionDisposition(
             cluster_id=cluster.cluster_id,
             disposition="NOT_A_DIMENSION",
