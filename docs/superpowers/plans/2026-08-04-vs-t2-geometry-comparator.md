@@ -8,21 +8,22 @@
 
 **Implementation base:** Create `task/vs-t2-geometry-comparator` from fresh integrated `main` and record that exact SHA before changing code.
 
-**Goal:** Build a deterministic offline comparator that aligns source and CAD region evidence through approved anchors, writes reproducible overlays and difference masks, computes the VS-T0 metric set, and classifies improvement or regression without issuing a visual verdict.
+**Goal:** Build a deterministic offline comparator that aligns source and CAD region evidence through approved anchors, writes reproducible overlays and difference masks, computes the ten VS-T0 metrics, and classifies improvement or regression without issuing a visual verdict.
 
-**Architecture:** Image algorithms stay in `primitive_ir_lib`; `cad_agent` only snapshots files, binds hashes, validates contracts, and writes artifacts. Implement similarity alignment with deterministic NumPy linear algebra. Permit perspective correction only through exactly four approved photograph anchors. Free-form deformation, model calls, AutoCAD calls, repair decisions, and publication are outside VS-T2.
+**Architecture:** Image algorithms stay in `primitive_ir_lib`; `cad_agent` only snapshots files, binds hashes, validates contracts, and writes artifacts. Similarity alignment uses deterministic NumPy linear algebra. Perspective correction is limited to exactly four approved photograph anchors. Free-form deformation, model calls, AutoCAD calls, repair decisions, and publication are outside VS-T2.
 
 **Tech Stack:** Windows, Python 3.11, OpenCV 5, NumPy 2, pytest, VS-T0 `geometry_comparison` contract.
 
 ## Global Constraints
 
-- Comparator output is evidence, not a visual `PASS` or a repair plan.
+- Comparator output is evidence, not visual `PASS`, repair, or publication authority.
 - Anchor authority order is datum, confirmed driving-dimension anchor, stable CAD entity anchor, then high-confidence visual anchor.
 - Similarity alignment permits translation, rotation, and uniform scale only.
 - Perspective correction requires `source_is_photograph=true` and exactly four approved non-collinear pairs.
 - Reject shear, nonuniform scale, reflections, thin-plate splines, optical flow, and free-form warping.
-- Failed alignment is valid evidence and emits an empty metric object, never fake zero-error metrics.
-- Bind outputs to reference package hash, CAD render hash, mutation hash, region ID, and alignment configuration.
+- Failed alignment is valid evidence: emit `alignment.status=FAILED`, `metrics={}`, `trend=BASELINE`, and no aligned image artifacts.
+- Because the VS-T0 contract requires `alignment.transform_sha256`, a failed alignment uses the canonical SHA-256 of its closed failure record and input/config hashes; it must not claim that a transform exists.
+- Bind outputs to reference package hash, exact reference image bytes, exact CAD render bytes, mutation hash, region ID, and alignment configuration.
 - Metrics must be finite and deterministic for identical input bytes.
 - Do not reduce acceptance to one average score.
 - Source/CAD images and generated evidence stay outside Git; tests use generated images and temporary directories.
@@ -35,7 +36,7 @@
 
 ### Comparator
 
-- `primitive_ir_lib/geometry_alignment.py` — anchor validation, deterministic similarity fit, photograph-only homography, controlled warp.
+- `primitive_ir_lib/geometry_alignment.py` — anchor validation, similarity fit, photograph-only homography, controlled warp.
 - `primitive_ir_lib/geometry_metrics.py` — outline normalization and the ten VS-T0 metrics.
 - `primitive_ir_lib/geometry_comparator.py` — overlays, masks, curve-profile evidence, and trend policy.
 
@@ -46,6 +47,7 @@
 
 ### Tests
 
+- `primitive_ir_lib/tests/geometry_test_helpers.py`
 - `primitive_ir_lib/tests/test_geometry_alignment.py`
 - `primitive_ir_lib/tests/test_geometry_metrics.py`
 - `primitive_ir_lib/tests/test_geometry_comparator.py`
@@ -130,7 +132,7 @@ class GeometryMetrics:
 
 
 def normalize_outline(image: np.ndarray) -> np.ndarray:
-    """Return a uint8 mask containing only 0 and 255."""
+    """Return a uint8 foreground mask containing only 0 and 255."""
 
 
 def compute_geometry_metrics(reference_mask: np.ndarray, cad_mask: np.ndarray) -> GeometryMetrics:
@@ -190,7 +192,7 @@ def run_geometry_comparison(
     previous_comparison_path: Path | None = None,
     source_is_photograph: bool = False,
 ) -> Path:
-    """Write image evidence and validated geometry-comparison.json atomically."""
+    """Write validated geometry-comparison.json and applicable evidence atomically."""
 ```
 
 ## Exact Metric Definitions
@@ -205,20 +207,94 @@ width_ratio_error = abs(width_cad/width_reference - 1)
 height_ratio_error = abs(height_cad/height_reference - 1)
 missing_edge_ratio = count(reference_edge AND NOT dilated(cad_edge)) / reference_edge_count
 extra_edge_ratio = count(cad_edge AND NOT dilated(reference_edge)) / cad_edge_count
-connected_component_difference = abs(component_count_reference-component_count_cad)
+connected_component_difference = abs(foreground_component_count_reference-foreground_component_count_cad)
 ```
 
-Use a one-pixel elliptical dilation kernel for missing/extra edge tolerance. Distances use Euclidean distance transforms. Empty masks are invalid inputs, not perfect matches.
+Use a one-pixel elliptical dilation kernel for missing/extra edge tolerance. Build edge maps with Canny. For each direction, compute distance to the other edge set using `cv2.distanceTransform(cv2.bitwise_not(other_edge))`. Empty silhouettes or empty edge sets are invalid metric inputs, not perfect matches. `connected_component_difference` counts disconnected foreground features; an internal hole affects edge metrics but does not by itself change foreground component count.
 
 ## Deterministic Trend Policy
 
-1. IoU is higher-is-better; all other numeric metrics are lower-is-better.
+1. IoU is higher-is-better; all other metrics are lower-is-better.
 2. A change smaller than or equal to `epsilon` is unchanged.
 3. Any regression in missing-edge ratio, extra-edge ratio, p95 Hausdorff, or connected-component difference returns `REGRESSED`.
-4. Otherwise, any regressing metric returns `REGRESSED`.
+4. Otherwise any regressing metric returns `REGRESSED`.
 5. Return `IMPROVED` only when at least one metric improves and none regress.
 6. Return `UNCHANGED` when all metrics remain within epsilon.
 7. Return `BASELINE` when there is no previous comparison.
+8. A previous comparison may be used only when its `region_id` and `reference_package_sha256` match the current run; otherwise refuse it.
+
+## Synthetic Test Helpers
+
+Create `primitive_ir_lib/tests/geometry_test_helpers.py`:
+
+```python
+from pathlib import Path
+import cv2
+import json
+import numpy as np
+from primitive_ir_lib.geometry_alignment import AnchorPair, AlignmentResult
+
+
+def rectangle_mask(*, dx: int = 0, dy: int = 0) -> np.ndarray:
+    image = np.zeros((160, 240), dtype=np.uint8)
+    cv2.rectangle(image, (40 + dx, 45 + dy), (190 + dx, 120 + dy), 255, -1)
+    return image
+
+
+def two_component_mask() -> np.ndarray:
+    image = rectangle_mask()
+    cv2.circle(image, (215, 35), 12, 255, -1)
+    return image
+
+
+def single_component_mask() -> np.ndarray:
+    return rectangle_mask()
+
+
+def identity_anchor_pairs() -> list[AnchorPair]:
+    return [
+        AnchorPair("A", (40.0, 45.0), (40.0, 45.0), "DATUM", 1.0),
+        AnchorPair("B", (190.0, 120.0), (190.0, 120.0), "DATUM", 1.0),
+        AnchorPair("C", (40.0, 120.0), (40.0, 120.0), "DATUM", 1.0),
+    ]
+
+
+def identity_alignment() -> AlignmentResult:
+    return AlignmentResult(
+        status="ALIGNED",
+        method="VERIFIED_ANCHOR_SIMILARITY",
+        matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+        anchor_ids=("A", "B", "C"),
+        residual_rms_px=0.0,
+        reasons=(),
+    )
+
+
+def write_mask(path: Path, mask: np.ndarray) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    assert cv2.imwrite(str(path), mask)
+    return path
+
+
+def write_anchor_file(path: Path, anchors: list[AnchorPair]) -> Path:
+    payload = {
+        "schema_version": "geometry-anchors-1.0",
+        "anchors": [
+            {
+                "anchor_id": item.anchor_id,
+                "reference_px": list(item.reference_px),
+                "cad_px": list(item.cad_px),
+                "authority": item.authority,
+                "confidence": item.confidence,
+            }
+            for item in anchors
+        ],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
+```
+
+Tasks add deterministic helpers for transformed, reflected, nonuniform, perspective, and curve cases in this same file before importing them.
 
 ---
 
@@ -226,6 +302,7 @@ Use a one-pixel elliptical dilation kernel for missing/extra edge tolerance. Dis
 
 **Files:**
 - Create: `primitive_ir_lib/geometry_alignment.py`
+- Create: `primitive_ir_lib/tests/geometry_test_helpers.py`
 - Create: `primitive_ir_lib/tests/test_geometry_alignment.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -242,14 +319,14 @@ def test_similarity_fit_recovers_controlled_transform() -> None:
 
 
 def test_similarity_fit_refuses_one_anchor() -> None:
-    result = estimate_similarity_alignment([one_anchor()])
+    result = estimate_similarity_alignment([identity_anchor_pairs()[0]])
     assert result.status == "FAILED"
     assert "two" in " ".join(result.reasons).lower()
 
 
-def test_similarity_fit_refuses_reflection_and_nonuniform_scale() -> None:
+def test_similarity_fit_refuses_reflection_and_three_point_nonuniform_mapping() -> None:
     assert estimate_similarity_alignment(reflected_anchor_pairs()).status == "FAILED"
-    assert estimate_similarity_alignment(nonuniform_anchor_pairs()).status == "FAILED"
+    assert estimate_similarity_alignment(nonuniform_three_anchor_pairs()).status == "FAILED"
 
 
 def test_similarity_fit_is_deterministic() -> None:
@@ -263,9 +340,9 @@ def test_similarity_fit_is_deterministic() -> None:
 python -m pytest primitive_ir_lib/tests/test_geometry_alignment.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 3: Implement a deterministic Umeyama fit**
+- [ ] **Step 3: Implement deterministic similarity fit**
 
-Sort anchors by ID. Use NumPy SVD. Reject duplicate IDs, duplicate pairs, fewer than two unique pairs, reflection, nonuniform mapping, non-finite values, scale/rotation limits, and residual above threshold. Do not use RANSAC.
+Sort anchors by ID. Use NumPy SVD. Two distinct pairs are sufficient for a similarity fit; with three or more pairs reject rank-deficient source geometry. Reject duplicate IDs, duplicate point pairs, reflection, nonuniform residual pattern, non-finite values, scale/rotation limits, and RMS residual above threshold. Do not use RANSAC.
 
 - [ ] **Step 4: Implement controlled warp**
 
@@ -276,7 +353,7 @@ Use `cv2.warpAffine`. Masks use `INTER_NEAREST` and zero border. Color images us
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_geometry_alignment.py -q -p no:cacheprovider
 git diff --check
-git add primitive_ir_lib/geometry_alignment.py primitive_ir_lib/tests/test_geometry_alignment.py
+git add primitive_ir_lib/geometry_alignment.py primitive_ir_lib/tests/geometry_test_helpers.py primitive_ir_lib/tests/test_geometry_alignment.py
 git commit -m "feat: add deterministic similarity alignment"
 ```
 
@@ -286,6 +363,7 @@ git commit -m "feat: add deterministic similarity alignment"
 
 **Files:**
 - Modify: `primitive_ir_lib/geometry_alignment.py`
+- Modify: `primitive_ir_lib/tests/geometry_test_helpers.py`
 - Modify: `primitive_ir_lib/tests/test_geometry_alignment.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -330,7 +408,7 @@ Use `cv2.getPerspectiveTransform` on anchors sorted by ID. Reproject all points 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_geometry_alignment.py -q -p no:cacheprovider
 git diff --check
-git add primitive_ir_lib/geometry_alignment.py primitive_ir_lib/tests/test_geometry_alignment.py
+git add primitive_ir_lib/geometry_alignment.py primitive_ir_lib/tests/geometry_test_helpers.py primitive_ir_lib/tests/test_geometry_alignment.py
 git commit -m "feat: add controlled photograph alignment"
 ```
 
@@ -340,6 +418,7 @@ git commit -m "feat: add controlled photograph alignment"
 
 **Files:**
 - Create: `primitive_ir_lib/geometry_metrics.py`
+- Modify: `primitive_ir_lib/tests/geometry_test_helpers.py`
 - Create: `primitive_ir_lib/tests/test_geometry_metrics.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -357,16 +436,16 @@ def test_identical_masks_have_identity_metrics() -> None:
 
 
 def test_shifted_rectangle_reports_distance_and_centroid_offset() -> None:
-    metrics = compute_geometry_metrics(rectangle_mask(), shifted_rectangle_mask(dx=10))
+    metrics = compute_geometry_metrics(rectangle_mask(), rectangle_mask(dx=10))
     assert metrics.silhouette_iou < 1.0
     assert metrics.centroid_offset_x_ratio > 0.0
     assert metrics.hausdorff_p95_normalized > 0.0
 
 
-def test_missing_hole_reports_missing_edges_and_component_change() -> None:
-    metrics = compute_geometry_metrics(mask_with_hole(), mask_without_hole())
+def test_missing_disconnected_feature_changes_components_and_edges() -> None:
+    metrics = compute_geometry_metrics(two_component_mask(), single_component_mask())
     assert metrics.missing_edge_ratio > 0.0
-    assert metrics.connected_component_difference != 0
+    assert metrics.connected_component_difference == 1
 
 
 def test_empty_mask_is_rejected() -> None:
@@ -383,14 +462,14 @@ python -m pytest primitive_ir_lib/tests/test_geometry_metrics.py -q -p no:cachep
 
 - [ ] **Step 3: Implement exact metrics**
 
-Normalize to single-channel uint8. Use `cv2.Canny`, `cv2.distanceTransform`, `np.percentile(distances, 95)`, `cv2.moments`, `cv2.boundingRect`, and `cv2.connectedComponents`. Keep full precision internally; round only during JSON serialization.
+Normalize to single-channel uint8. Validate equal shapes. Extract Canny edges, invert the other edge map before `cv2.distanceTransform`, select distances only at source edge pixels, and use `np.percentile(distances, 95)`. Use `cv2.moments`, `cv2.boundingRect`, and `cv2.connectedComponents` on filled foreground masks. Keep full precision internally; round only during JSON serialization.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_geometry_metrics.py -q -p no:cacheprovider
 git diff --check
-git add primitive_ir_lib/geometry_metrics.py primitive_ir_lib/tests/test_geometry_metrics.py
+git add primitive_ir_lib/geometry_metrics.py primitive_ir_lib/tests/geometry_test_helpers.py primitive_ir_lib/tests/test_geometry_metrics.py
 git commit -m "feat: compute deterministic geometry metrics"
 ```
 
@@ -400,25 +479,26 @@ git commit -m "feat: compute deterministic geometry metrics"
 
 **Files:**
 - Create: `primitive_ir_lib/geometry_comparator.py`
+- Modify: `primitive_ir_lib/tests/geometry_test_helpers.py`
 - Create: `primitive_ir_lib/tests/test_geometry_comparator.py`
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
 def test_artifacts_have_fixed_shapes_and_binary_masks() -> None:
-    reference = reference_image()
-    artifacts = create_comparison_artifacts(reference, cad_image(), identity_alignment())
+    reference = cv2.cvtColor(rectangle_mask(), cv2.COLOR_GRAY2BGR)
+    cad = reference.copy()
+    artifacts = create_comparison_artifacts(reference, cad, identity_alignment())
     assert artifacts.aligned_cad.shape == reference.shape
     assert set(np.unique(artifacts.missing_mask)) <= {0, 255}
     assert set(np.unique(artifacts.extra_mask)) <= {0, 255}
 
 
 def test_missing_and_extra_masks_are_directional() -> None:
-    artifacts = create_comparison_artifacts(
-        mask_with_two_features(),
-        mask_with_one_different_feature(),
-        identity_alignment(),
-    )
+    reference = cv2.cvtColor(two_component_mask(), cv2.COLOR_GRAY2BGR)
+    cad_mask = rectangle_mask(dx=5)
+    cad = cv2.cvtColor(cad_mask, cv2.COLOR_GRAY2BGR)
+    artifacts = create_comparison_artifacts(reference, cad, identity_alignment())
     assert np.count_nonzero(artifacts.missing_mask) > 0
     assert np.count_nonzero(artifacts.extra_mask) > 0
 
@@ -444,7 +524,7 @@ Overlay reference and aligned CAD in separate channels on a white background. Mi
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_geometry_comparator.py primitive_ir_lib/tests/test_geometry_metrics.py -q -p no:cacheprovider
 git diff --check
-git add primitive_ir_lib/geometry_comparator.py primitive_ir_lib/tests/test_geometry_comparator.py
+git add primitive_ir_lib/geometry_comparator.py primitive_ir_lib/tests/geometry_test_helpers.py primitive_ir_lib/tests/test_geometry_comparator.py
 git commit -m "feat: create geometry comparison evidence"
 ```
 
@@ -454,6 +534,7 @@ git commit -m "feat: create geometry comparison evidence"
 
 **Files:**
 - Modify: `primitive_ir_lib/geometry_comparator.py`
+- Modify: `primitive_ir_lib/tests/geometry_test_helpers.py`
 - Modify: `primitive_ir_lib/tests/test_geometry_comparator.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -496,7 +577,7 @@ Use field-by-field comparison with no weighted average. Protected missing/extra/
 ```powershell
 python -m pytest primitive_ir_lib/tests/test_geometry_comparator.py -q -p no:cacheprovider
 git diff --check
-git add primitive_ir_lib/geometry_comparator.py primitive_ir_lib/tests/test_geometry_comparator.py
+git add primitive_ir_lib/geometry_comparator.py primitive_ir_lib/tests/geometry_test_helpers.py primitive_ir_lib/tests/test_geometry_comparator.py
 git commit -m "feat: classify geometry comparison trend"
 ```
 
@@ -513,7 +594,9 @@ git commit -m "feat: classify geometry comparison trend"
 
 ```python
 def test_runner_writes_validated_hash_bound_comparison(tmp_path: Path) -> None:
-    reference, cad, anchors = write_synthetic_inputs(tmp_path)
+    reference = write_mask(tmp_path / "reference.png", rectangle_mask())
+    cad = write_mask(tmp_path / "cad.png", rectangle_mask())
+    anchors = write_anchor_file(tmp_path / "anchors.json", identity_anchor_pairs())
     output = run_geometry_comparison(
         run_id="RUN-VS-T2-001",
         region_id="SIDE-CABIN",
@@ -527,12 +610,13 @@ def test_runner_writes_validated_hash_bound_comparison(tmp_path: Path) -> None:
     payload = read_visual_contract(output, contract="geometry_comparison")
     assert payload["cad_render_sha256"] == sha256_file(cad)
     assert payload["alignment"]["status"] == "ALIGNED"
+    assert (output.parent / "overlay.png").is_file()
 
 
-def test_runner_records_failed_alignment_without_fake_metrics(tmp_path: Path) -> None:
-    reference = write_rectangle(tmp_path / "reference.png")
-    cad = write_rectangle(tmp_path / "cad.png")
-    anchors = write_anchor_file(tmp_path / "anchors.json", [single_anchor_pair()])
+def test_runner_records_failed_alignment_without_aligned_artifacts(tmp_path: Path) -> None:
+    reference = write_mask(tmp_path / "reference.png", rectangle_mask())
+    cad = write_mask(tmp_path / "cad.png", rectangle_mask())
+    anchors = write_anchor_file(tmp_path / "anchors.json", [identity_anchor_pairs()[0]])
     output = run_geometry_comparison(
         run_id="RUN-VS-T2-002",
         region_id="SIDE-CABIN",
@@ -547,10 +631,14 @@ def test_runner_records_failed_alignment_without_fake_metrics(tmp_path: Path) ->
     assert payload["alignment"]["status"] == "FAILED"
     assert payload["metrics"] == {}
     assert payload["trend"] == "BASELINE"
+    assert not (output.parent / "overlay.png").exists()
+    assert (output.parent / "alignment-failure.json").is_file()
 
 
 def test_runner_rejects_source_changed_during_run(tmp_path: Path, monkeypatch) -> None:
-    reference, cad, anchors = write_synthetic_inputs(tmp_path)
+    reference = write_mask(tmp_path / "reference.png", rectangle_mask())
+    cad = write_mask(tmp_path / "cad.png", rectangle_mask())
+    anchors = write_anchor_file(tmp_path / "anchors.json", identity_anchor_pairs())
     monkeypatch.setattr(
         "cad_agent.geometry_comparison_run._verify_unchanged",
         lambda path, expected_sha256: False,
@@ -576,7 +664,7 @@ python -m pytest tests/test_geometry_comparison_run.py -q -p no:cacheprovider
 
 - [ ] **Step 3: Implement immutable snapshots and atomic output**
 
-Required files:
+For `ALIGNED`, write:
 
 ```text
 aligned-cad.png
@@ -589,7 +677,17 @@ geometry-comparison.json
 comparison-manifest.json
 ```
 
-Manifest entries contain relative path, SHA-256, byte size, region, reference identity, CAD render identity, mutation identity, alignment method, and timestamp. Timestamp must not affect comparison ID or metrics. Derive comparison ID from canonical hashes plus region ID.
+For `FAILED`, write only:
+
+```text
+alignment-failure.json
+geometry-comparison.json
+comparison-manifest.json
+```
+
+Manifest entries contain relative path, SHA-256, byte size, region, reference image/package identity, CAD render identity, mutation identity, alignment method/status, and timestamp. Timestamp must not affect comparison ID or metrics. Derive comparison ID from canonical hashes plus region ID. Derive `transform_sha256` from the matrix when aligned, or the closed failure record when failed.
+
+When `previous_comparison_path` is supplied, validate it through the VS-T0 contract and require matching region/reference package before calculating trend.
 
 - [ ] **Step 4: Add CLI**
 
@@ -621,11 +719,13 @@ git commit -m "feat: add offline geometry comparison runner"
 Prove:
 
 - insufficient anchors produce `FAILED`;
-- reflection and nonuniform scale are rejected;
+- reflection and three-anchor nonuniform mappings are rejected;
 - perspective requires photograph flag and exactly four approved anchors;
+- failed alignment emits no fake metrics or aligned image artifacts;
 - VS-T2 exposes no verdict, repair operation, or publication authority;
 - protected missing-feature regression forces `REGRESSED` even when IoU improves;
-- identical input bytes produce identical JSON excluding timestamp and identical evidence image hashes.
+- mismatched previous region/reference identity is rejected;
+- identical input bytes produce identical JSON excluding timestamp and identical evidence hashes.
 
 - [ ] **Step 2: Run focused verification**
 
@@ -668,9 +768,10 @@ git commit -m "docs: record VS-T2 geometry comparator gate"
 - [ ] Similarity alignment is deterministic and controlled.
 - [ ] Perspective correction is photograph-only and four-anchor-only.
 - [ ] Free-form deformation is absent.
-- [ ] Failed alignment never emits fake zero-error metrics.
+- [ ] Failed alignment emits no fake metrics or aligned images.
 - [ ] All ten VS-T0 metrics are finite and reproducible.
 - [ ] Synthetic tests detect missing/extra features, displacement, proportion, contour, and curve-profile changes.
+- [ ] Component tests use disconnected features rather than holes.
 - [ ] Candidate trend cannot average away a protected regression.
 - [ ] Output validates through the integrated `geometry_comparison` contract.
 - [ ] Comparator never produces verdict, repair, or publication authority.
