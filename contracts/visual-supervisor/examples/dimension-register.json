@@ -35,6 +35,16 @@
       "attachment_confidence": 0.96,
       "blocker_scope": [],
       "raw_text_candidates": ["4500"],
+      "ocr_evidence": [
+        {
+          "id": "rawtext-4500-rot0",
+          "content": "4500",
+          "bbox": [20.0, 15.0, 100.0, 55.0],
+          "rotation_deg": 0.0,
+          "confidence": 0.99,
+          "source": "text_tesseract"
+        }
+      ],
       "symbol_text": null,
       "tolerance": {
         "mode": "NONE",
@@ -48,7 +58,8 @@
           [[80.0, 35.0], [80.0, 115.0]],
           [[340.0, 35.0], [340.0, 115.0]]
         ],
-        "arrow_points": [[80.0, 35.0], [340.0, 35.0]]
+        "arrow_points": [[80.0, 35.0], [340.0, 35.0]],
+        "leader_lines": []
       },
       "attachment_candidates": [
         {
@@ -61,6 +72,7 @@
       "provenance": {
         "observer_version": "dimension-observer-1.0",
         "ocr_engine": "tesseract-5.4.0.20240606",
+        "ocr_rotations_deg": [0.0, 90.0, -90.0],
         "observation_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
       }
     }

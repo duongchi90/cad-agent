@@ -114,6 +114,27 @@
             "type": "array",
             "items": {"type": "string", "minLength": 1}
           },
+          "ocr_evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "content", "bbox", "rotation_deg", "confidence", "source"],
+              "properties": {
+                "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+                "content": {"type": "string"},
+                "bbox": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": {"type": "number"}
+                },
+                "rotation_deg": {"type": "number", "enum": [-90, 0, 90]},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "source": {"type": "string", "minLength": 1}
+              }
+            }
+          },
           "symbol_text": {
             "anyOf": [
               {"type": "string", "minLength": 1},
@@ -139,7 +160,7 @@
           "extension_geometry": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["dimension_line", "extension_lines", "arrow_points"],
+            "required": ["dimension_line", "extension_lines", "arrow_points", "leader_lines"],
             "properties": {
               "dimension_line": {
                 "anyOf": [
@@ -179,6 +200,20 @@
                   "maxItems": 2,
                   "items": {"type": "number"}
                 }
+              },
+              "leader_lines": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {"type": "number"}
+                  }
+                }
               }
             }
           },
@@ -215,10 +250,11 @@
           "provenance": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["observer_version", "ocr_engine", "observation_sha256"],
+            "required": ["observer_version", "ocr_engine", "ocr_rotations_deg", "observation_sha256"],
             "properties": {
               "observer_version": {"type": "string", "minLength": 1},
               "ocr_engine": {"type": "string", "minLength": 1},
+              "ocr_rotations_deg": {"const": [0.0, 90.0, -90.0]},
               "observation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
             }
           }

@@ -88,6 +88,16 @@ def valid_dimension_register() -> dict[str, Any]:
 def valid_dimension_observer_evidence() -> dict[str, Any]:
     return {
         "raw_text_candidates": ["4500"],
+        "ocr_evidence": [
+            {
+                "id": "rawtext-4500-rot0",
+                "content": "4500",
+                "bbox": [20.0, 15.0, 100.0, 55.0],
+                "rotation_deg": 0.0,
+                "confidence": 0.99,
+                "source": "text_tesseract",
+            }
+        ],
         "symbol_text": None,
         "tolerance": {
             "mode": "NONE",
@@ -102,6 +112,7 @@ def valid_dimension_observer_evidence() -> dict[str, Any]:
                 [[340.0, 35.0], [340.0, 115.0]],
             ],
             "arrow_points": [[80.0, 35.0], [340.0, 35.0]],
+            "leader_lines": [],
         },
         "attachment_candidates": [
             {
@@ -114,6 +125,7 @@ def valid_dimension_observer_evidence() -> dict[str, Any]:
         "provenance": {
             "observer_version": "dimension-observer-1.0",
             "ocr_engine": "tesseract-5.4.0.20240606",
+            "ocr_rotations_deg": [0.0, 90.0, -90.0],
             "observation_sha256": "9" * 64,
         },
     }
