@@ -371,6 +371,22 @@ public sealed class ContractTests
                 && error.Contains("read-only", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void AllowsVisualEvidenceFailureWithoutInventingAnAcceptedPayload()
+    {
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/visual-evidence-export-result.json"))) with
+        {
+            Success = false,
+            Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+            Errors = new List<string> { "active document mismatch" }
+        };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.True(validation.IsValid);
+    }
+
     private static string RepositoryFile(string relativePath)
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);

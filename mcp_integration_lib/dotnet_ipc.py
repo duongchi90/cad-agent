@@ -862,7 +862,8 @@ class DotNetIPCClient:
                 raise DotNetIPCProtocolError(
                     "visual_evidence_export result must be read-only and contain no entity handles"
                 )
-            DotNetIPCClient._validate_visual_evidence_payload(result.get("payload"))
+            if result["success"] is True:
+                DotNetIPCClient._validate_visual_evidence_payload(result.get("payload"))
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:
                 raise DotNetIPCProtocolError(f"result {name} must be a non-empty string")

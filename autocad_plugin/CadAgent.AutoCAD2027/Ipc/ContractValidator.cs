@@ -161,7 +161,10 @@ public static class ContractValidator
             {
                 errors.Add("visual_evidence_export results must be read-only and contain no entity handles");
             }
-            ValidateVisualEvidencePayload(result.Payload, errors);
+            if (result.Success)
+            {
+                ValidateVisualEvidencePayload(result.Payload, errors);
+            }
         }
         if (result.Payload is null)
         {

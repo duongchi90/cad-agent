@@ -166,10 +166,14 @@
         "properties": {
           "operation": {
             "const": "visual_evidence_export"
+          },
+          "success": {
+            "const": true
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "success"
         ]
       },
       "then": {

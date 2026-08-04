@@ -229,3 +229,10 @@ def test_python_validator_rejects_mutating_vs_t3_result() -> None:
     result["changed"] = True
     with pytest.raises(DotNetIPCProtocolError, match="read-only"):
         DotNetIPCClient._validate_result(result, "REQ-VS-T3-001", "visual_evidence_export")
+
+
+def test_python_validator_allows_a_closed_failure_without_fake_evidence_payload() -> None:
+    result = valid_result()
+    result["success"] = False
+    result["payload"] = {}
+    DotNetIPCClient._validate_result(result, "REQ-VS-T3-001", "visual_evidence_export")
