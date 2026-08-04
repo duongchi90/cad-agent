@@ -83,3 +83,35 @@ def valid_dimension_register() -> dict[str, Any]:
             }
         ],
     }
+
+
+def valid_geometry_comparison() -> dict[str, Any]:
+    return {
+        "schema_version": "geometry-comparison-1.0",
+        "comparison_id": "GC-SIDE-CABIN-001",
+        "run_id": RUN_ID,
+        "region_id": REGION_ID,
+        "reference_package_sha256": REFERENCE_PACKAGE_SHA,
+        "cad_render_sha256": RENDER_SHA,
+        "mutation_sha256": MUTATION_SHA,
+        "alignment": {
+            "status": "ALIGNED",
+            "method": "VERIFIED_DATUM_SIMILARITY",
+            "anchor_ids": ["FRONT_AXLE_CENTER", "REAR_AXLE_CENTER"],
+            "transform_sha256": COMPARISON_SHA,
+        },
+        "metrics": {
+            "silhouette_iou": 0.92,
+            "chamfer_distance_normalized": 0.02,
+            "hausdorff_p95_normalized": 0.03,
+            "centroid_offset_x_ratio": 0.01,
+            "centroid_offset_y_ratio": 0.01,
+            "width_ratio_error": 0.02,
+            "height_ratio_error": 0.02,
+            "missing_edge_ratio": 0.01,
+            "extra_edge_ratio": 0.01,
+            "connected_component_difference": 0,
+        },
+        "trend": "IMPROVED",
+        "previous_comparison_sha256": COMPARISON_SHA,
+    }

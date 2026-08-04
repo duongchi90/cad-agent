@@ -109,6 +109,8 @@ def _validate_bbox(value: object, *, contract: str, path: str) -> None:
 
 _DIMENSION_ROLES = {"DRIVING", "REFERENCE", "DERIVED", "AMBIGUOUS", "CONFLICT"}
 _DIMENSION_STATUSES = {"CONFIRMED", "UNRESOLVED", "CONFLICT"}
+_ALIGNMENT_STATUSES = {"ALIGNED", "FAILED"}
+_COMPARISON_TRENDS = {"BASELINE", "IMPROVED", "REGRESSED", "UNCHANGED"}
 
 
 def _validate_dimension_register(payload: dict[str, Any]) -> None:
@@ -242,6 +244,91 @@ def require_dimension_gate_ready(register: Mapping[str, object]) -> None:
             )
 
 
+_GEOMETRY_METRICS = (
+    "silhouette_iou",
+    "chamfer_distance_normalized",
+    "hausdorff_p95_normalized",
+    "centroid_offset_x_ratio",
+    "centroid_offset_y_ratio",
+    "width_ratio_error",
+    "height_ratio_error",
+    "missing_edge_ratio",
+    "extra_edge_ratio",
+    "connected_component_difference",
+)
+
+
+def _validate_geometry_comparison(payload: dict[str, Any]) -> None:
+    contract = "geometry_comparison"
+    required = {
+        "schema_version",
+        "comparison_id",
+        "run_id",
+        "region_id",
+        "reference_package_sha256",
+        "cad_render_sha256",
+        "mutation_sha256",
+        "alignment",
+        "metrics",
+        "trend",
+        "previous_comparison_sha256",
+    }
+    _keys(payload, contract=contract, required=required)
+    if payload["schema_version"] != "geometry-comparison-1.0":
+        _fail(contract, "schema_version must be 'geometry-comparison-1.0'")
+    for key in ("comparison_id", "run_id", "region_id"):
+        _identifier(payload[key], contract=contract, path=key)
+    for key in ("reference_package_sha256", "cad_render_sha256", "mutation_sha256"):
+        _sha256(payload[key], contract=contract, path=key)
+
+    alignment = _object(payload["alignment"], contract=contract, path="alignment")
+    _keys(
+        alignment,
+        contract=contract,
+        required={"status", "method", "anchor_ids", "transform_sha256"},
+    )
+    status = alignment["status"]
+    if status not in _ALIGNMENT_STATUSES:
+        _fail(contract, "alignment.status is invalid")
+    _string(alignment["method"], contract=contract, path="alignment.method")
+    anchor_ids = _string_list(alignment["anchor_ids"], contract=contract, path="alignment.anchor_ids")
+    for index, anchor_id in enumerate(anchor_ids):
+        _identifier(anchor_id, contract=contract, path=f"alignment.anchor_ids[{index}]")
+    if status == "ALIGNED" and len(set(anchor_ids)) < 2:
+        _fail(contract, "alignment.anchor_ids requires at least two unique anchors when aligned")
+    _sha256(alignment["transform_sha256"], contract=contract, path="alignment.transform_sha256")
+
+    metrics = _object(payload["metrics"], contract=contract, path="metrics")
+    if status == "ALIGNED":
+        _keys(metrics, contract=contract, required=set(_GEOMETRY_METRICS))
+    else:
+        _keys(metrics, contract=contract, required=set(), optional=set())
+    for metric_name in _GEOMETRY_METRICS:
+        if metric_name not in metrics:
+            continue
+        path = f"metrics.{metric_name}"
+        value = _finite_number(metrics[metric_name], contract=contract, path=path)
+        if metric_name == "silhouette_iou":
+            if not 0.0 <= value <= 1.0:
+                _fail(contract, f"{path} must be between 0 and 1")
+        elif value < 0:
+            _fail(contract, f"{path} must be non-negative")
+        if metric_name == "connected_component_difference" and not isinstance(value, int):
+            _fail(contract, f"{path} must be an integer")
+
+    trend = payload["trend"]
+    if trend not in _COMPARISON_TRENDS:
+        _fail(contract, "trend is invalid")
+    previous_hash = payload["previous_comparison_sha256"]
+    if trend == "BASELINE":
+        if previous_hash is not None:
+            _fail(contract, "previous_comparison_sha256 must be null for BASELINE")
+    else:
+        _sha256(previous_hash, contract=contract, path="previous_comparison_sha256")
+    if status == "FAILED" and trend != "BASELINE":
+        _fail(contract, "FAILED alignment requires BASELINE trend")
+
+
 def _validate_visual_run_manifest(payload: dict[str, Any]) -> None:
     contract = "visual_run_manifest"
     required = {
@@ -299,6 +386,7 @@ def _validate_visual_run_manifest(payload: dict[str, Any]) -> None:
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "visual_run_manifest": _validate_visual_run_manifest,
     "dimension_register": _validate_dimension_register,
+    "geometry_comparison": _validate_geometry_comparison,
 }
 
 

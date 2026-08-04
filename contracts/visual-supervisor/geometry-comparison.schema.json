@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/visual-supervisor/geometry-comparison.schema.json",
+  "title": "Visual Supervisor Geometry Comparison",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "comparison_id",
+    "run_id",
+    "region_id",
+    "reference_package_sha256",
+    "cad_render_sha256",
+    "mutation_sha256",
+    "alignment",
+    "metrics",
+    "trend",
+    "previous_comparison_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "geometry-comparison-1.0"},
+    "comparison_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "region_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "reference_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cad_render_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mutation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "alignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "method", "anchor_ids", "transform_sha256"],
+      "properties": {
+        "status": {"enum": ["ALIGNED", "FAILED"]},
+        "method": {"type": "string", "minLength": 1},
+        "anchor_ids": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+        },
+        "transform_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "ALIGNED"}}},
+          "then": {"properties": {"anchor_ids": {"minItems": 2, "uniqueItems": true}}}
+        }
+      ]
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "silhouette_iou": {"type": "number", "minimum": 0, "maximum": 1},
+        "chamfer_distance_normalized": {"type": "number", "minimum": 0},
+        "hausdorff_p95_normalized": {"type": "number", "minimum": 0},
+        "centroid_offset_x_ratio": {"type": "number", "minimum": 0},
+        "centroid_offset_y_ratio": {"type": "number", "minimum": 0},
+        "width_ratio_error": {"type": "number", "minimum": 0},
+        "height_ratio_error": {"type": "number", "minimum": 0},
+        "missing_edge_ratio": {"type": "number", "minimum": 0},
+        "extra_edge_ratio": {"type": "number", "minimum": 0},
+        "connected_component_difference": {"type": "integer", "minimum": 0}
+      }
+    },
+    "trend": {"enum": ["BASELINE", "IMPROVED", "REGRESSED", "UNCHANGED"]},
+    "previous_comparison_sha256": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"alignment": {"properties": {"status": {"const": "ALIGNED"}}}}},
+      "then": {
+        "properties": {
+          "metrics": {
+            "required": [
+              "silhouette_iou",
+              "chamfer_distance_normalized",
+              "hausdorff_p95_normalized",
+              "centroid_offset_x_ratio",
+              "centroid_offset_y_ratio",
+              "width_ratio_error",
+              "height_ratio_error",
+              "missing_edge_ratio",
+              "extra_edge_ratio",
+              "connected_component_difference"
+            ],
+            "minProperties": 10,
+            "maxProperties": 10
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"alignment": {"properties": {"status": {"const": "FAILED"}}}}},
+      "then": {
+        "properties": {
+          "metrics": {"maxProperties": 0},
+          "trend": {"const": "BASELINE"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"trend": {"const": "BASELINE"}}},
+      "then": {"properties": {"previous_comparison_sha256": {"type": "null"}}},
+      "else": {
+        "properties": {
+          "previous_comparison_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  ]
+}

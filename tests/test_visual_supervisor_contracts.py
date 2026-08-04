@@ -10,7 +10,11 @@ from cad_agent.visual_contracts import (
     read_visual_contract,
     validate_visual_contract,
 )
-from tests.visual_supervisor_fixtures import valid_dimension_register, valid_visual_run_manifest
+from tests.visual_supervisor_fixtures import (
+    valid_dimension_register,
+    valid_geometry_comparison,
+    valid_visual_run_manifest,
+)
 
 
 def test_visual_run_manifest_validates_and_is_deep_copied() -> None:
@@ -58,3 +62,24 @@ def test_unresolved_critical_dimension_requires_blocker_scope() -> None:
     payload["summary"] = {"confirmed": 0, "unresolved": 1, "conflicts": 0}
     with pytest.raises(VisualContractError, match="blocker_scope"):
         validate_visual_contract(payload, contract="dimension_register")
+
+
+def test_geometry_comparison_rejects_out_of_range_iou() -> None:
+    payload = valid_geometry_comparison()
+    payload["metrics"]["silhouette_iou"] = 1.1
+    with pytest.raises(VisualContractError, match="silhouette_iou"):
+        validate_visual_contract(payload, contract="geometry_comparison")
+
+
+def test_geometry_comparison_rejects_aligned_without_two_anchors() -> None:
+    payload = valid_geometry_comparison()
+    payload["alignment"]["anchor_ids"] = ["ONLY_ONE"]
+    with pytest.raises(VisualContractError, match="anchor_ids"):
+        validate_visual_contract(payload, contract="geometry_comparison")
+
+
+def test_geometry_comparison_rejects_non_finite_metric() -> None:
+    payload = valid_geometry_comparison()
+    payload["metrics"]["height_ratio_error"] = float("nan")
+    with pytest.raises(VisualContractError, match="finite"):
+        validate_visual_contract(payload, contract="geometry_comparison")
