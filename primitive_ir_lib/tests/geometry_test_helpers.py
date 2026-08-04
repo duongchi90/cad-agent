@@ -27,6 +27,22 @@ def single_component_mask() -> np.ndarray:
     return rectangle_mask()
 
 
+def circular_arc_mask() -> np.ndarray:
+    image = np.zeros((180, 240), dtype=np.uint8)
+    cv2.ellipse(image, (120, 120), (80, 60), 0, 190, 350, 255, 3)
+    return image
+
+
+def flattened_arc_mask() -> np.ndarray:
+    image = np.zeros((180, 240), dtype=np.uint8)
+    points = np.array(
+        [[40, 120], [80, 95], [120, 88], [160, 95], [200, 120]],
+        dtype=np.int32,
+    )
+    cv2.polylines(image, [points], False, 255, 3)
+    return image
+
+
 def identity_anchor_pairs() -> list[AnchorPair]:
     return [
         AnchorPair("A", (40.0, 45.0), (40.0, 45.0), "DATUM", 1.0),
