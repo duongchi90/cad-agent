@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import inspect
+import copy
 from pathlib import Path
 
 import pytest
@@ -329,6 +330,30 @@ def test_dimension_register_builds_only_confirmed_scoped_bindings() -> None:
         ("REAR_AXLE_CENTER", "B2"),
     ]
     assert all(item["approval"] == "DIMENSION_REGISTER_CONFIRMED" for item in bindings)
+
+
+def test_dimension_register_binding_dimension_id_matches_mapped_handle() -> None:
+    register = dimension_register()
+    unmapped = copy.deepcopy(register["dimensions"][0])
+    unmapped["id"] = "DIM-SIDE-000"
+    unmapped["to_ref"] = {"type": "ENTITY", "id": "PART:CABIN_OUTER"}
+    unmapped["from_ref"].pop("entity_handle")
+    register["dimensions"].insert(0, unmapped)
+    register["summary"]["confirmed"] = 2
+
+    bindings = build_dimension_register_datum_bindings(
+        register,
+        datum_ids={"FRONT_AXLE_CENTER"},
+        run_id="RUN-001",
+        region_id="SIDE-CABIN",
+        manifest_sha256="b" * 64,
+        register_sha256="d" * 64,
+        source_sha256="1" * 64,
+        allowed_page_ids={"PAGE-001"},
+    )
+
+    assert bindings[0]["entity_handle"] == "A1"
+    assert bindings[0]["dimension_id"] == "DIM-SIDE-001"
 
 
 @pytest.mark.parametrize(

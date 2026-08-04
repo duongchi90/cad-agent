@@ -180,8 +180,9 @@ def build_dimension_register_datum_bindings(
             raise VisualEvidenceError(
                 f"Dimension Register datum '{datum_id}' is not CONFIRMED"
             )
-        handles = {match[1] for match in confirmed if match[1] is not None}
-        if not handles:
+        mapped_confirmed = [match for match in confirmed if match[1] is not None]
+        handles = {match[1] for match in mapped_confirmed}
+        if not mapped_confirmed:
             raise VisualEvidenceError(
                 f"Dimension Register datum '{datum_id}' has no entity_handle mapping"
             )
@@ -189,11 +190,14 @@ def build_dimension_register_datum_bindings(
             raise VisualEvidenceError(
                 f"Dimension Register datum '{datum_id}' has conflicting entity_handle mappings"
             )
-        dimension_id = min(match[0] for match in confirmed)
+        selected_handle = next(iter(handles))
+        dimension_id = min(
+            match[0] for match in mapped_confirmed if match[1] == selected_handle
+        )
         bindings.append(
             {
                 "id": datum_id,
-                "entity_handle": next(iter(handles)),
+                "entity_handle": selected_handle,
                 "run_id": run_id,
                 "region_id": region_id,
                 "visual_run_manifest_sha256": manifest_sha256,
