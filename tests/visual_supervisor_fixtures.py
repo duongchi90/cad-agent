@@ -41,3 +41,45 @@ def valid_visual_run_manifest() -> dict[str, Any]:
         "evidence_root": "runs/RUN-VISUAL-SYNTHETIC-001",
         "latest_mutation_sha256": MUTATION_SHA,
     }
+
+
+def valid_dimension_register() -> dict[str, Any]:
+    return {
+        "schema_version": "dimension-register-1.0",
+        "run_id": RUN_ID,
+        "source_sha256": SOURCE_SHA,
+        "page_id": PAGE_ID,
+        "view_id": VIEW_ID,
+        "coverage": {
+            "clusters_detected": 1,
+            "clusters_processed": 1,
+            "page_coverage_percent": 100.0,
+        },
+        "summary": {
+            "confirmed": 1,
+            "unresolved": 0,
+            "conflicts": 0,
+        },
+        "dimensions": [
+            {
+                "id": "DIM-SIDE-001",
+                "display_text": "4500",
+                "value": 4500.0,
+                "unit": "mm",
+                "kind": "HORIZONTAL_DISTANCE",
+                "role": "DRIVING",
+                "status": "CONFIRMED",
+                "critical": True,
+                "from_ref": {"type": "DATUM", "id": "FRONT_AXLE_CENTER"},
+                "to_ref": {"type": "DATUM", "id": "REAR_AXLE_CENTER"},
+                "source_evidence": {
+                    "crop_id": "DIMCLUSTER-001",
+                    "bbox": [100, 200, 600, 260],
+                    "crop_sha256": REFERENCE_PACKAGE_SHA,
+                },
+                "text_confidence": 0.99,
+                "attachment_confidence": 0.96,
+                "blocker_scope": [],
+            }
+        ],
+    }

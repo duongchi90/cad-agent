@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/visual-supervisor/dimension-register.schema.json",
+  "title": "Visual Supervisor Dimension Register",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "source_sha256",
+    "page_id",
+    "view_id",
+    "coverage",
+    "summary",
+    "dimensions"
+  ],
+  "properties": {
+    "schema_version": {"const": "dimension-register-1.0"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "page_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "view_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clusters_detected", "clusters_processed", "page_coverage_percent"],
+      "properties": {
+        "clusters_detected": {"type": "integer", "minimum": 0},
+        "clusters_processed": {"type": "integer", "minimum": 0},
+        "page_coverage_percent": {"type": "number", "minimum": 0, "maximum": 100}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confirmed", "unresolved", "conflicts"],
+      "properties": {
+        "confirmed": {"type": "integer", "minimum": 0},
+        "unresolved": {"type": "integer", "minimum": 0},
+        "conflicts": {"type": "integer", "minimum": 0}
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "display_text",
+          "value",
+          "unit",
+          "kind",
+          "role",
+          "status",
+          "critical",
+          "source_evidence",
+          "text_confidence",
+          "attachment_confidence",
+          "blocker_scope"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+          "display_text": {"type": "string", "minLength": 1},
+          "value": {"type": "number"},
+          "unit": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "minLength": 1},
+          "role": {
+            "type": "string",
+            "enum": ["DRIVING", "REFERENCE", "DERIVED", "AMBIGUOUS", "CONFLICT"]
+          },
+          "status": {"type": "string", "enum": ["CONFIRMED", "UNRESOLVED", "CONFLICT"]},
+          "critical": {"type": "boolean"},
+          "from_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "id"],
+            "properties": {
+              "type": {"type": "string", "enum": ["DATUM", "ENTITY", "FEATURE", "DIMENSION"]},
+              "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+            }
+          },
+          "to_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "id"],
+            "properties": {
+              "type": {"type": "string", "enum": ["DATUM", "ENTITY", "FEATURE", "DIMENSION"]},
+              "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+            }
+          },
+          "source_evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["crop_id", "bbox", "crop_sha256"],
+            "properties": {
+              "crop_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+              "bbox": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}},
+              "crop_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          },
+          "text_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "attachment_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "blocker_scope": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"role": {"const": "DRIVING"}, "status": {"const": "CONFIRMED"}},
+              "required": ["role", "status"]
+            },
+            "then": {"required": ["from_ref", "to_ref"]}
+          },
+          {
+            "if": {
+              "properties": {"critical": {"const": true}, "status": {"enum": ["UNRESOLVED", "CONFLICT"]}},
+              "required": ["critical", "status"]
+            },
+            "then": {"properties": {"blocker_scope": {"minItems": 1}}}
+          },
+          {
+            "if": {"properties": {"role": {"const": "CONFLICT"}}, "required": ["role"]},
+            "then": {"properties": {"status": {"const": "CONFLICT"}}}
+          },
+          {
+            "if": {"properties": {"role": {"const": "AMBIGUOUS"}}, "required": ["role"]},
+            "then": {"properties": {"status": {"enum": ["UNRESOLVED", "CONFLICT"]}}}
+          }
+        ]
+      }
+    }
+  }
+}
