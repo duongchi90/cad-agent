@@ -61,9 +61,14 @@
         ],
         "properties": {
           "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
-          "display_text": {"type": "string", "minLength": 1},
+          "display_text": {"type": "string"},
           "value": {"type": ["number", "null"]},
-          "unit": {"type": "string", "minLength": 1},
+          "unit": {
+            "anyOf": [
+              {"type": "string", "minLength": 1},
+              {"type": "null"}
+            ]
+          },
           "kind": {"type": "string", "minLength": 1},
           "role": {
             "type": "string",
@@ -104,6 +109,118 @@
           "blocker_scope": {
             "type": "array",
             "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+          },
+          "raw_text_candidates": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "symbol_text": {
+            "anyOf": [
+              {"type": "string", "minLength": 1},
+              {"type": "null"}
+            ]
+          },
+          "tolerance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "upper", "lower", "unit"],
+            "properties": {
+              "mode": {"enum": ["NONE", "SYMMETRIC", "LIMITS", "PLUS_MINUS"]},
+              "upper": {"type": ["number", "null"]},
+              "lower": {"type": ["number", "null"]},
+              "unit": {
+                "anyOf": [
+                  {"type": "string", "minLength": 1},
+                  {"type": "null"}
+                ]
+              }
+            }
+          },
+          "extension_geometry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dimension_line", "extension_lines", "arrow_points"],
+            "properties": {
+              "dimension_line": {
+                "anyOf": [
+                  {"type": "null"},
+                  {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "items": {"type": "number"}
+                    }
+                  }
+                ]
+              },
+              "extension_lines": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {"type": "number"}
+                  }
+                }
+              },
+              "arrow_points": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {"type": "number"}
+                }
+              }
+            }
+          },
+          "attachment_candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from_ref", "to_ref", "confidence", "evidence"],
+              "properties": {
+                "from_ref": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type", "id"],
+                  "properties": {
+                    "type": {"type": "string", "enum": ["DATUM", "ENTITY", "FEATURE", "DIMENSION"]},
+                    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+                  }
+                },
+                "to_ref": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type", "id"],
+                  "properties": {
+                    "type": {"type": "string", "enum": ["DATUM", "ENTITY", "FEATURE", "DIMENSION"]},
+                    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"}
+                  }
+                },
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}}
+              }
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["observer_version", "ocr_engine", "observation_sha256"],
+            "properties": {
+              "observer_version": {"type": "string", "minLength": 1},
+              "ocr_engine": {"type": "string", "minLength": 1},
+              "observation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
           }
         },
         "allOf": [
@@ -113,6 +230,18 @@
               "required": ["status"]
             },
             "then": {"properties": {"value": {"type": "number"}}}
+          },
+          {
+            "if": {
+              "properties": {"status": {"const": "CONFIRMED"}},
+              "required": ["status"]
+            },
+            "then": {
+              "properties": {
+                "display_text": {"type": "string", "minLength": 1},
+                "unit": {"type": "string", "minLength": 1}
+              }
+            }
           },
           {
             "if": {

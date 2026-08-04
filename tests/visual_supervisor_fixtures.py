@@ -85,6 +85,40 @@ def valid_dimension_register() -> dict[str, Any]:
     }
 
 
+def valid_dimension_observer_evidence() -> dict[str, Any]:
+    return {
+        "raw_text_candidates": ["4500"],
+        "symbol_text": None,
+        "tolerance": {
+            "mode": "NONE",
+            "upper": None,
+            "lower": None,
+            "unit": "mm",
+        },
+        "extension_geometry": {
+            "dimension_line": [[80.0, 35.0], [340.0, 35.0]],
+            "extension_lines": [
+                [[80.0, 35.0], [80.0, 115.0]],
+                [[340.0, 35.0], [340.0, 115.0]],
+            ],
+            "arrow_points": [[80.0, 35.0], [340.0, 35.0]],
+        },
+        "attachment_candidates": [
+            {
+                "from_ref": {"type": "DATUM", "id": "FRONT_AXLE_CENTER"},
+                "to_ref": {"type": "DATUM", "id": "REAR_AXLE_CENTER"},
+                "confidence": 0.94,
+                "evidence": ["extension-line-0", "extension-line-1"],
+            }
+        ],
+        "provenance": {
+            "observer_version": "dimension-observer-1.0",
+            "ocr_engine": "tesseract-5.4.0.20240606",
+            "observation_sha256": "9" * 64,
+        },
+    }
+
+
 def valid_geometry_comparison() -> dict[str, Any]:
     return {
         "schema_version": "geometry-comparison-1.0",
