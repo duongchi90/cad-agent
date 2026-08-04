@@ -20,7 +20,7 @@ Observed result:
 - Environment contract: PASS, 40 locked distributions.
 - IPC contract suite: 20 passed, 18 subtests passed.
 - Python IPC JUnit: 38 tests, 0 failures, 0 errors, 0 skipped.
-- Offline suite: 737 passed, 11 deselected, 18 subtests passed (755 total).
+- Offline suite: 740 passed, 11 deselected, 18 subtests passed (758 total).
 - Real-data unavailable probe: 2 skipped because private inputs were not configured.
 - AutoCAD Mechanical unavailable probe: 9 skipped because no live File IPC session was configured.
 - AutoCAD .NET gate in the canonical verifier: `NOT RUN` because
@@ -30,7 +30,7 @@ Observed result:
 - `git diff --check`: PASS.
 - Separate AutoCAD Mechanical 2027 .NET gate on the same implementation head:
   restore exit `0`; Release x64 build exit `0` with 1 warning and 0 errors;
-  Release x64 test exit `0`, 96 passed, 0 failed, 0 skipped.
+  Release x64 test exit `0`, 98 passed, 0 failed, 0 skipped.
 
 Authority-boundary review:
 
