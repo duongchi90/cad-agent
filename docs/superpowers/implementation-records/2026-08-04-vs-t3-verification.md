@@ -4,7 +4,7 @@ Status: verified offline; AutoCAD Mechanical live gate not run.
 
 Verification commit:
 
-`9d8201a8d814d1a521590d71ef43b89dbf5f920f`
+`d9c10b41e0b6b113dd67ab6fb669cf504f4d9279`
 
 Command:
 
@@ -19,7 +19,7 @@ Observed result:
 - Environment contract: PASS, 40 locked distributions.
 - IPC contract suite: 20 passed, 18 subtests passed.
 - Python IPC JUnit: 38 tests, 0 failures, 0 errors, 0 skipped.
-- Offline suite: 731 passed, 11 deselected, 18 subtests passed.
+- Offline suite: 735 passed, 11 deselected, 18 subtests passed.
 - Real-data unavailable probe: 2 skipped because private inputs were not configured.
 - AutoCAD Mechanical unavailable probe: 9 skipped because no live File IPC session was configured.
 - AutoCAD .NET gate: `NOT RUN` because `-SkipAutoCADDotNet` was explicit.
@@ -34,6 +34,18 @@ Authority-boundary review:
 - Accepted evidence requires `success=true`, `changed=false`, empty entity handles, equal DWG hashes, equal DBMOD, equal session-state fingerprints, and `transient_state_restored=true`.
 - Failure results do not invent an accepted visual-evidence payload.
 - Artifact transfer is request-owned, bounded, hash-verified, lease-protected, and cleaned by Python after handoff.
+- Current drawing bytes are snapshotted by the orchestrator and re-hashed before
+  atomic evidence promotion; the manifest's initial hash is not reused as a
+  current-state hash.
+- Success requires an artifact handoff consumer. A Python scavenger removes only
+  lease-free request directories older than 24 hours.
+- AutoCAD snapshots and restores actual view, pickfirst, layer, layout, and
+  renderer state; the fingerprint includes the view and separate off/frozen
+  layer flags.
+- Region filtering is based on entity extents. The deterministic flattener
+  covers lines, circles, arcs, polylines, text, dimensions, block references,
+  hatches, and splines; unknown visible entity types fail closed. DATUM
+  measurements require an explicit approved `datum_bindings` mapping.
 - No visual verdict, repair plan, Codex authority, save, publish, or mutation executor is present in VS-T3.
 
 This record does not claim private-drawing or AutoCAD live acceptance.
