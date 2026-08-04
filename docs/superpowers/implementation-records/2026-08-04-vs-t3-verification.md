@@ -5,7 +5,7 @@ Status: verified offline; AutoCAD Mechanical live gate not run.
 Verification target:
 
 Final PR #30 head after the implementation fixes and verification rerun.
-The exact SHA is recorded with the final PR update.
+The exact SHA is recorded in the final PR update and CI check.
 
 Command:
 
@@ -20,13 +20,16 @@ Observed result:
 - Environment contract: PASS, 40 locked distributions.
 - IPC contract suite: 20 passed, 18 subtests passed.
 - Python IPC JUnit: 38 tests, 0 failures, 0 errors, 0 skipped.
-- Offline suite: 735 passed, 11 deselected, 18 subtests passed.
+- Offline suite: 737 passed, 11 deselected, 18 subtests passed (755 total).
 - Real-data unavailable probe: 2 skipped because private inputs were not configured.
 - AutoCAD Mechanical unavailable probe: 9 skipped because no live File IPC session was configured.
 - AutoCAD .NET gate: `NOT RUN` because `-SkipAutoCADDotNet` was explicit.
 - AutoCAD live marker: `NOT RUN`; no AutoCAD Mechanical File IPC prerequisites were available.
 - Ruff: PASS on the affected Python files.
 - `git diff --check`: PASS.
+- Separate AutoCAD Mechanical 2027 .NET gate on the same implementation head:
+  restore exit `0`; Release x64 build exit `0` with 1 warning and 0 errors;
+  Release x64 test exit `0`, 96 passed, 0 failed, 0 skipped.
 
 Authority-boundary review:
 
