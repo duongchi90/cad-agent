@@ -30,7 +30,7 @@ Observed result:
 - `git diff --check`: PASS.
 - Separate AutoCAD Mechanical 2027 .NET gate on the same implementation head:
   restore exit `0`; Release x64 build exit `0` with 1 warning and 0 errors;
-  Release x64 test exit `0`, 98 passed, 0 failed, 0 skipped.
+  Release x64 test exit `0`, 99 passed, 0 failed, 0 skipped.
 
 Authority-boundary review:
 
