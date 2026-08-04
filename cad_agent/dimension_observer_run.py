@@ -31,17 +31,38 @@ class DimensionObserverRunError(ValueError):
     """Raised when an offline observer run cannot be safely committed."""
 
 
-def _read_json(path: Path) -> object:
+def _read_json_snapshot(snapshot: bytes, *, label: str) -> object:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise DimensionObserverRunError(f"Cannot read JSON input: {path}") from exc
+        return json.loads(snapshot.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DimensionObserverRunError(f"Cannot parse JSON snapshot: {label}") from exc
 
 
-def _read_anchors(path: Path | None) -> list[Mapping[str, object]]:
+def _snapshot_input(path: Path | None, *, label: str) -> tuple[bytes | None, str | None]:
     if path is None:
+        return None, None
+    try:
+        snapshot = path.read_bytes()
+    except OSError as exc:
+        raise DimensionObserverRunError(f"Cannot snapshot {label}: {path}") from exc
+    return snapshot, hashlib.sha256(snapshot).hexdigest()
+
+
+def _assert_snapshot(path: Path | None, snapshot: bytes | None, *, label: str) -> None:
+    if path is None or snapshot is None:
+        return
+    try:
+        current = path.read_bytes()
+    except OSError as exc:
+        raise DimensionObserverRunError(f"{label} changed during observer run") from exc
+    if current != snapshot:
+        raise DimensionObserverRunError(f"{label} changed during observer run")
+
+
+def _read_anchors(snapshot: bytes | None) -> list[Mapping[str, object]]:
+    if snapshot is None:
         return []
-    payload = _read_json(path)
+    payload = _read_json_snapshot(snapshot, label="semantic anchors")
     if isinstance(payload, dict):
         anchors = payload.get("anchors")
     else:
@@ -51,10 +72,10 @@ def _read_anchors(path: Path | None) -> list[Mapping[str, object]]:
     return anchors
 
 
-def _read_profile(path: Path | None) -> dict[str, Any]:
-    if path is None:
+def _read_profile(snapshot: bytes | None) -> dict[str, Any]:
+    if snapshot is None:
         return {"default_unit": None, "clusters": {}}
-    payload = _read_json(path)
+    payload = _read_json_snapshot(snapshot, label="observer profile")
     if not isinstance(payload, dict):
         raise DimensionObserverRunError("observer profile must be an object")
     if set(payload) != {"schema_version", "default_unit", "clusters"}:
@@ -153,8 +174,12 @@ def run_dimension_observer(
         raise DimensionObserverRunError("source image cannot be decoded")
     height, width = decoded.shape[:2]
     clusters = detect_dimension_clusters(decoded)
-    anchors = _read_anchors(Path(semantic_anchors_path).resolve() if semantic_anchors_path else None)
-    profile = _read_profile(Path(profile_path).resolve() if profile_path else None)
+    anchors_path = Path(semantic_anchors_path).resolve() if semantic_anchors_path else None
+    profile_input_path = Path(profile_path).resolve() if profile_path else None
+    anchors_snapshot, anchors_sha256 = _snapshot_input(anchors_path, label="semantic anchors")
+    profile_snapshot, profile_sha256 = _snapshot_input(profile_input_path, label="profile")
+    anchors = _read_anchors(anchors_snapshot)
+    profile = _read_profile(profile_snapshot)
     reader = ocr_reader or _default_ocr_reader(lang=ocr_lang, tesseract_cmd=tesseract_cmd)
 
     temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent)))
@@ -209,6 +234,8 @@ def run_dimension_observer(
             "schema_version": "dimension-observer-evidence-1.0",
             "run_id": run_id,
             "source_sha256": source_sha256,
+            "semantic_anchors_sha256": anchors_sha256,
+            "profile_sha256": profile_sha256,
             "page_id": page_id,
             "view_id": view_id,
             "image_size_px": {"width": width, "height": height},
@@ -216,8 +243,9 @@ def run_dimension_observer(
             "artifacts": artifacts,
         }
         _write_json(temporary / "observer-evidence.json", evidence)
-        if source.read_bytes() != source_bytes:
-            raise DimensionObserverRunError("source image changed during observer run")
+        _assert_snapshot(source, source_bytes, label="source image")
+        _assert_snapshot(anchors_path, anchors_snapshot, label="semantic anchors")
+        _assert_snapshot(profile_input_path, profile_snapshot, label="profile")
         if output.exists():
             output.rmdir()
         os.replace(temporary, output)
