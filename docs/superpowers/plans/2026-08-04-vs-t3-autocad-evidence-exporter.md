@@ -108,7 +108,8 @@ client, Codex bridge, publisher, or mutation-state store.
       `artifact_directory`, `region`, and `measurements`.
 - [ ] Define a separate closed result-payload schema containing before/after
       drawing hashes, before/after DBMOD, session-state hashes,
-      `transient_state_restored`, artifact descriptors, and the binding IDs.
+      `transient_state_restored`, `captured_at_utc`, artifact descriptors, and
+      the binding IDs.
 - [ ] Keep root result fields in the existing result envelope and require
       `changed=false` plus empty `entity_handles` for this operation.
 - [ ] Define the artifact descriptor with relative path, artifact ID, kind,
@@ -193,8 +194,15 @@ session restoration are explicit and testable.
       request IDs, over-limit files, and hash/size mismatches.
 - [ ] Return only closed descriptors for render, entity-map, and measurements;
       do not embed large binary or collection payloads in the result JSON.
-- [ ] Clean request-owned temporary artifacts on success after Python confirms
-      receipt and on every failure, timeout, cancellation, or exception.
+- [ ] Keep request-owned artifacts after a successful .NET result; make Python
+      the sole owner of success-path cleanup after verify/copy/promote or
+      reject. Make .NET clean only when no successful result was produced.
+- [ ] Add an exclusive request-owned active lease. On timeout, Python must not
+      assume cancellation; cleanup is best-effort only when the lease is free.
+      Add a startup scavenger that removes lease-free request directories older
+      than a fixed 24-hour TTL, including orphaned successful-result artifacts.
+- [ ] Test cleanup ownership, active-lease protection, timeout behavior, and
+      bounded stale-request scavenging.
 - [ ] Add dispatcher mapping for exactly `visual_evidence_export`.
 - [ ] Ensure render failures, unresolved references, DBMOD changes, source hash
       changes, and session-state restore failures produce no accepted evidence.
@@ -222,7 +230,8 @@ limits, ownership, and cleanup checks are deterministic.
       `drawing_sha256` expected hash.
 - [ ] Validate the returned operation, run ID, evidence ID, region ID,
       mutation hash, manifest snapshot hash, region-config hash, full path,
-      session-state fields, and separate closed payload structure.
+      session-state fields, `captured_at_utc`, and separate closed payload
+      structure.
 - [ ] Validate artifact descriptors before any artifact is read: path
       containment, no symlink/reparse point, request ownership, byte limits,
       declared length, MIME type, and SHA-256.
@@ -286,7 +295,8 @@ def write_visual_evidence(
 - [ ] Implement validation of `run_id`, `evidence_id`, `drawing_path`,
       `drawing_sha256`, `latest_mutation_sha256`,
       `visual_run_manifest_sha256`, `region_id`,
-      `region_config_sha256`, and `captured_at_utc`.
+      `region_config_sha256`, and the RFC3339 UTC `captured_at_utc` copied
+      exactly from the result payload.
 - [ ] Re-read the exact manifest bytes immediately before atomic promotion and
       reject any byte-level change, even when the mutation field is unchanged.
 - [ ] Read only verified request-owned descriptors into a temporary sibling
@@ -297,7 +307,8 @@ def write_visual_evidence(
       the destination does not exist and every check succeeds.
 - [ ] Make evidence reads repeat the freshness check so a package becomes
       `STALE` after a later mutation.
-- [ ] Remove temporary IPC artifacts on every success/failure path.
+- [ ] Remove temporary IPC artifacts on success/failure paths according to the
+      lease ownership rule; leave active timed-out work for the TTL scavenger.
 - [ ] Run focused Python evidence tests, Ruff, and `git diff --check`.
 - [ ] Commit as `feat: validate and persist fresh VS-T3 evidence`.
 
@@ -324,7 +335,7 @@ cannot be overwritten, and the writer never changes mutation state.
 - [ ] Assert `changed=false`, equal DBMOD before/after, equal drawing hashes,
       verified full path, exact manifest snapshot hash, exact mutation hash,
       equal session-state fingerprints, `transient_state_restored=true`, and
-      empty entity handles.
+      a valid result `captured_at_utc`, and empty entity handles.
 - [ ] Assert current layout/view, layer visibility/freeze state, selection set,
       and renderer system variables are unchanged after the operation.
 - [ ] Change one manifest byte without changing the mutation field and assert

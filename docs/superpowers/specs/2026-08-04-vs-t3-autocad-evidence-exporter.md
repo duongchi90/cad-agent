@@ -255,11 +255,21 @@ closed artifact descriptors:
 Python must verify that every descriptor is relative to the configured IPC
 root, remains inside the request-owned directory, contains no symlink or
 reparse-point component, has the declared size and hash, and belongs to the
-current request ID before reading or promoting it. Python copies verified
-artifacts into its atomic evidence staging directory, then removes the
-request-owned temporary directory. Failure, timeout, cancellation, or
-exception removes that directory as well. The .NET side also cleans it on
-operation failure.
+current request ID before reading or promoting it. The .NET side keeps
+request-owned artifacts intact after writing a successful result; Python is
+the sole owner of success-path cleanup after it verifies, copies, and promotes
+or rejects the result. The .NET side cleans the directory only when the
+operation fails before producing a successful result.
+
+The request-owned directory also contains an exclusive active lease while the
+managed operation is running. On timeout, Python must not assume that the
+managed operation was cancelled: it performs best-effort cleanup only when the
+lease is no longer held, records no final evidence, and leaves a stale request
+directory for the scavenger otherwise. A startup scavenger removes request
+directories older than the fixed 24-hour TTL only when the lease can be
+acquired and no matching request is active. This covers crashed clients and
+orphaned successful-result artifacts without deleting files from a still
+running operation.
 
 The fixed `vs-t3-artifacts-1` policy is:
 
@@ -304,6 +314,7 @@ Its `payload` schema is separate from the request-parameters schema:
     "session_state_sha256_before": "<hash>",
     "session_state_sha256_after": "<same hash>",
     "transient_state_restored": true,
+    "captured_at_utc": "2026-08-04T00:00:02Z",
     "artifacts": []
   }
 }
@@ -321,7 +332,7 @@ The minimum binding in the result/evidence manifest is:
   "visual_run_manifest_sha256": "<manifest snapshot hash>",
   "region_id": "SIDE-CABIN",
   "region_config_sha256": "<hash>",
-  "captured_at_utc": "2026-08-04T00:00:00Z"
+  "captured_at_utc": "2026-08-04T00:00:02Z"
 }
 ```
 
@@ -329,7 +340,8 @@ The minimum binding in the result/evidence manifest is:
 `dbmod_before` and `dbmod_after` must also be equal. `entity_handles` must be
 empty because this operation does not grant mutation authority. Entity-map
 records may contain stable component IDs and handles as read-only identity
-metadata, sorted deterministically.
+metadata, sorted deterministically. `captured_at_utc` is emitted by the
+managed operation as RFC3339 UTC and is copied unchanged by Python.
 
 ## 8. Evidence artifact layout
 
@@ -353,6 +365,8 @@ hash, all required binding fields, and every artifact hash.
 The writer uses a temporary sibling directory and an atomic rename. The final
 destination must not already exist or be non-empty. The writer never searches
 for the next available number and never overwrites a previous `evidence_id`.
+The evidence writer copies the exact result `captured_at_utc` into the
+evidence manifest; it does not choose between multiple time sources.
 
 ## 9. Fail-closed and freshness policy
 
