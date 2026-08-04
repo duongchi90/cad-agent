@@ -26,8 +26,21 @@ JSON_SUFFIX = ".json"
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+_VS_T3_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_LOWERCASE_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_VS_T3_CAPTURED_AT_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
+)
+_VS_T3_ARTIFACT_POLICY = "vs-t3-artifacts-1"
 SUPPORTED_OPERATIONS = frozenset(
-    {"health", "review", "close_disposable", "mechanical_bom", "drawing_setup_audit"}
+    {
+        "health",
+        "review",
+        "close_disposable",
+        "mechanical_bom",
+        "drawing_setup_audit",
+        "visual_evidence_export",
+    }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _WM_CHAR = 0x0102
@@ -481,7 +494,124 @@ class DotNetIPCClient:
                 raise ValueError(
                     "close_disposable requires disposable=true and save_changes=false"
                 )
+        elif operation == "visual_evidence_export":
+            DotNetIPCClient._validate_visual_evidence_parameters(values)
         return values
+
+    @staticmethod
+    def _validate_visual_evidence_parameters(parameters: Mapping[str, Any]) -> None:
+        required = {
+            "run_id",
+            "evidence_id",
+            "region_id",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "artifact_policy_version",
+            "artifact_directory",
+            "region",
+            "measurements",
+        }
+        if set(parameters) != required:
+            missing = sorted(required.difference(parameters))
+            unsupported = sorted(set(parameters).difference(required))
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(missing))
+            if unsupported:
+                details.append("unsupported " + ", ".join(unsupported))
+            raise ValueError("visual_evidence_export parameters: " + "; ".join(details))
+
+        for name in ("run_id", "evidence_id", "region_id"):
+            value = parameters[name]
+            if not isinstance(value, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(value):
+                raise ValueError(f"parameters.{name} must be a stable identifier")
+
+        for name in ("latest_mutation_sha256", "visual_run_manifest_sha256"):
+            value = parameters[name]
+            if not isinstance(value, str) or not _LOWERCASE_SHA256_PATTERN.fullmatch(value):
+                raise ValueError(f"parameters.{name} must be a lowercase SHA-256")
+
+        if parameters["artifact_policy_version"] != _VS_T3_ARTIFACT_POLICY:
+            raise ValueError(
+                "parameters.artifact_policy_version must be vs-t3-artifacts-1"
+            )
+        artifact_directory = parameters["artifact_directory"]
+        if (
+            not isinstance(artifact_directory, str)
+            or not artifact_directory
+            or artifact_directory.startswith(("/", "\\"))
+            or re.match(r"^[A-Za-z]:", artifact_directory)
+            or any(part in ("", ".", "..") for part in artifact_directory.replace("\\", "/").split("/"))
+        ):
+            raise ValueError("parameters.artifact_directory must be a safe relative path")
+
+        region = parameters["region"]
+        if not isinstance(region, Mapping):
+            raise ValueError("parameters.region must be an object")
+        region_required = {
+            "model_bbox_mm",
+            "pixel_size",
+            "background",
+            "include_layers",
+            "exclude_layers",
+        }
+        if set(region) != region_required:
+            raise ValueError("parameters.region must be a closed object")
+        bbox = region["model_bbox_mm"]
+        if (
+            not isinstance(bbox, list)
+            or len(bbox) != 4
+            or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in bbox)
+        ):
+            raise ValueError("parameters.region.model_bbox_mm must contain four numbers")
+        pixel_size = region["pixel_size"]
+        if (
+            not isinstance(pixel_size, list)
+            or len(pixel_size) != 2
+            or any(type(value) is not int or not 1 <= value <= 8192 for value in pixel_size)
+        ):
+            raise ValueError("parameters.region.pixel_size must contain two positive integers")
+        if region["background"] not in {"WHITE", "BLACK"}:
+            raise ValueError("parameters.region.background is unsupported")
+        for name in ("include_layers", "exclude_layers"):
+            layers = region[name]
+            if (
+                not isinstance(layers, list)
+                or any(not isinstance(layer, str) or not layer for layer in layers)
+                or len(layers) != len(set(layers))
+            ):
+                raise ValueError(f"parameters.region.{name} must contain unique layer names")
+
+        measurements = parameters["measurements"]
+        if not isinstance(measurements, list) or len(measurements) > 10000:
+            raise ValueError("parameters.measurements must be an array of at most 10000 items")
+        measurement_ids: set[str] = set()
+        for measurement in measurements:
+            if not isinstance(measurement, Mapping):
+                raise ValueError("parameters.measurements entries must be objects")
+            allowed = {"id", "kind", "reference", "to_reference"}
+            if set(measurement).difference(allowed) or not {"id", "kind", "reference"}.issubset(measurement):
+                raise ValueError("parameters.measurements entries must be closed")
+            identifier = measurement["id"]
+            if not isinstance(identifier, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(identifier):
+                raise ValueError("parameters.measurements.id must be a stable identifier")
+            if identifier in measurement_ids:
+                raise ValueError("parameters.measurements ids must be unique")
+            measurement_ids.add(identifier)
+            if measurement["kind"] not in {"DISTANCE", "ANGLE", "RADIUS", "DIAMETER", "BOUNDING_BOX"}:
+                raise ValueError("parameters.measurements.kind is unsupported")
+            DotNetIPCClient._validate_visual_evidence_reference(measurement["reference"])
+            if "to_reference" in measurement:
+                DotNetIPCClient._validate_visual_evidence_reference(measurement["to_reference"])
+
+    @staticmethod
+    def _validate_visual_evidence_reference(reference: Any) -> None:
+        if not isinstance(reference, Mapping) or set(reference) != {"type", "id"}:
+            raise ValueError("parameters.measurements references must be closed objects")
+        if reference["type"] not in {"ENTITY", "DATUM"}:
+            raise ValueError("parameters.measurements reference type is unsupported")
+        if not isinstance(reference["id"], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(reference["id"]):
+            raise ValueError("parameters.measurements reference id must be a stable identifier")
 
     @staticmethod
     def _validate_result(
@@ -539,11 +669,110 @@ class DotNetIPCClient:
             raise DotNetIPCProtocolError(
                 "drawing_setup_audit result must be read-only and contain no entity handles"
             )
+        if operation == "visual_evidence_export":
+            if result["changed"] is not False or result["entity_handles"]:
+                raise DotNetIPCProtocolError(
+                    "visual_evidence_export result must be read-only and contain no entity handles"
+                )
+            DotNetIPCClient._validate_visual_evidence_payload(result.get("payload"))
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:
                 raise DotNetIPCProtocolError(f"result {name} must be a non-empty string")
         if "payload" in result and not isinstance(result["payload"], dict):
             raise DotNetIPCProtocolError("result payload must be an object")
+
+    @staticmethod
+    def _validate_visual_evidence_payload(payload: Any) -> None:
+        if not isinstance(payload, Mapping):
+            raise DotNetIPCProtocolError("visual_evidence_export payload must be an object")
+        required = {
+            "run_id",
+            "evidence_id",
+            "region_id",
+            "drawing_sha256_before",
+            "drawing_sha256_after",
+            "dbmod_before",
+            "dbmod_after",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "region_config_sha256",
+            "session_state_sha256_before",
+            "session_state_sha256_after",
+            "transient_state_restored",
+            "captured_at_utc",
+            "artifacts",
+        }
+        if set(payload) != required:
+            raise DotNetIPCProtocolError("visual_evidence_export payload must be a closed object")
+        for name in ("run_id", "evidence_id", "region_id"):
+            if not isinstance(payload[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(payload[name]):
+                raise DotNetIPCProtocolError(f"visual evidence payload {name} is invalid")
+        for name in (
+            "drawing_sha256_before",
+            "drawing_sha256_after",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "region_config_sha256",
+            "session_state_sha256_before",
+            "session_state_sha256_after",
+        ):
+            if not isinstance(payload[name], str) or not _LOWERCASE_SHA256_PATTERN.fullmatch(payload[name]):
+                raise DotNetIPCProtocolError(f"visual evidence payload {name} is invalid")
+        if payload["drawing_sha256_before"] != payload["drawing_sha256_after"]:
+            raise DotNetIPCProtocolError("visual evidence drawing hashes must be equal")
+        if payload["dbmod_before"] != payload["dbmod_after"]:
+            raise DotNetIPCProtocolError("visual evidence DBMOD values must be equal")
+        if payload["session_state_sha256_before"] != payload["session_state_sha256_after"]:
+            raise DotNetIPCProtocolError("visual evidence session-state hashes must be equal")
+        if payload["transient_state_restored"] is not True:
+            raise DotNetIPCProtocolError("visual evidence transient state was not restored")
+        if (
+            not isinstance(payload["captured_at_utc"], str)
+            or not _VS_T3_CAPTURED_AT_PATTERN.fullmatch(payload["captured_at_utc"])
+        ):
+            raise DotNetIPCProtocolError("visual evidence captured_at_utc must be RFC3339 UTC")
+        artifacts = payload["artifacts"]
+        if not isinstance(artifacts, list) or len(artifacts) != 3:
+            raise DotNetIPCProtocolError("visual evidence must contain exactly three artifacts")
+        kinds: set[str] = set()
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                raise DotNetIPCProtocolError("visual evidence artifacts must be objects")
+            artifact_required = {
+                "artifact_id",
+                "kind",
+                "relative_path",
+                "sha256",
+                "byte_length",
+                "mime_type",
+            }
+            if set(artifact).difference(artifact_required | {"width", "height"}) or not artifact_required.issubset(artifact):
+                raise DotNetIPCProtocolError("visual evidence artifact descriptor must be closed")
+            if artifact["kind"] not in {"render", "entity_map", "measurements"}:
+                raise DotNetIPCProtocolError("visual evidence artifact kind is unsupported")
+            if artifact["kind"] in kinds:
+                raise DotNetIPCProtocolError("visual evidence artifact kinds must be unique")
+            kinds.add(artifact["kind"])
+            if (
+                not isinstance(artifact["artifact_id"], str)
+                or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(artifact["artifact_id"])
+            ):
+                raise DotNetIPCProtocolError("visual evidence artifact_id is invalid")
+            relative_path = artifact["relative_path"]
+            if (
+                not isinstance(relative_path, str)
+                or not relative_path
+                or relative_path.startswith(("/", "\\"))
+                or re.match(r"^[A-Za-z]:", relative_path)
+                or any(part in ("", ".", "..") for part in relative_path.replace("\\", "/").split("/"))
+            ):
+                raise DotNetIPCProtocolError("visual evidence artifact path is unsafe")
+            if not isinstance(artifact["sha256"], str) or not _LOWERCASE_SHA256_PATTERN.fullmatch(artifact["sha256"]):
+                raise DotNetIPCProtocolError("visual evidence artifact hash is invalid")
+            if type(artifact["byte_length"]) is not int or not 1 <= artifact["byte_length"] <= 33554432:
+                raise DotNetIPCProtocolError("visual evidence artifact byte_length is invalid")
+            if artifact["mime_type"] not in {"image/png", "application/json"}:
+                raise DotNetIPCProtocolError("visual evidence artifact MIME type is unsupported")
 
 
 __all__ = [

@@ -16,7 +16,8 @@ public static class ContractConstants
             "review",
             "close_disposable",
             "mechanical_bom",
-            "drawing_setup_audit"
+            "drawing_setup_audit",
+            "visual_evidence_export"
         };
 }
 

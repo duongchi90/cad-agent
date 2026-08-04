@@ -32,7 +32,8 @@
         "review",
         "close_disposable",
         "mechanical_bom",
-        "drawing_setup_audit"
+        "drawing_setup_audit",
+        "visual_evidence_export"
       ]
     },
     "drawing_full_path": {
@@ -156,6 +157,37 @@
           },
           "entity_handles": {
             "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "visual_evidence_export"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "required": [
+          "payload"
+        ],
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "changed": {
+            "const": false
+          },
+          "entity_handles": {
+            "maxItems": 0
+          },
+          "payload": {
+            "$ref": "operations/visual-evidence-export-result.schema.json"
           }
         }
       }
