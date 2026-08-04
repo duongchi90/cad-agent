@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CadAgent.AutoCAD2027.Ipc;
 
 namespace CadAgent.AutoCAD2027.Drawing;
@@ -16,7 +17,31 @@ public sealed record VisualEvidenceRequest(
     string ArtifactPolicyVersion,
     string ArtifactDirectory,
     JsonElement Region,
-    IReadOnlyList<JsonElement> Measurements);
+    IReadOnlyList<JsonElement> Measurements)
+{
+    public static VisualEvidenceRequest FromIpc(IpcRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Parameters is null)
+        {
+            throw new InvalidDataException("visual_evidence_export requires parameters.");
+        }
+
+        var parameters = request.Parameters;
+        return new VisualEvidenceRequest(
+            request.DrawingFullPath ?? throw new InvalidDataException("drawing_full_path is required."),
+            request.DrawingSha256 ?? throw new InvalidDataException("drawing_sha256 is required."),
+            parameters["run_id"].GetString()!,
+            parameters["evidence_id"].GetString()!,
+            parameters["region_id"].GetString()!,
+            parameters["latest_mutation_sha256"].GetString()!,
+            parameters["visual_run_manifest_sha256"].GetString()!,
+            parameters["artifact_policy_version"].GetString()!,
+            parameters["artifact_directory"].GetString()!,
+            parameters["region"].Clone(),
+            parameters["measurements"].EnumerateArray().Select(value => value.Clone()).ToArray());
+    }
+}
 
 public sealed record EvidenceArtifactDescriptor(
     string ArtifactId,
@@ -112,6 +137,48 @@ public sealed record VisualEvidenceSnapshot(
     bool Changed,
     IReadOnlyList<string> EntityHandles);
 
+public static class VisualEvidencePayload
+{
+    private static readonly JsonSerializerOptions SerializerOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    public static Dictionary<string, JsonElement> Create(VisualEvidenceSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["run_id"] = JsonSerializer.SerializeToElement(snapshot.RunId),
+            ["evidence_id"] = JsonSerializer.SerializeToElement(snapshot.EvidenceId),
+            ["region_id"] = JsonSerializer.SerializeToElement(snapshot.RegionId),
+            ["drawing_sha256_before"] = JsonSerializer.SerializeToElement(snapshot.DrawingSha256Before),
+            ["drawing_sha256_after"] = JsonSerializer.SerializeToElement(snapshot.DrawingSha256After),
+            ["dbmod_before"] = JsonSerializer.SerializeToElement(snapshot.DbModBefore),
+            ["dbmod_after"] = JsonSerializer.SerializeToElement(snapshot.DbModAfter),
+            ["latest_mutation_sha256"] = JsonSerializer.SerializeToElement(snapshot.LatestMutationSha256),
+            ["visual_run_manifest_sha256"] = JsonSerializer.SerializeToElement(snapshot.VisualRunManifestSha256),
+            ["region_config_sha256"] = JsonSerializer.SerializeToElement(snapshot.RegionConfigSha256),
+            ["session_state_sha256_before"] = JsonSerializer.SerializeToElement(snapshot.SessionStateSha256Before),
+            ["session_state_sha256_after"] = JsonSerializer.SerializeToElement(snapshot.SessionStateSha256After),
+            ["transient_state_restored"] = JsonSerializer.SerializeToElement(snapshot.TransientStateRestored),
+            ["captured_at_utc"] = JsonSerializer.SerializeToElement(
+                snapshot.CapturedAtUtc.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")),
+            ["artifacts"] = JsonSerializer.SerializeToElement(snapshot.Artifacts.Select(artifact => new
+            {
+                artifact_id = artifact.ArtifactId,
+                kind = artifact.Kind == "entity-map" ? "entity_map" : artifact.Kind,
+                relative_path = artifact.RelativePath,
+                sha256 = artifact.Sha256,
+                byte_length = artifact.ByteLength,
+                mime_type = artifact.MimeType,
+                width = artifact.Width,
+                height = artifact.Height
+            }).ToArray(), SerializerOptions)
+        };
+    }
+}
+
 public static class VisualEvidenceReadOnlyBoundary
 {
     public static IReadOnlyList<string> Validate(
@@ -174,6 +241,24 @@ public static class VisualEvidenceReadOnlyBoundary
         if (!string.Equals(request.VisualRunManifestSha256, snapshot.VisualRunManifestSha256, StringComparison.Ordinal))
         {
             errors.Add("visual_run_manifest_sha256 was not echoed exactly.");
+        }
+        if (!string.Equals(
+                request.ArtifactPolicyVersion,
+                VisualEvidenceArtifactPolicy.Version,
+                StringComparison.Ordinal))
+        {
+            errors.Add("artifact_policy_version is not supported.");
+        }
+        var expectedRegionHash = VisualEvidenceProjection.CanonicalRegionConfigSha256(request.Region);
+        if (!string.Equals(expectedRegionHash, snapshot.RegionConfigSha256, StringComparison.Ordinal))
+        {
+            errors.Add("region_config_sha256 does not match the requested region configuration.");
+        }
+        if (snapshot.Artifacts.Count != 3
+            || snapshot.Artifacts.Select(artifact => artifact.Kind).ToHashSet(StringComparer.Ordinal)
+                .SetEquals(new[] { "render", "entity-map", "measurements" }) is false)
+        {
+            errors.Add("visual_evidence_export must return exactly render, entity-map and measurements artifacts.");
         }
         return errors;
     }

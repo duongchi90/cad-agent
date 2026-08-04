@@ -215,6 +215,73 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void VisualEvidenceExportMapsTheReadOnlyGatewayAndPayloadWithoutMutationAuthority()
+    {
+        const string drawingHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string mutationHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        const string manifestHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        const string sessionHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        var path = @"C:\drawings\sample.dwg";
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,2400,2200],\"pixel_size\":[1600,1200],\"background\":\"WHITE\",\"include_layers\":[\"CABIN\"],\"exclude_layers\":[]}").RootElement;
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            VisualEvidence = new VisualEvidenceSnapshot(
+                path,
+                path,
+                "RUN-001",
+                "EVIDENCE-001",
+                "SIDE-CABIN",
+                drawingHash,
+                drawingHash,
+                0,
+                0,
+                mutationHash,
+                manifestHash,
+                VisualEvidenceProjection.CanonicalRegionConfigSha256(region),
+                sessionHash,
+                sessionHash,
+                true,
+                new DateTimeOffset(2026, 8, 4, 12, 0, 0, TimeSpan.Zero),
+                new[]
+                {
+                    new EvidenceArtifactDescriptor("render:cad-render.png", "render", "artifacts/visual-request/cad-render.png", drawingHash, 2, "image/png", 1600, 1200),
+                    new EvidenceArtifactDescriptor("entity-map:entities.json", "entity-map", "artifacts/visual-request/entities.json", mutationHash, 2, "application/json"),
+                    new EvidenceArtifactDescriptor("measurements:measurements.json", "measurements", "artifacts/visual-request/measurements.json", manifestHash, 2, "application/json")
+                },
+                false,
+                Array.Empty<string>())
+        };
+        var result = CreateDispatcher(gateway).Dispatch(new IpcRequest
+        {
+            RequestId = "visual-request",
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = "visual_evidence_export",
+            DrawingFullPath = path,
+            DrawingSha256 = drawingHash,
+            Parameters = Parameters(
+                ("run_id", JsonSerializer.SerializeToElement("RUN-001")),
+                ("evidence_id", JsonSerializer.SerializeToElement("EVIDENCE-001")),
+                ("region_id", JsonSerializer.SerializeToElement("SIDE-CABIN")),
+                ("latest_mutation_sha256", JsonSerializer.SerializeToElement(mutationHash)),
+                ("visual_run_manifest_sha256", JsonSerializer.SerializeToElement(manifestHash)),
+                ("artifact_policy_version", JsonSerializer.SerializeToElement(VisualEvidenceArtifactPolicy.Version)),
+                ("artifact_directory", JsonSerializer.SerializeToElement("artifacts/visual-request")),
+                ("region", region),
+                ("measurements", JsonSerializer.SerializeToElement(Array.Empty<object>()))),
+            Approval = null
+        });
+
+        Assert.True(result.Success);
+        Assert.Equal("visual_evidence_export", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Equal(mutationHash, result.Payload!["latest_mutation_sha256"].GetString());
+        Assert.Equal(1, gateway.ReadVisualEvidenceCallCount);
+    }
+
+    [Fact]
     public void MechanicalBomUsesUnavailableDefaultNoOpAdapter()
     {
         var gateway = new StubDrawingGateway
@@ -416,14 +483,15 @@ public sealed class OperationDispatcherTests
         string operation,
         string requestId,
         string? drawingFullPath,
-        Dictionary<string, JsonElement> parameters) =>
+        Dictionary<string, JsonElement> parameters,
+        string? drawingSha256 = null) =>
         new()
         {
             RequestId = requestId,
             SchemaVersion = ContractConstants.SchemaVersion,
             Operation = operation,
             DrawingFullPath = drawingFullPath,
-            DrawingSha256 = null,
+            DrawingSha256 = drawingSha256,
             Parameters = parameters,
             Approval = null
         };
@@ -454,9 +522,13 @@ public sealed class OperationDispatcherTests
 
         public Exception? ExceptionToThrow { get; init; }
 
+        public VisualEvidenceSnapshot? VisualEvidence { get; init; }
+
         public int ReadEntitiesCallCount { get; private set; }
 
         public int ReadDrawingSetupCallCount { get; private set; }
+
+        public int ReadVisualEvidenceCallCount { get; private set; }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
@@ -476,8 +548,11 @@ public sealed class OperationDispatcherTests
                 ?? throw new InvalidOperationException("No drawing setup fixture was configured.");
         }
 
-        public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
-            throw new NotSupportedException();
+        public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request)
+        {
+            ReadVisualEvidenceCallCount++;
+            return VisualEvidence ?? throw new NotSupportedException();
+        }
     }
 
     private sealed class FakeMechanicalAdapter : IMechanicalAdapter
