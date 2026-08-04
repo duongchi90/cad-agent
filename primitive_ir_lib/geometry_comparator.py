@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from primitive_ir_lib.geometry_alignment import AlignmentResult, warp_to_reference
-from primitive_ir_lib.geometry_metrics import normalize_outline
+from primitive_ir_lib.geometry_metrics import GeometryMetrics, normalize_outline
 
 
 @dataclass(frozen=True)
@@ -157,8 +157,87 @@ def compare_curve_profile(reference_mask: np.ndarray, cad_mask: np.ndarray) -> d
     }
 
 
+_TREND_FIELDS = (
+    "silhouette_iou",
+    "chamfer_distance_normalized",
+    "hausdorff_p95_normalized",
+    "centroid_offset_x_ratio",
+    "centroid_offset_y_ratio",
+    "width_ratio_error",
+    "height_ratio_error",
+    "missing_edge_ratio",
+    "extra_edge_ratio",
+    "connected_component_difference",
+)
+_HIGHER_IS_BETTER = {"silhouette_iou"}
+_PROTECTED_FIELDS = {
+    "missing_edge_ratio",
+    "extra_edge_ratio",
+    "hausdorff_p95_normalized",
+    "connected_component_difference",
+}
+
+
+def _validate_trend_metrics(metrics: GeometryMetrics, *, epsilon: float) -> None:
+    if not math.isfinite(float(epsilon)) or epsilon < 0.0:
+        raise ValueError("epsilon must be a non-negative finite number")
+    for field in _TREND_FIELDS:
+        value = getattr(metrics, field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{field} must be numeric")
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{field} must be finite")
+        if float(value) < 0.0:
+            raise ValueError(f"{field} must be non-negative")
+    if not 0.0 <= float(metrics.silhouette_iou) <= 1.0:
+        raise ValueError("silhouette_iou must be between 0 and 1")
+    if not isinstance(metrics.connected_component_difference, int):
+        raise ValueError("connected_component_difference must be an integer")
+
+
+def compare_metric_trend(
+    current: GeometryMetrics,
+    previous: GeometryMetrics | None,
+    *,
+    epsilon: float = 1e-6,
+) -> str:
+    """Classify candidate change without allowing an average to hide regressions."""
+
+    _validate_trend_metrics(current, epsilon=epsilon)
+    if previous is None:
+        return "BASELINE"
+    _validate_trend_metrics(previous, epsilon=epsilon)
+
+    improved = False
+    regressed = False
+    for field in _TREND_FIELDS:
+        current_value = float(getattr(current, field))
+        previous_value = float(getattr(previous, field))
+        if field in _HIGHER_IS_BETTER:
+            if current_value > previous_value + epsilon:
+                improved = True
+            elif current_value < previous_value - epsilon:
+                regressed = True
+        else:
+            if current_value < previous_value - epsilon:
+                improved = True
+            elif current_value > previous_value + epsilon:
+                regressed = True
+        if field in _PROTECTED_FIELDS and (
+            (field in _HIGHER_IS_BETTER and current_value < previous_value - epsilon)
+            or (field not in _HIGHER_IS_BETTER and current_value > previous_value + epsilon)
+        ):
+            return "REGRESSED"
+    if regressed:
+        return "REGRESSED"
+    if improved:
+        return "IMPROVED"
+    return "UNCHANGED"
+
+
 __all__ = [
     "ComparisonArtifacts",
     "compare_curve_profile",
+    "compare_metric_trend",
     "create_comparison_artifacts",
 ]
