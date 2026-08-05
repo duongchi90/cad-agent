@@ -1,0 +1,26 @@
+{
+  "request_id": "render-request-001",
+  "schema_version": "1.0",
+  "operation": "native_render_evidence",
+  "drawing_full_path": "C:\\drawings\\sample.dwg",
+  "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "parameters": {
+    "run_id": "run-001",
+    "latest_mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "visual_run_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "layout": {
+      "identity": "layout-001",
+      "name": "Layout1"
+    },
+    "artifact_kind": "PNG",
+    "render_options": {
+      "background": "white",
+      "dpi": 300,
+      "fit_to_paper": true,
+      "paper_size": "A4",
+      "plot_style": "monochrome.ctb"
+    },
+    "requested_at": "2026-08-05T08:00:00Z"
+  },
+  "approval": null
+}

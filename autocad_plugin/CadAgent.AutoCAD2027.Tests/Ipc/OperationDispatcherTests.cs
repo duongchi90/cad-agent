@@ -284,6 +284,37 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void NativeRenderEvidenceFailsClosedBeforeReadingTheDrawingGateway()
+    {
+        var path = @"C:\drawings\sample.dwg";
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(new IpcRequest
+        {
+            RequestId = "render-request-001",
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = "native_render_evidence",
+            DrawingFullPath = path,
+            DrawingSha256 = new string('a', 64),
+            Parameters = NativeRenderParameters(),
+            Approval = null
+        });
+
+        Assert.False(result.Success);
+        Assert.Equal("native_render_evidence", result.Operation);
+        Assert.Equal("NATIVE_RENDER_NOT_IMPLEMENTED", Assert.Single(result.Errors!));
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Empty(result.Payload!);
+        Assert.Equal(0, gateway.ReadEntitiesCallCount);
+        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
+        Assert.Equal(0, gateway.ReadVisualEvidenceCallCount);
+    }
+
+    [Fact]
     public void MechanicalBomUsesUnavailableDefaultNoOpAdapter()
     {
         var gateway = new StubDrawingGateway
@@ -501,6 +532,25 @@ public sealed class OperationDispatcherTests
     private static Dictionary<string, JsonElement> Parameters(
         params (string Name, JsonElement Value)[] values) =>
         values.ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
+
+    private static Dictionary<string, JsonElement> NativeRenderParameters() =>
+        new(StringComparer.Ordinal)
+        {
+            ["run_id"] = JsonSerializer.SerializeToElement("run-001"),
+            ["latest_mutation_sha256"] = JsonSerializer.SerializeToElement(new string('b', 64)),
+            ["visual_run_manifest_sha256"] = JsonSerializer.SerializeToElement(new string('c', 64)),
+            ["layout"] = JsonSerializer.SerializeToElement(new { identity = "layout-001", name = "Layout1" }),
+            ["artifact_kind"] = JsonSerializer.SerializeToElement("PNG"),
+            ["render_options"] = JsonSerializer.SerializeToElement(new
+            {
+                background = "white",
+                dpi = 300,
+                fit_to_paper = true,
+                paper_size = "A4",
+                plot_style = "monochrome.ctb"
+            }),
+            ["requested_at"] = JsonSerializer.SerializeToElement("2026-08-05T08:00:00Z")
+        };
 
     private static EntitySnapshot Entity(string handle, string type) =>
         new(handle, type, "0", new Dictionary<string, JsonElement>(StringComparer.Ordinal));

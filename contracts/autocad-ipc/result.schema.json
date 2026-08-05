@@ -33,7 +33,8 @@
         "close_disposable",
         "mechanical_bom",
         "drawing_setup_audit",
-        "visual_evidence_export"
+        "visual_evidence_export",
+        "native_render_evidence"
       ]
     },
     "drawing_full_path": {
@@ -194,6 +195,75 @@
             "$ref": "operations/visual-evidence-export-result.schema.json"
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "native_render_evidence"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "changed": {
+            "const": false
+          },
+          "entity_handles": {
+            "maxItems": 0
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": true
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "required": [
+                "payload"
+              ],
+              "properties": {
+                "payload": {
+                  "$ref": "operations/native-render-evidence-result.schema.json"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": false
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              }
+            }
+          }
+        ]
       }
     }
   ]
