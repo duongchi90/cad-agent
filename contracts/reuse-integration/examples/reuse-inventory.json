@@ -1,0 +1,41 @@
+{
+  "schema_version": "reuse-inventory-1.0",
+  "repository": "duongchi90/cad-agent",
+  "base_sha": "4cc2c0f198484581f5781466e769441d4e7da669",
+  "generated_at_utc": "2026-08-04T15:00:00Z",
+  "capabilities": [
+    {
+      "capability_id": "primitive-ir-image-pdf-recognition",
+      "capability": "Image/PDF recognition boundary",
+      "current_owner": "primitive_ir_lib",
+      "current_paths": [
+        "primitive_ir_lib/run_image.py",
+        "primitive_ir_lib/run_pdf.py"
+      ],
+      "current_apis": [
+        "primitive_ir_lib.run_image.run",
+        "primitive_ir_lib.run_pdf.run"
+      ],
+      "current_consumers": [
+        "cad_agent.run",
+        "cad_agent.run_pdf"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "primitive_ir_lib/tests/test_run_image.py",
+        "primitive_ir_lib/tests/test_run_pdf.py"
+      ],
+      "acceptance_gate": "Existing offline recognition tests and the affected private real-data benchmark.",
+      "migration": "Keep the existing Primitive IR entry points as the sole image/PDF recognition boundary.",
+      "rollback": "Remove this inventory entry; the existing recognition runtime remains unchanged.",
+      "inspected_paths": [
+        "primitive_ir_lib/run_image.py",
+        "primitive_ir_lib/run_pdf.py",
+        "primitive_ir_lib/tests/test_run_image.py",
+        "primitive_ir_lib/tests/test_run_pdf.py"
+      ],
+      "gap_reason": null
+    }
+  ]
+}
