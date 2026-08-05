@@ -22,10 +22,12 @@ Never treat a chat statement, PR body, branch name, or old status note as proof 
 ## 2. Current integrated state
 
 - Repository: `duongchi90/cad-agent`
-- Current integrated `main` at this handoff update: `c325d009c3035be5c3202e3939efd4a82bcd2f42`
+- Latest accepted implementation base at this handoff update: `c325d009c3035be5c3202e3939efd4a82bcd2f42`
 - Latest merged implementation PR: #35 — R0-T1 closed reuse-inventory contract and validator
 - Completed issue: #34
 - PR #31 was closed without merge because the reviewed and merged PR #32 superseded it.
+
+The current `main` may be newer because operational documentation can be committed after the implementation base above. Every new session must resolve the live `main` SHA from GitHub rather than assuming the SHA written here is the branch tip.
 
 R0-T1 added only:
 
@@ -41,7 +43,7 @@ R0-T1 did not change the CAD runtime, dependencies, lock file, AutoCAD behavior,
 - Task: R0-T2 — repository-wide reuse inventory and completeness gate
 - Issue: #36
 - Expected branch: `task/r0-t2-repository-reuse-inventory`
-- Required base: `c325d009c3035be5c3202e3939efd4a82bcd2f42`
+- Required implementation base: `c325d009c3035be5c3202e3939efd4a82bcd2f42`
 - PR: none recorded at this handoff update
 - Current task authority: Issue #36 plus Task 2 in the approved R0 plan
 
