@@ -95,7 +95,7 @@ cleanup or maintenance job is introduced by S2C.
 - .NET SDK: `10.0.301`.
 - Autodesk reference directory: `C:\Program Files\Autodesk\AutoCAD 2027`.
 - Built plugin assembly SHA-256 for the implementation candidate:
-  `a667fc54146f372bb9fbb2a0650ce3b627cd2ea745d9160fa70a7f1e818446de`.
+  `f19732ad152f9b61c9636015b21be2af3c50eee6038aa3458da00f3320790330`.
 - No Autodesk managed DLLs were copied into the repository or plugin output.
 
 The canonical verifier was run on the clean pre-update record head with:
