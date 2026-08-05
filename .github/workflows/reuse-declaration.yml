@@ -1,0 +1,30 @@
+name: reuse-declaration
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Write PR body and changed-file list
+        shell: pwsh
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          [IO.File]::WriteAllText("$env:RUNNER_TEMP\pr-body.txt", $env:PR_BODY ?? "", [Text.UTF8Encoding]::new($false))
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" | Out-File -Encoding utf8NoBOM "$env:RUNNER_TEMP\changed-files.txt"
+      - name: Check Reuse Declaration
+        shell: pwsh
+        run: |
+          python scripts/check_reuse_declaration.py `
+            --body-file "$env:RUNNER_TEMP\pr-body.txt" `
+            --changed-files "$env:RUNNER_TEMP\changed-files.txt"
