@@ -1,13 +1,44 @@
 {
   "request_id": "render-request-001",
-  "success": false,
+  "success": true,
   "operation": "native_render_evidence",
   "drawing_full_path": "C:\\drawings\\sample.dwg",
   "changed": false,
   "entity_handles": [],
   "warnings": [],
-  "errors": ["NATIVE_RENDER_NOT_IMPLEMENTED"],
+  "errors": [],
   "started_at": "2026-08-05T08:00:00Z",
-  "completed_at": "2026-08-05T08:00:00Z",
-  "payload": {}
+  "completed_at": "2026-08-05T08:00:03Z",
+  "payload": {
+    "schema_version": "autocad-native-render-evidence-1.0",
+    "request_id": "render-request-001",
+    "run_id": "run-001",
+    "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "latest_mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "visual_run_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "layout": {
+      "identity": "layout-001",
+      "name": "Layout1"
+    },
+    "artifact_kind": "PNG",
+    "render_options": {
+      "background": "white",
+      "dpi": 300,
+      "fit_to_paper": true,
+      "paper_size": "A4",
+      "plot_style": "monochrome.ctb"
+    },
+    "renderer": "AUTOCAD_NATIVE",
+    "artifact": {
+      "relative_path": "native-render/render-request-001/artifact.png",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "width": 2480,
+      "height": 3508
+    },
+    "capture_timestamp": "2026-08-05T08:00:03Z",
+    "changed": false,
+    "dbmod_before": 0,
+    "dbmod_after": 0,
+    "warnings": []
+  }
 }
