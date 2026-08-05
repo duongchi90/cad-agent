@@ -1,121 +1,81 @@
 # S2B AutoCAD-Native Render Evidence File IPC Seam
 
-Status: bounded S2B seam implemented; actual native capture and live acceptance
-remain locked for S2C.
+Status: accepted and squash-merged. The File IPC seam is implemented and
+fail-closed; actual AutoCAD-native capture and live acceptance remain outside
+S2B.
 
 ## Identity and bounded scope
 
 - Issue: #52.
-- Exact implementation base SHA: `393f318317032096ec5e055ed1c928090f3b7e31`.
-- Final head SHA: emitted by the single bounded commit and recorded in the PR
-  provenance; a commit cannot contain its own object ID without becoming
-  self-referential.
+- PR: #55.
+- Exact implementation base: `393f318317032096ec5e055ed1c928090f3b7e31`.
+- Final reviewed head: `0ed4cd3a0c0a23cd9a52626fd24e35626288c9d9`.
+- Final synthetic merge candidate: `fd9bb4153837d60483a00b6e3e3fc3a9d80c70e9`.
+- Accepted squash merge: `3d0aa999904f384efa4eb42a81637e4270591859`.
 - Branch: `task/s2b-native-render-ipc-seam`.
 - Changed files: exactly the 15 Issue #52 allowlisted files.
-- No dependencies or `requirements/windows-py311.lock` changed.
+- No dependency or `requirements/windows-py311.lock` change.
 
-The seam adds the `native_render_evidence` File IPC operation, maps the accepted
-S2A request fields through the existing envelope, validates successful payloads
-with `validate_render_evidence`, and returns the deterministic
-`NATIVE_RENDER_NOT_IMPLEMENTED` failure before any drawing gateway access.
-No image or PDF artifact is fabricated.
+The branch contained two bounded commits. The second commit added only the two
+validator helper overloads required for successful C# compilation. PO accepted
+this narrow compile-completion amendment and squash-merged both commits into one
+main commit.
+
+## Implemented behavior
+
+S2B adds the `native_render_evidence` operation to the existing File IPC
+request/result envelopes and existing closed .NET dispatcher. The Python
+adapter transports the accepted S2A request and validates any successful result
+through the accepted native-render evidence contract.
+
+The current .NET dispatcher recognizes the operation but returns the
+deterministic `NATIVE_RENDER_NOT_IMPLEMENTED` error before any drawing-gateway
+access. It produces no placeholder image or PDF and makes no mutation, approval,
+verdict, repair, publication, or production-readiness claim.
+
+The C# validator:
+
+- enforces closed request, layout, render-option, artifact, and result shapes;
+- rejects unsafe paths, malformed hashes/timestamps, unsupported artifact kinds,
+  approval/verdict fields, mutation claims, entity handles, and negative or
+  unequal DBMOD values;
+- binds successful result identity and render options back to the request;
+- requires read-only results and external artifact metadata only.
 
 ## Reuse Declaration
 
-Existing capability inspected: `mcp_integration_lib.dotnet_ipc`, the existing
-`health`, `review`, `drawing_setup_audit`, and `visual_evidence_export` File IPC
-operations, `autocad_render_evidence.py`, the closed request/result schemas,
-the C# contract validator, and the operation dispatcher.
+Existing capability inspected: `mcp_integration_lib.dotnet_ipc`, existing File
+IPC operations, accepted S2A `autocad_render_evidence.py`, closed schemas,
+`ContractModels`, `ContractValidator`, and `OperationDispatcher`.
 
-Existing API reused: `DotNetIPCClient.request`, the existing request/result
-envelopes, JSON schema conventions, `ContractModels`, `ContractValidator`,
-`OperationDispatcher`, pytest, C# unit tests, Ruff, the architecture checker,
-and the canonical verifier.
+Existing API reused: `DotNetIPCClient.request`, the existing File IPC envelopes,
+S2A validation, schema conventions, C# validator/dispatcher, pytest, C# tests,
+Ruff, architecture checker, and canonical verifier.
 
-Adapter required: one operation adapter named `native_render_evidence` that
-transports the accepted S2A request fields and validates returned evidence
-through `validate_render_evidence`.
+Adapter required: one `native_render_evidence` adapter through the existing
+transport and dispatcher.
 
-New capability genuinely missing: a versioned File IPC envelope and closed
-dispatcher registration for native-render evidence, with an explicit
-unsupported/fail-closed result until S2C implements the AutoCAD drawing
-gateway.
-
-Files allowed to change: `contracts/autocad-ipc/operations/native-render-evidence.schema.json`,
-`contracts/autocad-ipc/operations/native-render-evidence-result.schema.json`,
-`contracts/autocad-ipc/examples/native-render-evidence-request.json`,
-`contracts/autocad-ipc/examples/native-render-evidence-result.json`,
-`contracts/autocad-ipc/request.schema.json`, `contracts/autocad-ipc/result.schema.json`,
-`mcp_integration_lib/dotnet_ipc.py`,
-`mcp_integration_lib/tests/test_autocad_render_evidence_ipc.py`,
-`tests/test_autocad_render_evidence_ipc_contracts.py`,
-`autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractModels.cs`,
-`autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractValidator.cs`,
-`autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs`,
-`autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/ContractTests.cs`,
-`autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/OperationDispatcherTests.cs`,
-and this implementation record.
+New capability genuinely missing: a versioned File IPC seam for native-render
+evidence with explicit unsupported behavior before S2C.
 
 Files forbidden to duplicate: File IPC transport, dispatcher, S2A validator,
 AutoCAD renderer/plotter, visual verdict, repair executor, manifest/checkpoint/
-revision stores, publisher, dependencies, and `requirements/windows-py311.lock`.
+revision stores, publisher, dependencies, and the Python lock file.
 
-Compatibility behavior: all existing operations retain their existing allowlist
-entries and request/result behavior. The new operation validates safely but
-fails explicitly as `NATIVE_RENDER_NOT_IMPLEMENTED` against the current live
-gateway. No `IDrawingGateway`, `CommandContext`, AutoCAD database, plot API,
-HWND, or live File IPC implementation was added or changed.
+Compatibility behavior: existing File IPC operations retain their prior
+allowlist entries and behavior. S2B adds no `IDrawingGateway`, `CommandContext`,
+AutoCAD database, plotting, HWND, or live File IPC implementation.
 
-Migration and rollback path: revert the single bounded S2B commit; existing
-operations and the S2A offline contract remain unchanged.
+Migration and rollback path: revert accepted squash merge
+`3d0aa999904f384efa4eb42a81637e4270591859`; the existing operations and S2A
+contract remain otherwise unchanged.
 
 ## Verification evidence
 
-Focused IPC and S2A contract command:
+### Local mandatory .NET gate
 
-```powershell
-.\.venv-py311\Scripts\python.exe -m pytest mcp_integration_lib/tests/test_autocad_render_evidence.py mcp_integration_lib/tests/test_dotnet_ipc.py mcp_integration_lib/tests/test_autocad_render_evidence_ipc.py tests/test_autocad_render_evidence_ipc_contracts.py tests/test_vs_t3_ipc_contracts.py -q -p no:cacheprovider
-```
-
-Observed result: exit `0`; `111 passed, 18 subtests passed`.
-
-Full offline Python command:
-
-```powershell
-.\.venv-py311\Scripts\python.exe -m pytest tests primitive_ir_lib/tests semantic_ir_lib/tests dxf_builder_lib/tests mcp_integration_lib/tests agent_lib/tests -q -m "not real_data and not autocad_mechanical" -p no:cacheprovider
-```
-
-Observed result: exit `0`; `869 passed, 11 deselected, 18 subtests passed`.
-
-Ruff command:
-
-```powershell
-.\.venv-py311\Scripts\python.exe -m ruff check mcp_integration_lib/dotnet_ipc.py mcp_integration_lib/tests/test_autocad_render_evidence_ipc.py tests/test_autocad_render_evidence_ipc_contracts.py
-```
-
-Observed result: exit `0`; all checks passed.
-
-Architecture command:
-
-```powershell
-.\.venv-py311\Scripts\python.exe scripts/check_architecture_boundaries.py check --repo-root . --baseline contracts/reuse-integration/architecture-boundaries.json
-```
-
-Observed result: exit `0`; `Architecture boundaries: PASS`.
-
-Diff command:
-
-```powershell
-git diff --check
-```
-
-Observed result: exit `0` before the bounded commit.
-
-Canonical verifier command and result are recorded against the clean bounded
-candidate in the final PR provenance. The AutoCAD .NET portion is `NOT RUN`
-because this workstation has no `dotnet`, `msbuild`, or `csc` executable.
-
-The mandatory commands were attempted exactly:
+Run on final head `0ed4cd3a0c0a23cd9a52626fd24e35626288c9d9`
+with approved external Autodesk 2027 managed references:
 
 ```powershell
 dotnet restore autocad_plugin/CadAgent.AutoCAD2027.sln
@@ -123,22 +83,42 @@ dotnet build autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64 
 dotnet test autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64 --no-build --no-restore
 ```
 
-Each exited `1` because PowerShell reported that `dotnet` was not recognized.
-This is an environment blocker, not a pass.
+Observed result:
+
+- restore: PASS;
+- Release/x64 build: PASS;
+- C# tests: `113 passed, 0 failed`.
+
+Autodesk references remain external. The production project declares
+`<Private>false</Private>` for `AcCoreMgd`, `AcDbMgd`, and `AcMgd`; no Autodesk
+DLL was added to the PR.
+
+### Hosted sequential integration
+
+GitHub Actions checked synthetic merge
+`fd9bb4153837d60483a00b6e3e3fc3a9d80c70e9`, combining final head with `main`
+at `f66367ab79672cc6fc844a8e393542962bcf7f32`.
+
+Observed result:
+
+- `tests` workflow #346: PASS;
+- offline: `1022 passed`, 11 deselected, 18 subtests;
+- offline JUnit: `1040/0/0/0`;
+- dotnet IPC JUnit: `38/0/0/0`;
+- `reuse-declaration` workflow #28: PASS;
+- Ruff, architecture, lock/environment, and diff checks: PASS.
 
 ## Gate states
 
-- Python focused and offline gates: **PASS**.
-- Ruff: **PASS**.
-- Architecture checker: **PASS**.
-- `git diff --check`: **PASS**.
-- C# restore/build/test: **NOT RUN**; .NET SDK absent.
-- AutoCAD Mechanical live/File IPC smoke: **NOT RUN** and locked.
-- Actual AutoCAD-native capture: **NOT RUN** and locked for S2C.
-- Private drawing/data gate: **NOT RUN**.
-- Image/PDF fabrication: **NOT IMPLEMENTED**.
+- Python focused/offline and schema gates: **PASS**.
+- C# restore/build/test: **PASS**.
+- GitHub sequential integration CI: **PASS**.
+- AutoCAD Mechanical live/File IPC smoke: **NOT RUN**.
+- Actual AutoCAD-native capture: **NOT IMPLEMENTED / NOT RUN**.
+- Private drawing/data acceptance: **NOT RUN**.
+- Placeholder image/PDF fabrication: **NOT IMPLEMENTED**.
 - Verdict, approval, repair, and publication: **NOT IMPLEMENTED**.
-- S2C and S3 tasks: **NOT RUN**.
 
-Unavailable-state skips are not acceptance evidence and are not reported as
-passes.
+S2B acceptance does not promote a native-render runtime. S2C requires its own
+approved design/task, actual read-only gateway implementation, and live AutoCAD
+Mechanical acceptance.
