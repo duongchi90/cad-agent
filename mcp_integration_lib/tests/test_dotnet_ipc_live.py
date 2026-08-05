@@ -528,6 +528,10 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
         )
         request_id = f"s2c-live-{profile}-{time.time_ns()}"
         request_directory = dotnet_client.ipc_dir / "native-render" / request_id
+        expected_error_code = {
+            "missing-device": "NATIVE_RENDER_DEVICE_UNAVAILABLE",
+            "missing-media": "NATIVE_RENDER_MEDIA_UNAVAILABLE",
+        }[profile]
 
         try:
             with _disposable_drawing_cleanup(dotnet_client, str(drawing)) as mark_closed:
@@ -553,6 +557,10 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
                 self.assertEqual([], result["entity_handles"])
                 self.assertEqual({}, result["payload"])
                 self.assertTrue(result["errors"])
+                self.assertTrue(
+                    any(expected_error_code in error for error in result["errors"]),
+                    result["errors"],
+                )
                 self.assertEqual(
                     state_before,
                     legacy_client.drawing_get_variables(
@@ -560,6 +568,7 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
                     ),
                 )
                 self.assertEqual(original_sha256, _sha256(drawing))
+                self.assertTrue(request_directory.is_dir())
                 self.assertFalse((request_directory / "artifact.png").exists())
 
                 close = dotnet_client.close_disposable(
@@ -620,7 +629,16 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
         def artifact_path(relative_path: str) -> Path:
             return dotnet_client.ipc_dir.joinpath(*relative_path.split("/"))
 
-        def assert_failed(result_error: DotNetIPCResultError) -> None:
+        def assert_failed(
+            result_error: DotNetIPCResultError,
+            *,
+            request_id: str,
+            expected_error_code: str,
+            state_before: dict[str, object],
+            drawing_hash_before: str,
+            artifact_kind: str = "PNG",
+            artifact_must_exist: bool = False,
+        ) -> None:
             self.assertIsNotNone(result_error.result)
             result = result_error.result
             assert result is not None
@@ -629,6 +647,19 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
             self.assertEqual([], result["entity_handles"])
             self.assertEqual({}, result["payload"])
             self.assertTrue(result["errors"])
+            self.assertTrue(
+                any(expected_error_code in error for error in result["errors"]),
+                result["errors"],
+            )
+            self.assertEqual(state_before, session_state())
+            self.assertEqual(drawing_hash_before, _sha256(drawing))
+            final_path = (
+                dotnet_client.ipc_dir
+                / "native-render"
+                / request_id
+                / f"artifact.{artifact_kind.lower()}"
+            )
+            self.assertEqual(artifact_must_exist, final_path.is_file())
 
         try:
             with _disposable_drawing_cleanup(dotnet_client, str(drawing)) as mark_closed:
@@ -689,17 +720,33 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
                             )
                             self.assertEqual(image.width, artifact["width"])
                             self.assertEqual(image.height, artifact["height"])
+                            image.verify()
+                        with Image.open(final_path) as image:
+                            image.load()
+                            self.assertIn(
+                                (image.width, image.height),
+                                {(2480, 3508), (3508, 2480)},
+                            )
                     else:
                         self.assertEqual(1, artifact["page_count"])
                         self.assertEqual(1, len(PdfReader(str(final_path)).pages))
 
                     with self.assertRaises(DotNetIPCResultError) as duplicate_error:
+                        duplicate_state_before = session_state()
+                        duplicate_hash_before = _sha256(drawing)
                         dotnet_client.native_render_evidence(
                             expected_full_path,
                             request,
                         )
-                    assert_failed(duplicate_error.exception)
-                    self.assertTrue(final_path.is_file())
+                    assert_failed(
+                        duplicate_error.exception,
+                        request_id=request_id,
+                        expected_error_code="NATIVE_RENDER_DUPLICATE_REQUEST",
+                        state_before=duplicate_state_before,
+                        drawing_hash_before=duplicate_hash_before,
+                        artifact_kind=artifact_kind,
+                        artifact_must_exist=True,
+                    )
                     shutil.rmtree(final_path.parent)
 
                 missing_layout_id = f"s2c-live-missing-layout-{time.time_ns()}"
@@ -709,12 +756,20 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
                     missing_layout_id,
                     layout_name="S2C_LAYOUT_DOES_NOT_EXIST",
                 )
+                missing_layout_state_before = session_state()
+                missing_layout_hash_before = _sha256(drawing)
                 with self.assertRaises(DotNetIPCResultError) as missing_layout_error:
                     dotnet_client.native_render_evidence(
                         expected_full_path,
                         missing_layout_request,
                     )
-                assert_failed(missing_layout_error.exception)
+                assert_failed(
+                    missing_layout_error.exception,
+                    request_id=missing_layout_id,
+                    expected_error_code="NATIVE_RENDER_LAYOUT_NOT_FOUND",
+                    state_before=missing_layout_state_before,
+                    drawing_hash_before=missing_layout_hash_before,
+                )
                 shutil.rmtree(
                     dotnet_client.ipc_dir / "native-render" / missing_layout_id,
                     ignore_errors=True,
@@ -733,12 +788,20 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
                         "plot_style": "monochrome.ctb",
                     },
                 )
+                unsupported_state_before = session_state()
+                unsupported_hash_before = _sha256(drawing)
                 with self.assertRaises(DotNetIPCResultError) as unsupported_error:
                     dotnet_client.native_render_evidence(
                         expected_full_path,
                         unsupported_request,
                     )
-                assert_failed(unsupported_error.exception)
+                assert_failed(
+                    unsupported_error.exception,
+                    request_id=unsupported_id,
+                    expected_error_code="NATIVE_RENDER_UNSUPPORTED_PROFILE",
+                    state_before=unsupported_state_before,
+                    drawing_hash_before=unsupported_hash_before,
+                )
                 shutil.rmtree(
                     dotnet_client.ipc_dir / "native-render" / unsupported_id,
                     ignore_errors=True,

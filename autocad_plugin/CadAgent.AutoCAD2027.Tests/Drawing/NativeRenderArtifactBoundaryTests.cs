@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using CadAgent.AutoCAD2027.Drawing;
@@ -65,10 +67,14 @@ public sealed class NativeRenderArtifactBoundaryTests
         Directory.CreateDirectory(requestDirectory);
         try
         {
-            Assert.Throws<IOException>(() => new NativeRenderArtifactBoundary().Reserve(
+            var exception = Assert.Throws<IOException>(() => new NativeRenderArtifactBoundary().Reserve(
                 root,
                 "render-request-001",
                 "PDF"));
+            Assert.Contains(
+                NativeRenderPolicy.DuplicateRequestErrorCode,
+                exception.Message,
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -205,6 +211,76 @@ public sealed class NativeRenderArtifactBoundaryTests
     }
 
     [Fact]
+    public void PublishRejectsTheFormerPngPlaceholderWithoutImageDataOrValidCrcs()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary();
+            using var reservation = boundary.Reserve(root, "render-request-001", "PNG");
+            File.WriteAllBytes(reservation.TemporaryPath, MinimalPngPlaceholder(2480, 3508));
+
+            Assert.Throws<InvalidDataException>(() => boundary.Publish(reservation));
+            Assert.False(File.Exists(reservation.FinalPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void PublishRejectsPngWithACorruptChunkCrc()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary();
+            using var reservation = boundary.Reserve(root, "render-request-001", "PNG");
+            var bytes = MinimalPng(2480, 3508);
+            bytes[29] ^= 0x01;
+            File.WriteAllBytes(reservation.TemporaryPath, bytes);
+
+            Assert.Throws<InvalidDataException>(() => boundary.Publish(reservation));
+            Assert.False(File.Exists(reservation.FinalPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void PublishedArtifactRemainsSuccessfulWhenClaimCleanupFails()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary(
+                (source, destination) => File.Move(source, destination, overwrite: false),
+                _ => throw new IOException("simulated claim cleanup failure"));
+            NativeRenderArtifact artifact;
+            string finalPath;
+            string claimPath;
+            using (var reservation = boundary.Reserve(root, "render-request-001", "PNG"))
+            {
+                File.WriteAllBytes(reservation.TemporaryPath, MinimalPng(2480, 3508));
+                finalPath = reservation.FinalPath;
+                claimPath = reservation.ClaimPath;
+                artifact = boundary.Publish(reservation);
+            }
+
+            Assert.Equal("native-render/render-request-001/artifact.png", artifact.RelativePath);
+            Assert.True(File.Exists(finalPath));
+            Assert.True(File.Exists(claimPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void PublishRejectsPdfWithoutACoherentCatalogPageTreeAndXref()
     {
         var root = CreateRoot();
@@ -259,6 +335,36 @@ public sealed class NativeRenderArtifactBoundaryTests
 
     private static byte[] MinimalPng(int width, int height)
     {
+        using var output = new MemoryStream();
+        output.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+
+        var header = new byte[13];
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(0, 4), (uint)width);
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4, 4), (uint)height);
+        header[8] = 8;
+        header[9] = 0;
+        WritePngChunk(output, "IHDR", header);
+
+        using (var compressed = new MemoryStream())
+        {
+            using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+            {
+                var scanline = new byte[width + 1];
+                for (var row = 0; row < height; row++)
+                {
+                    zlib.Write(scanline, 0, scanline.Length);
+                }
+            }
+
+            WritePngChunk(output, "IDAT", compressed.ToArray());
+        }
+
+        WritePngChunk(output, "IEND", Array.Empty<byte>());
+        return output.ToArray();
+    }
+
+    private static byte[] MinimalPngPlaceholder(int width, int height)
+    {
         var bytes = new byte[45];
         new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }
             .CopyTo(bytes, 0);
@@ -270,6 +376,35 @@ public sealed class NativeRenderArtifactBoundaryTests
         bytes[25] = 2;
         Encoding.ASCII.GetBytes("IEND").CopyTo(bytes, 37);
         return bytes;
+    }
+
+    private static void WritePngChunk(Stream output, string type, byte[] data)
+    {
+        var typeBytes = Encoding.ASCII.GetBytes(type);
+        var length = new byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(length, (uint)data.Length);
+        output.Write(length);
+        output.Write(typeBytes);
+        output.Write(data);
+
+        var crcInput = new byte[typeBytes.Length + data.Length];
+        typeBytes.CopyTo(crcInput, 0);
+        data.CopyTo(crcInput, typeBytes.Length);
+        var crc = 0xFFFFFFFFu;
+        foreach (var value in crcInput)
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1) != 0
+                    ? (crc >> 1) ^ 0xEDB88320u
+                    : crc >> 1;
+            }
+        }
+
+        var crcBytes = new byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(crcBytes, ~crc);
+        output.Write(crcBytes);
     }
 
     private static byte[] MinimalPdf()

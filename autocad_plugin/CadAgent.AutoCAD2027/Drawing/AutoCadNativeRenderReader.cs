@@ -144,7 +144,9 @@ public static class AutoCadNativeRenderReader
 
             if (matches.Count != 1)
             {
-                throw new InvalidDataException("The requested paper-space layout was not found uniquely.");
+                throw new InvalidDataException(
+                    $"{NativeRenderPolicy.LayoutNotFoundErrorCode}: "
+                    + "The requested paper-space layout was not found uniquely.");
             }
 
             layoutId = matches[0].Id;
@@ -172,14 +174,24 @@ public static class AutoCadNativeRenderReader
     {
         var validator = PlotSettingsValidator.Current;
         var device = request.ArtifactKind == "PNG" ? PngDevice : PdfDevice;
-        validator.SetPlotConfigurationName(plotSettings, device, null);
-        validator.RefreshLists(plotSettings);
-
-        var mediaNames = validator.GetCanonicalMediaNameList(plotSettings)
-            .Cast<string>()
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        string[] mediaNames;
+        try
+        {
+            validator.SetPlotConfigurationName(plotSettings, device, null);
+            validator.RefreshLists(plotSettings);
+            mediaNames = validator.GetCanonicalMediaNameList(plotSettings)
+                .Cast<string>()
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Autodesk.AutoCAD.Runtime.Exception exception)
+        {
+            throw new InvalidDataException(
+                $"{NativeRenderPolicy.DeviceUnavailableErrorCode}: "
+                + $"The approved {request.ArtifactKind} device could not be configured.",
+                exception);
+        }
 
         var approvedMediaNames = new List<string>();
         foreach (var mediaName in mediaNames)
@@ -215,12 +227,23 @@ public static class AutoCadNativeRenderReader
         if (approvedMediaNames.Count != 1)
         {
             throw new InvalidDataException(
-                request.ArtifactKind == "PNG"
+                $"{NativeRenderPolicy.MediaUnavailableErrorCode}: "
+                + (request.ArtifactKind == "PNG"
                     ? "The approved PNG device does not expose exactly one approved A4 pixel media."
-                    : "The approved PDF device does not expose exactly one approved A4 media.");
+                    : "The approved PDF device does not expose exactly one approved A4 media."));
         }
 
-        validator.SetCanonicalMediaName(plotSettings, approvedMediaNames[0]);
+        try
+        {
+            validator.SetCanonicalMediaName(plotSettings, approvedMediaNames[0]);
+        }
+        catch (Autodesk.AutoCAD.Runtime.Exception exception)
+        {
+            throw new InvalidDataException(
+                $"{NativeRenderPolicy.MediaUnavailableErrorCode}: "
+                + "The approved media could not be selected.",
+                exception);
+        }
         validator.SetPlotType(plotSettings, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
         validator.SetUseStandardScale(plotSettings, true);
         validator.SetStdScaleType(plotSettings, StdScaleType.ScaleToFit);

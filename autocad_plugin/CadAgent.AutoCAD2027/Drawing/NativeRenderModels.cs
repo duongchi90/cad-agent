@@ -194,6 +194,13 @@ public static class NativeRenderPayload
 
 public static class NativeRenderPolicy
 {
+    public const string DuplicateRequestErrorCode = "NATIVE_RENDER_DUPLICATE_REQUEST";
+    public const string DuplicateArtifactErrorCode = "NATIVE_RENDER_DUPLICATE_ARTIFACT";
+    public const string DeviceUnavailableErrorCode = "NATIVE_RENDER_DEVICE_UNAVAILABLE";
+    public const string MediaUnavailableErrorCode = "NATIVE_RENDER_MEDIA_UNAVAILABLE";
+    public const string LayoutNotFoundErrorCode = "NATIVE_RENDER_LAYOUT_NOT_FOUND";
+    public const string UnsupportedProfileErrorCode = "NATIVE_RENDER_UNSUPPORTED_PROFILE";
+
     public const long ApprovedPngWidth = 2480;
     public const long ApprovedPngHeight = 3508;
     public const long ApprovedPngLandscapeWidth = 3508;
@@ -208,7 +215,8 @@ public static class NativeRenderPolicy
         ArgumentNullException.ThrowIfNull(request);
         if (string.Equals(request.Layout.Name, "Model", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException("Model space is not supported for native render evidence.");
+            throw new InvalidDataException(
+                $"{UnsupportedProfileErrorCode}: Model space is not supported for native render evidence.");
         }
 
         if (request.ArtifactKind is not ("PNG" or "PDF")
@@ -218,7 +226,8 @@ public static class NativeRenderPolicy
             || !string.Equals(request.RenderOptions.PaperSize, "A4", StringComparison.Ordinal)
             || !string.Equals(request.RenderOptions.PlotStyle, "monochrome.ctb", StringComparison.Ordinal))
         {
-            throw new InvalidDataException("The native render profile is not supported.");
+            throw new InvalidDataException(
+                $"{UnsupportedProfileErrorCode}: The native render profile is not supported.");
         }
     }
 

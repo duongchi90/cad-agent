@@ -37,7 +37,8 @@ public sealed class NativeRenderBoundaryTests
             layoutName,
             new NativeRenderOptions(background, dpi, fitToPaper, paperSize, plotStyle));
 
-        Assert.Throws<InvalidDataException>(() => NativeRenderPolicy.EnsureSupported(request));
+        var exception = Assert.Throws<InvalidDataException>(() => NativeRenderPolicy.EnsureSupported(request));
+        Assert.Contains(NativeRenderPolicy.UnsupportedProfileErrorCode, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -19,15 +19,26 @@ public sealed class NativeRenderArtifactBoundary
     };
 
     private readonly Action<string, string> _moveFinal;
+    private readonly Action<string> _deleteClaim;
 
     public NativeRenderArtifactBoundary()
-        : this((source, destination) => File.Move(source, destination, overwrite: false))
+        : this(
+            (source, destination) => File.Move(source, destination, overwrite: false),
+            File.Delete)
     {
     }
 
     internal NativeRenderArtifactBoundary(Action<string, string> moveFinal)
+        : this(moveFinal, File.Delete)
+    {
+    }
+
+    internal NativeRenderArtifactBoundary(
+        Action<string, string> moveFinal,
+        Action<string> deleteClaim)
     {
         _moveFinal = moveFinal ?? throw new ArgumentNullException(nameof(moveFinal));
+        _deleteClaim = deleteClaim ?? throw new ArgumentNullException(nameof(deleteClaim));
     }
 
     public NativeRenderArtifactReservation Reserve(
@@ -58,7 +69,9 @@ public sealed class NativeRenderArtifactBoundary
         EnsureWithin(nativeRoot, requestDirectory);
         if (Directory.Exists(requestDirectory) || File.Exists(requestDirectory))
         {
-            throw new IOException("The native render request directory already exists.");
+            throw new IOException(
+                $"{NativeRenderPolicy.DuplicateRequestErrorCode}: "
+                + "The native render request directory already exists.");
         }
 
         Directory.CreateDirectory(requestDirectory);
@@ -96,7 +109,9 @@ public sealed class NativeRenderArtifactBoundary
             {
                 claim.Dispose();
                 DeleteIfExists(claimPath);
-                throw new IOException("The native render artifact already exists.");
+                throw new IOException(
+                    $"{NativeRenderPolicy.DuplicateArtifactErrorCode}: "
+                    + "The native render artifact already exists.");
             }
 
             return new NativeRenderArtifactReservation(
@@ -107,6 +122,7 @@ public sealed class NativeRenderArtifactBoundary
                     .Replace(Path.DirectorySeparatorChar, '/'),
                 claimPath,
                 claim,
+                _deleteClaim,
                 artifactKind);
         }
         catch
@@ -188,25 +204,50 @@ public sealed class NativeRenderArtifactBoundary
 
     private static ArtifactMetadata ValidatePng(byte[] bytes)
     {
-        if (bytes.Length < 45 || !bytes.AsSpan(0, PngSignature.Length).SequenceEqual(PngSignature))
+        if (bytes.Length < PngSignature.Length
+            || !bytes.AsSpan(0, PngSignature.Length).SequenceEqual(PngSignature))
         {
             throw new InvalidDataException("The native render PNG signature is invalid.");
         }
 
         var offset = PngSignature.Length;
         var sawHeader = false;
+        var sawImageData = false;
         var sawEnd = false;
         long width = 0;
         long height = 0;
-        while (offset + 12 <= bytes.Length)
+        while (offset < bytes.Length)
         {
+            if (bytes.Length - offset < 12)
+            {
+                throw new InvalidDataException("The native render PNG contains a truncated chunk.");
+            }
+
             var chunkLength = BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(offset, 4));
             if (chunkLength > int.MaxValue || offset + 12L + chunkLength > bytes.Length)
             {
                 throw new InvalidDataException("The native render PNG contains a truncated chunk.");
             }
 
-            var chunkType = Encoding.ASCII.GetString(bytes, offset + 4, 4);
+            var chunkTypeBytes = bytes.AsSpan(offset + 4, 4);
+            foreach (var byteValue in chunkTypeBytes)
+            {
+                if ((byteValue is < (byte)'A' or > (byte)'Z')
+                    && (byteValue is < (byte)'a' or > (byte)'z'))
+                {
+                    throw new InvalidDataException("The native render PNG chunk type is invalid.");
+                }
+            }
+
+            var chunkType = Encoding.ASCII.GetString(chunkTypeBytes);
+            var chunkData = bytes.AsSpan(offset + 8, checked((int)chunkLength));
+            var expectedCrc = BinaryPrimitives.ReadUInt32BigEndian(
+                bytes.AsSpan(offset + 8 + checked((int)chunkLength), 4));
+            if (ComputePngCrc(chunkTypeBytes, chunkData) != expectedCrc)
+            {
+                throw new InvalidDataException($"The native render PNG {chunkType} CRC is invalid.");
+            }
+
             if (!sawHeader && chunkType != "IHDR")
             {
                 throw new InvalidDataException("The native render PNG is missing its IHDR chunk.");
@@ -234,7 +275,22 @@ public sealed class NativeRenderArtifactBoundary
                         "The native render PNG dimensions do not match the approved A4 300 DPI profile.");
                 }
 
+                if (chunkData[8] == 0 || chunkData[9] > 6)
+                {
+                    throw new InvalidDataException("The native render PNG IHDR color format is invalid.");
+                }
+
                 sawHeader = true;
+            }
+
+            if (chunkType == "IDAT")
+            {
+                if (chunkLength == 0)
+                {
+                    throw new InvalidDataException("The native render PNG IDAT chunk is empty.");
+                }
+
+                sawImageData = true;
             }
 
             offset += checked((int)(12 + chunkLength));
@@ -250,12 +306,41 @@ public sealed class NativeRenderArtifactBoundary
             }
         }
 
-        if (!sawHeader || !sawEnd)
+        if (!sawHeader || !sawImageData || !sawEnd)
         {
-            throw new InvalidDataException("The native render PNG is incomplete.");
+            throw new InvalidDataException("The native render PNG is missing coherent image data.");
         }
 
         return new ArtifactMetadata(width, height, null);
+    }
+
+    private static uint ComputePngCrc(ReadOnlySpan<byte> chunkType, ReadOnlySpan<byte> chunkData)
+    {
+        var crc = 0xFFFFFFFFu;
+        foreach (var value in chunkType)
+        {
+            crc = UpdatePngCrc(crc, value);
+        }
+
+        foreach (var value in chunkData)
+        {
+            crc = UpdatePngCrc(crc, value);
+        }
+
+        return ~crc;
+    }
+
+    private static uint UpdatePngCrc(uint crc, byte value)
+    {
+        crc ^= value;
+        for (var bit = 0; bit < 8; bit++)
+        {
+            crc = (crc & 1) != 0
+                ? (crc >> 1) ^ 0xEDB88320u
+                : crc >> 1;
+        }
+
+        return crc;
     }
 
     private static ArtifactMetadata ValidatePdf(byte[] bytes)
@@ -634,6 +719,7 @@ public sealed class NativeRenderArtifactBoundary
 public sealed class NativeRenderArtifactReservation : IDisposable
 {
     private FileStream? _claim;
+    private readonly Action<string> _deleteClaim;
     private bool _disposed;
 
     internal NativeRenderArtifactReservation(
@@ -643,6 +729,7 @@ public sealed class NativeRenderArtifactReservation : IDisposable
         string relativePath,
         string claimPath,
         FileStream claim,
+        Action<string> deleteClaim,
         string artifactKind)
     {
         RequestDirectory = requestDirectory;
@@ -651,6 +738,7 @@ public sealed class NativeRenderArtifactReservation : IDisposable
         RelativePath = relativePath;
         ClaimPath = claimPath;
         _claim = claim;
+        _deleteClaim = deleteClaim ?? throw new ArgumentNullException(nameof(deleteClaim));
         ArtifactKind = artifactKind;
     }
 
@@ -689,23 +777,53 @@ public sealed class NativeRenderArtifactReservation : IDisposable
             return;
         }
 
+        TryDelete(TemporaryPath, deleteWhenPublished: false);
         try
         {
-            if (!IsPublished && File.Exists(TemporaryPath))
-            {
-                File.Delete(TemporaryPath);
-            }
+            _claim?.Dispose();
+        }
+        catch (IOException)
+        {
+            // Cleanup must not mask the operation result. Leave the claim marker.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Cleanup must not mask the operation result. Leave the claim marker.
         }
         finally
         {
-            _claim?.Dispose();
             _claim = null;
-            if (File.Exists(ClaimPath))
-            {
-                File.Delete(ClaimPath);
-            }
-
+            TryDelete(ClaimPath, deleteWhenPublished: true);
             _disposed = true;
+        }
+    }
+
+    private void TryDelete(string path, bool deleteWhenPublished)
+    {
+        if (deleteWhenPublished || !IsPublished)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    if (string.Equals(path, ClaimPath, StringComparison.Ordinal))
+                    {
+                        _deleteClaim(path);
+                    }
+                    else
+                    {
+                        File.Delete(path);
+                    }
+                }
+            }
+            catch (IOException)
+            {
+                // A stale marker/temp is safer than a cleanup exception escaping.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // A stale marker/temp is safer than a cleanup exception escaping.
+            }
         }
     }
 }
