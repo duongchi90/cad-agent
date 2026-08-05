@@ -5,145 +5,136 @@ Status: current operational handoff for PO and coding agents.
 Updated: 2026-08-05
 
 This document is an operational index. Live GitHub evidence, `docs/STATUS.md`,
-`docs/ARCHITECTURE.md`, approved specifications, and active issues remain the
-sources of truth.
+`docs/ARCHITECTURE.md`, approved specifications, plans, issues, PRs, exact
+heads, diffs, and CI remain the sources of truth.
 
 ## 1. Source-of-truth order
 
 1. Live GitHub state: `main`, issue, branch, PR, exact head, changed files,
-   diff, and CI.
+   synthetic merge candidate, and CI logs.
 2. `docs/STATUS.md` for verified, partial, `SKIP`, and `NOT RUN` gates.
 3. `docs/ARCHITECTURE.md` for package ownership and safety boundaries.
 4. Approved specifications and implementation plans.
-5. This handoff for current task routing.
-6. Old chats and historical documents only as context.
+5. This handoff for current routing.
+6. Old chats, stale issues, and historical PRs only as context.
 
-Never treat a chat statement, branch name, PR body, or stale workflow run as
-proof without checking the exact commit and synthetic merge candidate.
+Never treat a branch name, PR body, chat statement, stale workflow, or old open
+issue as proof without checking current code and exact commit evidence.
 
 ## 2. Current integrated state
 
-- Repository: `duongchi90/cad-agent`
-- Latest accepted implementation base: `393f318317032096ec5e055ed1c928090f3b7e31`
-- Latest merged PR: #51 — S2A AutoCAD-native render evidence offline contract
-- Previous merged PR: #50 — S1 Codex SDK Windows compatibility spike
-- Completed issues: #49 and #48
-- R0 state: accepted for governance/rebaseline scope only.
+- Repository: `duongchi90/cad-agent`.
+- Latest accepted implementation merge: `a8a962281b2d7480c9444eb8e1b56c6795c108aa`.
+- Latest merged PR: #54 — S3A exact-base Xref inspection and extraction offline contract.
+- Previous accepted implementation merges:
+  - #51 S2A at `393f318317032096ec5e055ed1c928090f3b7e31`;
+  - #50 S1 at `ca85f2329e606bb307f8dece0bc1081575eec136`.
+- Current `main` includes later R1A design/plan documentation through
+  `d547ca8b1eb39651a00109da3862b79bcce4f0f9`.
 - Runtime promotion: none.
 
-### S1 accepted evidence
+### S3A accepted evidence
 
-- Implementation head: `b3f2ddeb2773fbb4cd94ee1364d0a50cb770944b`.
-- Squash merge: `ca85f2329e606bb307f8dece0bc1081575eec136`.
-- Exactly one bounded commit and four Issue #48 allowlisted files.
-- Focused tests: 14 passed.
-- Sequential hosted verification before merge: 804 offline tests plus 18
-  subtests; offline JUnit 822/0/0/0; dotnet IPC JUnit 38/0/0/0.
-- Official SDK inspection/probe is optional and fail-closed; no login, model
-  turn, repair execution, dependency/lock change, or production integration.
+- Implementation head: `c53501f93258b39078ed42a4cb0e4a96c4f09790`.
+- Squash merge: `a8a962281b2d7480c9444eb8e1b56c6795c108aa`.
+- Exactly one commit and four allowlisted files.
+- Focused tests: 49 passed.
+- Canonical candidate: PASS; offline JUnit 929/0/0/0.
+- AutoCAD, File IPC, C#, private data, S3B, and S3C remain `NOT RUN`/locked.
 
-### S2A accepted evidence
+## 3. Environment-blocked PR #55 — S2B
 
-- Implementation head: `43903547130625b9edf9261536bf6653da7a4736`.
-- Squash merge: `393f318317032096ec5e055ed1c928090f3b7e31`.
-- Exactly one bounded commit and four Issue #49 allowlisted files.
-- Focused tests: 58 passed.
-- Final sequential integration candidate:
-  `2b0df841de8ef5bce6ad52be7c00cff68f001dd2`, combining S2A with current
-  main containing S1.
-- `tests` run #314 and `reuse-declaration` run #16: success.
-- Integrated hosted verification: 862 offline tests plus 18 subtests; offline
-  JUnit 880/0/0/0; dotnet IPC JUnit 38/0/0/0.
-- File IPC integration, C# native capture, AutoCAD .NET, AutoCAD Mechanical
-  live, private-data acceptance, and visual verdict remain `NOT RUN` or not
-  implemented.
-
-The live `main` may become newer because this handoff is a later operational
-commit. Both active implementation branches below were created from exact base
-`393f318317032096ec5e055ed1c928090f3b7e31` and must not silently use the later
-handoff-only commit as their implementation base.
-
-## 3. Active parallel code tasks
-
-Execution mode: `PARALLEL_LUNA`.
-
-Shared base SHA: `393f318317032096ec5e055ed1c928090f3b7e31`.
-
-Overlap check: `PASS`.
-
-Merge policy: independent PO review, then sequential merge. After the first PR
-merges, the second PR must receive fresh synthetic-merge CI against current
-`main`. A stale workflow using an earlier merge ref is not sufficient.
-
-### Luna A — Issue #52
-
-Task: S2B File IPC envelope and fail-closed native-render dispatcher seam.
+PR: #55.
 
 Branch: `task/s2b-native-render-ipc-seam`.
 
-Scope:
+Exact head: `905508a418866ad51d888cad102994d0518b7d1d`.
 
-- extend the existing request/result schemas and examples;
-- add one `native_render_evidence` adapter to `DotNetIPCClient`;
-- register and validate the operation in the existing C# contract/dispatcher;
-- return a deterministic unsupported/fail-closed result until S2C implements
-  actual AutoCAD-native capture;
-- run Python, schema, C# restore/build/test, architecture, canonical, and CI
-  verification.
+State:
 
-It must not modify `IDrawingGateway`, `CommandContext`, AutoCAD database/plot
-code, dependencies, or lock files. It must not create placeholder render
-artifacts or claim that native rendering works.
+- source review: acceptable;
+- exactly one commit and 15 allowlisted files;
+- fresh sequential integration candidate:
+  `78225f922bd92adc25a844c70f513c297059c829`, combining S2B with S3A on main;
+- hosted offline: 918 passed plus 18 subtests;
+- offline JUnit: 936/0/0/0;
+- dotnet IPC JUnit: 38/0/0/0;
+- reuse declaration: PASS;
+- `.NET SDK 10.0.302`: available;
+- `dotnet restore`: exit 0;
+- `dotnet build` and `dotnet test`: blocked before valid test discovery because
+  `AcCoreMgd.dll`, `AcDbMgd.dll`, and `AcMgd.dll` cannot be resolved;
+- workstation does not contain `C:\Program Files\Autodesk\AutoCAD 2027`;
+- worktree clean and `git diff --check` PASS.
 
-### Luna B — Issue #53
+Classification: environment/reference blocker, not yet an implementation bug.
+Do not amend code merely to bypass this gate. Do not merge until restore,
+Release x64 build, and Release x64 test all exit 0 using approved Autodesk 2027
+managed references, with zero test failures and no Autodesk DLL copied to build
+output.
 
-Task: S3A exact-base Xref inspection and extraction offline contract.
+AutoCAD live, actual native capture, S2C, and private data remain `NOT RUN` or
+locked.
 
-Branch: `task/s3a-exact-base-xref-contract`.
+## 4. Active code task — Issue #56 R1A
 
-Allowed files:
+Execution mode: `SINGLE_LUNA`.
 
-- `mcp_integration_lib/exact_base_xref.py`
-- `mcp_integration_lib/tests/test_exact_base_xref.py`
-- `mcp_integration_lib/tests/fixtures/exact-base-xref-inspection.json`
-- `docs/superpowers/implementation-records/2026-08-05-exact-base-xref-offline.md`
+Issue: #56 — closed SourceBundle offline contract.
 
-This is a pure-Python contract slice for exact-base identity, eligibility,
-critical-dimension comparison, inspected components, frozen source provenance,
-and bounded extraction planning. It must not attach an Xref, copy entities,
-mutate a DWG, modify File IPC/C#, create a component registry, or claim live
-extraction.
+Branch: `task/r1a-source-bundle-offline`.
 
-## 4. Code-first, AutoCAD-live-later policy
+Exact implementation base:
+`d547ca8b1eb39651a00109da3862b79bcce4f0f9`.
 
-The current priority is deterministic code, contracts, adapters, schemas,
-fixtures, and offline/unit tests before requiring a running AutoCAD Mechanical
-session.
+Overlap with PR #55: `PASS`.
 
-This policy does not convert missing live evidence into a pass:
+Design:
+`docs/superpowers/specs/2026-08-05-source-bundle-offline-contract-design.md`.
 
-- S2B may establish only the envelope and fail-closed dispatcher seam;
-- S2 remains incomplete until S2C implements actual read-only native capture
-  and the approved AutoCAD live gate runs;
-- S3A may establish only inspection/extraction-plan contracts;
-- S3 remains incomplete until later File IPC/.NET and live Xref slices run;
-- private-data, actual CAD mutation, and AutoCAD live gates remain `NOT RUN`
-  until executed on an approved disposable environment;
-- code-complete or offline-verified does not mean production-ready.
+Plan:
+`docs/superpowers/plans/2026-08-05-source-bundle-offline-contract.md`.
 
-## 5. Locked work
+Purpose: add one closed, deterministic, pure-Python SourceBundle descriptor for
+immutable image, PDF, exact-base CAD, and engineer-record evidence metadata.
+It does not read source bytes, run recognition, launch AutoCAD, integrate with
+manifests/CLI, create a registry, or grant technical authority.
 
-Until Issues #52 and #53 are independently reviewed and merged:
+Exactly four implementation files are allowed:
 
-- do not start S2C actual AutoCAD-native capture;
-- do not start S3B/S3C File IPC/live Xref work;
-- do not start R1-R8;
-- do not execute old VS-T4 through VS-T8 unchanged;
-- do not add production Codex repair planning;
-- do not add a second OCR engine, dimension recognizer, solver, DXF builder,
-  AutoCAD transport/dispatcher, repair executor, manifest/checkpoint/revision
-  truth store, visual-verdict path, or publisher;
-- do not bypass or reorder M2 Drawing Initialization.
+1. `cad_agent/source_bundle.py`
+2. `tests/test_cad_agent_source_bundle.py`
+3. `tests/fixtures/source-bundle.json`
+4. `docs/superpowers/implementation-records/2026-08-05-source-bundle-offline.md`
+
+The worker must use TDD, reuse
+`cad_agent.drawing_contracts.canonical_json_sha256`, run focused tests, Ruff,
+architecture checker, diff-check, canonical verification with
+`-SkipAutoCADDotNet`, open one non-draft PR, and stop.
+
+## 5. Explicit parallel-work amendment
+
+The earlier blanket lock on all R1 work is narrowed because PR #55 is blocked
+only by unavailable Autodesk references and R1A has zero file/runtime overlap.
+
+Only R1A Issue #56 is unlocked.
+
+The following remain locked:
+
+- R1B and source-fusion runtime;
+- S2C actual AutoCAD-native capture;
+- S3B/S3C File IPC/live Xref work;
+- component/view registry;
+- dimension-authority expansion;
+- revision orchestration;
+- Codex production repair planning;
+- repair-loop integration;
+- visual verdict and publication;
+- old VS-T4 through VS-T8 unchanged;
+- any duplicate OCR, solver, DXF builder, AutoCAD transport/dispatcher,
+  manifest/checkpoint/revision store, repair executor, verdict path, or publisher.
+
+This amendment does not convert any missing live gate into PASS.
 
 ## 6. Authoritative ownership
 
@@ -155,47 +146,50 @@ primitive_ir_lib
   -> mcp_integration_lib
 ```
 
-- `primitive_ir_lib`: image/PDF recognition, OCR, geometry, tables,
-  calibration, and source traces.
-- `semantic_ir_lib`: semantic parts, constraints, pruning, and solving.
-- `agent_lib`: non-mutating advisory proposals with separate approved apply.
-- `dxf_builder_lib`: native DXF/entity generation and headless review/repair.
-- `mcp_integration_lib` plus the existing AutoCAD .NET plugin: the only approved
-  File IPC and AutoCAD Mechanical boundary.
+- `primitive_ir_lib`: recognition, OCR, geometry, tables, calibration, traces.
+- `semantic_ir_lib`: semantic parts, constraints, pruning, solving.
+- `agent_lib`: advisory proposals with separate approved apply.
+- `dxf_builder_lib`: native entities, DXF generation, headless review/repair.
+- `mcp_integration_lib` and the existing .NET plugin: the only approved File
+  IPC and AutoCAD Mechanical boundary.
 - `cad_agent`: thin orchestration, run identity, manifests, checkpoints,
   resumability, evidence routing, approval gates, and CLI composition.
 
-## 7. Required review gates
+R1A may add orchestration metadata only; it must not absorb recognition or CAD
+algorithms.
 
-Before accepting either active PR, the PO must verify:
+## 7. Required PO review for Issue #56
 
-- exact implementation base and exact final head;
-- bounded commit history;
-- changed files exactly match the issue allowlist;
-- no overlap between Issues #52 and #53;
-- focused tests, Ruff, architecture checker, `git diff --check`, canonical
-  verifier, and GitHub CI on the exact candidate or named synthetic merge;
-- S2B C# restore/build/test pass because it changes managed contract code;
-- all eight Reuse Declaration fields are separate and non-empty;
-- unavailable private data, File IPC live, AutoCAD .NET/live, and later-slice
-  gates are reported as `SKIP` or `NOT RUN`, never `PASS`;
-- no runtime promotion beyond the exact issue scope.
+Before accepting the R1A PR, verify:
 
-## 8. Authoritative design and records
+- ancestry includes exact base `d547ca8b1eb39651a00109da3862b79bcce4f0f9`;
+- one bounded commit;
+- exactly the four Issue #56 allowlisted files;
+- public API and field names match the approved design;
+- closed root/item/quality objects;
+- strict safe paths, IDs, hashes, timestamps, uniqueness, and compatibility matrix;
+- deterministic sorting and fixture hash;
+- no imports/calls to manifests, CLI, recognition packages, File IPC, ctypes,
+  subprocess, AutoCAD, or C#;
+- focused tests, Ruff, architecture checker, diff-check, canonical verifier,
+  Reuse Declaration, and GitHub CI pass;
+- AutoCAD .NET/live, private data, runtime integration, and later tasks are
+  reported truthfully as `NOT RUN`/not implemented;
+- no runtime promotion.
 
-- Design: `docs/superpowers/specs/2026-08-04-reuse-first-multisource-cad-reconstruction-design.md`
-- R0 plan: `docs/superpowers/plans/2026-08-04-reuse-integration-rebaseline.md`
-- R0 audit: `docs/superpowers/reuse/2026-08-04-reuse-integration-audit.md`
-- R0 implementation record: `docs/superpowers/implementation-records/2026-08-04-reuse-integration-rebaseline.md`
-- S1 record: `docs/superpowers/implementation-records/2026-08-05-codex-sdk-windows-spike.md`
-- S2A record: `docs/superpowers/implementation-records/2026-08-05-autocad-render-evidence-offline.md`
-- Historical Visual Supervisor rollout: preserved but superseded after VS-T3.
+## 8. Stale issue warning
+
+Issues #16 and #17 remain open historically, but their intended M2 behavior is
+already present in current `main`. Do not execute them from their old issue text
+without a fresh live-code audit. PR #18 was closed unmerged, but subsequent
+integrated code already contains the Drawing Setup CLI and later audit/verify
+implementation.
 
 ## 9. Next action
 
-- Luna A may implement Issue #52 only on
-  `task/s2b-native-render-ipc-seam`.
-- Luna B may implement Issue #53 only on
-  `task/s3a-exact-base-xref-contract`.
-- Each opens one non-draft PR and stops.
-- Neither Luna may review, merge, start S2C, S3B/S3C, or R1 work.
+- Luna implements Issue #56 only on `task/r1a-source-bundle-offline`.
+- Luna opens one non-draft PR and stops.
+- PR #55 remains open and unchanged until approved Autodesk references are
+  available for the mandatory .NET build/test gate.
+- Neither task may start S2C, S3B/S3C, R1B, registry, revision, repair, verdict,
+  or publication work.
