@@ -1220,6 +1220,15 @@ public static class ContractValidator
         return TryGetProperty(value, name, out array) && array.ValueKind == JsonValueKind.Array;
     }
 
+    private static bool TryGetArray(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name,
+        out JsonElement array)
+    {
+        array = default;
+        return values.TryGetValue(name, out array) && array.ValueKind == JsonValueKind.Array;
+    }
+
     private static bool TryGetInt64(
         IReadOnlyDictionary<string, JsonElement> values,
         string name,
@@ -1254,6 +1263,19 @@ public static class ContractValidator
         }
 
         value = element.GetBoolean();
+        return true;
+    }
+
+    private static bool TryGetBoolean(JsonElement value, string name, out bool result)
+    {
+        result = false;
+        if (!TryGetProperty(value, name, out var element)
+            || (element.ValueKind != JsonValueKind.True && element.ValueKind != JsonValueKind.False))
+        {
+            return false;
+        }
+
+        result = element.GetBoolean();
         return true;
     }
 
