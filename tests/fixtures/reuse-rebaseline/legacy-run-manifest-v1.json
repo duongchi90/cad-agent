@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "source": {
+    "name": "legacy.png",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "image"
+  },
+  "configuration": {
+    "scale_mm_per_px": 1.0
+  },
+  "approvals": {
+    "calibration": {
+      "approved": true,
+      "reference": "LEGACY-APPROVAL"
+    }
+  },
+  "stages": {
+    "primitive_ir": {
+      "state": "pending",
+      "artifact": null,
+      "sha256": null,
+      "details": null
+    },
+    "semantic_ir": {
+      "state": "pending",
+      "artifact": null,
+      "sha256": null,
+      "details": null
+    },
+    "dxf": {
+      "state": "pending",
+      "artifact": null,
+      "sha256": null,
+      "details": null
+    }
+  }
+}
