@@ -11,102 +11,104 @@ Live GitHub state, exact commits, diffs, CI logs, approved specifications, plans
 
 - Repository: `duongchi90/cad-agent`.
 - Latest accepted implementation merge:
-  `ff6d199ef6cd401ccf5d06bace1135e4e55f1216`.
-- Latest merged PR: #59 — R1B SourceBundle manifest-reference binding.
-- Previous accepted implementation merge:
-  `589d708a69f5c710c0a4c25e52a5b17db9749764` — PR #57 R1A.
+  `3d0aa999904f384efa4eb42a81637e4270591859`.
+- Latest merged PR: #55 — S2B fail-closed native-render File IPC seam.
+- Previous accepted implementation merges:
+  - `ff6d199ef6cd401ccf5d06bace1135e4e55f1216` — PR #59 R1B;
+  - `589d708a69f5c710c0a4c25e52a5b17db9749764` — PR #57 R1A;
+  - `a8a962281b2d7480c9444eb8e1b56c6795c108aa` — PR #54 S3A.
 - Runtime promotion: none.
 
-### R1B accepted evidence
+The exact implementation base for any task that depends on accepted S2B is
+`3d0aa999904f384efa4eb42a81637e4270591859`. Later docs-only commits are not
+implementation bases.
 
+## 2. S2B accepted evidence
+
+- Issue #52: completed by PR #55.
 - Exact implementation base:
-  `5950e7b056fc92131a243a7e403e4f187c99086f`.
-- Final head: `ed05d84028fda3378fdf61ff49e18462a7dbcaff`.
-- Squash merge: `ff6d199ef6cd401ccf5d06bace1135e4e55f1216`.
-- Exactly one bounded commit and four Issue #58 allowlisted files.
-- Focused/regression tests: 55 passed.
-- Hosted synthetic merge:
-  `dcbbd8327b19e16032e7e55905a769d37caabdaf`.
-- Hosted offline: 1015 passed plus 18 subtests; JUnit 1033/0/0/0.
-- Dotnet IPC JUnit: 38/0/0/0.
-- Reuse Declaration: PASS.
-- Private data, AutoCAD .NET, and AutoCAD Mechanical live: `NOT RUN`.
-- Legacy image/PDF manifests remain readable without injected fields.
-- No CLI/source-discovery, source-fusion runtime, recognition, CAD, authority,
-  registry, revision, repair, verdict, or publication behavior was promoted.
+  `393f318317032096ec5e055ed1c928090f3b7e31`.
+- Final reviewed head:
+  `0ed4cd3a0c0a23cd9a52626fd24e35626288c9d9`.
+- Synthetic merge with then-current `main`:
+  `fd9bb4153837d60483a00b6e3e3fc3a9d80c70e9`.
+- Accepted squash merge:
+  `3d0aa999904f384efa4eb42a81637e4270591859`.
+- Exactly 15 Issue #52 allowlisted files.
+- The branch had two bounded commits; the second added only two missing C#
+  validator helper overloads. PO accepted the narrow compile-completion change
+  and squash-merged both into one main commit.
+- Local mandatory .NET gate on final head:
+  - restore: PASS;
+  - Release/x64 build: PASS;
+  - C# tests: 113 passed, 0 failed.
+- Autodesk managed references remained external and project references retain
+  `Private=false`; no Autodesk DLL was added to the PR.
+- Hosted sequential integration:
+  - `tests` workflow #346: PASS;
+  - offline: 1022 passed plus 18 subtests;
+  - offline JUnit: 1040/0/0/0;
+  - dotnet IPC JUnit: 38/0/0/0;
+  - Reuse Declaration: PASS.
+- AutoCAD Mechanical live, actual native capture, and private-data acceptance:
+  `NOT RUN`.
 
-### R1A accepted evidence
+Accepted behavior is only the closed File IPC envelope/validator and dispatcher
+seam. `native_render_evidence` still returns
+`NATIVE_RENDER_NOT_IMPLEMENTED` before drawing-gateway access. No placeholder
+artifact, mutation, approval, verdict, repair, or publication path was added.
 
-- Final head: `9efe1b75fbf1720db44c3ca947e4c6d082282c57`.
-- Squash merge: `589d708a69f5c710c0a4c25e52a5b17db9749764`.
-- R1A remains the authoritative closed SourceBundle metadata contract and
-  canonical hash boundary.
+## 3. R1 accepted offline foundation
 
-## 2. Environment-blocked PR #55 — S2B
+### R1A — SourceBundle contract
 
-- PR: #55.
-- Branch: `task/s2b-native-render-ipc-seam`.
-- Exact head: `905508a418866ad51d888cad102994d0518b7d1d`.
-- Source review and hosted sequential offline CI: acceptable/PASS.
-- `.NET SDK 10.0.302`: available.
-- `dotnet restore`: exit 0.
-- Release x64 build/test remain blocked before valid discovery because approved
-  AutoCAD 2027 managed references cannot be resolved:
-  `AcCoreMgd.dll`, `AcDbMgd.dll`, and `AcMgd.dll`.
-- Classification: environment/reference blocker, not an accepted implementation
-  failure.
-- Do not amend source to bypass the gate and do not merge until restore,
-  Release x64 build, and Release x64 test all exit 0 with zero failures and no
-  Autodesk DLL copied to output.
+- PR #57 squash merge:
+  `589d708a69f5c710c0a4c25e52a5b17db9749764`.
+- Provides the closed deterministic SourceBundle metadata and canonical hash
+  boundary.
 
-S2C, actual native capture, AutoCAD live, and private data remain locked or
-`NOT RUN`.
+### R1B — manifest reference binding
 
-## 3. Completed task — Issue #58 R1B
+- PR #59 squash merge:
+  `ff6d199ef6cd401ccf5d06bace1135e4e55f1216`.
+- Provides one closed SourceBundle reference in existing image/PDF manifests.
+- Legacy unbound manifests remain readable with no injected field.
+- No CLI source discovery or source-fusion runtime was promoted.
 
-Issue #58 is closed as completed by PR #59.
+## 4. Current task state
 
-The accepted implementation adds only a closed `source_bundle-reference-1.0`
-record owned by `cad_agent.manifest`, validates the optional record in image and
-PDF readers, preserves legacy manifests, and rejects malformed or conflicting
-bindings.
+No implementation task is currently authorized or active.
 
-Do not reopen or extend R1B from chat instructions. Any additional behavior
-requires a separately approved design, plan, issue, exact base, allowlist, PR,
-and CI evidence.
+PR #55 is merged and no longer an environment blocker. Do not continue work on
+its old branch. Issue #52 is complete.
 
-## 4. Design gate for the next offline slice
+The following require separate design/plan/issue/branch gates before coding:
 
-R1C has not been issued and no implementation branch is authorized.
-
-The recommended next bounded slice is a SourceBundle byte-integrity audit that:
-
-- validates one accepted SourceBundle;
-- resolves its safe relative paths under one explicit source root;
-- verifies every file exists and matches the recorded SHA-256;
-- produces deterministic non-authoritative audit evidence;
-- does not run OCR, PDF rendering, CAD parsing, source-priority fusion, CLI
-  orchestration, registry, revision, repair, verdict, or publication.
-
-This recommendation remains a design proposal only until its specification is
-reviewed and approved. Do not implement it from this handoff paragraph.
-
-## 5. Locked work
-
-Until separately designed, planned, and reissued, do not start:
-
-- R1C or source-fusion runtime;
-- S2C actual AutoCAD-native capture;
-- S3B/S3C File IPC/live Xref work;
+- S2C actual read-only AutoCAD-native capture and live acceptance;
+- S3B/S3C exact-base Xref File IPC/live execution;
+- R1C SourceBundle byte-integrity audit;
 - component/view registry;
 - dimension-authority expansion;
 - candidate revision orchestration;
-- Codex production repair planning;
-- repair-loop integration;
-- visual verdict or publication;
-- old VS-T4 through VS-T8 unchanged;
-- duplicate OCR, solver, DXF builder, AutoCAD transport/dispatcher,
-  manifest/checkpoint/revision store, repair executor, verdict path, or publisher.
+- repair-loop, visual verdict, and publication.
+
+## 5. Recommended next bounded work
+
+Priority should be selected from the approved roadmap rather than inferred from
+old issue text:
+
+1. **S2C design/task:** implement actual read-only native capture through the
+   existing `native_render_evidence` operation and approved .NET drawing
+   gateway. Requires AutoCAD Mechanical 2027 live acceptance; code may be
+   prepared elsewhere, but the task cannot be accepted without the live gate.
+2. **S3B design/task:** extend the accepted S3A exact-base/Xref contract through
+   the existing File IPC boundary without creating a second dispatcher.
+3. **R1C offline design/task:** verify SourceBundle file existence and SHA-256
+   under one safe source root, producing non-authoritative audit evidence only.
+
+These are routing recommendations, not implementation authorization. The PO
+must first inspect the current roadmap/specifications, lock the design and
+allowlist, then create exact-base issues and branches.
 
 ## 6. Authoritative ownership
 
@@ -120,17 +122,18 @@ primitive_ir_lib
 
 - recognition/OCR remains in `primitive_ir_lib`;
 - semantic solving remains in `semantic_ir_lib`;
-- proposals/apply separation remains in `agent_lib`;
+- proposal/apply separation remains in `agent_lib`;
 - native entity generation/review remains in `dxf_builder_lib`;
 - AutoCAD access remains in the existing File IPC/.NET boundary;
 - `cad_agent` remains thin orchestration and the sole manifest/checkpoint owner.
 
-## 7. Next action
+No second OCR engine, solver, DXF builder, File IPC transport/dispatcher,
+manifest/checkpoint/revision store, repair executor, verdict path, or publisher
+is permitted.
 
-- No coding task is active after R1B.
-- PR #55 remains open and unchanged until approved Autodesk managed references
-  make the mandatory .NET gate executable.
-- The PO must complete and obtain approval for the R1C design before creating
-  an issue or branch.
-- No task starts from chat claims alone; require commit, diff, PR, and CI
-  evidence on the exact candidate.
+## 7. Evidence rule
+
+Do not treat chat claims, branch names, stale PR bodies, or old workflow runs as
+proof. Require the exact commit, changed-file list, source diff, appropriate
+local/live gate evidence, synthetic-merge CI, and truthful `PASS`, `FAIL`,
+`SKIP`, or `NOT RUN` state for every task.
