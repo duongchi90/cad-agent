@@ -342,6 +342,69 @@ public sealed class OperationDispatcherTests
         Assert.Equal(1, gateway.ReadNativeRenderEvidenceCallCount);
     }
 
+    [Theory]
+    [InlineData("background")]
+    [InlineData("dpi")]
+    [InlineData("fit_to_paper")]
+    [InlineData("paper_size")]
+    [InlineData("plot_style")]
+    public void NativeRenderEvidenceRejectsReturnedRenderOptionsThatDoNotMatchTheRequest(
+        string mismatchedField)
+    {
+        var path = @"C:\drawings\sample.dwg";
+        var requestId = "render-request-001";
+        var mismatchedOptions = new NativeRenderOptions(
+            mismatchedField == "background" ? "black" : "white",
+            mismatchedField == "dpi" ? 600 : 300,
+            mismatchedField == "fit_to_paper" ? false : true,
+            mismatchedField == "paper_size" ? "A3" : "A4",
+            mismatchedField == "plot_style" ? "acad.ctb" : "monochrome.ctb");
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            NativeRenderEvidence = NativeRenderSnapshot(path, requestId) with
+            {
+                RenderOptions = mismatchedOptions
+            }
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "native_render_evidence",
+            requestId,
+            path,
+            NativeRenderParameters(),
+            new string('a', 64)));
+
+        AssertNativeRenderBoundaryFailure(result);
+    }
+
+    [Fact]
+    public void NativeRenderEvidenceRejectsAnArtifactPathOutsideTheRequestOwner()
+    {
+        var path = @"C:\drawings\sample.dwg";
+        var requestId = "render-request-001";
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            NativeRenderEvidence = NativeRenderSnapshot(path, requestId) with
+            {
+                Artifact = NativeRenderSnapshot(path, requestId).Artifact with
+                {
+                    RelativePath = "native-render/another-request/artifact.png"
+                }
+            }
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "native_render_evidence",
+            requestId,
+            path,
+            NativeRenderParameters(),
+            new string('a', 64)));
+
+        AssertNativeRenderBoundaryFailure(result);
+    }
+
     [Fact]
     public void MechanicalBomUsesUnavailableDefaultNoOpAdapter()
     {
@@ -539,6 +602,17 @@ public sealed class OperationDispatcherTests
             clock: () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
             mechanicalAdapter: mechanicalAdapter,
             mechanicalWarnings: mechanicalWarnings));
+
+    private static void AssertNativeRenderBoundaryFailure(IpcResult result)
+    {
+        Assert.False(result.Success);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Empty(result.Payload!);
+        Assert.Contains(
+            result.Errors!,
+            error => error.Contains("native render evidence", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static IpcRequest Request(
         string operation,

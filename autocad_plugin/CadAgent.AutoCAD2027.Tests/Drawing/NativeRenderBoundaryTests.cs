@@ -71,6 +71,17 @@ public sealed class NativeRenderBoundaryTests
             true));
     }
 
+    [Fact]
+    public void PaperSpaceReaderDoesNotCenterLayoutPlots()
+    {
+        var readerPath = RepositoryFile(
+            "autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadNativeRenderReader.cs");
+
+        var source = File.ReadAllText(readerPath);
+
+        Assert.DoesNotContain("SetPlotCentered(", source, StringComparison.Ordinal);
+    }
+
     private static NativeRenderRequest Request(
         string artifactKind,
         string layoutName,
@@ -85,4 +96,20 @@ public sealed class NativeRenderBoundaryTests
             new("layout-001", layoutName),
             artifactKind,
             options ?? new("white", 300, true, "A4", "monochrome.ctb"));
+
+    private static string RepositoryFile(string relativePath)
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException($"Repository file was not found: {relativePath}");
+    }
 }

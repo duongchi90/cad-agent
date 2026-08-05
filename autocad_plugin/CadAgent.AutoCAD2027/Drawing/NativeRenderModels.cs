@@ -194,6 +194,15 @@ public static class NativeRenderPayload
 
 public static class NativeRenderPolicy
 {
+    public const long ApprovedPngWidth = 2480;
+    public const long ApprovedPngHeight = 3508;
+    public const long ApprovedPngLandscapeWidth = 3508;
+    public const long ApprovedPngLandscapeHeight = 2480;
+
+    public static bool IsApprovedPngDimensions(long width, long height) =>
+        (width == ApprovedPngWidth && height == ApprovedPngHeight)
+        || (width == ApprovedPngLandscapeWidth && height == ApprovedPngLandscapeHeight);
+
     public static void EnsureSupported(NativeRenderRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -235,5 +244,151 @@ public static class NativeRenderPolicy
         {
             throw new InvalidDataException("AutoCAD session state was not restored.");
         }
+    }
+
+    public static void EnsureMatchesRequest(
+        NativeRenderRequest request,
+        NativeRenderEvidenceSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var mismatches = new List<string>();
+        if (!string.Equals(snapshot.RequestId, request.RequestId, StringComparison.Ordinal))
+        {
+            mismatches.Add("request_id");
+        }
+
+        if (!string.Equals(snapshot.RunId, request.RunId, StringComparison.Ordinal))
+        {
+            mismatches.Add("run_id");
+        }
+
+        if (!string.Equals(snapshot.DrawingSha256, request.DrawingSha256, StringComparison.Ordinal))
+        {
+            mismatches.Add("drawing_sha256");
+        }
+
+        if (!string.Equals(
+                snapshot.LatestMutationSha256,
+                request.LatestMutationSha256,
+                StringComparison.Ordinal))
+        {
+            mismatches.Add("latest_mutation_sha256");
+        }
+
+        if (!string.Equals(
+                snapshot.VisualRunManifestSha256,
+                request.VisualRunManifestSha256,
+                StringComparison.Ordinal))
+        {
+            mismatches.Add("visual_run_manifest_sha256");
+        }
+
+        if (!string.Equals(snapshot.ArtifactKind, request.ArtifactKind, StringComparison.Ordinal))
+        {
+            mismatches.Add("artifact_kind");
+        }
+
+        if (!string.Equals(snapshot.Layout.Identity, request.Layout.Identity, StringComparison.Ordinal))
+        {
+            mismatches.Add("layout.identity");
+        }
+
+        if (!string.Equals(snapshot.Layout.Name, request.Layout.Name, StringComparison.Ordinal))
+        {
+            mismatches.Add("layout.name");
+        }
+
+        if (!string.Equals(snapshot.RenderOptions.Background, request.RenderOptions.Background, StringComparison.Ordinal))
+        {
+            mismatches.Add("render_options.background");
+        }
+
+        if (snapshot.RenderOptions.Dpi != request.RenderOptions.Dpi)
+        {
+            mismatches.Add("render_options.dpi");
+        }
+
+        if (snapshot.RenderOptions.FitToPaper != request.RenderOptions.FitToPaper)
+        {
+            mismatches.Add("render_options.fit_to_paper");
+        }
+
+        if (!string.Equals(snapshot.RenderOptions.PaperSize, request.RenderOptions.PaperSize, StringComparison.Ordinal))
+        {
+            mismatches.Add("render_options.paper_size");
+        }
+
+        if (!string.Equals(snapshot.RenderOptions.PlotStyle, request.RenderOptions.PlotStyle, StringComparison.Ordinal))
+        {
+            mismatches.Add("render_options.plot_style");
+        }
+
+        if (snapshot.DbmodBefore < 0
+            || snapshot.DbmodAfter < 0
+            || snapshot.DbmodBefore != snapshot.DbmodAfter)
+        {
+            mismatches.Add("dbmod");
+        }
+
+        if (snapshot.Artifact is null)
+        {
+            mismatches.Add("artifact");
+        }
+        else
+        {
+            var expectedPath = ExpectedArtifactRelativePath(request);
+            if (!string.Equals(snapshot.Artifact.RelativePath, expectedPath, StringComparison.Ordinal))
+            {
+                mismatches.Add("artifact.relative_path");
+            }
+
+            if (!System.Text.RegularExpressions.Regex.IsMatch(
+                    snapshot.Artifact.Sha256,
+                    "^[0-9a-f]{64}$",
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+            {
+                mismatches.Add("artifact.sha256");
+            }
+
+            if (request.ArtifactKind == "PNG"
+                && (!snapshot.Artifact.Width.HasValue
+                    || !snapshot.Artifact.Height.HasValue
+                    || !IsApprovedPngDimensions(
+                        snapshot.Artifact.Width.Value,
+                        snapshot.Artifact.Height.Value)
+                    || snapshot.Artifact.PageCount is not null))
+            {
+                mismatches.Add("artifact.png_metadata");
+            }
+
+            if (request.ArtifactKind == "PDF"
+                && (snapshot.Artifact.PageCount != 1
+                    || snapshot.Artifact.Width is not null
+                    || snapshot.Artifact.Height is not null))
+            {
+                mismatches.Add("artifact.pdf_metadata");
+            }
+        }
+
+        if (mismatches.Count != 0)
+        {
+            throw new InvalidDataException(
+                "The native render evidence did not match the request or read-only boundary: "
+                + string.Join(", ", mismatches));
+        }
+    }
+
+    public static string ExpectedArtifactRelativePath(NativeRenderRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var extension = request.ArtifactKind switch
+        {
+            "PNG" => "png",
+            "PDF" => "pdf",
+            _ => throw new InvalidDataException("The native render artifact kind is unsupported.")
+        };
+        return $"native-render/{request.RequestId}/artifact.{extension}";
     }
 }

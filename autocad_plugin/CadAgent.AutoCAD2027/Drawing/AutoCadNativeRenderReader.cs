@@ -14,6 +14,8 @@ public static class AutoCadNativeRenderReader
     private const string PdfDevice = "AutoCAD PDF (General Documentation).pc3";
     private const string PngDevice = "PublishToWeb PNG.pc3";
     private const string A4MediaName = "ISO_A4_(210.00_x_297.00_MM)";
+    private const double A4WidthMillimeters = 210;
+    private const double A4HeightMillimeters = 297;
 
     public static NativeRenderEvidenceSnapshot Capture(
         Document document,
@@ -175,20 +177,58 @@ public static class AutoCadNativeRenderReader
 
         var mediaNames = validator.GetCanonicalMediaNameList(plotSettings)
             .Cast<string>()
-            .Where(name => string.Equals(name, A4MediaName, StringComparison.Ordinal))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
             .ToArray();
-        if (mediaNames.Length != 1)
+
+        var approvedMediaNames = new List<string>();
+        foreach (var mediaName in mediaNames)
         {
-            throw new InvalidDataException("The approved device does not expose exactly one approved A4 media.");
+            try
+            {
+                validator.SetCanonicalMediaName(plotSettings, mediaName);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                continue;
+            }
+
+            var paperSize = plotSettings.PlotPaperSize;
+            var isApproved = request.ArtifactKind == "PNG"
+                ? plotSettings.PlotPaperUnits == PlotPaperUnit.Pixels
+                    && ((
+                        IsCloseTo(paperSize.X, NativeRenderPolicy.ApprovedPngWidth)
+                        && IsCloseTo(paperSize.Y, NativeRenderPolicy.ApprovedPngHeight))
+                        || (
+                            IsCloseTo(paperSize.X, NativeRenderPolicy.ApprovedPngLandscapeWidth)
+                            && IsCloseTo(paperSize.Y, NativeRenderPolicy.ApprovedPngLandscapeHeight)))
+                : string.Equals(mediaName, A4MediaName, StringComparison.Ordinal)
+                    && plotSettings.PlotPaperUnits == PlotPaperUnit.Millimeters
+                    && IsCloseTo(paperSize.X, A4WidthMillimeters)
+                    && IsCloseTo(paperSize.Y, A4HeightMillimeters);
+            if (isApproved)
+            {
+                approvedMediaNames.Add(mediaName);
+            }
         }
 
-        validator.SetCanonicalMediaName(plotSettings, mediaNames[0]);
+        if (approvedMediaNames.Count != 1)
+        {
+            throw new InvalidDataException(
+                request.ArtifactKind == "PNG"
+                    ? "The approved PNG device does not expose exactly one approved A4 pixel media."
+                    : "The approved PDF device does not expose exactly one approved A4 media.");
+        }
+
+        validator.SetCanonicalMediaName(plotSettings, approvedMediaNames[0]);
         validator.SetPlotType(plotSettings, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
         validator.SetUseStandardScale(plotSettings, true);
         validator.SetStdScaleType(plotSettings, StdScaleType.ScaleToFit);
-        validator.SetPlotCentered(plotSettings, true);
         validator.SetCurrentStyleSheet(plotSettings, request.RenderOptions.PlotStyle);
     }
+
+    private static bool IsCloseTo(double actual, double expected) =>
+        Math.Abs(actual - expected) < 0.001;
 
     private static void ExecutePlot(
         Document document,

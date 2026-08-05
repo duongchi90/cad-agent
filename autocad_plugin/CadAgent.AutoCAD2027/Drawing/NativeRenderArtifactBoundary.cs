@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using CadAgent.AutoCAD2027.Ipc;
 
 namespace CadAgent.AutoCAD2027.Drawing;
@@ -16,6 +17,18 @@ public sealed class NativeRenderArtifactBoundary
     {
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
     };
+
+    private readonly Action<string, string> _moveFinal;
+
+    public NativeRenderArtifactBoundary()
+        : this((source, destination) => File.Move(source, destination, overwrite: false))
+    {
+    }
+
+    internal NativeRenderArtifactBoundary(Action<string, string> moveFinal)
+    {
+        _moveFinal = moveFinal ?? throw new ArgumentNullException(nameof(moveFinal));
+    }
 
     public NativeRenderArtifactReservation Reserve(
         string ipcRoot,
@@ -138,15 +151,14 @@ public sealed class NativeRenderArtifactBoundary
             throw new IOException("The native render final artifact already exists.");
         }
 
-        reservation.ReleaseClaim();
         try
         {
-            File.Move(reservation.TemporaryPath, reservation.FinalPath, overwrite: false);
+            _moveFinal(reservation.TemporaryPath, reservation.FinalPath);
+            reservation.MarkFinalCreated();
             var finalBytes = File.ReadAllBytes(reservation.FinalPath);
             var finalHash = Hash(finalBytes);
             if (!string.Equals(temporaryHash, finalHash, StringComparison.Ordinal))
             {
-                DeleteIfExists(reservation.FinalPath);
                 throw new InvalidDataException("The native render final artifact hash changed after publication.");
             }
 
@@ -160,10 +172,7 @@ public sealed class NativeRenderArtifactBoundary
         }
         catch
         {
-            if (!reservation.IsPublished)
-            {
-                DeleteIfExists(reservation.FinalPath);
-            }
+            DeleteOwnedFinalIfUnchanged(reservation, temporaryHash);
 
             throw;
         }
@@ -219,6 +228,12 @@ public sealed class NativeRenderArtifactBoundary
                     throw new InvalidDataException("The native render PNG dimensions are invalid.");
                 }
 
+                if (!NativeRenderPolicy.IsApprovedPngDimensions(width, height))
+                {
+                    throw new InvalidDataException(
+                        "The native render PNG dimensions do not match the approved A4 300 DPI profile.");
+                }
+
                 sawHeader = true;
             }
 
@@ -251,55 +266,288 @@ public sealed class NativeRenderArtifactBoundary
             throw new InvalidDataException("The native render PDF header is invalid.");
         }
 
-        var tailStart = Math.Max(0, bytes.Length - 1024);
-        var tail = Encoding.ASCII.GetString(bytes, tailStart, bytes.Length - tailStart);
-        if (!tail.Contains("%%EOF", StringComparison.Ordinal))
+        var text = Encoding.Latin1.GetString(bytes);
+        var eofIndex = text.LastIndexOf("%%EOF", StringComparison.Ordinal);
+        if (eofIndex < 0
+            || text[(eofIndex + "%%EOF".Length)..].Any(character => !char.IsWhiteSpace(character)))
         {
             throw new InvalidDataException("The native render PDF is missing its EOF trailer.");
         }
 
-        var text = Encoding.Latin1.GetString(bytes);
-        var pageCount = CountPdfPages(text);
-        if (pageCount != 1)
+        var startxrefIndex = text.LastIndexOf("startxref", eofIndex, StringComparison.Ordinal);
+        if (startxrefIndex < 0)
+        {
+            throw new InvalidDataException("The native render PDF is missing startxref.");
+        }
+
+        var numberStart = startxrefIndex + "startxref".Length;
+        while (numberStart < text.Length && char.IsWhiteSpace(text[numberStart]))
+        {
+            numberStart++;
+        }
+
+        var numberEnd = numberStart;
+        while (numberEnd < text.Length && char.IsDigit(text[numberEnd]))
+        {
+            numberEnd++;
+        }
+
+        if (numberStart == numberEnd
+            || !long.TryParse(text[numberStart..numberEnd], out var xrefOffset)
+            || xrefOffset < 0
+            || xrefOffset > int.MaxValue
+            || xrefOffset >= text.Length
+            || !text.AsSpan((int)xrefOffset).StartsWith("xref", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The native render PDF xref offset is invalid.");
+        }
+
+        var objects = ParsePdfObjects(text);
+        var trailer = ParsePdfTrailer(text, (int)xrefOffset);
+        var fileSize = ReadPdfInteger(trailer, "/Size");
+        if (fileSize <= 0 || fileSize > int.MaxValue)
+        {
+            throw new InvalidDataException("The native render PDF trailer size is invalid.");
+        }
+
+        var xrefEntries = ParsePdfXref(text, (int)xrefOffset, (int)fileSize);
+        var rootId = ReadPdfReference(trailer, "/Root");
+        var catalog = GetPdfObject(objects, rootId, "catalog");
+        RequirePdfType(catalog, "Catalog", "catalog");
+        var pagesId = ReadPdfReference(catalog, "/Pages");
+        var pages = GetPdfObject(objects, pagesId, "page tree");
+        RequirePdfType(pages, "Pages", "page tree");
+        if (ReadPdfInteger(pages, "/Count") != 1)
         {
             throw new InvalidDataException("The native render PDF must contain exactly one page.");
         }
 
-        return new ArtifactMetadata(null, null, pageCount);
+        var pageIds = ReadPdfReferencesArray(pages, "/Kids");
+        if (pageIds.Count != 1)
+        {
+            throw new InvalidDataException("The native render PDF page tree must contain one page.");
+        }
+
+        var page = GetPdfObject(objects, pageIds[0], "page");
+        RequirePdfType(page, "Page", "page");
+        if (ReadPdfReference(page, "/Parent") != pagesId
+            || !Regex.IsMatch(page, @"/MediaBox\s*\[[^\]]+\]", RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException("The native render PDF page tree is incoherent.");
+        }
+
+        foreach (var objectId in new[] { rootId, pagesId, pageIds[0] })
+        {
+            if (!xrefEntries.TryGetValue(objectId, out var entry)
+                || entry.Kind != 'n'
+                || !IsPdfObjectDeclarationAt(text, entry.Offset, objectId))
+            {
+                throw new InvalidDataException("The native render PDF xref does not bind its page tree.");
+            }
+        }
+
+        return new ArtifactMetadata(null, null, 1);
     }
 
-    private static int CountPdfPages(string text)
+    private static Dictionary<int, string> ParsePdfObjects(string text)
     {
-        var count = 0;
-        var offset = 0;
-        while (offset < text.Length)
+        var objects = new Dictionary<int, string>();
+        var matches = Regex.Matches(
+            text,
+            @"(?ms)(?<!\d)(?<id>\d+)\s+\d+\s+obj\s*(?<body>.*?)\s*endobj",
+            RegexOptions.CultureInvariant);
+        foreach (Match match in matches)
         {
-            var typeIndex = text.IndexOf("/Type", offset, StringComparison.Ordinal);
-            if (typeIndex < 0)
+            var id = int.Parse(match.Groups["id"].Value, System.Globalization.CultureInfo.InvariantCulture);
+            if (!objects.TryAdd(id, match.Groups["body"].Value))
+            {
+                throw new InvalidDataException("The native render PDF contains duplicate object numbers.");
+            }
+        }
+
+        return objects;
+    }
+
+    private static string ParsePdfTrailer(string text, int xrefOffset)
+    {
+        var matches = Regex.Matches(
+            text,
+            @"(?s)trailer\s*<<(?<dictionary>.*?)>>",
+            RegexOptions.CultureInvariant);
+        var trailer = matches
+            .Cast<Match>()
+            .LastOrDefault(match => match.Index > xrefOffset);
+        return trailer?.Groups["dictionary"].Value
+            ?? throw new InvalidDataException("The native render PDF trailer is missing.");
+    }
+
+    private static Dictionary<int, PdfXrefEntry> ParsePdfXref(
+        string text,
+        int xrefOffset,
+        int expectedSize)
+    {
+        var entries = new Dictionary<int, PdfXrefEntry>();
+        var cursor = xrefOffset;
+        if (!string.Equals(ReadPdfLine(text, ref cursor), "xref", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The native render PDF xref table is invalid.");
+        }
+
+        while (true)
+        {
+            var subsection = ReadPdfLine(text, ref cursor);
+            if (subsection is null || string.Equals(subsection, "trailer", StringComparison.Ordinal))
             {
                 break;
             }
 
-            var valueIndex = typeIndex + "/Type".Length;
-            while (valueIndex < text.Length && char.IsWhiteSpace(text[valueIndex]))
+            var parts = subsection.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2
+                || !int.TryParse(parts[0], out var firstId)
+                || !int.TryParse(parts[1], out var count)
+                || firstId < 0
+                || count <= 0
+                || firstId > expectedSize - count)
             {
-                valueIndex++;
+                throw new InvalidDataException("The native render PDF xref subsection is invalid.");
             }
 
-            if (text.AsSpan(valueIndex).StartsWith("/Page", StringComparison.Ordinal))
+            for (var id = firstId; id < firstId + count; id++)
             {
-                var end = valueIndex + "/Page".Length;
-                if (end == text.Length || !char.IsLetterOrDigit(text[end]))
+                var entryLine = ReadPdfLine(text, ref cursor);
+                if (entryLine is null)
                 {
-                    count++;
+                    throw new InvalidDataException("The native render PDF xref entries are incomplete.");
+                }
+
+                var entryParts = entryLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (entryParts.Length != 3
+                    || !long.TryParse(entryParts[0], out var objectOffset)
+                    || !int.TryParse(entryParts[1], out var generation)
+                    || entryParts[2] is not ("n" or "f"))
+                {
+                    throw new InvalidDataException("The native render PDF xref entry is invalid.");
+                }
+
+                if (!entries.TryAdd(id, new PdfXrefEntry(objectOffset, generation, entryParts[2][0])))
+                {
+                    throw new InvalidDataException("The native render PDF xref repeats an object number.");
                 }
             }
-
-            offset = valueIndex + 1;
         }
 
-        return count;
+        if (!entries.TryGetValue(0, out var freeEntry)
+            || freeEntry.Kind != 'f'
+            || entries.Count != expectedSize)
+        {
+            throw new InvalidDataException("The native render PDF xref table is incomplete.");
+        }
+
+        return entries;
     }
+
+    private static string? ReadPdfLine(string text, ref int cursor)
+    {
+        if (cursor >= text.Length)
+        {
+            return null;
+        }
+
+        var lineStart = cursor;
+        var end = text.IndexOf('\n', cursor);
+        if (end < 0)
+        {
+            end = text.Length;
+            cursor = text.Length;
+        }
+        else
+        {
+            cursor = end + 1;
+        }
+
+        return text[lineStart..end].TrimEnd('\r');
+    }
+
+    private static int ReadPdfInteger(string dictionary, string name)
+    {
+        var match = Regex.Match(
+            dictionary,
+            $@"{Regex.Escape(name)}\s+(?<value>\d+)\b",
+            RegexOptions.CultureInvariant);
+        return match.Success && int.TryParse(match.Groups["value"].Value, out var value)
+            ? value
+            : throw new InvalidDataException($"The native render PDF dictionary is missing {name}.");
+    }
+
+    private static int ReadPdfReference(string dictionary, string name)
+    {
+        var match = Regex.Match(
+            dictionary,
+            $@"{Regex.Escape(name)}\s+(?<id>\d+)\s+\d+\s+R\b",
+            RegexOptions.CultureInvariant);
+        return match.Success && int.TryParse(match.Groups["id"].Value, out var value)
+            ? value
+            : throw new InvalidDataException($"The native render PDF dictionary is missing {name}.");
+    }
+
+    private static IReadOnlyList<int> ReadPdfReferencesArray(string dictionary, string name)
+    {
+        var match = Regex.Match(
+            dictionary,
+            $@"{Regex.Escape(name)}\s*\[(?<items>[^\]]*)\]",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            throw new InvalidDataException($"The native render PDF dictionary is missing {name}.");
+        }
+
+        return Regex.Matches(
+                match.Groups["items"].Value,
+                @"(?<id>\d+)\s+\d+\s+R\b",
+                RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .Select(item => int.Parse(
+                item.Groups["id"].Value,
+                System.Globalization.CultureInfo.InvariantCulture))
+            .ToArray();
+    }
+
+    private static string GetPdfObject(
+        IReadOnlyDictionary<int, string> objects,
+        int id,
+        string description) =>
+        objects.TryGetValue(id, out var body)
+            ? body
+            : throw new InvalidDataException($"The native render PDF {description} object is missing.");
+
+    private static void RequirePdfType(string dictionary, string expected, string description)
+    {
+        var match = Regex.Match(
+            dictionary,
+            @"/Type\s*/(?<type>[A-Za-z]+)\b",
+            RegexOptions.CultureInvariant);
+        if (!match.Success || !string.Equals(match.Groups["type"].Value, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"The native render PDF {description} object has an invalid type.");
+        }
+    }
+
+    private static bool IsPdfObjectDeclarationAt(string text, long offset, int id)
+    {
+        if (offset < 0 || offset > int.MaxValue || offset >= text.Length)
+        {
+            return false;
+        }
+
+        var regex = new Regex(
+            $@"\G{id}\s+\d+\s+obj\b",
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+        return regex.Match(text, (int)offset).Success;
+    }
+
+    private readonly record struct PdfXrefEntry(long Offset, int Generation, char Kind);
 
     private static void ValidateRequestIdForPath(string requestId)
     {
@@ -344,6 +592,33 @@ public sealed class NativeRenderArtifactBoundary
 
     private static string Hash(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static void DeleteOwnedFinalIfUnchanged(
+        NativeRenderArtifactReservation reservation,
+        string expectedHash)
+    {
+        if (!reservation.FinalCreatedByReservation || !File.Exists(reservation.FinalPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var finalBytes = File.ReadAllBytes(reservation.FinalPath);
+            if (string.Equals(Hash(finalBytes), expectedHash, StringComparison.Ordinal))
+            {
+                File.Delete(reservation.FinalPath);
+            }
+        }
+        catch (IOException)
+        {
+            // Leave an artifact we cannot prove is still owned by this reservation.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Leave an artifact we cannot prove is still owned by this reservation.
+        }
+    }
 
     private static void DeleteIfExists(string path)
     {
@@ -401,15 +676,9 @@ public sealed class NativeRenderArtifactReservation : IDisposable
         }
     }
 
-    internal void ReleaseClaim()
-    {
-        _claim?.Dispose();
-        _claim = null;
-        if (File.Exists(ClaimPath))
-        {
-            File.Delete(ClaimPath);
-        }
-    }
+    internal bool FinalCreatedByReservation { get; private set; }
+
+    internal void MarkFinalCreated() => FinalCreatedByReservation = true;
 
     internal void MarkPublished() => IsPublished = true;
 

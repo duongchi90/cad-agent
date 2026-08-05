@@ -100,15 +100,19 @@ public sealed class NativeRenderArtifactBoundaryTests
         }
     }
 
-    [Fact]
-    public void PublishReadsPngMetadataAndPublishesTheFinalSha256()
+    [Theory]
+    [InlineData(2480, 3508)]
+    [InlineData(3508, 2480)]
+    public void PublishReadsApprovedPngMetadataAndPublishesTheFinalSha256(
+        int width,
+        int height)
     {
         var root = CreateRoot();
         try
         {
             var boundary = new NativeRenderArtifactBoundary();
             using var reservation = boundary.Reserve(root, "render-request-001", "PNG");
-            var bytes = MinimalPng(2480, 3508);
+            var bytes = MinimalPng(width, height);
             File.WriteAllBytes(reservation.TemporaryPath, bytes);
 
             var artifact = boundary.Publish(reservation);
@@ -116,8 +120,8 @@ public sealed class NativeRenderArtifactBoundaryTests
             Assert.True(reservation.IsPublished);
             Assert.Equal("native-render/render-request-001/artifact.png", artifact.RelativePath);
             Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), artifact.Sha256);
-            Assert.Equal(2480, artifact.Width);
-            Assert.Equal(3508, artifact.Height);
+            Assert.Equal(width, artifact.Width);
+            Assert.Equal(height, artifact.Height);
             Assert.Null(artifact.PageCount);
             Assert.True(File.Exists(reservation.FinalPath));
             Assert.False(File.Exists(reservation.TemporaryPath));
@@ -149,6 +153,69 @@ public sealed class NativeRenderArtifactBoundaryTests
             {
                 using var stream = new FileStream(reservation.FinalPath, FileMode.CreateNew);
             });
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void PublishLeavesACompetingFinalArtifactUntouchedWhenMoveLosesTheRace()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var competingBytes = Encoding.ASCII.GetBytes("owned by another request");
+            var boundary = new NativeRenderArtifactBoundary((source, destination) =>
+            {
+                File.WriteAllBytes(destination, competingBytes);
+                throw new IOException("simulated final-path race");
+            });
+            using var reservation = boundary.Reserve(root, "render-request-001", "PDF");
+            File.WriteAllBytes(reservation.TemporaryPath, MinimalPdf());
+
+            Assert.Throws<IOException>(() => boundary.Publish(reservation));
+            Assert.Equal(competingBytes, File.ReadAllBytes(reservation.FinalPath));
+            Assert.False(reservation.IsPublished);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void PublishRejectsPngThatDoesNotMatchTheApprovedA4ThreeHundredDpiPixels()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary();
+            using var reservation = boundary.Reserve(root, "render-request-001", "PNG");
+            File.WriteAllBytes(reservation.TemporaryPath, MinimalPng(1600, 1200));
+
+            Assert.Throws<InvalidDataException>(() => boundary.Publish(reservation));
+            Assert.False(File.Exists(reservation.FinalPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void PublishRejectsPdfWithoutACoherentCatalogPageTreeAndXref()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary();
+            using var reservation = boundary.Reserve(root, "render-request-001", "PDF");
+            File.WriteAllBytes(reservation.TemporaryPath, MinimalPdfPlaceholder());
+
+            Assert.Throws<InvalidDataException>(() => boundary.Publish(reservation));
+            Assert.False(File.Exists(reservation.FinalPath));
         }
         finally
         {
@@ -205,7 +272,41 @@ public sealed class NativeRenderArtifactBoundaryTests
         return bytes;
     }
 
-    private static byte[] MinimalPdf() =>
+    private static byte[] MinimalPdf()
+    {
+        var objects = new[]
+        {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << >> /Contents 4 0 R >>",
+            "<< /Length 0 >>\nstream\nendstream"
+        };
+        var builder = new StringBuilder("%PDF-1.4\n");
+        var offsets = new List<int> { 0 };
+        for (var index = 0; index < objects.Length; index++)
+        {
+            offsets.Add(builder.Length);
+            builder.Append(index + 1)
+                .Append(" 0 obj\n")
+                .Append(objects[index])
+                .Append("\nendobj\n");
+        }
+
+        var xrefOffset = builder.Length;
+        builder.Append("xref\n0 5\n0000000000 65535 f \n");
+        for (var index = 1; index < offsets.Count; index++)
+        {
+            builder.Append(offsets[index].ToString("D10"))
+                .Append(" 00000 n \n");
+        }
+
+        builder.Append("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n")
+            .Append(xrefOffset)
+            .Append("\n%%EOF\n");
+        return Encoding.ASCII.GetBytes(builder.ToString());
+    }
+
+    private static byte[] MinimalPdfPlaceholder() =>
         Encoding.ASCII.GetBytes(
             "%PDF-1.4\n1 0 obj\n<< /Type /Page >>\nendobj\n%%EOF\n");
 

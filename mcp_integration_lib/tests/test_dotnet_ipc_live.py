@@ -56,6 +56,12 @@ def _s2c_live_prerequisites_available() -> bool:
     )
 
 
+def _s2c_refusal_probe_prerequisites_available(profile: str) -> bool:
+    return _s2c_live_prerequisites_available() and (
+        os.getenv("CAD_AGENT_S2C_NEGATIVE_PROFILE") == profile
+    )
+
+
 def _add_mechanical_bom_fixture(drawing_document) -> None:
     modelspace = drawing_document.modelspace()
     modelspace.add_line((0, 0), (10, 0))
@@ -497,6 +503,94 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
 )
 @pytest.mark.autocad_mechanical
 class NativeRenderS2CLiveTests(unittest.TestCase):
+    def _run_refusal_probe(self, profile: str) -> None:
+        """Run against an operator-prepared isolated AutoCAD profile.
+
+        missing-device must hide the approved PNG PC3 from the profile.
+        missing-media must expose that PC3 without the approved 2480x3508
+        pixel media. The test never changes shared AutoCAD configuration.
+        """
+
+        drawing = Path(os.environ["CAD_AGENT_LEAN_DISPOSABLE_DWG"]).resolve()
+        self.assertTrue(drawing.is_file(), f"Missing disposable drawing: {drawing}")
+        original_sha256 = _sha256(drawing)
+        expected_full_path = normalize_windows_absolute_path(str(drawing))
+        hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
+        legacy_client = FileIPCLiveMCPClient(
+            trigger=make_windows_dispatch_trigger(hwnd),
+            raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
+            bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
+        )
+        dotnet_client = DotNetIPCClient(
+            ipc_dir=os.environ["CAD_AGENT_DOTNET_IPC_DIR"],
+            trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+            timeout_s=30.0,
+        )
+        request_id = f"s2c-live-{profile}-{time.time_ns()}"
+        request_directory = dotnet_client.ipc_dir / "native-render" / request_id
+
+        try:
+            with _disposable_drawing_cleanup(dotnet_client, str(drawing)) as mark_closed:
+                legacy_client.drawing_open(str(drawing))
+                state_before = legacy_client.drawing_get_variables(
+                    ["DBMOD", "CTAB", "BACKGROUNDPLOT"]
+                )
+                with self.assertRaises(DotNetIPCResultError) as refusal_error:
+                    dotnet_client.native_render_evidence(
+                        expected_full_path,
+                        _s2c_request(
+                            expected_full_path,
+                            original_sha256,
+                            request_id,
+                            artifact_kind="PNG",
+                        ),
+                    )
+                result = refusal_error.exception.result
+                self.assertIsNotNone(result)
+                assert result is not None
+                self.assertFalse(result["success"])
+                self.assertFalse(result["changed"])
+                self.assertEqual([], result["entity_handles"])
+                self.assertEqual({}, result["payload"])
+                self.assertTrue(result["errors"])
+                self.assertEqual(
+                    state_before,
+                    legacy_client.drawing_get_variables(
+                        ["DBMOD", "CTAB", "BACKGROUNDPLOT"]
+                    ),
+                )
+                self.assertEqual(original_sha256, _sha256(drawing))
+                self.assertFalse((request_directory / "artifact.png").exists())
+
+                close = dotnet_client.close_disposable(
+                    expected_full_path,
+                    disposable=True,
+                    save_changes=False,
+                    request_id=f"s2c-live-{profile}-close-{time.time_ns()}",
+                )
+                self.assertTrue(close["success"])
+                self.assertFalse(close["changed"])
+                mark_closed()
+        finally:
+            shutil.rmtree(request_directory, ignore_errors=True)
+            self.assertEqual(original_sha256, _sha256(drawing))
+
+    @unittest.skipUnless(
+        _s2c_refusal_probe_prerequisites_available("missing-device"),
+        "requires an isolated AutoCAD profile with the approved PNG device absent "
+        "and CAD_AGENT_S2C_NEGATIVE_PROFILE=missing-device",
+    )
+    def test_s2c_missing_device_refuses_without_artifact(self) -> None:
+        self._run_refusal_probe("missing-device")
+
+    @unittest.skipUnless(
+        _s2c_refusal_probe_prerequisites_available("missing-media"),
+        "requires an isolated AutoCAD profile with no approved PNG pixel media "
+        "and CAD_AGENT_S2C_NEGATIVE_PROFILE=missing-media",
+    )
+    def test_s2c_missing_media_refuses_without_artifact(self) -> None:
+        self._run_refusal_probe("missing-media")
+
     def test_s2c_png_pdf_and_fail_closed_probes_are_read_only(self) -> None:
         from PIL import Image
         from pypdf import PdfReader
@@ -589,8 +683,10 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
 
                     if artifact_kind == "PNG":
                         with Image.open(final_path) as image:
-                            self.assertGreater(image.width, 0)
-                            self.assertGreater(image.height, 0)
+                            self.assertIn(
+                                (image.width, image.height),
+                                {(2480, 3508), (3508, 2480)},
+                            )
                             self.assertEqual(image.width, artifact["width"])
                             self.assertEqual(image.height, artifact["height"])
                     else:

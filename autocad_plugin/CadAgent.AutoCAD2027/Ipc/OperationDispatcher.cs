@@ -261,26 +261,7 @@ public sealed class OperationDispatcher
 
         var nativeRequest = NativeRenderRequest.FromIpc(request);
         var snapshot = _context.DrawingGateway.ReadNativeRenderEvidence(nativeRequest);
-        if (!string.Equals(snapshot.RequestId, request.RequestId, StringComparison.Ordinal)
-            || !string.Equals(snapshot.RunId, nativeRequest.RunId, StringComparison.Ordinal)
-            || !string.Equals(snapshot.DrawingSha256, request.DrawingSha256, StringComparison.Ordinal)
-            || !string.Equals(snapshot.LatestMutationSha256, nativeRequest.LatestMutationSha256, StringComparison.Ordinal)
-            || !string.Equals(
-                snapshot.VisualRunManifestSha256,
-                nativeRequest.VisualRunManifestSha256,
-                StringComparison.Ordinal)
-            || !string.Equals(snapshot.ArtifactKind, nativeRequest.ArtifactKind, StringComparison.Ordinal)
-            || !string.Equals(snapshot.Layout.Identity, nativeRequest.Layout.Identity, StringComparison.Ordinal)
-            || !string.Equals(snapshot.Layout.Name, nativeRequest.Layout.Name, StringComparison.Ordinal)
-            || snapshot.DbmodBefore < 0
-            || snapshot.DbmodAfter < 0
-            || snapshot.DbmodBefore != snapshot.DbmodAfter)
-        {
-            return Failure(
-                request,
-                new[] { "The native render evidence did not match the request or read-only boundary." },
-                startedAt);
-        }
+        NativeRenderPolicy.EnsureMatchesRequest(nativeRequest, snapshot);
 
         return CreateResult(
             request.RequestId!,
