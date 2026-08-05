@@ -10,14 +10,17 @@ passes.
 - Issue: #60, S2C.
 - Exact implementation base: `3d0aa999904f384efa4eb42a81637e4270591859`.
 - Implementation branch: `task/s2c-autocad-native-render`.
-- Verified pre-record fix head: `1d5d3eeefa4535c46be87d719438a2bd179ebddd`.
-- Production implementation commit: `043dfd4`; review-fix commit: `1d5d3ee`;
-  live gate commit: `6cee32e`.
-- Final head is emitted by the later record-only commit and is recorded in
-  PR provenance; a commit cannot contain its own object ID without becoming
-  self-referential.
+- Verified source-fix head: `009bc49320e104178f99af4e759d071e616535b8`.
+- Prior review-fix head: `67f958ed583477df340508ead925cbba0166935b`.
+- Source-fix commits: `67f958e` (claim cleanup, refusal evidence, and
+  provenance fixes) and `009bc49` (PNG decode validation and post-move
+  publication boundary).
+- This record-only update is kept separate from the source-fix head so the
+  tested source SHA remains unambiguous; the final branch head is recorded in
+  PR provenance after this commit.
 - The branch contains the two approved docs-only commits plus the bounded
-  implementation, live-test, review-fix, and this evidence-record change.
+  implementation, live-test, review-fix, source-fix, and this evidence-record
+  change.
 - Changed paths remain inside the exact Issue #60 20-file allowlist. No schema,
   Python production, dependency, project, `STATUS.md`, or `HANDOFF.md` file
   changed.
@@ -71,10 +74,16 @@ cleanup or maintenance job is introduced by S2C.
   reparse points, and uses an exclusive claim.
 - Plot output is written to a same-directory temporary file and published with
   no-overwrite atomic rename only after byte validation and SHA-256 hashing.
+  After the atomic move, publication only marks the reservation and returns
+  metadata/hash already verified from the temporary bytes; it performs no
+  final-artifact read or hash operation.
 - PNG signature/IHDR/dimension/IEND checks run before publication and accept
-  only exact A4 300 DPI pixel dimensions `2480x3508` or `3508x2480`. PDF
-  publication requires a coherent catalog, page tree, xref/startxref,
-  trailer, and exactly one page. Failed output has no final artifact.
+  only exact A4 300 DPI pixel dimensions `2480x3508` or `3508x2480`. PNG
+  validation also requires legal IHDR combinations, CRC-valid chunks, a
+  concatenated zlib IDAT stream, exact non-interlaced scanline length, and
+  filter bytes in the PNG-defined range. PDF publication requires a coherent
+  catalog, page tree, xref/startxref, trailer, and exactly one page. Failed
+  output has no final artifact.
 - The artifact claim remains held through final-path publication. If a move
   loses a final-path race, cleanup can delete only a final file proven to
   have been created by that reservation and whose bytes still match.
@@ -93,32 +102,52 @@ cleanup or maintenance job is introduced by S2C.
 
 ## Verification evidence
 
-### Offline and .NET
+### Exact source-fix evidence
 
-- `dotnet test autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64 --no-build --no-restore`
-  on fix head `1d5d3eeefa4535c46be87d719438a2bd179ebddd` exited `0`:
-  **152 passed, 0 failed, 0 skipped**.
-- Focused artifact boundary: **17 passed**.
-- Focused read-only policy: **15 passed**.
-- Focused dispatcher native-render tests: **25 passed**.
-- Python S2A/S2B contract tests: **7 passed**.
-- Live harness offline tests: **5 passed, 5 skipped**; Ruff on all affected
-  Python tests: **PASS**.
-- Architecture boundary checker: **PASS**.
-- `git diff --check`: **PASS**.
+- Source-fix head: `009bc49320e104178f99af4e759d071e616535b8`.
+- Autodesk reference directory: `C:\Program Files\Autodesk\AutoCAD 2027`,
+  with `AcCoreMgd.dll`, `AcDbMgd.dll`, and `AcMgd.dll` resolved from that
+  official AutoCAD Mechanical 2027 installation.
 - .NET SDK: `10.0.301`.
-- Autodesk reference directory: `C:\Program Files\Autodesk\AutoCAD 2027`.
-- Built plugin assembly SHA-256 for the review-fix candidate:
-  `0C9A6D15624F7737313BA7090F01A5A68C4F26785AF0DB3EE391AACD046A8861`.
-- No Autodesk managed DLLs were copied into the repository or plugin output.
 
-The canonical verifier was run on the clean review-fix head with:
+Release/x64 restore, build, and test were run by the canonical command below;
+the .NET sub-gate exited `0` with **163 passed, 0 failed, 0 skipped**.
+
+Focused boundary/policy command (exit `0`):
+
+```powershell
+dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests/CadAgent.AutoCAD2027.Tests.csproj -c Release -p:Platform=x64 --no-restore --no-build --filter "FullyQualifiedName~NativeRenderArtifactBoundaryTests|FullyQualifiedName~NativeRenderBoundaryTests" --verbosity minimal
+```
+
+Result: **43 passed, 0 failed, 0 skipped**.
+
+Architecture command (exit `0`):
+
+```powershell
+& 'C:\temp\cad-agent-s2c-py311\Scripts\python.exe' scripts/check_architecture_boundaries.py check --repo-root . --baseline contracts/reuse-integration/architecture-boundaries.json
+```
+
+Result: **Architecture boundaries: PASS**.
+
+Ruff command (exit `0`):
+
+```powershell
+& 'C:\temp\cad-agent-s2c-py311\Scripts\python.exe' -m ruff check mcp_integration_lib/tests/test_dotnet_ipc_live.py
+```
+
+Result: **All checks passed**. `git diff --check` exited `0`.
+
+Built plugin assembly SHA-256 at the source-fix head:
+`49F8E8CB1FED61543079ADAA80CE386ED037EF1269D61E1FEB8D54D0AB265D67`.
+No Autodesk managed DLLs were copied into the repository or plugin output.
+
+The canonical verifier was run on the clean source-fix head with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1 -PythonExe C:\temp\cad-agent-s2c-py311\Scripts\python.exe
 ```
 
-It exited `0`: dependency lock/environment **PASS**; .NET **152 passed, 0
+It exited `0`: dependency lock/environment **PASS**; .NET **163 passed, 0
 failed, 0 skipped**; dotnet IPC JUnit `38 tests, 0 failures, 0 errors, 0
 skipped`; offline JUnit `1040 tests, 0 failures, 0 errors, 0 skipped` (1022
 passed, 14 deselected, 18 subtests); private-data unavailable probe `2
