@@ -95,8 +95,22 @@ cleanup or maintenance job is introduced by S2C.
 - .NET SDK: `10.0.301`.
 - Autodesk reference directory: `C:\Program Files\Autodesk\AutoCAD 2027`.
 - Built plugin assembly SHA-256 for the implementation candidate:
-  `6df76e263c5e28c7ae92e5d823fcf35979bd3e7fdbec84b263b56c4f72b23112`.
+  `a667fc54146f372bb9fbb2a0650ce3b627cd2ea745d9160fa70a7f1e818446de`.
 - No Autodesk managed DLLs were copied into the repository or plugin output.
+
+The canonical verifier was run on the clean pre-update record head with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1 -PythonExe C:\temp\cad-agent-s2c-py311\Scripts\python.exe
+```
+
+It exited `0`: dependency lock/environment **PASS**; .NET **141 passed, 0
+failed, 0 skipped**; dotnet IPC JUnit `38 tests, 0 failures, 0 errors, 0
+skipped`; offline JUnit `1040 tests, 0 failures, 0 errors, 0 skipped` (1022
+passed, 12 deselected, 18 subtests); private-data unavailable probe `2
+skipped`; AutoCAD Mechanical unavailable probe `10 skipped`; architecture,
+Ruff, DLL-output, and diff checks **PASS**. The canonical AutoCAD live marker
+was **NOT RUN**.
 
 ### AutoCAD Mechanical live gate
 
