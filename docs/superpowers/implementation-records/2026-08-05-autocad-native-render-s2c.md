@@ -1,9 +1,10 @@
 # S2C AutoCAD-Native Layout Capture Implementation Record
 
-Status: production implementation and offline gates complete; AutoCAD
-Mechanical 2027 live PNG/PDF acceptance is **NOT RUN** because this machine
-has no configured live File IPC session. S2C is not accepted until that gate
-passes.
+Status: production implementation, offline gates, and AutoCAD Mechanical 2027
+live PNG/PDF acceptance are **PASS** on exact live-reviewed head
+`8cd75641c3c40032fb2e24b3597f163ccb434265`. This commit is the final
+docs-only record update; the PR remains open for PO review and must not be
+merged until that review accepts the updated record.
 
 ## Identity and bounded scope
 
@@ -11,13 +12,14 @@ passes.
 - Exact implementation base: `3d0aa999904f384efa4eb42a81637e4270591859`.
 - Implementation branch: `task/s2c-autocad-native-render`.
 - Verified source-fix head: `009bc49320e104178f99af4e759d071e616535b8`.
+- Verified live-reviewed head: `8cd75641c3c40032fb2e24b3597f163ccb434265`.
 - Prior review-fix head: `67f958ed583477df340508ead925cbba0166935b`.
 - Source-fix commits: `67f958e` (claim cleanup, refusal evidence, and
   provenance fixes) and `009bc49` (PNG decode validation and post-move
   publication boundary).
-- This record-only update is kept separate from the source-fix head so the
-  tested source SHA remains unambiguous; the final branch head is recorded in
-  PR provenance after this commit.
+- The live acceptance was run against the verified live-reviewed head above.
+  This commit changes only this implementation record, so the tested source
+  SHA remains unambiguous.
 - The branch contains the two approved docs-only commits plus the bounded
   implementation, live-test, review-fix, source-fix, and this evidence-record
   change.
@@ -152,38 +154,60 @@ failed, 0 skipped**; dotnet IPC JUnit `38 tests, 0 failures, 0 errors, 0
 skipped`; offline JUnit `1040 tests, 0 failures, 0 errors, 0 skipped` (1022
 passed, 14 deselected, 18 subtests); private-data unavailable probe `2
 skipped`; AutoCAD Mechanical unavailable probe `12 skipped`; architecture,
-Ruff, DLL-output, and diff checks **PASS**. The canonical AutoCAD live marker
-was **NOT RUN**.
+Ruff, DLL-output, and diff checks **PASS**. At this source-fix verification
+point the canonical AutoCAD live marker was **NOT RUN**; the live gate was
+subsequently executed and is recorded below.
 
-### AutoCAD Mechanical live gate
+### AutoCAD Mechanical 2027 live gate
 
-- AutoCAD 2027 `acad.exe` is installed at
-  `C:\Program Files\Autodesk\AutoCAD 2027\acad.exe`.
-- At verification time there was no running AutoCAD process, no
-  `CAD_AGENT_AUTOCAD_HWND`, no `CAD_AGENT_AUTOCAD_LISP_PATH`, no
-  `CAD_AGENT_DOTNET_IPC_DIR`, no `CAD_AGENT_FILE_IPC=1`, no
-  `CAD_AGENT_S2C_LIVE=1`, and no `CAD_AGENT_LEAN_DISPOSABLE_DWG`.
-- Command:
+Live acceptance passed on exact live-reviewed head
+`8cd75641c3c40032fb2e24b3597f163ccb434265` using the official File IPC and
+AutoCAD .NET drawing gateway. No production source changed during the live
+run.
+
+- Positive official command (exit `0`):
 
   ```powershell
-  & 'C:\temp\cad-agent-s2c-py311\Scripts\python.exe' -m pytest mcp_integration_lib/tests/test_dotnet_ipc_live.py -m autocad_mechanical -ra -p no:cacheprovider
+  & 'C:\temp\cad-agent-s2c-py311\Scripts\python.exe' -m pytest mcp_integration_lib/tests/test_dotnet_ipc_live.py -m autocad_mechanical -k 'test_s2c_png_pdf_and_fail_closed_probes_are_read_only' -ra -p no:cacheprovider
   ```
 
-  exited `0`: **12 skipped, 1024 deselected** in the canonical unavailable
-  probe; the S2C class's three tests were skipped by their explicit
-  prerequisite guards. This is **NOT RUN**, not acceptance.
-- Live PNG artifact: **NOT RUN**.
-- Live PDF artifact: **NOT RUN**.
-- Duplicate, missing-layout, unsupported-profile, missing-device, and
-  missing-media refusal probes: **NOT RUN**. The latter two require an
-  operator-prepared isolated AutoCAD profile marked with
-  `CAD_AGENT_S2C_NEGATIVE_PROFILE`; the harness never changes shared
-  AutoCAD configuration.
-- Product/profile, disposable DWG hash, exact layout, PC3 output, canonical
-  media, DBMOD, current-layout, and restored-session live evidence: **NOT RUN**.
-- Approved profile constants are fixed in the reader as:
-  `AutoCAD PDF (General Documentation).pc3`, `PublishToWeb PNG.pc3`, and
-  `ISO_A4_(210.00_x_297.00_MM)`.
+  Result: **1 passed, 10 deselected** in `9.88s`. PNG, PDF, duplicate,
+  missing-layout, and unsupported-profile probes passed.
+- PNG profile: device `PublishToWeb PNG.pc3`; the approved device exposed
+  exactly the canonical raster media
+  `UserDefinedRaster (2480.00 x 3508.00Pixels)` with plot units `Pixels`.
+  The final PNG passed the artifact-boundary checks and Pillow `verify()` and
+  `load()` decoding checks.
+- PDF profile: device `AutoCAD PDF (General Documentation).pc3`; canonical
+  media `ISO_A4_(210.00_x_297.00_MM)`. The final PDF opened as a valid
+  one-page document.
+- Missing-device official command (exit `0`) used the isolated
+  `CAD_AGENT_S2C_NEGATIVE_PROFILE=missing-device` profile and returned the
+  exact `NATIVE_RENDER_DEVICE_UNAVAILABLE` error with no artifact:
+
+  ```powershell
+  & 'C:\temp\cad-agent-s2c-py311\Scripts\python.exe' -m pytest mcp_integration_lib/tests/test_dotnet_ipc_live.py -m autocad_mechanical -k 'test_s2c_missing_device_refuses_without_artifact' -ra -p no:cacheprovider
+  ```
+
+  Result: **1 passed, 10 deselected** in `5.36s`.
+- Missing-media official command (exit `0`) used the isolated
+  `CAD_AGENT_S2C_NEGATIVE_PROFILE=missing-media` profile and returned the
+  exact `NATIVE_RENDER_MEDIA_UNAVAILABLE` error with no artifact:
+
+  ```powershell
+  & 'C:\temp\cad-agent-s2c-py311\Scripts\python.exe' -m pytest mcp_integration_lib/tests/test_dotnet_ipc_live.py -m autocad_mechanical -k 'test_s2c_missing_media_refuses_without_artifact' -ra -p no:cacheprovider
+  ```
+
+  Result: **1 passed, 10 deselected** in `6.76s`.
+- The official assertions covered request-owned artifact paths and final-byte
+  SHA-256, `changed=false`, `entity_handles=[]`, empty failure payloads,
+  equal non-negative DBMOD values, unchanged CTAB, unchanged
+  BACKGROUNDPLOT, unchanged DWG hash, current-layout preservation, and
+  AutoCAD/session restoration. Missing-device and missing-media refusals
+  proved final-artifact absence.
+- The live run restored the AutoCAD plotting/session state. The follow-up
+  record-only commit does not require another live run because its parent is
+  exactly the live-reviewed head and its only changed path is this record.
 
 ### Other gates and scope
 
@@ -194,6 +218,5 @@ was **NOT RUN**.
 - Publication: **NOT IMPLEMENTED**.
 - S3B and R1C: not started by this task.
 
-The PR must remain open for PO review and live AutoCAD Mechanical 2027 PNG/PDF
-acceptance. Offline success does not promote this implementation to accepted
-S2C status.
+The AutoCAD Mechanical 2027 live gate is **PASS**. The PR remains open only
+for PO review of this final record update; S3B and R1C remain locked.
