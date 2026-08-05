@@ -251,6 +251,96 @@ public sealed class NativeRenderArtifactBoundaryTests
     }
 
     [Fact]
+    public void PublishRejectsPngWithNonZlibIdatEvenWhenChunkCrcsAreValid()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary();
+            using var reservation = boundary.Reserve(root, "render-request-001", "PNG");
+            File.WriteAllBytes(
+                reservation.TemporaryPath,
+                PngWithIdat(2480, 3508, new byte[] { 0x01, 0x02, 0x03, 0x04 }));
+
+            Assert.Throws<InvalidDataException>(() => boundary.Publish(reservation));
+            Assert.False(File.Exists(reservation.FinalPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Theory]
+    [InlineData(24, 3)]
+    [InlineData(25, 1)]
+    [InlineData(25, 5)]
+    [InlineData(26, 1)]
+    [InlineData(27, 1)]
+    [InlineData(28, 1)]
+    public void PublishRejectsPngWithUnsupportedIhdrFields(int offset, byte value)
+    {
+        var root = CreateRoot();
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary();
+            using var reservation = boundary.Reserve(root, "render-request-001", "PNG");
+            var bytes = MinimalPng(2480, 3508);
+            bytes[offset] = value;
+            RewritePngChunkCrc(bytes, 8);
+            File.WriteAllBytes(reservation.TemporaryPath, bytes);
+
+            Assert.Throws<InvalidDataException>(() => boundary.Publish(reservation));
+            Assert.False(File.Exists(reservation.FinalPath));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
+    public void PublishSucceedsWhenDestinationIsHeldExclusivelyAfterAtomicMove()
+    {
+        var root = CreateRoot();
+        FileStream? finalLock = null;
+        try
+        {
+            var boundary = new NativeRenderArtifactBoundary((source, destination) =>
+            {
+                File.Move(source, destination, overwrite: false);
+                finalLock = new FileStream(
+                    destination,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            });
+
+            NativeRenderArtifact artifact;
+            byte[] bytes;
+            string finalPath;
+            using (var reservation = boundary.Reserve(root, "render-request-001", "PNG"))
+            {
+                bytes = MinimalPng(2480, 3508);
+                File.WriteAllBytes(reservation.TemporaryPath, bytes);
+                finalPath = reservation.FinalPath;
+
+                artifact = boundary.Publish(reservation);
+
+                Assert.True(reservation.IsPublished);
+                Assert.True(File.Exists(finalPath));
+            }
+
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), artifact.Sha256);
+        }
+        finally
+        {
+            finalLock?.Dispose();
+            DeleteRoot(root);
+        }
+    }
+
+    [Fact]
     public void PublishedArtifactRemainsSuccessfulWhenClaimCleanupFails()
     {
         var root = CreateRoot();
@@ -335,16 +425,6 @@ public sealed class NativeRenderArtifactBoundaryTests
 
     private static byte[] MinimalPng(int width, int height)
     {
-        using var output = new MemoryStream();
-        output.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
-
-        var header = new byte[13];
-        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(0, 4), (uint)width);
-        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4, 4), (uint)height);
-        header[8] = 8;
-        header[9] = 0;
-        WritePngChunk(output, "IHDR", header);
-
         using (var compressed = new MemoryStream())
         {
             using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
@@ -356,9 +436,22 @@ public sealed class NativeRenderArtifactBoundaryTests
                 }
             }
 
-            WritePngChunk(output, "IDAT", compressed.ToArray());
+            return PngWithIdat(width, height, compressed.ToArray());
         }
+    }
 
+    private static byte[] PngWithIdat(int width, int height, byte[] idat)
+    {
+        using var output = new MemoryStream();
+        output.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+
+        var header = new byte[13];
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(0, 4), (uint)width);
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4, 4), (uint)height);
+        header[8] = 8;
+        header[9] = 0;
+        WritePngChunk(output, "IHDR", header);
+        WritePngChunk(output, "IDAT", idat);
         WritePngChunk(output, "IEND", Array.Empty<byte>());
         return output.ToArray();
     }
@@ -405,6 +498,40 @@ public sealed class NativeRenderArtifactBoundaryTests
         var crcBytes = new byte[4];
         BinaryPrimitives.WriteUInt32BigEndian(crcBytes, ~crc);
         output.Write(crcBytes);
+    }
+
+    private static void RewritePngChunkCrc(byte[] bytes, int chunkOffset)
+    {
+        var chunkLength = checked((int)BinaryPrimitives.ReadUInt32BigEndian(
+            bytes.AsSpan(chunkOffset, 4)));
+        var type = bytes.AsSpan(chunkOffset + 4, 4);
+        var data = bytes.AsSpan(chunkOffset + 8, chunkLength);
+        var crc = 0xFFFFFFFFu;
+        foreach (var value in type)
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1) != 0
+                    ? (crc >> 1) ^ 0xEDB88320u
+                    : crc >> 1;
+            }
+        }
+
+        foreach (var value in data)
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1) != 0
+                    ? (crc >> 1) ^ 0xEDB88320u
+                    : crc >> 1;
+            }
+        }
+
+        BinaryPrimitives.WriteUInt32BigEndian(
+            bytes.AsSpan(chunkOffset + 8 + chunkLength, 4),
+            ~crc);
     }
 
     private static byte[] MinimalPdf()

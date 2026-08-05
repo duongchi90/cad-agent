@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -171,17 +172,10 @@ public sealed class NativeRenderArtifactBoundary
         {
             _moveFinal(reservation.TemporaryPath, reservation.FinalPath);
             reservation.MarkFinalCreated();
-            var finalBytes = File.ReadAllBytes(reservation.FinalPath);
-            var finalHash = Hash(finalBytes);
-            if (!string.Equals(temporaryHash, finalHash, StringComparison.Ordinal))
-            {
-                throw new InvalidDataException("The native render final artifact hash changed after publication.");
-            }
-
             reservation.MarkPublished();
             return new NativeRenderArtifact(
                 reservation.RelativePath,
-                finalHash,
+                temporaryHash,
                 metadata.Width,
                 metadata.Height,
                 metadata.PageCount);
@@ -213,9 +207,13 @@ public sealed class NativeRenderArtifactBoundary
         var offset = PngSignature.Length;
         var sawHeader = false;
         var sawImageData = false;
+        var sawPalette = false;
         var sawEnd = false;
         long width = 0;
         long height = 0;
+        byte bitDepth = 0;
+        byte colorType = 0;
+        using var imageData = new MemoryStream();
         while (offset < bytes.Length)
         {
             if (bytes.Length - offset < 12)
@@ -275,12 +273,32 @@ public sealed class NativeRenderArtifactBoundary
                         "The native render PNG dimensions do not match the approved A4 300 DPI profile.");
                 }
 
-                if (chunkData[8] == 0 || chunkData[9] > 6)
+                bitDepth = chunkData[8];
+                colorType = chunkData[9];
+                if (!IsValidPngIhdr(
+                        bitDepth,
+                        colorType,
+                        chunkData[10],
+                        chunkData[11],
+                        chunkData[12]))
                 {
-                    throw new InvalidDataException("The native render PNG IHDR color format is invalid.");
+                    throw new InvalidDataException("The native render PNG IHDR fields are invalid.");
                 }
 
                 sawHeader = true;
+            }
+
+            if (chunkType == "PLTE")
+            {
+                if (sawImageData
+                    || chunkLength < 3
+                    || chunkLength > 768
+                    || chunkLength % 3 != 0)
+                {
+                    throw new InvalidDataException("The native render PNG palette chunk is invalid.");
+                }
+
+                sawPalette = true;
             }
 
             if (chunkType == "IDAT")
@@ -291,6 +309,7 @@ public sealed class NativeRenderArtifactBoundary
                 }
 
                 sawImageData = true;
+                imageData.Write(chunkData);
             }
 
             offset += checked((int)(12 + chunkLength));
@@ -311,7 +330,108 @@ public sealed class NativeRenderArtifactBoundary
             throw new InvalidDataException("The native render PNG is missing coherent image data.");
         }
 
+        if (colorType == 3 && !sawPalette)
+        {
+            throw new InvalidDataException("The native render PNG palette is missing.");
+        }
+
+        ValidatePngImageData(imageData.ToArray(), width, height, bitDepth, colorType);
+
         return new ArtifactMetadata(width, height, null);
+    }
+
+    private static bool IsValidPngIhdr(
+        byte bitDepth,
+        byte colorType,
+        byte compressionMethod,
+        byte filterMethod,
+        byte interlaceMethod)
+    {
+        if (compressionMethod != 0 || filterMethod != 0 || interlaceMethod != 0)
+        {
+            return false;
+        }
+
+        return colorType switch
+        {
+            0 => bitDepth is 1 or 2 or 4 or 8 or 16,
+            2 => bitDepth is 8 or 16,
+            3 => bitDepth is 1 or 2 or 4 or 8,
+            4 => bitDepth is 8 or 16,
+            6 => bitDepth is 8 or 16,
+            _ => false
+        };
+    }
+
+    private static void ValidatePngImageData(
+        byte[] compressedBytes,
+        long width,
+        long height,
+        byte bitDepth,
+        byte colorType)
+    {
+        var channelCount = colorType switch
+        {
+            0 or 3 => 1,
+            2 => 3,
+            4 => 2,
+            6 => 4,
+            _ => throw new InvalidDataException("The native render PNG color type is invalid.")
+        };
+        var bitsPerPixel = checked(channelCount * bitDepth);
+        var rowBytes = checked((width * bitsPerPixel + 7) / 8);
+        var scanlineLength = checked((int)(rowBytes + 1));
+        var decodedLength = checked(height * (rowBytes + 1));
+        if (decodedLength <= 0 || decodedLength > MaxArtifactBytes)
+        {
+            throw new InvalidDataException("The native render PNG decoded image is too large.");
+        }
+
+        try
+        {
+            using var compressed = new MemoryStream(compressedBytes, writable: false);
+            using var zlib = new ZLibStream(compressed, CompressionMode.Decompress);
+            var scanline = new byte[scanlineLength];
+            for (var row = 0L; row < height; row++)
+            {
+                ReadPngExactly(zlib, scanline);
+                if (scanline[0] > 4)
+                {
+                    throw new InvalidDataException("The native render PNG scanline filter is invalid.");
+                }
+            }
+
+            if (zlib.ReadByte() != -1)
+            {
+                throw new InvalidDataException("The native render PNG has trailing scanline data.");
+            }
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new InvalidDataException(
+                "The native render PNG IDAT stream cannot be decoded.",
+                exception);
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidDataException(
+                "The native render PNG IDAT stream cannot be decoded.",
+                exception);
+        }
+    }
+
+    private static void ReadPngExactly(Stream stream, Span<byte> buffer)
+    {
+        while (!buffer.IsEmpty)
+        {
+            var read = stream.Read(buffer);
+            if (read <= 0)
+            {
+                throw new InvalidDataException("The native render PNG scanlines are truncated.");
+            }
+
+            buffer = buffer[read..];
+        }
     }
 
     private static uint ComputePngCrc(ReadOnlySpan<byte> chunkType, ReadOnlySpan<byte> chunkData)
