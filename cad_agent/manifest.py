@@ -2,15 +2,30 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
+import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from cad_agent.source_bundle import SourceBundleError, source_bundle_sha256, validate_source_bundle
 
 
 STAGE_NAMES = ("primitive_ir", "semantic_ir", "dxf")
 MANIFEST_NAME = "run-manifest.json"
+SOURCE_BUNDLE_REFERENCE_SCHEMA_VERSION = "source-bundle-reference-1.0"
+_SOURCE_BUNDLE_REFERENCE_FIELDS = {
+    "schema_version",
+    "bundle_id",
+    "run_id",
+    "source_bundle_sha256",
+    "item_count",
+}
+_SOURCE_BUNDLE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_SOURCE_BUNDLE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _DRAFT_REFERENCE_FIELDS: dict[str, object] = {
     "release_profile": "DRAFT_REFERENCE",
     "authoritative_release_eligible": False,
@@ -20,6 +35,81 @@ _DRAFT_REFERENCE_FIELDS: dict[str, object] = {
 
 class ManifestError(ValueError):
     """Raised when an on-disk run manifest cannot safely be used."""
+
+
+def validate_source_bundle_reference(value: object) -> dict[str, object]:
+    """Return a normalized closed SourceBundle reference or fail closed."""
+    if not isinstance(value, Mapping):
+        raise ManifestError("SourceBundle reference must be a mapping.")
+    missing = sorted(_SOURCE_BUNDLE_REFERENCE_FIELDS - set(value))
+    unexpected = sorted((key for key in value if key not in _SOURCE_BUNDLE_REFERENCE_FIELDS), key=str)
+    if missing:
+        raise ManifestError(f"SourceBundle reference missing required fields: {', '.join(missing)}")
+    if unexpected:
+        names = ", ".join(str(key) for key in unexpected)
+        raise ManifestError(f"SourceBundle reference has unsupported fields: {names}")
+    if value["schema_version"] != SOURCE_BUNDLE_REFERENCE_SCHEMA_VERSION:
+        raise ManifestError("SourceBundle reference has an unsupported schema_version.")
+    for field in ("bundle_id", "run_id"):
+        identifier = value[field]
+        if not isinstance(identifier, str) or not _SOURCE_BUNDLE_IDENTIFIER_RE.fullmatch(identifier):
+            raise ManifestError(f"SourceBundle reference has an invalid {field}.")
+    digest = value["source_bundle_sha256"]
+    if not isinstance(digest, str) or not _SOURCE_BUNDLE_SHA256_RE.fullmatch(digest):
+        raise ManifestError("SourceBundle reference has an invalid source_bundle_sha256.")
+    item_count = value["item_count"]
+    if isinstance(item_count, bool) or not isinstance(item_count, int) or not 1 <= item_count <= 10_000:
+        raise ManifestError("SourceBundle reference has an invalid item_count.")
+    return {
+        "schema_version": SOURCE_BUNDLE_REFERENCE_SCHEMA_VERSION,
+        "bundle_id": value["bundle_id"],
+        "run_id": value["run_id"],
+        "source_bundle_sha256": digest,
+        "item_count": item_count,
+    }
+
+
+def _source_bundle_reference(source_bundle: object) -> dict[str, object]:
+    try:
+        normalized = validate_source_bundle(source_bundle)
+        reference = {
+            "schema_version": SOURCE_BUNDLE_REFERENCE_SCHEMA_VERSION,
+            "bundle_id": normalized["bundle_id"],
+            "run_id": normalized["run_id"],
+            "source_bundle_sha256": source_bundle_sha256(normalized),
+            "item_count": len(normalized["items"]),
+        }
+    except SourceBundleError as exc:
+        raise ManifestError(f"SourceBundle validation failed: {exc}") from exc
+    return validate_source_bundle_reference(reference)
+
+
+def bind_source_bundle(manifest: Mapping[str, object], source_bundle: object) -> dict[str, Any]:
+    """Return a copied manifest bound to one validated SourceBundle."""
+    if not isinstance(manifest, Mapping):
+        raise ManifestError("Manifest must be a mapping.")
+    reference = _source_bundle_reference(source_bundle)
+    bound = copy.deepcopy(dict(manifest))
+    if "source_bundle" in bound:
+        existing = validate_source_bundle_reference(bound["source_bundle"])
+        if existing != reference:
+            raise ManifestError("source_bundle binding conflict")
+        bound["source_bundle"] = existing
+    else:
+        bound["source_bundle"] = reference
+    return bound
+
+
+def require_source_bundle_match(manifest: Mapping[str, object], source_bundle: object) -> None:
+    """Fail when the optional manifest reference does not match the bundle."""
+    if not isinstance(manifest, Mapping):
+        raise ManifestError("Manifest must be a mapping.")
+    if "source_bundle" not in manifest:
+        raise ManifestError("Manifest has no source_bundle binding.")
+    existing = validate_source_bundle_reference(manifest["source_bundle"])
+    reference = _source_bundle_reference(source_bundle)
+    if existing != reference:
+        raise ManifestError("SourceBundle reference does not match supplied SourceBundle.")
 
 
 def classify_draft_reference(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -65,6 +155,8 @@ def read_manifest(path: Path) -> dict[str, Any]:
     for stage in STAGE_NAMES:
         if stage not in payload["stages"]:
             raise ManifestError(f"Run manifest is missing the {stage!r} stage.")
+    if "source_bundle" in payload:
+        payload["source_bundle"] = validate_source_bundle_reference(payload["source_bundle"])
     return classify_draft_reference(payload)
 
 
