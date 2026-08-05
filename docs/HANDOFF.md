@@ -11,28 +11,36 @@ Live GitHub state, exact commits, diffs, CI logs, approved specifications, plans
 
 - Repository: `duongchi90/cad-agent`.
 - Latest accepted implementation merge:
-  `589d708a69f5c710c0a4c25e52a5b17db9749764`.
-- Latest merged PR: #57 — R1A closed SourceBundle offline contract.
+  `ff6d199ef6cd401ccf5d06bace1135e4e55f1216`.
+- Latest merged PR: #59 — R1B SourceBundle manifest-reference binding.
 - Previous accepted implementation merge:
-  `a8a962281b2d7480c9444eb8e1b56c6795c108aa` — PR #54 S3A.
+  `589d708a69f5c710c0a4c25e52a5b17db9749764` — PR #57 R1A.
 - Runtime promotion: none.
+
+### R1B accepted evidence
+
+- Exact implementation base:
+  `5950e7b056fc92131a243a7e403e4f187c99086f`.
+- Final head: `ed05d84028fda3378fdf61ff49e18462a7dbcaff`.
+- Squash merge: `ff6d199ef6cd401ccf5d06bace1135e4e55f1216`.
+- Exactly one bounded commit and four Issue #58 allowlisted files.
+- Focused/regression tests: 55 passed.
+- Hosted synthetic merge:
+  `dcbbd8327b19e16032e7e55905a769d37caabdaf`.
+- Hosted offline: 1015 passed plus 18 subtests; JUnit 1033/0/0/0.
+- Dotnet IPC JUnit: 38/0/0/0.
+- Reuse Declaration: PASS.
+- Private data, AutoCAD .NET, and AutoCAD Mechanical live: `NOT RUN`.
+- Legacy image/PDF manifests remain readable without injected fields.
+- No CLI/source-discovery, source-fusion runtime, recognition, CAD, authority,
+  registry, revision, repair, verdict, or publication behavior was promoted.
 
 ### R1A accepted evidence
 
-- Exact implementation base:
-  `d547ca8b1eb39651a00109da3862b79bcce4f0f9`.
 - Final head: `9efe1b75fbf1720db44c3ca947e4c6d082282c57`.
 - Squash merge: `589d708a69f5c710c0a4c25e52a5b17db9749764`.
-- Exactly one bounded commit and four allowlisted new files.
-- Focused tests: 68 passed.
-- Hosted synthetic merge:
-  `9c5ded397a67efb1c90ad6eeaa50060d693815a1`.
-- Hosted offline: 979 passed plus 18 subtests; JUnit 997/0/0/0.
-- Dotnet IPC JUnit: 38/0/0/0.
-- Reuse Declaration: PASS after PR-body formatting correction only.
-- Private data and AutoCAD Mechanical live: `NOT RUN`.
-- No manifest/CLI, source-fusion runtime, registry, revision, repair, verdict, or
-  publication implementation was promoted.
+- R1A remains the authoritative closed SourceBundle metadata contract and
+  canonical hash boundary.
 
 ## 2. Environment-blocked PR #55 — S2B
 
@@ -54,52 +62,38 @@ Live GitHub state, exact commits, diffs, CI logs, approved specifications, plans
 S2C, actual native capture, AutoCAD live, and private data remain locked or
 `NOT RUN`.
 
-## 3. Active code task — Issue #58 R1B
+## 3. Completed task — Issue #58 R1B
 
-Execution mode: `SINGLE_LUNA`.
+Issue #58 is closed as completed by PR #59.
 
-Issue: #58 — bind SourceBundle reference to existing manifests.
+The accepted implementation adds only a closed `source_bundle-reference-1.0`
+record owned by `cad_agent.manifest`, validates the optional record in image and
+PDF readers, preserves legacy manifests, and rejects malformed or conflicting
+bindings.
 
-Branch: `task/r1b-source-bundle-manifest-binding`.
+Do not reopen or extend R1B from chat instructions. Any additional behavior
+requires a separately approved design, plan, issue, exact base, allowlist, PR,
+and CI evidence.
 
-Exact implementation base:
-`5950e7b056fc92131a243a7e403e4f187c99086f`.
+## 4. Design gate for the next offline slice
 
-Overlap with PR #55: `PASS`.
+R1C has not been issued and no implementation branch is authorized.
 
-Design:
-`docs/superpowers/specs/2026-08-05-source-bundle-manifest-binding-design.md`.
+The recommended next bounded slice is a SourceBundle byte-integrity audit that:
 
-Plan:
-`docs/superpowers/plans/2026-08-05-source-bundle-manifest-binding.md`.
+- validates one accepted SourceBundle;
+- resolves its safe relative paths under one explicit source root;
+- verifies every file exists and matches the recorded SHA-256;
+- produces deterministic non-authoritative audit evidence;
+- does not run OCR, PDF rendering, CAD parsing, source-priority fusion, CLI
+  orchestration, registry, revision, repair, verdict, or publication.
 
-Goal: add one small closed `source_bundle` reference owned by
-`cad_agent.manifest`, validate it in image/PDF readers, preserve all legacy
-manifests when unbound, and refuse conflicting or stale bindings.
+This recommendation remains a design proposal only until its specification is
+reviewed and approved. Do not implement it from this handoff paragraph.
 
-Exactly four files may change:
+## 5. Locked work
 
-1. `cad_agent/manifest.py`
-2. `cad_agent/pdf.py`
-3. `tests/test_cad_agent_source_bundle_manifest.py`
-4. `docs/superpowers/implementation-records/2026-08-05-source-bundle-manifest-binding.md`
-
-Required boundaries:
-
-- reuse R1A validation and canonical hash APIs;
-- do not copy SourceBundle items into manifests;
-- do not create another writer/store;
-- no CLI integration or automatic binding in legacy workflows;
-- no source discovery, recognition, source-priority fusion, CAD, authority,
-  registry, revision, repair, verdict, or publication behavior;
-- no dependency or lock change;
-- AutoCAD .NET/live and private data remain `NOT RUN`.
-
-The worker opens one non-draft PR and stops.
-
-## 4. Locked work
-
-Until separately reissued and reviewed, do not start:
+Until separately designed, planned, and reissued, do not start:
 
 - R1C or source-fusion runtime;
 - S2C actual AutoCAD-native capture;
@@ -114,7 +108,7 @@ Until separately reissued and reviewed, do not start:
 - duplicate OCR, solver, DXF builder, AutoCAD transport/dispatcher,
   manifest/checkpoint/revision store, repair executor, verdict path, or publisher.
 
-## 5. Authoritative ownership
+## 6. Authoritative ownership
 
 ```text
 primitive_ir_lib
@@ -131,11 +125,12 @@ primitive_ir_lib
 - AutoCAD access remains in the existing File IPC/.NET boundary;
 - `cad_agent` remains thin orchestration and the sole manifest/checkpoint owner.
 
-## 6. Next action
+## 7. Next action
 
-- Luna implements Issue #58 only on
-  `task/r1b-source-bundle-manifest-binding`.
+- No coding task is active after R1B.
 - PR #55 remains open and unchanged until approved Autodesk managed references
   make the mandatory .NET gate executable.
-- No later task starts from chat claims alone; require commit, diff, PR, and CI
+- The PO must complete and obtain approval for the R1C design before creating
+  an issue or branch.
+- No task starts from chat claims alone; require commit, diff, PR, and CI
   evidence on the exact candidate.
