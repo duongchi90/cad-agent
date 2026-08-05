@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reuse-inventory.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "base_sha",
+    "generated_at_utc",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": {"const": "reuse-inventory-1.0"},
+    "repository": {"const": "duongchi90/cad-agent"},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "generated_at_utc": {"type": "string", "format": "date-time"},
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/capability"}
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {"type": "string", "minLength": 1},
+    "stringList": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/nonEmptyString"},
+      "uniqueItems": true
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_id",
+        "capability",
+        "current_owner",
+        "current_paths",
+        "current_apis",
+        "current_consumers",
+        "classification",
+        "adapter",
+        "tests",
+        "acceptance_gate",
+        "migration",
+        "rollback",
+        "inspected_paths",
+        "gap_reason"
+      ],
+      "properties": {
+        "capability_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+        "capability": {"$ref": "#/$defs/nonEmptyString"},
+        "current_owner": {"$ref": "#/$defs/nonEmptyString"},
+        "current_paths": {"$ref": "#/$defs/stringList"},
+        "current_apis": {"$ref": "#/$defs/stringList"},
+        "current_consumers": {"$ref": "#/$defs/stringList"},
+        "classification": {
+          "enum": [
+            "REUSE_AS_IS",
+            "EXTEND_WITH_ADAPTER",
+            "EXTEND_WITH_TEST",
+            "REFACTOR_BEHIND_COMPATIBILITY_LAYER",
+            "NEW_MISSING_CAPABILITY",
+            "DEPRECATED_AFTER_MIGRATION"
+          ]
+        },
+        "adapter": {"type": ["string", "null"]},
+        "tests": {"$ref": "#/$defs/stringList"},
+        "acceptance_gate": {"$ref": "#/$defs/nonEmptyString"},
+        "migration": {"$ref": "#/$defs/nonEmptyString"},
+        "rollback": {"$ref": "#/$defs/nonEmptyString"},
+        "inspected_paths": {"$ref": "#/$defs/stringList"},
+        "gap_reason": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
