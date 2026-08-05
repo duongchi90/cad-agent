@@ -14,6 +14,11 @@ from pathlib import Path
 import ezdxf
 import pytest
 
+from mcp_integration_lib.autocad_render_evidence import (
+    REQUEST_SCHEMA_VERSION,
+    build_render_evidence_request,
+    validate_render_request,
+)
 from mcp_integration_lib.dotnet_ipc import (
     DotNetIPCClient,
     DotNetIPCResultError,
@@ -83,7 +88,7 @@ def _sha256(path: Path) -> str:
 
 
 def _s2c_request(
-    drawing_full_path: str,
+    _drawing_full_path: str,
     drawing_sha256: str,
     request_id: str,
     *,
@@ -91,33 +96,64 @@ def _s2c_request(
     layout_name: str = "Layout1",
     render_options: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
-        "request_id": request_id,
-        "schema_version": "1.0",
-        "operation": "native_render_evidence",
-        "drawing_full_path": drawing_full_path,
-        "drawing_sha256": drawing_sha256,
-        "parameters": {
-            "run_id": "s2c-live-run",
-            "latest_mutation_sha256": "b" * 64,
-            "visual_run_manifest_sha256": "c" * 64,
-            "layout": {"identity": "s2c-layout-001", "name": layout_name},
-            "artifact_kind": artifact_kind,
-            "render_options": render_options
-            or {
-                "background": "white",
-                "dpi": 300,
-                "fit_to_paper": True,
-                "paper_size": "A4",
-                "plot_style": "monochrome.ctb",
-            },
-            "requested_at": datetime.now(timezone.utc)
+    return build_render_evidence_request(
+        request_id=request_id,
+        run_id="s2c-live-run",
+        drawing_sha256=drawing_sha256,
+        latest_mutation_sha256="b" * 64,
+        visual_run_manifest_sha256="c" * 64,
+        layout={"identity": "s2c-layout-001", "name": layout_name},
+        artifact_kind=artifact_kind,
+        render_options=render_options
+        or {
+            "background": "white",
+            "dpi": 300,
+            "fit_to_paper": True,
+            "paper_size": "A4",
+            "plot_style": "monochrome.ctb",
+        },
+        requested_at=(
+            datetime.now(timezone.utc)
             .replace(microsecond=0)
             .isoformat()
-            .replace("+00:00", "Z"),
-        },
-        "approval": None,
-    }
+            .replace("+00:00", "Z")
+        ),
+    )
+
+
+class NativeRenderRequestShapeTests(unittest.TestCase):
+    def test_s2c_request_is_a_valid_closed_native_render_payload(self) -> None:
+        request = _s2c_request(
+            r"C:\\temp\\s2c-shape-regression.dwg",
+            "a" * 64,
+            "s2c-offline-shape",
+        )
+        expected_keys = {
+            "schema_version",
+            "request_id",
+            "run_id",
+            "drawing_sha256",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "layout",
+            "artifact_kind",
+            "render_options",
+            "requested_at",
+        }
+
+        self.assertEqual(expected_keys, set(request))
+        self.assertEqual(REQUEST_SCHEMA_VERSION, request["schema_version"])
+        self.assertEqual(request, validate_render_request(request))
+        for forbidden_field in (
+            "approval",
+            "operation",
+            "drawing_full_path",
+            "parameters",
+            "verdict",
+            "repair",
+            "publication",
+        ):
+            self.assertNotIn(forbidden_field, request)
 
 
 def _cleanup_disposable_fixture_directory(
