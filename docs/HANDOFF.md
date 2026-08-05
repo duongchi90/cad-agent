@@ -4,16 +4,16 @@ Status: current operational handoff for PO and coding agents.
 
 Updated: 2026-08-05
 
-This is the first repository document to read in a new PO or coding session. It is an operational index, not a replacement for GitHub evidence, architecture, status, approved specifications, or implementation plans.
+This is the first repository document to read in a new PO or coding session. It is an operational index, not a replacement for live GitHub evidence, architecture, status, approved specifications, or implementation plans.
 
 ## 1. Source-of-truth order
 
 When sources disagree, use this order:
 
-1. Live GitHub state: `main`, issue, branch, PR, final head SHA, changed files, diff, and CI attached to the exact candidate.
+1. Live GitHub state: `main`, issue, branch, PR, exact final head, changed files, diff, and CI.
 2. `docs/STATUS.md` for verified, partial, `SKIP`, and `NOT RUN` gates.
-3. `docs/ARCHITECTURE.md` for package ownership and safety boundaries.
-4. The active approved specification and implementation plan.
+3. `docs/ARCHITECTURE.md` for ownership and safety boundaries.
+4. The active approved specification and plan.
 5. This handoff for navigation and current-task intent.
 6. Old chats and historical documents only as context.
 
@@ -22,10 +22,11 @@ Never treat a chat statement, PR description, branch name, or stale handoff as p
 ## 2. Current integrated state
 
 - Repository: `duongchi90/cad-agent`
-- Latest accepted implementation base: `cac38a1cf558aee1245ae669bcc106bf3619b8e5`
-- Latest merged implementation PR: #43 — R0-T5 architecture boundary ratchet
-- Completed issue: #42
+- Latest accepted implementation base: `07a14ce3623024f2df848b2b88ff447980772492`
+- Latest merged implementation PR: #45 — R0-T6 reuse integration audit and roadmap supersession
+- Completed issue: #44
 - Previous merged R0 PRs:
+  - #43 — R0-T5 architecture boundary ratchet
   - #41 — R0-T4 legacy CLI and artifact compatibility baseline
   - #39 — R0-T3 mandatory Reuse Declaration enforcement
   - #37 — R0-T2 repository-wide reuse inventory and completeness gate
@@ -33,45 +34,7 @@ Never treat a chat statement, PR description, branch name, or stale handoff as p
 
 The live `main` may be newer because this handoff can be committed after the accepted implementation base. Every implementation branch must use the exact base recorded in its issue, not a later handoff-only commit.
 
-R0-T5 added only:
-
-- `contracts/reuse-integration/architecture-boundaries.json`
-- `scripts/check_architecture_boundaries.py`
-- `tests/test_reuse_architecture_boundaries.py`
-
-The ratchet scans tracked Python and C# files, records reviewed existing exceptions, and blocks unbaselined duplicate-engine, AutoCAD ownership, DXF/OCR ownership, and second-truth-store violations. It does not change runtime behavior.
-
-Accepted evidence for PR #43 final head `53d38754cf12df937b7a977100165ad48d4605e9`:
-
-- exactly one bounded implementation commit from base `db91f3585f20984b7892454b3a5f9a6d2c32a567`;
-- exactly three allowlisted files changed;
-- focused architecture tests reported 6 passed;
-- GitHub `tests` workflow run #290: success;
-- GitHub `reuse-declaration` workflow run #5: success after a metadata-only PR-body correction;
-- CI verified synthetic merge candidate `b5ae876978fc39710841b84da783e450c32cda5a`;
-- hosted verifier: 787 offline tests passed, 18 subtests passed, and 38 dotnet IPC tests passed;
-- offline JUnit: 805 tests, 0 failures, 0 errors, 0 skipped;
-- private real-data unavailable-state probe: 2 `SKIP`;
-- actual private-data/real-drawing acceptance: `NOT RUN`;
-- AutoCAD unavailable-state probe: 9 `SKIP`;
-- actual AutoCAD Mechanical live marker: `NOT RUN`;
-- AutoCAD .NET gate: `NOT RUN` because verification used `-SkipAutoCADDotNet`.
-
-## 3. Active task
-
-- Task: R0-T6 — rebaseline audit report and roadmap supersession
-- Issue: #44
-- Expected branch: `task/r0-t6-rebaseline-audit`
-- Required implementation base: `cac38a1cf558aee1245ae669bcc106bf3619b8e5`
-- PR: none recorded at this handoff update
-- Current task authority: Issue #44 plus Task 6 in `docs/superpowers/plans/2026-08-04-reuse-integration-rebaseline.md`
-- Execution mode: `SINGLE_LUNA`
-- Parallel partner issue: none
-- Shared base SHA: `cac38a1cf558aee1245ae669bcc106bf3619b8e5`
-- Overlap check: `PASS`
-- Merge order: not applicable
-
-Allowed files for R0-T6:
+R0-T6 added or modified only:
 
 - `docs/superpowers/reuse/2026-08-04-reuse-integration-audit.md`
 - `docs/ARCHITECTURE.md`
@@ -79,14 +42,54 @@ Allowed files for R0-T6:
 - `docs/superpowers/plans/2026-08-04-visual-supervisor-rollout.md`
 - `tests/test_reuse_rebaseline_docs.py`
 
-R0-T6 creates the canonical audit report, links architecture and status to the inventory, and marks the old Visual Supervisor rollout superseded after VS-T3 without deleting historical evidence. It must leave R0 state as `Executing`; R0-T7 owns final aggregate verification and acceptance.
+Accepted evidence for PR #45 final head `0b987bdc35d3133ce69bc5372faade7bc31aa057`:
+
+- one bounded implementation commit from exact base `cac38a1cf558aee1245ae669bcc106bf3619b8e5`;
+- exactly five allowlisted files changed;
+- focused Task 6 suite: 30 passed;
+- inventory checker: exit 0;
+- architecture checker: PASS;
+- GitHub `tests` workflow run #294: success;
+- GitHub `reuse-declaration` workflow run #7: success after a metadata-only PR-body normalization;
+- CI verified synthetic merge candidate `3053a2aa79d2bb09dfd4cafe64a4f80e2bd5e0cb`;
+- hosted verifier: 790 offline tests passed, 18 subtests passed, and 38 dotnet IPC tests passed;
+- offline JUnit: 808 tests, 0 failures, 0 errors, 0 skipped;
+- private-data unavailable-state probe: 2 `SKIP`; actual private-data acceptance: `NOT RUN`;
+- AutoCAD unavailable-state probe: 9 `SKIP`; actual AutoCAD Mechanical live acceptance: `NOT RUN`;
+- AutoCAD .NET gate: `NOT RUN` because verification used `-SkipAutoCADDotNet`;
+- no runtime capability was added or promoted.
+
+## 3. Active task
+
+- Task: R0-T7 — aggregate verification and implementation record
+- Issue: #46
+- Expected branch: `task/r0-t7-aggregate-verification`
+- Required implementation base: `07a14ce3623024f2df848b2b88ff447980772492`
+- PR: none recorded at this handoff update
+- Current task authority: Issue #46 plus Task 7 in `docs/superpowers/plans/2026-08-04-reuse-integration-rebaseline.md`
+- Execution mode: `SINGLE_LUNA`
+- Parallel partner issue: none
+- Shared base SHA: `07a14ce3623024f2df848b2b88ff447980772492`
+- Overlap check: `PASS`
+- Merge order: not applicable
+
+Allowed files for R0-T7:
+
+- `docs/superpowers/implementation-records/2026-08-04-reuse-integration-rebaseline.md`
+- `docs/STATUS.md`
+
+Task 7 intentionally uses two bounded documentation commits on one branch and one PR:
+
+1. provisional record committed before the full verifier so the tree is clean;
+2. final record-only commit after observed evidence is written.
+
+The implementation record must distinguish the fully verified candidate SHA from the later record-only SHA. It may mark R0 accepted only after the focused suite, governance CLIs, Ruff, canonical verifier, and final record-only verification all pass truthfully.
 
 ## 4. Locked work
 
-Until R0-T6 is reviewed and merged:
+Until R0-T7 is reviewed and merged:
 
-- do not start R0-T7;
-- do not start S1, S2, or S3;
+- do not start S1, S2, or S3 implementation;
 - do not start R1-R8;
 - do not execute old VS-T4 through VS-T8 unchanged;
 - do not add Codex SDK runtime, Source Fusion runtime, base-CAD extraction, component/view registry, revision orchestration, repair loop, publisher, or previous-drawing library;
@@ -104,11 +107,15 @@ Current implementation plan:
 
 - `docs/superpowers/plans/2026-08-04-reuse-integration-rebaseline.md`
 
+Canonical audit:
+
+- `docs/superpowers/reuse/2026-08-04-reuse-integration-audit.md`
+
 Historical rollout:
 
 - `docs/superpowers/plans/2026-08-04-visual-supervisor-rollout.md`
 
-The historical rollout remains evidence and background. Task 6 must mark its post-VS-T3 tasks superseded without deleting them.
+The historical rollout is explicitly superseded after VS-T3. Its accepted history remains; VS-T4 through VS-T8 must not be executed unchanged.
 
 ## 6. Current package ownership
 
@@ -148,48 +155,28 @@ GitHub evidence wins whenever this handoff or a chat is stale.
 
 ## 8. Parallel Luna Max policy
 
-At every task transition, the PO must explicitly choose and record:
+### Current R0 rule
 
-- `SINGLE_LUNA`: one coding Luna owns one bounded issue;
-- `PARALLEL_LUNA`: two coding Lunas own two independent issues.
-
-### R0 rule
-
-Until R0-T7 is reviewed and merged, only one Luna may create code, commits, implementation branches, or PRs at a time. A second Luna may perform read-only inspection or planning but may not implement another issue.
+Until R0-T7 is reviewed and merged, use `SINGLE_LUNA`. A second Luna may perform read-only inspection or prepare draft plans, but may not create another implementation branch or PR.
 
 ### First safe two-Luna point
 
-After R0 acceptance, the PO may prepare separately approved plans for the first parallel pair:
+After R0 acceptance, the PO may issue a separately planned `PARALLEL_LUNA` pair only after confirming disjoint write sets:
 
-- Luna A: `S1 Codex SDK Windows compatibility spike`;
-- Luna B: `S2 AutoCAD-native render/plot evidence spike`.
+- Luna A: S1 Codex SDK Windows compatibility spike;
+- Luna B: S2 AutoCAD-native render/plot evidence spike.
 
-R0 acceptance permits planning; it does not automatically authorize implementation. Each spike still requires its own plan, issue, locked base SHA, disjoint allowlist, tests, PR, and review.
+Do not use S2 plus S3 as the first pair because both are likely to touch AutoCAD plugin, File IPC, dispatcher, or shared AutoCAD contracts.
 
-Do not use `S2 + S3` as the first pair because both are likely to touch the AutoCAD plugin, File IPC, dispatcher, or shared AutoCAD contracts.
+Parallel implementation requires:
 
-Parallel work is allowed only when:
-
-1. Each Luna has a separate issue, branch, allowlist, commit history, and PR.
-2. Both branches start from the same locked base SHA.
-3. Allowlists are disjoint and interfaces are agreed before coding.
-4. They do not both modify central files such as `cad_agent/cli.py`, `cad_agent/manifest.py`, `mcp_integration_lib/dotnet_ipc.py`, `OperationDispatcher.cs`, or a shared schema.
-5. One PO reviews both; neither Luna reviews or merges its own PR.
-6. PRs merge sequentially; the second branch incorporates the new `main` and reruns affected verification when assumptions changed.
-7. Any overlap, interface change, or failure pauses the affected parallel branch.
-8. Parallel execution never bypasses Drawing Setup, human approval, Visual Supervisor independence, private-data gates, AutoCAD live gates, or stop points.
-
-Before every new implementation issue, record:
-
-```text
-Execution mode: SINGLE_LUNA or PARALLEL_LUNA
-Parallel partner issue: <issue number or none>
-Shared base SHA: <exact SHA>
-Overlap check: PASS or BLOCKED
-Merge order: <issue A then issue B, or not applicable>
-```
-
-If these fields cannot be answered confidently, use `SINGLE_LUNA`.
+1. separate issue, branch, allowlist, commits, tests, PR, and review for each Luna;
+2. the same locked base SHA;
+3. disjoint allowlists and agreed interfaces before coding;
+4. no shared edits to central files such as `cad_agent/cli.py`, `cad_agent/manifest.py`, `mcp_integration_lib/dotnet_ipc.py`, `OperationDispatcher.cs`, or shared schemas;
+5. one PO reviews both and merges sequentially;
+6. the second PR rebases or incorporates new `main` and reruns affected verification before merge;
+7. any overlap, interface change, or failed assumption pauses the affected branch.
 
 ## 9. New-session bootstrap
 
@@ -207,4 +194,4 @@ Then verify live `main`, issue state, branch/PR, exact head, changed files, diff
 
 Execution mode: `SINGLE_LUNA`.
 
-Codex/Luna Max may implement Issue #44 only. The implementation branch must start from `cac38a1cf558aee1245ae669bcc106bf3619b8e5`, even if `main` contains a later handoff-only commit. Open one non-draft PR with all eight Reuse Declaration values on separate same-line fields, then stop. The PO must review that PR before R0-T7 is issued.
+Codex/Luna Max may implement Issue #46 only. The branch must start from `07a14ce3623024f2df848b2b88ff447980772492`, even if `main` contains a later handoff-only commit. Open one non-draft PR with the exact verified candidate SHA, the later record-only SHA, observed evidence, and all eight Reuse Declaration values on separate same-line fields, then stop. The PO must review and merge R0-T7 before any S1/S2/S3 implementation begins.
