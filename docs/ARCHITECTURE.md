@@ -183,3 +183,31 @@ history. They are evidence, not the current status ledger.
 The approved design is
 `docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md`; the executing
 M2 record is `docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md`.
+
+## Reuse-first multisource reconstruction rebaseline
+
+The approved reuse-first design is
+[`docs/superpowers/specs/2026-08-04-reuse-first-multisource-cad-reconstruction-design.md`](superpowers/specs/2026-08-04-reuse-first-multisource-cad-reconstruction-design.md).
+The machine-readable inventory is
+[`docs/superpowers/reuse/2026-08-04-reuse-inventory.json`](superpowers/reuse/2026-08-04-reuse-inventory.json),
+the audit is
+[`docs/superpowers/reuse/2026-08-04-reuse-integration-audit.md`](superpowers/reuse/2026-08-04-reuse-integration-audit.md),
+and the governing R0 plan is
+[`docs/superpowers/plans/2026-08-04-reuse-integration-rebaseline.md`](superpowers/plans/2026-08-04-reuse-integration-rebaseline.md).
+
+The existing `primitive_ir_lib -> semantic_ir_lib -> agent_lib ->
+dxf_builder_lib -> mcp_integration_lib` packages remain the execution engine.
+Future additions are orchestration-level adapters around those authorities;
+they do not replace or duplicate recognition, solving, DXF generation, repair,
+or AutoCAD transport.
+
+VS-T3 deterministic projection remains structural/offline evidence for entity
+mapping, region identity, and diagnostics. It is not automatically final
+visual truth. When final fidelity depends on display or plot behavior,
+AutoCAD-native render/plot evidence remains behind the existing File IPC
+boundary.
+
+The names R1-R8 describe a locked dependency queue only. They do not authorize
+implementation. Each future task requires a fresh plan against the then-current
+integrated `main`, a complete Reuse Declaration, tests, review, and its own
+acceptance gates.

@@ -1,8 +1,12 @@
 # Visual Supervisor Closed-Loop Rollout Implementation Plan
 
+**Status:** Superseded after VS-T3 by the reuse-first multisource reconstruction rebaseline.
+
+VS-T0 through VS-T3 remain historical accepted slices. Do not execute VS-T4 through VS-T8 unchanged. Their useful requirements must be reissued through the reuse inventory, compatibility spikes, and R1-R8 plans, each with a Reuse Declaration.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Planned
+**Historical plan status at creation:** Planned
 
 **Approval date:** 2026-08-04
 
