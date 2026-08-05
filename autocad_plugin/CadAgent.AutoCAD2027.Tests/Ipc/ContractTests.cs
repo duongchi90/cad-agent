@@ -509,7 +509,7 @@ public sealed class ContractTests
     }
 
     [Fact]
-    public void NativeRenderEvidenceUnsupportedExampleRoundTripsAsClosedFailure()
+    public void NativeRenderEvidenceSuccessExampleRoundTripsAsClosedReadOnlyResult()
     {
         var request = ContractJson.DeserializeRequest(File.ReadAllText(
             RepositoryFile("contracts/autocad-ipc/examples/native-render-evidence-request.json")));
@@ -518,10 +518,15 @@ public sealed class ContractTests
 
         Assert.True(ContractValidator.ValidateRequest(request).IsValid);
         Assert.True(ContractValidator.ValidateResult(result).IsValid);
-        Assert.False(result.Success);
+        Assert.True(result.Success);
         Assert.Equal("native_render_evidence", request.Operation);
-        Assert.Equal("NATIVE_RENDER_NOT_IMPLEMENTED", Assert.Single(result.Errors!));
-        Assert.Empty(result.Payload!);
+        Assert.Empty(result.Errors!);
+        Assert.Equal("AUTOCAD_NATIVE", result.Payload!["renderer"].GetString());
+        Assert.Equal(
+            "native-render/render-request-001/artifact.png",
+            result.Payload["artifact"].GetProperty("relative_path").GetString());
+        Assert.Empty(result.EntityHandles!);
+        Assert.False(result.Changed);
     }
 
     private static string RepositoryFile(string relativePath)

@@ -316,6 +316,13 @@ public sealed class CommandContext
         public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
             AutoCadVisualEvidenceReader.Export(_document, request, _ipcDirectory, DateTimeOffset.UtcNow);
 
+        public NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request) =>
+            AutoCadNativeRenderReader.Capture(
+                _document,
+                request,
+                _ipcDirectory,
+                DateTimeOffset.UtcNow);
+
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
         {
             var snapshots = new List<MechanicalComponentSnapshot>();

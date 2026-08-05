@@ -252,8 +252,48 @@ public sealed class OperationDispatcher
             startedAt);
     }
 
-    private IpcResult DispatchNativeRenderEvidence(IpcRequest request, DateTimeOffset startedAt) =>
-        Failure(request, new[] { "NATIVE_RENDER_NOT_IMPLEMENTED" }, startedAt);
+    private IpcResult DispatchNativeRenderEvidence(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var nativeRequest = NativeRenderRequest.FromIpc(request);
+        var snapshot = _context.DrawingGateway.ReadNativeRenderEvidence(nativeRequest);
+        if (!string.Equals(snapshot.RequestId, request.RequestId, StringComparison.Ordinal)
+            || !string.Equals(snapshot.RunId, nativeRequest.RunId, StringComparison.Ordinal)
+            || !string.Equals(snapshot.DrawingSha256, request.DrawingSha256, StringComparison.Ordinal)
+            || !string.Equals(snapshot.LatestMutationSha256, nativeRequest.LatestMutationSha256, StringComparison.Ordinal)
+            || !string.Equals(
+                snapshot.VisualRunManifestSha256,
+                nativeRequest.VisualRunManifestSha256,
+                StringComparison.Ordinal)
+            || !string.Equals(snapshot.ArtifactKind, nativeRequest.ArtifactKind, StringComparison.Ordinal)
+            || !string.Equals(snapshot.Layout.Identity, nativeRequest.Layout.Identity, StringComparison.Ordinal)
+            || !string.Equals(snapshot.Layout.Name, nativeRequest.Layout.Name, StringComparison.Ordinal)
+            || snapshot.DbmodBefore < 0
+            || snapshot.DbmodAfter < 0
+            || snapshot.DbmodBefore != snapshot.DbmodAfter)
+        {
+            return Failure(
+                request,
+                new[] { "The native render evidence did not match the request or read-only boundary." },
+                startedAt);
+        }
+
+        return CreateResult(
+            request.RequestId!,
+            "native_render_evidence",
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: Array.Empty<string>(),
+            warnings: snapshot.Warnings,
+            errors: Array.Empty<string>(),
+            payload: NativeRenderPayload.Create(snapshot),
+            startedAt);
+    }
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
         IReadOnlyList<MechanicalComponentSnapshot> components) =>
