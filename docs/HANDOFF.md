@@ -22,28 +22,32 @@ Never treat a chat statement, PR body, branch name, or old status note as proof 
 ## 2. Current integrated state
 
 - Repository: `duongchi90/cad-agent`
-- Latest accepted implementation base at this handoff update: `20be1cff9502115ddeb9171d9f856bddb9f90f63`
-- Latest merged implementation PR: #37 — R0-T2 repository-wide reuse inventory and completeness gate
-- Completed issue: #36
-- Previous R0 implementation PR: #35 — R0-T1 closed reuse-inventory contract and validator
+- Latest accepted implementation base at this handoff update: `55736be3ec2dbc93c374868f210b6d833c4f81fa`
+- Latest merged implementation PR: #39 — R0-T3 mandatory Reuse Declaration enforcement
+- Completed issue: #38
+- Previous R0 implementation PR: #37 — R0-T2 repository-wide reuse inventory and completeness gate
+- Earlier R0 implementation PR: #35 — R0-T1 closed reuse-inventory contract and validator
 - PR #31 was closed without merge because the reviewed and merged PR #32 superseded it.
 
 The current `main` may be newer because operational documentation can be committed after the implementation base above. Every new session must resolve the live `main` SHA from GitHub rather than assuming the SHA written here is the branch tip.
 
-R0-T2 added only:
+R0-T3 added only:
 
-- `docs/superpowers/reuse/2026-08-04-reuse-inventory.json`
-- `scripts/reuse_inventory.py`
-- `tests/test_reuse_inventory_contract.py`
-- `tests/test_reuse_inventory_repository.py`
+- `.github/pull_request_template.md`
+- `.github/workflows/reuse-declaration.yml`
+- `scripts/check_reuse_declaration.py`
+- `tests/test_reuse_declaration.py`
 
-R0-T2 records exactly 20 required capabilities and makes the standalone inventory CLI fail closed when the capability set is incomplete. It did not change CAD runtime packages, dependencies, the lock file, AutoCAD behavior, repair authority, Visual Supervisor verdict authority, or publication behavior.
+R0-T3 requires implementation PRs to provide all eight non-empty Reuse Declaration fields. Docs/non-implementation changes remain auditable and exempt. It did not change CAD runtime packages, CLI behavior, artifact behavior, dependencies, the lock file, AutoCAD behavior, repair authority, Visual Supervisor verdict authority, or publication behavior.
 
-Accepted evidence for PR #37 final head `cedba0c108c4ad8e26d3e7f2e871aada8a3baff8`:
+Accepted evidence for PR #39 final head `e3248c1c529d74cbc96fb119f54311bc580a7e65`:
 
-- focused R0-T1 + R0-T2 tests: 16 passed;
-- GitHub Actions run #278: success;
-- hosted verifier: 765 offline tests passed and 38 dotnet IPC tests passed;
+- one bounded implementation commit from base `20be1cff9502115ddeb9171d9f856bddb9f90f63`;
+- exactly four allowlisted files changed;
+- focused tests: 11 passed;
+- GitHub `tests` workflow run #282: success;
+- GitHub `reuse-declaration` workflow run #2: success after a metadata-only correction to place the `Files allowed to change:` value on the same line;
+- hosted verifier: 776 offline tests passed and 38 dotnet IPC tests passed;
 - private real-data unavailable-state probe: 2 SKIP;
 - actual private-data/real-drawing acceptance: NOT RUN;
 - AutoCAD unavailable-state probe: 9 SKIP;
@@ -52,27 +56,29 @@ Accepted evidence for PR #37 final head `cedba0c108c4ad8e26d3e7f2e871aada8a3baff
 
 ## 3. Active task
 
-- Task: R0-T3 — mandatory Reuse Declaration for implementation PRs
-- Issue: #38
-- Expected branch: `task/r0-t3-reuse-declaration`
-- Required implementation base: `20be1cff9502115ddeb9171d9f856bddb9f90f63`
+- Task: R0-T4 — legacy CLI and artifact compatibility baseline
+- Issue: #40
+- Expected branch: `task/r0-t4-legacy-compatibility`
+- Required implementation base: `55736be3ec2dbc93c374868f210b6d833c4f81fa`
 - PR: none recorded at this handoff update
-- Current task authority: Issue #38 plus Task 3 in the approved R0 plan
+- Current task authority: Issue #40 plus Task 4 in the approved R0 plan
 
-Allowed files for R0-T3:
+Allowed files for R0-T4:
 
-- `.github/pull_request_template.md`
-- `.github/workflows/reuse-declaration.yml`
-- `scripts/check_reuse_declaration.py`
-- `tests/test_reuse_declaration.py`
+- `contracts/reuse-integration/legacy-cli-baseline.json`
+- `scripts/export_cli_contract.py`
+- `tests/fixtures/reuse-rebaseline/legacy-run-manifest-v1.json`
+- `tests/test_reuse_legacy_compatibility.py`
 
-R0-T3 adds governance enforcement only. Implementation changes must carry all eight non-empty Reuse Declaration fields; docs/non-implementation changes remain explicitly auditable and exempt. The task must not modify CAD runtime, contracts unrelated to this checker, dependencies, or the lock file.
+R0-T4 snapshots the complete current CLI surface and proves that a historical v1 run manifest remains readable with safe defaults. It must not modify the parser, manifest writer, CAD runtime, dependencies, lock file, or AutoCAD behavior.
+
+Every Reuse Declaration field in the R0-T4 PR body must have a non-empty value on the same line after the colon so the merged R0-T3 workflow can verify it.
 
 ## 4. Locked work
 
-Until R0-T3 is reviewed and merged:
+Until R0-T4 is reviewed and merged:
 
-- do not start R0-T4;
+- do not start R0-T5, R0-T6, or R0-T7;
 - do not start S1, S2, or S3;
 - do not start R1–R8;
 - do not resume the old VS-T4 or VS-T5 tasks unchanged;
@@ -149,6 +155,7 @@ Before accepting any task or PR, the PO must verify:
 - the diff does not duplicate an existing engine or authority path;
 - focused tests and aggregate verifier results belong to the exact final head;
 - CI status is read from the exact final head;
+- the `reuse-declaration` workflow passes for every implementation PR after R0-T3;
 - AutoCAD, private-data, real-drawing, or external-model gates are recorded truthfully as `PASS`, `FAIL`, `SKIP`, or `NOT RUN`;
 - `SKIP` and `NOT RUN` are never described as PASS;
 - no next task starts before the current issue is reviewed and merged.
@@ -163,11 +170,62 @@ Summary:
 
 - The user is project owner and engineering authority.
 - ChatGPT is the PO/reviewer/governance agent.
-- Codex is the implementation agent.
+- Codex/Luna Max is the implementation agent.
 - Visual Supervisor is the independent visual-verdict subsystem, not the coding agent.
 - Existing CAD engines and AutoCAD boundaries remain the execution authorities for their domains.
 
-## 10. New-session bootstrap
+## 10. Parallel Luna Max policy
+
+At every task transition, the PO must explicitly decide and record one of these execution modes:
+
+- `SINGLE_LUNA`: one coding Luna Max owns the bounded issue;
+- `PARALLEL_LUNA`: two coding Luna Max agents own two independent issues.
+
+The default during R0 is `SINGLE_LUNA`.
+
+### R0 rule
+
+Until R0-T7 is reviewed and merged, only one Luna Max may create code, commits, branches, or PRs at a time. R0-T3 through R0-T7 form a dependency chain of governance baselines and final SHA-bound verification. A second Luna may perform read-only repository inspection or planning, but must not create an implementation branch or PR.
+
+### First safe two-Luna point
+
+After R0 acceptance, the PO may authorize fresh, separately approved plans for the first parallel pair:
+
+- Luna Max A: `S1 Codex SDK Windows compatibility spike`;
+- Luna Max B: `S2 AutoCAD-native render/plot evidence spike`.
+
+R0 acceptance permits planning these spikes; it does not automatically authorize implementation. Each spike still requires its own approved issue and implementation plan.
+
+Do not use `S2 + S3` as the first parallel pair because both are likely to touch AutoCAD plugin, File IPC, dispatcher, or shared AutoCAD contracts.
+
+### Mandatory separation for two Luna agents
+
+Parallel work is allowed only when all conditions below are true:
+
+1. Each Luna has a separate issue, branch, file allowlist, commit history, and PR.
+2. Both branches start from the same locked and recorded base SHA.
+3. Their allowlists are disjoint and their interfaces are agreed before coding.
+4. They do not both modify shared central files such as `cad_agent/cli.py`, `cad_agent/manifest.py`, `mcp_integration_lib/dotnet_ipc.py`, `OperationDispatcher.cs`, or a shared schema.
+5. Neither Luna reviews or merges its own PR; the single PO reviews both.
+6. The PO merges the PRs sequentially. Before the second merge, its branch must incorporate the new `main` and rerun affected focused tests, Reuse Declaration, and CI if the first merge changed its base assumptions.
+7. A failure, overlap, or interface change in either branch pauses the other branch when its assumptions are affected.
+8. Parallel execution never bypasses Drawing Setup, human approval, Visual Supervisor independence, private-data gates, AutoCAD live gates, or task stop points.
+
+### PO reminder
+
+Before issuing every new implementation issue, the PO must answer in the issue or handoff:
+
+```text
+Execution mode: SINGLE_LUNA or PARALLEL_LUNA
+Parallel partner issue: <issue number or none>
+Shared base SHA: <exact SHA>
+Overlap check: PASS or BLOCKED
+Merge order: <issue A then issue B, or not applicable>
+```
+
+If these fields cannot be answered confidently, use `SINGLE_LUNA`.
+
+## 11. New-session bootstrap
 
 A new PO chat must begin by reading:
 
@@ -177,8 +235,10 @@ A new PO chat must begin by reading:
 4. the design and active plan named above
 5. the active issue and any current PR
 
-Then verify `main`, issue state, branch/PR, final head, changed files, diff, and CI before making any status claim.
+Then verify `main`, issue state, branch/PR, final head, changed files, diff, CI, and the execution mode before making any status claim.
 
-## 11. Next action
+## 12. Next action
 
-Codex may implement Issue #38 only. The implementation branch must start from `20be1cff9502115ddeb9171d9f856bddb9f90f63`, even if `main` has a later handoff-only documentation commit. Codex must open one non-draft PR and stop. The PO must review that PR before R0-T4 is issued.
+Execution mode: `SINGLE_LUNA`.
+
+Codex/Luna Max may implement Issue #40 only. The implementation branch must start from `55736be3ec2dbc93c374868f210b6d833c4f81fa`, even if `main` has a later handoff-only documentation commit. Codex must open one non-draft PR with all eight Reuse Declaration values on the same line as their fields and then stop. The PO must review that PR before R0-T5 is issued.
