@@ -16,6 +16,34 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## Reuse Integration Rebaseline
+
+- State: **Executing**. R0-T6 records the audit and supersedes the historical
+  roadmap; R0 is not accepted or completed until Task 7 owns the aggregate
+  verification.
+- Exact implementation base for this task:
+  `cac38a1cf558aee1245ae669bcc106bf3619b8e5`.
+- Design merge:
+  `4cc2c0f198484581f5781466e769441d4e7da669`.
+- Machine-readable inventory:
+  `docs/superpowers/reuse/2026-08-04-reuse-inventory.json`.
+- Canonical audit:
+  `docs/superpowers/reuse/2026-08-04-reuse-integration-audit.md`.
+- Evidence available through R0-T5: the closed inventory contains 20
+  capabilities; the legacy compatibility baseline covers 37 commands and
+  historical v1 manifest defaults; the architecture ratchet contains 24
+  explicitly accepted existing violations; R0-T5 focused tests passed `6` and
+  its canonical verifier passed with offline `787` tests and dotnet IPC `38`
+  tests on the reviewed candidate.
+- Runtime changes: none in the design merge or this documentation task. No
+  runtime capability is promoted.
+- VS-T4/VS-T5 old rollout: **locked**. M2 Drawing Initialization remains
+  authoritative.
+- Private-data gate: **NOT RUN**.
+- AutoCAD Mechanical live gate: **NOT RUN**.
+- Codex SDK spike: **NOT RUN**.
+- Unavailable-state `SKIP` results, when collected, are not acceptance evidence.
+
 ## Authoritative verification
 
 After bootstrap, run `.\scripts\verify.ps1`. It runs the offline gate and
