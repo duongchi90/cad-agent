@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -42,6 +43,9 @@ public static class ContractValidator
 
     private static readonly Regex VisualEvidenceCapturedAtPattern =
         new("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex NativeRenderTimestampPattern =
+        new("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static ContractValidationResult ValidateRequest(IpcRequest? request)
     {
@@ -116,6 +120,10 @@ public static class ContractValidator
         {
             ValidateVisualEvidenceParameters(request, errors);
         }
+        else if (string.Equals(request.Operation, "native_render_evidence", StringComparison.Ordinal))
+        {
+            ValidateNativeRenderEvidenceRequest(request, errors);
+        }
 
         return new ContractValidationResult(errors);
     }
@@ -164,6 +172,21 @@ public static class ContractValidator
             if (result.Success)
             {
                 ValidateVisualEvidencePayload(result.Payload, errors);
+            }
+        }
+        if (string.Equals(result.Operation, "native_render_evidence", StringComparison.Ordinal))
+        {
+            if (result.Changed || (result.EntityHandles?.Count ?? 0) != 0)
+            {
+                errors.Add("native_render_evidence results must be read-only and contain no entity handles");
+            }
+            if (result.Success)
+            {
+                ValidateNativeRenderEvidencePayload(result.Payload, null, errors);
+            }
+            else if (result.Payload is not null && result.Payload.Count != 0)
+            {
+                errors.Add("native_render_evidence failure results must contain an empty payload");
             }
         }
         if (result.Payload is null)
@@ -352,6 +375,145 @@ public static class ContractValidator
         {
             errors.Add("close_disposable parameters contain unsupported fields");
         }
+    }
+
+    private static void ValidateNativeRenderEvidenceRequest(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        if (request.DrawingSha256 is null || !LowercaseSha256Pattern.IsMatch(request.DrawingSha256))
+        {
+            errors.Add("native_render_evidence drawing_sha256 must be a lowercase SHA-256");
+        }
+        if (request.Approval.HasValue && request.Approval.Value.ValueKind != JsonValueKind.Null)
+        {
+            errors.Add("native_render_evidence approval is not allowed");
+        }
+
+        var parameters = request.Parameters!;
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "run_id",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "layout",
+            "artifact_kind",
+            "render_options",
+            "requested_at"
+        };
+        foreach (var missing in required.Except(parameters.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"native_render_evidence parameters are missing '{missing}'");
+        }
+        foreach (var unsupported in parameters.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"native_render_evidence parameters contain unsupported field '{unsupported}'");
+        }
+
+        if (!TryGetString(parameters, "run_id", out var runId)
+            || !IsNativeRenderString(runId, identifier: true))
+        {
+            errors.Add("native_render_evidence parameters.run_id is invalid");
+        }
+        foreach (var name in new[] { "latest_mutation_sha256", "visual_run_manifest_sha256" })
+        {
+            if (!TryGetString(parameters, name, out var hash) || !LowercaseSha256Pattern.IsMatch(hash))
+            {
+                errors.Add($"native_render_evidence parameters.{name} must be a lowercase SHA-256");
+            }
+        }
+        if (TryGetProperty(parameters, "layout", out var layout))
+        {
+            ValidateNativeRenderLayout(layout, "native_render_evidence parameters.layout", errors);
+        }
+        if (!TryGetString(parameters, "artifact_kind", out var artifactKind)
+            || artifactKind is not ("PNG" or "PDF"))
+        {
+            errors.Add("native_render_evidence parameters.artifact_kind must be PNG or PDF");
+        }
+        if (TryGetProperty(parameters, "render_options", out var renderOptions))
+        {
+            ValidateNativeRenderOptions(
+                renderOptions,
+                "native_render_evidence parameters.render_options",
+                errors);
+        }
+        if (!TryGetString(parameters, "requested_at", out var requestedAt)
+            || !IsNativeRenderTimestamp(requestedAt))
+        {
+            errors.Add("native_render_evidence parameters.requested_at must be UTC");
+        }
+    }
+
+    private static void ValidateNativeRenderLayout(
+        JsonElement layout,
+        string displayName,
+        ICollection<string> errors)
+    {
+        var required = new HashSet<string>(StringComparer.Ordinal) { "identity", "name" };
+        ValidateClosedObject(layout, required, displayName, errors);
+        if (!TryGetString(layout, "identity", out var identity)
+            || !IsNativeRenderString(identity, identifier: true))
+        {
+            errors.Add($"{displayName}.identity is invalid");
+        }
+        if (!TryGetString(layout, "name", out var name)
+            || !IsNativeRenderString(name))
+        {
+            errors.Add($"{displayName}.name is invalid");
+        }
+    }
+
+    private static void ValidateNativeRenderOptions(
+        JsonElement options,
+        string displayName,
+        ICollection<string> errors)
+    {
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "background", "dpi", "fit_to_paper", "paper_size", "plot_style"
+        };
+        ValidateClosedObject(options, required, displayName, errors);
+        if (!TryGetString(options, "background", out var background)
+            || background is not ("black" or "white"))
+        {
+            errors.Add($"{displayName}.background is unsupported");
+        }
+        if (!TryGetInt64(options, "dpi", out var dpi) || dpi is < 1 or > 2400)
+        {
+            errors.Add($"{displayName}.dpi is invalid");
+        }
+        if (!TryGetBoolean(options, "fit_to_paper", out _))
+        {
+            errors.Add($"{displayName}.fit_to_paper must be a boolean");
+        }
+        foreach (var name in new[] { "paper_size", "plot_style" })
+        {
+            if (!TryGetString(options, name, out var value) || !IsNativeRenderString(value))
+            {
+                errors.Add($"{displayName}.{name} is invalid");
+            }
+        }
+    }
+
+    private static bool IsNativeRenderString(string value, bool identifier = false) =>
+        value.Length is > 0 and <= 512
+        && value.All(character => character >= ' ' && character != '\u007f')
+        && (!identifier || VisualEvidenceIdentifierPattern.IsMatch(value));
+
+    private static bool IsNativeRenderTimestamp(string value)
+    {
+        if (!NativeRenderTimestampPattern.IsMatch(value))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.TryParseExact(
+            value,
+            new[] { "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFF'Z'" },
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out _);
     }
 
     private static void ValidateVisualEvidenceParameters(
@@ -647,6 +809,280 @@ public static class ContractValidator
         {
             errors.Add("measurement reference id must be a stable identifier");
         }
+    }
+
+    private static void ValidateNativeRenderEvidencePayload(
+        IReadOnlyDictionary<string, JsonElement>? payload,
+        IpcRequest? request,
+        ICollection<string> errors)
+    {
+        if (payload is null)
+        {
+            errors.Add("native_render_evidence payload must be an object");
+            return;
+        }
+
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schema_version",
+            "request_id",
+            "run_id",
+            "drawing_sha256",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "layout",
+            "artifact_kind",
+            "render_options",
+            "renderer",
+            "artifact",
+            "capture_timestamp",
+            "changed",
+            "dbmod_before",
+            "dbmod_after",
+            "warnings"
+        };
+        foreach (var missing in required.Except(payload.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"native_render_evidence payload is missing '{missing}'");
+        }
+        foreach (var unsupported in payload.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"native_render_evidence payload contains unsupported field '{unsupported}'");
+        }
+
+        if (!TryGetString(payload, "schema_version", out var schemaVersion)
+            || !string.Equals(schemaVersion, "autocad-native-render-evidence-1.0", StringComparison.Ordinal))
+        {
+            errors.Add("native_render_evidence payload schema_version is unsupported");
+        }
+        foreach (var name in new[] { "request_id", "run_id" })
+        {
+            if (!TryGetString(payload, name, out var identifier)
+                || !IsNativeRenderString(identifier, identifier: true))
+            {
+                errors.Add($"native_render_evidence payload {name} is invalid");
+            }
+        }
+        foreach (var name in new[]
+        {
+            "drawing_sha256", "latest_mutation_sha256", "visual_run_manifest_sha256"
+        })
+        {
+            if (!TryGetString(payload, name, out var hash) || !LowercaseSha256Pattern.IsMatch(hash))
+            {
+                errors.Add($"native_render_evidence payload {name} must be a lowercase SHA-256");
+            }
+        }
+        if (TryGetProperty(payload, "layout", out var layout))
+        {
+            ValidateNativeRenderLayout(layout, "native_render_evidence payload.layout", errors);
+        }
+        if (!TryGetString(payload, "artifact_kind", out var artifactKind)
+            || artifactKind is not ("PNG" or "PDF"))
+        {
+            errors.Add("native_render_evidence payload.artifact_kind must be PNG or PDF");
+        }
+        if (TryGetProperty(payload, "render_options", out var renderOptions))
+        {
+            ValidateNativeRenderOptions(
+                renderOptions,
+                "native_render_evidence payload.render_options",
+                errors);
+        }
+        if (!TryGetString(payload, "renderer", out var renderer)
+            || !string.Equals(renderer, "AUTOCAD_NATIVE", StringComparison.Ordinal))
+        {
+            errors.Add("native_render_evidence payload.renderer must be AUTOCAD_NATIVE");
+        }
+        if (TryGetProperty(payload, "artifact", out var artifact)
+            && (artifactKind is "PNG" or "PDF"))
+        {
+            ValidateNativeRenderArtifact(artifact, artifactKind, errors);
+        }
+        if (!TryGetString(payload, "capture_timestamp", out var captureTimestamp)
+            || !IsNativeRenderTimestamp(captureTimestamp))
+        {
+            errors.Add("native_render_evidence payload.capture_timestamp must be UTC");
+        }
+        if (!TryGetBoolean(payload, "changed", out var changed) || changed)
+        {
+            errors.Add("native_render_evidence payload.changed must be false");
+        }
+        if (!TryGetInt64(payload, "dbmod_before", out var dbmodBefore)
+            || !TryGetInt64(payload, "dbmod_after", out var dbmodAfter)
+            || dbmodBefore < 0
+            || dbmodAfter < 0)
+        {
+            errors.Add("native_render_evidence payload DBMOD values must be non-negative integers");
+        }
+        else if (dbmodBefore != dbmodAfter)
+        {
+            errors.Add("native_render_evidence payload DBMOD values must be equal");
+        }
+        if (!TryGetArray(payload, "warnings", out var warnings)
+            || warnings.EnumerateArray().Any(value =>
+                value.ValueKind != JsonValueKind.String
+                || !IsNativeRenderString(value.GetString() ?? string.Empty)))
+        {
+            errors.Add("native_render_evidence payload.warnings must be an array of strings");
+        }
+
+        if (request is not null)
+        {
+            ValidateNativeRenderPayloadMatchesRequest(payload, request, errors);
+        }
+    }
+
+    private static void ValidateNativeRenderPayloadMatchesRequest(
+        IReadOnlyDictionary<string, JsonElement> payload,
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        var parameters = request.Parameters!;
+        MatchNativeRenderString(payload, "request_id", request.RequestId, errors);
+        MatchNativeRenderString(payload, "run_id", parameters, "run_id", errors);
+        MatchNativeRenderString(payload, "drawing_sha256", request.DrawingSha256, errors);
+        MatchNativeRenderString(payload, "latest_mutation_sha256", parameters, "latest_mutation_sha256", errors);
+        MatchNativeRenderString(payload, "visual_run_manifest_sha256", parameters, "visual_run_manifest_sha256", errors);
+        MatchNativeRenderString(payload, "artifact_kind", parameters, "artifact_kind", errors);
+
+        if (TryGetProperty(payload, "layout", out var payloadLayout)
+            && TryGetProperty(parameters, "layout", out var requestLayout))
+        {
+            MatchNativeRenderString(payloadLayout, "identity", requestLayout, "identity", errors, "layout");
+            MatchNativeRenderString(payloadLayout, "name", requestLayout, "name", errors, "layout");
+        }
+        if (TryGetProperty(payload, "render_options", out var payloadOptions)
+            && TryGetProperty(parameters, "render_options", out var requestOptions))
+        {
+            foreach (var name in new[] { "background", "dpi", "fit_to_paper", "paper_size", "plot_style" })
+            {
+                MatchNativeRenderJsonValue(payloadOptions, name, requestOptions, name, errors, "render_options");
+            }
+        }
+    }
+
+    private static void MatchNativeRenderString(
+        IReadOnlyDictionary<string, JsonElement> payload,
+        string payloadName,
+        string? expected,
+        ICollection<string> errors)
+    {
+        if (expected is not null
+            && TryGetString(payload, payloadName, out var actual)
+            && !string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            errors.Add($"native_render_evidence payload.{payloadName} does not match request");
+        }
+    }
+
+    private static void MatchNativeRenderString(
+        IReadOnlyDictionary<string, JsonElement> payload,
+        string payloadName,
+        IReadOnlyDictionary<string, JsonElement> expectedValues,
+        string expectedName,
+        ICollection<string> errors,
+        string displayName = "request")
+    {
+        if (TryGetString(expectedValues, expectedName, out var expected))
+        {
+            MatchNativeRenderString(payload, payloadName, expected, errors);
+        }
+        else
+        {
+            errors.Add($"native_render_evidence {displayName}.{expectedName} is missing");
+        }
+    }
+
+    private static void MatchNativeRenderString(
+        JsonElement payload,
+        string payloadName,
+        JsonElement expectedValues,
+        string expectedName,
+        ICollection<string> errors,
+        string displayName)
+    {
+        if (TryGetString(expectedValues, expectedName, out var expected))
+        {
+            if (!TryGetString(payload, payloadName, out var actual)
+                || !string.Equals(actual, expected, StringComparison.Ordinal))
+            {
+                errors.Add($"native_render_evidence payload.{displayName}.{payloadName} does not match request");
+            }
+        }
+    }
+
+    private static void MatchNativeRenderJsonValue(
+        JsonElement payload,
+        string payloadName,
+        JsonElement expectedValues,
+        string expectedName,
+        ICollection<string> errors,
+        string displayName)
+    {
+        if (TryGetProperty(payload, payloadName, out var actual)
+            && TryGetProperty(expectedValues, expectedName, out var expected)
+            && actual.GetRawText() != expected.GetRawText())
+        {
+            errors.Add($"native_render_evidence payload.{displayName}.{payloadName} does not match request");
+        }
+    }
+
+    private static void ValidateNativeRenderArtifact(
+        JsonElement artifact,
+        string artifactKind,
+        ICollection<string> errors)
+    {
+        var required = artifactKind == "PNG"
+            ? new HashSet<string>(StringComparer.Ordinal) { "relative_path", "sha256", "width", "height" }
+            : new HashSet<string>(StringComparer.Ordinal) { "relative_path", "sha256", "page_count" };
+        ValidateClosedObject(artifact, required, "native_render_evidence artifact", errors);
+        if (!TryGetString(artifact, "relative_path", out var relativePath)
+            || !IsSafeNativeRenderArtifactPath(relativePath, artifactKind))
+        {
+            errors.Add("native_render_evidence artifact path is unsafe");
+        }
+        if (!TryGetString(artifact, "sha256", out var hash) || !LowercaseSha256Pattern.IsMatch(hash))
+        {
+            errors.Add("native_render_evidence artifact hash is invalid");
+        }
+        if (artifactKind == "PNG")
+        {
+            if (!TryGetInt64(artifact, "width", out var width) || width is < 1 or > 100000)
+            {
+                errors.Add("native_render_evidence PNG width is invalid");
+            }
+            if (!TryGetInt64(artifact, "height", out var height) || height is < 1 or > 100000)
+            {
+                errors.Add("native_render_evidence PNG height is invalid");
+            }
+            if (TryGetInt64(artifact, "width", out width)
+                && TryGetInt64(artifact, "height", out height)
+                && width * height > 100000000)
+            {
+                errors.Add("native_render_evidence PNG dimensions exceed the maximum pixel count");
+            }
+        }
+        else if (!TryGetInt64(artifact, "page_count", out var pageCount)
+            || pageCount is < 1 or > 100000)
+        {
+            errors.Add("native_render_evidence PDF page_count is invalid");
+        }
+    }
+
+    private static bool IsSafeNativeRenderArtifactPath(string path, string artifactKind)
+    {
+        if (path.Length is 0 or > 512
+            || path[0] is '/' or '\\'
+            || (path.Length >= 2 && char.IsLetter(path[0]) && path[1] == ':')
+            || path.Contains('\\')
+            || path.Contains("//", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var parts = path.Split('/');
+        return parts.All(part => part is not ("" or "." or ".."))
+            && path.EndsWith(artifactKind == "PNG" ? ".png" : ".pdf", StringComparison.Ordinal);
     }
 
     private static void ValidateVisualEvidencePayload(

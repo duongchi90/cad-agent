@@ -423,6 +423,107 @@ public sealed class ContractTests
         Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
     }
 
+    [Fact]
+    public void NativeRenderEvidenceRequestAcceptsOnlyTheClosedS2AParameterMapping()
+    {
+        var request = NativeRenderRequest();
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+    }
+
+    [Theory]
+    [InlineData("unexpected", "value")]
+    [InlineData("approval", "APPROVED")]
+    [InlineData("verdict", "PASS")]
+    public void NativeRenderEvidenceRequestRejectsForbiddenOrUnknownFields(string name, string value)
+    {
+        var parameters = NativeRenderRequest().Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters[name] = JsonSerializer.SerializeToElement(value);
+
+        var validation = ContractValidator.ValidateRequest(
+            NativeRenderRequest() with { Parameters = parameters });
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains(name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("drawing_sha256", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    [InlineData("artifact_kind", "JPG")]
+    [InlineData("requested_at", "2026-08-05T08:00:00+01:00")]
+    public void NativeRenderEvidenceRequestRejectsUnsafeOrMalformedS2AValues(string field, string value)
+    {
+        var request = NativeRenderRequest();
+        if (field == "drawing_sha256")
+        {
+            request = request with { DrawingSha256 = value };
+        }
+        else
+        {
+            var parameters = request.Parameters!
+                .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+            parameters[field] = JsonSerializer.SerializeToElement(value);
+            request = request with { Parameters = parameters };
+        }
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains(field, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NativeRenderEvidenceSuccessResultRequiresReadOnlyClosedPayload()
+    {
+        var result = NativeRenderResult(success: true);
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+    }
+
+    [Fact]
+    public void NativeRenderEvidenceResultRejectsMutationClaims()
+    {
+        var result = NativeRenderResult(success: true) with { Changed = true };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("read-only", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NativeRenderEvidenceResultRejectsNegativeDbmod()
+    {
+        var result = NativeRenderResult(success: true);
+        result.Payload!["dbmod_before"] = JsonSerializer.SerializeToElement(-1);
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("DBMOD", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NativeRenderEvidenceUnsupportedExampleRoundTripsAsClosedFailure()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/native-render-evidence-request.json")));
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/native-render-evidence-result.json")));
+
+        Assert.True(ContractValidator.ValidateRequest(request).IsValid);
+        Assert.True(ContractValidator.ValidateResult(result).IsValid);
+        Assert.False(result.Success);
+        Assert.Equal("native_render_evidence", request.Operation);
+        Assert.Equal("NATIVE_RENDER_NOT_IMPLEMENTED", Assert.Single(result.Errors!));
+        Assert.Empty(result.Payload!);
+    }
+
     private static string RepositoryFile(string relativePath)
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -449,4 +550,84 @@ public sealed class ContractTests
         Parameters = new Dictionary<string, JsonElement>(),
         Approval = null
     };
+
+    private static IpcRequest NativeRenderRequest() => new()
+    {
+        RequestId = "render-request-001",
+        SchemaVersion = ContractConstants.SchemaVersion,
+        Operation = "native_render_evidence",
+        DrawingFullPath = @"C:\drawings\sample.dwg",
+        DrawingSha256 = new string('a', 64),
+        Parameters = new Dictionary<string, JsonElement>
+        {
+            ["run_id"] = JsonSerializer.SerializeToElement("run-001"),
+            ["latest_mutation_sha256"] = JsonSerializer.SerializeToElement(new string('b', 64)),
+            ["visual_run_manifest_sha256"] = JsonSerializer.SerializeToElement(new string('c', 64)),
+            ["layout"] = JsonSerializer.SerializeToElement(new { identity = "layout-001", name = "Layout1" }),
+            ["artifact_kind"] = JsonSerializer.SerializeToElement("PNG"),
+            ["render_options"] = JsonSerializer.SerializeToElement(new
+            {
+                background = "white",
+                dpi = 300,
+                fit_to_paper = true,
+                paper_size = "A4",
+                plot_style = "monochrome.ctb"
+            }),
+            ["requested_at"] = JsonSerializer.SerializeToElement("2026-08-05T08:00:00Z")
+        },
+        Approval = null
+    };
+
+    private static IpcResult NativeRenderResult(bool success)
+    {
+        var request = NativeRenderRequest();
+        return new IpcResult
+        {
+            RequestId = request.RequestId,
+            Success = success,
+            Operation = request.Operation,
+            DrawingFullPath = request.DrawingFullPath,
+            Changed = false,
+            EntityHandles = new List<string>(),
+            Warnings = new List<string>(),
+            Errors = success ? new List<string>() : new List<string> { "NATIVE_RENDER_NOT_IMPLEMENTED" },
+            StartedAt = DateTimeOffset.Parse("2026-08-05T08:00:00Z"),
+            CompletedAt = DateTimeOffset.Parse("2026-08-05T08:00:00Z"),
+            Payload = success ? NativeRenderPayload() : new Dictionary<string, JsonElement>()
+        };
+    }
+
+    private static Dictionary<string, JsonElement> NativeRenderPayload() =>
+        new(StringComparer.Ordinal)
+        {
+            ["schema_version"] = JsonSerializer.SerializeToElement("autocad-native-render-evidence-1.0"),
+            ["request_id"] = JsonSerializer.SerializeToElement("render-request-001"),
+            ["run_id"] = JsonSerializer.SerializeToElement("run-001"),
+            ["drawing_sha256"] = JsonSerializer.SerializeToElement(new string('a', 64)),
+            ["latest_mutation_sha256"] = JsonSerializer.SerializeToElement(new string('b', 64)),
+            ["visual_run_manifest_sha256"] = JsonSerializer.SerializeToElement(new string('c', 64)),
+            ["layout"] = JsonSerializer.SerializeToElement(new { identity = "layout-001", name = "Layout1" }),
+            ["artifact_kind"] = JsonSerializer.SerializeToElement("PNG"),
+            ["render_options"] = JsonSerializer.SerializeToElement(new
+            {
+                background = "white",
+                dpi = 300,
+                fit_to_paper = true,
+                paper_size = "A4",
+                plot_style = "monochrome.ctb"
+            }),
+            ["renderer"] = JsonSerializer.SerializeToElement("AUTOCAD_NATIVE"),
+            ["artifact"] = JsonSerializer.SerializeToElement(new
+            {
+                relative_path = "artifact.png",
+                sha256 = new string('d', 64),
+                width = 1600,
+                height = 1200
+            }),
+            ["capture_timestamp"] = JsonSerializer.SerializeToElement("2026-08-05T08:00:00Z"),
+            ["changed"] = JsonSerializer.SerializeToElement(false),
+            ["dbmod_before"] = JsonSerializer.SerializeToElement(0),
+            ["dbmod_after"] = JsonSerializer.SerializeToElement(0),
+            ["warnings"] = JsonSerializer.SerializeToElement(Array.Empty<string>())
+        };
 }

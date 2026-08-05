@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/native-render-evidence.schema.json",
+  "title": "CadAgent AutoCAD-native render evidence request parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "latest_mutation_sha256",
+    "visual_run_manifest_sha256",
+    "layout",
+    "artifact_kind",
+    "render_options",
+    "requested_at"
+  ],
+  "properties": {
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "latest_mutation_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+    "visual_run_manifest_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "name"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/identifier" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "artifact_kind": { "enum": ["PNG", "PDF"] },
+    "render_options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["background", "dpi", "fit_to_paper", "paper_size", "plot_style"],
+      "properties": {
+        "background": { "enum": ["black", "white"] },
+        "dpi": { "type": "integer", "minimum": 1, "maximum": 2400 },
+        "fit_to_paper": { "type": "boolean" },
+        "paper_size": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "plot_style": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "requested_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

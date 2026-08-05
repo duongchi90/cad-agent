@@ -1,0 +1,13 @@
+{
+  "request_id": "render-request-001",
+  "success": false,
+  "operation": "native_render_evidence",
+  "drawing_full_path": "C:\\drawings\\sample.dwg",
+  "changed": false,
+  "entity_handles": [],
+  "warnings": [],
+  "errors": ["NATIVE_RENDER_NOT_IMPLEMENTED"],
+  "started_at": "2026-08-05T08:00:00Z",
+  "completed_at": "2026-08-05T08:00:00Z",
+  "payload": {}
+}

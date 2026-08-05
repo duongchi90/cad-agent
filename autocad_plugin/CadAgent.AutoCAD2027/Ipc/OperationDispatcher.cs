@@ -45,6 +45,7 @@ public sealed class OperationDispatcher
                 "mechanical_bom" => DispatchMechanicalBom(request, startedAt),
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
+                "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
             };
         }
@@ -250,6 +251,9 @@ public sealed class OperationDispatcher
             payload: VisualEvidencePayload.Create(snapshot),
             startedAt);
     }
+
+    private IpcResult DispatchNativeRenderEvidence(IpcRequest request, DateTimeOffset startedAt) =>
+        Failure(request, new[] { "NATIVE_RENDER_NOT_IMPLEMENTED" }, startedAt);
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
         IReadOnlyList<MechanicalComponentSnapshot> components) =>

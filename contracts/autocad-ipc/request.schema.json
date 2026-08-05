@@ -30,7 +30,8 @@
         "close_disposable",
         "mechanical_bom",
         "drawing_setup_audit",
-        "visual_evidence_export"
+        "visual_evidence_export",
+        "native_render_evidence"
       ]
     },
     "drawing_full_path": {
@@ -188,6 +189,35 @@
           },
           "parameters": {
             "$ref": "operations/visual-evidence-export.schema.json"
+          },
+          "approval": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "native_render_evidence"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "drawing_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "parameters": {
+            "$ref": "operations/native-render-evidence.schema.json"
           },
           "approval": {
             "const": null

@@ -15,6 +15,11 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
+from mcp_integration_lib.autocad_render_evidence import (
+    AutoCADRenderEvidenceError,
+    validate_render_evidence,
+    validate_render_request,
+)
 from cad_agent.visual_evidence import (
     VisualEvidenceError,
     assert_dimension_register_unchanged,
@@ -50,6 +55,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "mechanical_bom",
         "drawing_setup_audit",
         "visual_evidence_export",
+        "native_render_evidence",
     }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -647,6 +653,46 @@ class DotNetIPCClient:
             request_id=request_id,
         )
 
+    def native_render_evidence(
+        self,
+        drawing_full_path: str | Path,
+        request: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Transport one validated S2A request through the existing File IPC envelope.
+
+        The current dispatcher deliberately returns ``NATIVE_RENDER_NOT_IMPLEMENTED``.
+        A successful response is accepted only after its payload is validated against
+        the exact S2A request supplied by the caller.
+        """
+
+        normalized_request = validate_render_request(request)
+
+        parameters = {
+            name: normalized_request[name]
+            for name in (
+                "run_id",
+                "latest_mutation_sha256",
+                "visual_run_manifest_sha256",
+                "layout",
+                "artifact_kind",
+                "render_options",
+                "requested_at",
+            )
+        }
+        result = self.request(
+            "native_render_evidence",
+            drawing_full_path,
+            drawing_sha256=normalized_request["drawing_sha256"],
+            parameters=parameters,
+            approval=None,
+            request_id=normalized_request["request_id"],
+        )
+        try:
+            validate_render_evidence(result.get("payload"), normalized_request)
+        except AutoCADRenderEvidenceError as exc:
+            raise DotNetIPCProtocolError(str(exc)) from exc
+        return result
+
     def visual_evidence_export(
         self,
         drawing_full_path: str | Path,
@@ -990,7 +1036,47 @@ class DotNetIPCClient:
                 )
         elif operation == "visual_evidence_export":
             DotNetIPCClient._validate_visual_evidence_parameters(values)
+        elif operation == "native_render_evidence":
+            DotNetIPCClient._validate_native_render_parameters(values)
         return values
+
+    @staticmethod
+    def _validate_native_render_parameters(parameters: Mapping[str, Any]) -> None:
+        required = {
+            "run_id",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "layout",
+            "artifact_kind",
+            "render_options",
+            "requested_at",
+        }
+        if set(parameters) != required:
+            missing = sorted(required.difference(parameters))
+            unsupported = sorted(set(parameters).difference(required))
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(missing))
+            if unsupported:
+                details.append("unsupported " + ", ".join(unsupported))
+            raise ValueError("native_render_evidence parameters: " + "; ".join(details))
+
+        candidate = {
+            "schema_version": "autocad-native-render-request-1.0",
+            "request_id": "native-render-request",
+            "run_id": parameters["run_id"],
+            "drawing_sha256": "a" * 64,
+            "latest_mutation_sha256": parameters["latest_mutation_sha256"],
+            "visual_run_manifest_sha256": parameters["visual_run_manifest_sha256"],
+            "layout": parameters["layout"],
+            "artifact_kind": parameters["artifact_kind"],
+            "render_options": parameters["render_options"],
+            "requested_at": parameters["requested_at"],
+        }
+        try:
+            validate_render_request(candidate)
+        except AutoCADRenderEvidenceError as exc:
+            raise ValueError(str(exc)) from exc
 
     @staticmethod
     def _validate_visual_evidence_parameters(parameters: Mapping[str, Any]) -> None:
@@ -1236,6 +1322,15 @@ class DotNetIPCClient:
                 )
             if result["success"] is True:
                 DotNetIPCClient._validate_visual_evidence_payload(result.get("payload"))
+        if operation == "native_render_evidence":
+            if result["changed"] is not False or result["entity_handles"]:
+                raise DotNetIPCProtocolError(
+                    "native_render_evidence result must be read-only and contain no entity handles"
+                )
+            if result["success"] is False and result.get("payload") not in (None, {}):
+                raise DotNetIPCProtocolError(
+                    "native_render_evidence failure result must not contain evidence payload"
+                )
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:
                 raise DotNetIPCProtocolError(f"result {name} must be a non-empty string")
