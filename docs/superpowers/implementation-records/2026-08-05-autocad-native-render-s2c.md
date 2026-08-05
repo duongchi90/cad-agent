@@ -10,13 +10,14 @@ passes.
 - Issue: #60, S2C.
 - Exact implementation base: `3d0aa999904f384efa4eb42a81637e4270591859`.
 - Implementation branch: `task/s2c-autocad-native-render`.
-- Verified pre-record head: `6cee32e696e4f40cec966288cc1e72ae58827375`.
-- Production implementation commit: `043dfd4`; live gate commit: `6cee32e`.
+- Verified pre-record fix head: `1d5d3eeefa4535c46be87d719438a2bd179ebddd`.
+- Production implementation commit: `043dfd4`; review-fix commit: `1d5d3ee`;
+  live gate commit: `6cee32e`.
 - Final head is emitted by the later record-only commit and is recorded in
   PR provenance; a commit cannot contain its own object ID without becoming
   self-referential.
 - The branch contains the two approved docs-only commits plus the bounded
-  implementation, live-test, and this evidence-record change.
+  implementation, live-test, review-fix, and this evidence-record change.
 - Changed paths remain inside the exact Issue #60 20-file allowlist. No schema,
   Python production, dependency, project, `STATUS.md`, or `HANDOFF.md` file
   changed.
@@ -70,11 +71,22 @@ cleanup or maintenance job is introduced by S2C.
   reparse points, and uses an exclusive claim.
 - Plot output is written to a same-directory temporary file and published with
   no-overwrite atomic rename only after byte validation and SHA-256 hashing.
-- PNG signature/IHDR/dimension/IEND and one-page PDF header/EOF/page-count
-  checks run before publication. Failed output has no final artifact.
+- PNG signature/IHDR/dimension/IEND checks run before publication and accept
+  only exact A4 300 DPI pixel dimensions `2480x3508` or `3508x2480`. PDF
+  publication requires a coherent catalog, page tree, xref/startxref,
+  trailer, and exactly one page. Failed output has no final artifact.
+- The artifact claim remains held through final-path publication. If a move
+  loses a final-path race, cleanup can delete only a final file proven to
+  have been created by that reservation and whose bytes still match.
 - `BACKGROUNDPLOT` is snapshotted, set to foreground plotting, and restored in
   all exit paths. Current layout, drawing database, and file bytes are not
   modified or saved.
+- Paper-space uses `PlotType.Layout` without plot centering. Device/media
+  selection is exact: approved PDF A4 millimeters or approved PNG pixel
+  media; missing device/media fails closed.
+- The dispatcher binds all five render-option fields, correlation fields,
+  read-only DBMOD values, artifact metadata, and the exact
+  `native-render/<request_id>/artifact.png|pdf` path before success.
 - `layout.identity` is correlation metadata; `layout.name` selects the actual
   paper-space AutoCAD layout. No entity handles, verdict, approval, repair, or
   publication result is produced.
@@ -83,32 +95,34 @@ cleanup or maintenance job is introduced by S2C.
 
 ### Offline and .NET
 
-- `dotnet test autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64 -p:AutodeskReferenceDir="C:\\Program Files\\Autodesk\\AutoCAD 2027" --no-restore`
-  exited `0`: **141 passed, 0 failed, 0 skipped**.
-- Focused artifact boundary: **13 passed**.
-- Focused read-only policy: **14 passed**.
-- Focused dispatcher native-render tests: **2 passed**.
+- `dotnet test autocad_plugin/CadAgent.AutoCAD2027.sln -c Release -p:Platform=x64 --no-build --no-restore`
+  on fix head `1d5d3eeefa4535c46be87d719438a2bd179ebddd` exited `0`:
+  **152 passed, 0 failed, 0 skipped**.
+- Focused artifact boundary: **17 passed**.
+- Focused read-only policy: **15 passed**.
+- Focused dispatcher native-render tests: **25 passed**.
 - Python S2A/S2B contract tests: **7 passed**.
-- Ruff on affected Python tests: **PASS**.
+- Live harness offline tests: **5 passed, 5 skipped**; Ruff on all affected
+  Python tests: **PASS**.
 - Architecture boundary checker: **PASS**.
 - `git diff --check`: **PASS**.
 - .NET SDK: `10.0.301`.
 - Autodesk reference directory: `C:\Program Files\Autodesk\AutoCAD 2027`.
-- Built plugin assembly SHA-256 for the implementation candidate:
-  `f19732ad152f9b61c9636015b21be2af3c50eee6038aa3458da00f3320790330`.
+- Built plugin assembly SHA-256 for the review-fix candidate:
+  `0C9A6D15624F7737313BA7090F01A5A68C4F26785AF0DB3EE391AACD046A8861`.
 - No Autodesk managed DLLs were copied into the repository or plugin output.
 
-The canonical verifier was run on the clean pre-update record head with:
+The canonical verifier was run on the clean review-fix head with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1 -PythonExe C:\temp\cad-agent-s2c-py311\Scripts\python.exe
 ```
 
-It exited `0`: dependency lock/environment **PASS**; .NET **141 passed, 0
+It exited `0`: dependency lock/environment **PASS**; .NET **152 passed, 0
 failed, 0 skipped**; dotnet IPC JUnit `38 tests, 0 failures, 0 errors, 0
 skipped`; offline JUnit `1040 tests, 0 failures, 0 errors, 0 skipped` (1022
-passed, 12 deselected, 18 subtests); private-data unavailable probe `2
-skipped`; AutoCAD Mechanical unavailable probe `10 skipped`; architecture,
+passed, 14 deselected, 18 subtests); private-data unavailable probe `2
+skipped`; AutoCAD Mechanical unavailable probe `12 skipped`; architecture,
 Ruff, DLL-output, and diff checks **PASS**. The canonical AutoCAD live marker
 was **NOT RUN**.
 
@@ -126,12 +140,16 @@ was **NOT RUN**.
   & 'C:\temp\cad-agent-s2c-py311\Scripts\python.exe' -m pytest mcp_integration_lib/tests/test_dotnet_ipc_live.py -m autocad_mechanical -ra -p no:cacheprovider
   ```
 
-  exited `0`: **3 skipped, 5 deselected**. The S2C class itself was skipped
-  by its explicit prerequisite guard. This is **NOT RUN**, not acceptance.
+  exited `0`: **12 skipped, 1024 deselected** in the canonical unavailable
+  probe; the S2C class's three tests were skipped by their explicit
+  prerequisite guards. This is **NOT RUN**, not acceptance.
 - Live PNG artifact: **NOT RUN**.
 - Live PDF artifact: **NOT RUN**.
-- Duplicate, missing-layout, unsupported-profile, and missing-device/media
-  refusal probes: **NOT RUN**.
+- Duplicate, missing-layout, unsupported-profile, missing-device, and
+  missing-media refusal probes: **NOT RUN**. The latter two require an
+  operator-prepared isolated AutoCAD profile marked with
+  `CAD_AGENT_S2C_NEGATIVE_PROFILE`; the harness never changes shared
+  AutoCAD configuration.
 - Product/profile, disposable DWG hash, exact layout, PC3 output, canonical
   media, DBMOD, current-layout, and restored-session live evidence: **NOT RUN**.
 - Approved profile constants are fixed in the reader as:
