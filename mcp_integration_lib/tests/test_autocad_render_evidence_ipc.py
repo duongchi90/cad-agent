@@ -157,15 +157,15 @@ def test_native_render_ipc_examples_and_schema_branches_are_closed() -> None:
     assert operation_schema["additionalProperties"] is False
     assert result_payload_schema["additionalProperties"] is False
     assert request_envelope["operation"] == "native_render_evidence"
-    assert result_envelope == {
-        **result_envelope,
-        "operation": "native_render_evidence",
-        "success": False,
-        "changed": False,
-        "entity_handles": [],
-        "errors": ["NATIVE_RENDER_NOT_IMPLEMENTED"],
-        "payload": {},
-    }
+    assert result_envelope["operation"] == "native_render_evidence"
+    assert result_envelope["success"] is True
+    assert result_envelope["changed"] is False
+    assert result_envelope["entity_handles"] == []
+    assert result_envelope["errors"] == []
+    assert result_envelope["payload"]["renderer"] == "AUTOCAD_NATIVE"
+    assert result_envelope["payload"]["artifact"]["relative_path"] == (
+        "native-render/render-request-001/artifact.png"
+    )
     native_request = {
         "schema_version": REQUEST_SCHEMA_VERSION,
         "request_id": request_envelope["request_id"],
@@ -179,7 +179,18 @@ def test_native_render_ipc_examples_and_schema_branches_are_closed() -> None:
         "requested_at": request_envelope["parameters"]["requested_at"],
     }
     assert validate_render_request(native_request)["request_id"] == request_envelope["request_id"]
-    assert result_envelope["payload"] == {}
+    assert result_envelope["payload"]["changed"] is False
+    assert result_envelope["payload"]["dbmod_before"] == 0
+    assert result_envelope["payload"]["dbmod_after"] == 0
+    assert not any(
+        forbidden in result_envelope["payload"]
+        for forbidden in (
+            "verdict",
+            "approval",
+            "repair",
+            "publication",
+        )
+    )
     assert "native_render_evidence" in request_schema["properties"]["operation"]["enum"]
     assert "native_render_evidence" in result_schema["properties"]["operation"]["enum"]
     request_branch = next(

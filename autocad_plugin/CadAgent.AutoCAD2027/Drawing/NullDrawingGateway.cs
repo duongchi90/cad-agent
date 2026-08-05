@@ -18,4 +18,7 @@ public sealed class NullDrawingGateway : IDrawingGateway
 
     public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
         throw new InvalidOperationException("No active drawing is available for visual evidence export.");
+
+    public NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request) =>
+        throw new InvalidOperationException("No active drawing is available for native render evidence.");
 }

@@ -229,5 +229,8 @@ public sealed class CommandGuardTests
 
         public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>
             throw new NotSupportedException();
+
+        public NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request) =>
+            throw new NotSupportedException();
     }
 }

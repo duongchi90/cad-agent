@@ -12,4 +12,6 @@ public interface IDrawingGateway
     DrawingSetupSnapshot ReadDrawingSetup();
 
     VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request);
+
+    NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request);
 }

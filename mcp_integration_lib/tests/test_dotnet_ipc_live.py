@@ -8,13 +8,20 @@ import time
 import unittest
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import ezdxf
 import pytest
 
+from mcp_integration_lib.autocad_render_evidence import (
+    REQUEST_SCHEMA_VERSION,
+    build_render_evidence_request,
+    validate_render_request,
+)
 from mcp_integration_lib.dotnet_ipc import (
     DotNetIPCClient,
+    DotNetIPCResultError,
     make_windows_dotnet_dispatch_trigger,
     normalize_windows_absolute_path,
     request_path,
@@ -46,6 +53,20 @@ def _lean_setup_prerequisites_available() -> bool:
     )
 
 
+def _s2c_live_prerequisites_available() -> bool:
+    return (
+        os.getenv("CAD_AGENT_S2C_LIVE") == "1"
+        and _live_prerequisites_available()
+        and bool(os.getenv("CAD_AGENT_LEAN_DISPOSABLE_DWG"))
+    )
+
+
+def _s2c_refusal_probe_prerequisites_available(profile: str) -> bool:
+    return _s2c_live_prerequisites_available() and (
+        os.getenv("CAD_AGENT_S2C_NEGATIVE_PROFILE") == profile
+    )
+
+
 def _add_mechanical_bom_fixture(drawing_document) -> None:
     modelspace = drawing_document.modelspace()
     modelspace.add_line((0, 0), (10, 0))
@@ -64,6 +85,75 @@ def _add_mechanical_bom_fixture(drawing_document) -> None:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _s2c_request(
+    _drawing_full_path: str,
+    drawing_sha256: str,
+    request_id: str,
+    *,
+    artifact_kind: str = "PNG",
+    layout_name: str = "Layout1",
+    render_options: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return build_render_evidence_request(
+        request_id=request_id,
+        run_id="s2c-live-run",
+        drawing_sha256=drawing_sha256,
+        latest_mutation_sha256="b" * 64,
+        visual_run_manifest_sha256="c" * 64,
+        layout={"identity": "s2c-layout-001", "name": layout_name},
+        artifact_kind=artifact_kind,
+        render_options=render_options
+        or {
+            "background": "white",
+            "dpi": 300,
+            "fit_to_paper": True,
+            "paper_size": "A4",
+            "plot_style": "monochrome.ctb",
+        },
+        requested_at=(
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
+    )
+
+
+class NativeRenderRequestShapeTests(unittest.TestCase):
+    def test_s2c_request_is_a_valid_closed_native_render_payload(self) -> None:
+        request = _s2c_request(
+            r"C:\\temp\\s2c-shape-regression.dwg",
+            "a" * 64,
+            "s2c-offline-shape",
+        )
+        expected_keys = {
+            "schema_version",
+            "request_id",
+            "run_id",
+            "drawing_sha256",
+            "latest_mutation_sha256",
+            "visual_run_manifest_sha256",
+            "layout",
+            "artifact_kind",
+            "render_options",
+            "requested_at",
+        }
+
+        self.assertEqual(expected_keys, set(request))
+        self.assertEqual(REQUEST_SCHEMA_VERSION, request["schema_version"])
+        self.assertEqual(request, validate_render_request(request))
+        for forbidden_field in (
+            "approval",
+            "operation",
+            "drawing_full_path",
+            "parameters",
+            "verdict",
+            "repair",
+            "publication",
+        ):
+            self.assertNotIn(forbidden_field, request)
 
 
 def _cleanup_disposable_fixture_directory(
@@ -440,3 +530,328 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 drawing_path,
                 original_sha256=original_sha256,
             )
+
+
+@unittest.skipUnless(
+    _s2c_live_prerequisites_available(),
+    "requires CAD_AGENT_S2C_LIVE=1, CAD_AGENT_FILE_IPC=1, AutoCAD HWND, "
+    "LISP path, CAD_AGENT_DOTNET_IPC_DIR, and CAD_AGENT_LEAN_DISPOSABLE_DWG",
+)
+@pytest.mark.autocad_mechanical
+class NativeRenderS2CLiveTests(unittest.TestCase):
+    def _run_refusal_probe(self, profile: str) -> None:
+        """Run against an operator-prepared isolated AutoCAD profile.
+
+        missing-device must hide the approved PNG PC3 from the profile.
+        missing-media must expose that PC3 without the approved 2480x3508
+        pixel media. The test never changes shared AutoCAD configuration.
+        """
+
+        drawing = Path(os.environ["CAD_AGENT_LEAN_DISPOSABLE_DWG"]).resolve()
+        self.assertTrue(drawing.is_file(), f"Missing disposable drawing: {drawing}")
+        original_sha256 = _sha256(drawing)
+        expected_full_path = normalize_windows_absolute_path(str(drawing))
+        hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
+        legacy_client = FileIPCLiveMCPClient(
+            trigger=make_windows_dispatch_trigger(hwnd),
+            raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
+            bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
+        )
+        dotnet_client = DotNetIPCClient(
+            ipc_dir=os.environ["CAD_AGENT_DOTNET_IPC_DIR"],
+            trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+            timeout_s=30.0,
+        )
+        request_id = f"s2c-live-{profile}-{time.time_ns()}"
+        request_directory = dotnet_client.ipc_dir / "native-render" / request_id
+        expected_error_code = {
+            "missing-device": "NATIVE_RENDER_DEVICE_UNAVAILABLE",
+            "missing-media": "NATIVE_RENDER_MEDIA_UNAVAILABLE",
+        }[profile]
+
+        try:
+            with _disposable_drawing_cleanup(dotnet_client, str(drawing)) as mark_closed:
+                legacy_client.drawing_open(str(drawing))
+                state_before = legacy_client.drawing_get_variables(
+                    ["DBMOD", "CTAB", "BACKGROUNDPLOT"]
+                )
+                with self.assertRaises(DotNetIPCResultError) as refusal_error:
+                    dotnet_client.native_render_evidence(
+                        expected_full_path,
+                        _s2c_request(
+                            expected_full_path,
+                            original_sha256,
+                            request_id,
+                            artifact_kind="PNG",
+                        ),
+                    )
+                result = refusal_error.exception.result
+                self.assertIsNotNone(result)
+                assert result is not None
+                self.assertFalse(result["success"])
+                self.assertFalse(result["changed"])
+                self.assertEqual([], result["entity_handles"])
+                self.assertEqual({}, result["payload"])
+                self.assertTrue(result["errors"])
+                self.assertTrue(
+                    any(expected_error_code in error for error in result["errors"]),
+                    result["errors"],
+                )
+                self.assertEqual(
+                    state_before,
+                    legacy_client.drawing_get_variables(
+                        ["DBMOD", "CTAB", "BACKGROUNDPLOT"]
+                    ),
+                )
+                self.assertEqual(original_sha256, _sha256(drawing))
+                self.assertTrue(request_directory.is_dir())
+                self.assertFalse((request_directory / "artifact.png").exists())
+
+                close = dotnet_client.close_disposable(
+                    expected_full_path,
+                    disposable=True,
+                    save_changes=False,
+                    request_id=f"s2c-live-{profile}-close-{time.time_ns()}",
+                )
+                self.assertTrue(close["success"])
+                self.assertFalse(close["changed"])
+                mark_closed()
+        finally:
+            shutil.rmtree(request_directory, ignore_errors=True)
+            self.assertEqual(original_sha256, _sha256(drawing))
+
+    @unittest.skipUnless(
+        _s2c_refusal_probe_prerequisites_available("missing-device"),
+        "requires an isolated AutoCAD profile with the approved PNG device absent "
+        "and CAD_AGENT_S2C_NEGATIVE_PROFILE=missing-device",
+    )
+    def test_s2c_missing_device_refuses_without_artifact(self) -> None:
+        self._run_refusal_probe("missing-device")
+
+    @unittest.skipUnless(
+        _s2c_refusal_probe_prerequisites_available("missing-media"),
+        "requires an isolated AutoCAD profile with no approved PNG pixel media "
+        "and CAD_AGENT_S2C_NEGATIVE_PROFILE=missing-media",
+    )
+    def test_s2c_missing_media_refuses_without_artifact(self) -> None:
+        self._run_refusal_probe("missing-media")
+
+    def test_s2c_png_pdf_and_fail_closed_probes_are_read_only(self) -> None:
+        from PIL import Image
+        from pypdf import PdfReader
+
+        drawing = Path(os.environ["CAD_AGENT_LEAN_DISPOSABLE_DWG"]).resolve()
+        self.assertTrue(drawing.is_file(), f"Missing disposable drawing: {drawing}")
+        original_sha256 = _sha256(drawing)
+        expected_full_path = normalize_windows_absolute_path(str(drawing))
+        hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
+        legacy_client = FileIPCLiveMCPClient(
+            trigger=make_windows_dispatch_trigger(hwnd),
+            raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
+            bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
+        )
+        dotnet_client = DotNetIPCClient(
+            ipc_dir=os.environ["CAD_AGENT_DOTNET_IPC_DIR"],
+            trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+            timeout_s=30.0,
+        )
+
+        def session_state() -> dict[str, object]:
+            values = legacy_client.drawing_get_variables(
+                ["DBMOD", "CTAB", "BACKGROUNDPLOT"]
+            )
+            return {name: values.get(name) for name in ("DBMOD", "CTAB", "BACKGROUNDPLOT")}
+
+        def artifact_path(relative_path: str) -> Path:
+            return dotnet_client.ipc_dir.joinpath(*relative_path.split("/"))
+
+        def assert_failed(
+            result_error: DotNetIPCResultError,
+            *,
+            request_id: str,
+            expected_error_code: str,
+            state_before: dict[str, object],
+            drawing_hash_before: str,
+            artifact_kind: str = "PNG",
+            artifact_must_exist: bool = False,
+        ) -> None:
+            self.assertIsNotNone(result_error.result)
+            result = result_error.result
+            assert result is not None
+            self.assertFalse(result["success"])
+            self.assertFalse(result["changed"])
+            self.assertEqual([], result["entity_handles"])
+            self.assertEqual({}, result["payload"])
+            self.assertTrue(result["errors"])
+            self.assertTrue(
+                any(expected_error_code in error for error in result["errors"]),
+                result["errors"],
+            )
+            self.assertEqual(state_before, session_state())
+            self.assertEqual(drawing_hash_before, _sha256(drawing))
+            final_path = (
+                dotnet_client.ipc_dir
+                / "native-render"
+                / request_id
+                / f"artifact.{artifact_kind.lower()}"
+            )
+            self.assertEqual(artifact_must_exist, final_path.is_file())
+
+        try:
+            with _disposable_drawing_cleanup(dotnet_client, str(drawing)) as mark_closed:
+                legacy_client.drawing_open(str(drawing))
+
+                for artifact_kind in ("PNG", "PDF"):
+                    request_id = f"s2c-live-{artifact_kind.lower()}-{time.time_ns()}"
+                    request = _s2c_request(
+                        expected_full_path,
+                        original_sha256,
+                        request_id,
+                        artifact_kind=artifact_kind,
+                    )
+                    state_before = session_state()
+                    result = dotnet_client.native_render_evidence(
+                        expected_full_path,
+                        request,
+                    )
+                    state_after = session_state()
+
+                    self.assertTrue(result["success"])
+                    self.assertFalse(result["changed"])
+                    self.assertEqual([], result["entity_handles"])
+                    self.assertEqual([], result["errors"])
+                    self.assertNotIn("NATIVE_RENDER_NOT_IMPLEMENTED", result["errors"])
+                    self.assertEqual(expected_full_path, result["drawing_full_path"])
+                    self.assertEqual(state_before, state_after)
+                    self.assertEqual(original_sha256, _sha256(drawing))
+                    self.assertEqual(
+                        state_before["DBMOD"],
+                        result["payload"]["dbmod_before"],
+                    )
+                    self.assertEqual(
+                        state_before["DBMOD"],
+                        result["payload"]["dbmod_after"],
+                    )
+
+                    artifact = result["payload"]["artifact"]
+                    expected_suffix = artifact_kind.lower()
+                    self.assertEqual(
+                        f"native-render/{request_id}/artifact.{expected_suffix}",
+                        artifact["relative_path"],
+                    )
+                    final_path = artifact_path(artifact["relative_path"])
+                    self.assertTrue(final_path.is_file())
+                    final_bytes = final_path.read_bytes()
+                    self.assertEqual(
+                        hashlib.sha256(final_bytes).hexdigest(),
+                        artifact["sha256"],
+                    )
+                    self.assertGreater(len(final_bytes), 0)
+
+                    if artifact_kind == "PNG":
+                        with Image.open(final_path) as image:
+                            self.assertIn(
+                                (image.width, image.height),
+                                {(2480, 3508), (3508, 2480)},
+                            )
+                            self.assertEqual(image.width, artifact["width"])
+                            self.assertEqual(image.height, artifact["height"])
+                            image.verify()
+                        with Image.open(final_path) as image:
+                            image.load()
+                            self.assertIn(
+                                (image.width, image.height),
+                                {(2480, 3508), (3508, 2480)},
+                            )
+                    else:
+                        self.assertEqual(1, artifact["page_count"])
+                        self.assertEqual(1, len(PdfReader(str(final_path)).pages))
+
+                    with self.assertRaises(DotNetIPCResultError) as duplicate_error:
+                        duplicate_state_before = session_state()
+                        duplicate_hash_before = _sha256(drawing)
+                        dotnet_client.native_render_evidence(
+                            expected_full_path,
+                            request,
+                        )
+                    assert_failed(
+                        duplicate_error.exception,
+                        request_id=request_id,
+                        expected_error_code="NATIVE_RENDER_DUPLICATE_REQUEST",
+                        state_before=duplicate_state_before,
+                        drawing_hash_before=duplicate_hash_before,
+                        artifact_kind=artifact_kind,
+                        artifact_must_exist=True,
+                    )
+                    shutil.rmtree(final_path.parent)
+
+                missing_layout_id = f"s2c-live-missing-layout-{time.time_ns()}"
+                missing_layout_request = _s2c_request(
+                    expected_full_path,
+                    original_sha256,
+                    missing_layout_id,
+                    layout_name="S2C_LAYOUT_DOES_NOT_EXIST",
+                )
+                missing_layout_state_before = session_state()
+                missing_layout_hash_before = _sha256(drawing)
+                with self.assertRaises(DotNetIPCResultError) as missing_layout_error:
+                    dotnet_client.native_render_evidence(
+                        expected_full_path,
+                        missing_layout_request,
+                    )
+                assert_failed(
+                    missing_layout_error.exception,
+                    request_id=missing_layout_id,
+                    expected_error_code="NATIVE_RENDER_LAYOUT_NOT_FOUND",
+                    state_before=missing_layout_state_before,
+                    drawing_hash_before=missing_layout_hash_before,
+                )
+                shutil.rmtree(
+                    dotnet_client.ipc_dir / "native-render" / missing_layout_id,
+                    ignore_errors=True,
+                )
+
+                unsupported_id = f"s2c-live-unsupported-profile-{time.time_ns()}"
+                unsupported_request = _s2c_request(
+                    expected_full_path,
+                    original_sha256,
+                    unsupported_id,
+                    render_options={
+                        "background": "white",
+                        "dpi": 600,
+                        "fit_to_paper": True,
+                        "paper_size": "A4",
+                        "plot_style": "monochrome.ctb",
+                    },
+                )
+                unsupported_state_before = session_state()
+                unsupported_hash_before = _sha256(drawing)
+                with self.assertRaises(DotNetIPCResultError) as unsupported_error:
+                    dotnet_client.native_render_evidence(
+                        expected_full_path,
+                        unsupported_request,
+                    )
+                assert_failed(
+                    unsupported_error.exception,
+                    request_id=unsupported_id,
+                    expected_error_code="NATIVE_RENDER_UNSUPPORTED_PROFILE",
+                    state_before=unsupported_state_before,
+                    drawing_hash_before=unsupported_hash_before,
+                )
+                shutil.rmtree(
+                    dotnet_client.ipc_dir / "native-render" / unsupported_id,
+                    ignore_errors=True,
+                )
+
+                close = dotnet_client.close_disposable(
+                    expected_full_path,
+                    disposable=True,
+                    save_changes=False,
+                    request_id=f"s2c-live-close-{time.time_ns()}",
+                )
+                self.assertTrue(close["success"])
+                self.assertFalse(close["changed"])
+                self.assertTrue(close["payload"]["closed_without_saving"])
+                mark_closed()
+        finally:
+            self.assertEqual(original_sha256, _sha256(drawing))

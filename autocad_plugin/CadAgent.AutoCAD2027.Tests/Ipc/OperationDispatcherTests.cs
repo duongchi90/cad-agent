@@ -284,34 +284,125 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
-    public void NativeRenderEvidenceFailsClosedBeforeReadingTheDrawingGateway()
+    public void NativeRenderEvidenceDelegatesThroughTheExistingDrawingGateway()
+    {
+        var path = @"C:\drawings\sample.dwg";
+        var requestId = "render-request-001";
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            NativeRenderEvidence = NativeRenderSnapshot(path, requestId)
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "native_render_evidence",
+            requestId,
+            path,
+            NativeRenderParameters(),
+            new string('a', 64)));
+
+        Assert.True(result.Success);
+        Assert.Equal("native_render_evidence", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Empty(result.Errors!);
+        Assert.Equal("AUTOCAD_NATIVE", result.Payload!["renderer"].GetString());
+        Assert.Equal(
+            "native-render/render-request-001/artifact.png",
+            result.Payload["artifact"].GetProperty("relative_path").GetString());
+        Assert.True(ContractValidator.ValidateResult(result).IsValid);
+        Assert.Equal(0, gateway.ReadEntitiesCallCount);
+        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
+        Assert.Equal(0, gateway.ReadVisualEvidenceCallCount);
+        Assert.Equal(1, gateway.ReadNativeRenderEvidenceCallCount);
+    }
+
+    [Fact]
+    public void NativeRenderEvidenceGatewayFailureReturnsAnEmptyPayload()
     {
         var path = @"C:\drawings\sample.dwg";
         var gateway = new StubDrawingGateway
         {
-            ActiveDocumentFullPath = path
+            ActiveDocumentFullPath = path,
+            NativeRenderException = new InvalidOperationException("NATIVE_RENDER_DEVICE_UNAVAILABLE")
         };
 
-        var result = CreateDispatcher(gateway).Dispatch(new IpcRequest
-        {
-            RequestId = "render-request-001",
-            SchemaVersion = ContractConstants.SchemaVersion,
-            Operation = "native_render_evidence",
-            DrawingFullPath = path,
-            DrawingSha256 = new string('a', 64),
-            Parameters = NativeRenderParameters(),
-            Approval = null
-        });
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "native_render_evidence",
+            "render-request-failure",
+            path,
+            NativeRenderParameters(),
+            new string('a', 64)));
 
         Assert.False(result.Success);
-        Assert.Equal("native_render_evidence", result.Operation);
-        Assert.Equal("NATIVE_RENDER_NOT_IMPLEMENTED", Assert.Single(result.Errors!));
         Assert.False(result.Changed);
         Assert.Empty(result.EntityHandles!);
         Assert.Empty(result.Payload!);
-        Assert.Equal(0, gateway.ReadEntitiesCallCount);
-        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
-        Assert.Equal(0, gateway.ReadVisualEvidenceCallCount);
+        Assert.Contains("NATIVE_RENDER_DEVICE_UNAVAILABLE", result.Errors!);
+        Assert.Equal(1, gateway.ReadNativeRenderEvidenceCallCount);
+    }
+
+    [Theory]
+    [InlineData("background")]
+    [InlineData("dpi")]
+    [InlineData("fit_to_paper")]
+    [InlineData("paper_size")]
+    [InlineData("plot_style")]
+    public void NativeRenderEvidenceRejectsReturnedRenderOptionsThatDoNotMatchTheRequest(
+        string mismatchedField)
+    {
+        var path = @"C:\drawings\sample.dwg";
+        var requestId = "render-request-001";
+        var mismatchedOptions = new NativeRenderOptions(
+            mismatchedField == "background" ? "black" : "white",
+            mismatchedField == "dpi" ? 600 : 300,
+            mismatchedField == "fit_to_paper" ? false : true,
+            mismatchedField == "paper_size" ? "A3" : "A4",
+            mismatchedField == "plot_style" ? "acad.ctb" : "monochrome.ctb");
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            NativeRenderEvidence = NativeRenderSnapshot(path, requestId) with
+            {
+                RenderOptions = mismatchedOptions
+            }
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "native_render_evidence",
+            requestId,
+            path,
+            NativeRenderParameters(),
+            new string('a', 64)));
+
+        AssertNativeRenderBoundaryFailure(result);
+    }
+
+    [Fact]
+    public void NativeRenderEvidenceRejectsAnArtifactPathOutsideTheRequestOwner()
+    {
+        var path = @"C:\drawings\sample.dwg";
+        var requestId = "render-request-001";
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            NativeRenderEvidence = NativeRenderSnapshot(path, requestId) with
+            {
+                Artifact = NativeRenderSnapshot(path, requestId).Artifact with
+                {
+                    RelativePath = "native-render/another-request/artifact.png"
+                }
+            }
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(Request(
+            "native_render_evidence",
+            requestId,
+            path,
+            NativeRenderParameters(),
+            new string('a', 64)));
+
+        AssertNativeRenderBoundaryFailure(result);
     }
 
     [Fact]
@@ -512,6 +603,17 @@ public sealed class OperationDispatcherTests
             mechanicalAdapter: mechanicalAdapter,
             mechanicalWarnings: mechanicalWarnings));
 
+    private static void AssertNativeRenderBoundaryFailure(IpcResult result)
+    {
+        Assert.False(result.Success);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Empty(result.Payload!);
+        Assert.Contains(
+            result.Errors!,
+            error => error.Contains("native render evidence", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static IpcRequest Request(
         string operation,
         string requestId,
@@ -552,6 +654,29 @@ public sealed class OperationDispatcherTests
             ["requested_at"] = JsonSerializer.SerializeToElement("2026-08-05T08:00:00Z")
         };
 
+    private static NativeRenderEvidenceSnapshot NativeRenderSnapshot(
+        string path,
+        string requestId) =>
+        new(
+            requestId,
+            "run-001",
+            new string('a', 64),
+            new string('b', 64),
+            new string('c', 64),
+            new("layout-001", "Layout1"),
+            "PNG",
+            new("white", 300, true, "A4", "monochrome.ctb"),
+            new(
+                "native-render/render-request-001/artifact.png",
+                new string('d', 64),
+                2480,
+                3508,
+                null),
+            new DateTimeOffset(2026, 8, 5, 8, 0, 3, TimeSpan.Zero),
+            0,
+            0,
+            Array.Empty<string>());
+
     private static EntitySnapshot Entity(string handle, string type) =>
         new(handle, type, "0", new Dictionary<string, JsonElement>(StringComparer.Ordinal));
 
@@ -576,11 +701,17 @@ public sealed class OperationDispatcherTests
 
         public VisualEvidenceSnapshot? VisualEvidence { get; init; }
 
+        public NativeRenderEvidenceSnapshot? NativeRenderEvidence { get; init; }
+
+        public Exception? NativeRenderException { get; init; }
+
         public int ReadEntitiesCallCount { get; private set; }
 
         public int ReadDrawingSetupCallCount { get; private set; }
 
         public int ReadVisualEvidenceCallCount { get; private set; }
+
+        public int ReadNativeRenderEvidenceCallCount { get; private set; }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
@@ -604,6 +735,17 @@ public sealed class OperationDispatcherTests
         {
             ReadVisualEvidenceCallCount++;
             return VisualEvidence ?? throw new NotSupportedException();
+        }
+
+        public NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request)
+        {
+            ReadNativeRenderEvidenceCallCount++;
+            if (NativeRenderException is not null)
+            {
+                throw NativeRenderException;
+            }
+
+            return NativeRenderEvidence ?? throw new NotSupportedException();
         }
     }
 

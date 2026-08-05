@@ -252,8 +252,29 @@ public sealed class OperationDispatcher
             startedAt);
     }
 
-    private IpcResult DispatchNativeRenderEvidence(IpcRequest request, DateTimeOffset startedAt) =>
-        Failure(request, new[] { "NATIVE_RENDER_NOT_IMPLEMENTED" }, startedAt);
+    private IpcResult DispatchNativeRenderEvidence(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var nativeRequest = NativeRenderRequest.FromIpc(request);
+        var snapshot = _context.DrawingGateway.ReadNativeRenderEvidence(nativeRequest);
+        NativeRenderPolicy.EnsureMatchesRequest(nativeRequest, snapshot);
+
+        return CreateResult(
+            request.RequestId!,
+            "native_render_evidence",
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: Array.Empty<string>(),
+            warnings: snapshot.Warnings,
+            errors: Array.Empty<string>(),
+            payload: NativeRenderPayload.Create(snapshot),
+            startedAt);
+    }
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
         IReadOnlyList<MechanicalComponentSnapshot> components) =>
