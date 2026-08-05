@@ -1,0 +1,771 @@
+{
+  "schema_version": "reuse-inventory-1.0",
+  "repository": "duongchi90/cad-agent",
+  "base_sha": "c325d009c3035be5c3202e3939efd4a82bcd2f42",
+  "generated_at_utc": "2026-08-05T00:00:00Z",
+  "capabilities": [
+    {
+      "capability_id": "image-pdf-recognition",
+      "capability": "Image and PDF primitive recognition, OCR, and calibration boundary",
+      "current_owner": "primitive_ir_lib",
+      "current_paths": [
+        "primitive_ir_lib/run_image.py",
+        "primitive_ir_lib/run_pdf.py",
+        "primitive_ir_lib/text_extraction.py"
+      ],
+      "current_apis": [
+        "primitive_ir_lib.run_image.run",
+        "primitive_ir_lib.run_pdf.run_pdf",
+        "primitive_ir_lib.text_extraction.extract_text_tesseract"
+      ],
+      "current_consumers": [
+        "cad_agent.cli._run_primitive",
+        "cad_agent.pdf.run_pdf_stages"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "primitive_ir_lib/tests/test_run_image.py",
+        "primitive_ir_lib/tests/test_run_pdf.py"
+      ],
+      "acceptance_gate": "Existing offline recognition tests plus the affected approved private real-data benchmark.",
+      "migration": "Keep primitive_ir_lib as the sole image/PDF recognition and OCR boundary.",
+      "rollback": "Revert the inventory entry; the existing recognition runtime remains unchanged.",
+      "inspected_paths": [
+        "primitive_ir_lib/run_image.py",
+        "primitive_ir_lib/run_pdf.py",
+        "primitive_ir_lib/text_extraction.py",
+        "primitive_ir_lib/tests/test_run_image.py",
+        "primitive_ir_lib/tests/test_run_pdf.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "semantic-parts-constraints",
+      "capability": "Semantic parts, compound inference, constraint pruning, and solving",
+      "current_owner": "semantic_ir_lib",
+      "current_paths": [
+        "semantic_ir_lib/assemble.py",
+        "semantic_ir_lib/constraint_pruning.py",
+        "semantic_ir_lib/constraint_solving.py"
+      ],
+      "current_apis": [
+        "semantic_ir_lib.assemble.build_semantic_document",
+        "semantic_ir_lib.constraint_pruning.prune_constraints",
+        "semantic_ir_lib.constraint_solving.solve_constraints"
+      ],
+      "current_consumers": [
+        "cad_agent.cli._run_semantic",
+        "cad_agent.dimension_pilot.run_dimension_pilot"
+      ],
+      "classification": "EXTEND_WITH_ADAPTER",
+      "adapter": "Route multisource component evidence through the existing Semantic IR assembly and SolveSpace boundaries.",
+      "tests": [
+        "semantic_ir_lib/tests/test_semantic_ir.py",
+        "semantic_ir_lib/tests/test_constraint_pruning.py",
+        "semantic_ir_lib/tests/test_constraint_solving.py"
+      ],
+      "acceptance_gate": "Existing semantic, pruning, solving, and affected real-data constraint tests.",
+      "migration": "Add only a source-bundle adapter at the existing semantic assembly boundary.",
+      "rollback": "Revert the adapter and inventory entry; semantic IR and solver APIs remain authoritative.",
+      "inspected_paths": [
+        "semantic_ir_lib/assemble.py",
+        "semantic_ir_lib/constraint_pruning.py",
+        "semantic_ir_lib/constraint_solving.py",
+        "semantic_ir_lib/tests/test_semantic_ir.py",
+        "semantic_ir_lib/tests/test_constraint_pruning.py",
+        "semantic_ir_lib/tests/test_constraint_solving.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "ambiguity-proposal-apply",
+      "capability": "Audited ambiguity proposal and separately approved application",
+      "current_owner": "agent_lib",
+      "current_paths": [
+        "agent_lib/run.py",
+        "agent_lib/models.py"
+      ],
+      "current_apis": [
+        "agent_lib.run.run",
+        "agent_lib.run._apply_report_with_approval"
+      ],
+      "current_consumers": [
+        "agent_lib.tests.test_run",
+        "cad_agent CLI agent workflows"
+      ],
+      "classification": "EXTEND_WITH_ADAPTER",
+      "adapter": "Bind multisource ambiguity evidence to AgentReport proposals while preserving the existing hash-bound apply gate.",
+      "tests": [
+        "agent_lib/tests/test_run.py",
+        "agent_lib/tests/test_models.py"
+      ],
+      "acceptance_gate": "Agent advisory and explicit approval/application tests; ambiguous decisions remain human-gated.",
+      "migration": "Use AgentReport as the only proposal representation and keep application as a second approved invocation.",
+      "rollback": "Revert the adapter; existing advisory and approval behavior remains unchanged.",
+      "inspected_paths": [
+        "agent_lib/run.py",
+        "agent_lib/models.py",
+        "agent_lib/tests/test_run.py",
+        "agent_lib/tests/test_models.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "native-dxf-generation",
+      "capability": "Native editable DXF and component/entity generation",
+      "current_owner": "dxf_builder_lib",
+      "current_paths": [
+        "dxf_builder_lib/builder.py"
+      ],
+      "current_apis": [
+        "dxf_builder_lib.builder.build_dxf",
+        "dxf_builder_lib.builder.NativeLinearDimensionSpec"
+      ],
+      "current_consumers": [
+        "cad_agent.cli._run_dxf",
+        "cad_agent.dimension_pilot.write_dimension_evidence"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "dxf_builder_lib/tests/test_builder.py",
+        "dxf_builder_lib/tests/test_text_style_unicode.py"
+      ],
+      "acceptance_gate": "Existing native DXF builder and headless read-back tests.",
+      "migration": "Keep all new component output on the existing dxf_builder_lib builder boundary.",
+      "rollback": "Revert inventory-only references; no DXF builder code is changed by R0.",
+      "inspected_paths": [
+        "dxf_builder_lib/builder.py",
+        "dxf_builder_lib/tests/test_builder.py",
+        "dxf_builder_lib/tests/test_text_style_unicode.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "headless-review-repair",
+      "capability": "Headless DXF review and deterministic repair",
+      "current_owner": "dxf_builder_lib",
+      "current_paths": [
+        "dxf_builder_lib/reviewer.py",
+        "dxf_builder_lib/repair.py"
+      ],
+      "current_apis": [
+        "dxf_builder_lib.reviewer.review_dxf",
+        "dxf_builder_lib.repair.repair_dxf",
+        "dxf_builder_lib.repair.repair_insert_components"
+      ],
+      "current_consumers": [
+        "cad_agent.cli._run_dxf",
+        "tests/test_cad_agent_cli.py"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "dxf_builder_lib/tests/test_reviewer.py",
+        "dxf_builder_lib/tests/test_repair.py"
+      ],
+      "acceptance_gate": "Existing headless review/repair tests before any AutoCAD mutation.",
+      "migration": "Route candidate DXF checks through review_dxf and approved repair APIs only.",
+      "rollback": "Revert inventory-only references; existing headless safety boundary remains unchanged.",
+      "inspected_paths": [
+        "dxf_builder_lib/reviewer.py",
+        "dxf_builder_lib/repair.py",
+        "dxf_builder_lib/tests/test_reviewer.py",
+        "dxf_builder_lib/tests/test_repair.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "autocad-file-ipc",
+      "capability": "AutoCAD Mechanical File IPC and .NET dispatcher boundary",
+      "current_owner": "mcp_integration_lib and autocad_plugin/CadAgent.AutoCAD2027",
+      "current_paths": [
+        "mcp_integration_lib/mcp_client.py",
+        "mcp_integration_lib/dotnet_ipc.py",
+        "autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs",
+        "contracts/autocad-ipc/request.schema.json"
+      ],
+      "current_apis": [
+        "mcp_integration_lib.mcp_client.FileIPCLiveMCPClient",
+        "mcp_integration_lib.dotnet_ipc.DotNetIPCClient",
+        "autocad_plugin.CadAgent.AutoCAD2027.Ipc.OperationDispatcher.Dispatch"
+      ],
+      "current_consumers": [
+        "cad_agent.cli._live_client",
+        "autocad_plugin.CadAgent.AutoCAD2027.Commands.CadAgentCommands"
+      ],
+      "classification": "EXTEND_WITH_TEST",
+      "adapter": null,
+      "tests": [
+        "mcp_integration_lib/tests/test_dotnet_ipc.py",
+        "mcp_integration_lib/tests/test_file_ipc_e2e.py",
+        "autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/OperationDispatcherTests.cs"
+      ],
+      "acceptance_gate": "Contract tests plus AutoCAD Mechanical 2027 File IPC smoke when prerequisites exist; otherwise NOT RUN/SKIP.",
+      "migration": "Add multisource calls only through the existing File IPC request/result contracts.",
+      "rollback": "Revert new smoke/adapter references; existing File IPC remains unchanged.",
+      "inspected_paths": [
+        "mcp_integration_lib/mcp_client.py",
+        "mcp_integration_lib/dotnet_ipc.py",
+        "autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs",
+        "contracts/autocad-ipc/request.schema.json",
+        "mcp_integration_lib/tests/test_dotnet_ipc.py",
+        "mcp_integration_lib/tests/test_file_ipc_e2e.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "autocad-repair",
+      "capability": "Approved AutoCAD Mechanical repair operations",
+      "current_owner": "mcp_integration_lib and dxf_builder_lib",
+      "current_paths": [
+        "mcp_integration_lib/mcp_client.py",
+        "dxf_builder_lib/repair.py",
+        "cad_agent/cli.py",
+        "autocad_plugin/CadAgent.AutoCAD2027/Mechanical/ManagedMechanicalAdapter.cs"
+      ],
+      "current_apis": [
+        "mcp_integration_lib.mcp_client.MCPClient.entity_erase",
+        "dxf_builder_lib.repair.repair_dxf",
+        "cad_agent.cli._mechanical_repair_command",
+        "autocad_plugin.CadAgent.AutoCAD2027.Mechanical.ManagedMechanicalAdapter.Execute"
+      ],
+      "current_consumers": [
+        "cad_agent mechanical-repair",
+        "autocad_plugin.CadAgent.AutoCAD2027.Ipc.OperationDispatcher"
+      ],
+      "classification": "EXTEND_WITH_ADAPTER",
+      "adapter": "Route approved repair plans through existing backup, live review, repair, and second-review gates.",
+      "tests": [
+        "dxf_builder_lib/tests/test_repair.py",
+        "tests/test_cad_agent_cli.py",
+        "mcp_integration_lib/tests/test_dotnet_ipc.py"
+      ],
+      "acceptance_gate": "Headless repair tests plus AutoCAD Mechanical live repair smoke with verified backup and human approval.",
+      "migration": "Keep production mutation behind existing mechanical-repair approvals and rollback checks.",
+      "rollback": "Revert the adapter and reopen the verified backup; no production drawing is mutated by R0.",
+      "inspected_paths": [
+        "mcp_integration_lib/mcp_client.py",
+        "dxf_builder_lib/repair.py",
+        "cad_agent/cli.py",
+        "autocad_plugin/CadAgent.AutoCAD2027/Mechanical/ManagedMechanicalAdapter.cs",
+        "dxf_builder_lib/tests/test_repair.py",
+        "tests/test_cad_agent_cli.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "run-manifest-checkpoint-resume",
+      "capability": "Run manifests, PDF manifests, checkpoints, and resumability",
+      "current_owner": "cad_agent",
+      "current_paths": [
+        "cad_agent/manifest.py",
+        "cad_agent/pdf.py",
+        "cad_agent/cli.py"
+      ],
+      "current_apis": [
+        "cad_agent.manifest.new_manifest",
+        "cad_agent.manifest.read_manifest",
+        "cad_agent.manifest.write_manifest",
+        "cad_agent.cli.run_stages",
+        "cad_agent.pdf.run_pdf_stages"
+      ],
+      "current_consumers": [
+        "cad_agent.cli run",
+        "cad_agent.cli resume",
+        "cad_agent.cli run-pdf",
+        "cad_agent.cli resume-pdf"
+      ],
+      "classification": "EXTEND_WITH_ADAPTER",
+      "adapter": "Bind source-bundle and candidate revision metadata to the existing manifest/checkpoint lifecycle without creating a second store.",
+      "tests": [
+        "tests/test_cad_agent_cli.py",
+        "tests/test_cad_agent_pdf.py"
+      ],
+      "acceptance_gate": "Existing run/resume and run-pdf/resume-pdf contract tests plus hash-stable checkpoint evidence.",
+      "migration": "Extend current manifest fields only through cad_agent.manifest and preserve legacy readers/defaults.",
+      "rollback": "Revert the adapter fields; current manifests, checkpoints, and resume behavior remain authoritative.",
+      "inspected_paths": [
+        "cad_agent/manifest.py",
+        "cad_agent/pdf.py",
+        "cad_agent/cli.py",
+        "tests/test_cad_agent_cli.py",
+        "tests/test_cad_agent_pdf.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "drawing-setup",
+      "capability": "Hash-bound Drawing Initialization Setup gate",
+      "current_owner": "cad_agent and contracts/drawing-setup",
+      "current_paths": [
+        "cad_agent/drawing_setup.py",
+        "contracts/drawing-setup/drawing-setup-plan.schema.json",
+        "contracts/drawing-setup/drawing-setup-audit.schema.json"
+      ],
+      "current_apis": [
+        "cad_agent.drawing_setup.create_setup_plan",
+        "cad_agent.drawing_setup.create_setup_audit",
+        "cad_agent.drawing_setup.evaluate_setup_plan",
+        "cad_agent.drawing_setup.require_setup_verified"
+      ],
+      "current_consumers": [
+        "cad_agent.cli drawing-setup-plan",
+        "cad_agent.cli drawing-setup-audit",
+        "cad_agent.cli drawing-setup-verify"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "tests/test_drawing_setup_contracts.py",
+        "tests/test_cad_agent_drawing_setup.py"
+      ],
+      "acceptance_gate": "Drawing Setup contract and read-only AutoCAD Mechanical audit gates remain before geometry creation.",
+      "migration": "Use the existing Drawing Setup contracts and SETUP_VERIFIED evidence as the authoritative entry gate.",
+      "rollback": "Revert inventory references; Drawing Initialization behavior is unchanged.",
+      "inspected_paths": [
+        "cad_agent/drawing_setup.py",
+        "contracts/drawing-setup/drawing-setup-plan.schema.json",
+        "contracts/drawing-setup/drawing-setup-audit.schema.json",
+        "tests/test_drawing_setup_contracts.py",
+        "tests/test_cad_agent_drawing_setup.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "dimension-pilot",
+      "capability": "Offline dimension-first pilot adapter and evidence",
+      "current_owner": "cad_agent and contracts/dimension-pilot",
+      "current_paths": [
+        "cad_agent/dimension_pilot.py",
+        "contracts/dimension-pilot/dimension-pilot-plan.schema.json",
+        "contracts/dimension-pilot/dimension-pilot-evidence.schema.json"
+      ],
+      "current_apis": [
+        "cad_agent.dimension_pilot.run_dimension_pilot",
+        "cad_agent.dimension_pilot.write_dimension_evidence",
+        "dxf_builder_lib.builder.build_dxf"
+      ],
+      "current_consumers": [
+        "cad_agent.cli dimension-pilot",
+        "semantic_ir_lib.constraint_solving.solve_constraints"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "tests/test_cad_agent_dimension_pilot.py",
+        "tests/test_cad_agent_dimension_pilot_cli.py",
+        "tests/test_dimension_pilot_contracts.py"
+      ],
+      "acceptance_gate": "Gate A setup evidence precedes Gate B dimension acceptance; Mechanical acceptance remains NOT RUN offline.",
+      "migration": "Keep dimension-first driving lengths and datum anchoring at the existing SolveSpace/DXF boundaries.",
+      "rollback": "Revert inventory references; existing Dimension Pilot remains unchanged.",
+      "inspected_paths": [
+        "cad_agent/dimension_pilot.py",
+        "contracts/dimension-pilot/dimension-pilot-plan.schema.json",
+        "contracts/dimension-pilot/dimension-pilot-evidence.schema.json",
+        "tests/test_cad_agent_dimension_pilot.py",
+        "tests/test_dimension_pilot_contracts.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "vs-t1-dimension-observer",
+      "capability": "Visual Supervisor T1 dimension observation",
+      "current_owner": "primitive_ir_lib and cad_agent",
+      "current_paths": [
+        "primitive_ir_lib/dimension_observer.py",
+        "cad_agent/dimension_observer_run.py",
+        "cad_agent/run_dimension_observer.py"
+      ],
+      "current_apis": [
+        "primitive_ir_lib.dimension_observer.detect_dimension_clusters",
+        "primitive_ir_lib.dimension_observer.observe_dimension_cluster",
+        "primitive_ir_lib.dimension_observer.build_dimension_register",
+        "cad_agent.dimension_observer_run.run_dimension_observer"
+      ],
+      "current_consumers": [
+        "cad_agent.run_dimension_observer",
+        "tests/test_dimension_observer_run.py"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "primitive_ir_lib/tests/test_dimension_observer.py",
+        "tests/test_dimension_observer_run.py"
+      ],
+      "acceptance_gate": "Deterministic observer contract tests; private dimension benchmark when affected.",
+      "migration": "Reuse the existing observation/register evidence and do not add a second dimension recognizer.",
+      "rollback": "Revert inventory references; T1 observer remains unchanged.",
+      "inspected_paths": [
+        "primitive_ir_lib/dimension_observer.py",
+        "cad_agent/dimension_observer_run.py",
+        "cad_agent/run_dimension_observer.py",
+        "primitive_ir_lib/tests/test_dimension_observer.py",
+        "tests/test_dimension_observer_run.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "vs-t2-geometry-comparator",
+      "capability": "Visual Supervisor T2 geometry comparator",
+      "current_owner": "primitive_ir_lib and cad_agent",
+      "current_paths": [
+        "primitive_ir_lib/geometry_comparator.py",
+        "cad_agent/geometry_comparison_run.py",
+        "cad_agent/run_geometry_comparison.py"
+      ],
+      "current_apis": [
+        "primitive_ir_lib.geometry_comparator.create_comparison_artifacts",
+        "primitive_ir_lib.geometry_comparator.compare_curve_profile",
+        "primitive_ir_lib.geometry_comparator.compare_metric_trend",
+        "cad_agent.geometry_comparison_run.run_geometry_comparison"
+      ],
+      "current_consumers": [
+        "cad_agent.run_geometry_comparison",
+        "tests/test_geometry_comparison_run.py"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "primitive_ir_lib/tests/test_geometry_comparator.py",
+        "tests/test_geometry_comparison_run.py",
+        "tests/test_geometry_comparator_policy.py"
+      ],
+      "acceptance_gate": "Comparator contract and deterministic trend tests; no visual verdict is inferred from comparator output alone.",
+      "migration": "Reuse comparator metrics as evidence input and keep verdict authority separate.",
+      "rollback": "Revert inventory references; T2 comparator remains unchanged.",
+      "inspected_paths": [
+        "primitive_ir_lib/geometry_comparator.py",
+        "cad_agent/geometry_comparison_run.py",
+        "cad_agent/run_geometry_comparison.py",
+        "primitive_ir_lib/tests/test_geometry_comparator.py",
+        "tests/test_geometry_comparison_run.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "vs-t3-evidence-exporter",
+      "capability": "Visual Supervisor T3 AutoCAD-native evidence exporter",
+      "current_owner": "mcp_integration_lib and autocad_plugin/CadAgent.AutoCAD2027",
+      "current_paths": [
+        "mcp_integration_lib/dotnet_ipc.py",
+        "contracts/autocad-ipc/operations/visual-evidence-export.schema.json",
+        "autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs",
+        "autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadVisualEvidenceReader.cs"
+      ],
+      "current_apis": [
+        "mcp_integration_lib.dotnet_ipc.DotNetIPCClient.visual_evidence_export",
+        "autocad_plugin.CadAgent.AutoCAD2027.Ipc.OperationDispatcher.DispatchVisualEvidenceExport",
+        "autocad_plugin.CadAgent.AutoCAD2027.Drawing.AutoCadVisualEvidenceReader.ReadVisualEvidence"
+      ],
+      "current_consumers": [
+        "cad_agent.cli fidelity-mechanical-review",
+        "mcp_integration_lib.tests.test_vs_t3_ipc_adapter"
+      ],
+      "classification": "REUSE_AS_IS",
+      "adapter": null,
+      "tests": [
+        "mcp_integration_lib/tests/test_vs_t3_ipc_adapter.py",
+        "tests/test_vs_t3_ipc_contracts.py",
+        "autocad_plugin/CadAgent.AutoCAD2027.Tests/Drawing/VisualEvidenceBoundaryTests.cs"
+      ],
+      "acceptance_gate": "T3 contract tests and AutoCAD Mechanical live evidence export when prerequisites exist; otherwise NOT RUN/SKIP.",
+      "migration": "Keep AutoCAD-native evidence read-only and routed through the existing .NET File IPC operation.",
+      "rollback": "Revert inventory references; T3 evidence export remains unchanged.",
+      "inspected_paths": [
+        "mcp_integration_lib/dotnet_ipc.py",
+        "contracts/autocad-ipc/operations/visual-evidence-export.schema.json",
+        "autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs",
+        "autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadVisualEvidenceReader.cs",
+        "mcp_integration_lib/tests/test_vs_t3_ipc_adapter.py",
+        "tests/test_vs_t3_ipc_contracts.py"
+      ],
+      "gap_reason": null
+    },
+    {
+      "capability_id": "source-bundle-fusion",
+      "capability": "Multisource source-bundle and evidence-role fusion",
+      "current_owner": "none complete",
+      "current_paths": [
+        "cad_agent/manifest.py",
+        "cad_agent/pdf.py",
+        "cad_agent/visual_evidence.py",
+        "mcp_integration_lib/dotnet_ipc.py"
+      ],
+      "current_apis": [
+        "cad_agent.manifest.new_manifest",
+        "cad_agent.pdf.new_pdf_manifest",
+        "cad_agent.visual_evidence.snapshot_visual_run_manifest",
+        "mcp_integration_lib.dotnet_ipc.DotNetIPCClient.visual_evidence_export"
+      ],
+      "current_consumers": [
+        "cad_agent.cli.run",
+        "cad_agent.cli.run-pdf",
+        "cad_agent.cli.fidelity-mechanical-review"
+      ],
+      "classification": "NEW_MISSING_CAPABILITY",
+      "adapter": null,
+      "tests": [
+        "tests/test_cad_agent_cli.py",
+        "tests/test_cad_agent_pdf.py",
+        "tests/test_visual_evidence.py"
+      ],
+      "acceptance_gate": "A future source-bundle contract test and human review; no source fusion runtime is authorized by R0.",
+      "migration": "Introduce one orchestration boundary that references existing source, manifest, and evidence APIs without replacing them.",
+      "rollback": "Revert the future source-bundle boundary; existing image/PDF and evidence workflows remain intact.",
+      "inspected_paths": [
+        "cad_agent/manifest.py",
+        "cad_agent/pdf.py",
+        "cad_agent/visual_evidence.py",
+        "mcp_integration_lib/dotnet_ipc.py",
+        "tests/test_cad_agent_cli.py",
+        "tests/test_cad_agent_pdf.py",
+        "tests/test_visual_evidence.py"
+      ],
+      "gap_reason": "Existing manifests, PDF staging, and AutoCAD evidence export are separate boundaries; no complete source-bundle object fuses their roles and hashes into one multisource input record."
+    },
+    {
+      "capability_id": "exact-base-component-extraction",
+      "capability": "Exact-base CAD component extraction and provenance binding",
+      "current_owner": "none complete",
+      "current_paths": [
+        "primitive_ir_lib/run_image.py",
+        "primitive_ir_lib/run_pdf.py",
+        "primitive_ir_lib/geometry_extraction.py",
+        "dxf_builder_lib/builder.py"
+      ],
+      "current_apis": [
+        "primitive_ir_lib.run_image.run",
+        "primitive_ir_lib.run_pdf.run_pdf",
+        "dxf_builder_lib.builder.build_dxf"
+      ],
+      "current_consumers": [
+        "cad_agent.cli._run_primitive",
+        "cad_agent.cli._run_dxf"
+      ],
+      "classification": "NEW_MISSING_CAPABILITY",
+      "adapter": null,
+      "tests": [
+        "primitive_ir_lib/tests/test_run_image.py",
+        "primitive_ir_lib/tests/test_run_pdf.py",
+        "dxf_builder_lib/tests/test_builder.py"
+      ],
+      "acceptance_gate": "Future exact-base extraction contract, source hash, and human review before any candidate export.",
+      "migration": "Add a read-only extraction/provenance adapter over existing recognition and DXF boundaries.",
+      "rollback": "Revert the future extraction adapter; existing image/PDF recognition and DXF generation remain authoritative.",
+      "inspected_paths": [
+        "primitive_ir_lib/run_image.py",
+        "primitive_ir_lib/run_pdf.py",
+        "primitive_ir_lib/geometry_extraction.py",
+        "dxf_builder_lib/builder.py",
+        "primitive_ir_lib/tests/test_run_image.py",
+        "primitive_ir_lib/tests/test_run_pdf.py",
+        "dxf_builder_lib/tests/test_builder.py"
+      ],
+      "gap_reason": "The repository recognizes primitives and builds DXF, but has no complete read-only registry that extracts exact-base components from an approved CAD source and binds each component to source hashes and provenance."
+    },
+    {
+      "capability_id": "component-view-registry",
+      "capability": "Linked component and multi-view registry",
+      "current_owner": "none complete",
+      "current_paths": [
+        "semantic_ir_lib/assemble.py",
+        "dxf_builder_lib/builder.py",
+        "dxf_builder_lib/reviewer.py"
+      ],
+      "current_apis": [
+        "semantic_ir_lib.assemble.build_semantic_document",
+        "dxf_builder_lib.builder.build_dxf",
+        "dxf_builder_lib.reviewer.review_dxf"
+      ],
+      "current_consumers": [
+        "cad_agent.cli._run_semantic",
+        "cad_agent.cli._run_dxf"
+      ],
+      "classification": "NEW_MISSING_CAPABILITY",
+      "adapter": null,
+      "tests": [
+        "semantic_ir_lib/tests/test_semantic_ir.py",
+        "dxf_builder_lib/tests/test_semantic_components.py",
+        "dxf_builder_lib/tests/test_reviewer.py"
+      ],
+      "acceptance_gate": "Future component/view registry contract and independent review of linked view identity.",
+      "migration": "Add one registry adapter over existing Semantic IR parts and DXF component handles.",
+      "rollback": "Revert the future registry; Semantic IR, DXF handles, and headless review remain unchanged.",
+      "inspected_paths": [
+        "semantic_ir_lib/assemble.py",
+        "dxf_builder_lib/builder.py",
+        "dxf_builder_lib/reviewer.py",
+        "semantic_ir_lib/tests/test_semantic_ir.py",
+        "dxf_builder_lib/tests/test_semantic_components.py",
+        "dxf_builder_lib/tests/test_reviewer.py"
+      ],
+      "gap_reason": "Existing Semantic IR parts and DXF handles are not a persistent component/view graph linking the same component across overall, detail, section, and AutoCAD-native views."
+    },
+    {
+      "capability_id": "candidate-revision-synchronization",
+      "capability": "Candidate revision synchronization across artifacts and views",
+      "current_owner": "none complete",
+      "current_paths": [
+        "cad_agent/manifest.py",
+        "cad_agent/pdf.py",
+        "cad_agent/visual_evidence.py",
+        "dxf_builder_lib/builder.py"
+      ],
+      "current_apis": [
+        "cad_agent.manifest.write_manifest",
+        "cad_agent.pdf.run_pdf_stages",
+        "cad_agent.visual_evidence.write_visual_evidence",
+        "dxf_builder_lib.builder.build_dxf"
+      ],
+      "current_consumers": [
+        "cad_agent.cli.resume",
+        "cad_agent.cli.resume-pdf",
+        "cad_agent.cli.fidelity-promote"
+      ],
+      "classification": "NEW_MISSING_CAPABILITY",
+      "adapter": null,
+      "tests": [
+        "tests/test_cad_agent_cli.py",
+        "tests/test_cad_agent_pdf.py",
+        "tests/test_visual_evidence.py"
+      ],
+      "acceptance_gate": "Future revision manifest contract, immutable candidate test, and human promotion gate.",
+      "migration": "Build revision synchronization on the existing manifest, checkpoint, DXF, and visual-evidence hashes.",
+      "rollback": "Revert the future revision coordinator; existing manifests and checkpoints remain readable.",
+      "inspected_paths": [
+        "cad_agent/manifest.py",
+        "cad_agent/pdf.py",
+        "cad_agent/visual_evidence.py",
+        "dxf_builder_lib/builder.py",
+        "tests/test_cad_agent_cli.py",
+        "tests/test_cad_agent_pdf.py",
+        "tests/test_visual_evidence.py"
+      ],
+      "gap_reason": "Current manifests and checkpoints track individual pipeline stages, but no complete revision coordinator synchronizes multiple source/view candidates, supersession, and immutable artifact hashes."
+    },
+    {
+      "capability_id": "independent-visual-verdict",
+      "capability": "Independent visual evidence verdict separate from generation",
+      "current_owner": "none complete",
+      "current_paths": [
+        "primitive_ir_lib/geometry_comparator.py",
+        "cad_agent/visual_contracts.py",
+        "cad_agent/visual_evidence.py",
+        "autocad_plugin/CadAgent.AutoCAD2027/Review/ReviewEngine.cs"
+      ],
+      "current_apis": [
+        "primitive_ir_lib.geometry_comparator.compare_metric_trend",
+        "cad_agent.visual_contracts.validate_visual_contract",
+        "cad_agent.visual_evidence.validate_visual_evidence_freshness",
+        "autocad_plugin.CadAgent.AutoCAD2027.Review.ReviewEngine.Review"
+      ],
+      "current_consumers": [
+        "cad_agent.cli fidelity-review-index",
+        "cad_agent.cli mechanical-review"
+      ],
+      "classification": "NEW_MISSING_CAPABILITY",
+      "adapter": null,
+      "tests": [
+        "tests/test_geometry_comparator_policy.py",
+        "tests/test_visual_evidence.py",
+        "autocad_plugin/CadAgent.AutoCAD2027.Tests/Review/ReviewEngineTests.cs"
+      ],
+      "acceptance_gate": "Future independent verdict contract and delegated visual/human review; comparator output alone cannot be PASS.",
+      "migration": "Compose existing comparator, evidence, and AutoCAD review results without letting generation self-approve.",
+      "rollback": "Revert the future verdict coordinator; existing evidence and review records remain read-only.",
+      "inspected_paths": [
+        "primitive_ir_lib/geometry_comparator.py",
+        "cad_agent/visual_contracts.py",
+        "cad_agent/visual_evidence.py",
+        "autocad_plugin/CadAgent.AutoCAD2027/Review/ReviewEngine.cs",
+        "tests/test_geometry_comparator_policy.py",
+        "tests/test_visual_evidence.py",
+        "autocad_plugin/CadAgent.AutoCAD2027.Tests/Review/ReviewEngineTests.cs"
+      ],
+      "gap_reason": "Existing geometry comparison and AutoCAD review produce separate evidence, but no independent verdict record aggregates them with explicit human/delegated approval without becoming a generation-side self-approval path."
+    },
+    {
+      "capability_id": "codex-repair-planning",
+      "capability": "Codex repair planning separated from repair execution",
+      "current_owner": "none complete",
+      "current_paths": [
+        "agent_lib/run.py",
+        "dxf_builder_lib/repair.py",
+        "cad_agent/cli.py"
+      ],
+      "current_apis": [
+        "agent_lib.run.run",
+        "dxf_builder_lib.repair.repair_dxf",
+        "dxf_builder_lib.repair.repair_insert_components",
+        "cad_agent.cli._mechanical_repair_command"
+      ],
+      "current_consumers": [
+        "agent_lib.tests.test_run",
+        "tests/test_cad_agent_cli.py"
+      ],
+      "classification": "NEW_MISSING_CAPABILITY",
+      "adapter": null,
+      "tests": [
+        "agent_lib/tests/test_run.py",
+        "dxf_builder_lib/tests/test_repair.py",
+        "tests/test_cad_agent_cli.py"
+      ],
+      "acceptance_gate": "Future hash-bound repair-plan contract, human approval, backup, and second-review gates.",
+      "migration": "Add a non-mutating planner that emits approved inputs for existing headless/mechanical repair APIs.",
+      "rollback": "Revert the planner; existing repair executors remain behind their current approval gates.",
+      "inspected_paths": [
+        "agent_lib/run.py",
+        "dxf_builder_lib/repair.py",
+        "cad_agent/cli.py",
+        "agent_lib/tests/test_run.py",
+        "dxf_builder_lib/tests/test_repair.py",
+        "tests/test_cad_agent_cli.py"
+      ],
+      "gap_reason": "Agent advice/application and repair executors exist, but no dedicated non-mutating Codex repair planner binds visual findings, repair scope, approvals, backups, and executor inputs into one auditable plan."
+    },
+    {
+      "capability_id": "verified-promotion",
+      "capability": "Verified candidate promotion with visual and Mechanical evidence",
+      "current_owner": "cad_agent and mcp_integration_lib",
+      "current_paths": [
+        "cad_agent/visual_evidence.py",
+        "cad_agent/visual_contracts.py",
+        "cad_agent/cli.py",
+        "mcp_integration_lib/dotnet_ipc.py"
+      ],
+      "current_apis": [
+        "cad_agent.visual_evidence.write_visual_evidence",
+        "cad_agent.visual_contracts.require_auto_publish_authorized",
+        "cad_agent.cli._fidelity_promote_command",
+        "mcp_integration_lib.dotnet_ipc.DotNetIPCClient.visual_evidence_export"
+      ],
+      "current_consumers": [
+        "cad_agent.cli fidelity-promote",
+        "cad_agent.cli fidelity-mechanical-review"
+      ],
+      "classification": "EXTEND_WITH_ADAPTER",
+      "adapter": "Bind candidate promotion to existing visual contract authorization, evidence freshness, and read-only Mechanical review checkpoints.",
+      "tests": [
+        "tests/test_cad_agent_fidelity.py",
+        "tests/test_visual_evidence.py",
+        "tests/test_cad_agent_cli.py"
+      ],
+      "acceptance_gate": "Delegated visual approval and AutoCAD Mechanical read-only review; production mutation remains separately gated.",
+      "migration": "Extend the current fidelity promotion flow without changing the ordinary production repair boundary.",
+      "rollback": "Revert the promotion adapter; existing review-only fidelity artifacts remain outside production mutation.",
+      "inspected_paths": [
+        "cad_agent/visual_evidence.py",
+        "cad_agent/visual_contracts.py",
+        "cad_agent/cli.py",
+        "mcp_integration_lib/dotnet_ipc.py",
+        "tests/test_cad_agent_fidelity.py",
+        "tests/test_visual_evidence.py",
+        "tests/test_cad_agent_cli.py"
+      ],
+      "gap_reason": null
+    }
+  ]
+}

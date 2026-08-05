@@ -22,6 +22,30 @@ CLASSIFICATIONS = frozenset(
         "DEPRECATED_AFTER_MIGRATION",
     }
 )
+REQUIRED_CAPABILITY_IDS = frozenset(
+    {
+        "image-pdf-recognition",
+        "semantic-parts-constraints",
+        "ambiguity-proposal-apply",
+        "native-dxf-generation",
+        "headless-review-repair",
+        "autocad-file-ipc",
+        "autocad-repair",
+        "run-manifest-checkpoint-resume",
+        "drawing-setup",
+        "dimension-pilot",
+        "vs-t1-dimension-observer",
+        "vs-t2-geometry-comparator",
+        "vs-t3-evidence-exporter",
+        "source-bundle-fusion",
+        "exact-base-component-extraction",
+        "component-view-registry",
+        "candidate-revision-synchronization",
+        "independent-visual-verdict",
+        "codex-repair-planning",
+        "verified-promotion",
+    }
+)
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _CAPABILITY_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _ROOT_FIELDS = {
@@ -156,6 +180,19 @@ def read_inventory(path: Path) -> dict[str, Any]:
     return validate_inventory(payload)
 
 
+def validate_completeness(inventory: Mapping[str, object]) -> None:
+    """Require exactly the repository-wide capability set for the R0 audit."""
+
+    validated = validate_inventory(inventory)
+    actual = {item["capability_id"] for item in validated["capabilities"]}
+    if actual != REQUIRED_CAPABILITY_IDS:
+        raise ValueError(
+            "reuse inventory capability set mismatch: "
+            f"missing={sorted(REQUIRED_CAPABILITY_IDS - actual)} "
+            f"extra={sorted(actual - REQUIRED_CAPABILITY_IDS)}"
+        )
+
+
 def validate_against_repository(inventory: Mapping[str, object], repo_root: Path) -> None:
     """Ensure all repository-relative inventory paths exist inside ``repo_root``."""
 
@@ -187,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     inventory = read_inventory(args.inventory)
     validate_against_repository(inventory, args.repo_root)
+    validate_completeness(inventory)
     print(args.inventory.resolve())
     return 0
 
