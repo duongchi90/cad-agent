@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/reuse_inventory.py"
 EXAMPLE = ROOT / "contracts/reuse-integration/examples/reuse-inventory.json"
+REPOSITORY_INVENTORY = ROOT / "docs/superpowers/reuse/2026-08-04-reuse-inventory.json"
 
 
 def _module():
@@ -104,7 +105,7 @@ def test_external_repository_paths_are_allowed() -> None:
     module.validate_against_repository(payload, ROOT)
 
 
-def test_cli_checks_the_example_inventory() -> None:
+def test_cli_rejects_incomplete_example_inventory() -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -118,5 +119,23 @@ def test_cli_checks_the_example_inventory() -> None:
         text=True,
         check=False,
     )
+    assert result.returncode != 0
+    assert "capability set mismatch" in result.stderr
+
+
+def test_cli_checks_complete_repository_inventory() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "check",
+            str(REPOSITORY_INVENTORY),
+            "--repo-root",
+            str(ROOT),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert result.returncode == 0, result.stderr
-    assert str(EXAMPLE.resolve()) in result.stdout
+    assert str(REPOSITORY_INVENTORY.resolve()) in result.stdout
