@@ -1,0 +1,53 @@
+{
+  "schema_version": "source-bundle-1.0",
+  "bundle_id": "BUNDLE-20260805-001",
+  "run_id": "RUN-20260805-001",
+  "created_at_utc": "2026-08-05T07:30:00Z",
+  "items": [
+    {
+      "source_id": "BASE-CAD-001",
+      "kind": "EXACT_BASE_CAD",
+      "role": "BASE_CAD",
+      "relative_path": "sources/base/original.dwg",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/acad",
+      "page_ids": [],
+      "region_ids": [],
+      "captured_at_utc": null,
+      "quality": {
+        "distortion": "NONE",
+        "legibility": "GOOD"
+      }
+    },
+    {
+      "source_id": "DETAIL-PDF-001",
+      "kind": "PDF",
+      "role": "DETAIL",
+      "relative_path": "sources/details/detail-pages.pdf",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "media_type": "application/pdf",
+      "page_ids": ["PAGE-002", "PAGE-003"],
+      "region_ids": ["REGION-DETAIL-A"],
+      "captured_at_utc": "2026-08-05T07:20:00Z",
+      "quality": {
+        "distortion": "PERSPECTIVE",
+        "legibility": "LIMITED"
+      }
+    },
+    {
+      "source_id": "ENGINEER-DECISION-001",
+      "kind": "ENGINEER_RECORD",
+      "role": "DECISION",
+      "relative_path": "sources/decisions/decision-001.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "media_type": "application/json",
+      "page_ids": [],
+      "region_ids": ["REGION-DETAIL-A"],
+      "captured_at_utc": "2026-08-05T07:25:00Z",
+      "quality": {
+        "distortion": "NONE",
+        "legibility": "GOOD"
+      }
+    }
+  ]
+}
