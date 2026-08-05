@@ -1,0 +1,30 @@
+{
+  "accepted_existing_violations": [
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:cad_agent/cli.py:mcp_integration_lib.dotnet_ipc",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:cad_agent/cli.py:mcp_integration_lib.mcp_client",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:cad_agent/live.py:mcp_integration_lib.repair2",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:cad_agent/live.py:mcp_integration_lib.reviewer2",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:tests/test_cad_agent_cli.py:mcp_integration_lib.mcp_client",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:tests/test_cad_agent_drawing_setup.py:mcp_integration_lib.dotnet_ipc",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:tests/test_cad_agent_fidelity.py:mcp_integration_lib.mcp_client",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:tests/test_cad_agent_live.py:mcp_integration_lib.mcp_client",
+    "AUTOCAD_TRANSPORT_OUTSIDE_APPROVED_BOUNDARY:tests/test_vs_t3_ipc_contracts.py:mcp_integration_lib.dotnet_ipc",
+    "DIRECT_DXF_WRITE_OUTSIDE_DXF_BUILDER:cad_agent/fidelity.py:ezdxf",
+    "DIRECT_DXF_WRITE_OUTSIDE_DXF_BUILDER:cad_agent/fidelity.py:ezdxf.addons.drawing",
+    "DIRECT_DXF_WRITE_OUTSIDE_DXF_BUILDER:cad_agent/fidelity.py:ezdxf.addons.drawing.pymupdf",
+    "DIRECT_DXF_WRITE_OUTSIDE_DXF_BUILDER:mcp_integration_lib/tests/test_dotnet_ipc_live.py:ezdxf",
+    "DIRECT_DXF_WRITE_OUTSIDE_DXF_BUILDER:mcp_integration_lib/tests/test_file_ipc_e2e.py:ezdxf",
+    "DIRECT_DXF_WRITE_OUTSIDE_DXF_BUILDER:mcp_integration_lib/tests/test_vs_t3_live.py:ezdxf",
+    "DIRECT_DXF_WRITE_OUTSIDE_DXF_BUILDER:tests/test_cad_agent_fidelity.py:ezdxf",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:agent_lib/run.py:cv2",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:cad_agent/dimension_observer_run.py:cv2",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:cad_agent/dimension_observer_run.py:pytesseract",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:cad_agent/fidelity.py:cv2",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:cad_agent/geometry_comparison_run.py:cv2",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:tests/test_cad_agent_cli.py:cv2",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:tests/test_cad_agent_fidelity.py:cv2",
+    "DIRECT_OCR_IMPORT_OUTSIDE_PRIMITIVE_OWNER:verify_tier2.py:cv2"
+  ],
+  "base_sha": "db91f3585f20984b7892454b3a5f9a6d2c32a567",
+  "schema_version": "architecture-boundaries-1.0"
+}
