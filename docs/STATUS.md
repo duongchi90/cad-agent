@@ -18,9 +18,14 @@
 
 ## Reuse Integration Rebaseline
 
-- State: **Executing**. R0-T6 records the audit and supersedes the historical
-  roadmap; R0 is not accepted or completed until Task 7 owns the aggregate
-  verification.
+- State: **Executing**. R0-T7 is recording the aggregate verification; R0 is
+  not accepted or completed until the final evidence record is verified.
+- Current Task 7 implementation base:
+  `07a14ce3623024f2df848b2b88ff447980772492`.
+- Provisional implementation record:
+  `docs/superpowers/implementation-records/2026-08-04-reuse-integration-rebaseline.md`.
+- Full-verifier candidate and final record-only head: **NOT RUN** at the
+  provisional-record stage.
 - Exact implementation base for this task:
   `cac38a1cf558aee1245ae669bcc106bf3619b8e5`.
 - Design merge:
