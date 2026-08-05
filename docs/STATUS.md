@@ -18,15 +18,18 @@
 
 ## Reuse Integration Rebaseline
 
-- State: **Executing**. R0-T7 is recording the aggregate verification; R0 is
-  not accepted or completed until the final evidence record is verified.
+- State: **Accepted for R0 governance/rebaseline scope**. Runtime work remains
+  locked; this acceptance does not promote any future subsystem.
+- R0-T6 documentation phase state before aggregate verification: **Executing**.
 - Current Task 7 implementation base:
   `07a14ce3623024f2df848b2b88ff447980772492`.
-- Provisional implementation record:
+- Implementation record:
   `docs/superpowers/implementation-records/2026-08-04-reuse-integration-rebaseline.md`.
-- Full-verifier candidate and final record-only head: **NOT RUN** at the
-  provisional-record stage.
-- Exact implementation base for this task:
+- Full-verifier candidate SHA:
+  `a373114c91edd02a6a4dd086b02b2a89433be964`.
+- Final record-only SHA: recorded in the final PR and handoff after the
+  record-only commit; the canonical verifier was not rerun on that commit.
+- R0-T6 implementation base:
   `cac38a1cf558aee1245ae669bcc106bf3619b8e5`.
 - Design merge:
   `4cc2c0f198484581f5781466e769441d4e7da669`.
@@ -48,6 +51,10 @@
 - AutoCAD Mechanical live gate: **NOT RUN**.
 - Codex SDK spike: **NOT RUN**.
 - Unavailable-state `SKIP` results, when collected, are not acceptance evidence.
+- R0 acceptance evidence: inventory checker exit `0`; architecture checker
+  `PASS`; focused R0 suite `41 passed, 0 skipped`; canonical candidate offline
+  JUnit `808/0/0/0` and dotnet IPC JUnit `38/0/0/0`.
+- Remaining locked work: S1, S2, S3, R1-R8, and old VS-T4 through VS-T8.
 
 ## Authoritative verification
 
