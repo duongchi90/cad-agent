@@ -22,44 +22,57 @@ Never treat a chat statement, PR body, branch name, or old status note as proof 
 ## 2. Current integrated state
 
 - Repository: `duongchi90/cad-agent`
-- Latest accepted implementation base at this handoff update: `c325d009c3035be5c3202e3939efd4a82bcd2f42`
-- Latest merged implementation PR: #35 — R0-T1 closed reuse-inventory contract and validator
-- Completed issue: #34
+- Latest accepted implementation base at this handoff update: `20be1cff9502115ddeb9171d9f856bddb9f90f63`
+- Latest merged implementation PR: #37 — R0-T2 repository-wide reuse inventory and completeness gate
+- Completed issue: #36
+- Previous R0 implementation PR: #35 — R0-T1 closed reuse-inventory contract and validator
 - PR #31 was closed without merge because the reviewed and merged PR #32 superseded it.
 
 The current `main` may be newer because operational documentation can be committed after the implementation base above. Every new session must resolve the live `main` SHA from GitHub rather than assuming the SHA written here is the branch tip.
 
-R0-T1 added only:
+R0-T2 added only:
 
-- `contracts/reuse-integration/reuse-inventory.schema.json`
-- `contracts/reuse-integration/examples/reuse-inventory.json`
+- `docs/superpowers/reuse/2026-08-04-reuse-inventory.json`
 - `scripts/reuse_inventory.py`
 - `tests/test_reuse_inventory_contract.py`
+- `tests/test_reuse_inventory_repository.py`
 
-R0-T1 did not change the CAD runtime, dependencies, lock file, AutoCAD behavior, repair authority, Visual Supervisor verdict authority, or publication behavior.
+R0-T2 records exactly 20 required capabilities and makes the standalone inventory CLI fail closed when the capability set is incomplete. It did not change CAD runtime packages, dependencies, the lock file, AutoCAD behavior, repair authority, Visual Supervisor verdict authority, or publication behavior.
+
+Accepted evidence for PR #37 final head `cedba0c108c4ad8e26d3e7f2e871aada8a3baff8`:
+
+- focused R0-T1 + R0-T2 tests: 16 passed;
+- GitHub Actions run #278: success;
+- hosted verifier: 765 offline tests passed and 38 dotnet IPC tests passed;
+- private real-data unavailable-state probe: 2 SKIP;
+- actual private-data/real-drawing acceptance: NOT RUN;
+- AutoCAD unavailable-state probe: 9 SKIP;
+- actual AutoCAD Mechanical live marker: NOT RUN;
+- AutoCAD .NET gate: NOT RUN because the hosted verifier used `-SkipAutoCADDotNet`.
 
 ## 3. Active task
 
-- Task: R0-T2 — repository-wide reuse inventory and completeness gate
-- Issue: #36
-- Expected branch: `task/r0-t2-repository-reuse-inventory`
-- Required implementation base: `c325d009c3035be5c3202e3939efd4a82bcd2f42`
+- Task: R0-T3 — mandatory Reuse Declaration for implementation PRs
+- Issue: #38
+- Expected branch: `task/r0-t3-reuse-declaration`
+- Required implementation base: `20be1cff9502115ddeb9171d9f856bddb9f90f63`
 - PR: none recorded at this handoff update
-- Current task authority: Issue #36 plus Task 2 in the approved R0 plan
+- Current task authority: Issue #38 plus Task 3 in the approved R0 plan
 
-Allowed files for R0-T2:
+Allowed files for R0-T3:
 
-- `docs/superpowers/reuse/2026-08-04-reuse-inventory.json`
-- `tests/test_reuse_inventory_repository.py`
-- `scripts/reuse_inventory.py`
+- `.github/pull_request_template.md`
+- `.github/workflows/reuse-declaration.yml`
+- `scripts/check_reuse_declaration.py`
+- `tests/test_reuse_declaration.py`
 
-R0-T2 must inventory exactly 20 required capabilities and add a completeness gate. It is audit/governance work only.
+R0-T3 adds governance enforcement only. Implementation changes must carry all eight non-empty Reuse Declaration fields; docs/non-implementation changes remain explicitly auditable and exempt. The task must not modify CAD runtime, contracts unrelated to this checker, dependencies, or the lock file.
 
 ## 4. Locked work
 
-Until R0-T2 is reviewed and merged:
+Until R0-T3 is reviewed and merged:
 
-- do not start R0-T3;
+- do not start R0-T4;
 - do not start S1, S2, or S3;
 - do not start R1–R8;
 - do not resume the old VS-T4 or VS-T5 tasks unchanged;
@@ -168,4 +181,4 @@ Then verify `main`, issue state, branch/PR, final head, changed files, diff, and
 
 ## 11. Next action
 
-Codex may implement Issue #36 only. The PO must review its eventual PR before R0-T3 is issued.
+Codex may implement Issue #38 only. The implementation branch must start from `20be1cff9502115ddeb9171d9f856bddb9f90f63`, even if `main` has a later handoff-only documentation commit. Codex must open one non-draft PR and stop. The PO must review that PR before R0-T4 is issued.
