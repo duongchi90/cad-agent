@@ -1,0 +1,908 @@
+{
+  "commands": {
+    "dimension-pilot-run": {
+      "options": {
+        "--output-dxf": {
+          "dest": "output_dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--output-evidence": {
+          "dest": "output_evidence",
+          "nargs": null,
+          "required": true
+        },
+        "--plan": {
+          "dest": "plan",
+          "nargs": null,
+          "required": true
+        },
+        "--primitive-ir": {
+          "dest": "primitive_ir",
+          "nargs": null,
+          "required": true
+        },
+        "--semantic-ir": {
+          "dest": "semantic_ir",
+          "nargs": null,
+          "required": true
+        },
+        "--setup-evidence": {
+          "dest": "setup_evidence",
+          "nargs": null,
+          "required": true
+        },
+        "--setup-plan": {
+          "dest": "setup_plan",
+          "nargs": null,
+          "required": true
+        },
+        "--source": {
+          "dest": "source",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "doctor": {
+      "options": {
+        "--json": {
+          "dest": "json",
+          "nargs": 0,
+          "required": false
+        }
+      }
+    },
+    "drawing-setup-audit": {
+      "options": {
+        "--drawing": {
+          "dest": "drawing",
+          "nargs": null,
+          "required": true
+        },
+        "--hwnd": {
+          "dest": "hwnd",
+          "nargs": null,
+          "required": true
+        },
+        "--ipc-dir": {
+          "dest": "ipc_dir",
+          "nargs": null,
+          "required": true
+        },
+        "--output": {
+          "dest": "output",
+          "nargs": null,
+          "required": true
+        },
+        "--timeout-s": {
+          "dest": "timeout_s",
+          "nargs": null,
+          "required": false
+        }
+      }
+    },
+    "drawing-setup-plan": {
+      "options": {
+        "--definition": {
+          "dest": "definition",
+          "nargs": null,
+          "required": true
+        },
+        "--domain-pack": {
+          "dest": "domain_pack",
+          "nargs": null,
+          "required": true
+        },
+        "--output": {
+          "dest": "output",
+          "nargs": null,
+          "required": true
+        },
+        "--profile": {
+          "dest": "profile",
+          "nargs": null,
+          "required": true
+        },
+        "--run-id": {
+          "dest": "run_id",
+          "nargs": null,
+          "required": true
+        },
+        "--template-file": {
+          "dest": "template_file",
+          "nargs": null,
+          "required": true
+        },
+        "--template-manifest": {
+          "dest": "template_manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "drawing-setup-verify": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--audit": {
+          "dest": "audit",
+          "nargs": null,
+          "required": true
+        },
+        "--output": {
+          "dest": "output",
+          "nargs": null,
+          "required": true
+        },
+        "--plan": {
+          "dest": "plan",
+          "nargs": null,
+          "required": true
+        },
+        "--verified-by": {
+          "dest": "verified_by",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-compose": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-dimension-observe": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-dimension-reconstruct": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--base-dxf": {
+          "dest": "base_dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-dimension-review-index": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-hatch-approve": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--base-dxf": {
+          "dest": "base_dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--mappings": {
+          "dest": "mappings",
+          "nargs": null,
+          "required": true
+        },
+        "--observation": {
+          "dest": "observation",
+          "nargs": null,
+          "required": true
+        },
+        "--page": {
+          "dest": "page",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-hatch-observe": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-hatch-reconstruct": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--base-dxf": {
+          "dest": "base_dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-linetype-reconstruct": {
+      "options": {
+        "--base-dxf": {
+          "dest": "base_dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--observation": {
+          "dest": "observation",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-mechanical-review": {
+      "options": {
+        "--dispatcher": {
+          "dest": "dispatcher",
+          "nargs": null,
+          "required": true
+        },
+        "--hwnd": {
+          "dest": "hwnd",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--page": {
+          "dest": "page",
+          "nargs": null,
+          "required": true
+        },
+        "--timeout-s": {
+          "dest": "timeout_s",
+          "nargs": null,
+          "required": false
+        }
+      }
+    },
+    "fidelity-observe": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-overlay": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-pdf": {
+      "options": {
+        "--dpi": {
+          "dest": "dpi",
+          "nargs": null,
+          "required": false
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--output-dir": {
+          "dest": "output_dir",
+          "nargs": null,
+          "required": true
+        },
+        "--source-approval": {
+          "dest": "source_approval",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-promote": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--composed-page": {
+          "dest": "composed_page",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--page": {
+          "dest": "page",
+          "nargs": null,
+          "required": true
+        },
+        "--revision": {
+          "dest": "revision",
+          "nargs": null,
+          "required": false
+        }
+      }
+    },
+    "fidelity-reconstruct": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-region-approve": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--page": {
+          "dest": "page",
+          "nargs": null,
+          "required": true
+        },
+        "--region-id": {
+          "dest": "region_id",
+          "nargs": null,
+          "required": true
+        },
+        "--revision": {
+          "dest": "revision",
+          "nargs": null,
+          "required": false
+        }
+      }
+    },
+    "fidelity-region-proposal": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--page": {
+          "dest": "page",
+          "nargs": null,
+          "required": true
+        },
+        "--regions": {
+          "dest": "regions",
+          "nargs": null,
+          "required": true
+        },
+        "--revision": {
+          "dest": "revision",
+          "nargs": null,
+          "required": false
+        }
+      }
+    },
+    "fidelity-review-index": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-review-queue": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-table-text-approve": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--candidate-id": {
+          "dest": "candidate_id",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--observation": {
+          "dest": "observation",
+          "nargs": null,
+          "required": true
+        },
+        "--page": {
+          "dest": "page",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-table-text-observe": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-table-text-reconstruct": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--base-dxf": {
+          "dest": "base_dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-text-approve": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--candidate-id": {
+          "dest": "candidate_id",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--observation": {
+          "dest": "observation",
+          "nargs": null,
+          "required": true
+        },
+        "--page": {
+          "dest": "page",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-text-approve-selection": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        },
+        "--selection": {
+          "dest": "selection",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-text-observe": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-text-reconstruct": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--base-dxf": {
+          "dest": "base_dxf",
+          "nargs": null,
+          "required": false
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "fidelity-text-review-index": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "mechanical-repair": {
+      "options": {
+        "--approval-reference": {
+          "dest": "approval_reference",
+          "nargs": null,
+          "required": true
+        },
+        "--backup-dir": {
+          "dest": "backup_dir",
+          "nargs": null,
+          "required": true
+        },
+        "--build-evidence": {
+          "dest": "build_evidence",
+          "nargs": null,
+          "required": true
+        },
+        "--confirm-repair": {
+          "dest": "confirm_repair",
+          "nargs": null,
+          "required": true
+        },
+        "--dispatcher": {
+          "dest": "dispatcher",
+          "nargs": null,
+          "required": true
+        },
+        "--dxf": {
+          "dest": "dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--hwnd": {
+          "dest": "hwnd",
+          "nargs": null,
+          "required": true
+        },
+        "--report": {
+          "dest": "report",
+          "nargs": null,
+          "required": true
+        },
+        "--timeout-s": {
+          "dest": "timeout_s",
+          "nargs": null,
+          "required": false
+        }
+      }
+    },
+    "mechanical-review": {
+      "options": {
+        "--build-evidence": {
+          "dest": "build_evidence",
+          "nargs": null,
+          "required": true
+        },
+        "--dispatcher": {
+          "dest": "dispatcher",
+          "nargs": null,
+          "required": true
+        },
+        "--dxf": {
+          "dest": "dxf",
+          "nargs": null,
+          "required": true
+        },
+        "--hwnd": {
+          "dest": "hwnd",
+          "nargs": null,
+          "required": true
+        },
+        "--report": {
+          "dest": "report",
+          "nargs": null,
+          "required": true
+        },
+        "--timeout-s": {
+          "dest": "timeout_s",
+          "nargs": null,
+          "required": false
+        }
+      }
+    },
+    "resume": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "resume-pdf": {
+      "options": {
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "run": {
+      "options": {
+        "--calibration-approval": {
+          "dest": "calibration_approval",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--output-dir": {
+          "dest": "output_dir",
+          "nargs": null,
+          "required": true
+        },
+        "--scale-mm-per-px": {
+          "dest": "scale_mm_per_px",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
+    "run-pdf": {
+      "options": {
+        "--auto-ocr-roi": {
+          "dest": "auto_ocr_roi",
+          "nargs": 0,
+          "required": false
+        },
+        "--calibration-approval": {
+          "dest": "calibration_approval",
+          "nargs": null,
+          "required": true
+        },
+        "--dpi": {
+          "dest": "dpi",
+          "nargs": null,
+          "required": false
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--output-dir": {
+          "dest": "output_dir",
+          "nargs": null,
+          "required": true
+        },
+        "--scale-mm-per-px": {
+          "dest": "scale_mm_per_px",
+          "nargs": null,
+          "required": true
+        }
+      }
+    }
+  },
+  "schema_version": "legacy-cli-baseline-1.0"
+}
