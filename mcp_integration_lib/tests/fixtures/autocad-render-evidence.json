@@ -1,0 +1,86 @@
+{
+  "request": {
+    "artifact_kind": "PNG",
+    "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "latest_mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "layout": {
+      "identity": "layout-001",
+      "name": "Layout1"
+    },
+    "render_options": {
+      "background": "white",
+      "dpi": 300,
+      "fit_to_paper": true,
+      "paper_size": "A4",
+      "plot_style": "monochrome.ctb"
+    },
+    "request_id": "render-request-001",
+    "run_id": "run-001",
+    "requested_at": "2026-08-05T08:00:00Z",
+    "schema_version": "autocad-native-render-request-1.0",
+    "visual_run_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "png": {
+    "artifact": {
+      "height": 1080,
+      "relative_path": "evidence/layout-001.png",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "width": 1920
+    },
+    "artifact_kind": "PNG",
+    "changed": false,
+    "capture_timestamp": "2026-08-05T08:00:03Z",
+    "dbmod_after": 0,
+    "dbmod_before": 0,
+    "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "latest_mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "layout": {
+      "identity": "layout-001",
+      "name": "Layout1"
+    },
+    "renderer": "AUTOCAD_NATIVE",
+    "render_options": {
+      "background": "white",
+      "dpi": 300,
+      "fit_to_paper": true,
+      "paper_size": "A4",
+      "plot_style": "monochrome.ctb"
+    },
+    "request_id": "render-request-001",
+    "run_id": "run-001",
+    "schema_version": "autocad-native-render-evidence-1.0",
+    "visual_run_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "warnings": []
+  },
+  "pdf": {
+    "artifact": {
+      "page_count": 2,
+      "relative_path": "evidence/layout-001.pdf",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "artifact_kind": "PDF",
+    "changed": false,
+    "capture_timestamp": "2026-08-05T08:00:04Z",
+    "dbmod_after": 0,
+    "dbmod_before": 0,
+    "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "latest_mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "layout": {
+      "identity": "layout-001",
+      "name": "Layout1"
+    },
+    "renderer": "AUTOCAD_NATIVE",
+    "render_options": {
+      "background": "white",
+      "dpi": 300,
+      "fit_to_paper": true,
+      "paper_size": "A4",
+      "plot_style": "monochrome.ctb"
+    },
+    "request_id": "render-request-001",
+    "run_id": "run-001",
+    "schema_version": "autocad-native-render-evidence-1.0",
+    "visual_run_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "warnings": []
+  }
+}
