@@ -8,6 +8,8 @@ Read these before planning or changing behavior:
 - Current architecture: `docs/ARCHITECTURE.md`
 - Verified status: `docs/STATUS.md`
 - Quality and release gates: `docs/QUALITY.md`
+- AI roles and authority: `docs/AI_OPERATING_MODEL.md`
+- Active accelerated reuse-first program: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md` and `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`
 - Design/plan record policy: `docs/superpowers/README.md`
 
 `HANDOFF.md` and `CAD-Agent-Kien-Truc-v1_3.md` are historical evidence. Do not
@@ -40,11 +42,13 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 
 1. Inspect current status, relevant contracts, and recent commits.
 2. For new behavior, obtain design approval before implementation.
-3. Use a failing regression test or benchmark before changing production logic.
-4. Keep one writer for a branch or overlapping file set. Use parallel agents for
+3. Before new production behavior, complete the Issue's internal/external reuse dossier and prefer existing APIs or a thin adapter; stop for PO review when licensing, reproducibility, architecture ownership, or benchmark benefit is unclear.
+4. Do not build a custom production Codex transport: use the approved official SDK/App Server/fallback order from the operating model.
+5. Use a failing regression test or benchmark before changing production logic.
+6. Keep one writer for a branch or overlapping file set. Use parallel agents for
    read-heavy exploration, test execution, and independent review.
-5. Keep commits scoped and run focused checks after each task.
-6. Run `scripts/verify.ps1` before claiming completion or committing a release
+7. Keep commits scoped and run focused checks after each task.
+8. Run `scripts/verify.ps1` before claiming completion or committing a release
    candidate.
 
 ## Specialized gates
