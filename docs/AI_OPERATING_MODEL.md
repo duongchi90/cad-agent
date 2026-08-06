@@ -59,6 +59,52 @@ For each task, the PO must produce one of two outcomes:
 1. **Accepted** — exact evidence, remaining NOT RUN gates, merge action, and next bounded task.
 2. **Changes required** — numbered blockers, affected files/contracts, required regression tests, and no next-task authorization.
 
+## Official ChatGPT-to-Codex handoff
+
+ChatGPT context is materialized as a closed, hash-bound vision handoff; chat memory alone is not execution authority.
+
+The official OpenAI Codex Python SDK is the preferred `openai-codex` worker-control integration. App Server is used only for required SDK gaps; a bounded official CLI mode is the fallback; MCP is experimental/interoperability only.
+
+Codex output is schema-bound and remains untrusted until CAD Agent validators and fresh post-operation evidence pass.
+
+ChatGPT supplies product vision, scope, protected constraints, and acceptance criteria; it does not fabricate engineering truth.
+
+## Mandatory reuse dossier
+
+Every implementation Issue must record the following before production behavior is authorized:
+
+- internal owners/APIs/contracts/tests inspected;
+- external repositories/vendor samples inspected;
+- exact revision/tag and license;
+- maintenance, security, platform, dependency, and test fit;
+- benchmark method and result;
+- classification;
+- migration and rollback;
+- concrete gap reason for `NEW_MISSING_CAPABILITY`.
+
+Each candidate must use exactly one classification:
+
+```text
+REUSE_AS_IS
+EXTEND_WITH_ADAPTER
+EXTEND_WITH_TEST
+PORT_BOUNDED_LOGIC
+SPIKE_ONLY
+REJECT
+NEW_MISSING_CAPABILITY
+```
+
+`NEW_MISSING_CAPABILITY` is permitted only when the dossier names the internal and external alternatives inspected and gives a concrete gap reason.
+
+## Parallel execution rules
+
+- one writer owns each overlapping file set.
+- A research lane is read-only and may inspect internal APIs, external repositories, licenses, benchmarks, and fit.
+- A live-preparation lane may prepare fixtures and evidence commands but must not modify runtime code or production behavior.
+- Hosted CI runs independently against the declared exact head or synthetic merge.
+- PO review is independent of implementation and hosted CI.
+- Shared canonical documents, including status and handoff, are changed only by the integration owner.
+
 ## 3. Codex role — bounded implementation agent
 
 Codex is the coding and execution agent.
