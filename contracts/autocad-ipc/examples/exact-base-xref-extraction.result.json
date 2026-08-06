@@ -1,0 +1,81 @@
+{
+  "request_id": "xref-extraction-request-001",
+  "success": true,
+  "operation": "exact_base_xref_extraction",
+  "drawing_full_path": "C:\\temp\\s3b-candidate-input.dwg",
+  "changed": true,
+  "entity_handles": ["E001", "E002"],
+  "warnings": [],
+  "errors": [],
+  "started_at": "2026-08-06T08:01:00Z",
+  "completed_at": "2026-08-06T08:01:03Z",
+  "payload": {
+    "accepted_target_overwrite": false,
+    "candidate_changed_during_operation": true,
+    "candidate_input_path": "C:\\temp\\s3b-candidate-input.dwg",
+    "candidate_input_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "candidate_output_path": "C:\\temp\\s3b-candidate-output.dwg",
+    "candidate_output_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "components": [
+      {
+        "candidate_handle": "E001",
+        "logical_component_id": "chassis-main",
+        "provenance": "REUSED_FROM_BASE_CAD",
+        "source_block": "CHASSIS_MAIN",
+        "source_handle": "A1B2",
+        "source_layer": "BODY",
+        "source_revision": "rev-2026-08-05-01",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transform": {
+          "rotation_degrees": 0.0,
+          "translation": {"x": 10.0, "y": 20.0, "z": 0.0},
+          "uniform_scale": 1.0
+        }
+      },
+      {
+        "candidate_handle": "E002",
+        "logical_component_id": "cabin-main",
+        "provenance": "REUSED_FROM_BASE_CAD",
+        "source_block": "CABIN_MAIN",
+        "source_handle": "C3D4",
+        "source_layer": "BODY",
+        "source_revision": "rev-2026-08-05-01",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transform": {
+          "rotation_degrees": 2.5,
+          "translation": {"x": 0.0, "y": 0.0, "z": 5.0},
+          "uniform_scale": 1.0
+        }
+      }
+    ],
+    "live_preflight": {
+      "dbmod_after": 0,
+      "dbmod_before": 0,
+      "eligible": true,
+      "evidence_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "inspection_id": "inspection-002",
+      "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_drawing_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "xref": {
+        "name": "BASE_XREF",
+        "read_only": true,
+        "status": "INSPECTED"
+      }
+    },
+    "plan_id": "extraction-plan-001",
+    "request_id": "xref-extraction-request-001",
+    "run_id": "run-001",
+    "save_performed": true,
+    "schema_version": "exact-base-xref-extraction-result-1.0",
+    "source_handle_to_candidate_handle": [
+      {"source_handle": "A1B2", "candidate_handle": "E001"},
+      {"source_handle": "C3D4", "candidate_handle": "E002"}
+    ],
+    "source_mutated": false,
+    "source_revision": "rev-2026-08-05-01",
+    "source_saved": false,
+    "source_sha256_after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_sha256_before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "warnings": []
+  }
+}

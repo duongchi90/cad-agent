@@ -1,0 +1,53 @@
+{
+  "request_id": "xref-inspection-request-001",
+  "schema_version": "1.0",
+  "operation": "exact_base_xref_inspection",
+  "drawing_full_path": "C:\\temp\\s3b-inspection-host.dwg",
+  "drawing_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "parameters": {
+    "run_id": "run-001",
+    "source_full_path": "C:\\approved\\base-vehicle.dwg",
+    "source_revision": "rev-2026-08-05-01",
+    "inspection_expectations": {
+      "source": {
+        "source_id": "base-vehicle-001",
+        "revision": "rev-2026-08-05-01",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "identity": {
+        "vehicle": "vehicle-001",
+        "model": "model-x"
+      },
+      "critical_dimensions": [
+        {"control": "wheelbase", "target": 2750.0, "tolerance": 1.0, "unit": "mm"},
+        {"control": "track", "target": 1600.0, "tolerance": 1.0, "unit": "mm"},
+        {"control": "chassis", "target": 4200.0, "tolerance": 2.0, "unit": "mm"},
+        {"control": "cabin", "target": 1850.0, "tolerance": 2.0, "unit": "mm"},
+        {"control": "axle", "target": 1200.0, "tolerance": 1.0, "unit": "mm"}
+      ],
+      "xref": {
+        "name": "BASE_XREF"
+      },
+      "components": [
+        {
+          "component_type": "BLOCK",
+          "logical_component_id": "chassis-main",
+          "provenance": "REUSED_FROM_BASE_CAD",
+          "source_block": "CHASSIS_MAIN",
+          "source_handle": "A1B2",
+          "source_layer": "BODY"
+        },
+        {
+          "component_type": "BLOCK",
+          "logical_component_id": "cabin-main",
+          "provenance": "REUSED_FROM_BASE_CAD",
+          "source_block": "CABIN_MAIN",
+          "source_handle": "C3D4",
+          "source_layer": "BODY"
+        }
+      ]
+    },
+    "target_role": "INSPECTION_HOST"
+  },
+  "approval": null
+}
