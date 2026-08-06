@@ -13,9 +13,10 @@ claim S3B live acceptance.
 - Exact implementation base: `1ba05ea6d768351fa7106109bcee244e60463527`.
 - Implementation branch: `task/s3b-exact-base-xref`.
 - Checkpoint PR: #65, kept as draft for final PO review.
-- Task 6 and the bounded inspection-route follow-up heads are reported in the
-  final handoff; this record does not embed a self-referential SHA.
-- Follow-up changed paths are exactly:
+- Fresh verification target head: `9f5dc302643fdfae77cbda65dd6cdc0c8deccc59`.
+- Full implementation audit: the exact-base implementation diff contains
+  exactly 27 paths, all allowlisted by Issue #64.
+- Inspection follow-up audit: exactly these four paths:
   - `autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs`
   - `autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/OperationDispatcherTests.cs`
   - `mcp_integration_lib/tests/test_dotnet_ipc_live.py`
@@ -37,8 +38,9 @@ dispatch trigger, legacy AutoCAD File IPC trigger, S3A inspection/plan fixture
 shape, disposable close guard, drawing hash helper, and read-only live-test
 patterns.
 
-Existing API reused: `exact_base_xref_extraction()`, its closed-contract and
-result validation, `FileIPCLiveMCPClient`, `make_windows_dotnet_dispatch_trigger`,
+Existing API reused: `exact_base_xref_inspection()`,
+`exact_base_xref_extraction()`, their closed-contract and result validation,
+`FileIPCLiveMCPClient`, `make_windows_dotnet_dispatch_trigger`,
 `make_windows_dispatch_trigger`, `make_windows_lisp_trigger`, and the existing
 `autocad_mechanical` marker.
 
@@ -54,8 +56,8 @@ that proves the File IPC request reaches the Task 5 extraction route and that
 success is candidate-only, source-read-only, hash-bound, and session-state
 stable.
 
-Files allowed to change: only the two paths listed above, as authorized by
-Issue #64 Task 6.
+Full implementation allowlist: exactly the 27 paths authorized by Issue #64.
+Inspection follow-up allowlist: exactly the four paths listed above.
 
 Files forbidden to duplicate: IPC transport, Python production client,
 schemas/examples, C#/.NET runtime, AutoCAD reader or dispatcher, accepted DWG,
@@ -68,9 +70,9 @@ is collected under `autocad_mechanical` and reports `SKIP`. No offline test or
 unavailable-state probe can promote this to live `PASS`. The test uses no
 committed DWG, private source, API key, or live session identifier.
 
-Migration and rollback path: revert the single bounded Task 6 commit. The
-existing offline contracts and Task 5 runtime remain the safe fallback; no
-production behavior is removed by the rollback.
+Migration and rollback path: revert the bounded S3B implementation commits as
+one reviewed series. The existing offline contracts and Task 5 runtime remain
+the safe fallback; no production behavior outside S3B is removed by rollback.
 
 ## Live prerequisites and safety boundary
 
@@ -126,8 +128,8 @@ dotnet test autocad_plugin/CadAgent.AutoCAD2027.sln `
 Observed result: **42 passed, 0 failed**, including the standalone inspection
 gateway route and closed-failure tests.
 
-Full .NET solution result before the bounded follow-up commit: **194 passed,
-0 failed**.
+Fresh full .NET solution result on exact head `9f5dc302`: **194 passed, 0
+failed**. The hosted AutoCAD .NET gate remains **NOT RUN**.
 
 Ruff command:
 
@@ -138,10 +140,11 @@ Ruff command:
 
 Observed result: exit `0`; all checks passed.
 
-The canonical `scripts/verify.ps1` result and exact final test counts are
-reported from the clean bounded commit in the final handoff. Until an operator
-provides the qualifying AutoCAD Mechanical session and approved disposable
-fixture/configuration, the authoritative live state remains **NOT RUN**.
+The canonical `scripts/verify.ps1` ran on exact head `9f5dc302` with a clean
+tree and exit `0`: IPC JUnit **50 tests, 0 failure/error/skip**, offline JUnit
+**1053 tests, 0 failure/error/skip**, private-data unavailable probe **2 SKIP**,
+and AutoCAD unavailable probe **13 SKIP**. AutoCAD live remains **NOT RUN**;
+this record-only finalization commit does not change runtime behavior.
 
 ## Gate states
 
@@ -150,5 +153,6 @@ fixture/configuration, the authoritative live state remains **NOT RUN**.
   probe was **SKIP**.
 - Private drawing/source-data acceptance: **NOT RUN**.
 - S3B final PO acceptance and merge: **PENDING / LOCKED**.
-- Task 7 full verification/evidence handoff: **PENDING**.
+- Task 7 full verification/evidence handoff: **COMPLETED** on exact head
+  `9f5dc302` before this record-only finalization commit.
 - S3C, R1C, registry, revision, repair, verdict, and publication: **LOCKED**.
