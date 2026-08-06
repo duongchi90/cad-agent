@@ -4,6 +4,42 @@
 > `docs/STATUS.md` and `docs/QUALITY.md`. Preserve the material below as dated
 > implementation evidence, not as the source of current project truth.
 
+## Current handoff — S2C accepted; S3B planning only (2026-08-06)
+
+This section is the current governance handoff. The historical material below
+is retained as evidence and is not a substitute for `docs/STATUS.md`.
+
+### Product-owner decision
+
+- S1 and S2 are accepted.
+- S2C, actual read-only AutoCAD-native layout capture, is accepted at
+  `365cb2df47cc3d0232a4b5df1901f55dbe46b22c` (`origin/main`).
+- S3A offline inspection evidence and extraction-plan contract is accepted.
+- **Only S3B planning is unlocked:** exact-base Xref File IPC/.NET live
+  inspection and approved extraction.
+- S3C, R1C source-fusion runtime, component registry/revision, repair, verdict,
+  and publication remain locked. S3C is to be decided after S3B live
+  acceptance.
+
+### S3B planning boundary
+
+S3B must reuse the existing File IPC, dispatcher, and drawing gateway, and use
+the S3A validator/extraction plan directly. The exact-base source Xref is
+read-only and its hash must remain stable. Only components that passed
+inspection and have an approved extraction plan may be extracted.
+
+The only permitted local transforms are translation, rotation, and positive
+uniform scale. Mutation is limited to a disposable/candidate drawing and must
+never overwrite an accepted DWG. Evidence must preserve source handle, layer,
+block, source revision, source hash, and `REUSED_FROM_BASE_CAD` provenance.
+Vehicle identity, critical dimensions, source hash, inspection membership, and
+invalid transforms must fail closed.
+
+S3B does not include Source Fusion, a component registry, revision handling,
+repair, verdict, publication, or any accepted-DWG mutation. AutoCAD live
+inspection/extraction is **NOT RUN** until the approved implementation task
+provides an exact base, dedicated branch, allowlist, and live prerequisites.
+
 # CAD Agent — handoff Phase 1–3
 
 ## Gói này gồm
