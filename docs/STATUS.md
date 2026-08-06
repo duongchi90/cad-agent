@@ -16,6 +16,20 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## Accelerated reuse-first program: PLANNING/GOVERNANCE ONLY
+
+- Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.
+- Issue: #68.
+- PR: #69 (OPEN/DRAFT; not merged).
+- No runtime capability is promoted by this program PR.
+- Immediate post-merge wave requires three fresh Issues:
+  - official vision handoff;
+  - R1C source integrity/fusion;
+  - S2C/S3B live readiness.
+- S3B AutoCAD live: **NOT RUN**.
+- Hosted AutoCAD .NET: **NOT RUN**.
+- All current future-runtime locks remain in force.
+
 ## Reuse Integration Rebaseline
 
 - State: **Accepted for R0 governance/rebaseline scope**. Runtime work remains

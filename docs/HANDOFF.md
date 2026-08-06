@@ -166,4 +166,20 @@ primitive_ir_lib
 
 ## 8. Next action
 
-Future-slice selection gate only. The gate requires a separate Issue, exact base, branch, allowlist, verification and live/private-data gates, and PO authorization. Do not select or begin S3C, R1C, registry, revision, repair, verdict, publication, or OCR work from this handoff.
+The active next action is Issue #68 / PR #69, the accelerated reuse-first
+program, which remains planning/governance only:
+
+- Program design: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md`.
+- Program plan: `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`.
+- Planning branch: `planning/accelerated-reuse-first-program`.
+- Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.
+- PR #69 remains OPEN/DRAFT and is not accepted or merged.
+- PR #65 / `a9968480258e01fda9d4dfbf01a27958b67747bc` remains the latest
+  accepted runtime implementation.
+- PR #67 / `d00b24e4853d2bfa6bd94873d3014e37575e2718` remains the latest
+  accepted governance merge.
+- No runtime authorization exists until the program PR merges and fresh child
+  Issues are created.
+
+Do not begin S3C, R1C implementation, registry, revision, repair, verdict,
+publication, or OCR work from this handoff.
