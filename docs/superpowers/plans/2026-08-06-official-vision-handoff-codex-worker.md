@@ -438,7 +438,10 @@ registry, publisher, or AutoCAD route.
 - [ ] **Step 2: Run Reuse Declaration using real inputs.**
 
   ```powershell
-  $wave1aBase = "<future-runtime-exact-base>"
+  $wave1aBase = $env:WAVE1A_EXACT_BASE
+  if ([string]::IsNullOrWhiteSpace($wave1aBase)) {
+    throw "WAVE1A_EXACT_BASE must equal the exact base authorized by the future runtime Issue."
+  }
   $wave1aPrNumber = (gh pr view --json number --jq .number).Trim()
   $wave1aTemp = Join-Path $env:TEMP "cad-agent-wave1a-reuse-check"
   New-Item -ItemType Directory -Path $wave1aTemp -Force | Out-Null
