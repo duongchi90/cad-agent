@@ -261,11 +261,28 @@ planning PR.
 
   Expected: all focused tests pass; unavailable SDK/App Server/CLI states are
   explicit and no real model gate is claimed.
-- [ ] **Step 2: Run Reuse Declaration and architecture checks.**
+- [ ] **Step 2: Run Reuse Declaration and architecture checks.** Create the
+  final PR-body and exact changed-file inputs from the current PR/head, then
+  pass both required arguments to the repository checker:
 
-  Run: `python scripts/check_reuse_declaration.py`
+  ```powershell
+  $wave1aBase = "d71d0c97e28e03cb430f05589c8381b4ede70e66"
+  $wave1aPrNumber = (gh pr view --json number --jq .number).Trim()
+  $wave1aTemp = Join-Path $env:TEMP "cad-agent-wave1a-reuse-check"
+  New-Item -ItemType Directory -Path $wave1aTemp -Force | Out-Null
+  $wave1aBodyFile = Join-Path $wave1aTemp "final-pr-body.md"
+  $wave1aChangedFiles = Join-Path $wave1aTemp "changed-files.txt"
+  gh pr view $wave1aPrNumber --json body --jq .body | Set-Content -LiteralPath $wave1aBodyFile -Encoding utf8
+  git diff --name-only "$wave1aBase...HEAD" | Set-Content -LiteralPath $wave1aChangedFiles -Encoding utf8
+  python scripts/check_reuse_declaration.py --body-file $wave1aBodyFile --changed-files $wave1aChangedFiles
+  if ($LASTEXITCODE -ne 0) { throw "Reuse Declaration failed." }
+  Remove-Item -LiteralPath $wave1aTemp -Recurse -Force
+  ```
 
-  Expected: no undeclared implementation or duplicate authority.
+  Expected: `Reuse Declaration: docs/non-implementation exemption` for this
+  docs-only planning PR, followed by the architecture-boundary checks with no
+  undeclared implementation or duplicate authority. The final PR body and
+  changed-file list must be generated again after the final head is pushed.
 - [ ] **Step 3: Run the canonical verifier on a clean committed candidate.**
 
   Run: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1`

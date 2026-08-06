@@ -143,8 +143,9 @@ a planning-PR pin.
 Source: [`openai/codex/sdk/python`](https://github.com/openai/codex/tree/main/sdk/python),
 the [official Codex SDK documentation](https://developers.openai.com/codex/sdk),
 and the repository's [Apache-2.0 license](https://github.com/openai/codex/blob/main/LICENSE).
-The observed historical runtime tag is `rust-v0.144.4` at
-`632c07017ed17f00ca6d911b754683dee785af69`. The observed repository `main`
+The observed historical runtime tag is `rust-v0.144.4` at commit
+`8c68d4c87dc54d38861f5114e920c3de2efa5876` (the annotated tag object is
+`632c07017ed17f00ca6d911b754683dee785af69`). The observed repository `main`
 head during this audit was `57f42a81131ccf5933e7ec5dc659c381eeb5d72b`; a
 future compatibility run must record the exact installed package, runtime,
 repository revision, and generated schema revision it used.
