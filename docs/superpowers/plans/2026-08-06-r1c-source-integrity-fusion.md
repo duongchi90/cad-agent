@@ -6,14 +6,13 @@
 
 **Architecture:** Preserve `source-bundle-1.0`. Create adjacent `source-custody-1.0` and `source-fusion-1.0` artifacts, use a bounded Windows final-handle adapter for source identity/containment, project IR observations into UUID-independent canonical digests, and bind only small closed references through the existing `cad_agent.manifest` owner.
 
-**Tech Stack:** Windows; Python 3.11; stdlib `hashlib`, `json`, `os`, `pathlib`, `stat`, `ctypes`, and `msvcrt`; existing locked Pillow 12.3.0 and pypdf 6.14.2; optional ezdxf 1.4.4 remains spike-only; pytest; Ruff; repository architecture checker and canonical verifier.
+**Tech Stack:** Windows; Python 3.11; stdlib `hashlib`, `json`, `os`, `pathlib`, `stat`, `ctypes`, and `msvcrt`; existing locked Pillow 12.3.0 and pypdf 6.14.2; pytest; Ruff; repository architecture checker and canonical verifier. Locked ezdxf 1.4.4 remains spike-only and is not used by the first runtime slice.
 
 ## Global constraints
 
 - This plan is not executable until a separate runtime Issue supplies the exact implementation base, branch, and final allowlist.
 - Runtime implementation remains locked while PR #78 is planning-only.
-- Preserve `cad_agent/source_bundle.py` and `source-bundle-1.0` unchanged.
-- Preserve current Primitive/Semantic models and producers, including optional `PrimitiveIRRef.sha256` behavior.
+- Preserve `cad_agent/source_bundle.py`, `source-bundle-1.0`, current Primitive/Semantic models, current CLI producers, and optional `PrimitiveIRRef.sha256` behavior.
 - Preserve R1B legacy manifest behavior; absent R1C references remain absent.
 - No dependency, lock-file, workflow, CLI, schema-directory, OCR, model call, AutoCAD/File IPC, registry, revision, repair, visual verdict, engineering approval, or publication change.
 - No private source, absolute source path, raw Windows volume/file ID, customer content, or parser exception text in Git or ordinary logs.
@@ -64,95 +63,103 @@
 - Create: `cad_agent/source_integrity.py`
 - Create: `tests/test_cad_agent_source_integrity.py`
 
-**Consumes:**
+**Interfaces:**
 
-- `cad_agent.source_bundle.validate_source_bundle()`
-- `cad_agent.source_bundle.source_bundle_sha256()`
-- `cad_agent.drawing_contracts.canonical_json_sha256()`
+- Consumes: `validate_source_bundle(payload)`, `source_bundle_sha256(payload)`, and `canonical_json_sha256(payload)`.
+- Produces:
+  - `SOURCE_CUSTODY_SCHEMA_VERSION = "source-custody-1.0"`
+  - `class SourceIntegrityError(ValueError)`
+  - `validate_source_custody(payload: object) -> dict[str, object]`
+  - `source_custody_sha256(payload: object) -> str`
 
-**Produces:**
-
-- `SOURCE_CUSTODY_SCHEMA_VERSION = "source-custody-1.0"`
-- `class SourceIntegrityError(ValueError)`
-- `validate_source_custody(payload: object) -> dict[str, object]`
-- `source_custody_sha256(payload: object) -> str`
-- closed root/item/alias-group validators
-
-- [ ] **Step 1: Write failing round-trip and closed-field tests**
-
-Create `_valid_custody_payload()` containing:
+- [ ] **Step 1: Write the concrete valid fixture and failing round-trip test**
 
 ```python
-{
-    "schema_version": "source-custody-1.0",
-    "bundle_id": "BUNDLE-001",
-    "run_id": "RUN-001",
-    "source_bundle_sha256": "a" * 64,
-    "approved_root_id": "ROOT-SYNTHETIC",
-    "approved_root_configuration_sha256": "b" * 64,
-    "file_identity_scheme": "windows-volume-file-id-v1",
-    "status": "READY",
-    "eligible_count": 2,
-    "blocking_count": 0,
-    "items": [...],
-    "alias_groups": [],
-}
-```
+def _valid_custody_payload() -> dict[str, object]:
+    return {
+        "schema_version": "source-custody-1.0",
+        "bundle_id": "BUNDLE-001",
+        "run_id": "RUN-001",
+        "source_bundle_sha256": "a" * 64,
+        "approved_root_id": "ROOT-SYNTHETIC",
+        "approved_root_configuration_sha256": "b" * 64,
+        "file_identity_scheme": "windows-volume-file-id-v1",
+        "status": "READY",
+        "eligible_count": 1,
+        "blocking_count": 0,
+        "items": [
+            {
+                "source_id": "IMAGE-001",
+                "kind": "IMAGE",
+                "role": "DETAIL",
+                "relative_path": "sources/detail.png",
+                "declared_sha256": "c" * 64,
+                "observed_sha256": "c" * 64,
+                "size_bytes": 128,
+                "declared_media_type": "image/png",
+                "observed_media_type": "image/png",
+                "media_metadata": {
+                    "format": "PNG",
+                    "width_px": 16,
+                    "height_px": 16,
+                    "mode": "RGB",
+                    "dpi_x": None,
+                    "dpi_y": None,
+                },
+                "page_ids": [],
+                "region_ids": ["REGION-DETAIL-001"],
+                "file_identity_scheme": "windows-volume-file-id-v1",
+                "file_identity_sha256": "d" * 64,
+                "alias_group_id": None,
+                "custody_state": "VERIFIED",
+                "blocking_reason_code": None,
+            }
+        ],
+        "alias_groups": [],
+    }
 
-Required assertions:
 
-```python
 def test_custody_round_trip_is_closed_and_deterministic() -> None:
     payload = _valid_custody_payload()
     normalized = validate_source_custody(payload)
     assert normalized["status"] == "READY"
     assert source_custody_sha256(normalized) == source_custody_sha256(payload)
+```
 
+- [ ] **Step 2: Write failing readiness/count and authority tests**
 
+```python
 def test_ready_custody_cannot_contain_blockers() -> None:
     payload = _valid_custody_payload()
     payload["blocking_count"] = 1
     with pytest.raises(SourceIntegrityError, match="READY"):
         validate_source_custody(payload)
-```
 
-Test exact required fields, enums, lowercase hashes, count consistency, safe relative paths, media metadata closure, file-identity fields, and rejection of authority fields such as `visual_pass`, `engineering_verdict`, `approved`, `repair`, and `publication`.
 
-- [ ] **Step 2: Write failing BLOCKED-artifact tests**
-
-Prove one complete sanitized artifact may contain blocking states:
-
-```python
-def test_blocked_custody_reports_sanitized_item_state() -> None:
+def test_custody_rejects_visual_authority() -> None:
     payload = _valid_custody_payload()
-    payload["status"] = "BLOCKED"
-    payload["eligible_count"] = 1
-    payload["blocking_count"] = 1
-    payload["items"][1]["custody_state"] = "HASH_MISMATCH"
-    payload["items"][1]["blocking_reason_code"] = "SOURCE_HASH_MISMATCH"
-    normalized = validate_source_custody(payload)
-    assert normalized["status"] == "BLOCKED"
+    payload["visual_pass"] = True
+    with pytest.raises(SourceIntegrityError, match="unsupported"):
+        validate_source_custody(payload)
 ```
 
-Validate that `BLOCKED` contains no absolute path, raw identity, or private detail.
+Add exact tests for required/unknown fields, enums, lowercase hashes, count consistency, safe relative paths, media metadata closure, and rejection of `engineering_verdict`, `approved`, `repair`, and `publication`.
 
-- [ ] **Step 3: Write failing alias-group distinction tests**
+- [ ] **Step 3: Write failing BLOCKED artifact and alias-group tests**
 
-Alias groups must include `group_type`, sorted source IDs, byte hash, and sorted privacy-safe file-identity hashes. Test that `SAME_FILE_ALIAS` and `DUPLICATE_BYTES` cannot be interchanged.
+Prove one complete sanitized `BLOCKED` artifact is valid, but `READY` with a blocking item is invalid. Prove `SAME_FILE_ALIAS` and `DUPLICATE_BYTES` have distinct group types and identity evidence.
 
 - [ ] **Step 4: Run tests and confirm import failure**
 
 ```powershell
-.\.venv-py311\Scripts\python.exe -m pytest `
-  tests/test_cad_agent_source_integrity.py `
-  -q -p no:cacheprovider
+.\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_integrity.py -q -p no:cacheprovider
 ```
 
-Expected: import failure because `cad_agent.source_integrity` does not exist.
+Expected: collection/import failure because `cad_agent.source_integrity` does not exist.
 
 - [ ] **Step 5: Implement minimal closed validators**
 
-Use exact root states `READY`/`BLOCKED` and exact item states from the design. Deep-copy returns; sort item and group arrays by stable keys; reject non-finite values and inconsistent counts.
+Implement exact root statuses `READY` and `BLOCKED`, exact item states from the design, deep-copy returns, stable sorting, finite-value checks, and count/group invariants.
 
 - [ ] **Step 6: Run focused tests and Ruff**
 
@@ -179,55 +186,47 @@ git commit -m "contracts: add closed R1C custody evidence"
 - Modify: `cad_agent/source_integrity.py`
 - Modify: `tests/test_cad_agent_source_integrity.py`
 
-**Consumes:** Task 1 validators and an approved root configuration supplied outside R1A.
+**Interfaces:**
 
-**Produces:**
+- Produces:
+  - `inspect_source_bundle(*, approved_root_id: str, approved_root_revision: str, approved_root: Path, policy_limits: Mapping[str, int], source_bundle: object) -> dict[str, object]`
+  - `require_source_custody_match(*, approved_root_id: str, approved_root_revision: str, approved_root: Path, policy_limits: Mapping[str, int], source_bundle: object, custody: object) -> None`
 
-- `inspect_source_bundle(*, approved_root_id: str, approved_root_revision: str, approved_root: Path, policy_limits: Mapping[str, int], source_bundle: object) -> dict[str, object]`
-- `require_source_custody_match(*, approved_root_id: str, approved_root_revision: str, approved_root: Path, source_bundle: object, custody: object) -> None`
-- private Windows-safe-handle helpers for final path, file identity, reparse checks, and configuration hashing
-
-- [ ] **Step 1: Add failing approved-root revision tests**
-
-Test that equal root ID with a changed path or revision produces another `approved_root_configuration_sha256` and makes old custody stale.
+- [ ] **Step 1: Add failing approved-root revision test**
 
 ```python
 def test_root_id_remap_invalidates_custody(tmp_path: Path) -> None:
-    first = _inspect_at_root(tmp_path / "first", revision="R1")
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    custody = _inspect_at_root(first_root, revision="R1")
     with pytest.raises(SourceIntegrityError, match="root configuration"):
         require_source_custody_match(
             approved_root_id="ROOT-A",
             approved_root_revision="R2",
-            approved_root=tmp_path / "second",
-            source_bundle=_bundle(),
-            custody=first,
+            approved_root=second_root,
+            policy_limits=_policy_limits(),
+            source_bundle=_bundle_for_root(second_root),
+            custody=custody,
         )
 ```
 
-- [ ] **Step 2: Add failing final-handle containment tests**
+- [ ] **Step 2: Add deterministic final-handle refusal tests**
 
-Use injectable platform adapters, not sleeps, to simulate:
+Use injected platform adapters, not sleeps, for path-component replacement, junction/reparse substitution, final path outside root, identity change after parser work, and unavailable final-path evidence. No fallback to filename or pre-open `resolve()` is allowed.
 
-- path component changed after pre-open checks;
-- junction/reparse substitution;
-- final opened path outside root;
-- opened identity changed after parser phase;
-- final path unavailable;
-- non-Windows or unsupported platform evidence unable to prove required identity.
+- [ ] **Step 3: Add hardlink/duplicate tests**
 
-Expected behavior: sanitized blocking state or `SourceIntegrityError` for platform invariant failure; never fallback to filename/pre-open resolve.
+Prove:
 
-- [ ] **Step 3: Add failing hardlink/duplicate identity tests**
+- same opened file identity -> `SAME_FILE_ALIAS`;
+- independent identities with equal bytes -> `DUPLICATE_BYTES`;
+- replacement with identical bytes but another identity invalidates custody;
+- conflicting declarations for one identity block;
+- raw identity and absolute path never appear in artifact/error.
 
-Test:
-
-- two paths to one file identity become `SAME_FILE_ALIAS`;
-- two independent identities with equal bytes become `DUPLICATE_BYTES`;
-- identical bytes but replaced file identity invalidate prior custody;
-- conflicting declarations for one file identity block;
-- raw volume/file ID and absolute path never appear in artifact/error.
-
-- [ ] **Step 4: Run focused tests and confirm API failures**
+- [ ] **Step 4: Run tests and confirm API failures**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_integrity.py -q -p no:cacheprovider
@@ -235,38 +234,26 @@ Test:
 
 - [ ] **Step 5: Implement bounded Windows handle adapter**
 
-Port concepts, not AutoCAD policy, from `ExactBaseXrefPolicy.cs`:
+Port only the safe-handle concepts from `ExactBaseXrefPolicy.cs`: read-only open, bounded `GetFinalPathNameByHandleW`, file information by handle, normalized final path, post-open containment, reparse refusal, and identity comparison before/after inspection. Failure to prove containment/identity is fail-closed.
 
-- open source read-only;
-- obtain OS handle from the custody-owned descriptor;
-- use bounded `GetFinalPathNameByHandleW` and `GetFileInformationByHandle`/equivalent identity call;
-- normalize the final handle path;
-- prove final containment under the approved root;
-- reject reparse traversal;
-- compare identity before/after inspection.
-
-If final path or identity cannot be proved, fail closed.
-
-- [ ] **Step 6: Implement configuration and privacy-safe identity hashes**
-
-Compute:
+- [ ] **Step 6: Implement root and privacy-safe identity hashes**
 
 ```python
-approved_root_configuration_sha256 = canonical_json_sha256({
-    "schema_version": "approved-source-root-1.0",
-    "approved_root_id": approved_root_id,
-    "approved_root_revision": approved_root_revision,
-    "normalized_root_path": normalized_server_path,
-    "file_identity_scheme": "windows-volume-file-id-v1",
-    "policy_limits": normalized_limits,
-})
+approved_root_configuration_sha256 = canonical_json_sha256(
+    {
+        "schema_version": "approved-source-root-1.0",
+        "approved_root_id": approved_root_id,
+        "approved_root_revision": approved_root_revision,
+        "normalized_root_path": normalized_server_path,
+        "file_identity_scheme": "windows-volume-file-id-v1",
+        "policy_limits": normalized_limits,
+    }
+)
 ```
 
-Only the hash enters artifacts.
+Only the hash enters artifacts. Compute `file_identity_sha256` from the root configuration hash, raw opened-handle volume/file identity, and final normalized relative path; never serialize raw inputs.
 
-Compute item identity from the configuration hash, raw opened-handle identity, and final normalized relative path. Do not serialize raw inputs.
-
-- [ ] **Step 7: Run tests repeatedly and Ruff**
+- [ ] **Step 7: Run repeated tests and Ruff**
 
 ```powershell
 1..5 | ForEach-Object {
@@ -292,76 +279,58 @@ git commit -m "security: bind R1C custody to final file identity"
 - Modify: `cad_agent/source_integrity.py`
 - Modify: `tests/test_cad_agent_source_integrity.py`
 
-**Consumes:** Task 2 custody-owned descriptor and stable first hash.
+**Interfaces:**
 
-**Produces:** bounded image/PDF/CAD-header/JSON observations without parser ownership of the source descriptor.
+- Consumes: Task 2 custody-owned descriptor and stable first hash.
+- Produces: bounded image/PDF/CAD-header/JSON observations without parser ownership of the source descriptor.
 
-- [ ] **Step 1: Add failing parser-isolation tests**
+- [ ] **Step 1: Add parser-isolation and cleanup tests**
 
-Provide a fake parser that closes or seeks its input. Assert the custody descriptor remains valid and the second hash/final identity check still runs.
+Use a fake parser that closes/seeks its input. Prove the custody descriptor remains usable. For an operation-owned snapshot, prove hash equality, cleanup on success/error, no manifest reference, and mandatory second hash/final identity check on the original.
 
-- [ ] **Step 2: Add failing operation-owned snapshot cleanup tests**
+- [ ] **Step 2: Add Pillow/pypdf resource tests**
 
-For parsers requiring isolation, create a bounded temp snapshot under the current run temp root. Test:
+Cover valid and truncated PNG/JPEG, decompression-bomb refusal, valid and malformed/encrypted PDF, excessive page/box/byte limits, declared-media mismatch, and parser disagreement.
 
-- snapshot hash equals first source hash;
-- snapshot is removed on success and exception;
-- manifest/custody does not reference snapshot path;
-- original source second hash and final identity remain mandatory.
+- [ ] **Step 3: Add strict JSON tests**
 
-- [ ] **Step 3: Add failing Pillow/pypdf resource tests**
+```python
+def test_engineer_json_rejects_duplicate_keys(tmp_path: Path) -> None:
+    path = tmp_path / "decision.json"
+    path.write_bytes(b'{"value":1,"value":2}')
+    custody = _inspect_engineer_record(path)
+    assert custody["status"] == "BLOCKED"
+    assert custody["items"][0]["blocking_reason_code"] == "JSON_DUPLICATE_KEY"
+```
 
-Synthetic cases:
+Also reject malformed UTF-8, non-object root, `NaN`/Infinity, and excessive byte/depth/key/array/string limits.
 
-- valid PNG/JPEG dimensions and DPI;
-- truncated/mismatched image;
-- decompression-bomb warning/error;
-- valid one/multi-page PDF;
-- encrypted PDF;
-- malformed cross-reference/page tree;
-- excessive page count, box dimensions, and source bytes;
-- declared media mismatch/polyglot disagreement.
-
-- [ ] **Step 4: Add failing strict JSON tests**
-
-Reject:
-
-- duplicate keys;
-- `NaN`, `Infinity`, `-Infinity`;
-- malformed UTF-8;
-- non-object root;
-- excessive depth/key/array/string/byte limits.
-
-Assert original byte SHA remains custody authority and canonical JSON digest is derived metadata only.
-
-- [ ] **Step 5: Run focused tests and confirm failure**
+- [ ] **Step 4: Run tests and confirm failure**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_integrity.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Implement duplicated-handle/snapshot parser boundary**
+- [ ] **Step 5: Implement duplicated-handle/snapshot boundary**
 
-Keep the original custody descriptor open. Give adapters either a duplicated handle or a bounded snapshot. Always perform the second hash and final-handle checks on the original.
+Keep the original custody descriptor open. Parser adapters receive a duplicated handle or a bounded snapshot. Always second-hash and final-identity-check the original.
 
-- [ ] **Step 7: Implement bounded media adapters**
+- [ ] **Step 6: Implement bounded adapters**
 
-- Pillow 12.3.0: `EXTEND_WITH_TEST`; read-only identify/verify; no save/convert/transpose.
-- pypdf 6.14.2: `EXTEND_WITH_TEST`; strict structure/page metadata; no rewrite/decrypt/text authority.
+- Pillow 12.3.0: read-only identify/verify; no save/convert/transpose.
+- pypdf 6.14.2: strict page/box/rotation/user-unit observations; no rewrite/decrypt/text authority.
 - DWG: bounded `AC10xx` header only.
-- DXF: header-only first slice; ezdxf remains unused `SPIKE_ONLY` unless a later amendment authorizes it.
-- JSON: strict hooks and policy limits.
+- DXF: header only; ezdxf remains unused spike-only.
+- JSON: duplicate-key and non-finite refusal plus policy limits.
 
-Parser disagreement becomes a sanitized blocking observation, never a silent priority choice.
-
-- [ ] **Step 8: Run focused tests and Ruff**
+- [ ] **Step 7: Run focused tests and Ruff**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_integrity.py -q -p no:cacheprovider
 .\.venv-py311\Scripts\python.exe -m ruff check cad_agent/source_integrity.py tests/test_cad_agent_source_integrity.py
 ```
 
-- [ ] **Step 9: Commit Task 3**
+- [ ] **Step 8: Commit Task 3**
 
 ```powershell
 git add cad_agent/source_integrity.py tests/test_cad_agent_source_integrity.py
@@ -377,73 +346,55 @@ git commit -m "feat: inspect R1C media through bounded read-only adapters"
 - Create: `cad_agent/source_fusion.py`
 - Create: `tests/test_cad_agent_source_fusion.py`
 
-**Consumes:** validated R1A bundle, `READY` custody artifact, existing PDF-render/Primitive artifacts and their checkpoint hashes.
+**Interfaces:**
 
-**Produces:**
+- Produces:
+  - `SOURCE_FUSION_SCHEMA_VERSION = "source-fusion-1.0"`
+  - `class SourceFusionError(ValueError)`
+  - `validate_page_locators(*, source_bundle: object, custody: object, page_locators: object) -> list[dict[str, object]]`
+  - `validate_region_locators(*, custody: object, page_locators: object, region_locators: object) -> list[dict[str, object]]`
+  - `validate_render_provenance(*, custody: object, page_locators: object, render_provenance: object, primitive_documents: object, checkpoint_bindings: object) -> list[dict[str, object]]`
 
-- `SOURCE_FUSION_SCHEMA_VERSION = "source-fusion-1.0"`
-- `class SourceFusionError(ValueError)`
-- closed page/region/render-provenance validators
-- canonical decimal/coordinate normalization helpers
+- [ ] **Step 1: Add page and region locator tests**
 
-- [ ] **Step 1: Add failing page locator tests**
+Require exactly one explicit mapping per R1A label. For pixels require `RASTER_TOP_LEFT_X_RIGHT_Y_DOWN`, exact raster SHA/dimensions, and integer bounds. For PDF points require `PDF_USER_SPACE_BOTTOM_LEFT_X_RIGHT_Y_UP`, page box, rotation, user unit, and canonical decimal strings.
 
-Test every R1A page label requires exactly one explicit locator and that label sorting never implies page order. Validate page index, box kind/bounds, rotation, user unit, and custody source hash.
+- [ ] **Step 2: Add PDF render-chain tests**
 
-- [ ] **Step 2: Add failing region coordinate tests**
+Bind custody PDF hash, page index/box/rotation/user unit, DPI/matrix, rendered image hash/dimensions, Primitive artifact hash, and Primitive source-document hash/dimensions/page index. Test wrong page, DPI, crop, rotation, matrix, raster hash, and Primitive source hash.
 
-For pixel locators require:
+- [ ] **Step 3: Add direct-image provenance test**
 
-- `RASTER_TOP_LEFT_X_RIGHT_Y_DOWN`;
-- exact raster SHA, width, height;
-- integer in-bounds coordinates.
+```python
+def test_direct_image_primitive_source_must_match_custody() -> None:
+    with pytest.raises(SourceFusionError, match="source_document sha256"):
+        validate_render_provenance(
+            custody=_image_custody(observed_sha256="a" * 64),
+            page_locators=[],
+            render_provenance=[],
+            primitive_documents=[_primitive_document(source_sha256="b" * 64)],
+            checkpoint_bindings=_checkpoint_bindings(),
+        )
+```
 
-For PDF-point locators require:
-
-- `PDF_USER_SPACE_BOTTOM_LEFT_X_RIGHT_Y_UP`;
-- exact page locator;
-- media/crop box, normalized rotation, user unit;
-- canonical non-exponent decimal strings with negative zero refused/normalized.
-
-Add rotated/cropped PDF, ambiguous origin, out-of-bounds, and equivalent-noncanonical number tests.
-
-- [ ] **Step 3: Add failing PDF render-chain tests**
-
-The record must bind:
-
-- custody PDF hash;
-- page locator/index;
-- selected box/rotation/user unit;
-- render DPI and canonical matrix;
-- raster convention;
-- rendered image hash/dimensions;
-- Primitive artifact hash;
-- Primitive source-document hash/dimensions/page index.
-
-Test wrong page, DPI, crop, rotation, matrix, raster hash, and Primitive source-document hash.
-
-- [ ] **Step 4: Add direct-image provenance test**
-
-Require Primitive source-document SHA and dimensions to equal custody observations for direct image sources.
-
-- [ ] **Step 5: Run tests and confirm import/API failure**
+- [ ] **Step 4: Run tests and confirm import failure**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_fusion.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Implement minimal closed locator/render validators**
+- [ ] **Step 5: Implement closed locator/render validators**
 
-No OCR, filename inference, or model mapping. Canonical arrays sort by closed compound keys.
+No OCR, filename inference, or model mapping. Normalize finite PDF decimal values to non-exponent strings and sort arrays by closed compound keys.
 
-- [ ] **Step 7: Run focused tests and Ruff**
+- [ ] **Step 6: Run focused tests and Ruff**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_fusion.py -q -p no:cacheprovider
 .\.venv-py311\Scripts\python.exe -m ruff check cad_agent/source_fusion.py tests/test_cad_agent_source_fusion.py
 ```
 
-- [ ] **Step 8: Commit Task 4**
+- [ ] **Step 7: Commit Task 4**
 
 ```powershell
 git add cad_agent/source_fusion.py tests/test_cad_agent_source_fusion.py
@@ -459,52 +410,45 @@ git commit -m "contracts: bind R1C page region and render provenance"
 - Modify: `cad_agent/source_fusion.py`
 - Modify: `tests/test_cad_agent_source_fusion.py`
 
-**Consumes:** current-format Primitive/Semantic JSON mappings plus externally verified artifact/checkpoint hashes.
+**Interfaces:**
 
-**Produces:**
+- Produces:
+  - `project_primitive_observations(*, primitive_documents: object, render_provenance: object, checkpoint_bindings: object) -> list[dict[str, object]]`
+  - `project_semantic_observations(*, semantic_documents: object, primitive_observations: object, checkpoint_bindings: object) -> list[dict[str, object]]`
 
-- deterministic Primitive observation projections/digests
-- deterministic Semantic projections/digests
-- duplicate-observation groups and ambiguity blockers
-- external Semantic-to-Primitive checkpoint binding
+- [ ] **Step 1: Add Primitive UUID/order invariance test**
 
-- [ ] **Step 1: Add failing Primitive UUID/order invariance tests**
+Build equivalent Primitive artifacts with different UUIDs, handles, extraction timestamps, and order. Require identical observation projections/hashes.
 
-Create equivalent Primitive artifacts with different UUIDs, handles, extraction timestamps, and list order. Require identical canonical observation digests and final provenance hash.
+- [ ] **Step 2: Add duplicate-observation ambiguity test**
 
-- [ ] **Step 2: Add failing duplicate-observation tests**
+Represent identical closed projections as one digest plus multiplicity. Require `DUPLICATE_OBSERVATION_AMBIGUITY` when Semantic selects an indistinguishable strict subset.
 
-For exactly identical closed projections require one group with `occurrence_count` and deterministic labels. If Semantic references only an indistinguishable subset, require `DUPLICATE_OBSERVATION_AMBIGUITY`.
+- [ ] **Step 3: Add Semantic UUID/order invariance and producer compatibility tests**
 
-- [ ] **Step 3: Add failing Semantic UUID/order invariance tests**
+Use a current-format `PrimitiveIRRef` with filename/count and omitted optional SHA; bind externally through checkpoint hashes. When optional SHA exists, require equality.
 
-Create equivalent Semantic artifacts with different part/constraint UUIDs and order; map legacy primitive IDs to the same deterministic Primitive digests; require identical Semantic projections.
+```python
+def test_current_semantic_without_optional_primitive_sha_is_supported() -> None:
+    projected = project_semantic_observations(
+        semantic_documents=[_semantic_document(primitive_sha256=None)],
+        primitive_observations=_primitive_observations(),
+        checkpoint_bindings=_checkpoint_bindings(),
+    )
+    assert projected[0]["primitive_checkpoint_sha256"] == "a" * 64
+```
 
-- [ ] **Step 4: Add current-producer compatibility tests**
-
-Use a current-format `PrimitiveIRRef` containing filename/count and omitted optional SHA. Bind externally using existing manifest/checkpoint Primitive hash. Require PASS.
-
-When optional SHA is present, require exact equality. Wrong filename/count/checkpoint hash must fail.
-
-- [ ] **Step 5: Run focused tests and confirm failure**
+- [ ] **Step 4: Run tests and confirm failure**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_fusion.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Implement closed Primitive projection**
+- [ ] **Step 5: Implement closed projections**
 
-Exclude UUID, handle, volatile timestamps, input order, and unapproved validation notes. Include source/render binding, type/source/layer, normalized geometry/text, confidence, trace, and calibration projection.
+Exclude UUID, handle, volatile timestamps, input order, and unapproved notes. Include source/render binding, normalized geometry/text/trace/calibration, and checkpoint hashes. Duplicate labels derive only from content digest and multiplicity.
 
-- [ ] **Step 7: Implement duplicate multiset rule**
-
-Canonical duplicate groups contain digest, multiplicity, and labels derived only from digest/count. Never sort or identify canonical occurrences by legacy UUID.
-
-- [ ] **Step 8: Implement Semantic external checkpoint binding**
-
-Bind Semantic file hash and associated Primitive checkpoint hash from the run manifest. Validate `PrimitiveIRRef` filename/count and optional SHA when present. Do not change Semantic models or producer code.
-
-- [ ] **Step 9: Run focused tests, permutation loop, and Ruff**
+- [ ] **Step 6: Run permutation loop and Ruff**
 
 ```powershell
 1..5 | ForEach-Object {
@@ -514,7 +458,7 @@ Bind Semantic file hash and associated Primitive checkpoint hash from the run ma
 .\.venv-py311\Scripts\python.exe -m ruff check cad_agent/source_fusion.py tests/test_cad_agent_source_fusion.py
 ```
 
-- [ ] **Step 10: Commit Task 5**
+- [ ] **Step 7: Commit Task 5**
 
 ```powershell
 git add cad_agent/source_fusion.py tests/test_cad_agent_source_fusion.py
@@ -530,84 +474,56 @@ git commit -m "feat: project deterministic R1C IR provenance"
 - Modify: `cad_agent/source_fusion.py`
 - Modify: `tests/test_cad_agent_source_fusion.py`
 
-**Consumes:** Tasks 4-5 locators/render/provenance and Task 1-3 custody.
+**Interfaces:**
 
-**Produces:**
+- Produces:
+  - `validate_source_conflict_resolution(payload: object) -> dict[str, object]`
+  - `build_source_fusion_packet(*, source_bundle: object, custody: object, page_locators: object, region_locators: object, render_provenance: object, primitive_documents: object, semantic_documents: object, checkpoint_bindings: object, resolution_references: object = ()) -> dict[str, object]`
+  - `validate_source_fusion_packet(payload: object) -> dict[str, object]`
+  - `source_fusion_sha256(payload: object) -> str`
+  - `require_source_fusion_match(*, source_bundle: object, custody: object, page_locators: object, region_locators: object, render_provenance: object, primitive_documents: object, semantic_documents: object, checkpoint_bindings: object, resolution_references: object, fusion: object) -> None`
 
-- `build_source_fusion_packet(...) -> dict[str, object]`
-- `validate_source_fusion_packet(payload: object) -> dict[str, object]`
-- `source_fusion_sha256(payload: object) -> str`
-- `require_source_fusion_match(...) -> None`
-- `validate_source_conflict_resolution(payload: object) -> dict[str, object]`
+- [ ] **Step 1: Add conflict-preservation tests**
 
-- [ ] **Step 1: Add failing conflict preservation tests**
+Cover byte identity, media/parser, locator/render, calibration, measurement, geometry, material, decision, and duplicate-observation conflicts. Prove source count, confidence, role rank, parser choice, and list order never discard evidence.
 
-Cover every required conflict type:
+- [ ] **Step 2: Add fusion-input hash test**
 
-- byte identity;
-- media/parser observation;
-- locator/render;
-- calibration;
-- measurement/geometry/material/decision;
-- duplicate observation ambiguity.
+Require `fusion_input_sha256` to cover bundle/custody/root/locator/render/provenance/conflict content before resolutions and remain invariant to input permutation.
 
-Assert source count, confidence, role rank, parser choice, and list order never delete a conflicting evidence reference.
+- [ ] **Step 3: Add replay/expiry tests**
 
-- [ ] **Step 2: Add failing fusion-input hash tests**
+A resolution binds run/conflict/subject, exact compared evidence hashes, bundle/custody/root hashes, exact `fusion_input_sha256`, selected resolution, approval reference, issued/expiry UTC, and `APPROVED`. Replay across any changed context or expiry fails.
 
-Require `fusion_input_sha256` to hash bundle/custody/root/locator/render/provenance/conflict content before resolutions. Shuffling caller input must not change it.
+- [ ] **Step 4: Add status tests**
 
-- [ ] **Step 3: Add failing resolution replay tests**
+```python
+def test_unresolved_measurement_conflict_blocks_ready() -> None:
+    packet = build_source_fusion_packet(**_conflicting_measurement_inputs())
+    assert packet["status"] == "BLOCKED_UNRESOLVED"
+    assert packet["conflicts"][0]["conflict_type"] == "MEASUREMENT_CONFLICT"
+```
 
-A valid `source-conflict-resolution-1.0` binds:
+Also test custody not READY, stale hashes/approval, exact READY, and rejection of visual/repair/publication authority.
 
-- run/conflict/subject;
-- exact compared evidence hashes;
-- bundle/custody/root hashes;
-- exact `fusion_input_sha256`;
-- selected resolution;
-- approval reference;
-- issued/expiry UTC;
-- `APPROVED` status.
-
-Test replay across another conflict, run, root revision, source bundle, custody hash, compared evidence, fusion input, or expired time. All must fail.
-
-- [ ] **Step 4: Add failing status tests**
-
-Rules:
-
-- custody not `READY` -> no fusion packet;
-- stale hashes/approval -> `STALE` or raised match failure;
-- blocking unresolved conflict -> `BLOCKED_UNRESOLVED`;
-- all inputs exact and no blocker -> `READY`;
-- `READY` with authority fields or unresolved blockers -> reject.
-
-- [ ] **Step 5: Run focused tests and confirm failure**
+- [ ] **Step 5: Run tests and confirm failure**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_fusion.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 6: Implement deterministic conflict construction**
+- [ ] **Step 6: Implement conflict construction, resolution validation, status, and stale matching**
 
-Generate conflict IDs from canonical conflict content. Preserve compared evidence and normalized values. Role rank is display ordering only.
+Generate conflict IDs from canonical content. R1C validates externally issued approval evidence but does not issue approval. `require_source_fusion_match()` returns only for an exact current match.
 
-- [ ] **Step 7: Implement closed resolution validator**
-
-R1C validates externally issued approval evidence but does not issue approval. An engineer `DECISION` source does not satisfy the resolution contract.
-
-- [ ] **Step 8: Implement packet status and stale matching**
-
-`require_source_fusion_match()` returns only for an exact current match; otherwise raises a closed `SourceFusionError` without leaking paths/content.
-
-- [ ] **Step 9: Run focused tests and Ruff**
+- [ ] **Step 7: Run focused tests and Ruff**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_source_fusion.py -q -p no:cacheprovider
 .\.venv-py311\Scripts\python.exe -m ruff check cad_agent/source_fusion.py tests/test_cad_agent_source_fusion.py
 ```
 
-- [ ] **Step 10: Commit Task 6**
+- [ ] **Step 8: Commit Task 6**
 
 ```powershell
 git add cad_agent/source_fusion.py tests/test_cad_agent_source_fusion.py
@@ -624,67 +540,59 @@ git commit -m "feat: preserve R1C conflicts and validate resolutions"
 - Modify: `cad_agent/pdf.py`
 - Modify: `tests/test_cad_agent_source_bundle_manifest.py`
 
-**Consumes:** validated custody/fusion artifacts and hashes.
+**Interfaces:**
 
-**Produces:**
+- Produces:
+  - `SOURCE_CUSTODY_REFERENCE_SCHEMA_VERSION = "source-custody-reference-1.0"`
+  - `SOURCE_FUSION_REFERENCE_SCHEMA_VERSION = "source-fusion-reference-1.0"`
+  - `validate_source_custody_reference(value: object) -> dict[str, object]`
+  - `validate_source_fusion_reference(value: object) -> dict[str, object]`
+  - `bind_source_custody(manifest: Mapping[str, object], source_bundle: object, custody: object) -> dict[str, Any]`
+  - `bind_source_fusion(manifest: Mapping[str, object], source_bundle: object, custody: object, fusion: object) -> dict[str, Any]`
+  - `require_manifest_source_custody_match(manifest: Mapping[str, object], source_bundle: object, custody: object) -> None`
+  - `require_manifest_source_fusion_match(manifest: Mapping[str, object], source_bundle: object, custody: object, fusion: object) -> None`
 
-- `SOURCE_CUSTODY_REFERENCE_SCHEMA_VERSION = "source-custody-reference-1.0"`
-- `SOURCE_FUSION_REFERENCE_SCHEMA_VERSION = "source-fusion-reference-1.0"`
-- reference validators
-- `bind_source_custody(...)`
-- `bind_source_fusion(...)`
-- manifest-level exact match helpers
-
-- [ ] **Step 1: Add failing custody-reference tests**
-
-Exact fields:
-
-```python
-{
-    "schema_version": "source-custody-reference-1.0",
-    "source_bundle_sha256": "...",
-    "approved_root_configuration_sha256": "...",
-    "source_custody_sha256": "...",
-    "status": "READY",
-    "item_count": 4,
-    "eligible_count": 4,
-    "blocking_count": 0,
-}
-```
-
-Reject inconsistent counts/readiness.
-
-- [ ] **Step 2: Add failing fusion-reference tests**
-
-Exact fields:
+- [ ] **Step 1: Add concrete custody-reference tests**
 
 ```python
-{
-    "schema_version": "source-fusion-reference-1.0",
-    "source_bundle_sha256": "...",
-    "source_custody_sha256": "...",
-    "approved_root_configuration_sha256": "...",
-    "source_fusion_sha256": "...",
-    "fusion_input_sha256": "...",
-    "status": "READY",
-    "conflict_count": 0,
-    "unresolved_count": 0,
-    "resolution_count": 0,
-}
+def _custody_reference() -> dict[str, object]:
+    return {
+        "schema_version": "source-custody-reference-1.0",
+        "source_bundle_sha256": "a" * 64,
+        "approved_root_configuration_sha256": "b" * 64,
+        "source_custody_sha256": "c" * 64,
+        "status": "READY",
+        "item_count": 4,
+        "eligible_count": 4,
+        "blocking_count": 0,
+    }
 ```
 
-Reject `READY` with blockers/unresolved conflicts.
+Reject inconsistent counts/readiness and unknown fields.
+
+- [ ] **Step 2: Add concrete fusion-reference tests**
+
+```python
+def _fusion_reference() -> dict[str, object]:
+    return {
+        "schema_version": "source-fusion-reference-1.0",
+        "source_bundle_sha256": "a" * 64,
+        "source_custody_sha256": "c" * 64,
+        "approved_root_configuration_sha256": "b" * 64,
+        "source_fusion_sha256": "d" * 64,
+        "fusion_input_sha256": "e" * 64,
+        "status": "READY",
+        "conflict_count": 0,
+        "unresolved_count": 0,
+        "resolution_count": 0,
+    }
+```
+
+Reject READY with blockers/unresolved conflicts.
 
 - [ ] **Step 3: Add legacy and unequal-rebind tests**
 
-Prove:
-
-- legacy image/PDF manifests are unchanged when R1C fields are absent;
-- readers validate only present fields;
-- equal bind is idempotent;
-- unequal bind fails;
-- fusion bind requires exact bundle/custody/root match;
-- manifests store references only, never full item/provenance/conflict arrays.
+Prove legacy image/PDF manifests remain unchanged, readers validate only present fields, equal bind is idempotent, unequal bind fails, fusion requires exact bundle/custody/root match, and manifests store references only.
 
 - [ ] **Step 4: Run focused/regression tests and confirm failures**
 
@@ -697,15 +605,11 @@ Prove:
   -q -p no:cacheprovider
 ```
 
-- [ ] **Step 5: Implement validators/binders following the R1B pattern**
+- [ ] **Step 5: Implement validators/binders following R1B**
 
-Deep-copy manifests, validate derived artifacts first, bind all context hashes, refuse unequal rebinding, and map domain errors to `ManifestError` without private detail.
+Deep-copy manifests, validate artifacts first, bind context hashes, refuse unequal rebinding, and map errors to `ManifestError` without private detail. Extend readers only when keys exist.
 
-- [ ] **Step 6: Extend readers only when keys exist**
-
-Preserve manifest schema versions and draft-reference safety defaults. Do not inject absent R1C keys.
-
-- [ ] **Step 7: Run focused/regression tests and Ruff**
+- [ ] **Step 6: Run focused/regression tests and Ruff**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest `
@@ -721,7 +625,7 @@ Preserve manifest schema versions and draft-reference safety defaults. Do not in
   tests/test_cad_agent_source_bundle_manifest.py
 ```
 
-- [ ] **Step 8: Commit Task 7**
+- [ ] **Step 7: Commit Task 7**
 
 ```powershell
 git add cad_agent/manifest.py cad_agent/pdf.py tests/test_cad_agent_source_bundle_manifest.py
@@ -736,37 +640,23 @@ git commit -m "manifest: bind R1C custody and fusion references"
 
 - Modify: `tests/test_cad_agent_source_integrity.py`
 - Modify: `tests/test_cad_agent_source_fusion.py`
-- Modify only for proven defects: `cad_agent/source_integrity.py`, `cad_agent/source_fusion.py`
+- Modify only for a proven defect: `cad_agent/source_integrity.py`, `cad_agent/source_fusion.py`
 
-**Produces:** complete synthetic acceptance matrix; no new public API.
+- [ ] **Step 1: Add fixed malformed and resource corpus**
 
-- [ ] **Step 1: Add fixed malformed corpus**
-
-Include valid/truncated/mismatched PNG/JPEG/PDF/DWG-header/DXF/JSON; encrypted/malformed PDF; duplicate JSON keys; malformed UTF-8; non-finite values; oversized limits.
+Include valid/truncated/mismatched PNG/JPEG/PDF/DWG-header/DXF/JSON, encrypted/malformed PDF, duplicate JSON keys, malformed UTF-8, non-finite values, and oversized limits.
 
 - [ ] **Step 2: Add deterministic race/path hooks**
 
-No sleep-based tests. Inject component replacement, reparse substitution, source mutation, source replacement with same bytes, parser closure, and identity change.
+Inject component replacement, reparse substitution, source mutation, same-byte identity replacement, parser closure, and identity change. Do not use sleeps.
 
 - [ ] **Step 3: Add permutation/rebuild determinism tests**
 
-Require byte-identical custody/fusion hashes across:
-
-- reversed/shuffled inputs;
-- repeated runs;
-- different UUIDs/list order in equivalent IR;
-- equal JSON values with different input key order;
-- duplicate observation multiplicity.
+Require byte-identical custody/fusion hashes across reversed inputs, repeated runs, different UUIDs/order in equivalent IR, different JSON key order, and duplicate-observation multiplicity.
 
 - [ ] **Step 4: Add privacy/static AST tests**
 
-Prove:
-
-- no network/subprocess/AutoCAD/File IPC/OCR/model imports;
-- source inspection has no save/write/replace/unlink path for approved source files;
-- operation-owned temp cleanup is bounded;
-- no visual PASS, repair, publisher, or CAD mutation authority;
-- no absolute path/raw file identity in canonical artifacts or closed errors.
+Prove no network/subprocess/AutoCAD/File IPC/OCR/model imports; no approved-source write/save/replace/unlink; bounded temp cleanup; no visual/repair/publication authority; and no absolute path/raw identity leakage.
 
 - [ ] **Step 5: Run complete focused R1 suite**
 
@@ -795,11 +685,10 @@ Record AutoCAD .NET, AutoCAD Mechanical live, and private-data gates as `NOT RUN
 
 - [ ] **Step 7: Commit Task 8**
 
-Stage only files that actually changed:
-
 ```powershell
 git add tests/test_cad_agent_source_integrity.py tests/test_cad_agent_source_fusion.py
-if (git diff --name-only | Select-String '^cad_agent/source_(integrity|fusion)\.py$') {
+$productionChanges = git diff --name-only | Select-String '^cad_agent/source_(integrity|fusion)\.py$'
+if ($productionChanges) {
   git add cad_agent/source_integrity.py cad_agent/source_fusion.py
 }
 git diff --cached --name-only
@@ -814,11 +703,7 @@ git commit -m "test: harden R1C custody and fusion boundaries"
 
 - Create: `docs/superpowers/implementation-records/2026-08-06-r1c-source-integrity-fusion.md`
 
-**Consumes:** exact runtime Issue, commit chain, changed files, verification, hosted runs, and Cell 5 findings.
-
 - [ ] **Step 1: Require concrete runtime identity**
-
-Before executing any runtime task, the runtime Issue must set these environment values:
 
 ```powershell
 $runtimeBase = $env:CAD_AGENT_R1C_RUNTIME_BASE_SHA
@@ -828,19 +713,9 @@ if (-not $runtimeBase -or -not $runtimeBranch) {
 }
 ```
 
-- [ ] **Step 2: Write exact implementation record**
+- [ ] **Step 2: Write the exact implementation record**
 
-Include:
-
-- Issue/base/branch/final head;
-- bounded commits;
-- exact files;
-- internal reuse and external classifications;
-- Cell 5 blocker dispositions;
-- tests and canonical verifier counts;
-- hosted run IDs and synthetic merge SHA;
-- private/live/AutoCAD .NET `NOT RUN`/`SKIP` states;
-- migration/rollback and retained locks.
+Record Issue/base/branch/final head, bounded commits, exact files, internal/external reuse, Cell 5 dispositions, test/verifier counts, hosted run IDs/synthetic merge, truthful private/live/AutoCAD states, migration/rollback, and retained locks.
 
 - [ ] **Step 3: Audit exact allowlist**
 
@@ -863,7 +738,7 @@ if ($comparison) {
 }
 ```
 
-The runtime Issue may narrow this expected list; the command must then use that exact approved list.
+The runtime Issue may narrow this list; the command must use its exact approved list.
 
 - [ ] **Step 4: Run final exact-head verification**
 
@@ -873,39 +748,28 @@ git diff --check "$runtimeBase...HEAD"
 git status --short
 ```
 
-Expected: verifier exit 0 and clean worktree after committing the record.
+Expected: verifier exit 0 and a clean worktree after the record commit.
 
-- [ ] **Step 5: Commit the implementation record**
+- [ ] **Step 5: Commit, push, and stop**
 
 ```powershell
 git add docs/superpowers/implementation-records/2026-08-06-r1c-source-integrity-fusion.md
 git commit -m "docs: record R1C source integrity verification"
-```
-
-- [ ] **Step 6: Push normally and open/retain draft PR**
-
-```powershell
 git push -u origin $runtimeBranch
 ```
 
-No force-push, rebase, amend, squash, ready-for-review transition, or merge.
-
-- [ ] **Step 7: Stop for independent review**
-
-Post exact head and PR to Cell 5 and Master PO. Runtime remains unaccepted until hosted tests, Reuse Declaration, Cell 5 review, and Master PO exact-head review pass.
+Open/retain a draft PR. Do not mark ready or merge. Post the exact head to Cell 5 and Master PO.
 
 ---
 
 ## Planning-only verification for PR #78
-
-The writer of this planning PR must:
 
 ```powershell
 git diff --check d71d0c97e28e03cb430f05589c8381b4ede70e66...HEAD
 .\scripts\verify.ps1 -SkipAutoCADDotNet
 ```
 
-When the local worktree is unavailable, report local verification as `NOT RUN`; hosted checks remain required. The final cumulative diff must contain exactly:
+When no local worktree is available, report local verification as `NOT RUN`; hosted checks remain required. The cumulative planning diff must contain exactly:
 
 - `docs/superpowers/specs/2026-08-06-r1c-source-integrity-fusion-design.md`
 - `docs/superpowers/plans/2026-08-06-r1c-source-integrity-fusion.md`
@@ -916,8 +780,7 @@ PR #78 remains `OPEN/DRAFT` until the second Cell 5 review and Master PO decisio
 
 ### Spec coverage
 
-- root revision, privacy-safe identity, alias/duplicate distinction: Tasks 1-2;
-- final-handle containment and TOCTOU: Task 2;
+- root revision, privacy-safe identity, aliases/duplicates, final-handle containment: Tasks 1-2;
 - parser isolation and strict JSON: Task 3;
 - PDF/render/coordinate chain: Task 4;
 - UUID-independent IR provenance and current Semantic compatibility: Task 5;
@@ -928,27 +791,19 @@ PR #78 remains `OPEN/DRAFT` until the second Cell 5 review and Master PO decisio
 
 ### Name/type consistency
 
-- custody statuses are `READY` and `BLOCKED`;
-- fusion statuses are `READY`, `BLOCKED_UNRESOLVED`, and `STALE`;
-- identity scheme is `windows-volume-file-id-v1`;
-- pixel convention is `RASTER_TOP_LEFT_X_RIGHT_Y_DOWN`;
-- PDF convention is `PDF_USER_SPACE_BOTTOM_LEFT_X_RIGHT_Y_UP`;
-- conflict resolutions bind `fusion_input_sha256` before resolution application.
+- custody statuses: `READY`, `BLOCKED`;
+- fusion statuses: `READY`, `BLOCKED_UNRESOLVED`, `STALE`;
+- identity scheme: `windows-volume-file-id-v1`;
+- pixel convention: `RASTER_TOP_LEFT_X_RIGHT_Y_DOWN`;
+- PDF convention: `PDF_USER_SPACE_BOTTOM_LEFT_X_RIGHT_Y_UP`;
+- resolution context: `fusion_input_sha256` before resolution application.
 
 ### Placeholder scan
 
-No guessed runtime SHA or branch is embedded. Execution is guarded by exact values supplied by the future approved runtime Issue.
+The plan contains concrete fixture values and exact public signatures. No runtime SHA or branch is guessed; execution is guarded by exact values supplied by the future approved runtime Issue.
 
 ## Execution handoff
 
-After this planning PR is accepted, Master PO must create a separate runtime Issue with:
-
-- exact implementation base and branch;
-- accepted/narrowed eight-path allowlist;
-- root/identity policy limits;
-- approved dependency posture with no lock change;
-- exact offline verification and hosted gates;
-- Cell 5 second-review disposition;
-- truthful `NOT RUN` states for AutoCAD and private data.
+After this planning PR is accepted, Master PO must create a separate runtime Issue with exact base/branch, accepted/narrowed eight-path allowlist, root/identity policy limits, approved no-lock-change dependency posture, exact offline/hosted gates, Cell 5 disposition, and truthful `NOT RUN` AutoCAD/private-data states.
 
 Recommended execution mode: subagent-driven development with one writer and independent requirements/security review after each bounded task.
