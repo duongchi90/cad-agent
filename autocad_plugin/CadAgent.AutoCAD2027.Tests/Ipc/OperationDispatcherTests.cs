@@ -54,6 +54,97 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void ExactBaseXrefExtractionRoutesFreshCandidateSnapshotToResult()
+    {
+        var fixture = ExtractionDispatcherFixture();
+        try
+        {
+            var gateway = new StubDrawingGateway
+            {
+                ActiveDocumentFullPath = fixture.InputPath,
+                ExactBaseXrefExtraction = new ExactBaseXrefExtractionSnapshot
+                {
+                    Success = true,
+                    DrawingFullPath = fixture.InputPath,
+                    Changed = true,
+                    EntityHandles = new[] { "E001" },
+                    Evidence = new ExactBaseXrefExtractionEvidence
+                    {
+                        AcceptedTargetOverwrite = false,
+                        CandidateChangedDuringOperation = true,
+                        CandidateInputPath = fixture.InputPath,
+                        CandidateInputSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                        CandidateOutputPath = fixture.OutputPath,
+                        CandidateOutputSha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                        Components = new[]
+                        {
+                            new ExactBaseXrefExtractionComponentEvidence
+                            {
+                                CandidateHandle = "E001",
+                                LogicalComponentId = "chassis-main",
+                                Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
+                                SourceBlock = "CHASSIS_MAIN",
+                                SourceHandle = "A1B2",
+                                SourceLayer = "BODY",
+                                SourceRevision = "rev-2026-08-05-01",
+                                SourceSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                Transform = new ExactBaseXrefTransform
+                                {
+                                    RotationDegrees = 0,
+                                    Translation = new ExactBaseXrefPoint { X = 0, Y = 0, Z = 0 },
+                                    UniformScale = 1
+                                }
+                            }
+                        },
+                        LivePreflight = new ExactBaseXrefLivePreflightEvidence
+                        {
+                            DbmodBefore = 0,
+                            DbmodAfter = 0,
+                            Eligible = true,
+                            EvidenceSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                            InspectionId = "inspection-001",
+                            SourceSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            TargetDrawingSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                            Xref = new ExactBaseXrefLiveXref
+                            {
+                                Name = "BASE_XREF",
+                                ReadOnly = true,
+                                Status = "INSPECTED"
+                            }
+                        },
+                        PlanId = "extraction-plan-001",
+                        RequestId = "xref-extraction-request-001",
+                        RunId = "run-001",
+                        SavePerformed = true,
+                        SourceHandleToCandidateHandle = new[]
+                        {
+                            new ExactBaseXrefHandleMapping { SourceHandle = "A1B2", CandidateHandle = "E001" }
+                        },
+                        SourceRevision = "rev-2026-08-05-01",
+                        SourceSha256Before = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        SourceSha256After = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }
+                }
+            };
+            var dispatcher = CreateDispatcher(gateway, exactBaseXrefPolicy: fixture.Policy);
+
+            var result = dispatcher.Dispatch(fixture.Request);
+
+            Assert.True(result.Success);
+            Assert.True(result.Changed);
+            Assert.Equal(new[] { "E001" }, result.EntityHandles);
+            Assert.Equal(1, gateway.ExtractExactBaseXrefCallCount);
+            Assert.False(result.Payload!["accepted_target_overwrite"].GetBoolean());
+            Assert.False(result.Payload["source_mutated"].GetBoolean());
+            Assert.Equal("exact-base-xref-extraction-result-1.0", result.Payload["schema_version"].GetString());
+        }
+        finally
+        {
+            Directory.Delete(fixture.Root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void HealthReturnsTheActiveDocumentAndPreservesRequestId()
     {
         var gateway = new StubDrawingGateway
@@ -646,6 +737,122 @@ public sealed class OperationDispatcherTests
             mechanicalWarnings: mechanicalWarnings,
             exactBaseXrefPolicy: exactBaseXrefPolicy));
 
+    private static (IpcRequest Request, ExactBaseXrefPolicy Policy, string Root, string InputPath, string OutputPath)
+        ExtractionDispatcherFixture()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "cadagent-s3b-dispatcher-" + Guid.NewGuid().ToString("N"));
+        var sourcePath = Path.Combine(root, "source", "base-vehicle.dwg");
+        var acceptedPath = Path.Combine(root, "accepted", "accepted.dwg");
+        var inputPath = Path.Combine(root, "candidate", "input.dwg");
+        var outputPath = Path.Combine(root, "candidate", "output.dwg");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(acceptedPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(inputPath)!);
+        File.WriteAllText(sourcePath, "source");
+        File.WriteAllText(acceptedPath, "accepted");
+        File.WriteAllText(inputPath, "candidate");
+
+        var dimensions = new[]
+        {
+            new { control = "wheelbase", target = 2750.0, tolerance = 1.0, unit = "mm" },
+            new { control = "track", target = 1600.0, tolerance = 1.0, unit = "mm" },
+            new { control = "chassis", target = 4200.0, tolerance = 2.0, unit = "mm" },
+            new { control = "cabin", target = 1850.0, tolerance = 2.0, unit = "mm" },
+            new { control = "axle", target = 1200.0, tolerance = 1.0, unit = "mm" }
+        };
+        var component = new
+        {
+            component_type = "BLOCK",
+            logical_component_id = "chassis-main",
+            provenance = "REUSED_FROM_BASE_CAD",
+            source_block = "CHASSIS_MAIN",
+            source_handle = "A1B2",
+            source_layer = "BODY"
+        };
+        var planComponent = new
+        {
+            component_type = component.component_type,
+            logical_component_id = component.logical_component_id,
+            provenance = component.provenance,
+            source_block = component.source_block,
+            source_handle = component.source_handle,
+            source_layer = component.source_layer,
+            bounding = new
+            {
+                min = new { x = 0.0, y = 0.0, z = 0.0 },
+                max = new { x = 1.0, y = 1.0, z = 1.0 }
+            },
+            transform = new
+            {
+                rotation_degrees = 0.0,
+                translation = new { x = 0.0, y = 0.0, z = 0.0 },
+                uniform_scale = 1.0
+            }
+        };
+        var expectations = new
+        {
+            source = new { source_id = "base-vehicle-001", revision = "rev-2026-08-05-01", sha256 = "a".PadLeft(64, 'a') },
+            identity = new { vehicle = "vehicle-001", model = "model-x" },
+            critical_dimensions = dimensions,
+            xref = new { name = "BASE_XREF" },
+            components = new[] { component }
+        };
+        var approval = new { reference = "approval-example-001", status = "APPROVED" };
+        var plan = new
+        {
+            approval,
+            base_source = new
+            {
+                relative_path = "approved/base-vehicle.dwg",
+                revision = "rev-2026-08-05-01",
+                sha256 = "a".PadLeft(64, 'a'),
+                source_id = "base-vehicle-001"
+            },
+            components = new[] { planComponent },
+            impacted_views = new[] { new { identity = "model-space", name = "Model" } },
+            inspection_id = "inspection-001",
+            plan_id = "extraction-plan-001",
+            provenance = "REUSED_FROM_BASE_CAD",
+            request_id = "xref-inspection-request-001",
+            run_id = "run-001",
+            schema_version = "exact-base-xref-extraction-plan-1.0",
+            source_revision = "rev-2026-08-05-01",
+            target_drawing_sha256 = "d".PadLeft(64, 'd'),
+            transform_policy = ExactBaseXrefOperationNames.TransformPolicy
+        };
+        var request = new IpcRequest
+        {
+            RequestId = "xref-extraction-request-001",
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = ExactBaseXrefOperationNames.Extraction,
+            DrawingFullPath = inputPath,
+            DrawingSha256 = "d".PadLeft(64, 'd'),
+            Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["run_id"] = JsonSerializer.SerializeToElement("run-001"),
+                ["source_full_path"] = JsonSerializer.SerializeToElement(sourcePath),
+                ["source_revision"] = JsonSerializer.SerializeToElement("rev-2026-08-05-01"),
+                ["inspection_expectations"] = JsonSerializer.SerializeToElement(expectations),
+                ["extraction_plan"] = JsonSerializer.SerializeToElement(plan),
+                ["target_role"] = JsonSerializer.SerializeToElement("DISPOSABLE_CANDIDATE"),
+                ["candidate_output_path"] = JsonSerializer.SerializeToElement(outputPath)
+            },
+            Approval = JsonSerializer.SerializeToElement(approval)
+        };
+        return (
+            request,
+            new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+                root,
+                acceptedPath,
+                "b".PadLeft(64, 'b'),
+                sourcePath,
+                "a".PadLeft(64, 'a'),
+                "rev-2026-08-05-01")),
+            root,
+            inputPath,
+            outputPath);
+    }
+
     private static IpcRequest ExactBaseXrefInspectionRequest() => new()
     {
         RequestId = "xref-inspection-request-001",
@@ -869,6 +1076,8 @@ public sealed class OperationDispatcherTests
 
         public NativeRenderEvidenceSnapshot? NativeRenderEvidence { get; init; }
 
+        public ExactBaseXrefExtractionSnapshot? ExactBaseXrefExtraction { get; init; }
+
         public Exception? NativeRenderException { get; init; }
 
         public int ReadEntitiesCallCount { get; private set; }
@@ -878,6 +1087,8 @@ public sealed class OperationDispatcherTests
         public int ReadVisualEvidenceCallCount { get; private set; }
 
         public int ReadNativeRenderEvidenceCallCount { get; private set; }
+
+        public int ExtractExactBaseXrefCallCount { get; private set; }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
@@ -912,6 +1123,17 @@ public sealed class OperationDispatcherTests
             }
 
             return NativeRenderEvidence ?? throw new NotSupportedException();
+        }
+
+        public ExactBaseXrefExtractionSnapshot ExtractExactBaseXref(
+            ExactBaseXrefExtractionParameters request,
+            string requestId)
+        {
+            ExtractExactBaseXrefCallCount++;
+            return ExactBaseXrefExtraction
+                ?? ExactBaseXrefExtractionSnapshot.Failure(
+                    ActiveDocumentFullPath,
+                    new[] { "No extraction fixture was configured." });
         }
     }
 

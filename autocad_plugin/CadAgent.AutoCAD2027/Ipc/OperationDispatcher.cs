@@ -295,7 +295,7 @@ public sealed class OperationDispatcher
 
     private IpcResult DispatchExactBaseXrefExtraction(IpcRequest request, DateTimeOffset startedAt)
     {
-        if (!TryMatchActiveDocument(request.DrawingFullPath, out _, out var error))
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
         {
             return Failure(
                 request,
@@ -304,9 +304,33 @@ public sealed class OperationDispatcher
         }
 
         var parameters = _context.ExactBaseXrefPolicy.ValidateExtractionRequest(request);
-        _context.ExactBaseXrefPolicy.RequireFreshLivePreflight(parameters.RunId);
-        return Failure(request, new[] { "unreachable" }, startedAt);
+        var snapshot = _context.DrawingGateway.ExtractExactBaseXref(
+            parameters,
+            request.RequestId!);
+        if (!snapshot.Success || snapshot.Evidence is null)
+        {
+            return Failure(request, snapshot.Errors, startedAt);
+        }
+
+        return CreateResult(
+            request.RequestId!,
+            ExactBaseXrefOperationNames.Extraction,
+            snapshot.DrawingFullPath ?? activePath,
+            success: true,
+            changed: true,
+            snapshot.EntityHandles,
+            snapshot.Warnings,
+            snapshot.Errors,
+            SerializeExtractionEvidence(snapshot.Evidence),
+            startedAt);
     }
+
+    private static Dictionary<string, JsonElement> SerializeExtractionEvidence(
+        ExactBaseXrefExtractionEvidence evidence) =>
+        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            JsonSerializer.Serialize(evidence, ContractJson.Options),
+            ContractJson.Options)
+        ?? throw new InvalidOperationException("exact-base extraction evidence could not be serialized");
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
         IReadOnlyList<MechanicalComponentSnapshot> components) =>

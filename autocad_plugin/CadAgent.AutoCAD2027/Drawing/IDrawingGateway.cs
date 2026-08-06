@@ -19,4 +19,17 @@ public interface IDrawingGateway
         ExactBaseXrefInspectionParameters request) =>
         throw new InvalidOperationException(
             "This drawing gateway does not provide the live exact-base Xref inspection operation.");
+
+    ExactBaseXrefExtractionSnapshot ExtractExactBaseXref(
+        ExactBaseXrefExtractionParameters request,
+        string requestId)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
+        var boundary = ReadExactBaseXrefInspection(request);
+        return boundary.ExtractionOperation?.Invoke(requestId)
+            ?? ExactBaseXrefExtractionSnapshot.Failure(
+                boundary.DrawingFullPath,
+                new[] { "S3B_LIVE_UNAVAILABLE" });
+    }
 }
