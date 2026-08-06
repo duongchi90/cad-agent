@@ -11,9 +11,12 @@ Live GitHub state, exact commits, diffs, CI logs, approved specifications, plans
 
 - Repository: `duongchi90/cad-agent`.
 - Latest accepted implementation merge:
-  `365cb2df47cc3d0232a4b5df1901f55dbe46b22c`.
-- Latest merged PR: #61 — S2C actual read-only AutoCAD-native layout capture.
+  `a9968480258e01fda9d4dfbf01a27958b67747bc`.
+- Latest merged PR: #65 — S3B exact-base Xref inspection and approved
+  extraction.
 - Previous accepted implementation merges:
+  - `365cb2df47cc3d0232a4b5df1901f55dbe46b22c` — PR #61 S2C actual
+    read-only AutoCAD-native layout capture;
   - `ff6d199ef6cd401ccf5d06bace1135e4e55f1216` — PR #59 R1B;
   - `589d708a69f5c710c0a4c25e52a5b17db9749764` — PR #57 R1A;
   - `a8a962281b2d7480c9444eb8e1b56c6795c108aa` — PR #54 S3A.
@@ -102,44 +105,37 @@ Issue #60 allowlisted paths may change. If another existing `IDrawingGateway`
 implementation or test double requires a change, Codex stops and reports the
 exact path instead of expanding scope.
 
-## 4. Acceptance state
+## 4. Accepted S3B boundary
 
-S2C is accepted on the exact reviewed head `365cb2df` for the read-only layout
-capture boundary. It does not authorize any later source-fusion or mutation
-flow. The following remain separate future gates:
+S3B is accepted on PR #65 and merge
+`a9968480258e01fda9d4dfbf01a27958b67747bc` for exact-base Xref inspection and
+approved extraction. The accepted boundary is:
 
-- exact-base Xref inspection and approved extraction;
-- private-data acceptance when an approved private input exists;
-- any future production mutation, repair, verdict, or publication.
-
-Private data remains `NOT RUN` unless separately approved.
-
-## 5. Next authorized slice — S3B planning only
-
-S3B is the next authorized planning slice:
-`exact-base Xref File IPC/.NET live inspection and approved extraction`.
-Planning must reuse the existing File IPC, dispatcher, and drawing gateway and
-the S3A validator/extraction plan. The implementation task is not started by
-this handoff.
-
-The planning boundary is:
-
-- source Xref is read-only and its hash must remain stable;
-- only inspected components with an approved extraction plan may be used;
+- source Xrefs and accepted DWGs are read-only and remain immutable;
+- inspection is server-built and extraction performs fresh live preflight
+  immediately before mutation;
+- extraction creates only new disposable candidates;
 - allowed local transforms are translation, rotation, and positive uniform
   scale only;
-- mutation is limited to disposable/candidate drawings and never overwrites an
-  accepted DWG;
 - evidence preserves source handle, layer, block, source revision, source hash,
   and `REUSED_FROM_BASE_CAD` provenance;
-- vehicle identity, critical dimensions, source hash, inspection membership,
-  and invalid transforms fail closed.
+- AutoCAD Mechanical live acceptance remains `NOT RUN`;
+- private drawing/source-data acceptance remains `NOT RUN`.
+
+Runtime verification head: `9f5dc302643fdfae77cbda65dd6cdc0c8deccc59`.
+Record-only final head: `67c3496da313245fc9ceeee26814e099b32f2c87`.
+
+## 5. Future-slice selection gate
+
+No next runtime slice is selected or authorized by this handoff. Any future
+runtime work requires a separate Issue, exact base, branch, allowlist,
+verification gates, live/private-data gate decisions, and explicit PO
+authorization before repository changes begin.
 
 ## 6. Locked work
 
-Do not start until S3B live acceptance exists:
+Until a future-slice selection gate is separately accepted, keep locked:
 
-- S3B implementation/live extraction;
 - S3C repair/publication;
 - R1C SourceBundle byte-integrity audit or source-fusion runtime;
 - component/view registry;
@@ -148,7 +144,8 @@ Do not start until S3B live acceptance exists:
 - repair-loop integration;
 - visual verdict or publication;
 - duplicate OCR, solver, DXF builder, File IPC transport/dispatcher,
-  manifest/checkpoint/revision store, repair executor, verdict path, or publisher.
+  manifest/checkpoint/revision store, repair executor, verdict path, or
+  publisher.
 
 ## 7. Authoritative ownership
 
@@ -169,8 +166,4 @@ primitive_ir_lib
 
 ## 8. Next action
 
-Prepare and approve the S3B design/plan on exact base
-`365cb2df47cc3d0232a4b5df1901f55dbe46b22c`. Do not implement S3B from this
-governance update alone; require a dedicated implementation Issue/PR, exact
-branch, allowlist, and live prerequisites. Decide S3C only after S3B live
-acceptance. R1C remains locked.
+Future-slice selection gate only. The gate requires a separate Issue, exact base, branch, allowlist, verification and live/private-data gates, and PO authorization. Do not select or begin S3C, R1C, registry, revision, repair, verdict, publication, or OCR work from this handoff.
