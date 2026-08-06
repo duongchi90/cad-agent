@@ -20,12 +20,15 @@
 
 - Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.
 - Issue: #68.
-- PR: #69 (OPEN/DRAFT; not merged).
-- No runtime capability is promoted by this program PR.
-- Immediate post-merge wave requires three fresh Issues:
+- PR: #69; GitHub is the live source of its current state.
+- Before merge, complete the PO review and merge gate for PR #69.
+- After merge, verify fresh `main` at the program merge SHA, then create three
+  separate Wave 1 Issues:
   - official vision handoff;
   - R1C source integrity/fusion;
   - S2C/S3B live readiness.
+- No runtime capability is automatically opened by this program, its PR, or its
+  merge.
 - S3B AutoCAD live: **NOT RUN**.
 - Hosted AutoCAD .NET: **NOT RUN**.
 - All current future-runtime locks remain in force.
