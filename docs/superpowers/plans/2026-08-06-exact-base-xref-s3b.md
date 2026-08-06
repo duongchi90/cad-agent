@@ -15,6 +15,10 @@
 - Use a new task branch created from the exact base; do not use the personal pilot branch and do not merge, rebase, reset, or switch it without explicit task direction.
 - The implementation issue must name the exact base, branch, bounded commit policy, allowlist below, and live AutoCAD gate.
 - S3A policy in mcp_integration_lib/exact_base_xref.py and its fixtures are authoritative and must not be weakened, duplicated, or rewritten.
+- Caller-provided inspection evidence is expectation data only. The request must exclude live-owned observed, status, eligible, changed, DBMOD, live bounds, and live timestamps; the C# gateway must build a fresh S3A-compatible live result from AutoCAD and the file system.
+- Extraction must run a complete fresh live preflight immediately before opening its mutation transaction. Matching run_id, a valid offline plan, or a caller-provided successful inspection never authorizes mutation.
+- CommandContext owns the server-side S3B path policy. It loads CAD_AGENT_S3B_DISPOSABLE_ROOT, CAD_AGENT_S3B_ACCEPTED_DWG_PATH, CAD_AGENT_S3B_ACCEPTED_DWG_SHA256, CAD_AGENT_S3B_EXACT_BASE_SOURCE_PATH, CAD_AGENT_S3B_EXACT_BASE_SOURCE_SHA256, and CAD_AGENT_S3B_EXACT_BASE_SOURCE_REVISION. Requests cannot override these values.
+- Controlled paths must be canonicalized through Windows file handles and checked by final path and file identity. Reject junctions, symlinks, mount points, other reparse points, aliases, path escapes, source/accepted aliases, and outputs outside the resolved disposable root. Lexical prefix checks are insufficient.
 - The source Xref is read-only. Source hash must match the request and remain unchanged before and after every live operation.
 - Extraction target must be a disposable candidate under a configured disposable root. It must not be the accepted DWG, an existing accepted path, or the source path.
 - Only inspected BLOCK components are supported in the first implementation. An unrecognized component type fails closed.
@@ -23,6 +27,9 @@
 - Do not commit API keys, .env files, private DWG files, source drawings, OCR output, or unapproved live artifacts.
 - AutoCAD Mechanical 2027, Autodesk references, approved fixture, and private source data are required for the live gate. If unavailable, record NOT RUN or SKIP; never convert an offline test into a live PASS.
 - Every task must add focused tests before implementation changes, run the focused tests, run scripts/verify.ps1, and produce one bounded commit.
+- The IPC result semantics are closed: drawing_full_path is the server-canonical active document path; inspection has changed=false and entity_handles=[]; successful extraction has changed=true and sorted native-created candidate handles; failures after cleanup have changed=false and entity_handles=[].
+- Extraction evidence must include a source_handle_to_candidate_handle mapping for every native-extracted component, plus source provenance and candidate-only state.
+- A session guard must restore the original active document, layout/view/UCS state, and transaction state. Partial candidate output cleanup may remove only the operation-owned newly-created file after canonical identity recheck.
 
 ## Allowlist
 
@@ -41,6 +48,7 @@ Create:
 - autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadExactBaseXrefReader.cs
 - autocad_plugin/CadAgent.AutoCAD2027.Tests/Drawing/ExactBaseXrefPolicyTests.cs
 - autocad_plugin/CadAgent.AutoCAD2027.Tests/Drawing/ExactBaseXrefReaderTests.cs
+- docs/superpowers/implementation-records/2026-08-06-exact-base-xref-s3b.md
 
 Modify:
 
@@ -77,20 +85,23 @@ Files:
 
 Tests first:
 
-- Add tests that accept a valid inspection request with no approval.
-- Add tests that accept a valid extraction request only with target_role DISPOSABLE_CANDIDATE and approval status APPROVED.
-- Add tests that reject missing run identity, source path, source revision, inspection, plan, approval reference, or candidate output path.
+- Add tests that accept a valid inspection request with no approval and only the closed inspection_expectations projection.
+- Add tests that accept a valid extraction request only with target_role DISPOSABLE_CANDIDATE, extraction_plan.approval.status APPROVED, and exact canonical equality with the envelope approval object.
+- Add tests that reject missing run identity, source path, source revision, inspection_expectations, plan, approval reference, or candidate output path.
 - Add tests that reject unknown operation parameters and any operation name outside the explicit allowlist.
 - Add tests that reject a source path equal to the active target path or candidate output path.
-- Add tests that require result evidence to report source hash before and after, source mutation state, candidate state, and accepted-target overwrite state.
+- Add tests that reject caller-supplied observed, status, eligible, changed, DBMOD, live bounds, live hashes, or live timestamps.
+- Add tests that require result evidence to define drawing_full_path, changed, entity_handles, source-handle-to-candidate-handle mapping, and accepted-target overwrite state.
 
 Implementation:
 
 - Define the operation names and schemas as explicit contract constants.
 - Keep the normal IpcRequest envelope unchanged except for the minimum allowlist and schema discriminator changes.
-- Make the result payload distinguish read-only inspection from candidate extraction.
+- Make the result payload distinguish read-only inspection from candidate extraction and define drawing_full_path as the server-canonical active document path.
+- Define inspection changed=false/entity_handles=[] and successful extraction changed=true with native-created candidate handles; after cleanup, failures return changed=false/entity_handles=[].
+- Define source_handle_to_candidate_handle evidence for every extracted component.
 - Use stable error identifiers for missing approval, source identity mismatch, source mutation, target safety failure, component mismatch, and transform policy failure.
-- Ensure schema validation does not treat a caller-provided eligible value or approval boolean as sufficient authority.
+- Ensure schema validation does not treat caller-owned live fields, eligible values, approval booleans, target-role booleans, or lexical path containment as authority.
 
 Verification:
 
@@ -109,19 +120,20 @@ Files:
 
 Tests first:
 
-- Add an inspection-client test that calls validate_xref_inspection before sending a request.
+- Add an inspection-client test that validates the offline S3A record, then sends only inspection_expectations and never the live-owned evidence fields.
 - Add an extraction-client test that calls validate_extraction_plan with the inspection payload before sending a request.
-- Add tests that reject unsafe relative runtime source paths, source/target path equality, invalid hashes, mismatched revisions, and a plan component not present in the inspection.
-- Add tests that require extraction approval status APPROVED and a non-empty approval reference.
+- Add tests that reject unsafe relative runtime source paths, source/target path equality, invalid hashes, mismatched revisions, and a plan component not present in the offline inspection.
+- Add tests that require extraction_plan.approval.status APPROVED, a non-empty reference, and exact equality with the envelope approval object.
 - Add tests that preserve source handle, layer, block, transform, and REUSED_FROM_BASE_CAD fields without renaming them.
-- Add result normalization tests for source hash stability, candidate output metadata, source_mutated=false, and accepted_target_overwrite=false.
+- Add result normalization tests for the server-built live inspection, source hash stability, drawing_full_path, changed, entity_handles, candidate output metadata, source_handle_to_candidate_handle, source_mutated=false, and accepted_target_overwrite=false.
 
 Implementation:
 
 - Add exact_base_xref_inspection and exact_base_xref_extraction client methods next to the existing native-render and visual-evidence methods.
 - Reuse the existing request-id, full-path, hash, approval, timeout, and File IPC retry behavior.
-- Accept persisted S3A relative source paths only as input metadata; require an explicit absolute runtime path for the live request.
+- Accept persisted S3A records only as offline expectations and require an explicit runtime path that the server-side CommandContext source policy also authorizes.
 - Call the existing validators before sending and fail locally when they reject the payload.
+- Never send a prior successful inspection as extraction authority; extraction sends the offline plan/expectations and the server performs fresh preflight.
 - Do not add a Python-side source-fusion or registry adapter.
 - Do not claim live success from a mock response; live result normalization must retain the actual gate state.
 
@@ -149,7 +161,8 @@ Tests first:
 
 - Add dispatcher tests for both operations with the existing fake or null gateway.
 - Add policy tests for exact request identity, source hash and revision equality, required PASS controls, read-only Xref state, BLOCK-only component support, exact source handle/layer/block matching, and local transform limits.
-- Add fail-closed tests for wrong active document, source/target aliasing, missing approval, non-disposable target, stale plan, unknown component, duplicate component, non-uniform scale, zero or negative scale, reflection, global transform, and source hash changes.
+- Add policy tests for server-owned environment configuration, canonical final paths, file identity, reparse-point/junction rejection, root containment, source/accepted alias rejection, and new-output nonexistence.
+- Add fail-closed tests for wrong active document, source/target aliasing, missing approval, exact plan/envelope approval mismatch, non-disposable target, stale plan, unknown component, duplicate component, non-uniform scale, zero or negative scale, reflection, global transform, source hash changes, and missing fresh preflight.
 - Add tests proving the existing operations remain unchanged.
 
 Implementation:
@@ -157,9 +170,12 @@ Implementation:
 - Model only the S3B request, component, transform, live snapshot, and candidate evidence fields required by the design.
 - Centralize all S3B policy checks in ExactBaseXrefPolicy; the dispatcher must not grow duplicated ad hoc checks.
 - Route only the two explicit operation names. Unknown operations continue to fail closed.
-- Revalidate the S3A inspection and plan shape at the C# boundary or through a shared contract representation; do not trust eligible, approved, or read-only flags supplied without matching live evidence.
-- Require extraction approval.status=APPROVED with an approval reference.
-- Require a candidate output path under the configured disposable root and reject an existing accepted path.
+- Revalidate the offline S3A plan shape at the C# boundary; accept only the closed inspection_expectations projection and build all live-owned inspection fields from AutoCAD.
+- Require extraction_plan.approval.status=APPROVED and exact canonical equality with the envelope approval object, including the approval reference.
+- Load the S3BPathPolicy once in CommandContext from the six server-side environment values named in the design. Do not trust request booleans or caller paths.
+- Require candidate input and output paths to pass handle-based canonicalization, file-identity, reparse-point, root-containment, source-alias, and accepted-alias checks.
+- Require extraction to invoke the full live preflight immediately before mutation; a prior inspection result is informational only.
+- Define drawing_full_path, changed, entity_handles, and source_handle_to_candidate_handle in the result model exactly as specified by the design.
 - Return unsuccessful results with stable error identifiers and no partial acceptance.
 
 Verification:
@@ -183,6 +199,7 @@ Files:
 Tests first:
 
 - Add gateway tests using deterministic fake database objects for source hash stability, Xref read-only state, identity controls, critical dimensions, component handles, layers, blocks, and DBMOD stability.
+- Add tests proving every live-owned field is recomputed from AutoCAD/file-system reads and that caller-supplied observed, status, eligible, changed, DBMOD, live bounds, live hashes, and timestamps are never echoed.
 - Add tests that inspect only the named Xref components and do not fall back to an unbounded model-space scan.
 - Add tests that an inspection exception produces an unsuccessful result and never invokes a save.
 - Add tests that the NullDrawingGateway remains safe and reports the live operation as unavailable.
@@ -190,12 +207,14 @@ Tests first:
 Implementation:
 
 - Add an explicit gateway method for read-only exact-base Xref inspection.
+- Construct the server-owned S3BPathPolicy in CommandContext from the named environment values and use it for every request.
 - Use the active AutoCAD document selected by CommandContext and the existing mechanical warning/file IPC setup.
-- Resolve the exact-base Xref by the request and live drawing identity; verify it is an external reference and read-only before reading components.
-- Read source handle, layer, block, and live bounds for each requested component, plus vehicle identity and critical dimensions from the already approved inspection controls.
-- Hash the source file before and after the read and compare both with the requested source hash.
+- Resolve the exact-base Xref by the server-authorized source identity and live drawing identity; verify it is an external reference and read-only before reading components.
+- Read source handle, layer, block, live bounds, vehicle identity, and critical dimensions from AutoCAD. Compute observed values, PASS/FAIL status, eligibility, changed, DBMOD, and timestamps in the gateway.
+- Build a fresh S3A-compatible live_inspection result from those reads, validate that result with the frozen S3A validator, and never copy caller evidence into it.
+- Hash the source file before and after the read and compare both with the server-configured source hash.
 - Capture target hash and DBMOD before and after; require unchanged values for inspection success.
-- Set changed=false for inspection and never call a save, transaction commit that mutates the source, or accepted-target mutation path.
+- Set drawing_full_path to the server-canonical active path, changed=false, and entity_handles=[] for inspection. Never call a save, mutating transaction commit, or accepted-target mutation path.
 
 Verification:
 
@@ -220,21 +239,26 @@ Tests first:
 
 - Add a candidate-only extraction test that copies exactly the inspected BLOCK components.
 - Add transform tests for translation, rotation, and positive uniform scale on each component.
-- Add tests that reject an uninspected component, source handle/layer/block mismatch, unsupported type, target handle, global transform, non-uniform scale, reflection, and a missing approval reference.
-- Add tests that reject source/accepted-target writes, candidate output paths outside the disposable root, existing output paths, and candidate/source path aliases.
+- Add tests that reject an uninspected component, source handle/layer/block mismatch, unsupported type, target handle, global transform, non-uniform scale, reflection, a missing approval reference, and an exact plan/envelope approval mismatch.
+- Add tests that invoke the full live preflight immediately before mutation and reject extraction when any fresh identity, dimension, Xref, component, hash, or DBMOD check fails, regardless of prior inspection/run_id.
+- Add tests that reject source/accepted-target writes, candidate input/output paths outside the server-owned disposable root, existing output paths, reparse points, and candidate/source/accepted aliases.
 - Add tests that source hash is stable and source_mutated=false after success and after every failure.
-- Add tests that a mid-operation failure closes or discards the candidate and does not report a successful extraction.
+- Add tests that source_handle_to_candidate_handle maps each native-created candidate handle and that result drawing_full_path, changed, and entity_handles follow the closed semantics.
+- Add tests that a mid-operation failure closes or discards the candidate, restores the original session, cleans only its own partial output, and does not report a successful extraction.
 
 Implementation:
 
-- Require a successful associated inspection and a freshly revalidated extraction plan before opening the candidate mutation transaction.
-- Resolve only source objects identified by the inspected handle/layer/block triple.
+- Require a freshly revalidated extraction plan and exact plan/envelope approval binding before opening the candidate mutation transaction.
+- Run the complete live preflight again immediately before the mutation transaction. A prior inspection result and matching run_id are not authority.
+- Resolve only source objects identified by the inspected handle/layer/block triple and matched again by fresh live evidence.
 - Use the AutoCAD Managed .NET native database clone boundary for the selected source objects; do not reconstruct geometry or apply a drawing-wide transform.
 - Apply each component transform locally, with positive uniform scale only.
-- Save only a newly created candidate output below the configured disposable root. Never save the source Xref or an accepted DWG.
-- Return source provenance for every extracted component: source handle, layer, block, source revision, source hash, and REUSED_FROM_BASE_CAD.
+- Capture and restore the original active document, layout/view/UCS, and transaction state with a finally-protected session guard.
+- Save only a newly created candidate output below the server-owned disposable root. Never save the source Xref or an accepted DWG.
+- Return drawing_full_path as the canonical active candidate input, changed=true only for committed candidate mutation, sorted native-created candidate handles in entity_handles, and source_handle_to_candidate_handle mappings.
+- Return source provenance for every extracted component: source handle, candidate handle, layer, block, source revision, source hash, and REUSED_FROM_BASE_CAD.
 - Return candidate_changed_during_operation and save_performed separately from accepted_target_overwrite. accepted_target_overwrite must always be false.
-- Hash the source after extraction and close or discard the candidate when any policy, transaction, hash, or evidence step fails.
+- Hash the source after extraction. On any policy, transaction, hash, evidence, restoration, or cleanup failure, close/discard the candidate, delete only the own newly-created output after identity recheck, and return changed=false/entity_handles=[].
 
 Verification:
 
@@ -255,10 +279,10 @@ Files:
 Tests first:
 
 - Add a live test marker and make it skip unless all required environment variables and AutoCAD Mechanical 2027 prerequisites are present.
-- Require explicit source and candidate paths, expected source hash, and a disposable-root check.
-- Exercise inspection first and assert source hash stability, identity PASS, critical dimensions PASS, read-only Xref, and unchanged DBMOD.
-- Exercise extraction only after the inspection result succeeds and an APPROVED plan is supplied.
-- Assert candidate output is new and disposable, accepted_target_overwrite=false, source_mutated=false, and all component provenance fields are present.
+- Require server-owned source/accepted/root configuration, explicit candidate input/output paths, expected source hash, canonical path checks, and a disposable-root check.
+- Exercise inspection first and assert a fresh server-built live_inspection with source hash stability, identity PASS, critical dimensions PASS, read-only Xref, unchanged DBMOD, and no caller-owned live field echo.
+- Exercise extraction with a plan whose approval object exactly matches the IPC envelope and assert the full live preflight runs immediately before mutation.
+- Assert candidate output is new and disposable, drawing_full_path is canonical, changed/entity_handles have the closed semantics, accepted_target_overwrite=false, source_mutated=false, source-to-candidate mappings exist, session state is restored, and cleanup is complete.
 - Assert missing AutoCAD, missing Autodesk references, unavailable fixture, or missing approved private source records NOT RUN or SKIP instead of PASS.
 
 Implementation:
@@ -308,8 +332,12 @@ The implementation is complete only when:
 - Both S3B operations are allowlisted and covered by contract tests.
 - Python requests are validated by the frozen S3A policy before transport.
 - C# policy and dispatcher fail closed for every safety condition in the design.
+- Live inspection is server-authoritative: every observed/status/eligible/changed/DBMOD/bounds/hash/timestamp field is freshly computed and caller evidence is never echoed.
 - Inspection is demonstrably read-only and preserves source hash and target DBMOD.
-- Extraction copies only inspected, approved BLOCK components into a new disposable candidate.
+- Extraction performs the full live preflight immediately before mutation and copies only inspected, approved BLOCK components into a new disposable candidate.
+- CommandContext-owned path policy proves canonical root containment, reparse-point rejection, source/accepted alias rejection, and new-output safety.
+- extraction_plan.approval exactly matches the APPROVED IPC envelope approval object.
+- drawing_full_path, changed, entity_handles, source_handle_to_candidate_handle, session restoration, and partial-output cleanup are evidenced according to the closed contract.
 - Only local translation, rotation, and positive uniform scale are accepted.
 - Source provenance includes handle, layer, block, revision, hash, and REUSED_FROM_BASE_CAD.
 - Accepted DWG is unchanged and never overwritten.
