@@ -13,6 +13,47 @@ namespace CadAgent.AutoCAD2027.Tests.Ipc;
 public sealed class OperationDispatcherTests
 {
     [Fact]
+    public void ExactBaseXrefInspectionRoutesToFailClosedBoundaryWithoutGatewayReads()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\inspection-host.dwg"
+        };
+        var dispatcher = CreateDispatcher(gateway);
+
+        var result = dispatcher.Dispatch(ExactBaseXrefInspectionRequest());
+
+        Assert.False(result.Success);
+        Assert.Equal("exact_base_xref_inspection", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Contains(result.Errors!, error => error.Contains("S3B_", StringComparison.Ordinal));
+        Assert.Equal(0, gateway.ReadEntitiesCallCount);
+        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
+        Assert.Equal(0, gateway.ReadVisualEvidenceCallCount);
+        Assert.Equal(0, gateway.ReadNativeRenderEvidenceCallCount);
+    }
+
+    [Fact]
+    public void ExactBaseXrefExtractionNeverUsesRunIdAsFreshPreflight()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\temp\candidate-input.dwg"
+        };
+        var dispatcher = CreateDispatcher(gateway);
+
+        var result = dispatcher.Dispatch(ExactBaseXrefExtractionRequest());
+
+        Assert.False(result.Success);
+        Assert.Equal("exact_base_xref_extraction", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Contains(result.Errors!, error => error.Contains("S3B_", StringComparison.Ordinal));
+        Assert.Equal(0, gateway.ReadEntitiesCallCount);
+    }
+
+    [Fact]
     public void HealthReturnsTheActiveDocumentAndPreservesRequestId()
     {
         var gateway = new StubDrawingGateway
@@ -594,14 +635,139 @@ public sealed class OperationDispatcherTests
         StubDrawingGateway gateway,
         Action? closeWithoutSaving = null,
         IMechanicalAdapter? mechanicalAdapter = null,
-        ICollection<string>? mechanicalWarnings = null) =>
+        ICollection<string>? mechanicalWarnings = null,
+        ExactBaseXrefPolicy? exactBaseXrefPolicy = null) =>
         new(new CommandContext(
             new JsonFileStore(Path.Combine(Path.GetTempPath(), "cadagent-t06-tests", Guid.NewGuid().ToString("N"))),
             gateway,
             closeWithoutSaving ?? (() => { }),
             clock: () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
             mechanicalAdapter: mechanicalAdapter,
-            mechanicalWarnings: mechanicalWarnings));
+            mechanicalWarnings: mechanicalWarnings,
+            exactBaseXrefPolicy: exactBaseXrefPolicy));
+
+    private static IpcRequest ExactBaseXrefInspectionRequest() => new()
+    {
+        RequestId = "xref-inspection-request-001",
+        SchemaVersion = ContractConstants.SchemaVersion,
+        Operation = ExactBaseXrefOperationNames.Inspection,
+        DrawingFullPath = @"C:\drawings\inspection-host.dwg",
+        DrawingSha256 = new string('b', 64),
+        Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["run_id"] = JsonSerializer.SerializeToElement("run-001"),
+            ["source_full_path"] = JsonSerializer.SerializeToElement(@"C:\approved\base-vehicle.dwg"),
+            ["source_revision"] = JsonSerializer.SerializeToElement("rev-2026-08-05-01"),
+            ["inspection_expectations"] = JsonSerializer.SerializeToElement(new
+            {
+                source = new
+                {
+                    source_id = "base-vehicle-001",
+                    revision = "rev-2026-08-05-01",
+                    sha256 = new string('a', 64)
+                },
+                identity = new { vehicle = "vehicle-001", model = "model-x" },
+                critical_dimensions = new[]
+                {
+                    new { control = "wheelbase", target = 2750.0, tolerance = 1.0, unit = "mm" },
+                    new { control = "track", target = 1600.0, tolerance = 1.0, unit = "mm" },
+                    new { control = "chassis", target = 4200.0, tolerance = 2.0, unit = "mm" },
+                    new { control = "cabin", target = 1850.0, tolerance = 2.0, unit = "mm" },
+                    new { control = "axle", target = 1200.0, tolerance = 1.0, unit = "mm" }
+                },
+                xref = new { name = "BASE_XREF" },
+                components = new[]
+                {
+                    new
+                    {
+                        component_type = "BLOCK",
+                        logical_component_id = "chassis-main",
+                        provenance = "REUSED_FROM_BASE_CAD",
+                        source_block = "CHASSIS_MAIN",
+                        source_handle = "A1B2",
+                        source_layer = "BODY"
+                    }
+                }
+            }),
+            ["target_role"] = JsonSerializer.SerializeToElement("INSPECTION_HOST")
+        },
+        Approval = null
+    };
+
+    private static IpcRequest ExactBaseXrefExtractionRequest() => new()
+    {
+        RequestId = "xref-extraction-request-001",
+        SchemaVersion = ContractConstants.SchemaVersion,
+        Operation = ExactBaseXrefOperationNames.Extraction,
+        DrawingFullPath = @"C:\temp\candidate-input.dwg",
+        DrawingSha256 = new string('b', 64),
+        Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["run_id"] = JsonSerializer.SerializeToElement("run-001"),
+            ["source_full_path"] = JsonSerializer.SerializeToElement(@"C:\approved\base-vehicle.dwg"),
+            ["source_revision"] = JsonSerializer.SerializeToElement("rev-2026-08-05-01"),
+            ["inspection_expectations"] = JsonSerializer.SerializeToElement(new
+            {
+                source = new
+                {
+                    source_id = "base-vehicle-001",
+                    revision = "rev-2026-08-05-01",
+                    sha256 = new string('a', 64)
+                },
+                identity = new { vehicle = "vehicle-001", model = "model-x" },
+                critical_dimensions = new[]
+                {
+                    new { control = "wheelbase", target = 2750.0, tolerance = 1.0, unit = "mm" },
+                    new { control = "track", target = 1600.0, tolerance = 1.0, unit = "mm" },
+                    new { control = "chassis", target = 4200.0, tolerance = 2.0, unit = "mm" },
+                    new { control = "cabin", target = 1850.0, tolerance = 2.0, unit = "mm" },
+                    new { control = "axle", target = 1200.0, tolerance = 1.0, unit = "mm" }
+                },
+                xref = new { name = "BASE_XREF" },
+                components = new[]
+                {
+                    new
+                    {
+                        component_type = "BLOCK",
+                        logical_component_id = "chassis-main",
+                        provenance = "REUSED_FROM_BASE_CAD",
+                        source_block = "CHASSIS_MAIN",
+                        source_handle = "A1B2",
+                        source_layer = "BODY"
+                    }
+                }
+            }),
+            ["extraction_plan"] = JsonSerializer.SerializeToElement(new
+            {
+                approval = new { reference = "approval-example-001", status = "APPROVED" },
+                base_source = new
+                {
+                    relative_path = "approved/base-vehicle.dwg",
+                    revision = "rev-2026-08-05-01",
+                    sha256 = new string('a', 64),
+                    source_id = "base-vehicle-001"
+                },
+                components = Array.Empty<object>(),
+                impacted_views = new[] { new { identity = "model-space", name = "Model" } },
+                inspection_id = "inspection-001",
+                plan_id = "extraction-plan-001",
+                provenance = "REUSED_FROM_BASE_CAD",
+                request_id = "xref-inspection-request-001",
+                run_id = "run-001",
+                schema_version = "exact-base-xref-extraction-plan-1.0",
+                source_revision = "rev-2026-08-05-01",
+                target_drawing_sha256 = new string('b', 64),
+                transform_policy = "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY"
+            }),
+            ["target_role"] = JsonSerializer.SerializeToElement("DISPOSABLE_CANDIDATE"),
+            ["candidate_output_path"] = JsonSerializer.SerializeToElement(@"C:\temp\candidate-output.dwg")
+        },
+        Approval = JsonSerializer.SerializeToElement(new
+        {
+            reference = "approval-example-001",
+            status = "APPROVED"
+        })
+    };
 
     private static void AssertNativeRenderBoundaryFailure(IpcResult result)
     {

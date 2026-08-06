@@ -27,7 +27,8 @@ public sealed class CommandContext
         Action<string>? report = null,
         Func<DateTimeOffset>? clock = null,
         IMechanicalAdapter? mechanicalAdapter = null,
-        ICollection<string>? mechanicalWarnings = null)
+        ICollection<string>? mechanicalWarnings = null,
+        ExactBaseXrefPolicy? exactBaseXrefPolicy = null)
     {
         Store = store ?? throw new ArgumentNullException(nameof(store));
         DrawingGateway = drawingGateway ?? throw new ArgumentNullException(nameof(drawingGateway));
@@ -36,6 +37,7 @@ public sealed class CommandContext
         Clock = clock ?? (() => DateTimeOffset.UtcNow);
         MechanicalAdapter = mechanicalAdapter ?? new NoOpMechanicalAdapter();
         _mechanicalWarnings = mechanicalWarnings ?? new List<string>();
+        ExactBaseXrefPolicy = exactBaseXrefPolicy ?? ExactBaseXrefPolicy.FromEnvironment();
     }
 
     public JsonFileStore Store { get; }
@@ -43,6 +45,8 @@ public sealed class CommandContext
     public IDrawingGateway DrawingGateway { get; }
 
     public IMechanicalAdapter MechanicalAdapter { get; }
+
+    public ExactBaseXrefPolicy ExactBaseXrefPolicy { get; }
 
     public Action CloseWithoutSaving { get; }
 
@@ -109,7 +113,8 @@ public sealed class CommandContext
             closeScheduler.Schedule,
             message => editor.WriteMessage($"\n{message}"),
             mechanicalAdapter: new ManagedMechanicalAdapter(gateway),
-            mechanicalWarnings: mechanicalWarnings);
+            mechanicalWarnings: mechanicalWarnings,
+            exactBaseXrefPolicy: ExactBaseXrefPolicy.FromEnvironment());
     }
 
     private sealed class AutoCadDrawingGateway : IDrawingGateway, IMechanicalDrawingGateway

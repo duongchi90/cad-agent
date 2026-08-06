@@ -46,6 +46,8 @@ public sealed class OperationDispatcher
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
+                ExactBaseXrefOperationNames.Inspection => DispatchExactBaseXrefInspection(request, startedAt),
+                ExactBaseXrefOperationNames.Extraction => DispatchExactBaseXrefExtraction(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
             };
         }
@@ -274,6 +276,36 @@ public sealed class OperationDispatcher
             errors: Array.Empty<string>(),
             payload: NativeRenderPayload.Create(snapshot),
             startedAt);
+    }
+
+    private IpcResult DispatchExactBaseXrefInspection(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out _, out var error))
+        {
+            return Failure(
+                request,
+                new[] { $"{ExactBaseXrefPolicy.ActiveDocumentMismatchCode}: {error}" },
+                startedAt);
+        }
+
+        var parameters = _context.ExactBaseXrefPolicy.ValidateInspectionRequest(request);
+        _context.ExactBaseXrefPolicy.RequireFreshLivePreflight(parameters.RunId);
+        return Failure(request, new[] { "unreachable" }, startedAt);
+    }
+
+    private IpcResult DispatchExactBaseXrefExtraction(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out _, out var error))
+        {
+            return Failure(
+                request,
+                new[] { $"{ExactBaseXrefPolicy.ActiveDocumentMismatchCode}: {error}" },
+                startedAt);
+        }
+
+        var parameters = _context.ExactBaseXrefPolicy.ValidateExtractionRequest(request);
+        _context.ExactBaseXrefPolicy.RequireFreshLivePreflight(parameters.RunId);
+        return Failure(request, new[] { "unreachable" }, startedAt);
     }
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(

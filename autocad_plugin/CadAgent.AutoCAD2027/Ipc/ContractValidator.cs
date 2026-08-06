@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using CadAgent.AutoCAD2027.Drawing;
 
 namespace CadAgent.AutoCAD2027.Ipc;
 
@@ -125,6 +126,12 @@ public static class ContractValidator
             ValidateNativeRenderEvidenceRequest(request, errors);
         }
 
+        if (request.Operation is ExactBaseXrefOperationNames.Inspection
+            or ExactBaseXrefOperationNames.Extraction)
+        {
+            ExactBaseXrefPolicy.ValidateRequestShape(request, errors);
+        }
+
         return new ContractValidationResult(errors);
     }
 
@@ -187,6 +194,24 @@ public static class ContractValidator
             else if (result.Payload is not null && result.Payload.Count != 0)
             {
                 errors.Add("native_render_evidence failure results must contain an empty payload");
+            }
+        }
+        if (string.Equals(result.Operation, ExactBaseXrefOperationNames.Inspection, StringComparison.Ordinal))
+        {
+            if (result.Changed || (result.EntityHandles?.Count ?? 0) != 0)
+            {
+                errors.Add("exact_base_xref_inspection results must be read-only and contain no entity handles");
+            }
+        }
+        if (string.Equals(result.Operation, ExactBaseXrefOperationNames.Extraction, StringComparison.Ordinal))
+        {
+            if (!result.Success && (result.Changed || (result.EntityHandles?.Count ?? 0) != 0))
+            {
+                errors.Add("exact_base_xref_extraction failure results must be unchanged and contain no entity handles");
+            }
+            if (result.Success && !result.Changed)
+            {
+                errors.Add("successful exact_base_xref_extraction results must report changed=true");
             }
         }
         if (result.Payload is null)
