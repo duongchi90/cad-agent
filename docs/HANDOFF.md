@@ -2,7 +2,7 @@
 
 Status: current operational handoff for PO and coding agents.
 
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 Live GitHub state, exact commits, diffs, CI logs, approved specifications, plans,
 `docs/STATUS.md`, and `docs/ARCHITECTURE.md` remain the sources of truth.
@@ -11,16 +11,17 @@ Live GitHub state, exact commits, diffs, CI logs, approved specifications, plans
 
 - Repository: `duongchi90/cad-agent`.
 - Latest accepted implementation merge:
-  `3d0aa999904f384efa4eb42a81637e4270591859`.
-- Latest merged PR: #55 — S2B fail-closed native-render File IPC seam.
+  `365cb2df47cc3d0232a4b5df1901f55dbe46b22c`.
+- Latest merged PR: #61 — S2C actual read-only AutoCAD-native layout capture.
 - Previous accepted implementation merges:
   - `ff6d199ef6cd401ccf5d06bace1135e4e55f1216` — PR #59 R1B;
   - `589d708a69f5c710c0a4c25e52a5b17db9749764` — PR #57 R1A;
   - `a8a962281b2d7480c9444eb8e1b56c6795c108aa` — PR #54 S3A.
-- Runtime promotion: none.
+- Runtime promotion: no source-fusion, repair, verdict, or publication runtime
+  is promoted.
 
-The exact implementation base for S2C is
-`3d0aa999904f384efa4eb42a81637e4270591859`. Later docs-only commits are not
+The accepted S2C implementation head is
+`365cb2df47cc3d0232a4b5df1901f55dbe46b22c`. Later docs-only commits are not
 implementation bases.
 
 ## 2. Accepted S2B boundary
@@ -35,13 +36,16 @@ S2C may replace only that unsupported dispatcher path through the existing
 drawing gateway. It may not add a second transport, queue, dispatcher, protocol,
 renderer fallback, verdict, approval, repair, or publication path.
 
-## 3. Active task — Issue #60 S2C
+## 3. Accepted S2C — Issue #60
 
-Execution mode: `SINGLE_CODEX`.
+S2C is accepted at merge commit
+`365cb2df47cc3d0232a4b5df1901f55dbe46b22c` (PR #61) for the bounded
+read-only AutoCAD-native layout capture scope. The branch and plan references
+below are the historical implementation record.
 
 Issue: #60 — actual read-only AutoCAD-native layout capture.
 
-Branch: `task/s2c-autocad-native-render`.
+Historical implementation branch: `task/s2c-autocad-native-render`.
 
 Exact implementation base:
 `3d0aa999904f384efa4eb42a81637e4270591859`.
@@ -57,8 +61,8 @@ The branch was prepared with two PO docs-only commits:
 - design commit: `091f189bacf21f4d67c228672ff0137ac0af8f84`;
 - plan head: `2febca49526f560cd0daaa631aecc262936e8695`.
 
-Those commits do not constitute production implementation. Treat Codex as not
-started until there is a production diff, later commit, PR, or matching CI.
+Those commits were preparation only; the accepted implementation is the S2C
+merge recorded above.
 
 ### Locked S2C profile
 
@@ -100,25 +104,43 @@ exact path instead of expanding scope.
 
 ## 4. Acceptance state
 
-S2C is not accepted until all of the following pass on the exact reviewed head:
+S2C is accepted on the exact reviewed head `365cb2df` for the read-only layout
+capture boundary. It does not authorize any later source-fusion or mutation
+flow. The following remain separate future gates:
 
-- changed-file and source review;
-- Release/x64 restore, build, and C# tests with official Autodesk references;
-- focused Python tests, Ruff, architecture, diff-check, and canonical verifier;
-- hosted synthetic-merge CI and Reuse Declaration;
-- real AutoCAD Mechanical 2027 live PNG success;
-- real AutoCAD Mechanical 2027 live one-page PDF success;
-- duplicate, missing layout/device/media, and unsupported-profile fail-closed
-  probes;
-- read-only DBMOD/hash/session-state evidence.
+- exact-base Xref inspection and approved extraction;
+- private-data acceptance when an approved private input exists;
+- any future production mutation, repair, verdict, or publication.
 
 Private data remains `NOT RUN` unless separately approved.
 
-## 5. Locked work
+## 5. Next authorized slice — S3B planning only
 
-Do not start while Issue #60 is active:
+S3B is the next authorized planning slice:
+`exact-base Xref File IPC/.NET live inspection and approved extraction`.
+Planning must reuse the existing File IPC, dispatcher, and drawing gateway and
+the S3A validator/extraction plan. The implementation task is not started by
+this handoff.
 
-- S3B/S3C exact-base Xref File IPC/live work;
+The planning boundary is:
+
+- source Xref is read-only and its hash must remain stable;
+- only inspected components with an approved extraction plan may be used;
+- allowed local transforms are translation, rotation, and positive uniform
+  scale only;
+- mutation is limited to disposable/candidate drawings and never overwrites an
+  accepted DWG;
+- evidence preserves source handle, layer, block, source revision, source hash,
+  and `REUSED_FROM_BASE_CAD` provenance;
+- vehicle identity, critical dimensions, source hash, inspection membership,
+  and invalid transforms fail closed.
+
+## 6. Locked work
+
+Do not start until S3B live acceptance exists:
+
+- S3B implementation/live extraction;
+- S3C repair/publication;
 - R1C SourceBundle byte-integrity audit or source-fusion runtime;
 - component/view registry;
 - dimension-authority expansion;
@@ -128,7 +150,7 @@ Do not start while Issue #60 is active:
 - duplicate OCR, solver, DXF builder, File IPC transport/dispatcher,
   manifest/checkpoint/revision store, repair executor, verdict path, or publisher.
 
-## 6. Authoritative ownership
+## 7. Authoritative ownership
 
 ```text
 primitive_ir_lib
@@ -145,9 +167,10 @@ primitive_ir_lib
 - AutoCAD access remains in the existing File IPC/.NET drawing-gateway boundary;
 - `cad_agent` remains thin orchestration and the sole manifest/checkpoint owner.
 
-## 7. Next action
+## 8. Next action
 
-Codex implements Issue #60 task-by-task on
-`task/s2c-autocad-native-render`, opens one non-draft PR, and stops. No later
-task starts from chat claims alone; require exact commit, diff, PR, CI, and live
-evidence.
+Prepare and approve the S3B design/plan on exact base
+`365cb2df47cc3d0232a4b5df1901f55dbe46b22c`. Do not implement S3B from this
+governance update alone; require a dedicated implementation Issue/PR, exact
+branch, allowlist, and live prerequisites. Decide S3C only after S3B live
+acceptance. R1C remains locked.
