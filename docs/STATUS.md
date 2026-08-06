@@ -65,30 +65,30 @@ collects unavailable-state probes for `real_data` and `autocad_mechanical` as ex
 `SKIP` results with prerequisites removed. A real private-data or live AutoCAD
 Mechanical gate that was not separately executed remains `NOT RUN`.
 
-## Roadmap and governance gate — S2C accepted; S3B planning only (2026-08-06)
+## Roadmap and governance gate — S3B accepted; future runtime locked (2026-08-06)
 
 - S1 and S2 are accepted. S2C, actual read-only AutoCAD-native layout capture,
   is accepted at `365cb2df47cc3d0232a4b5df1901f55dbe46b22c` (PR #61,
   `origin/main`).
 - S3A offline inspection evidence and extraction-plan contract is accepted.
   R1A SourceBundle offline contract and R1B manifest binding are accepted.
-- **Only S3B planning is unlocked:** exact-base Xref File IPC/.NET live
-  inspection and approved extraction. S3B implementation and live acceptance
-  remain **NOT RUN**.
-- S3B must reuse the existing File IPC, dispatcher, drawing gateway, and S3A
-  validator/extraction plan. The source Xref is read-only, its hash must remain
-  stable, and only inspected components with an approved extraction plan may
-  be used.
-- Allowed local transforms are translation, rotation, and positive uniform
-  scale only. Mutation is limited to disposable/candidate drawings and must
-  never overwrite an accepted DWG.
-- Extraction evidence must retain source handle, layer, block, source revision,
-  source hash, and `REUSED_FROM_BASE_CAD` provenance. Vehicle identity, critical
-  dimensions, source hash, inspection membership, and invalid transforms fail
-  closed.
-- S3C, R1C source-fusion runtime, component registry/revision, repair, verdict,
-  and publication remain **locked**. S3C is decided only after S3B live
-  acceptance. No runtime capability is promoted by this docs-only update.
+- S3B implementation is accepted through PR #65 and merge
+  `a9968480258e01fda9d4dfbf01a27958b67747bc`.
+- Issue #64 is completed.
+- Runtime verification head: `9f5dc302643fdfae77cbda65dd6cdc0c8deccc59`.
+- Record-only final head: `67c3496da313245fc9ceeee26814e099b32f2c87`.
+- The accepted S3B boundary uses read-only exact-base Xref inspection and
+  approved extraction into new disposable candidates only. Source Xrefs and
+  accepted DWGs remain immutable; allowed local transforms are translation,
+  rotation, and positive uniform scale only.
+- Fresh server-owned live preflight remains mandatory immediately before
+  mutation, and extraction evidence retains source handle, layer, block,
+  source revision, source hash, and `REUSED_FROM_BASE_CAD` provenance.
+- AutoCAD Mechanical S3B live acceptance: **NOT RUN**.
+- Hosted AutoCAD .NET: **NOT RUN**.
+- No private drawing/source-data acceptance is promoted.
+- S3C, R1C SourceBundle/source-fusion, registry, revision, repair, verdict, publication, and OCR remain **locked**.
+- No next runtime milestone is selected by this rebaseline.
 
 ## Visual Supervisor VS-T0 contract-only slice (2026-08-04)
 
