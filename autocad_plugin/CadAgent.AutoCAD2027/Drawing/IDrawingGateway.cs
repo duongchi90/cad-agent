@@ -14,4 +14,9 @@ public interface IDrawingGateway
     VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request);
 
     NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request);
+
+    ExactBaseXrefInspectionSnapshot ReadExactBaseXrefInspection(
+        ExactBaseXrefInspectionParameters request) =>
+        throw new InvalidOperationException(
+            "This drawing gateway does not provide the live exact-base Xref inspection operation.");
 }

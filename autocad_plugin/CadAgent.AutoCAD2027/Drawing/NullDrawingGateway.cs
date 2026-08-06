@@ -21,4 +21,11 @@ public sealed class NullDrawingGateway : IDrawingGateway
 
     public NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request) =>
         throw new InvalidOperationException("No active drawing is available for native render evidence.");
+
+    public ExactBaseXrefInspectionSnapshot ReadExactBaseXrefInspection(
+        ExactBaseXrefInspectionParameters request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return ExactBaseXrefInspectionSnapshot.Unavailable("S3B_LIVE_UNAVAILABLE");
+    }
 }

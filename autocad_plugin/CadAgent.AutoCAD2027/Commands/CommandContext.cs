@@ -98,7 +98,12 @@ public sealed class CommandContext
         var ipcDirectory = Environment.GetEnvironmentVariable(IpcDirectoryEnvironmentVariable);
         var store = new JsonFileStore(
             string.IsNullOrWhiteSpace(ipcDirectory) ? DefaultIpcDirectory : ipcDirectory);
-        var gateway = new AutoCadDrawingGateway(document, mechanicalWarnings.Add, store.IpcDirectory);
+        var exactBaseXrefPolicy = ExactBaseXrefPolicy.FromEnvironment();
+        var gateway = new AutoCadDrawingGateway(
+            document,
+            mechanicalWarnings.Add,
+            store.IpcDirectory,
+            exactBaseXrefPolicy);
         var closeScheduler = new OneShotIdleCloseScheduler(
             handler => AcadApplication.Idle += handler,
             handler => AcadApplication.Idle -= handler,
@@ -114,7 +119,7 @@ public sealed class CommandContext
             message => editor.WriteMessage($"\n{message}"),
             mechanicalAdapter: new ManagedMechanicalAdapter(gateway),
             mechanicalWarnings: mechanicalWarnings,
-            exactBaseXrefPolicy: ExactBaseXrefPolicy.FromEnvironment());
+            exactBaseXrefPolicy: exactBaseXrefPolicy);
     }
 
     private sealed class AutoCadDrawingGateway : IDrawingGateway, IMechanicalDrawingGateway
@@ -122,17 +127,22 @@ public sealed class CommandContext
         private readonly Document _document;
         private readonly Action<string> _mechanicalWarning;
         private readonly string _ipcDirectory;
+        private readonly AutoCadExactBaseXrefReader _exactBaseXrefReader;
 
         public AutoCadDrawingGateway(
             Document document,
             Action<string> mechanicalWarning,
-            string ipcDirectory)
+            string ipcDirectory,
+            ExactBaseXrefPolicy exactBaseXrefPolicy)
         {
             _document = document ?? throw new ArgumentNullException(nameof(document));
             _mechanicalWarning = mechanicalWarning ?? throw new ArgumentNullException(nameof(mechanicalWarning));
             _ipcDirectory = string.IsNullOrWhiteSpace(ipcDirectory)
                 ? throw new ArgumentException("The IPC directory is required.", nameof(ipcDirectory))
                 : ipcDirectory;
+            _exactBaseXrefReader = new AutoCadExactBaseXrefReader(
+                new AutoCadExactBaseXrefDatabase(_document),
+                exactBaseXrefPolicy ?? throw new ArgumentNullException(nameof(exactBaseXrefPolicy)));
         }
 
         public string? ActiveDocumentFullPath => _document.Database?.Filename;
@@ -327,6 +337,10 @@ public sealed class CommandContext
                 request,
                 _ipcDirectory,
                 DateTimeOffset.UtcNow);
+
+        public ExactBaseXrefInspectionSnapshot ReadExactBaseXrefInspection(
+            ExactBaseXrefInspectionParameters request) =>
+            _exactBaseXrefReader.Read(request);
 
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
         {
