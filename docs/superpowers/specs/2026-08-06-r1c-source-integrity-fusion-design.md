@@ -5,53 +5,59 @@
 - Issue: #71
 - Exact planning base: `d71d0c97e28e03cb430f05589c8381b4ede70e66`
 - Planning branch: `planning/w1b-r1c-source-integrity-fusion`
-- Paired independent research/red-team: Issue #77
+- Draft PR: #78
+- Independent source-integrity red-team: Issue #77
 - This document is planning/design only.
-- R1C runtime implementation, dependencies, model calls, AutoCAD mutation, OCR expansion, registry, revision, repair, verdict, and publication remain locked.
+- R1C runtime implementation remains locked until this planning PR is accepted and a separate runtime Issue supplies an exact base, branch, allowlist, and gates.
+- No model call, AutoCAD mutation, OCR expansion, component/view registry, candidate revision, repair, visual verdict, engineering approval, or publication authority is introduced.
 
 ## Decision summary
 
-R1C will be an adjacent, pure-Python, fail-closed adapter around the accepted R1A `SourceBundle`, the R1B manifest binding, existing `primitive_ir_lib` and `semantic_ir_lib` artifacts, and the existing `cad_agent` manifest/checkpoint owner.
+R1C is an adjacent, pure-Python evidence adapter around the accepted R1A `SourceBundle`, the accepted R1B SourceBundle-to-manifest binding, existing Primitive/Semantic IR artifacts, and the existing `cad_agent` manifest/checkpoint owner.
 
-R1C will not expand `source-bundle-1.0`, create another source registry, copy source bytes by default, infer page or crop identity, select a silent winner among conflicting sources, or produce a visual/engineering verdict. It will create two closed derived artifacts:
+R1C preserves `source-bundle-1.0` unchanged and creates two closed derived artifacts:
 
-1. `source-custody-1.0`: byte-stable, media-verified custody evidence for each SourceBundle item.
-2. `source-fusion-1.0`: deterministic ordering, locator binding, provenance grouping, and conflict-state evidence for downstream reconstruction.
+1. `source-custody-1.0` proves approved-root configuration, stable source bytes, privacy-safe file identity, media observations, aliases, duplicates, and blocking custody states.
+2. `source-fusion-1.0` binds explicit page/region/render locators, deterministic Primitive/Semantic projections, evidence groups, conflicts, stale state, and replay-safe conflict resolutions.
 
-Both artifacts are hash-bound to the accepted R1A SourceBundle. The existing run manifest remains the only run truth store and records only closed references to the derived artifacts.
+The existing run manifest remains the only run/checkpoint truth store and stores only small closed references to these artifacts. The derived artifacts live under the existing run output root and never become a second database, source registry, or approval store.
+
+`READY` means only that deterministic downstream reconstruction inputs are closed and unblocked. It is never visual PASS, engineering truth, CAD acceptance, repair permission, or publication authorization.
 
 ## Goals
 
 R1C must:
 
-- verify approved source bytes without mutating them;
-- bind declared source metadata to observed bytes, size, media structure, and stable identity;
-- detect path escape, reparse/symlink traversal, aliasing, duplicates, replacement, and mid-read mutation;
-- preserve explicit source roles without treating role order as engineering authority;
-- bind page, sheet, view, crop, and region locators explicitly;
-- reuse Primitive IR traces/calibration and Semantic IR references instead of re-recognizing sources;
-- create deterministic conflict records and unresolved states;
-- produce a deterministic downstream fusion packet, not fused geometry and not PASS;
-- integrate through `cad_agent.manifest` without a second manifest/checkpoint/evidence store;
-- remain testable using synthetic bytes only.
+- verify approved source bytes without changing them;
+- prove the opened file remains under the approved root after open;
+- bind a stable approved-root configuration revision to every custody artifact;
+- distinguish same-file aliases from independent files with duplicate bytes;
+- preserve source roles without allowing source count, confidence, or order to silently choose truth;
+- bind PDF page, render, crop, rotation, coordinate convention, region, view, and sheet identity explicitly;
+- project Primitive/Semantic observations into deterministic identities that exclude UUIDs, handles, timestamps, and list order;
+- bind current Semantic IR artifacts to Primitive IR using existing manifest/checkpoint hashes without requiring an optional field that current producers omit;
+- preserve conflicts and unresolved states;
+- accept only replay-safe, hash-bound conflict-resolution evidence from an existing external approval owner;
+- fail closed on changed source, changed root mapping, changed file identity, stale evidence, ambiguous duplicate observations, and parser disagreement;
+- remain testable with synthetic files and no AutoCAD session.
 
 ## Non-goals
 
 R1C does not:
 
-- discover files outside an approved intake root;
-- crawl folders or infer sources from filenames;
-- change R1A/R1B schema versions;
-- perform OCR, image recognition, CAD parsing authority, visual comparison, or model inference;
-- resolve engineering conflicts automatically;
-- mutate source bytes or accepted CAD;
-- create a component/view registry or revision store;
-- authorize repair, publication, or AutoCAD operations;
-- commit private source bytes, source paths, or customer data.
+- discover or crawl files outside an approved intake root;
+- trust filenames, extensions, R1A labels, or path strings as byte identity;
+- change R1A or R1B schema versions;
+- create a content-addressable store, database, source registry, or checkpoint owner;
+- perform OCR, recognition, geometric solving, CAD parsing authority, visual comparison, or model inference;
+- modify Primitive IR, Semantic IR, CLI producers, AutoCAD/File IPC, or accepted source CAD in the first runtime slice;
+- automatically resolve engineering conflicts;
+- treat an engineer `DECISION` source as an approval;
+- publish private absolute paths, raw filesystem identity, customer content, or parser exception details.
 
-## Existing internal owners and exact reuse map
+## Internal reuse dossier
 
-### R1A SourceBundle contract — `REUSE_AS_IS`
+### R1A SourceBundle — `REUSE_AS_IS`
 
 Owner and APIs:
 
@@ -67,143 +73,149 @@ Tests and evidence:
 - `tests/fixtures/source-bundle.json`
 - `docs/superpowers/implementation-records/2026-08-05-source-bundle-offline.md`
 
-R1A already owns closed source IDs, kinds, roles, relative paths, declared SHA-256, media type, page/region labels, capture time, and coarse quality. R1C consumes the normalized R1A artifact and must not add filesystem behavior or authority fields to R1A.
+R1A remains the declared-source metadata contract. It owns source ID, kind, role, safe relative path, declared SHA-256, declared media type, page/region labels, capture time, and coarse quality. R1C does not add filesystem, custody, fusion, approval, or verdict behavior to it.
+
+### Canonical JSON hashing — `REUSE_AS_IS`
+
+Owner and API:
+
+- `cad_agent/drawing_contracts.py::canonical_json_sha256()`
+
+The helper already provides sorted, compact UTF-8 canonical JSON hashing and rejects non-finite numeric values. R1C reuses it for closed configuration, identity, observation, conflict, resolution, custody, and fusion projections.
 
 ### R1B manifest binding — `EXTEND_WITH_ADAPTER`
 
 Owner and APIs:
 
 - `cad_agent/manifest.py`
-- `SOURCE_BUNDLE_REFERENCE_SCHEMA_VERSION`
 - `validate_source_bundle_reference(value)`
 - `bind_source_bundle(manifest, source_bundle)`
 - `require_source_bundle_match(manifest, source_bundle)`
-- `read_manifest(path)` / `write_manifest(path, manifest)`
 - `sha256_file(path)`
+- `read_manifest(path)` / `write_manifest(path, manifest)`
 - `verify_source(manifest, source)`
 - `completed_artifact(output_dir, stage)`
 - `cad_agent/pdf.py::read_pdf_manifest(path)`
 
-Tests and evidence:
+Tests:
 
 - `tests/test_cad_agent_source_bundle_manifest.py`
 - `tests/test_cad_agent_cli.py`
 - `tests/test_cad_agent_pdf.py`
-- `docs/superpowers/implementation-records/2026-08-05-source-bundle-manifest-binding.md`
 
-R1B already proves that optional closed references can be added without copying SourceBundle items or breaking legacy manifests. R1C follows this pattern for custody/fusion references.
+R1C follows R1B's optional closed-reference and unequal-rebind refusal pattern. It does not copy custody/fusion arrays into the manifest.
 
-### Primitive IR source evidence — `REUSE_AS_IS`
+### Windows safe-handle path and identity concepts — `PORT_BOUNDED_LOGIC`
 
-Owner and APIs:
+Reference owner:
 
-- `primitive_ir_lib/models.py::SourceDocument`
-- `primitive_ir_lib/models.py::Trace`
-- `primitive_ir_lib/models.py::Calibration`
-- `primitive_ir_lib/models.py::Primitive`
-- `primitive_ir_lib/models.py::PrimitiveIRDocument`
-- `primitive_ir_lib/run_image.py::run`
-- `primitive_ir_lib/run_pdf.py::run_pdf`
+- `autocad_plugin/CadAgent.AutoCAD2027/Drawing/ExactBaseXrefPolicy.cs`
+- its use of safe handles, final path resolution, file identity, reparse checks, and server-owned source revision/hash configuration
+
+R1C ports only the bounded Windows concepts required for source intake: open a read-only handle, obtain the final path from that handle, obtain volume/file identity, prove post-open containment, reject reparse substitution, and compare identity before/after inspection. It does not copy AutoCAD-specific policy or create a second general path-policy authority.
+
+### Primitive IR evidence — `EXTEND_WITH_ADAPTER`
+
+Owners and APIs:
+
+- `primitive_ir_lib/models.py::{SourceDocument, Trace, Calibration, Primitive, PrimitiveIRDocument}`
+- `primitive_ir_lib/run_image.py::run()`
+- `primitive_ir_lib/run_pdf.py::run_pdf()`
 
 Tests:
 
 - `primitive_ir_lib/tests/test_run_image.py`
 - `primitive_ir_lib/tests/test_run_pdf.py`
-- Primitive IR model/schema tests under `primitive_ir_lib/tests/`
+- existing Primitive IR model/schema tests
 
-R1C reuses source SHA, page index, pixel dimensions, trace bounding boxes, extraction tool, primitive IDs, confidence, cross-validation, and calibration evidence. It does not invoke a second OCR or recognition engine.
+R1C reads current artifacts and projects deterministic observation content. It does not use current UUID fields as canonical identity and does not rerun OCR or geometry extraction.
 
-### Semantic IR engineering references — `EXTEND_WITH_ADAPTER`
+### Semantic IR evidence — `EXTEND_WITH_ADAPTER`
 
-Owner and APIs:
+Owners and APIs:
 
-- `semantic_ir_lib/models.py::PrimitiveIRRef`
-- `semantic_ir_lib/models.py::SemanticPart`
-- `semantic_ir_lib/models.py::Constraint`
-- `semantic_ir_lib/models.py::SemanticIRDocument`
-- `semantic_ir_lib.assemble.build_semantic_document`
-- `semantic_ir_lib.constraint_pruning.prune_constraints`
-- `semantic_ir_lib.constraint_solving.solve_constraints`
+- `semantic_ir_lib/models.py::{PrimitiveIRRef, SemanticPart, Constraint, SemanticIRDocument}`
+- `semantic_ir_lib/assemble.py::build_semantic_document()`
+- `semantic_ir_lib.constraint_pruning.prune_constraints()`
+- `semantic_ir_lib.constraint_solving.solve_constraints()`
 
-Tests:
+Current compatibility fact:
 
-- `semantic_ir_lib/tests/test_semantic_ir.py`
-- `semantic_ir_lib/tests/test_constraint_pruning.py`
-- `semantic_ir_lib/tests/test_constraint_solving.py`
+- `PrimitiveIRRef.sha256` is optional.
+- `build_semantic_document()` creates a reference with filename and primitive count but does not normally populate SHA-256.
+- `cad_agent.cli._run_semantic()` uses that current producer behavior.
 
-Semantic IR intentionally references Primitive IR IDs instead of copying geometry. R1C preserves that pattern: fusion provenance points to artifact hashes and IDs; it does not duplicate primitives, parts, constraints, or solved coordinates.
+R1C therefore binds Semantic IR externally to the Primitive IR checkpoint hash from the existing run manifest. It validates filename/count and validates the optional `PrimitiveIRRef.sha256` only when present.
 
-### Run manifests, checkpoints, resume, evidence, and approvals — `EXTEND_WITH_ADAPTER`
+### Run manifests, checkpoints, resume, and approvals — `EXTEND_WITH_ADAPTER`
 
-Owner and APIs:
+Owners:
 
 - `cad_agent/manifest.py`
 - `cad_agent/pdf.py`
-- `cad_agent/cli.py::run_stages`
-- `cad_agent/pdf.py::run_pdf_stages`
-- existing manifest source SHA verification and artifact checkpoint hashes
-- existing calibration approval records and draft-reference safety defaults
+- `cad_agent/cli.py::run_stages()`
+- `cad_agent/pdf.py::run_pdf_stages()`
 
-Tests:
+The existing manifest remains the sole run/checkpoint lifecycle owner. Existing calibration approval and draft-reference safety behavior remains unchanged. Conflict approval is supplied by an existing external approval owner and merely validated/bound by R1C.
 
-- `tests/test_cad_agent_cli.py`
-- `tests/test_cad_agent_pdf.py`
-- `tests/test_cad_agent_source_bundle_manifest.py`
+### Genuine missing capability — `NEW_MISSING_CAPABILITY`
 
-The run manifest remains the sole lifecycle owner. Full custody/fusion artifacts live under the existing run output directory and the manifest stores only schema/version/ID/hash/count/status references.
-
-### Existing hashing and fail-closed patterns — `REUSE_AS_IS`
-
-- `cad_agent.manifest.sha256_file()` for streamed SHA-256.
-- `cad_agent.drawing_contracts.canonical_json_sha256()` for canonical JSON hashing.
-- closed-object validation and lowercase SHA-256 checks in `cad_agent.source_bundle`.
-- atomic temporary-write plus `os.replace()` in `cad_agent.manifest.write_manifest()`.
-- source hash verification before resume in `cad_agent.manifest.verify_source()`.
-- artifact hash verification in `cad_agent.manifest.completed_artifact()`.
-- optional-reference validation without default injection in R1B.
-
-### Missing internal capability — `NEW_MISSING_CAPABILITY`
-
-The repository does not currently own a Python boundary that:
-
-- inspects every SourceBundle item against an approved root;
-- proves bytes were stable while media metadata was read;
-- records aliases/duplicates without leaking absolute paths;
-- binds explicit page/crop locators;
-- groups Primitive/Semantic evidence deterministically;
-- emits conflict/unresolved state and a fusion-ready packet.
-
-That bounded gap is R1C. It is an adapter and evidence boundary, not a new recognition, manifest, CAD, verdict, or approval authority.
+No current Python owner proves every R1A item against an approved root using final-handle containment and privacy-safe identity, or emits explicit render/locator/provenance/conflict/stale evidence. This narrow gap is R1C.
 
 ## Approaches considered
 
-### A. Expand `source-bundle-1.0` with custody and fusion fields
+### Expand `source-bundle-1.0`
 
-Rejected. R1A is a closed, accepted metadata contract. Adding observed filesystem/media fields would either break the schema or require `source-bundle-2.0`, mix declared intake with derived evidence, and enlarge migration scope.
+Rejected. It would mix declared intake with observed evidence, break the accepted closed contract, and enlarge migration scope.
 
-### B. Create a source registry/database
+### Add a source registry or content-addressable database
 
-Rejected. A new registry would duplicate the existing run manifest/checkpoint owner, create lifecycle and migration complexity, and conflict with the future component/view registry.
+Rejected. It would duplicate the existing manifest/checkpoint lifecycle and conflict with later registry/revision work.
 
-### C. Adjacent derived artifacts plus existing manifest references
+### Adjacent custody/fusion artifacts with existing manifest references
 
-Selected. R1A remains declared-source truth, R1C derives immutable custody/fusion evidence, and R1B's existing manifest owner binds only hashes and state. This is the smallest architecture that closes the missing byte-integrity and deterministic-fusion gap.
+Selected. It preserves accepted contracts and owners while adding only the missing evidence boundary.
 
-## Closed derived contracts
+## `source-custody-1.0` contract
 
-### `source-custody-1.0`
-
-Canonical root fields:
+### Root fields
 
 - `schema_version`
 - `bundle_id`
 - `run_id`
 - `source_bundle_sha256`
 - `approved_root_id`
+- `approved_root_configuration_sha256`
+- `file_identity_scheme`
+- `status`
+- `eligible_count`
+- `blocking_count`
 - `items`
 - `alias_groups`
 
-No wall-clock timestamp or absolute path participates in the canonical payload.
+Allowed status values:
+
+- `READY`
+- `BLOCKED`
+
+A custody operation publishes one complete closed artifact after scanning all declared items. Expected source failures become sanitized item states and produce `status=BLOCKED`; malformed contracts, internal invariant violations, or inability to obtain required Windows final-handle evidence raise `SourceIntegrityError` and publish no artifact.
+
+Fusion accepts only a custody artifact with `status=READY` and `blocking_count=0`.
+
+### Approved-root binding
+
+`approved_root_id` is a stable logical identifier. `approved_root_configuration_sha256` binds the server-owned root mapping and revision without publishing the path. It is computed from a closed server configuration projection containing:
+
+- configuration schema/version;
+- approved root logical ID;
+- root revision;
+- normalized server-owned root path;
+- identity namespace/version;
+- policy limits.
+
+Only the hash enters custody/fusion artifacts. A root ID remapped to another path/revision produces a different configuration hash and makes prior custody stale.
+
+### Item fields
 
 Each item contains:
 
@@ -212,47 +224,149 @@ Each item contains:
 - `role`
 - `relative_path`
 - `declared_sha256`
-- `observed_sha256`
-- `size_bytes`
+- `observed_sha256` or `null`
+- `size_bytes` or `null`
 - `declared_media_type`
-- `observed_media_type`
-- `media_metadata`
+- `observed_media_type` or `null`
+- `media_metadata` or `null`
 - `page_ids`
 - `region_ids`
+- `file_identity_scheme`
+- `file_identity_sha256` or `null`
 - `alias_group_id` or `null`
 - `custody_state`
+- `blocking_reason_code` or `null`
 
 Allowed custody states:
 
 - `VERIFIED`
 - `DUPLICATE_BYTES`
-- `ALIAS_PATH`
+- `SAME_FILE_ALIAS`
 - `MISSING`
 - `PATH_ESCAPE`
 - `REPARSE_POINT`
+- `FINAL_PATH_OUTSIDE_ROOT`
 - `UNSUPPORTED_MEDIA`
 - `MEDIA_MISMATCH`
 - `HASH_MISMATCH`
 - `CHANGED_DURING_READ`
+- `IDENTITY_CHANGED`
 - `UNREADABLE`
+- `RESOURCE_LIMIT`
 
-Only `VERIFIED` and a fully explained `DUPLICATE_BYTES` group are eligible for a ready fusion packet. All other states fail closed.
+Only `VERIFIED` and fully explained independent-file `DUPLICATE_BYTES` items are eligible. `SAME_FILE_ALIAS` is blocking until declarations are proven compatible and the approved policy explicitly allows that alias group; the first runtime slice defaults it to blocking.
 
-### `source-fusion-1.0`
+### Privacy-safe file identity
 
-Canonical root fields:
+On Windows, R1C derives `file_identity_sha256` from a closed projection containing:
+
+- `file_identity_scheme = windows-volume-file-id-v1`;
+- `approved_root_configuration_sha256`;
+- opened-handle volume serial;
+- opened-handle file index/ID;
+- final-handle normalized relative path under the approved root.
+
+The raw volume serial, file ID, and absolute final path are never serialized or logged. The derived hash permits stale/alias checks without disclosing workstation details.
+
+### Alias groups
+
+Each alias group contains:
+
+- `alias_group_id`
+- `group_type`
+- sorted `source_ids`
+- `observed_sha256`
+- sorted `file_identity_sha256s`
+
+Allowed group types:
+
+- `SAME_FILE_ALIAS`
+- `DUPLICATE_BYTES`
+
+A same file/hardlink identity and two independent identities with equal bytes are never conflated. Roles and source IDs remain separate; duplicate count never increases authority.
+
+## Source custody flow
+
+For every item:
+
+1. Validate the R1A SourceBundle and approved-root configuration hash.
+2. Reject lexical escape, absolute/UNC/device paths, alternate data streams, empty components, and unsupported Unicode/case forms before open.
+3. Walk components with `lstat`/Windows attributes and reject symlink, junction, mount point, or other reparse traversal.
+4. Open the final file read-only using a Windows-safe handle with sharing flags that permit normal read coexistence but no write by R1C.
+5. Obtain final path and volume/file identity from the opened handle.
+6. Prove the final opened path remains under the exact approved root and matches the requested relative path policy.
+7. Capture initial handle identity and size.
+8. Stream first SHA-256 from the custody-owned descriptor.
+9. Parse media through a duplicated handle or bounded operation-owned snapshot; parser code never owns or closes the custody descriptor.
+10. Stream second SHA-256 from the original custody descriptor.
+11. Re-read final path, handle identity, size, and path identity.
+12. Require first/second hashes, size, file identity, and final containment to remain unchanged.
+13. Compare observed byte hash and media with R1A declarations.
+14. Compute privacy-safe identity and alias/duplicate groups.
+15. Emit one sanitized item state.
+
+If final-handle containment or file identity cannot be proved on Windows, the item fails closed. No fallback to pre-open `Path.resolve()`, `samefile()`, filename, or extension is allowed.
+
+## Parser isolation and media verification
+
+R1C retains one custody-owned source descriptor. Parser adapters receive either:
+
+- an OS/C-runtime duplicated read-only handle whose closure cannot close the custody descriptor; or
+- a bounded operation-owned temporary snapshot produced from already-hashed bytes, whose SHA-256 must equal the first source hash.
+
+A temporary snapshot:
+
+- lives only under the current run temp area;
+- is never referenced by manifests as a source;
+- is removed on success/failure;
+- is not a second store;
+- is followed by a second hash and final-identity check of the original source.
+
+### Images
+
+Use locked Pillow 12.3.0 as `EXTEND_WITH_TEST`. Record format, width, height, mode, and bounded DPI observations. Treat decompression-bomb warning/error as `RESOURCE_LIMIT`. Never save, convert, transpose, thumbnail, or mutate source data.
+
+### PDFs
+
+Use locked pypdf 6.14.2 as `EXTEND_WITH_TEST`, with strict structural parsing. Record page count, encryption state, media/crop boxes, user unit, and normalized rotation. Encrypted, malformed, repaired-only, excessive-page, or resource-unbounded inputs fail closed. R1C performs no rewrite, decryption, text extraction authority, or PDF repair.
+
+### Exact-base CAD
+
+- DWG: bounded `AC10xx` header/media observation only; no new DWG parser.
+- DXF: header-only first slice. Locked ezdxf 1.4.4 remains `SPIKE_ONLY`; a later read-only structure adapter requires its own focused proof and never becomes CAD truth.
+
+### Engineer JSON
+
+Original byte SHA-256 remains custody authority. Derived canonical JSON digest is allowed only after:
+
+- strict UTF-8 decode;
+- duplicate-key refusal via `object_pairs_hook`;
+- `NaN`, `Infinity`, and `-Infinity` refusal via `parse_constant`;
+- object-root requirement;
+- byte, depth, key-count, array-length, and string-length limits;
+- finite numeric validation.
+
+An engineer `DECISION` record is evidence only.
+
+## `source-fusion-1.0` contract
+
+### Root fields
 
 - `schema_version`
 - `bundle_id`
 - `run_id`
 - `source_bundle_sha256`
 - `source_custody_sha256`
+- `approved_root_configuration_sha256`
 - `page_locators`
 - `region_locators`
-- `primitive_evidence`
-- `semantic_evidence`
+- `render_provenance`
+- `primitive_observations`
+- `semantic_observations`
 - `evidence_groups`
 - `conflicts`
+- `resolution_references`
+- `fusion_input_sha256`
 - `status`
 
 Status values:
@@ -261,278 +375,291 @@ Status values:
 - `BLOCKED_UNRESOLVED`
 - `STALE`
 
-`READY` means only that inputs are byte-stable, locators/provenance are closed, and no blocking conflict remains. It is not a visual PASS, engineering approval, CAD acceptance, repair permission, or publication permission.
+`fusion_input_sha256` hashes the canonical bundle/custody/locator/render/provenance/conflict content before applying resolutions. Conflict-resolution artifacts bind to this value to prevent replay and avoid circular dependency on the final fusion hash.
 
-## Source byte custody flow
+## Explicit page and region identity
 
-1. Validate and normalize the R1A SourceBundle.
-2. Require a server/operator-approved intake root ID and filesystem root supplied outside the SourceBundle.
-3. Resolve the root strictly and reject a non-directory or reparse/symlink root.
-4. Join only the validated R1A `relative_path` under that root.
-5. Reject lexical escape before filesystem access.
-6. Walk each path component with `lstat`; reject symlink, junction, mount/reparse, or non-regular-file substitution.
-7. Open the final file read-only in binary mode.
-8. Capture descriptor identity/size before read.
-9. Stream SHA-256 over the opened descriptor.
-10. Seek and read media metadata through the same descriptor or a bounded read-only adapter.
-11. Stream SHA-256 a second time after metadata extraction.
-12. Capture descriptor and path identity/size after read.
-13. Require both hashes, sizes, descriptor identity, and final path identity to match.
-14. Compare the stable observed hash to the SourceBundle declared hash.
-15. Emit a normalized custody item; never write to the source.
+R1A page/region IDs are labels only. R1C never maps them by sort order or filename convention.
 
-Two-pass hashing is intentional. It is more expensive than a single hash but gives deterministic evidence that metadata extraction did not race an in-place replacement or mutation. Performance is bounded by synthetic benchmarks and may later use an approved optimization only if it preserves the same guarantee.
-
-## Path, alias, duplicate, and privacy rules
-
-- Absolute source paths are never serialized into custody/fusion artifacts.
-- `approved_root_id` is a stable configuration identifier, not a path.
-- `relative_path` remains the R1A normalized value.
-- Runtime alias checks use `os.path.samefile`, descriptor/path stat identity, and reparse checks.
-- Alias groups are represented by a deterministic ID derived from sorted source IDs and the stable byte hash.
-- Identical bytes under different source IDs are preserved as separate evidence references but may share one alias/duplicate group.
-- Same path or same file identity with conflicting declared hashes/media/kinds fails closed.
-- Same bytes with different roles never silently collapse the roles.
-- A duplicate does not become authoritative merely because it appears multiple times.
-
-## Media verification and metadata
-
-Media verification uses existing pinned dependencies only; declared extensions and MIME strings are insufficient.
-
-### Images
-
-Use Pillow read-only verification against the same opened descriptor. Record format, width, height, mode, and available DPI metadata. Do not call save, transpose, convert, thumbnail, or any mutating transform. PNG/JPEG observed types must match the R1A declared media type.
-
-### PDFs
-
-Use pypdf strict read-only parsing for page count, encryption state, page boxes, and structural readability. Do not rewrite, repair, decrypt without an approved secret flow, or extract source text in R1C. Multi-page page identity requires explicit locator bindings.
-
-### Exact-base CAD
-
-- DWG: bounded header/media sniff only; no new DWG parser and no geometry authority.
-- DXF: existing pinned `ezdxf` may be used read-only for structural audit in a separately tested adapter; it does not replace AutoCAD truth.
-- R1C does not mutate or normalize CAD bytes.
-
-### Engineer records
-
-Require UTF-8 JSON parsing. Record a canonical JSON digest as derived metadata while retaining the original byte SHA-256 as custody authority. A record with role `DECISION` is evidence only; it is not an approval unless an existing approval owner supplies a separate hash-bound approval reference.
-
-## Explicit page, sheet, view, crop, and region identity
-
-R1A `page_ids` and `region_ids` are stable labels, but R1A sorts them and does not bind a page ID to a PDF page index or a region ID to crop coordinates. R1C must not infer those mappings.
-
-`source-fusion-1.0` therefore requires explicit locator records:
-
-Page locator:
+### Page locator
 
 - `source_id`
 - `page_id`
 - `page_index_zero_based`
 - `sheet_id` or `null`
 - `view_id` or `null`
+- `custody_source_sha256`
+- `box_kind`
+- `box_bounds_pdf_points`
+- `normalized_rotation_degrees`
+- `user_unit`
+- `pdf_coordinate_convention`
 
-Region locator:
+For PDF pages:
+
+- `box_kind` is `MEDIA_BOX` or `CROP_BOX`;
+- `normalized_rotation_degrees` is one of `0`, `90`, `180`, `270`;
+- `pdf_coordinate_convention` is `PDF_USER_SPACE_BOTTOM_LEFT_X_RIGHT_Y_UP`;
+- finite decimal values are normalized to canonical non-exponent decimal strings with no negative zero.
+
+### Region locator
+
+Common fields:
 
 - `source_id`
 - `region_id`
 - `page_id` or `null`
-- `coordinate_space` (`PIXEL` or `PDF_POINT`)
-- `bounds` (`x_min`, `y_min`, `x_max`, `y_max`)
+- `coordinate_space`
 - `locator_source_sha256`
 
-Rules:
+For `PIXEL`:
 
-- every declared page/region label must have exactly one locator;
-- locator indexes/bounds must fit observed media metadata;
-- a locator hash must bind to the custody source hash;
-- multi-page PDF mapping without explicit locators is `BLOCKED_UNRESOLVED`;
-- no filename convention, sorted label order, OCR, or model call may infer a mapping.
+- convention is `RASTER_TOP_LEFT_X_RIGHT_Y_DOWN`;
+- bounds are integer pixels;
+- exact raster SHA-256, width, and height are required.
 
-## Quality, skew, distortion, resolution, and calibration
+For `PDF_POINT`:
 
-R1C preserves the R1A coarse quality values and adds only observed media metadata. Recognition-derived quality belongs to Primitive IR:
+- the exact page locator is required;
+- box kind/bounds, user unit, rotation, origin convention, and canonical decimal bounds are required.
 
-- image dimensions/DPI and PDF page boxes/page count come from custody adapters;
-- trace bounding boxes, confidence, extraction tool, and page index come from Primitive IR;
-- skew/distortion observations already produced by approved Primitive IR processing are referenced by artifact hash and observation ID;
-- calibration comes from `PrimitiveIRDocument.calibration`, including status and `source_sha256`;
-- unverified calibration stays unresolved and cannot become verified in R1C;
-- R1C does not calculate a new production scale.
+Every declared label has exactly one locator. Out-of-bounds, ambiguous rotated/cropped coordinates, missing raster identity, or equivalent-but-noncanonical numeric forms fail closed.
 
-## Deterministic provenance
+## PDF render provenance
 
-Primitive evidence reference fields:
+A PDF Primitive IR is bound through a closed render-provenance record:
 
-- `primitive_ir_sha256`
-- `source_id`
-- `page_id` or `null`
-- `region_id` or `null`
-- `primitive_id`
-- `trace_bbox`
-- `calibration_sha256`
+- custody source PDF SHA-256;
+- source/page locator and page index;
+- selected box kind/bounds;
+- normalized page rotation and user unit;
+- render DPI;
+- canonical PDF-to-raster matrix;
+- raster coordinate convention;
+- rendered image SHA-256, width, and height;
+- Primitive IR artifact SHA-256;
+- Primitive IR `source_document.sha256`;
+- Primitive IR source dimensions/page index.
 
-Semantic evidence reference fields:
+The Primitive IR source-document hash must equal the rendered raster hash, not the PDF byte hash. The render record proves the PDF-to-page-to-raster-to-Primitive chain.
 
-- `semantic_ir_sha256`
-- `primitive_ir_sha256`
-- `part_id` or `constraint_id`
-- sorted `primitive_ids`
+For a direct image source, Primitive IR `source_document.sha256` must equal the custody observed source hash and dimensions must match custody metadata.
 
-Every reference must resolve to a supplied artifact whose file hash matches the reference. Semantic evidence must point to the exact Primitive IR hash declared by `PrimitiveIRRef`; IDs alone are never sufficient.
+Wrong page, wrong DPI, wrong crop/rotation, wrong matrix, wrong raster hash, or wrong Primitive source-document hash makes fusion stale or blocked.
 
-Canonical arrays are sorted by stable compound keys. Canonical JSON hashing uses the existing `canonical_json_sha256()` helper. Random IDs, filesystem iteration order, locale-dependent values, floating-point string shortcuts, and current time are forbidden from canonical output.
+## Deterministic Primitive provenance
 
-## Roles, precedence, and conflicts
+Current Primitive IDs use UUIDs and are not canonical identity. R1C computes a closed `primitive_observation_sha256` from a projection excluding:
 
-Roles determine evidence lanes, not automatic truth:
+- `id`;
+- `handle`;
+- extraction timestamps;
+- validation notes/status that are not approved evidence;
+- list position.
 
-- `BASE_CAD`: exact-base geometry reference for explicitly mapped components/views only.
-- `MEASUREMENT`: explicit numeric measurement evidence.
-- `DECISION`: engineering decision evidence; requires separate approval to resolve a conflict.
-- `DETAIL` and `SECTION`: local geometry/detail evidence.
-- `OVERALL`: global arrangement evidence.
-- `MATERIAL_TABLE`: material/text evidence.
+The projection includes the source/render binding, primitive type/source/layer, normalized geometry or text content, confidence, trace bounds, and calibration projection/hash.
 
-The packet uses a deterministic display/order rank, then `source_id`, but ordering never discards evidence.
+Canonical arrays sort by observation digest and closed content. Equivalent Primitive artifacts rebuilt with different UUIDs or list order must produce the same fusion hash.
 
-A conflict record contains:
+For exactly identical observation projections:
 
-- deterministic `conflict_id` from canonical conflict content;
-- `conflict_type`;
-- `subject_key`;
-- sorted evidence references;
-- normalized compared values/units where applicable;
-- `state` (`UNRESOLVED`, `RESOLVED_BY_APPROVAL`, `STALE`);
-- `resolution_reference` or `null`;
-- `blocking` boolean.
+- R1C creates one duplicate-observation group with `observation_sha256` and `occurrence_count`;
+- canonical occurrence labels are `observation_sha256:0001` through the count;
+- labels are interchangeable and do not depend on legacy UUIDs;
+- a Semantic artifact that selects only a strict subset of indistinguishable duplicates is `DUPLICATE_OBSERVATION_AMBIGUITY` and blocks fusion unless additional stable evidence distinguishes them.
 
-Required conflict types include:
+Legacy UUIDs may appear only in a non-authoritative diagnostic map outside canonical identity when policy allows; they do not participate in sorting, conflict IDs, or hashes.
+
+## Deterministic Semantic provenance
+
+R1C computes semantic observation digests from closed projections excluding semantic UUIDs and input order.
+
+Binding rules:
+
+- the supplied Semantic artifact file hash must match the existing manifest/checkpoint hash;
+- the externally supplied Primitive artifact hash must match the Primitive checkpoint hash associated with that Semantic stage;
+- `PrimitiveIRRef.file_name` and `primitive_count` must match the bound Primitive artifact;
+- optional `PrimitiveIRRef.sha256`, when present, must equal the bound Primitive artifact hash;
+- omission of the optional SHA remains compatible and is not itself a failure;
+- part/constraint primitive references are converted from legacy IDs to deterministic Primitive observation digests/multiplicities;
+- unresolved mapping to indistinguishable duplicates blocks fusion.
+
+`primitive_ir_lib/**`, `semantic_ir_lib/**`, and `cad_agent/cli.py` remain unchanged in the first runtime slice.
+
+## Roles, ordering, and conflicts
+
+Roles define evidence lanes, not authority. A deterministic display rank followed by canonical evidence digest controls ordering only.
+
+Required conflict types:
 
 - `BYTE_IDENTITY_CONFLICT`
 - `MEDIA_TYPE_CONFLICT`
+- `PARSER_OBSERVATION_CONFLICT`
 - `LOCATOR_CONFLICT`
+- `RENDER_PROVENANCE_CONFLICT`
 - `CALIBRATION_CONFLICT`
 - `MEASUREMENT_CONFLICT`
 - `GEOMETRY_CONFLICT`
 - `MATERIAL_CONFLICT`
 - `DECISION_CONFLICT`
+- `DUPLICATE_OBSERVATION_AMBIGUITY`
 
-No majority vote, confidence-only winner, source-count weighting, or model-generated resolution is allowed. A blocking unresolved conflict makes status `BLOCKED_UNRESOLVED`.
+A conflict contains:
 
-## Stale and changed-source behavior
+- deterministic `conflict_id` from canonical conflict content;
+- `conflict_type`;
+- `subject_key`;
+- sorted compared evidence hashes;
+- normalized compared values/units;
+- `state` (`UNRESOLVED`, `RESOLVED_BY_APPROVAL`, `STALE`);
+- `blocking`;
+- `resolution_reference_sha256` or `null`.
 
-The fusion packet is stale when any of these changes:
+No majority vote, source-count weighting, confidence-only winner, parser priority, or model-generated resolution is allowed. Parser disagreement is preserved as a conflict.
 
-- canonical SourceBundle hash;
-- custody artifact hash;
-- any source byte hash/size/identity;
-- page or region locator hash;
-- Primitive IR or Semantic IR artifact hash;
-- calibration evidence hash;
-- approved conflict-resolution reference.
+## `source-conflict-resolution-1.0`
 
-Consumers must call a fail-closed match function before reuse. A prior run ID, filename, source ID, or manifest path is never authority. Changed bytes require a fresh SourceBundle/custody/fusion lifecycle; R1C never rewrites an old artifact in place.
+R1C validates but does not issue approvals. The external approval owner supplies a closed resolution artifact containing:
 
-## Existing manifest/checkpoint integration
+- `schema_version`
+- `resolution_id`
+- `run_id`
+- `conflict_id`
+- `subject_key`
+- sorted `compared_evidence_sha256s`
+- `source_bundle_sha256`
+- `source_custody_sha256`
+- `approved_root_configuration_sha256`
+- `fusion_input_sha256`
+- `selected_resolution`
+- `approval_reference`
+- `issued_at_utc`
+- `expires_at_utc`
+- `status = APPROVED`
 
-The existing manifest owner gains optional closed references only:
+Validation requires exact conflict/context/evidence matching and a non-expired approval. A resolution from another conflict, run, source bundle, custody artifact, root revision, or fusion-input context is rejected. Changing any bound evidence makes the resolution stale. An engineer `DECISION` source alone never satisfies this contract.
 
-`source_custody` reference:
+## Stale-state rules
+
+Custody/fusion reuse fails closed when any of these changes:
+
+- SourceBundle canonical hash;
+- approved-root configuration hash;
+- source byte hash, size, or privacy-safe file identity;
+- final-handle relative path or containment result;
+- media observations relevant to locators;
+- page/region/render provenance;
+- Primitive or Semantic artifact/checkpoint hash;
+- deterministic observation projection/multiplicity;
+- calibration hash/status;
+- conflict content;
+- resolution context, approval, or expiry.
+
+A prior run ID, filename, UUID, manifest path, or equal byte hash alone is not sufficient authority.
+
+## Manifest/checkpoint integration
+
+The existing manifest owner gains optional closed references only.
+
+### Custody reference
 
 - `schema_version = source-custody-reference-1.0`
 - `source_bundle_sha256`
+- `approved_root_configuration_sha256`
 - `source_custody_sha256`
+- `status`
 - `item_count`
-- `verified_count`
+- `eligible_count`
+- `blocking_count`
 
-`source_fusion` reference:
+### Fusion reference
 
 - `schema_version = source-fusion-reference-1.0`
 - `source_bundle_sha256`
 - `source_custody_sha256`
+- `approved_root_configuration_sha256`
 - `source_fusion_sha256`
+- `fusion_input_sha256`
 - `status`
 - `conflict_count`
 - `unresolved_count`
+- `resolution_count`
 
 Rules:
 
-- legacy manifests without either field remain readable and unchanged;
-- readers validate an optional reference only when present;
+- legacy manifests without R1C fields remain readable and unchanged;
+- readers validate optional fields only when present;
 - readers never inject null/default R1C fields;
-- binding an unequal existing reference fails;
-- full custody/fusion items are never copied into the run manifest;
-- artifact files are written atomically under the existing run output root;
-- resume requires all bound hashes to match before any downstream stage is reused.
+- unequal rebinding fails;
+- full item/locator/provenance/conflict arrays never enter the manifest;
+- resume requires exact reference/artifact/hash matching;
+- `READY` cannot coexist with custody blockers or unresolved blocking conflicts.
 
-## Failure behavior
+## Security and threat model
 
-R1C raises one closed domain error type per module and returns no partial ready packet. On any failure:
+Synthetic tests must cover:
 
-- source bytes remain untouched;
-- temporary derived artifacts owned by the current operation are removed;
-- existing manifest/checkpoints are not replaced;
-- no downstream recognition/fusion stage starts;
-- the error names a stable code/category without leaking absolute paths or private content.
+- lexical escape, absolute/UNC/device path, alternate data stream, Unicode/case ambiguity;
+- symlink, junction, reparse/mount traversal and component replacement;
+- final opened path outside root;
+- hardlinks/same-file aliases and duplicate bytes/different identities;
+- root-ID remapping and source replacement with identical bytes;
+- mutation before open, during parsing, between hashes, and before downstream reuse;
+- extension/header/media mismatch, polyglots, truncation, encrypted/malformed PDF;
+- decompression bombs and page/pixel/byte limits;
+- duplicate JSON keys, malformed UTF-8, excessive depth/count/length, non-finite constants;
+- rotated/cropped PDF and ambiguous coordinate systems;
+- parser disagreement;
+- UUID/list-order nondeterminism;
+- wrong Primitive/Semantic checkpoint binding;
+- replayed/expired conflict approval;
+- absolute path/private content leakage in artifacts, logs, and errors.
 
-Expected failure categories include path policy, unreadable source, changed source, hash mismatch, media mismatch, invalid locator, stale evidence, duplicate conflict, unresolved conflict, and malformed closed contract.
-
-## Synthetic and private-data boundaries
-
-Planning and ordinary CI use only synthetic bytes generated in `tmp_path`:
-
-- minimal valid/invalid PNG and JPEG files;
-- one- and multi-page PDFs created in memory;
-- minimal DWG header samples and ASCII DXF samples;
-- UTF-8 JSON engineer records;
-- symlink/junction/reparse tests when the platform permits;
-- duplicate, alias, replacement, truncation, and mid-read mutation probes.
-
-Private-data tests remain separately marked and require an approved external root. Private bytes, absolute paths, hashes, metadata, and generated artifacts must not be committed or printed in ordinary logs.
+R1C imports no network, subprocess, OCR, model, AutoCAD, File IPC, repair, or publication modules.
 
 ## External reuse dossier
 
-The runtime Issue must re-verify the exact repository lock before implementation. Current planning-base candidates are:
+The runtime Issue must re-check the exact lock at its selected base. Planning-base evidence:
 
-| Candidate | Exact version/revision basis | License | Classification | Decision |
+| Candidate | Exact basis | License/support | Classification | Decision |
 |---|---|---|---|---|
-| Python 3.11 `hashlib`, `json`, `pathlib`, `os`, `stat` | CPython 3.11 supported environment | PSF | `REUSE_AS_IS` | Primary byte hash, path/stat, JSON, and reparse primitives; zero dependency cost. |
-| Pillow | repository lock `pillow==12.3.0` | PIL/MIT-CMU style | `EXTEND_WITH_ADAPTER` | Read-only image format/dimension/DPI verification; no transform/save. |
-| pypdf | repository lock `pypdf==6.14.2` | BSD-3-Clause | `EXTEND_WITH_ADAPTER` | Strict PDF structure/page metadata; no rewrite/repair/text authority. |
-| PyMuPDF | repository lock `pymupdf==1.28.0` | AGPL-3.0 or commercial | `REJECT` for new R1C authority | Existing PDF-render path may remain; R1C does not create a second PDF parser dependency or expand licensing exposure. |
-| ezdxf | repository lock `ezdxf==1.4.4` | MIT | `SPIKE_ONLY`, then `EXTEND_WITH_ADAPTER` if accepted | Read-only DXF structure only; never DWG or CAD truth. |
-| `python-magic`/libmagic | not pinned | mixed wrapper/libmagic deployment | `REJECT` | Adds Windows native binary/deployment/pinning cost for behavior covered by existing parsers. |
-| `filetype`-style signature libraries | not pinned | varies | `REJECT` | New dependency is unnecessary for the closed supported media set. |
+| Python 3.11 stdlib `hashlib`, `json`, `os`, `pathlib`, `stat`, `ctypes`, `msvcrt` | supported project runtime | PSF; no dependency | `REUSE_AS_IS` | Primary hashing, strict JSON primitives, and bounded Windows handle adapter. |
+| Pillow | locked `12.3.0`; official release 2026-07-01; Python >=3.10 | MIT-CMU | `EXTEND_WITH_TEST` | Read-only image observations under strict resource limits; original bytes remain authority. |
+| pypdf | locked `6.14.2`; official release 2026-06-23; Python >=3.9 including 3.11 | BSD-3-Clause | `EXTEND_WITH_TEST` | Strict PDF structure/page observations only; no rewrite/text/repair authority. |
+| ezdxf | locked `1.4.4`; official release 2026-05-14; Python >=3.10; CPython 3.11 Windows wheel | MIT | `SPIKE_ONLY` | Header-only first slice; read-only structure requires later focused acceptance. |
+| PyMuPDF | locked `1.28.0` | AGPL-3.0 or commercial | `REJECT` for new R1C authority | Existing approved render use remains untouched; no second custody PDF parser. |
+| `filetype` | unpinned `1.2.0`, 2022-11-02 | MIT, pure Python, old release | `REJECT` first slice | Existing parsers plus bounded signatures cover supported media. |
+| `python-magic` | unpinned `0.4.27`, 2022-06-07 | MIT wrapper plus Windows libmagic/DLL | `REJECT` | Native deployment and pinning cost. |
+| stdlib `mimetypes` | Python 3.11 | filename based | `REJECT` as authority | May not prove bytes. |
+| new CAS/database/fsspec store | not pinned | new owner/dependencies | `REJECT` | Duplicates manifest/checkpoint/storage authority. |
 
-Security and maintenance rules:
+No dependency or lock-file change is authorized by the first runtime slice.
 
-- use only versions already present in `requirements/windows-py311.lock` for the first runtime slice;
-- no dependency or lock-file change without a separate amendment;
-- parsers receive bounded local files only, with size/page/pixel limits checked before expensive work;
-- no network access or telemetry;
-- parser exceptions map to closed R1C errors;
-- fuzz/truncation/decompression-bomb tests must be included for supported media.
+## Deterministic benchmark method
 
-Benchmark method:
+Use synthetic fixed bytes only:
 
-- generate deterministic synthetic files at small, medium, and approved maximum sizes;
-- run custody twice and require byte-for-byte identical canonical artifacts/hashes;
-- compare two-pass hash time and parser time separately;
-- enforce a bounded memory/size policy rather than an unproven wall-clock SLA;
-- test parallel input ordering and require identical sorted output;
-- no private file is needed for benchmark acceptance.
+- valid/truncated/mismatched PNG/JPEG/PDF/DWG-header/DXF/JSON;
+- small, medium, and approved-limit sizes;
+- repeated and permuted runs must produce byte-identical canonical artifacts/hashes;
+- equivalent Primitive/Semantic artifacts with different UUIDs/order must produce identical fusion hashes;
+- resource limits, not workstation-specific timing, are acceptance gates;
+- hash and parser phases may be measured separately for diagnostics;
+- source bytes/mtime remain unchanged;
+- no private file or AutoCAD session is required.
 
-Migration and rollback:
+## Migration and rollback
 
-- no existing bytes or manifests are migrated in the first runtime slice;
-- R1C fields are optional and absent from legacy manifests;
-- revert the bounded R1C commit(s) to roll back;
-- derived R1C artifacts may be deleted without changing source bytes or accepted legacy runs;
-- a later migration may generate fresh R1C artifacts only through explicit rerun, never backfill guessed values.
+- Existing SourceBundle, manifests, Primitive IR, Semantic IR, CLI, and run outputs are not migrated.
+- R1C references are optional and absent from legacy manifests.
+- Existing runs gain R1C evidence only through an explicit fresh rerun; no guessed backfill.
+- Derived custody/fusion artifacts may be deleted without changing source bytes or accepted legacy runs.
+- Rollback is a revert of bounded R1C commits and removal of derived artifacts/references from disposable runs.
+- No AutoCAD rollback is needed because R1C performs no AutoCAD operation.
 
 ## Proposed future runtime allowlist
 
-A separate runtime Issue must pin an exact base after this planning PR is accepted. Proposed first-slice files:
+A separate runtime Issue may narrow this list.
 
 ### Create
 
@@ -550,53 +677,56 @@ A separate runtime Issue must pin an exact base after this planning PR is accept
 
 ### Do not modify
 
-- `cad_agent/source_bundle.py` and the R1A fixture/schema behavior;
-- recognition/OCR/geometry packages;
-- Semantic IR models/solver;
-- `agent_lib` and Wave 1A files;
-- DXF/AutoCAD/File IPC code;
-- requirements and lock files;
-- workflows, `STATUS.md`, and `HANDOFF.md`;
-- registry, revision, repair, verdict, and publication code.
-
-The Master PO may narrow this proposed allowlist. Any expansion requires a formal amendment before implementation.
+- `cad_agent/source_bundle.py`
+- `cad_agent/cli.py`
+- `primitive_ir_lib/**`
+- `semantic_ir_lib/**`
+- `agent_lib/**` and Wave 1A files
+- `dxf_builder_lib/**`
+- `mcp_integration_lib/**`
+- `autocad_plugin/**`
+- `requirements/**` and lock files
+- workflows, `docs/STATUS.md`, and `docs/HANDOFF.md`
+- registry, revision, repair, verdict, and publication code
 
 ## One-writer overlap matrix
 
-| Lane | Writer | Production write set | Overlap rule |
+| Lane | Writer | Write set | Rule |
 |---|---|---|---|
-| Wave 1A / Issue #70 | Cell 1 | future `agent_lib`/closed vision-handoff worker-control slice | Must not modify R1C files or manifest source-integrity references. |
-| Wave 1B / Issue #71 | Cell 2 | planning files only; future proposed R1C files above | Sole writer for R1C planning/runtime allowlist. |
-| Wave 1C / Issue #72 | Cell 3 | none by default | Evidence/operator only; defects require separate Issue. |
-| Cell 5 / Issue #77 | read-only red-team | none | May comment/review only; never pushes to the writer branch. |
-| Master PO | governance/review | no production code in this slice | Final acceptance, merge order, and scope amendments only. |
+| Wave 1A / #70 | Cell 1 | vision-handoff/Codex worker planning or later approved worker files | Must not modify R1C or manifest R1C references concurrently. |
+| Wave 1B / #71 | Cell 2 | these two planning files; later approved R1C runtime allowlist | Sole R1C writer. |
+| Wave 1C / #72 | Cell 3 | no repository writes by default | AutoCAD evidence only; no R1C dependency. |
+| Cell 5 / #77 | read-only | comments/reviews only | No branch push. |
+| Master PO | final governance | acceptance/merge/scope amendments | No production code in this slice. |
 
-`cad_agent/manifest.py` is a shared canonical owner. During future R1C implementation, Wave 1A must not modify it concurrently. Integration order is controlled by Master PO.
+`cad_agent/manifest.py` is shared canonical ownership. Future R1C implementation must not run concurrently with another writer changing that file.
 
-## Acceptance criteria for the future runtime slice
+## Cell 5 blocker disposition
 
-- R1A and R1B compatibility tests remain passing.
-- SourceBundle declared hash and stable observed hash must match.
-- Path escape, reparse, alias, duplicate, missing, changed-during-read, media mismatch, and truncation tests fail closed.
-- Supported media metadata is deterministic and read-only.
-- Multi-page/page-region mappings require explicit locators.
-- Primitive/Semantic provenance is hash- and ID-bound.
-- Conflicts are preserved and sorted; no silent winner exists.
-- `READY` is never represented as visual PASS or engineering approval.
-- Legacy manifests remain byte-compatible when R1C is absent.
-- Final diff stays within the approved runtime allowlist.
-- Focused tests, canonical verifier, hosted synthetic-merge checks, and Reuse Declaration pass.
-- Private-data, AutoCAD, and hosted AutoCAD .NET gates remain truthful `NOT RUN`/`SKIP` unless separately executed.
+- A root revision/config hash and privacy-safe file identity are now explicit.
+- Same-file aliases and duplicate bytes are separate group types.
+- Final-handle Windows containment is mandatory and ports bounded S3B concepts.
+- UUIDs/handles/timestamps/list order are excluded from canonical Primitive/Semantic identity.
+- Current Semantic artifacts with omitted optional Primitive SHA remain compatible through external checkpoint binding.
+- PDF render provenance and coordinate conventions are closed and hash-bound.
+- Parser isolation uses duplicated handles or bounded operation-owned snapshots.
+- Engineer JSON safety is explicit.
+- Custody publishes one complete `READY/BLOCKED` artifact; fusion rejects `BLOCKED`.
+- Conflict-resolution evidence has an exact replay-safe schema and external approval owner.
+- Pillow/pypdf classifications are corrected to `EXTEND_WITH_TEST` and official version/release/support evidence is recorded.
 
-## Planning acceptance
+## Planning acceptance criteria
 
 This design is acceptable when:
 
-- it composes R1A/R1B rather than replacing them;
-- it names existing owners, APIs, tests, and missing gaps;
-- source custody and stale-state behavior fail closed;
-- locator mapping is explicit, not inferred;
-- conflict preservation is deterministic;
-- external candidates are bounded to the existing lock and license posture;
-- the future runtime write set does not overlap Wave 1A or Wave 1C;
-- the planning PR changes only this design and its implementation plan.
+- final diff contains only this design and its plan;
+- R1A/R1B and current producers remain unchanged;
+- approved root, byte identity, final-handle containment, alias/duplicate, and stale behavior fail closed;
+- deterministic provenance is invariant to UUID and list-order changes;
+- PDF page/render/coordinate provenance is explicit;
+- conflicts are preserved and resolutions cannot replay across context;
+- manifest/checkpoint ownership is not duplicated;
+- no dependency, model, OCR, AutoCAD, repair, verdict, or publication authority is introduced;
+- hosted tests and Reuse Declaration pass;
+- Cell 5 re-reviews the exact revised head;
+- Master PO reviews the exact final head before merge.
