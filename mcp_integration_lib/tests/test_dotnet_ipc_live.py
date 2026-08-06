@@ -1,6 +1,7 @@
 """Opt-in disposable AutoCAD Mechanical smoke test for the .NET IPC path."""
 
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -64,6 +65,23 @@ def _s2c_live_prerequisites_available() -> bool:
 def _s2c_refusal_probe_prerequisites_available(profile: str) -> bool:
     return _s2c_live_prerequisites_available() and (
         os.getenv("CAD_AGENT_S2C_NEGATIVE_PROFILE") == profile
+    )
+
+
+def _s3b_live_prerequisites_available() -> bool:
+    return _live_prerequisites_available() and all(
+        bool(os.getenv(name))
+        for name in (
+            "CAD_AGENT_DOTNET_IPC_DIR",
+            "CAD_AGENT_S3B_FIXTURE_JSON",
+            "CAD_AGENT_S3B_CANDIDATE_DWG",
+            "CAD_AGENT_S3B_DISPOSABLE_ROOT",
+            "CAD_AGENT_S3B_ACCEPTED_DWG_PATH",
+            "CAD_AGENT_S3B_ACCEPTED_DWG_SHA256",
+            "CAD_AGENT_S3B_EXACT_BASE_SOURCE_PATH",
+            "CAD_AGENT_S3B_EXACT_BASE_SOURCE_SHA256",
+            "CAD_AGENT_S3B_EXACT_BASE_SOURCE_REVISION",
+        )
     )
 
 
@@ -855,3 +873,193 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
                 mark_closed()
         finally:
             self.assertEqual(original_sha256, _sha256(drawing))
+
+
+@unittest.skipUnless(
+    _s3b_live_prerequisites_available(),
+    "requires AutoCAD File IPC, CAD_AGENT_DOTNET_IPC_DIR, an approved S3B fixture, "
+    "a disposable candidate DWG, and server-owned S3B path/hash/revision configuration",
+)
+@pytest.mark.autocad_mechanical
+class ExactBaseXrefS3BLiveTests(unittest.TestCase):
+    def test_s3b_live_extraction_is_fresh_read_only_preflight_and_candidate_only(self) -> None:
+        fixture_path = Path(os.environ["CAD_AGENT_S3B_FIXTURE_JSON"]).resolve()
+        if not fixture_path.is_file():
+            self.skipTest(f"Missing approved S3B fixture: {fixture_path}")
+
+        try:
+            fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self.skipTest(f"S3B fixture is unavailable or invalid: {exc}")
+        if not isinstance(fixture, dict):
+            self.skipTest("S3B fixture must be a JSON object")
+
+        inspection = fixture.get("inspection")
+        extraction_plan = fixture.get("plan")
+        if not isinstance(inspection, dict) or not isinstance(extraction_plan, dict):
+            self.skipTest("S3B fixture must contain inspection and plan objects")
+
+        approval = extraction_plan.get("approval")
+        if not isinstance(approval, dict) or approval.get("status") != "APPROVED":
+            self.skipTest("S3B live extraction requires an operator-approved plan fixture")
+
+        root = Path(os.environ["CAD_AGENT_S3B_DISPOSABLE_ROOT"]).resolve()
+        source = Path(os.environ["CAD_AGENT_S3B_EXACT_BASE_SOURCE_PATH"]).resolve()
+        accepted = Path(os.environ["CAD_AGENT_S3B_ACCEPTED_DWG_PATH"]).resolve()
+        candidate = Path(os.environ["CAD_AGENT_S3B_CANDIDATE_DWG"]).resolve()
+        for label, path in (
+            ("disposable root", root),
+            ("exact-base source", source),
+            ("accepted DWG", accepted),
+            ("candidate DWG", candidate),
+        ):
+            if label == "disposable root":
+                available = path.is_dir()
+            else:
+                available = path.is_file()
+            if not available:
+                self.skipTest(f"Missing S3B {label}: {path}")
+
+        if not candidate.is_relative_to(root):
+            self.skipTest("S3B candidate DWG must be under the server-owned disposable root")
+
+        configured_source_hash = os.environ["CAD_AGENT_S3B_EXACT_BASE_SOURCE_SHA256"]
+        configured_accepted_hash = os.environ["CAD_AGENT_S3B_ACCEPTED_DWG_SHA256"]
+        source_hash_before = _sha256(source)
+        accepted_hash_before = _sha256(accepted)
+        candidate_hash_before = _sha256(candidate)
+        self.assertEqual(configured_source_hash, source_hash_before)
+        self.assertEqual(configured_accepted_hash, accepted_hash_before)
+
+        plan_source = extraction_plan.get("base_source")
+        plan_target_hash = extraction_plan.get("target_drawing_sha256")
+        inspection_target_hash = inspection.get("target_drawing_sha256")
+        if not isinstance(plan_source, dict):
+            self.skipTest("S3B plan fixture has no base_source binding")
+        if plan_source.get("sha256") != configured_source_hash:
+            self.skipTest("S3B plan source hash is not bound to server configuration")
+        if plan_target_hash != candidate_hash_before:
+            self.skipTest("S3B plan target hash is not bound to the disposable candidate")
+        if inspection_target_hash != candidate_hash_before:
+            self.skipTest("S3B inspection target hash is not bound to the disposable candidate")
+
+        request_id = f"s3b-live-{time.time_ns()}"
+        candidate_output = root / f"cadagent-s3b-output-{request_id}.dwg"
+        self.assertFalse(candidate_output.exists())
+
+        hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
+        legacy_client = FileIPCLiveMCPClient(
+            trigger=make_windows_dispatch_trigger(hwnd),
+            raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
+            bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
+        )
+        dotnet_client = DotNetIPCClient(
+            ipc_dir=os.environ["CAD_AGENT_DOTNET_IPC_DIR"],
+            trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+            timeout_s=45.0,
+        )
+        expected_full_path = normalize_windows_absolute_path(str(candidate))
+        candidate_output_hash: str | None = None
+
+        try:
+            with _disposable_drawing_cleanup(dotnet_client, str(candidate)) as mark_closed:
+                legacy_client.drawing_open(str(candidate))
+                state_before = legacy_client.drawing_get_variables(
+                    ["DBMOD", "CTAB", "CVPORT", "UCSNAME"]
+                )
+                result = dotnet_client.exact_base_xref_extraction(
+                    expected_full_path,
+                    drawing_sha256=candidate_hash_before,
+                    source_full_path=str(source),
+                    inspection=inspection,
+                    extraction_plan=extraction_plan,
+                    candidate_output_path=str(candidate_output),
+                    approval=approval,
+                    source_revision=os.environ["CAD_AGENT_S3B_EXACT_BASE_SOURCE_REVISION"],
+                    request_id=request_id,
+                )
+                state_after = legacy_client.drawing_get_variables(
+                    ["DBMOD", "CTAB", "CVPORT", "UCSNAME"]
+                )
+                payload = result["payload"]
+                self.assertTrue(result["success"])
+                self.assertTrue(result["changed"])
+                self.assertEqual(expected_full_path, result["drawing_full_path"])
+                self.assertEqual(sorted(result["entity_handles"]), result["entity_handles"])
+                self.assertEqual(
+                    len(result["entity_handles"]),
+                    len(set(result["entity_handles"])),
+                )
+                self.assertTrue(payload["accepted_target_overwrite"] is False)
+                self.assertTrue(payload["candidate_changed_during_operation"])
+                self.assertTrue(payload["save_performed"])
+                self.assertFalse(payload["source_mutated"])
+                self.assertFalse(payload["source_saved"])
+                self.assertEqual(expected_full_path, payload["candidate_input_path"])
+                self.assertEqual(candidate_hash_before, payload["candidate_input_sha256"])
+                self.assertEqual(configured_source_hash, payload["source_sha256_before"])
+                self.assertEqual(configured_source_hash, payload["source_sha256_after"])
+                self.assertEqual(
+                    os.environ["CAD_AGENT_S3B_EXACT_BASE_SOURCE_REVISION"],
+                    payload["source_revision"],
+                )
+                self.assertEqual(state_before, state_after)
+                self.assertEqual(source_hash_before, _sha256(source))
+                self.assertEqual(accepted_hash_before, _sha256(accepted))
+                self.assertEqual(candidate_hash_before, _sha256(candidate))
+
+                live_preflight = payload["live_preflight"]
+                self.assertTrue(live_preflight["eligible"])
+                self.assertEqual(
+                    live_preflight["dbmod_before"],
+                    live_preflight["dbmod_after"],
+                )
+                self.assertEqual(candidate_hash_before, live_preflight["target_drawing_sha256"])
+                self.assertEqual(configured_source_hash, live_preflight["source_sha256"])
+                self.assertTrue(live_preflight["xref"]["read_only"])
+                self.assertEqual("INSPECTED", live_preflight["xref"]["status"])
+
+                expected_components = {
+                    component["source_handle"]: component
+                    for component in extraction_plan["components"]
+                }
+                actual_components = {
+                    component["source_handle"]: component
+                    for component in payload["components"]
+                }
+                self.assertEqual(set(expected_components), set(actual_components))
+                for source_handle, expected in expected_components.items():
+                    actual = actual_components[source_handle]
+                    self.assertEqual(expected["source_block"], actual["source_block"])
+                    self.assertEqual(expected["source_layer"], actual["source_layer"])
+                    self.assertEqual(expected["provenance"], actual["provenance"])
+                    self.assertEqual(
+                        os.environ["CAD_AGENT_S3B_EXACT_BASE_SOURCE_REVISION"],
+                        actual["source_revision"],
+                    )
+                    self.assertEqual(configured_source_hash, actual["source_sha256"])
+
+                mapping = payload["source_handle_to_candidate_handle"]
+                self.assertEqual(
+                    set(expected_components),
+                    {item["source_handle"] for item in mapping},
+                )
+                candidate_output_hash = payload["candidate_output_sha256"]
+                self.assertTrue(candidate_output.is_file())
+                self.assertEqual(candidate_output_hash, _sha256(candidate_output))
+
+                close = dotnet_client.close_disposable(
+                    expected_full_path,
+                    disposable=True,
+                    save_changes=False,
+                    request_id=f"{request_id}-close",
+                )
+                self.assertTrue(close["success"])
+                self.assertFalse(close["changed"])
+                self.assertTrue(close["payload"]["closed_without_saving"])
+                mark_closed()
+        finally:
+            if candidate_output_hash is not None and candidate_output.is_file():
+                self.assertEqual(candidate_output_hash, _sha256(candidate_output))
+                candidate_output.unlink()
+            self.assertFalse(candidate_output.exists())
