@@ -1,3 +1,5 @@
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,6 +38,49 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             client.drawing_open("C:/work/a.dxf")
 
         self.assertEqual([], command_sequences)
+
+    def test_already_open_active_target_is_not_reopened(self):
+        raw_commands = []
+        command_sequences = []
+        target_path = "C:/work/already-active.dxf"
+        active_document = {"full_name": target_path}
+        com_activation_attempts = []
+        com_open_attempts = []
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+            if command.startswith("(progn (vl-load-com)"):
+                com_activation_attempts.append(active_document["full_name"])
+                if active_document["full_name"].casefold() != target_path.casefold():
+                    com_open_attempts.append(target_path)
+                    active_document["full_name"] = target_path
+            elif command.startswith('(load "'):
+                return
+            else:
+                self.fail(f"unexpected raw LISP command: {command}")
+
+        client = FileIPCLiveMCPClient(
+            raw_lisp_trigger=raw_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        def dispatch(command, params):
+            if command == "drawing-get-variables":
+                return {"DWGPREFIX": "C:/work/", "DWGNAME": "already-active.dxf"}
+            return {}
+
+        client._dispatch = dispatch
+
+        self.assertEqual({"path": target_path}, client.drawing_open(target_path))
+        self.assertEqual([target_path], com_activation_attempts)
+        self.assertEqual([], com_open_attempts)
+        self.assertEqual([], command_sequences)
+        self.assertEqual("c:\\work\\already-active.dxf", client._active_drawing_path)
+        self.assertEqual(target_path, active_document["full_name"])
 
     def test_com_activation_failure_falls_back_only_with_positive_start_tab_proof(self):
         raw_commands = []
@@ -135,6 +180,53 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
             self.assertEqual({}, client._dispatch("ping", {}))
             self.assertEqual([], list(ipc_dir.iterdir()))
+
+    def test_fail_closed_cleanup_preserves_disposable_fixture_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ipc_dir = root / "ipc"
+            target = root / "disposable-target.dxf"
+            original_bytes = b"disposable CAD fixture bytes\x00\x01\x02"
+            target.write_bytes(original_bytes)
+            before_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+            raw_commands = []
+            command_sequences = []
+
+            def raw_trigger(command):
+                raw_commands.append(command)
+
+            def trigger():
+                command_file = next(ipc_dir.glob("autocad_mcp_cmd_*.json"))
+                request_id = command_file.stem.removeprefix("autocad_mcp_cmd_")
+                (ipc_dir / f"autocad_mcp_result_{request_id}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": request_id,
+                            "ok": False,
+                            "error": "post-activation dispatcher failure",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            client = FileIPCLiveMCPClient(
+                ipc_dir=str(ipc_dir),
+                trigger=trigger,
+                raw_lisp_trigger=raw_trigger,
+                bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+                command_trigger=command_sequences.append,
+                timeout_s=0.1,
+                poll_interval_s=0.001,
+                document_settle_s=0,
+            )
+
+            with self.assertRaisesRegex(MCPTimeoutError, "post-activation dispatcher failure"):
+                client.drawing_open(str(target))
+
+            self.assertEqual(before_hash, hashlib.sha256(target.read_bytes()).hexdigest())
+            self.assertEqual(original_bytes, target.read_bytes())
+            self.assertEqual([], list(ipc_dir.iterdir()))
+            self.assertEqual([], command_sequences)
 
 
 if __name__ == "__main__":
