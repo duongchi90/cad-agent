@@ -166,4 +166,27 @@ primitive_ir_lib
 
 ## 8. Next action
 
-Future-slice selection gate only. The gate requires a separate Issue, exact base, branch, allowlist, verification and live/private-data gates, and PO authorization. Do not select or begin S3C, R1C, registry, revision, repair, verdict, publication, or OCR work from this handoff.
+Issue #68 / PR #69 is the accelerated reuse-first program planning record.
+This program remains planning/governance only; GitHub is the live source of PR
+state, and this handoff must not cache whether PR #69 is open, draft, merged, or
+closed.
+
+- Program design: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md`.
+- Program plan: `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`.
+- Planning branch: `planning/accelerated-reuse-first-program`.
+- Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.
+- Before PR #69 merges, complete the PO review and merge gate.
+- After PR #69 merges, verify fresh `main` at the program merge SHA, then create
+  three separate Wave 1 Issues: official vision handoff, R1C source
+  integrity/fusion, and S2C/S3B live readiness.
+- PR #65 / `a9968480258e01fda9d4dfbf01a27958b67747bc` is the latest accepted
+  runtime implementation record; this program does not promote runtime.
+- PR #67 / `d00b24e4853d2bfa6bd94873d3014e37575e2718` is the accepted governance
+  base for this program; after PR #69 merges, its merge SHA becomes the program
+  governance head.
+- No runtime is automatically authorized by this program or its merge. Each
+  Wave 1 Issue still requires its own scope, exact base, allowlist, reuse
+  dossier, verification gates, and PO authorization.
+
+Do not begin S3C, R1C implementation, registry, revision, repair, verdict,
+publication, or OCR work from this handoff.
