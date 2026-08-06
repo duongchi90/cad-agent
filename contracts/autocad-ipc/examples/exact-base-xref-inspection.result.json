@@ -1,0 +1,74 @@
+{
+  "request_id": "xref-inspection-request-001",
+  "success": true,
+  "operation": "exact_base_xref_inspection",
+  "drawing_full_path": "C:\\temp\\s3b-inspection-host.dwg",
+  "changed": false,
+  "entity_handles": [],
+  "warnings": [],
+  "errors": [],
+  "started_at": "2026-08-06T08:00:00Z",
+  "completed_at": "2026-08-06T08:00:01Z",
+  "payload": {
+    "base_source": {
+      "relative_path": "approved/base-vehicle.dwg",
+      "revision": "rev-2026-08-05-01",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "base-vehicle-001"
+    },
+    "capture_timestamp": "2026-08-06T08:00:01Z",
+    "changed": false,
+    "components": [
+      {
+        "bounding": {
+          "max": {"x": 2100.0, "y": 900.0, "z": 1200.0},
+          "min": {"x": 0.0, "y": -900.0, "z": 0.0}
+        },
+        "component_type": "BLOCK",
+        "logical_component_id": "chassis-main",
+        "provenance": "REUSED_FROM_BASE_CAD",
+        "source_block": "CHASSIS_MAIN",
+        "source_handle": "A1B2",
+        "source_layer": "BODY"
+      },
+      {
+        "bounding": {
+          "max": {"x": 1700.0, "y": 700.0, "z": 1800.0},
+          "min": {"x": 500.0, "y": -700.0, "z": 800.0}
+        },
+        "component_type": "BLOCK",
+        "logical_component_id": "cabin-main",
+        "provenance": "REUSED_FROM_BASE_CAD",
+        "source_block": "CABIN_MAIN",
+        "source_handle": "C3D4",
+        "source_layer": "BODY"
+      }
+    ],
+    "conflicts": [],
+    "critical_dimensions": [
+      {"control": "wheelbase", "observed": 2750.0, "status": "PASS", "target": 2750.0, "tolerance": 1.0, "unit": "mm"},
+      {"control": "track", "observed": 1600.0, "status": "PASS", "target": 1600.0, "tolerance": 1.0, "unit": "mm"},
+      {"control": "chassis", "observed": 4200.0, "status": "PASS", "target": 4200.0, "tolerance": 2.0, "unit": "mm"},
+      {"control": "cabin", "observed": 1850.0, "status": "PASS", "target": 1850.0, "tolerance": 2.0, "unit": "mm"},
+      {"control": "axle", "observed": 1200.0, "status": "PASS", "target": 1200.0, "tolerance": 1.0, "unit": "mm"}
+    ],
+    "dbmod_after": 0,
+    "dbmod_before": 0,
+    "eligible": true,
+    "identity_observations": [
+      {"field": "vehicle", "observed": "vehicle-001", "status": "PASS", "target": "vehicle-001"},
+      {"field": "model", "observed": "model-x", "status": "PASS", "target": "model-x"}
+    ],
+    "inspection_id": "inspection-001",
+    "request_id": "xref-inspection-request-001",
+    "run_id": "run-001",
+    "schema_version": "exact-base-xref-inspection-1.0",
+    "target_drawing_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "warnings": [],
+    "xref": {
+      "name": "BASE_XREF",
+      "read_only": true,
+      "status": "INSPECTED"
+    }
+  }
+}

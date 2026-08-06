@@ -31,7 +31,9 @@
         "mechanical_bom",
         "drawing_setup_audit",
         "visual_evidence_export",
-        "native_render_evidence"
+        "native_render_evidence",
+        "exact_base_xref_inspection",
+        "exact_base_xref_extraction"
       ]
     },
     "drawing_full_path": {
@@ -221,6 +223,80 @@
           },
           "approval": {
             "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "exact_base_xref_inspection"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "drawing_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "parameters": {
+            "$ref": "operations/exact-base-xref-inspection.schema.json"
+          },
+          "approval": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "exact_base_xref_extraction"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "drawing_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "parameters": {
+            "$ref": "operations/exact-base-xref-extraction.schema.json"
+          },
+          "approval": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "reference",
+              "status"
+            ],
+            "properties": {
+              "reference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "status": {
+                "const": "APPROVED"
+              }
+            }
           }
         }
       }

@@ -27,7 +27,8 @@ public sealed class CommandContext
         Action<string>? report = null,
         Func<DateTimeOffset>? clock = null,
         IMechanicalAdapter? mechanicalAdapter = null,
-        ICollection<string>? mechanicalWarnings = null)
+        ICollection<string>? mechanicalWarnings = null,
+        ExactBaseXrefPolicy? exactBaseXrefPolicy = null)
     {
         Store = store ?? throw new ArgumentNullException(nameof(store));
         DrawingGateway = drawingGateway ?? throw new ArgumentNullException(nameof(drawingGateway));
@@ -36,6 +37,7 @@ public sealed class CommandContext
         Clock = clock ?? (() => DateTimeOffset.UtcNow);
         MechanicalAdapter = mechanicalAdapter ?? new NoOpMechanicalAdapter();
         _mechanicalWarnings = mechanicalWarnings ?? new List<string>();
+        ExactBaseXrefPolicy = exactBaseXrefPolicy ?? ExactBaseXrefPolicy.FromEnvironment();
     }
 
     public JsonFileStore Store { get; }
@@ -43,6 +45,8 @@ public sealed class CommandContext
     public IDrawingGateway DrawingGateway { get; }
 
     public IMechanicalAdapter MechanicalAdapter { get; }
+
+    public ExactBaseXrefPolicy ExactBaseXrefPolicy { get; }
 
     public Action CloseWithoutSaving { get; }
 
@@ -94,7 +98,12 @@ public sealed class CommandContext
         var ipcDirectory = Environment.GetEnvironmentVariable(IpcDirectoryEnvironmentVariable);
         var store = new JsonFileStore(
             string.IsNullOrWhiteSpace(ipcDirectory) ? DefaultIpcDirectory : ipcDirectory);
-        var gateway = new AutoCadDrawingGateway(document, mechanicalWarnings.Add, store.IpcDirectory);
+        var exactBaseXrefPolicy = ExactBaseXrefPolicy.FromEnvironment();
+        var gateway = new AutoCadDrawingGateway(
+            document,
+            mechanicalWarnings.Add,
+            store.IpcDirectory,
+            exactBaseXrefPolicy);
         var closeScheduler = new OneShotIdleCloseScheduler(
             handler => AcadApplication.Idle += handler,
             handler => AcadApplication.Idle -= handler,
@@ -109,7 +118,8 @@ public sealed class CommandContext
             closeScheduler.Schedule,
             message => editor.WriteMessage($"\n{message}"),
             mechanicalAdapter: new ManagedMechanicalAdapter(gateway),
-            mechanicalWarnings: mechanicalWarnings);
+            mechanicalWarnings: mechanicalWarnings,
+            exactBaseXrefPolicy: exactBaseXrefPolicy);
     }
 
     private sealed class AutoCadDrawingGateway : IDrawingGateway, IMechanicalDrawingGateway
@@ -117,17 +127,22 @@ public sealed class CommandContext
         private readonly Document _document;
         private readonly Action<string> _mechanicalWarning;
         private readonly string _ipcDirectory;
+        private readonly AutoCadExactBaseXrefReader _exactBaseXrefReader;
 
         public AutoCadDrawingGateway(
             Document document,
             Action<string> mechanicalWarning,
-            string ipcDirectory)
+            string ipcDirectory,
+            ExactBaseXrefPolicy exactBaseXrefPolicy)
         {
             _document = document ?? throw new ArgumentNullException(nameof(document));
             _mechanicalWarning = mechanicalWarning ?? throw new ArgumentNullException(nameof(mechanicalWarning));
             _ipcDirectory = string.IsNullOrWhiteSpace(ipcDirectory)
                 ? throw new ArgumentException("The IPC directory is required.", nameof(ipcDirectory))
                 : ipcDirectory;
+            _exactBaseXrefReader = new AutoCadExactBaseXrefReader(
+                new AutoCadExactBaseXrefDatabase(_document),
+                exactBaseXrefPolicy ?? throw new ArgumentNullException(nameof(exactBaseXrefPolicy)));
         }
 
         public string? ActiveDocumentFullPath => _document.Database?.Filename;
@@ -322,6 +337,10 @@ public sealed class CommandContext
                 request,
                 _ipcDirectory,
                 DateTimeOffset.UtcNow);
+
+        public ExactBaseXrefInspectionSnapshot ReadExactBaseXrefInspection(
+            ExactBaseXrefInspectionParameters request) =>
+            _exactBaseXrefReader.Read(request);
 
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents()
         {

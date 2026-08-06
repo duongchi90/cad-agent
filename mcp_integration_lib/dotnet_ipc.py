@@ -20,6 +20,11 @@ from mcp_integration_lib.autocad_render_evidence import (
     validate_render_evidence,
     validate_render_request,
 )
+from mcp_integration_lib.exact_base_xref import (
+    ExactBaseXrefError,
+    validate_extraction_plan,
+    validate_xref_inspection,
+)
 from cad_agent.visual_evidence import (
     VisualEvidenceError,
     assert_dimension_register_unchanged,
@@ -56,6 +61,8 @@ SUPPORTED_OPERATIONS = frozenset(
         "drawing_setup_audit",
         "visual_evidence_export",
         "native_render_evidence",
+        "exact_base_xref_inspection",
+        "exact_base_xref_extraction",
     }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -63,6 +70,23 @@ _WM_CHAR = 0x0102
 _DOTNET_DISPATCH_COMMAND = "\x1b\x1bCADAGENT_DISPATCH\r"
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+_EXACT_BASE_XREF_INSPECTION = "exact_base_xref_inspection"
+_EXACT_BASE_XREF_EXTRACTION = "exact_base_xref_extraction"
+_EXACT_BASE_XREF_INSPECTION_TARGET_ROLE = "INSPECTION_HOST"
+_EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE = "DISPOSABLE_CANDIDATE"
+_EXACT_BASE_XREF_LIVE_OWNED_FIELDS = frozenset(
+    {
+        "observed",
+        "status",
+        "eligible",
+        "changed",
+        "dbmod_before",
+        "dbmod_after",
+        "live_bounds",
+        "live_hashes",
+        "live_timestamps",
+    }
+)
 
 
 def _get_user32() -> Any:
@@ -534,8 +558,25 @@ class DotNetIPCClient:
             parameters if parameters is not None else {},
         )
         normalized_sha256 = self._validate_sha256(drawing_sha256)
+        if normalized_operation in {
+            _EXACT_BASE_XREF_INSPECTION,
+            _EXACT_BASE_XREF_EXTRACTION,
+        }:
+            self._validate_exact_base_xref_hash(normalized_sha256, "drawing_sha256")
+            self._validate_exact_base_xref_paths(
+                normalized_path,
+                normalized_parameters["source_full_path"],
+                candidate_output_path=normalized_parameters.get("candidate_output_path"),
+            )
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
+        if normalized_operation == _EXACT_BASE_XREF_INSPECTION and approval is not None:
+            raise ValueError("exact_base_xref_inspection approval must be null")
+        if normalized_operation == _EXACT_BASE_XREF_EXTRACTION:
+            self._validate_exact_base_xref_approval(
+                normalized_parameters["extraction_plan"]["approval"],
+                approval,
+            )
 
         actual_request_id = normalize_request_id(
             request_id if request_id is not None else self.request_id_factory()
@@ -691,6 +732,135 @@ class DotNetIPCClient:
             validate_render_evidence(result.get("payload"), normalized_request)
         except AutoCADRenderEvidenceError as exc:
             raise DotNetIPCProtocolError(str(exc)) from exc
+        return result
+
+    def exact_base_xref_inspection(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        drawing_sha256: str,
+        source_full_path: str | Path,
+        inspection: Mapping[str, Any],
+        source_revision: str | None = None,
+        run_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send only S3A inspection expectations to the read-only live gate."""
+
+        validated_inspection = self._validate_offline_xref_inspection(inspection)
+        resolved_revision, resolved_run_id = self._resolve_xref_identity(
+            validated_inspection,
+            source_revision=source_revision,
+            run_id=run_id,
+        )
+        normalized_source = normalize_windows_absolute_path(source_full_path)
+        normalized_drawing = normalize_windows_absolute_path(drawing_full_path)
+        self._validate_exact_base_xref_hash(drawing_sha256, "drawing_sha256")
+        self._validate_exact_base_xref_paths(
+            normalized_drawing,
+            normalized_source,
+            candidate_output_path=None,
+        )
+        result = self.request(
+            _EXACT_BASE_XREF_INSPECTION,
+            normalized_drawing,
+            drawing_sha256=drawing_sha256,
+            parameters={
+                "run_id": resolved_run_id,
+                "source_full_path": normalized_source,
+                "source_revision": resolved_revision,
+                "inspection_expectations": self._inspection_expectations(validated_inspection),
+                "target_role": _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE,
+            },
+            approval=None,
+            request_id=(
+                validated_inspection["request_id"]
+                if request_id is None
+                else request_id
+            ),
+        )
+        self._validate_exact_base_xref_inspection_result(
+            result,
+            validated_inspection=validated_inspection,
+            drawing_full_path=normalized_drawing,
+            drawing_sha256=drawing_sha256,
+            run_id=resolved_run_id,
+        )
+        return result
+
+    def exact_base_xref_extraction(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        drawing_sha256: str,
+        source_full_path: str | Path,
+        inspection: Mapping[str, Any],
+        extraction_plan: Mapping[str, Any],
+        candidate_output_path: str | Path,
+        approval: Mapping[str, Any] | None = None,
+        source_revision: str | None = None,
+        run_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate an offline S3A plan before sending a candidate-only request."""
+
+        validated_inspection = self._validate_offline_xref_inspection(inspection)
+        try:
+            validated_plan = validate_extraction_plan(
+                extraction_plan,
+                inspection=validated_inspection,
+            )
+        except ExactBaseXrefError as exc:
+            raise ValueError(str(exc)) from exc
+        self._validate_exact_base_xref_approval(validated_plan["approval"], approval)
+        resolved_revision, resolved_run_id = self._resolve_xref_identity(
+            validated_inspection,
+            source_revision=(
+                validated_plan["source_revision"]
+                if source_revision is None
+                else source_revision
+            ),
+            run_id=validated_plan["run_id"] if run_id is None else run_id,
+        )
+        if resolved_revision != validated_plan["source_revision"]:
+            raise ValueError("source_revision does not match the extraction plan")
+        if resolved_run_id != validated_plan["run_id"]:
+            raise ValueError("run_id does not match the extraction plan")
+
+        normalized_source = normalize_windows_absolute_path(source_full_path)
+        normalized_drawing = normalize_windows_absolute_path(drawing_full_path)
+        normalized_output = normalize_windows_absolute_path(candidate_output_path)
+        self._validate_exact_base_xref_hash(drawing_sha256, "drawing_sha256")
+        self._validate_exact_base_xref_paths(
+            normalized_drawing,
+            normalized_source,
+            candidate_output_path=normalized_output,
+        )
+        result = self.request(
+            _EXACT_BASE_XREF_EXTRACTION,
+            normalized_drawing,
+            drawing_sha256=drawing_sha256,
+            parameters={
+                "run_id": resolved_run_id,
+                "source_full_path": normalized_source,
+                "source_revision": resolved_revision,
+                "inspection_expectations": self._inspection_expectations(validated_inspection),
+                "extraction_plan": validated_plan,
+                "target_role": _EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE,
+                "candidate_output_path": normalized_output,
+            },
+            approval=approval,
+            request_id=validated_plan["request_id"] if request_id is None else request_id,
+        )
+        self._validate_exact_base_xref_extraction_result(
+            result,
+            validated_inspection=validated_inspection,
+            validated_plan=validated_plan,
+            drawing_full_path=normalized_drawing,
+            drawing_sha256=drawing_sha256,
+            candidate_output_path=normalized_output,
+            run_id=resolved_run_id,
+        )
         return result
 
     def visual_evidence_export(
@@ -1038,7 +1208,255 @@ class DotNetIPCClient:
             DotNetIPCClient._validate_visual_evidence_parameters(values)
         elif operation == "native_render_evidence":
             DotNetIPCClient._validate_native_render_parameters(values)
+        elif operation == _EXACT_BASE_XREF_INSPECTION:
+            DotNetIPCClient._validate_exact_base_xref_inspection_parameters(values)
+        elif operation == _EXACT_BASE_XREF_EXTRACTION:
+            DotNetIPCClient._validate_exact_base_xref_extraction_parameters(values)
         return values
+
+    @staticmethod
+    def _validate_offline_xref_inspection(payload: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            return validate_xref_inspection(payload)
+        except ExactBaseXrefError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @staticmethod
+    def _inspection_expectations(inspection: Mapping[str, Any]) -> dict[str, Any]:
+        identity = {
+            item["field"]: item["target"]
+            for item in inspection["identity_observations"]
+        }
+        return {
+            "source": {
+                key: inspection["base_source"][key]
+                for key in ("source_id", "revision", "sha256")
+            },
+            "identity": identity,
+            "critical_dimensions": [
+                {
+                    "control": item["control"],
+                    "target": item["target"],
+                    "tolerance": item["tolerance"],
+                    "unit": item["unit"],
+                }
+                for item in inspection["critical_dimensions"]
+            ],
+            "xref": {"name": inspection["xref"]["name"]},
+            "components": [
+                {
+                    key: component[key]
+                    for key in (
+                        "component_type",
+                        "logical_component_id",
+                        "provenance",
+                        "source_block",
+                        "source_handle",
+                        "source_layer",
+                    )
+                }
+                for component in inspection["components"]
+            ],
+        }
+
+    @staticmethod
+    def _resolve_xref_identity(
+        inspection: Mapping[str, Any],
+        *,
+        source_revision: str | None,
+        run_id: str | None,
+    ) -> tuple[str, str]:
+        expected_revision = inspection["base_source"]["revision"]
+        expected_run_id = inspection["run_id"]
+        if source_revision is not None and source_revision != expected_revision:
+            raise ValueError("source_revision does not match the offline inspection")
+        if run_id is not None and run_id != expected_run_id:
+            raise ValueError("run_id does not match the offline inspection")
+        return expected_revision, expected_run_id
+
+    @staticmethod
+    def _validate_exact_base_xref_hash(value: Any, field_name: str) -> str:
+        if not isinstance(value, str) or not _LOWERCASE_SHA256_PATTERN.fullmatch(value):
+            raise ValueError(f"{field_name} must be a lowercase 64-character SHA-256")
+        return value
+
+    @staticmethod
+    def _validate_exact_base_xref_paths(
+        drawing_full_path: str | None,
+        source_full_path: str | Path,
+        *,
+        candidate_output_path: str | Path | None,
+    ) -> None:
+        if drawing_full_path is None:
+            raise ValueError("drawing_full_path is required for exact-base Xref operations")
+        normalized_drawing = normalize_windows_absolute_path(drawing_full_path).casefold()
+        normalized_source = normalize_windows_absolute_path(source_full_path).casefold()
+        if normalized_source == normalized_drawing:
+            raise ValueError("source_full_path must not equal drawing_full_path")
+        if candidate_output_path is not None:
+            normalized_output = normalize_windows_absolute_path(candidate_output_path).casefold()
+            if normalized_output in {normalized_drawing, normalized_source}:
+                raise ValueError(
+                    "candidate_output_path must be distinct from drawing_full_path and source_full_path"
+                )
+
+    @staticmethod
+    def _validate_exact_base_xref_expectations(expectations: Any) -> None:
+        required = {"source", "identity", "critical_dimensions", "xref", "components"}
+        if not isinstance(expectations, Mapping) or set(expectations) != required:
+            raise ValueError("inspection_expectations must be a closed object")
+
+        def reject_live_owned(value: Any, context: str) -> None:
+            if isinstance(value, Mapping):
+                for key, nested in value.items():
+                    if key in _EXACT_BASE_XREF_LIVE_OWNED_FIELDS:
+                        raise ValueError(f"{context}.{key} is live-owned and must not be supplied")
+                    reject_live_owned(nested, f"{context}.{key}")
+            elif isinstance(value, list):
+                for index, nested in enumerate(value):
+                    reject_live_owned(nested, f"{context}[{index}]")
+
+        reject_live_owned(expectations, "inspection_expectations")
+        if not isinstance(expectations["source"], Mapping) or set(expectations["source"]) != {
+            "source_id",
+            "revision",
+            "sha256",
+        }:
+            raise ValueError("inspection_expectations.source is not closed")
+        DotNetIPCClient._validate_exact_base_xref_hash(
+            expectations["source"]["sha256"],
+            "inspection_expectations.source.sha256",
+        )
+        for name in ("source_id", "revision"):
+            if not isinstance(expectations["source"][name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
+                expectations["source"][name]
+            ):
+                raise ValueError(f"inspection_expectations.source.{name} is invalid")
+        if not isinstance(expectations["identity"], Mapping) or set(expectations["identity"]) != {
+            "vehicle",
+            "model",
+        }:
+            raise ValueError("inspection_expectations.identity is not closed")
+        for name in ("vehicle", "model"):
+            if not isinstance(expectations["identity"][name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
+                expectations["identity"][name]
+            ):
+                raise ValueError(f"inspection_expectations.identity.{name} is invalid")
+        dimensions = expectations["critical_dimensions"]
+        if not isinstance(dimensions, list) or len(dimensions) != 5:
+            raise ValueError("inspection_expectations.critical_dimensions must contain five controls")
+        for dimension in dimensions:
+            if not isinstance(dimension, Mapping) or set(dimension) != {
+                "control",
+                "target",
+                "tolerance",
+                "unit",
+            }:
+                raise ValueError("inspection_expectations.critical_dimensions entries are not closed")
+        if not isinstance(expectations["xref"], Mapping) or set(expectations["xref"]) != {"name"}:
+            raise ValueError("inspection_expectations.xref is not closed")
+        components = expectations["components"]
+        if not isinstance(components, list) or not components:
+            raise ValueError("inspection_expectations.components must not be empty")
+        component_fields = {
+            "component_type",
+            "logical_component_id",
+            "provenance",
+            "source_block",
+            "source_handle",
+            "source_layer",
+        }
+        for component in components:
+            if not isinstance(component, Mapping) or set(component) != component_fields:
+                raise ValueError("inspection_expectations.components entries are not closed")
+
+    @staticmethod
+    def _validate_exact_base_xref_inspection_parameters(parameters: Mapping[str, Any]) -> None:
+        required = {
+            "run_id",
+            "source_full_path",
+            "source_revision",
+            "inspection_expectations",
+            "target_role",
+        }
+        if set(parameters) != required:
+            raise ValueError("exact_base_xref_inspection parameters must be closed")
+        for name in ("run_id", "source_revision"):
+            if not isinstance(parameters[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
+                parameters[name]
+            ):
+                raise ValueError(f"parameters.{name} is invalid")
+        normalize_windows_absolute_path(parameters["source_full_path"])
+        if parameters["target_role"] != _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE:
+            raise ValueError("parameters.target_role must be INSPECTION_HOST")
+        DotNetIPCClient._validate_exact_base_xref_expectations(
+            parameters["inspection_expectations"]
+        )
+
+    @staticmethod
+    def _validate_exact_base_xref_extraction_parameters(parameters: Mapping[str, Any]) -> None:
+        required = {
+            "run_id",
+            "source_full_path",
+            "source_revision",
+            "inspection_expectations",
+            "extraction_plan",
+            "target_role",
+            "candidate_output_path",
+        }
+        if set(parameters) != required:
+            raise ValueError("exact_base_xref_extraction parameters must be closed")
+        for name in ("run_id", "source_revision"):
+            if not isinstance(parameters[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
+                parameters[name]
+            ):
+                raise ValueError(f"parameters.{name} is invalid")
+        normalize_windows_absolute_path(parameters["source_full_path"])
+        normalize_windows_absolute_path(parameters["candidate_output_path"])
+        if parameters["target_role"] != _EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE:
+            raise ValueError("parameters.target_role must be DISPOSABLE_CANDIDATE")
+        DotNetIPCClient._validate_exact_base_xref_expectations(
+            parameters["inspection_expectations"]
+        )
+        try:
+            plan = validate_extraction_plan(parameters["extraction_plan"])
+        except ExactBaseXrefError as exc:
+            raise ValueError(str(exc)) from exc
+        if plan["approval"]["status"] != "APPROVED" or not isinstance(
+            plan["approval"]["reference"], str
+        ):
+            raise ValueError("extraction_plan.approval must be APPROVED with a reference")
+
+    @staticmethod
+    def _canonical_json(value: Any) -> str:
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("approval must contain canonical JSON values") from exc
+
+    @staticmethod
+    def _validate_exact_base_xref_approval(
+        plan_approval: Any,
+        envelope_approval: Mapping[str, Any] | None,
+    ) -> None:
+        if not isinstance(plan_approval, Mapping):
+            raise ValueError("extraction_plan.approval is required")
+        if plan_approval.get("status") != "APPROVED" or not isinstance(
+            plan_approval.get("reference"), str
+        ) or not plan_approval["reference"]:
+            raise ValueError("extraction_plan.approval must be APPROVED with a reference")
+        if not isinstance(envelope_approval, Mapping):
+            raise ValueError("extraction approval must be an object")
+        if DotNetIPCClient._canonical_json(dict(plan_approval)) != DotNetIPCClient._canonical_json(
+            dict(envelope_approval)
+        ):
+            raise ValueError("extraction_plan.approval must exactly match envelope approval")
 
     @staticmethod
     def _validate_native_render_parameters(parameters: Mapping[str, Any]) -> None:
@@ -1331,11 +1749,238 @@ class DotNetIPCClient:
                 raise DotNetIPCProtocolError(
                     "native_render_evidence failure result must not contain evidence payload"
                 )
+        if operation == _EXACT_BASE_XREF_INSPECTION:
+            if result["changed"] is not False or result["entity_handles"]:
+                raise DotNetIPCProtocolError(
+                    "exact_base_xref_inspection result must be read-only and contain no entity handles"
+                )
+            if result["success"] is False and result.get("payload") not in (None, {}):
+                raise DotNetIPCProtocolError(
+                    "exact_base_xref_inspection failure result must not contain evidence payload"
+                )
+        if operation == _EXACT_BASE_XREF_EXTRACTION:
+            if result["success"] is True:
+                if result["changed"] is not True or not result["entity_handles"]:
+                    raise DotNetIPCProtocolError(
+                        "exact_base_xref_extraction success must contain candidate handles"
+                    )
+                if result["entity_handles"] != sorted(set(result["entity_handles"])):
+                    raise DotNetIPCProtocolError(
+                        "exact_base_xref_extraction candidate handles must be sorted and unique"
+                    )
+                if not isinstance(result.get("payload"), dict):
+                    raise DotNetIPCProtocolError(
+                        "exact_base_xref_extraction success requires an evidence payload"
+                    )
+            elif result["changed"] is not False or result["entity_handles"] or result.get("payload") not in (
+                None,
+                {},
+            ):
+                raise DotNetIPCProtocolError(
+                    "exact_base_xref_extraction failure must be cleaned up and empty"
+                )
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:
                 raise DotNetIPCProtocolError(f"result {name} must be a non-empty string")
         if "payload" in result and not isinstance(result["payload"], dict):
             raise DotNetIPCProtocolError("result payload must be an object")
+
+    @staticmethod
+    def _validate_exact_base_xref_inspection_result(
+        result: Mapping[str, Any],
+        *,
+        validated_inspection: Mapping[str, Any],
+        drawing_full_path: str,
+        drawing_sha256: str,
+        run_id: str,
+    ) -> None:
+        if result["drawing_full_path"].casefold() != drawing_full_path.casefold():
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_inspection result drawing_full_path is not canonical"
+            )
+        try:
+            payload = validate_xref_inspection(result.get("payload"))
+        except ExactBaseXrefError as exc:
+            raise DotNetIPCProtocolError(
+                f"exact_base_xref_inspection payload is invalid: {exc}"
+            ) from exc
+        if payload["request_id"] != result["request_id"]:
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_inspection payload request_id does not match result"
+            )
+        if payload["run_id"] != run_id:
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_inspection payload run_id does not match request"
+            )
+        if payload["base_source"] != validated_inspection["base_source"]:
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_inspection payload source identity does not match expectations"
+            )
+        if payload["target_drawing_sha256"] != drawing_sha256:
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_inspection payload target hash does not match request"
+            )
+
+    @staticmethod
+    def _validate_exact_base_xref_extraction_result(
+        result: Mapping[str, Any],
+        *,
+        validated_inspection: Mapping[str, Any],
+        validated_plan: Mapping[str, Any],
+        drawing_full_path: str,
+        drawing_sha256: str,
+        candidate_output_path: str,
+        run_id: str,
+    ) -> None:
+        payload = result.get("payload")
+        if not isinstance(payload, Mapping):
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_extraction result payload must be an object"
+            )
+        required = {
+            "accepted_target_overwrite",
+            "candidate_changed_during_operation",
+            "candidate_input_path",
+            "candidate_input_sha256",
+            "candidate_output_path",
+            "candidate_output_sha256",
+            "components",
+            "live_preflight",
+            "plan_id",
+            "request_id",
+            "run_id",
+            "save_performed",
+            "schema_version",
+            "source_handle_to_candidate_handle",
+            "source_mutated",
+            "source_revision",
+            "source_saved",
+            "source_sha256_after",
+            "source_sha256_before",
+            "warnings",
+        }
+        if set(payload) != required:
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_extraction payload must be a closed evidence object"
+            )
+        if result["drawing_full_path"].casefold() != drawing_full_path.casefold():
+            raise DotNetIPCProtocolError(
+                "exact_base_xref_extraction result drawing_full_path is not canonical"
+            )
+        try:
+            normalized_input = normalize_windows_absolute_path(payload["candidate_input_path"])
+            normalized_output = normalize_windows_absolute_path(payload["candidate_output_path"])
+            expected_source = validated_inspection["base_source"]["sha256"]
+            candidate_input_hash = DotNetIPCClient._validate_exact_base_xref_hash(
+                payload["candidate_input_sha256"],
+                "candidate_input_sha256",
+            )
+            DotNetIPCClient._validate_exact_base_xref_hash(
+                payload["candidate_output_sha256"],
+                "candidate_output_sha256",
+            )
+            source_before = DotNetIPCClient._validate_exact_base_xref_hash(
+                payload["source_sha256_before"],
+                "source_sha256_before",
+            )
+            source_after = DotNetIPCClient._validate_exact_base_xref_hash(
+                payload["source_sha256_after"],
+                "source_sha256_after",
+            )
+        except (TypeError, ValueError) as exc:
+            raise DotNetIPCProtocolError(
+                f"exact_base_xref_extraction evidence path or hash is invalid: {exc}"
+            ) from exc
+        if normalized_input.casefold() != drawing_full_path.casefold():
+            raise DotNetIPCProtocolError(
+                "candidate_input_path does not match the active candidate drawing"
+            )
+        if normalized_output.casefold() != candidate_output_path.casefold():
+            raise DotNetIPCProtocolError(
+                "candidate_output_path does not match the request"
+            )
+        if candidate_input_hash != drawing_sha256:
+            raise DotNetIPCProtocolError("candidate input hash does not match the request")
+        if source_before != expected_source or source_after != expected_source:
+            raise DotNetIPCProtocolError("source hash changed or does not match inspection")
+        if payload["accepted_target_overwrite"] is not False:
+            raise DotNetIPCProtocolError("accepted_target_overwrite must be false")
+        if payload["candidate_changed_during_operation"] is not True:
+            raise DotNetIPCProtocolError("candidate_changed_during_operation must be true")
+        if payload["save_performed"] is not True:
+            raise DotNetIPCProtocolError("save_performed must be true")
+        if payload["source_mutated"] is not False or payload["source_saved"] is not False:
+            raise DotNetIPCProtocolError("source must remain read-only")
+        if payload["schema_version"] != "exact-base-xref-extraction-result-1.0":
+            raise DotNetIPCProtocolError("extraction result schema_version is unsupported")
+        if payload["request_id"] != result["request_id"] or payload["run_id"] != run_id:
+            raise DotNetIPCProtocolError("extraction evidence identity does not match request")
+        if payload["plan_id"] != validated_plan["plan_id"]:
+            raise DotNetIPCProtocolError("extraction evidence plan_id does not match plan")
+        if payload["source_revision"] != validated_plan["source_revision"]:
+            raise DotNetIPCProtocolError("extraction evidence source revision does not match plan")
+
+        preflight = payload["live_preflight"]
+        if not isinstance(preflight, Mapping) or set(preflight) != {
+            "dbmod_after",
+            "dbmod_before",
+            "eligible",
+            "evidence_sha256",
+            "inspection_id",
+            "source_sha256",
+            "target_drawing_sha256",
+            "xref",
+        }:
+            raise DotNetIPCProtocolError("live_preflight evidence is not closed")
+        if preflight["eligible"] is not True:
+            raise DotNetIPCProtocolError("live_preflight must be eligible")
+        if preflight["source_sha256"] != expected_source:
+            raise DotNetIPCProtocolError("live_preflight source hash does not match inspection")
+        if preflight["target_drawing_sha256"] != drawing_sha256:
+            raise DotNetIPCProtocolError("live_preflight target hash does not match request")
+        xref = preflight["xref"]
+        if not isinstance(xref, Mapping) or xref.get("read_only") is not True or xref.get("status") != "INSPECTED":
+            raise DotNetIPCProtocolError("live_preflight Xref is not inspected read-only")
+
+        components = payload["components"]
+        mappings = payload["source_handle_to_candidate_handle"]
+        if not isinstance(components, list) or not components or not isinstance(mappings, list):
+            raise DotNetIPCProtocolError("extraction evidence components and mappings are required")
+        candidate_handles: list[str] = []
+        component_pairs: set[tuple[str, str]] = set()
+        for component in components:
+            if not isinstance(component, Mapping):
+                raise DotNetIPCProtocolError("component evidence must be an object")
+            for name in (
+                "candidate_handle",
+                "logical_component_id",
+                "provenance",
+                "source_block",
+                "source_handle",
+                "source_layer",
+                "source_revision",
+                "source_sha256",
+                "transform",
+            ):
+                if name not in component:
+                    raise DotNetIPCProtocolError(f"component evidence is missing {name}")
+            if component["provenance"] != "REUSED_FROM_BASE_CAD":
+                raise DotNetIPCProtocolError("component provenance is not REUSED_FROM_BASE_CAD")
+            if component["source_revision"] != validated_plan["source_revision"]:
+                raise DotNetIPCProtocolError("component source revision does not match plan")
+            if component["source_sha256"] != expected_source:
+                raise DotNetIPCProtocolError("component source hash does not match inspection")
+            candidate_handles.append(component["candidate_handle"])
+            component_pairs.add((component["source_handle"], component["candidate_handle"]))
+        if candidate_handles != result["entity_handles"]:
+            raise DotNetIPCProtocolError("entity_handles do not match native candidate evidence")
+        mapping_pairs: set[tuple[str, str]] = set()
+        for mapping in mappings:
+            if not isinstance(mapping, Mapping) or set(mapping) != {"source_handle", "candidate_handle"}:
+                raise DotNetIPCProtocolError("source_handle_to_candidate_handle entries are not closed")
+            mapping_pairs.add((mapping["source_handle"], mapping["candidate_handle"]))
+        if mapping_pairs != component_pairs:
+            raise DotNetIPCProtocolError("source_handle_to_candidate_handle is incomplete or inconsistent")
 
     @staticmethod
     def _validate_visual_evidence_payload(payload: Any) -> None:

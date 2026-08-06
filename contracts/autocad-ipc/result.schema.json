@@ -34,7 +34,9 @@
         "mechanical_bom",
         "drawing_setup_audit",
         "visual_evidence_export",
-        "native_render_evidence"
+        "native_render_evidence",
+        "exact_base_xref_inspection",
+        "exact_base_xref_extraction"
       ]
     },
     "drawing_full_path": {
@@ -256,6 +258,150 @@
             },
             "then": {
               "properties": {
+                "payload": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "exact_base_xref_inspection"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "changed": {
+            "const": false
+          },
+          "entity_handles": {
+            "maxItems": 0
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": true
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "required": [
+                "payload"
+              ],
+              "properties": {
+                "payload": {
+                  "$ref": "operations/exact-base-xref-inspection-result.schema.json"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": false
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "exact_base_xref_extraction"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": true
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "required": [
+                "payload"
+              ],
+              "properties": {
+                "changed": {
+                  "const": true
+                },
+                "entity_handles": {
+                  "minItems": 1
+                },
+                "payload": {
+                  "$ref": "operations/exact-base-xref-extraction-result.schema.json"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": false
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "properties": {
+                "changed": {
+                  "const": false
+                },
+                "entity_handles": {
+                  "maxItems": 0
+                },
                 "payload": {
                   "type": "object",
                   "maxProperties": 0

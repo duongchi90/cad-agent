@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 import os
@@ -99,6 +100,104 @@ def _result(request: dict[str, object], payload: dict[str, object] | None = None
     }
 
 
+def _exact_base_fixture() -> dict[str, object]:
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "exact-base-xref-inspection.json"
+    return json.loads(fixture_path.read_text(encoding="utf-8"))
+
+
+def _exact_base_extraction_result_payload() -> dict[str, object]:
+    return {
+        "accepted_target_overwrite": False,
+        "candidate_changed_during_operation": True,
+        "candidate_input_path": r"C:\temp\candidate-input.dwg",
+        "candidate_input_sha256": "b" * 64,
+        "candidate_output_path": r"C:\temp\candidate-output.dwg",
+        "candidate_output_sha256": "c" * 64,
+        "components": [
+            {
+                "candidate_handle": "E001",
+                "logical_component_id": "chassis-main",
+                "provenance": "REUSED_FROM_BASE_CAD",
+                "source_block": "CHASSIS_MAIN",
+                "source_handle": "A1B2",
+                "source_layer": "BODY",
+                "source_revision": "rev-2026-08-05-01",
+                "source_sha256": "a" * 64,
+                "transform": {
+                    "rotation_degrees": 0.0,
+                    "translation": {"x": 10.0, "y": 20.0, "z": 0.0},
+                    "uniform_scale": 1.0,
+                },
+            },
+            {
+                "candidate_handle": "E002",
+                "logical_component_id": "cabin-main",
+                "provenance": "REUSED_FROM_BASE_CAD",
+                "source_block": "CABIN_MAIN",
+                "source_handle": "C3D4",
+                "source_layer": "BODY",
+                "source_revision": "rev-2026-08-05-01",
+                "source_sha256": "a" * 64,
+                "transform": {
+                    "rotation_degrees": 2.5,
+                    "translation": {"x": 0.0, "y": 0.0, "z": 5.0},
+                    "uniform_scale": 1.0,
+                },
+            },
+        ],
+        "live_preflight": {
+            "dbmod_after": 0,
+            "dbmod_before": 0,
+            "eligible": True,
+            "evidence_sha256": "d" * 64,
+            "inspection_id": "inspection-002",
+            "source_sha256": "a" * 64,
+            "target_drawing_sha256": "b" * 64,
+            "xref": {"name": "BASE_XREF", "read_only": True, "status": "INSPECTED"},
+        },
+        "plan_id": "extraction-plan-001",
+        "request_id": "xref-request-001",
+        "run_id": "run-001",
+        "save_performed": True,
+        "schema_version": "exact-base-xref-extraction-result-1.0",
+        "source_handle_to_candidate_handle": [
+            {"source_handle": "A1B2", "candidate_handle": "E001"},
+            {"source_handle": "C3D4", "candidate_handle": "E002"},
+        ],
+        "source_mutated": False,
+        "source_revision": "rev-2026-08-05-01",
+        "source_saved": False,
+        "source_sha256_after": "a" * 64,
+        "source_sha256_before": "a" * 64,
+        "warnings": [],
+    }
+
+
+def _exact_result(
+    request: dict[str, object],
+    payload: dict[str, object],
+    *,
+    changed: bool,
+    entity_handles: list[str],
+) -> dict[str, object]:
+    result = _result(request, payload)
+    result["changed"] = changed
+    result["entity_handles"] = entity_handles
+    return result
+
+
+def _nested_mapping_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        return set(value) | {
+            key
+            for nested in value.values()
+            for key in _nested_mapping_keys(nested)
+        }
+    if isinstance(value, list):
+        return {key for nested in value for key in _nested_mapping_keys(nested)}
+    return set()
+
+
 class FakeDispatcher:
     def __init__(self, ipc_dir: Path, payload: dict[str, object] | None = None) -> None:
         self.ipc_dir = ipc_dir
@@ -143,6 +242,257 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertEqual("Kiểm tra Ω", dispatcher.requests[0]["approval"]["note"])
             self.assertIn("Kiểm tra Ω".encode("utf-8"), dispatcher.request_bytes)
             self.assertFalse(list(ipc_dir.glob("cadagent_dotnet_*.json")))
+
+    def test_exact_base_xref_inspection_sends_only_validated_expectations(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = fixture["inspection"]
+        requests: list[dict[str, object]] = []
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                requests.append(request)
+                atomic_write_json(
+                    result_path(ipc_dir, str(request["request_id"])),
+                    _exact_result(
+                        request,
+                        copy.deepcopy(inspection),
+                        changed=False,
+                        entity_handles=[],
+                    ),
+                )
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            result = client.exact_base_xref_inspection(
+                r"C:\temp\inspection-host.dwg",
+                drawing_sha256="b" * 64,
+                source_full_path=r"C:\approved\base-vehicle.dwg",
+                inspection=inspection,
+                request_id="xref-request-001",
+            )
+
+        request = requests[0]
+        parameters = request["parameters"]
+        self.assertEqual(
+            {
+                "run_id",
+                "source_full_path",
+                "source_revision",
+                "inspection_expectations",
+                "target_role",
+            },
+            set(parameters),
+        )
+        self.assertEqual("INSPECTION_HOST", parameters["target_role"])
+        self.assertIsNone(request["approval"])
+        self.assertEqual(
+            "rev-2026-08-05-01",
+            parameters["inspection_expectations"]["source"]["revision"],
+        )
+        self.assertNotIn(
+            "observed",
+            _nested_mapping_keys(parameters["inspection_expectations"]),
+        )
+        self.assertFalse(
+            {
+                "status",
+                "eligible",
+                "changed",
+                "dbmod_before",
+                "dbmod_after",
+                "live_bounds",
+                "live_hashes",
+                "live_timestamps",
+            }
+            & _nested_mapping_keys(parameters["inspection_expectations"])
+        )
+        self.assertFalse(result["changed"])
+        self.assertEqual([], result["entity_handles"])
+
+    def test_exact_base_xref_extraction_validates_plan_and_binds_approval(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = fixture["inspection"]
+        plan = copy.deepcopy(fixture["plan"])
+        plan["approval"] = {"reference": "approval-001", "status": "APPROVED"}
+        requests: list[dict[str, object]] = []
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                requests.append(request)
+                atomic_write_json(
+                    result_path(ipc_dir, str(request["request_id"])),
+                    _exact_result(
+                        request,
+                        _exact_base_extraction_result_payload(),
+                        changed=True,
+                        entity_handles=["E001", "E002"],
+                    ),
+                )
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            result = client.exact_base_xref_extraction(
+                r"C:\temp\candidate-input.dwg",
+                drawing_sha256="b" * 64,
+                source_full_path=r"C:\approved\base-vehicle.dwg",
+                inspection=inspection,
+                extraction_plan=plan,
+                candidate_output_path=r"C:\temp\candidate-output.dwg",
+                approval=plan["approval"],
+                request_id="xref-request-001",
+            )
+
+        request = requests[0]
+        parameters = request["parameters"]
+        self.assertEqual(
+            {
+                "run_id",
+                "source_full_path",
+                "source_revision",
+                "inspection_expectations",
+                "extraction_plan",
+                "target_role",
+                "candidate_output_path",
+            },
+            set(parameters),
+        )
+        self.assertEqual(plan["approval"], request["approval"])
+        self.assertEqual("APPROVED", request["approval"]["status"])
+        self.assertEqual("DISPOSABLE_CANDIDATE", parameters["target_role"])
+        self.assertEqual(plan, parameters["extraction_plan"])
+        self.assertNotIn(
+            "eligible",
+            _nested_mapping_keys(parameters["inspection_expectations"]),
+        )
+        self.assertTrue(result["changed"])
+        self.assertEqual(["E001", "E002"], result["entity_handles"])
+        self.assertFalse(result["payload"]["source_mutated"])
+        self.assertFalse(result["payload"]["accepted_target_overwrite"])
+        self.assertEqual(
+            2,
+            len(result["payload"]["source_handle_to_candidate_handle"]),
+        )
+
+    def test_exact_base_xref_rejects_invalid_offline_inputs_before_transport(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = fixture["inspection"]
+        plan = copy.deepcopy(fixture["plan"])
+        plan["approval"] = {"reference": "approval-001", "status": "APPROVED"}
+        trigger_calls = 0
+
+        with TemporaryDirectory() as temporary:
+
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+            common = {
+                "drawing_full_path": r"C:\temp\candidate-input.dwg",
+                "drawing_sha256": "b" * 64,
+                "source_full_path": r"C:\approved\base-vehicle.dwg",
+                "inspection": inspection,
+                "extraction_plan": plan,
+                "candidate_output_path": r"C:\temp\candidate-output.dwg",
+                "approval": plan["approval"],
+            }
+            uninspected_plan = copy.deepcopy(plan)
+            uninspected_plan["components"][0]["logical_component_id"] = "not-inspected"
+            cases = [
+                {
+                    "source_full_path": "approved/base-vehicle.dwg",
+                    "message": "absolute Windows path",
+                },
+                {"drawing_sha256": "B" * 64, "message": "lowercase"},
+                {
+                    "source_revision": "wrong-revision",
+                    "message": "source revision",
+                },
+                {
+                    "source_full_path": r"C:\temp\candidate-input.dwg",
+                    "message": "source path",
+                },
+                {
+                    "candidate_output_path": r"C:\approved\base-vehicle.dwg",
+                    "message": "candidate output",
+                },
+                {
+                    "approval": {"reference": "other", "status": "APPROVED"},
+                    "message": "approval",
+                },
+                {
+                    "extraction_plan": uninspected_plan,
+                    "message": "uninspected component",
+                },
+            ]
+            for case in cases:
+                with self.subTest(message=case["message"]):
+                    kwargs = dict(common)
+                    kwargs.update({key: value for key, value in case.items() if key != "message"})
+                    with self.assertRaises(ValueError):
+                        client.exact_base_xref_extraction(**kwargs)
+
+        self.assertEqual(0, trigger_calls)
+
+    def test_exact_base_xref_rejects_live_owned_offline_evidence(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["components"][0]["observed"] = True
+        trigger_calls = 0
+
+        with TemporaryDirectory() as temporary:
+
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+            with self.assertRaises(ValueError):
+                client.exact_base_xref_inspection(
+                    r"C:\temp\inspection-host.dwg",
+                    drawing_sha256="b" * 64,
+                    source_full_path=r"C:\approved\base-vehicle.dwg",
+                    inspection=inspection,
+                )
+
+        self.assertEqual(0, trigger_calls)
+
+    def test_exact_base_xref_rejects_mutated_extraction_evidence(self) -> None:
+        fixture = _exact_base_fixture()
+        plan = copy.deepcopy(fixture["plan"])
+        plan["approval"] = {"reference": "approval-001", "status": "APPROVED"}
+        payload = _exact_base_extraction_result_payload()
+        payload["source_mutated"] = True
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                atomic_write_json(
+                    result_path(ipc_dir, str(request["request_id"])),
+                    _exact_result(request, payload, changed=True, entity_handles=["E001", "E002"]),
+                )
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            with self.assertRaises(DotNetIPCProtocolError):
+                client.exact_base_xref_extraction(
+                    r"C:\temp\candidate-input.dwg",
+                    drawing_sha256="b" * 64,
+                    source_full_path=r"C:\approved\base-vehicle.dwg",
+                    inspection=fixture["inspection"],
+                    extraction_plan=plan,
+                    candidate_output_path=r"C:\temp\candidate-output.dwg",
+                    approval=plan["approval"],
+                    request_id="xref-request-001",
+                )
 
     def test_health_allows_null_drawing_path(self) -> None:
         with TemporaryDirectory() as temporary:

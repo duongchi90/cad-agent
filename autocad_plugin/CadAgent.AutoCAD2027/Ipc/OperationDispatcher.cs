@@ -46,6 +46,8 @@ public sealed class OperationDispatcher
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
+                ExactBaseXrefOperationNames.Inspection => DispatchExactBaseXrefInspection(request, startedAt),
+                ExactBaseXrefOperationNames.Extraction => DispatchExactBaseXrefExtraction(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
             };
         }
@@ -275,6 +277,92 @@ public sealed class OperationDispatcher
             payload: NativeRenderPayload.Create(snapshot),
             startedAt);
     }
+
+    private IpcResult DispatchExactBaseXrefInspection(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(
+                request,
+                new[] { $"{ExactBaseXrefPolicy.ActiveDocumentMismatchCode}: {error}" },
+                startedAt);
+        }
+
+        var parameters = _context.ExactBaseXrefPolicy.ValidateInspectionRequest(request);
+        var snapshot = _context.DrawingGateway.ReadExactBaseXrefInspection(parameters);
+        var snapshotErrors = snapshot.Errors.ToList();
+        if (!snapshot.Success || snapshot.Evidence is null)
+        {
+            return Failure(request, snapshotErrors, startedAt);
+        }
+
+        if (snapshot.Changed
+            || snapshot.Evidence.Changed
+            || snapshot.EntityHandles.Count != 0)
+        {
+            snapshotErrors.Add(
+                "S3B_INSPECTION_MUTATION: live inspection must return changed=false and no entity handles");
+            return Failure(request, snapshotErrors, startedAt);
+        }
+
+        return CreateResult(
+            request.RequestId!,
+            ExactBaseXrefOperationNames.Inspection,
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: Array.Empty<string>(),
+            warnings: snapshot.Warnings,
+            errors: Array.Empty<string>(),
+            payload: SerializeInspectionEvidence(snapshot.Evidence),
+            startedAt);
+    }
+
+    private IpcResult DispatchExactBaseXrefExtraction(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(
+                request,
+                new[] { $"{ExactBaseXrefPolicy.ActiveDocumentMismatchCode}: {error}" },
+                startedAt);
+        }
+
+        var parameters = _context.ExactBaseXrefPolicy.ValidateExtractionRequest(request);
+        var snapshot = _context.DrawingGateway.ExtractExactBaseXref(
+            parameters,
+            request.RequestId!);
+        if (!snapshot.Success || snapshot.Evidence is null)
+        {
+            return Failure(request, snapshot.Errors, startedAt);
+        }
+
+        return CreateResult(
+            request.RequestId!,
+            ExactBaseXrefOperationNames.Extraction,
+            snapshot.DrawingFullPath ?? activePath,
+            success: true,
+            changed: true,
+            snapshot.EntityHandles,
+            snapshot.Warnings,
+            snapshot.Errors,
+            SerializeExtractionEvidence(snapshot.Evidence),
+            startedAt);
+    }
+
+    private static Dictionary<string, JsonElement> SerializeExtractionEvidence(
+        ExactBaseXrefExtractionEvidence evidence) =>
+        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            JsonSerializer.Serialize(evidence, ContractJson.Options),
+            ContractJson.Options)
+        ?? throw new InvalidOperationException("exact-base extraction evidence could not be serialized");
+
+    private static Dictionary<string, JsonElement> SerializeInspectionEvidence(
+        ExactBaseXrefLiveInspection evidence) =>
+        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            JsonSerializer.Serialize(evidence, ContractJson.Options),
+            ContractJson.Options)
+        ?? throw new InvalidOperationException("exact-base inspection evidence could not be serialized");
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
         IReadOnlyList<MechanicalComponentSnapshot> components) =>

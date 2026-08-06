@@ -529,6 +529,237 @@ public sealed class ContractTests
         Assert.False(result.Changed);
     }
 
+    [Fact]
+    public void ExactBaseXrefOperationsAreAllowlistedWithClosedSchemaBranches()
+    {
+        using var requestSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/request.schema.json")));
+        using var resultSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/result.schema.json")));
+
+        foreach (var schema in new[] { requestSchema, resultSchema })
+        {
+            var operations = schema.RootElement
+                .GetProperty("properties")
+                .GetProperty("operation")
+                .GetProperty("enum")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .ToArray();
+
+            Assert.Contains("exact_base_xref_inspection", operations);
+            Assert.Contains("exact_base_xref_extraction", operations);
+        }
+
+        Assert.Equal(
+            "operations/exact-base-xref-inspection.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "exact_base_xref_inspection")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/exact-base-xref-extraction.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "exact_base_xref_extraction")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/exact-base-xref-inspection-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "exact_base_xref_inspection")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/exact-base-xref-extraction-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "exact_base_xref_extraction")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+
+        using var inspectionSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile(
+                "contracts/autocad-ipc/operations/exact-base-xref-inspection.schema.json")));
+        var expectationProperties = inspectionSchema.RootElement
+            .GetProperty("$defs")
+            .GetProperty("inspectionExpectations")
+            .GetProperty("properties")
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToArray();
+        foreach (var forbidden in new[]
+        {
+            "observed", "status", "eligible", "changed", "dbmod_before",
+            "dbmod_after", "live_bounds", "live_hashes", "live_timestamps"
+        })
+        {
+            Assert.DoesNotContain(forbidden, expectationProperties);
+        }
+        Assert.False(
+            inspectionSchema.RootElement.GetProperty("additionalProperties").GetBoolean());
+        Assert.False(
+            inspectionSchema.RootElement
+                .GetProperty("$defs")
+                .GetProperty("inspectionExpectations")
+                .GetProperty("additionalProperties")
+                .GetBoolean());
+    }
+
+    [Fact]
+    public void ExactBaseXrefExamplesRoundTripWithClosedApprovalAndEvidenceSemantics()
+    {
+        var inspectionRequest = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile(
+                "contracts/autocad-ipc/examples/exact-base-xref-inspection.request.json")));
+        var inspectionResult = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile(
+                "contracts/autocad-ipc/examples/exact-base-xref-inspection.result.json")));
+        var extractionRequest = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile(
+                "contracts/autocad-ipc/examples/exact-base-xref-extraction.request.json")));
+        var extractionResult = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile(
+                "contracts/autocad-ipc/examples/exact-base-xref-extraction.result.json")));
+
+        Assert.Equal("exact_base_xref_inspection", inspectionRequest.Operation);
+        Assert.Null(inspectionRequest.Approval);
+        Assert.Equal("INSPECTION_HOST", inspectionRequest.Parameters!["target_role"].GetString());
+        Assert.Equal("exact_base_xref_inspection", inspectionResult.Operation);
+        Assert.False(inspectionResult.Changed);
+        Assert.Empty(inspectionResult.EntityHandles!);
+        Assert.Equal(
+            "exact-base-xref-inspection-1.0",
+            inspectionResult.Payload!["schema_version"].GetString());
+
+        Assert.Equal("exact_base_xref_extraction", extractionRequest.Operation);
+        var planApproval = extractionRequest.Parameters!["extraction_plan"]
+            .GetProperty("approval");
+        Assert.Equal("APPROVED", planApproval.GetProperty("status").GetString());
+        Assert.Equal(
+            planApproval.GetProperty("reference").GetString(),
+            extractionRequest.Approval!.Value.GetProperty("reference").GetString());
+        Assert.Equal(
+            planApproval.GetProperty("status").GetString(),
+            extractionRequest.Approval!.Value.GetProperty("status").GetString());
+        Assert.Equal(
+            "DISPOSABLE_CANDIDATE",
+            extractionRequest.Parameters["target_role"].GetString());
+
+        Assert.Equal("exact_base_xref_extraction", extractionResult.Operation);
+        Assert.True(extractionResult.Changed);
+        Assert.Equal(new[] { "E001", "E002" }, extractionResult.EntityHandles);
+        Assert.Equal(
+            "exact-base-xref-extraction-result-1.0",
+            extractionResult.Payload!["schema_version"].GetString());
+        Assert.False(extractionResult.Payload["source_mutated"].GetBoolean());
+        Assert.False(extractionResult.Payload["accepted_target_overwrite"].GetBoolean());
+        Assert.Equal(
+            2,
+            extractionResult.Payload["source_handle_to_candidate_handle"]
+                .GetArrayLength());
+    }
+
+    [Fact]
+    public void ExactBaseXrefResultSchemasCloseReadOnlyAndCandidateBranches()
+    {
+        using var resultSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/result.schema.json")));
+
+        var inspectionBranch = FindOperationBranch(
+            resultSchema.RootElement,
+            "exact_base_xref_inspection");
+        var inspectionSuccess = inspectionBranch.GetProperty("then");
+        Assert.False(
+            inspectionSuccess.GetProperty("properties")
+                .GetProperty("changed")
+                .GetProperty("const")
+                .GetBoolean());
+        Assert.Equal(
+            0,
+            inspectionSuccess.GetProperty("properties")
+                .GetProperty("entity_handles")
+                .GetProperty("maxItems")
+                .GetInt32());
+
+        var inspectionPayload = inspectionSuccess
+            .GetProperty("allOf")[0]
+            .GetProperty("then");
+        Assert.Equal(
+            "operations/exact-base-xref-inspection-result.schema.json",
+            inspectionPayload.GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+
+        var extractionBranch = FindOperationBranch(
+            resultSchema.RootElement,
+            "exact_base_xref_extraction");
+        var extractionSuccess = extractionBranch.GetProperty("then")
+            .GetProperty("allOf")[0]
+            .GetProperty("then");
+        Assert.Equal(
+            "operations/exact-base-xref-extraction-result.schema.json",
+            extractionSuccess.GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.True(
+            extractionSuccess.GetProperty("properties")
+                .GetProperty("changed")
+                .GetProperty("const")
+                .GetBoolean());
+        Assert.Equal(
+            1,
+            extractionSuccess.GetProperty("properties")
+                .GetProperty("entity_handles")
+                .GetProperty("minItems")
+                .GetInt32());
+
+        var extractionFailure = extractionBranch.GetProperty("then")
+            .GetProperty("allOf")[1]
+            .GetProperty("then");
+        Assert.False(
+            extractionFailure.GetProperty("properties")
+                .GetProperty("changed")
+                .GetProperty("const")
+                .GetBoolean());
+        Assert.Equal(
+            0,
+            extractionFailure.GetProperty("properties")
+                .GetProperty("entity_handles")
+                .GetProperty("maxItems")
+                .GetInt32());
+        Assert.Equal(
+            0,
+            extractionFailure.GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("maxProperties")
+                .GetInt32());
+    }
+
+    private static JsonElement FindOperationBranch(JsonElement schema, string operation)
+    {
+        return schema.GetProperty("allOf")
+            .EnumerateArray()
+            .Single(branch =>
+                branch.GetProperty("if")
+                    .GetProperty("properties")
+                    .GetProperty("operation")
+                    .GetProperty("const")
+                    .GetString() == operation);
+    }
+
     private static string RepositoryFile(string relativePath)
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);

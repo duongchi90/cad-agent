@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/exact-base-xref-inspection.schema.json",
+  "title": "CadAgent exact-base Xref inspection request parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "source_full_path",
+    "source_revision",
+    "inspection_expectations",
+    "target_role"
+  ],
+  "properties": {
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "source_full_path": { "$ref": "#/$defs/absoluteWindowsPath" },
+    "source_revision": { "$ref": "#/$defs/identifier" },
+    "inspection_expectations": { "$ref": "#/$defs/inspectionExpectations" },
+    "target_role": { "const": "INSPECTION_HOST" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "absoluteWindowsPath": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32767,
+      "pattern": "^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)"
+    },
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "baseSourceExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "revision", "sha256"],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/identifier" },
+        "revision": { "$ref": "#/$defs/identifier" },
+        "sha256": { "$ref": "#/$defs/lowercaseSha256" }
+      }
+    },
+    "identityExpectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vehicle", "model"],
+      "properties": {
+        "vehicle": { "$ref": "#/$defs/identifier" },
+        "model": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "criticalDimensionExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control", "target", "tolerance", "unit"],
+      "properties": {
+        "control": { "$ref": "#/$defs/identifier" },
+        "target": { "type": "number" },
+        "tolerance": { "type": "number", "minimum": 0 },
+        "unit": { "enum": ["in", "mm"] }
+      }
+    },
+    "componentExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component_type",
+        "logical_component_id",
+        "provenance",
+        "source_block",
+        "source_handle",
+        "source_layer"
+      ],
+      "properties": {
+        "component_type": { "const": "BLOCK" },
+        "logical_component_id": { "$ref": "#/$defs/identifier" },
+        "provenance": { "const": "REUSED_FROM_BASE_CAD" },
+        "source_block": { "$ref": "#/$defs/identifier" },
+        "source_handle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[0-9A-Fa-f]+$"
+        },
+        "source_layer": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "inspectionExpectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "identity",
+        "critical_dimensions",
+        "xref",
+        "components"
+      ],
+      "properties": {
+        "source": { "$ref": "#/$defs/baseSourceExpectation" },
+        "identity": { "$ref": "#/$defs/identityExpectations" },
+        "critical_dimensions": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/criticalDimensionExpectation" }
+        },
+        "xref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/componentExpectation" }
+        }
+      }
+    }
+  }
+}
