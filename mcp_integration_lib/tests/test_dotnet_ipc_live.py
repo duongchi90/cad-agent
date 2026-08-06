@@ -940,8 +940,8 @@ class ExactBaseXrefS3BLiveTests(unittest.TestCase):
             self.skipTest("S3B plan source hash is not bound to server configuration")
         if plan_target_hash != candidate_hash_before:
             self.skipTest("S3B plan target hash is not bound to the disposable candidate")
-        if inspection_target_hash != candidate_hash_before:
-            self.skipTest("S3B inspection target hash is not bound to the disposable candidate")
+        if inspection_target_hash != accepted_hash_before:
+            self.skipTest("S3B inspection target hash is not bound to the accepted DWG")
 
         request_id = f"s3b-live-{time.time_ns()}"
         candidate_output = root / f"cadagent-s3b-output-{request_id}.dwg"
@@ -958,17 +958,60 @@ class ExactBaseXrefS3BLiveTests(unittest.TestCase):
             trigger=make_windows_dotnet_dispatch_trigger(hwnd),
             timeout_s=45.0,
         )
-        expected_full_path = normalize_windows_absolute_path(str(candidate))
+        accepted_full_path = normalize_windows_absolute_path(str(accepted))
+        candidate_full_path = normalize_windows_absolute_path(str(candidate))
         candidate_output_hash: str | None = None
+        accepted_open = False
 
         try:
+            legacy_client.drawing_open(str(accepted))
+            accepted_open = True
+            accepted_state_before = legacy_client.drawing_get_variables(
+                ["DBMOD", "CTAB", "CVPORT", "UCSNAME"]
+            )
+            inspection_result = dotnet_client.exact_base_xref_inspection(
+                accepted_full_path,
+                drawing_sha256=accepted_hash_before,
+                source_full_path=str(source),
+                inspection=inspection,
+                source_revision=os.environ["CAD_AGENT_S3B_EXACT_BASE_SOURCE_REVISION"],
+                request_id=f"{request_id}-inspection",
+            )
+            inspection_payload = inspection_result["payload"]
+            self.assertTrue(inspection_result["success"])
+            self.assertFalse(inspection_result["changed"])
+            self.assertEqual([], inspection_result["entity_handles"])
+            self.assertEqual(accepted_full_path, inspection_result["drawing_full_path"])
+            self.assertEqual("exact-base-xref-inspection-1.0", inspection_payload["schema_version"])
+            self.assertEqual(inspection_result["request_id"], inspection_payload["request_id"])
+            self.assertEqual(inspection["run_id"], inspection_payload["run_id"])
+            self.assertEqual(accepted_hash_before, inspection_payload["target_drawing_sha256"])
+            self.assertEqual(configured_source_hash, inspection_payload["base_source"]["sha256"])
+            self.assertEqual(accepted_hash_before, inspection_payload["target_drawing_sha256"])
+            self.assertEqual(inspection_payload["base_source"]["sha256"], _sha256(source))
+            self.assertFalse(inspection_payload["changed"])
+            self.assertEqual(inspection_payload["dbmod_before"], inspection_payload["dbmod_after"])
+            self.assertTrue(inspection_payload["eligible"])
+            self.assertTrue(inspection_payload["xref"]["read_only"])
+            self.assertEqual("INSPECTED", inspection_payload["xref"]["status"])
+            self.assertTrue(all(item["status"] == "PASS" for item in inspection_payload["identity_observations"]))
+            self.assertTrue(all(item["status"] == "PASS" for item in inspection_payload["critical_dimensions"]))
+            self.assertTrue(all(item["component_type"] == "BLOCK" for item in inspection_payload["components"]))
+            self.assertTrue(all(item["provenance"] == "REUSED_FROM_BASE_CAD" for item in inspection_payload["components"]))
+            accepted_state_after = legacy_client.drawing_get_variables(
+                ["DBMOD", "CTAB", "CVPORT", "UCSNAME"]
+            )
+            self.assertEqual(accepted_state_before, accepted_state_after)
+            self.assertEqual(source_hash_before, _sha256(source))
+            self.assertEqual(accepted_hash_before, _sha256(accepted))
+
             with _disposable_drawing_cleanup(dotnet_client, str(candidate)) as mark_closed:
                 legacy_client.drawing_open(str(candidate))
                 state_before = legacy_client.drawing_get_variables(
                     ["DBMOD", "CTAB", "CVPORT", "UCSNAME"]
                 )
                 result = dotnet_client.exact_base_xref_extraction(
-                    expected_full_path,
+                    candidate_full_path,
                     drawing_sha256=candidate_hash_before,
                     source_full_path=str(source),
                     inspection=inspection,
@@ -984,7 +1027,7 @@ class ExactBaseXrefS3BLiveTests(unittest.TestCase):
                 payload = result["payload"]
                 self.assertTrue(result["success"])
                 self.assertTrue(result["changed"])
-                self.assertEqual(expected_full_path, result["drawing_full_path"])
+                self.assertEqual(candidate_full_path, result["drawing_full_path"])
                 self.assertEqual(sorted(result["entity_handles"]), result["entity_handles"])
                 self.assertEqual(
                     len(result["entity_handles"]),
@@ -995,7 +1038,7 @@ class ExactBaseXrefS3BLiveTests(unittest.TestCase):
                 self.assertTrue(payload["save_performed"])
                 self.assertFalse(payload["source_mutated"])
                 self.assertFalse(payload["source_saved"])
-                self.assertEqual(expected_full_path, payload["candidate_input_path"])
+                self.assertEqual(candidate_full_path, payload["candidate_input_path"])
                 self.assertEqual(candidate_hash_before, payload["candidate_input_sha256"])
                 self.assertEqual(configured_source_hash, payload["source_sha256_before"])
                 self.assertEqual(configured_source_hash, payload["source_sha256_after"])
@@ -1049,7 +1092,7 @@ class ExactBaseXrefS3BLiveTests(unittest.TestCase):
                 self.assertEqual(candidate_output_hash, _sha256(candidate_output))
 
                 close = dotnet_client.close_disposable(
-                    expected_full_path,
+                    candidate_full_path,
                     disposable=True,
                     save_changes=False,
                     request_id=f"{request_id}-close",
@@ -1059,6 +1102,8 @@ class ExactBaseXrefS3BLiveTests(unittest.TestCase):
                 self.assertTrue(close["payload"]["closed_without_saving"])
                 mark_closed()
         finally:
+            if accepted_open:
+                legacy_client.drawing_close(save_changes=False)
             if candidate_output_hash is not None and candidate_output.is_file():
                 self.assertEqual(candidate_output_hash, _sha256(candidate_output))
                 candidate_output.unlink()

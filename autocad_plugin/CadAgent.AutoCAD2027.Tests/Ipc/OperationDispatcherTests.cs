@@ -13,25 +13,64 @@ namespace CadAgent.AutoCAD2027.Tests.Ipc;
 public sealed class OperationDispatcherTests
 {
     [Fact]
-    public void ExactBaseXrefInspectionRoutesToFailClosedBoundaryWithoutGatewayReads()
+    public void ExactBaseXrefInspectionRoutesFreshReadOnlySnapshotToResult()
     {
+        var fixture = InspectionDispatcherFixture();
         var gateway = new StubDrawingGateway
         {
-            ActiveDocumentFullPath = @"C:\drawings\inspection-host.dwg"
+            ActiveDocumentFullPath = fixture.TargetPath,
+            ExactBaseXrefInspection = InspectionSnapshot(fixture.TargetPath)
         };
-        var dispatcher = CreateDispatcher(gateway);
+        var dispatcher = CreateDispatcher(gateway, exactBaseXrefPolicy: fixture.Policy);
 
-        var result = dispatcher.Dispatch(ExactBaseXrefInspectionRequest());
+        try
+        {
+            var result = dispatcher.Dispatch(fixture.Request);
 
-        Assert.False(result.Success);
-        Assert.Equal("exact_base_xref_inspection", result.Operation);
-        Assert.False(result.Changed);
-        Assert.Empty(result.EntityHandles!);
-        Assert.Contains(result.Errors!, error => error.Contains("S3B_", StringComparison.Ordinal));
-        Assert.Equal(0, gateway.ReadEntitiesCallCount);
-        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
-        Assert.Equal(0, gateway.ReadVisualEvidenceCallCount);
-        Assert.Equal(0, gateway.ReadNativeRenderEvidenceCallCount);
+            Assert.True(result.Success);
+            Assert.Equal("exact_base_xref_inspection", result.Operation);
+            Assert.False(result.Changed);
+            Assert.Empty(result.EntityHandles!);
+            Assert.Equal(fixture.TargetPath, result.DrawingFullPath);
+            Assert.Empty(result.Errors!);
+            Assert.Equal(1, gateway.ReadExactBaseXrefInspectionCallCount);
+            Assert.Equal("exact-base-xref-inspection-1.0", result.Payload!["schema_version"].GetString());
+            Assert.False(result.Payload["changed"].GetBoolean());
+            Assert.True(result.Payload["eligible"].GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(fixture.Root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExactBaseXrefInspectionGatewayFailureReturnsClosedFailure()
+    {
+        var fixture = InspectionDispatcherFixture();
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = fixture.TargetPath,
+            ExactBaseXrefInspection = ExactBaseXrefInspectionSnapshot.Unavailable(
+                "S3B_LIVE_UNAVAILABLE")
+        };
+
+        try
+        {
+            var result = CreateDispatcher(gateway, exactBaseXrefPolicy: fixture.Policy)
+                .Dispatch(fixture.Request);
+
+            Assert.False(result.Success);
+            Assert.False(result.Changed);
+            Assert.Empty(result.EntityHandles!);
+            Assert.Empty(result.Payload!);
+            Assert.Contains("S3B_LIVE_UNAVAILABLE", result.Errors!);
+            Assert.Equal(1, gateway.ReadExactBaseXrefInspectionCallCount);
+        }
+        finally
+        {
+            Directory.Delete(fixture.Root, recursive: true);
+        }
     }
 
     [Fact]
@@ -737,6 +776,98 @@ public sealed class OperationDispatcherTests
             mechanicalWarnings: mechanicalWarnings,
             exactBaseXrefPolicy: exactBaseXrefPolicy));
 
+    private static (IpcRequest Request, ExactBaseXrefPolicy Policy, string Root, string TargetPath)
+        InspectionDispatcherFixture()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "cadagent-s3b-inspection-dispatcher-" + Guid.NewGuid().ToString("N"));
+        var sourcePath = Path.Combine(root, "source", "base-vehicle.dwg");
+        var acceptedPath = Path.Combine(root, "accepted", "accepted.dwg");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(acceptedPath)!);
+        File.WriteAllText(sourcePath, "source");
+        File.WriteAllText(acceptedPath, "accepted");
+
+        return (
+            ExactBaseXrefInspectionRequest(acceptedPath, sourcePath),
+            new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+                root,
+                acceptedPath,
+                new string('b', 64),
+                sourcePath,
+                new string('a', 64),
+                "rev-2026-08-05-01")),
+            root,
+            acceptedPath);
+    }
+
+    private static ExactBaseXrefInspectionSnapshot InspectionSnapshot(string drawingFullPath) => new()
+    {
+        Success = true,
+        DrawingFullPath = drawingFullPath,
+        Changed = false,
+        EntityHandles = Array.Empty<string>(),
+        Evidence = new ExactBaseXrefLiveInspection
+        {
+            BaseSource = new ExactBaseXrefPlanSource
+            {
+                RelativePath = "approved/base-vehicle.dwg",
+                Revision = "rev-2026-08-05-01",
+                Sha256 = new string('a', 64),
+                SourceId = "base-vehicle-001"
+            },
+            SchemaVersion = "exact-base-xref-inspection-1.0",
+            CaptureTimestamp = new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
+            Changed = false,
+            DbmodBefore = 0,
+            DbmodAfter = 0,
+            Eligible = true,
+            Components = new List<ExactBaseXrefLiveComponent>
+            {
+                new()
+                {
+                    ComponentType = "BLOCK",
+                    LogicalComponentId = "chassis-main",
+                    Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
+                    SourceBlock = "CHASSIS_MAIN",
+                    SourceHandle = "A1B2",
+                    SourceLayer = "BODY",
+                    Bounding = new ExactBaseXrefBounding
+                    {
+                        Min = new ExactBaseXrefPoint { X = 0, Y = 0, Z = 0 },
+                        Max = new ExactBaseXrefPoint { X = 1, Y = 1, Z = 1 }
+                    }
+                }
+            },
+            Conflicts = new List<string>(),
+            CriticalDimensions = new List<ExactBaseXrefLiveDimension>
+            {
+                new() { Control = "wheelbase", Observed = 2750, Status = "PASS", Target = 2750, Tolerance = 1, Unit = "mm" },
+                new() { Control = "track", Observed = 1600, Status = "PASS", Target = 1600, Tolerance = 1, Unit = "mm" },
+                new() { Control = "chassis", Observed = 4200, Status = "PASS", Target = 4200, Tolerance = 2, Unit = "mm" },
+                new() { Control = "cabin", Observed = 1850, Status = "PASS", Target = 1850, Tolerance = 2, Unit = "mm" },
+                new() { Control = "axle", Observed = 1200, Status = "PASS", Target = 1200, Tolerance = 1, Unit = "mm" }
+            },
+            IdentityObservations = new List<ExactBaseXrefIdentityObservation>
+            {
+                new() { Field = "vehicle", Observed = "vehicle-001", Status = "PASS", Target = "vehicle-001" },
+                new() { Field = "model", Observed = "model-x", Status = "PASS", Target = "model-x" }
+            },
+            InspectionId = "inspection-001",
+            RequestId = "xref-inspection-request-001",
+            RunId = "run-001",
+            TargetDrawingSha256 = new string('b', 64),
+            Warnings = new List<string>(),
+            Xref = new ExactBaseXrefLiveXref
+            {
+                Name = "BASE_XREF",
+                ReadOnly = true,
+                Status = "INSPECTED"
+            }
+        },
+        Warnings = Array.Empty<string>(),
+        Errors = Array.Empty<string>()
+    };
+
     private static (IpcRequest Request, ExactBaseXrefPolicy Policy, string Root, string InputPath, string OutputPath)
         ExtractionDispatcherFixture()
     {
@@ -853,17 +984,20 @@ public sealed class OperationDispatcherTests
             outputPath);
     }
 
-    private static IpcRequest ExactBaseXrefInspectionRequest() => new()
+    private static IpcRequest ExactBaseXrefInspectionRequest(
+        string? drawingFullPath = null,
+        string? sourceFullPath = null) => new()
     {
         RequestId = "xref-inspection-request-001",
         SchemaVersion = ContractConstants.SchemaVersion,
         Operation = ExactBaseXrefOperationNames.Inspection,
-        DrawingFullPath = @"C:\drawings\inspection-host.dwg",
+        DrawingFullPath = drawingFullPath ?? @"C:\drawings\inspection-host.dwg",
         DrawingSha256 = new string('b', 64),
         Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
         {
             ["run_id"] = JsonSerializer.SerializeToElement("run-001"),
-            ["source_full_path"] = JsonSerializer.SerializeToElement(@"C:\approved\base-vehicle.dwg"),
+            ["source_full_path"] = JsonSerializer.SerializeToElement(
+                sourceFullPath ?? @"C:\approved\base-vehicle.dwg"),
             ["source_revision"] = JsonSerializer.SerializeToElement("rev-2026-08-05-01"),
             ["inspection_expectations"] = JsonSerializer.SerializeToElement(new
             {
@@ -1076,6 +1210,8 @@ public sealed class OperationDispatcherTests
 
         public NativeRenderEvidenceSnapshot? NativeRenderEvidence { get; init; }
 
+        public ExactBaseXrefInspectionSnapshot? ExactBaseXrefInspection { get; init; }
+
         public ExactBaseXrefExtractionSnapshot? ExactBaseXrefExtraction { get; init; }
 
         public Exception? NativeRenderException { get; init; }
@@ -1087,6 +1223,8 @@ public sealed class OperationDispatcherTests
         public int ReadVisualEvidenceCallCount { get; private set; }
 
         public int ReadNativeRenderEvidenceCallCount { get; private set; }
+
+        public int ReadExactBaseXrefInspectionCallCount { get; private set; }
 
         public int ExtractExactBaseXrefCallCount { get; private set; }
 
@@ -1123,6 +1261,15 @@ public sealed class OperationDispatcherTests
             }
 
             return NativeRenderEvidence ?? throw new NotSupportedException();
+        }
+
+        public ExactBaseXrefInspectionSnapshot ReadExactBaseXrefInspection(
+            ExactBaseXrefInspectionParameters request)
+        {
+            ReadExactBaseXrefInspectionCallCount++;
+            return ExactBaseXrefInspection
+                ?? ExactBaseXrefInspectionSnapshot.Unavailable(
+                    "No inspection fixture was configured.");
         }
 
         public ExactBaseXrefExtractionSnapshot ExtractExactBaseXref(

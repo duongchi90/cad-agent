@@ -1,9 +1,10 @@
-# S3B Exact-Base Xref Gated Live Harness
+# S3B Exact-Base Xref Live Inspection and Gated Extraction
 
-Status: the opt-in S3B live acceptance harness is implemented. AutoCAD
-Mechanical live acceptance is **NOT RUN** on this head because no qualifying
-session, File IPC trigger, approved fixture, and server-owned S3B configuration
-were available. The implementation does not claim S3B live acceptance.
+Status: the standalone inspection route and opt-in S3B live acceptance harness
+are implemented. AutoCAD Mechanical live acceptance is **NOT RUN** on this
+head because no qualifying session, File IPC trigger, approved fixture, and
+server-owned S3B configuration were available. The implementation does not
+claim S3B live acceptance.
 
 ## Identity and bounded scope
 
@@ -12,15 +13,21 @@ were available. The implementation does not claim S3B live acceptance.
 - Exact implementation base: `1ba05ea6d768351fa7106109bcee244e60463527`.
 - Implementation branch: `task/s3b-exact-base-xref`.
 - Checkpoint PR: #65, kept as draft for final PO review.
-- Task 6 completion head is reported in the final handoff; this record is part
-  of the bounded commit and therefore does not embed a self-referential SHA.
-- Changed paths are exactly:
+- Task 6 and the bounded inspection-route follow-up heads are reported in the
+  final handoff; this record does not embed a self-referential SHA.
+- Follow-up changed paths are exactly:
+  - `autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs`
+  - `autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/OperationDispatcherTests.cs`
   - `mcp_integration_lib/tests/test_dotnet_ipc_live.py`
-  - `docs/superpowers/implementation-records/2026-08-06-exact-base-xref-s3b-live.md`
+  - `docs/superpowers/implementation-records/2026-08-06-exact-base-xref-s3b.md`
 
-The live test reuses the Task 5 extraction path. It does not add a second
-transport, dispatcher, AutoCAD reader, source-fusion runtime, registry,
-revision store, repair, verdict, or publication path.
+The standalone inspection operation now calls the existing read-only drawing
+gateway and serializes its fresh server-owned evidence. The live test calls
+that inspection against the accepted DWG before opening the disposable
+candidate, then calls the existing Task 5 extraction path. Extraction still
+performs its own fresh preflight immediately before mutation. No second
+transport, AutoCAD reader, source-fusion runtime, registry, revision store,
+repair, verdict, or publication path is added.
 
 ## Reuse Declaration
 
@@ -35,7 +42,8 @@ result validation, `FileIPCLiveMCPClient`, `make_windows_dotnet_dispatch_trigger
 `make_windows_dispatch_trigger`, `make_windows_lisp_trigger`, and the existing
 `autocad_mechanical` marker.
 
-Adapter required: one opt-in pytest/unittest harness that opens an operator-
+Adapter required: one opt-in pytest/unittest harness that dispatches the
+existing S3B inspection request against the accepted DWG, opens an operator-
 provided disposable candidate, dispatches the existing S3B extraction request,
 checks fresh live-preflight evidence and candidate provenance, closes the
 candidate without saving, and removes only the uniquely named output after a
@@ -78,13 +86,15 @@ The opt-in test requires all of the following process variables:
 - server-owned `CAD_AGENT_S3B_DISPOSABLE_ROOT`, accepted-DWG path/hash, and
   exact-base source path/hash/revision variables.
 
-The fixture target hash must equal the candidate hash, and the fixture source
-hash must equal the configured source hash. The active candidate is opened
-through the existing File IPC path. The test asserts fresh `live_preflight`
-eligibility, stable DBMOD, read-only inspected Xref state, sorted native
-candidate handles, complete source-handle mapping, source/layer/block/
-provenance/revision/hash evidence, and unchanged source, accepted DWG,
-candidate-input bytes, layout, view-port, UCS, and DBMOD state.
+The fixture inspection target hash must equal the accepted-DWG hash, the plan
+target hash must equal the candidate hash, and both source bindings must equal
+the configured source hash. The accepted DWG and candidate are opened through
+the existing File IPC path. The test asserts fresh server-built inspection
+evidence, `changed=false`, empty inspection handles, read-only inspected Xref
+state, stable accepted-DWG DBMOD, fresh `live_preflight` eligibility, sorted
+native candidate handles, complete source-handle mapping,
+source/layer/block/provenance/revision/hash evidence, and unchanged source,
+accepted DWG, candidate-input bytes, layout, view-port, UCS, and DBMOD state.
 
 The output is a unique file below the server-owned disposable root. Cleanup
 deletes it only after the returned output hash is rechecked. The active input
@@ -104,6 +114,20 @@ Focused marker command:
 With the required live prerequisites absent, the observed result was **6
 skipped, 6 deselected**, exit `0`. This is a truthful unavailable-state result
 and not a live acceptance.
+
+Focused .NET command:
+
+```powershell
+dotnet test autocad_plugin/CadAgent.AutoCAD2027.sln `
+  --configuration Release --no-restore `
+  --filter "FullyQualifiedName~OperationDispatcherTests|FullyQualifiedName~ExactBaseXrefReaderTests"
+```
+
+Observed result: **42 passed, 0 failed**, including the standalone inspection
+gateway route and closed-failure tests.
+
+Full .NET solution result before the bounded follow-up commit: **194 passed,
+0 failed**.
 
 Ruff command:
 
