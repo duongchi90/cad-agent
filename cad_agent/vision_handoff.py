@@ -19,6 +19,7 @@ from .visual_evidence import _path_contains_windows_reparse_point
 
 HANDOFF_SCHEMA_VERSION = "vision-handoff-1.0"
 DEFAULT_VALIDATOR_VERSION = "vision-handoff-validator-1.0"
+SERVER_OWNED_ADAPTER_VERSION = "adapter-1.0"
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _FORBIDDEN_AUTHORITY_FIELDS = frozenset(
@@ -438,6 +439,19 @@ class ServerOwnedAuthorityContext:
 
 
 @dataclass(frozen=True)
+class ServerOwnedWorkerBindingContext:
+    """Immutable server-owned local runtime and effective sandbox identity."""
+
+    adapter_version: str
+    observed_thread_id: str
+    sandbox_policy: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            object.__setattr__(self, field_name, _freeze(getattr(self, field_name)))
+
+
+@dataclass(frozen=True)
 class ValidatedVisionHandoff:
     """Fail-closed, immutable handoff and its run-scoped schema snapshot."""
 
@@ -465,6 +479,31 @@ class ValidatedVisionHandoff:
         )
 
 
+@dataclass(frozen=True)
+class BoundWorkerThread:
+    """Immutable local binding between one provider thread and one handoff."""
+
+    handoff_id: str
+    handoff_hash: str
+    run_id: str
+    thread_id: str
+    adapter_version: str
+    model_config_identity: Mapping[str, object]
+    instruction_source_identity: Sequence[Mapping[str, object]]
+    sandbox_policy: Mapping[str, object]
+    output_schema_sha256: str
+    output_validator_version: str
+    approval_reference: str
+    approval_authority: str
+    handoff_expires_at: str
+    policy_identity: str
+    authority_context_identity: str
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            object.__setattr__(self, field_name, _freeze(getattr(self, field_name)))
+
+
 def _authority_context_payload(context: ServerOwnedAuthorityContext) -> dict[str, object]:
     return {
         "handoff_id": context.handoff_id,
@@ -489,6 +528,48 @@ def _authority_context_payload(context: ServerOwnedAuthorityContext) -> dict[str
         "provider_policy": _thaw(context.provider_policy),
         "consumed_handoff_ids": _thaw(context.consumed_handoff_ids),
     }
+
+
+def _worker_policy_identity(
+    authority_context: ServerOwnedAuthorityContext,
+    sandbox_policy: Mapping[str, object],
+) -> str:
+    expected = _authority_context_payload(authority_context)
+    policy_payload = {
+        "scope": expected["scope"],
+        "protected_constraints": expected["protected_constraints"],
+        "workspace": expected["workspace"],
+        "sandbox_policy": _thaw(sandbox_policy),
+        "allowed_operations": expected["allowed_operations"],
+        "forbidden_mutations": expected["forbidden_mutations"],
+        "required_verification_gates": expected["required_verification_gates"],
+        "provider_policy": expected["provider_policy"],
+        "instruction_sources": expected["instruction_sources"],
+    }
+    return _canonical_sha256(policy_payload)
+
+
+def _worker_authority_context_identity(
+    authority_context: ServerOwnedAuthorityContext,
+    policy_identity: str,
+) -> str:
+    expected = _authority_context_payload(authority_context)
+    authority_payload = {
+        "handoff_id": expected["handoff_id"],
+        "program_id": expected["program_id"],
+        "run_id": expected["run_id"],
+        "request_id": expected["request_id"],
+        "created_at": expected["created_at"],
+        "expires_at": expected["expires_at"],
+        "single_use": expected["single_use"],
+        "consumed": expected["consumed"],
+        "source": expected["source"],
+        "accepted_base": expected["accepted_base"],
+        "approval_reference": expected["approval_reference"],
+        "approval_authority": expected["approval_authority"],
+        "policy_identity": policy_identity,
+    }
+    return _canonical_sha256(authority_payload)
 
 
 def _validate_authority_context(
@@ -627,6 +708,278 @@ def _validate_authority_context(
     return frozenset(consumed_handoff_ids)
 
 
+def _worker_handoff_payload(
+    handoff: ValidatedVisionHandoff,
+    *,
+    authority_context: ServerOwnedAuthorityContext,
+    now: datetime | None,
+) -> tuple[Mapping[str, object], datetime]:
+    if not isinstance(handoff, ValidatedVisionHandoff):
+        _fail("worker thread binding requires a ValidatedVisionHandoff")
+    current = _normalize_now(now)
+    handoff.schema_snapshot.assert_unchanged()
+    payload = handoff.payload
+    if not isinstance(payload, Mapping):
+        _fail("worker thread binding handoff payload must be immutable mapping")
+    canonical_without_hash = _thaw(payload)
+    supplied_hash = canonical_without_hash.pop("handoff_sha256", None)
+    if not isinstance(supplied_hash, str):
+        _fail("worker thread handoff hash is missing")
+    _sha256(supplied_hash, path="handoff_sha256")
+    canonical_bytes = _canonical_bytes(canonical_without_hash)
+    expected_hash = hashlib.sha256(canonical_bytes).hexdigest()
+    if supplied_hash != expected_hash or handoff.handoff_sha256 != supplied_hash:
+        _fail("worker thread handoff binding is invalid")
+    if handoff.canonical_bytes != canonical_bytes:
+        _fail("worker thread canonical handoff bytes do not match")
+
+    consumed_handoff_ids = _validate_authority_context(payload, authority_context)
+    validated_bytes = _validate_payload(
+        payload,
+        now=current,
+        consumed_handoff_ids=consumed_handoff_ids,
+    )
+    if validated_bytes != canonical_bytes or validated_bytes != handoff.canonical_bytes:
+        _fail("worker thread handoff validation changed canonical bytes")
+    return payload, current
+
+
+def _worker_model_config_identity(
+    payload: Mapping[str, object]
+) -> dict[str, object]:
+    policy = _keys(
+        payload["provider_policy"],
+        required={"model_identity", "config_sha256"},
+        optional={"approval_mode", "experimental_api"},
+        path="provider_policy",
+    )
+    _identifier(policy["model_identity"], path="provider_policy.model_identity")
+    _sha256(policy["config_sha256"], path="provider_policy.config_sha256")
+    return {
+        "model_identity": policy["model_identity"],
+        "config_sha256": policy["config_sha256"],
+    }
+
+
+def _worker_instruction_source_identity(
+    payload: Mapping[str, object]
+) -> list[dict[str, Any]]:
+    observed = _validate_list_object(
+        payload["instruction_sources"],
+        fields={"source_id", "role", "sha256"},
+        path="worker_thread.instruction_source_identity",
+    )
+    for index, source in enumerate(observed):
+        _identifier(source["source_id"], path=f"worker_thread.instruction_source_identity[{index}].source_id")
+        _identifier(source["role"], path=f"worker_thread.instruction_source_identity[{index}].role")
+        _sha256(source["sha256"], path=f"worker_thread.instruction_source_identity[{index}].sha256")
+    if _canonical_bytes(observed) != _canonical_bytes(payload["instruction_sources"]):
+        _fail("worker thread instruction source identity mismatch")
+    return observed
+
+
+def _worker_sandbox_policy(payload: Mapping[str, object], value: object) -> dict[str, Any]:
+    if not isinstance(value, ServerOwnedWorkerBindingContext):
+        _fail("worker thread requires a server-owned worker binding context")
+    if value.adapter_version != SERVER_OWNED_ADAPTER_VERSION:
+        _fail("worker thread adapter version is not server-owned")
+    observed = _keys(
+        value.sandbox_policy,
+        required={"roots", "write_policy", "cwd"},
+        path="worker_thread.sandbox_policy",
+    )
+    observed_roots = _non_empty_string_list(
+        observed["roots"], path="worker_thread.sandbox_policy.roots", minimum=1
+    )
+    _string(observed["cwd"], path="worker_thread.sandbox_policy.cwd")
+    if observed["write_policy"] != "DISPOSABLE_ONLY":
+        _fail("worker thread sandbox write policy must be DISPOSABLE_ONLY")
+    workspace = _keys(payload["workspace"], required={"roots", "write_policy"}, path="workspace")
+    expected_roots = _non_empty_string_list(workspace["roots"], path="workspace.roots", minimum=1)
+    expected = {
+        "roots": expected_roots,
+        "write_policy": workspace["write_policy"],
+        "cwd": expected_roots[0],
+    }
+    normalized = {
+        "roots": observed_roots,
+        "write_policy": observed["write_policy"],
+        "cwd": observed["cwd"],
+    }
+    if _canonical_bytes(normalized) != _canonical_bytes(expected):
+        _fail("worker thread sandbox policy or controlled cwd mismatch")
+    return normalized
+
+
+def _server_observed_thread_id(value: object) -> str:
+    if not isinstance(value, ServerOwnedWorkerBindingContext):
+        _fail("worker thread requires a server-owned worker binding context")
+    return _identifier(
+        value.observed_thread_id,
+        path="worker_thread.server_observed_thread_id",
+    )
+
+
+def _validate_worker_context(
+    value: ServerOwnedWorkerBindingContext, *, thread_id: str
+) -> None:
+    observed_thread_id = _server_observed_thread_id(value)
+    if observed_thread_id != thread_id:
+        _fail(
+            "worker_thread.thread_id does not match the server-observed provider thread identity"
+        )
+
+
+def _make_bound_worker_thread(
+    handoff: ValidatedVisionHandoff,
+    *,
+    thread_id: str,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+    now: datetime | None,
+) -> BoundWorkerThread:
+    payload, _ = _worker_handoff_payload(
+        handoff,
+        authority_context=authority_context,
+        now=now,
+    )
+    _identifier(thread_id, path="worker_thread.thread_id")
+    _validate_worker_context(worker_context, thread_id=thread_id)
+    model_config = _worker_model_config_identity(payload)
+    instruction_sources = _worker_instruction_source_identity(payload)
+    sandbox = _worker_sandbox_policy(payload, worker_context)
+    policy_identity = _worker_policy_identity(authority_context, sandbox)
+    authority_context_identity = _worker_authority_context_identity(
+        authority_context,
+        policy_identity,
+    )
+    return BoundWorkerThread(
+        handoff_id=payload["handoff_id"],
+        handoff_hash=handoff.handoff_sha256,
+        run_id=payload["run_id"],
+        thread_id=thread_id,
+        adapter_version=worker_context.adapter_version,
+        model_config_identity=model_config,
+        instruction_source_identity=instruction_sources,
+        sandbox_policy=sandbox,
+        output_schema_sha256=payload["output_schema_sha256"],
+        output_validator_version=payload["output_validator_version"],
+        approval_reference=payload["approval_reference"],
+        approval_authority=payload["approval_authority"],
+        handoff_expires_at=payload["expires_at"],
+        policy_identity=policy_identity,
+        authority_context_identity=authority_context_identity,
+    )
+
+
+def _validate_bound_worker_thread(binding: object, *, now: datetime | None) -> BoundWorkerThread:
+    if not isinstance(binding, BoundWorkerThread):
+        _fail("resume/fork requires a complete BoundWorkerThread")
+    _identifier(binding.handoff_id, path="bound_worker_thread.handoff_id")
+    _sha256(binding.handoff_hash, path="bound_worker_thread.handoff_hash")
+    _identifier(binding.run_id, path="bound_worker_thread.run_id")
+    _identifier(binding.thread_id, path="bound_worker_thread.thread_id")
+    _identifier(binding.adapter_version, path="bound_worker_thread.adapter_version")
+    _identifier(binding.output_validator_version, path="bound_worker_thread.output_validator_version")
+    _sha256(binding.output_schema_sha256, path="bound_worker_thread.output_schema_sha256")
+    _identifier(binding.approval_reference, path="bound_worker_thread.approval_reference")
+    _sha256(binding.policy_identity, path="bound_worker_thread.policy_identity")
+    _sha256(
+        binding.authority_context_identity,
+        path="bound_worker_thread.authority_context_identity",
+    )
+    if binding.approval_authority not in {"OWNER", "MASTER_PO"}:
+        _fail("bound worker thread approval authority is invalid")
+    if _parse_time(binding.handoff_expires_at, path="bound_worker_thread.handoff_expires_at") <= _normalize_now(now):
+        _fail("bound worker thread history is stale or expired")
+    return binding
+
+
+def bind_worker_thread(
+    handoff: ValidatedVisionHandoff,
+    *,
+    thread_id: str,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+    now: datetime | None = None,
+) -> BoundWorkerThread:
+    """Bind one observed provider thread to a validated handoff only."""
+
+    return _make_bound_worker_thread(
+        handoff,
+        thread_id=thread_id,
+        authority_context=authority_context,
+        worker_context=worker_context,
+        now=now,
+    )
+
+
+def resume_worker_thread(
+    binding: BoundWorkerThread,
+    handoff: ValidatedVisionHandoff,
+    *,
+    thread_id: str,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+    now: datetime | None = None,
+) -> BoundWorkerThread:
+    """Revalidate a complete prior binding without accepting a bare thread ID."""
+
+    _validate_bound_worker_thread(binding, now=now)
+    candidate = _make_bound_worker_thread(
+        handoff,
+        thread_id=thread_id,
+        authority_context=authority_context,
+        worker_context=worker_context,
+        now=now,
+    )
+    if candidate != binding:
+        _fail("worker thread resume binding mismatch")
+    return binding
+
+
+def fork_worker_thread(
+    source_binding: BoundWorkerThread,
+    handoff: ValidatedVisionHandoff,
+    *,
+    source_handoff: ValidatedVisionHandoff,
+    source_authority_context: ServerOwnedAuthorityContext,
+    source_worker_context: ServerOwnedWorkerBindingContext,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+    thread_id: str,
+    now: datetime | None = None,
+) -> BoundWorkerThread:
+    """Bind a fork only to a fresh handoff and fresh approval identity."""
+
+    source = _validate_bound_worker_thread(source_binding, now=now)
+    source_candidate = _make_bound_worker_thread(
+        source_handoff,
+        thread_id=_server_observed_thread_id(source_worker_context),
+        authority_context=source_authority_context,
+        worker_context=source_worker_context,
+        now=now,
+    )
+    if source_candidate != source:
+        _fail("worker thread fork source binding is not server-proven")
+    target = _make_bound_worker_thread(
+        handoff,
+        thread_id=thread_id,
+        authority_context=authority_context,
+        worker_context=worker_context,
+        now=now,
+    )
+    if target.thread_id == source.thread_id:
+        _fail("worker thread fork requires a fresh provider thread ID")
+    if target.handoff_id == source.handoff_id or target.handoff_hash == source.handoff_hash:
+        _fail("worker thread fork requires a fresh handoff")
+    if target.approval_reference == source.approval_reference:
+        _fail("worker thread fork requires a fresh approval")
+    if target.policy_identity != source.policy_identity:
+        _fail("worker thread fork policy identity cannot widen")
+    return target
+
+
 def _normalize_now(now: datetime | None) -> datetime:
     current = datetime.now(timezone.utc) if now is None else now
     if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
@@ -757,13 +1110,19 @@ def validate_output_schema_binding(
 
 
 __all__ = [
+    "BoundWorkerThread",
     "DEFAULT_VALIDATOR_VERSION",
     "HANDOFF_SCHEMA_VERSION",
     "ServerOwnedAuthorityContext",
+    "ServerOwnedWorkerBindingContext",
+    "SERVER_OWNED_ADAPTER_VERSION",
     "SchemaSnapshot",
     "ValidatedVisionHandoff",
     "VisionHandoffError",
+    "bind_worker_thread",
     "bind_vision_handoff",
+    "fork_worker_thread",
+    "resume_worker_thread",
     "validate_output_schema_binding",
     "validate_vision_handoff",
 ]
