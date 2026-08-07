@@ -443,6 +443,7 @@ class ServerOwnedWorkerBindingContext:
     """Immutable server-owned local runtime and effective sandbox identity."""
 
     adapter_version: str
+    observed_thread_id: str
     sandbox_policy: Mapping[str, object]
 
     def __post_init__(self) -> None:
@@ -810,6 +811,25 @@ def _worker_sandbox_policy(payload: Mapping[str, object], value: object) -> dict
     return normalized
 
 
+def _server_observed_thread_id(value: object) -> str:
+    if not isinstance(value, ServerOwnedWorkerBindingContext):
+        _fail("worker thread requires a server-owned worker binding context")
+    return _identifier(
+        value.observed_thread_id,
+        path="worker_thread.server_observed_thread_id",
+    )
+
+
+def _validate_worker_context(
+    value: ServerOwnedWorkerBindingContext, *, thread_id: str
+) -> None:
+    observed_thread_id = _server_observed_thread_id(value)
+    if observed_thread_id != thread_id:
+        _fail(
+            "worker_thread.thread_id does not match the server-observed provider thread identity"
+        )
+
+
 def _make_bound_worker_thread(
     handoff: ValidatedVisionHandoff,
     *,
@@ -824,6 +844,7 @@ def _make_bound_worker_thread(
         now=now,
     )
     _identifier(thread_id, path="worker_thread.thread_id")
+    _validate_worker_context(worker_context, thread_id=thread_id)
     model_config = _worker_model_config_identity(payload)
     instruction_sources = _worker_instruction_source_identity(payload)
     sandbox = _worker_sandbox_policy(payload, worker_context)
@@ -934,7 +955,7 @@ def fork_worker_thread(
     source = _validate_bound_worker_thread(source_binding, now=now)
     source_candidate = _make_bound_worker_thread(
         source_handoff,
-        thread_id=source.thread_id,
+        thread_id=_server_observed_thread_id(source_worker_context),
         authority_context=source_authority_context,
         worker_context=source_worker_context,
         now=now,

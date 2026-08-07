@@ -21,15 +21,25 @@ def _module():
 def _thread_inputs(handoff, *, thread_id: str = "THREAD-001") -> dict[str, object]:
     return {
         "thread_id": thread_id,
-        "worker_context": _worker_context(handoff),
+        "worker_context": _worker_context(
+            handoff,
+            observed_thread_id=thread_id,
+        ),
     }
 
 
-def _worker_context(handoff, *, adapter_version: str = "adapter-1.0", sandbox_policy=None):
+def _worker_context(
+    handoff,
+    *,
+    adapter_version: str = "adapter-1.0",
+    sandbox_policy=None,
+    observed_thread_id: str = "THREAD-001",
+):
     module = _module()
     workspace = handoff.payload["workspace"]
     return module.ServerOwnedWorkerBindingContext(
         adapter_version=adapter_version,
+        observed_thread_id=observed_thread_id,
         sandbox_policy=sandbox_policy
         or {
             "roots": list(workspace["roots"]),
@@ -195,6 +205,13 @@ def test_resume_rejects_server_owned_worker_context_drift(tmp_path: Path) -> Non
     with pytest.raises(ValueError, match="sandbox|cwd|binding"):
         _resume_thread(handoff, bound, worker_context=bad_sandbox_context)
 
+    bad_thread_context = _worker_context(
+        handoff,
+        observed_thread_id="FOREIGN-THREAD",
+    )
+    with pytest.raises(ValueError, match="thread|server-owned|binding"):
+        _resume_thread(handoff, bound, worker_context=bad_thread_context)
+
 
 @pytest.mark.parametrize("field", ["output_schema_sha256", "output_validator_version"])
 def test_resume_rejects_schema_identity_drift(tmp_path: Path, field: str) -> None:
@@ -262,7 +279,8 @@ def test_fork_binds_fresh_target_without_inherited_approval(tmp_path: Path) -> N
     module = _module()
     schema_path = _write_schema(tmp_path / "schema.json")
     source = _bind(schema_path)
-    source_bound = _bind_thread(source)
+    source_worker_context = _worker_context(source)
+    source_bound = _bind_thread(source, worker_context=source_worker_context)
     target = _fresh_handoff(schema_path)
     target_inputs = _thread_inputs(target, thread_id="THREAD-002")
     target_bound = module.fork_worker_thread(
@@ -270,7 +288,7 @@ def test_fork_binds_fresh_target_without_inherited_approval(tmp_path: Path) -> N
         target,
         source_handoff=source,
         source_authority_context=_authority_context(dict(source.payload)),
-        source_worker_context=_worker_context(source),
+        source_worker_context=source_worker_context,
         authority_context=_authority_context(dict(target.payload)),
         now=NOW,
         **target_inputs,
@@ -282,6 +300,7 @@ def test_fork_binds_fresh_target_without_inherited_approval(tmp_path: Path) -> N
     assert target_bound.approval_reference == "APPROVAL-002"
     assert target_bound.approval_reference != source_bound.approval_reference
     assert target_bound.handoff_hash == target.handoff_sha256
+    assert source_bound.thread_id == source_worker_context.observed_thread_id
 
 
 def test_current_consumption_snapshot_blocks_start_resume_and_fork(tmp_path: Path) -> None:
@@ -328,6 +347,27 @@ def test_fork_rebinds_and_rejects_tampered_source_history(tmp_path: Path) -> Non
     target = _fresh_handoff(schema_path)
 
     with pytest.raises(ValueError, match="source|binding|approval|history"):
+        module.fork_worker_thread(
+            tampered,
+            target,
+            source_handoff=source,
+            source_authority_context=_authority_context(dict(source.payload)),
+            source_worker_context=_worker_context(source),
+            authority_context=_authority_context(dict(target.payload)),
+            now=NOW,
+            **_thread_inputs(target, thread_id="THREAD-002"),
+        )
+
+
+def test_fork_rejects_tampered_source_thread_id(tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    source = _bind(schema_path)
+    source_bound = _bind_thread(source)
+    tampered = replace(source_bound, thread_id="FOREIGN-THREAD")
+    target = _fresh_handoff(schema_path)
+
+    with pytest.raises(ValueError, match="source|thread|binding"):
         module.fork_worker_thread(
             tampered,
             target,
