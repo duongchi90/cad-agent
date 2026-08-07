@@ -156,6 +156,29 @@ def _prepared(tmp_path: Path) -> WorkerEnvironmentAttestation:
     )
 
 
+def _launch_with_boundary(
+    *,
+    environment: WorkerEnvironmentAttestation,
+    expected_environment: WorkerEnvironmentAttestation | None = None,
+    executable: Path,
+    argv: tuple[str, ...],
+    cleanup_deadline_seconds: float,
+    max_processes: int,
+    _process_api: _FakeProcessApi | None = None,
+) -> WorkerProcessHandle:
+    approved = expected_environment or environment
+    return launch_worker_process(
+        environment=environment,
+        expected_disposable_root=approved.disposable_root,
+        expected_cwd=approved.cwd,
+        executable=executable,
+        argv=argv,
+        cleanup_deadline_seconds=cleanup_deadline_seconds,
+        max_processes=max_processes,
+        _process_api=_process_api,
+    )
+
+
 def _launch_fake(
     tmp_path: Path,
     *,
@@ -163,8 +186,9 @@ def _launch_fake(
     deadline: float = 0.25,
     max_processes: int = 8,
 ) -> WorkerProcessHandle:
-    return launch_worker_process(
-        environment=_prepared(tmp_path),
+    prepared = _prepared(tmp_path)
+    return _launch_with_boundary(
+        environment=prepared,
         executable=Path(sys.executable).resolve(),
         argv=("-c", "pass"),
         cleanup_deadline_seconds=deadline,
@@ -197,6 +221,7 @@ def test_environment_starts_empty_and_filters_parent_secrets_and_config(tmp_path
     assert child["CODEX_HOME"] != source["CODEX_HOME"]
     for name in ("CODEX_HOME", "TEMP", "TMP"):
         assert Path(child[name]).is_relative_to(root.resolve())
+
 
 def test_worker_owned_directories_are_fresh_empty_and_disposable(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
@@ -312,9 +337,10 @@ def test_environment_key_order_is_deterministic(tmp_path: Path) -> None:
 
 def test_missing_executable_fails_before_job_creation(tmp_path: Path) -> None:
     api = _FakeProcessApi()
+    prepared = _prepared(tmp_path)
     with pytest.raises(WorkerProcessError) as caught:
-        launch_worker_process(
-            environment=_prepared(tmp_path),
+        _launch_with_boundary(
+            environment=prepared,
             executable=tmp_path / "missing.exe",
             argv=(),
             cleanup_deadline_seconds=1.0,
@@ -342,9 +368,10 @@ def test_invalid_limits_fail_before_launch(
     tmp_path: Path, deadline: float, max_processes: int
 ) -> None:
     api = _FakeProcessApi()
+    prepared = _prepared(tmp_path)
     with pytest.raises(WorkerProcessError) as caught:
-        launch_worker_process(
-            environment=_prepared(tmp_path),
+        _launch_with_boundary(
+            environment=prepared,
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
             cleanup_deadline_seconds=deadline,
@@ -370,9 +397,10 @@ def test_partial_launch_failure_is_sanitized_and_resources_are_closed(
 ) -> None:
     api = _FakeProcessApi()
     api.fail_stage = stage
+    prepared = _prepared(tmp_path)
     with pytest.raises(WorkerProcessError) as caught:
-        launch_worker_process(
-            environment=_prepared(tmp_path),
+        _launch_with_boundary(
+            environment=prepared,
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
             cleanup_deadline_seconds=1.0,
@@ -544,7 +572,7 @@ def test_real_windows_job_contains_child_and_grandchild_and_cleans_tree(tmp_path
         f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
         "time.sleep(60)"
     )
-    handle = launch_worker_process(
+    handle = _launch_with_boundary(
         environment=prepared,
         executable=Path(sys.executable).resolve(),
         argv=("-c", root_code),
@@ -645,8 +673,9 @@ def test_launch_rejects_forged_self_consistent_environment_attestation(
 
     api = _FakeProcessApi()
     with pytest.raises(WorkerProcessError) as caught:
-        launch_worker_process(
+        _launch_with_boundary(
             environment=forged,
+            expected_environment=prepared,
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
             cleanup_deadline_seconds=1.0,
@@ -707,8 +736,9 @@ def test_launch_rejects_self_consistent_cwd_dotdot_escape(tmp_path: Path) -> Non
     )
     api = _FakeProcessApi()
     with pytest.raises(WorkerProcessError) as caught:
-        launch_worker_process(
+        _launch_with_boundary(
             environment=forged,
+            expected_environment=prepared,
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
             cleanup_deadline_seconds=1.0,
@@ -751,8 +781,9 @@ def test_launch_rejects_self_consistent_unapproved_alternate_root(tmp_path: Path
 
     api = _FakeProcessApi()
     with pytest.raises(WorkerProcessError) as caught:
-        launch_worker_process(
+        _launch_with_boundary(
             environment=forged,
+            expected_environment=approved,
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
             cleanup_deadline_seconds=1.0,
@@ -773,7 +804,7 @@ def test_launch_rejects_worker_state_populated_after_preparation(
 
     api = _FakeProcessApi()
     with pytest.raises(WorkerProcessError) as caught:
-        launch_worker_process(
+        _launch_with_boundary(
             environment=prepared,
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
