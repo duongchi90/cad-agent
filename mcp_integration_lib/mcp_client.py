@@ -141,13 +141,15 @@ class FileIPCLiveMCPClient:
                  raw_lisp_trigger: Optional[Callable[[str], None]] = None,
                  bootstrap_lisp_path: Optional[str] = None,
                  document_settle_s: float = 2.0,
-                 command_trigger: Optional[Callable[[str], None]] = None) -> None:
+                 command_trigger: Optional[Callable[[str], None]] = None,
+                 start_tab_no_document_probe: Optional[Callable[[], bool]] = None) -> None:
         self._dir, self._trigger = Path(ipc_dir), trigger
         self._timeout, self._poll = timeout_s, poll_interval_s
         self._raw_lisp_trigger = raw_lisp_trigger
         self._bootstrap_lisp_path = bootstrap_lisp_path
         self._document_settle_s = document_settle_s
         self._command_trigger = command_trigger
+        self._start_tab_no_document_probe = start_tab_no_document_probe
         self._active_drawing_path: Optional[str] = None
 
     def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -184,10 +186,6 @@ class FileIPCLiveMCPClient:
             expected_path = _normalized_autocad_path(path)
             active_path = ""
             for attempt in range(2):
-                # Opening another document replaces the document-scoped
-                # AutoLISP namespace. Invoke AutoCAD's COM API, then load the
-                # dispatcher in the newly active document. A ping alone is not
-                # enough: it can be answered by the previously active drawing.
                 try:
                     self._raw_lisp_trigger(
                         '(progn (vl-load-com) '
@@ -204,23 +202,19 @@ class FileIPCLiveMCPClient:
                         '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"))) '
                         '(vla-activate mcp-open-doc))'
                     )
-                    time.sleep(self._document_settle_s)
-                    self._raw_lisp_trigger('(load "' + normalized_loader + '")')
-                    time.sleep(self._document_settle_s)
-                    self._wait_for_dispatcher()
-                except (MCPTimeoutError, MCPToolError):
-                    # After closing the last drawing AutoCAD may be on the
-                    # Start tab, where the document-scoped LISP namespace is
-                    # unavailable. A command-level OPEN creates the document
-                    # at the UI boundary; then the normal LISP bootstrap can
-                    # run in that newly active document.
-                    if self._command_trigger is None or attempt != 0:
+                except (MCPTimeoutError, MCPToolError) as exc:
+                    if (
+                        self._command_trigger is None
+                        or attempt != 0
+                        or not self._start_tab_no_document_is_proven(exc)
+                    ):
                         raise
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
-                    time.sleep(self._document_settle_s)
-                    self._raw_lisp_trigger('(load "' + normalized_loader + '")')
-                    time.sleep(self._document_settle_s)
-                    self._wait_for_dispatcher()
+                time.sleep(self._document_settle_s)
+                self._active_drawing_path = expected_path
+                self._raw_lisp_trigger('(load "' + normalized_loader + '")')
+                time.sleep(self._document_settle_s)
+                self._wait_for_dispatcher()
                 variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
                 active_path = _normalized_autocad_path(
                     ntpath.join(
@@ -240,6 +234,18 @@ class FileIPCLiveMCPClient:
         result = self._dispatch("drawing-open", {"path": path})
         self._active_drawing_path = _normalized_autocad_path(path)
         return result
+
+    def _start_tab_no_document_is_proven(self, error: Exception) -> bool:
+        message = str(error).casefold()
+        if any(marker in message for marker in ("rpc_e_call_rejected", "modal", "select file", "dialog")):
+            return False
+        probe = self._start_tab_no_document_probe
+        if probe is not None:
+            try:
+                return bool(probe())
+            except Exception:
+                return False
+        return False
 
     def _wait_for_dispatcher(self) -> None:
         deadline = time.time() + self._timeout
