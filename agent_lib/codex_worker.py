@@ -1,15 +1,18 @@
 """Provider-independent, fail-closed official SDK worker lifecycle seam.
 
 This module composes existing handoff/thread authority with the accepted Task-3
-process boundary. Provider responses and candidate output remain untrusted.
-No real provider/model/auth transport is selected implicitly.
+process boundary. Official-SDK compatibility/import/delegate work is child-owned
+when the concrete Task-3 boundary is used. Provider responses and candidate
+output remain untrusted.
 """
 
 from __future__ import annotations
 
+import base64
 import importlib
 import math
 import re
+import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -23,9 +26,12 @@ from agent_lib.codex_worker_process import (
     ProcessTreeIdentity,
     WorkerCleanupResult,
     WorkerEnvironmentAttestation,
+    WorkerProcessError,
     cleanup_worker_process,
+    exchange_worker_control,
     launch_worker_process,
     prepare_worker_environment,
+    run_worker_control_child,
 )
 from cad_agent.vision_handoff import (
     BoundWorkerThread,
@@ -50,13 +56,29 @@ _ALLOWED_EVENTS = frozenset(
         "provider.failed",
     }
 )
+_CHILD_ERROR_CODES = frozenset(
+    {
+        "WORKER_SDK_INCOMPATIBLE",
+        "WORKER_PROVIDER_FAILED",
+        "WORKER_PROVIDER_RESPONSE_INVALID",
+        "WORKER_TIMEOUT",
+    }
+)
 
 
 class CodexWorkerError(RuntimeError):
     """Categorical Task-4 failure without raw provider/private detail."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        primary_code: str | None = None,
+        cleanup_result: WorkerCleanupResult | None = None,
+    ) -> None:
         self.code = code
+        self.primary_code = primary_code or code
+        self.cleanup_result = cleanup_result
         super().__init__(code)
 
 
@@ -93,6 +115,20 @@ def _freeze_json_like(value: object) -> object:
     _fail("WORKER_PROVIDER_RESPONSE_INVALID")
 
 
+def _thaw_json_like(value: object) -> object:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json_like(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw_json_like(item) for item in value]
+    _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+
+
 def _identifier(value: object) -> str:
     if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
@@ -113,7 +149,7 @@ def _validate_timeout(value: float) -> float:
 
 @dataclass(frozen=True, repr=False)
 class AdapterRequest:
-    """Immutable normalized request passed to one explicit adapter only."""
+    """Immutable normalized request for one child-owned adapter operation."""
 
     operation: str
     thread_id: str
@@ -170,7 +206,6 @@ class CodexWorkerResult:
 
 class WorkerAdapter(Protocol):
     def ensure_compatible(self) -> None: ...
-
     def invoke(self, request: AdapterRequest) -> object: ...
 
 
@@ -181,33 +216,144 @@ class WorkerProcessBoundary(Protocol):
         expected_disposable_root: Path,
         expected_cwd: Path,
     ) -> tuple[WorkerEnvironmentAttestation, object]: ...
-
+    def invoke(self, handle: object, request: AdapterRequest) -> object: ...
     def cleanup(self, handle: object) -> object: ...
 
 
+def _request_to_wire(request: AdapterRequest) -> Mapping[str, object]:
+    return {
+        "operation": request.operation,
+        "thread_id": request.thread_id,
+        "handoff_sha256": request.handoff_sha256,
+        "run_id": request.run_id,
+        "approval_mode": request.approval_mode,
+        "experimental_api": request.experimental_api,
+        "model_identity": request.model_identity,
+        "config_sha256": request.config_sha256,
+        "output_schema_b64": base64.b64encode(request.output_schema_bytes).decode("ascii"),
+        "output_schema_sha256": request.output_schema_sha256,
+        "output_validator_version": request.output_validator_version,
+        "sandbox_roots": list(request.sandbox_roots),
+        "cwd": request.cwd,
+        "timeout_seconds": request.timeout_seconds,
+        "input_payload": _thaw_json_like(request.input_payload),
+        "cancelled": request.cancelled,
+    }
+
+
+def _request_from_wire(value: Mapping[str, object]) -> AdapterRequest:
+    required = {
+        "operation",
+        "thread_id",
+        "handoff_sha256",
+        "run_id",
+        "approval_mode",
+        "experimental_api",
+        "model_identity",
+        "config_sha256",
+        "output_schema_b64",
+        "output_schema_sha256",
+        "output_validator_version",
+        "sandbox_roots",
+        "cwd",
+        "timeout_seconds",
+        "input_payload",
+        "cancelled",
+    }
+    if set(value) != required:
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    schema_text = value.get("output_schema_b64")
+    roots = value.get("sandbox_roots")
+    if not isinstance(schema_text, str) or not isinstance(roots, list):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    if any(not isinstance(root, str) for root in roots):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    try:
+        schema_bytes = base64.b64decode(schema_text.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    operation = value.get("operation")
+    thread_id = value.get("thread_id")
+    handoff_sha256 = value.get("handoff_sha256")
+    run_id = value.get("run_id")
+    approval_mode = value.get("approval_mode")
+    experimental_api = value.get("experimental_api")
+    model_identity = value.get("model_identity")
+    config_sha256 = value.get("config_sha256")
+    output_schema_sha256 = value.get("output_schema_sha256")
+    output_validator_version = value.get("output_validator_version")
+    cwd = value.get("cwd")
+    timeout_seconds = value.get("timeout_seconds")
+    cancelled = value.get("cancelled")
+    strings = (
+        operation,
+        thread_id,
+        handoff_sha256,
+        run_id,
+        approval_mode,
+        model_identity,
+        config_sha256,
+        output_schema_sha256,
+        output_validator_version,
+        cwd,
+    )
+    if any(not isinstance(item, str) for item in strings):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    if not isinstance(experimental_api, bool) or not isinstance(cancelled, bool):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    return AdapterRequest(
+        operation=operation,
+        thread_id=thread_id,
+        handoff_sha256=handoff_sha256,
+        run_id=run_id,
+        approval_mode=approval_mode,
+        experimental_api=experimental_api,
+        model_identity=model_identity,
+        config_sha256=config_sha256,
+        output_schema_bytes=schema_bytes,
+        output_schema_sha256=output_schema_sha256,
+        output_validator_version=output_validator_version,
+        sandbox_roots=tuple(roots),
+        cwd=cwd,
+        timeout_seconds=float(timeout_seconds),
+        input_payload=value.get("input_payload"),
+        cancelled=cancelled,
+    )
+
+
 class Task3ProcessBoundary:
-    """Explicit adapter over the accepted Task-3 public process owner."""
+    """Concrete Task-3 child-control client for Task-4 lifecycle requests."""
 
     def __init__(
         self,
         *,
-        executable: Path,
-        argv: Sequence[str],
         cleanup_deadline_seconds: float,
         max_processes: int,
         source_environment: Mapping[str, str] | None = None,
+        _executable: Path | None = None,
+        _argv: Sequence[str] | None = None,
     ) -> None:
-        self._executable = Path(executable)
-        self._argv = tuple(argv)
         self._cleanup_deadline_seconds = float(cleanup_deadline_seconds)
         self._max_processes = max_processes
         self._source_environment = source_environment
+        self._executable = Path(_executable or sys.executable).resolve()
+        if _argv is None:
+            repo_root = str(Path(__file__).resolve().parents[1])
+            child_code = (
+                "import sys;"
+                f"sys.path.insert(0,{repo_root!r});"
+                "from agent_lib.codex_worker import _child_main;"
+                "raise SystemExit(_child_main())"
+            )
+            self._argv = ("-c", child_code)
+        else:
+            self._argv = tuple(_argv)
 
     def start(
         self,
-        *,
-        expected_disposable_root: Path,
-        expected_cwd: Path,
+        *, expected_disposable_root: Path, expected_cwd: Path
     ) -> tuple[WorkerEnvironmentAttestation, object]:
         attestation = prepare_worker_environment(
             disposable_root=expected_disposable_root,
@@ -222,15 +368,28 @@ class Task3ProcessBoundary:
             argv=self._argv,
             cleanup_deadline_seconds=self._cleanup_deadline_seconds,
             max_processes=self._max_processes,
+            control_channel=True,
         )
         return attestation, handle
+
+    def invoke(self, handle: object, request: AdapterRequest) -> object:
+        try:
+            response = exchange_worker_control(handle, _request_to_wire(request))  # type: ignore[arg-type]
+        except WorkerProcessError:
+            _fail("WORKER_PROVIDER_FAILED")
+        worker_error = response.get("_worker_error")
+        if worker_error is not None:
+            if not isinstance(worker_error, str) or worker_error not in _CHILD_ERROR_CODES:
+                _fail("WORKER_PROVIDER_FAILED")
+            _fail(worker_error)
+        return response
 
     def cleanup(self, handle: object) -> object:
         return cleanup_worker_process(handle)  # type: ignore[arg-type]
 
 
 class LazyOfficialSdkAdapter:
-    """Lazy official-SDK import seam with no implicit alternate transport."""
+    """Lazy official-SDK import seam intended to execute inside the child."""
 
     def __init__(
         self,
@@ -265,6 +424,51 @@ class LazyOfficialSdkAdapter:
         if delegate is None:
             _fail("WORKER_SDK_INCOMPATIBLE")
         return delegate.invoke(request)
+
+
+def run_codex_worker_child(
+    *,
+    adapter_factory: Callable[[object], WorkerAdapter],
+    compatibility_check: Callable[[], object] = require_compatible_codex_sdk,
+    module_loader: Callable[[str], object] = importlib.import_module,
+    input_stream=None,
+    output_stream=None,
+) -> int:
+    lazy = LazyOfficialSdkAdapter(
+        adapter_factory=adapter_factory,
+        compatibility_check=compatibility_check,
+        module_loader=module_loader,
+    )
+
+    def handler(payload: Mapping[str, object]) -> Mapping[str, object]:
+        try:
+            request = _request_from_wire(payload)
+            response = lazy.invoke(request)
+            if not isinstance(response, Mapping):
+                return {"_worker_error": "WORKER_PROVIDER_RESPONSE_INVALID"}
+            thawed = _thaw_json_like(response)
+            if not isinstance(thawed, Mapping):
+                return {"_worker_error": "WORKER_PROVIDER_RESPONSE_INVALID"}
+            return thawed
+        except TimeoutError:
+            return {"_worker_error": "WORKER_TIMEOUT"}
+        except CodexWorkerError as exc:
+            code = exc.code if exc.code in _CHILD_ERROR_CODES else "WORKER_PROVIDER_FAILED"
+            return {"_worker_error": code}
+        except Exception:
+            return {"_worker_error": "WORKER_PROVIDER_FAILED"}
+
+    return run_worker_control_child(
+        handler, input_stream=input_stream, output_stream=output_stream
+    )
+
+
+def _unsupported_official_adapter_factory(_module: object) -> WorkerAdapter:
+    _fail("WORKER_SDK_INCOMPATIBLE")
+
+
+def _child_main() -> int:
+    return run_codex_worker_child(adapter_factory=_unsupported_official_adapter_factory)
 
 
 def _sandbox_boundary(
@@ -410,9 +614,7 @@ def _normalize_events(value: object) -> tuple[CodexWorkerEvent, ...]:
 
 def _normalize_response(
     value: object,
-    *,
-    operation: str,
-    expected_thread_id: str,
+    *, operation: str, expected_thread_id: str
 ) -> tuple[str, str | None, tuple[CodexWorkerEvent, ...], object | None]:
     if not isinstance(value, Mapping):
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
@@ -448,8 +650,7 @@ def _normalize_response(
 
 
 def _cleanup_evidence(
-    process_boundary: WorkerProcessBoundary,
-    handle: object,
+    process_boundary: WorkerProcessBoundary, handle: object
 ) -> tuple[WorkerCleanupResult | None, str | None]:
     try:
         result = process_boundary.cleanup(handle)
@@ -469,11 +670,32 @@ def _cleanup_evidence(
     return result, "WORKER_CLEANUP_FAILED"
 
 
-class CodexWorkerSession:
-    """One bounded local worker session bound to immutable server-owned authority."""
+def _raise_open_failure(
+    process_boundary: WorkerProcessBoundary, handle: object, primary_code: str
+) -> None:
+    cleanup, cleanup_code = _cleanup_evidence(process_boundary, handle)
+    raise CodexWorkerError(
+        cleanup_code or primary_code,
+        primary_code=primary_code,
+        cleanup_result=cleanup,
+    )
 
+
+def _invoke_child(
+    process_boundary: WorkerProcessBoundary, handle: object, request: AdapterRequest
+) -> object:
+    try:
+        return process_boundary.invoke(handle, request)
+    except TimeoutError:
+        raise CodexWorkerError("WORKER_TIMEOUT") from None
+    except CodexWorkerError:
+        raise
+    except Exception:
+        raise CodexWorkerError("WORKER_PROVIDER_FAILED") from None
+
+
+class CodexWorkerSession:
     __slots__ = (
-        "_adapter",
         "_authority_context",
         "_binding",
         "_cleanup_result",
@@ -494,7 +716,6 @@ class CodexWorkerSession:
         binding: BoundWorkerThread,
         authority_context: ServerOwnedAuthorityContext,
         worker_context: ServerOwnedWorkerBindingContext,
-        adapter: WorkerAdapter,
         process_boundary: WorkerProcessBoundary,
         environment_attestation: WorkerEnvironmentAttestation,
         process_handle: object,
@@ -503,7 +724,6 @@ class CodexWorkerSession:
         self._binding = binding
         self._authority_context = authority_context
         self._worker_context = worker_context
-        self._adapter = adapter
         self._process_boundary = process_boundary
         self._environment_attestation = environment_attestation
         self._process_handle = process_handle
@@ -539,8 +759,7 @@ class CodexWorkerSession:
         )
         del root
         approval_mode, experimental_api, model_identity, config_sha256 = _policy_fields(
-            self._authority_context,
-            self._binding,
+            self._authority_context, self._binding
         )
         return AdapterRequest(
             operation=operation,
@@ -563,10 +782,7 @@ class CodexWorkerSession:
 
     def _result(
         self,
-        *,
-        operation: str,
-        status: str,
-        success: bool,
+        *, operation: str, status: str, success: bool,
         turn_id: str | None = None,
         events: tuple[CodexWorkerEvent, ...] = (),
         candidate_output: object | None = None,
@@ -592,8 +808,7 @@ class CodexWorkerSession:
         if self._terminal_result is not None:
             return self._terminal_result
         cleanup, cleanup_code = _cleanup_evidence(
-            self._process_boundary,
-            self._process_handle,
+            self._process_boundary, self._process_handle
         )
         self._cleanup_result = cleanup
         final_code = cleanup_code or code
@@ -614,9 +829,7 @@ class CodexWorkerSession:
         self,
         operation: str,
         payload: object,
-        *,
-        timeout_seconds: float,
-        now: datetime | None,
+        *, timeout_seconds: float, now: datetime | None
     ) -> CodexWorkerResult:
         if self._terminal_result is not None:
             return self._terminal_result
@@ -631,13 +844,10 @@ class CodexWorkerSession:
             return self._cleanup_failure(operation, "WORKER_AUTHORITY_MISMATCH")
         started = time.monotonic()
         try:
-            response = self._adapter.invoke(request)
-        except TimeoutError:
-            return self._cleanup_failure(operation, "WORKER_TIMEOUT")
-        except CodexWorkerError:
-            return self._cleanup_failure(operation, "WORKER_PROVIDER_FAILED")
-        except Exception:
-            return self._cleanup_failure(operation, "WORKER_PROVIDER_FAILED")
+            response = _invoke_child(self._process_boundary, self._process_handle, request)
+        except CodexWorkerError as exc:
+            code = "WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_PROVIDER_FAILED"
+            return self._cleanup_failure(operation, code)
         if time.monotonic() - started > request.timeout_seconds:
             return self._cleanup_failure(operation, "WORKER_TIMEOUT")
         try:
@@ -662,38 +872,17 @@ class CodexWorkerSession:
         )
 
     def turn(
-        self,
-        payload: object,
-        *,
-        timeout_seconds: float,
-        now: datetime | None = None,
+        self, payload: object, *, timeout_seconds: float, now: datetime | None = None
     ) -> CodexWorkerResult:
-        return self._invoke(
-            "turn",
-            payload,
-            timeout_seconds=timeout_seconds,
-            now=now,
-        )
+        return self._invoke("turn", payload, timeout_seconds=timeout_seconds, now=now)
 
     def steer(
-        self,
-        payload: object,
-        *,
-        timeout_seconds: float,
-        now: datetime | None = None,
+        self, payload: object, *, timeout_seconds: float, now: datetime | None = None
     ) -> CodexWorkerResult:
-        return self._invoke(
-            "steer",
-            payload,
-            timeout_seconds=timeout_seconds,
-            now=now,
-        )
+        return self._invoke("steer", payload, timeout_seconds=timeout_seconds, now=now)
 
     def interrupt(
-        self,
-        *,
-        timeout_seconds: float,
-        now: datetime | None = None,
+        self, *, timeout_seconds: float, now: datetime | None = None
     ) -> CodexWorkerResult:
         if self._terminal_result is not None:
             return self._terminal_result
@@ -704,7 +893,7 @@ class CodexWorkerSession:
                 timeout_seconds=timeout_seconds,
                 now=now,
             )
-            response = self._adapter.invoke(request)
+            response = _invoke_child(self._process_boundary, self._process_handle, request)
             _normalize_response(
                 response,
                 operation="interrupt",
@@ -716,10 +905,7 @@ class CodexWorkerSession:
         return self._cleanup_failure("interrupt", "WORKER_INTERRUPTED")
 
     def cancel(
-        self,
-        *,
-        timeout_seconds: float,
-        now: datetime | None = None,
+        self, *, timeout_seconds: float, now: datetime | None = None
     ) -> CodexWorkerResult:
         if self._terminal_result is not None:
             return self._terminal_result
@@ -732,16 +918,13 @@ class CodexWorkerSession:
                 now=now,
                 cancelled=True,
             )
-            self._adapter.invoke(request)
+            _invoke_child(self._process_boundary, self._process_handle, request)
         except Exception:
             return self._cleanup_failure("cancel", "WORKER_INTERRUPT_FAILED")
         return self._cleanup_failure("cancel", "WORKER_CANCELLED")
 
     def close(
-        self,
-        *,
-        timeout_seconds: float,
-        now: datetime | None = None,
+        self, *, timeout_seconds: float, now: datetime | None = None
     ) -> CodexWorkerResult:
         if self._terminal_result is not None:
             return self._terminal_result
@@ -754,7 +937,7 @@ class CodexWorkerSession:
                 timeout_seconds=timeout_seconds,
                 now=now,
             )
-            response = self._adapter.invoke(request)
+            response = _invoke_child(self._process_boundary, self._process_handle, request)
             status, _turn_id, events, _candidate = _normalize_response(
                 response,
                 operation="close",
@@ -762,13 +945,16 @@ class CodexWorkerSession:
             )
             if status == "failed":
                 provider_code = "WORKER_PROVIDER_FAILED"
-        except CodexWorkerError:
-            provider_code = "WORKER_AUTHORITY_MISMATCH"
+        except CodexWorkerError as exc:
+            provider_code = (
+                "WORKER_AUTHORITY_MISMATCH"
+                if exc.code == "WORKER_AUTHORITY_MISMATCH"
+                else "WORKER_PROVIDER_FAILED"
+            )
         except Exception:
             provider_code = "WORKER_PROVIDER_FAILED"
         cleanup, cleanup_code = _cleanup_evidence(
-            self._process_boundary,
-            self._process_handle,
+            self._process_boundary, self._process_handle
         )
         self._cleanup_result = cleanup
         if cleanup_code is not None or provider_code is not None:
@@ -810,6 +996,7 @@ def _open_codex_worker(
     timeout_seconds: float,
     now: datetime | None,
 ) -> CodexWorkerSession:
+    del adapter
     timeout = _validate_timeout(timeout_seconds)
     root, cwd, roots = _revalidate_binding(
         handoff=handoff,
@@ -819,17 +1006,8 @@ def _open_codex_worker(
         now=now,
     )
     try:
-        adapter.ensure_compatible()
-    except CodexWorkerError as exc:
-        if exc.code == "WORKER_SDK_INCOMPATIBLE":
-            raise
-        _fail("WORKER_SDK_INCOMPATIBLE")
-    except Exception:
-        _fail("WORKER_SDK_INCOMPATIBLE")
-    try:
         attestation, handle = process_boundary.start(
-            expected_disposable_root=root,
-            expected_cwd=cwd,
+            expected_disposable_root=root, expected_cwd=cwd
         )
     except Exception:
         _fail("WORKER_PROCESS_START_FAILED")
@@ -840,12 +1018,10 @@ def _open_codex_worker(
             expected_root=root,
             expected_cwd=cwd,
         )
-    except CodexWorkerError:
-        _cleanup_evidence(process_boundary, handle)
-        raise
+    except CodexWorkerError as exc:
+        _raise_open_failure(process_boundary, handle, exc.code)
     approval_mode, experimental_api, model_identity, config_sha256 = _policy_fields(
-        authority_context,
-        binding,
+        authority_context, binding
     )
     request = AdapterRequest(
         operation=operation,
@@ -865,16 +1041,12 @@ def _open_codex_worker(
     )
     started = time.monotonic()
     try:
-        response = adapter.invoke(request)
-    except TimeoutError:
-        _cleanup_evidence(process_boundary, handle)
-        _fail("WORKER_TIMEOUT")
-    except Exception:
-        _cleanup_evidence(process_boundary, handle)
-        _fail("WORKER_PROVIDER_FAILED")
+        response = _invoke_child(process_boundary, handle, request)
+    except CodexWorkerError as exc:
+        primary = exc.code if exc.code in _CHILD_ERROR_CODES else "WORKER_PROVIDER_FAILED"
+        _raise_open_failure(process_boundary, handle, primary)
     if time.monotonic() - started > timeout:
-        _cleanup_evidence(process_boundary, handle)
-        _fail("WORKER_TIMEOUT")
+        _raise_open_failure(process_boundary, handle, "WORKER_TIMEOUT")
     try:
         status, _turn_id, _events, _candidate = _normalize_response(
             response,
@@ -882,17 +1054,14 @@ def _open_codex_worker(
             expected_thread_id=binding.thread_id,
         )
     except CodexWorkerError:
-        _cleanup_evidence(process_boundary, handle)
-        raise
+        _raise_open_failure(process_boundary, handle, "WORKER_PROVIDER_RESPONSE_INVALID")
     if status != "ready":
-        _cleanup_evidence(process_boundary, handle)
-        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+        _raise_open_failure(process_boundary, handle, "WORKER_PROVIDER_RESPONSE_INVALID")
     return CodexWorkerSession(
         handoff=handoff,
         binding=binding,
         authority_context=authority_context,
         worker_context=worker_context,
-        adapter=adapter,
         process_boundary=process_boundary,
         environment_attestation=attestation,
         process_handle=handle,
@@ -910,8 +1079,6 @@ def start_codex_worker(
     timeout_seconds: float,
     now: datetime | None = None,
 ) -> CodexWorkerSession:
-    """Start only from an already server-proven current thread binding."""
-
     return _open_codex_worker(
         operation="start",
         handoff=handoff,
@@ -936,8 +1103,6 @@ def resume_codex_worker(
     timeout_seconds: float,
     now: datetime | None = None,
 ) -> CodexWorkerSession:
-    """Resume only after exact current binding revalidation."""
-
     return _open_codex_worker(
         operation="resume",
         handoff=handoff,
@@ -966,8 +1131,6 @@ def fork_codex_worker(
     timeout_seconds: float,
     now: datetime | None = None,
 ) -> CodexWorkerSession:
-    """Fork only when the existing thread owner proves fresh non-widened authority."""
-
     try:
         expected = fork_worker_thread(
             source_binding,
@@ -1009,5 +1172,10 @@ __all__ = [
     "WorkerProcessBoundary",
     "fork_codex_worker",
     "resume_codex_worker",
+    "run_codex_worker_child",
     "start_codex_worker",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(_child_main())
