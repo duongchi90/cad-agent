@@ -222,6 +222,7 @@ def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
         attributes & _FILE_ATTRIBUTE_REPARSE_POINT
     )
 
+
 def _canonical_existing_directory(
     value: Path,
     *,
@@ -248,6 +249,26 @@ def _is_contained(root: Path, candidate: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _canonical_launch_boundary(
+    *,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+) -> tuple[Path, Path]:
+    root = _canonical_existing_directory(
+        Path(expected_disposable_root),
+        error_code="WORKER_DISPOSABLE_ROOT_UNSAFE",
+        path_contains_reparse=_path_contains_windows_reparse_point,
+    )
+    workdir = _canonical_existing_directory(
+        Path(expected_cwd),
+        error_code="WORKER_CWD_UNSAFE",
+        path_contains_reparse=_path_contains_windows_reparse_point,
+    )
+    if not _is_contained(root, workdir):
+        _fail("WORKER_CWD_UNSAFE")
+    return root, workdir
 
 
 def _reject_environment_nul(key: str, value: str) -> None:
@@ -369,23 +390,62 @@ def _validate_limits(*, cleanup_deadline_seconds: float, max_processes: int) -> 
 
 def _validate_attestation_filesystem(
     attestation: WorkerEnvironmentAttestation,
-) -> None:
-    for path in (
-        attestation.disposable_root,
-        attestation.cwd,
-        attestation.codex_home,
-        attestation.temp_dir,
-    ):
-        if not path.is_absolute() or not path.is_dir():
-            _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-        if _path_contains_windows_reparse_point(path):
-            _fail("WORKER_REPARSE_PATH")
-    if not _is_contained(attestation.disposable_root, attestation.cwd):
+    *,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+) -> Path:
+    approved_root, approved_cwd = _canonical_launch_boundary(
+        expected_disposable_root=expected_disposable_root,
+        expected_cwd=expected_cwd,
+    )
+    attested_root = _canonical_existing_directory(
+        Path(attestation.disposable_root),
+        error_code="WORKER_DISPOSABLE_ROOT_UNSAFE",
+        path_contains_reparse=_path_contains_windows_reparse_point,
+    )
+    attested_cwd = _canonical_existing_directory(
+        Path(attestation.cwd),
+        error_code="WORKER_CWD_UNSAFE",
+        path_contains_reparse=_path_contains_windows_reparse_point,
+    )
+    attested_codex_home = _canonical_existing_directory(
+        Path(attestation.codex_home),
+        error_code="WORKER_DISPOSABLE_STATE_UNSAFE",
+        path_contains_reparse=_path_contains_windows_reparse_point,
+    )
+    attested_temp = _canonical_existing_directory(
+        Path(attestation.temp_dir),
+        error_code="WORKER_DISPOSABLE_STATE_UNSAFE",
+        path_contains_reparse=_path_contains_windows_reparse_point,
+    )
+
+    if Path(attestation.disposable_root) != attested_root or attested_root != approved_root:
+        _fail("WORKER_DISPOSABLE_ROOT_UNSAFE")
+    if Path(attestation.cwd) != attested_cwd or attested_cwd != approved_cwd:
         _fail("WORKER_CWD_UNSAFE")
-    if not _is_contained(attestation.disposable_root, attestation.codex_home):
+    if (
+        Path(attestation.codex_home) != attested_codex_home
+        or attested_codex_home != approved_root / "codex-home"
+    ):
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-    if not _is_contained(attestation.disposable_root, attestation.temp_dir):
+    if (
+        Path(attestation.temp_dir) != attested_temp
+        or attested_temp != approved_root / "tmp"
+    ):
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
+    if not _is_contained(approved_root, attested_cwd):
+        _fail("WORKER_CWD_UNSAFE")
+    if not _is_contained(approved_root, attested_codex_home):
+        _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
+    if not _is_contained(approved_root, attested_temp):
+        _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
+
+    try:
+        if any(attested_codex_home.iterdir()) or any(attested_temp.iterdir()):
+            _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
+    except OSError:
+        _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
+    return attested_cwd
 
 
 def _validate_attestation_environment(
@@ -485,6 +545,8 @@ def _safe_terminate_job(api: _ProcessApi, job_handle: object | None) -> None:
 def launch_worker_process(
     *,
     environment: WorkerEnvironmentAttestation,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
     executable: Path,
     argv: Sequence[str],
     cleanup_deadline_seconds: float,
@@ -499,7 +561,11 @@ def launch_worker_process(
         cleanup_deadline_seconds=cleanup_deadline_seconds,
         max_processes=max_processes,
     )
-    _validate_attestation_filesystem(environment)
+    workdir = _validate_attestation_filesystem(
+        environment,
+        expected_disposable_root=expected_disposable_root,
+        expected_cwd=expected_cwd,
+    )
     _validate_attestation_environment(environment)
     runtime = _validate_executable(Path(executable))
     arguments = _validate_argv(argv)
@@ -521,7 +587,7 @@ def launch_worker_process(
             created = api.create_suspended_process(
                 executable=runtime,
                 argv=arguments,
-                cwd=environment.cwd,
+                cwd=workdir,
                 environment=environment.environment,
             )
             process_handle = created.process_handle
