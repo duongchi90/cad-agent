@@ -1,6 +1,6 @@
 """Closed, deterministic R1C numeric and evidence-contract helpers.
 
-This module validates candidate in-memory records only.  A normalized custody
+This module validates candidate in-memory records only. A normalized custody
 record is not evidence that source bytes were inspected or are currently fresh,
 and an evaluation record does not confer approval, verdict, or publication
 authority.
@@ -189,19 +189,27 @@ def _optional_hash(value: object, *, path: str) -> str | None:
 def _identifier_list(value: object, *, path: str) -> list[str]:
     if not isinstance(value, list):
         _fail(path, "must be an array")
-    normalized = [_identifier(item, path=f"{path}[{index}]") for index, item in enumerate(value)]
+    normalized = [
+        _identifier(item, path=f"{path}[{index}]")
+        for index, item in enumerate(value)
+    ]
     return sorted(set(normalized))
 
 
 def _hash_list(value: object, *, path: str) -> list[str]:
     if not isinstance(value, list):
         _fail(path, "must be an array of hashes")
-    normalized = [_hash(item, path=f"{path}[{index}]") for index, item in enumerate(value)]
+    normalized = [
+        _hash(item, path=f"{path}[{index}]")
+        for index, item in enumerate(value)
+    ]
     return sorted(set(normalized))
 
 
 def _decimal(value: object, *, path: str) -> decimal.Decimal:
-    if isinstance(value, bool) or not isinstance(value, (str, int, float, decimal.Decimal)):
+    if isinstance(value, bool) or not isinstance(
+        value, (str, int, float, decimal.Decimal)
+    ):
         _fail(path, "must be a finite numeric value")
     try:
         parsed = decimal.Decimal(str(value))
@@ -282,14 +290,20 @@ def r1c_quantity_within_tolerance(
     tolerance_normalized = canonicalize_r1c_quantity(
         tolerance, quantity=quantity, unit=tolerance_unit
     )
+    left_value = decimal.Decimal(left_normalized["value"])
+    right_value = decimal.Decimal(right_normalized["value"])
     tolerance_value = decimal.Decimal(tolerance_normalized["value"])
-    if tolerance_value < 0:
-        _fail("tolerance", "must be non-negative")
-    difference = abs(
-        decimal.Decimal(left_normalized["value"])
-        - decimal.Decimal(right_normalized["value"])
-    )
-    return difference <= tolerance_value
+    with decimal.localcontext() as context:
+        context.prec = max(
+            64,
+            len(left_value.as_tuple().digits) + 4,
+            len(right_value.as_tuple().digits) + 4,
+            len(tolerance_value.as_tuple().digits) + 4,
+        )
+        if tolerance_value < 0:
+            _fail("tolerance", "must be non-negative")
+        difference = abs(left_value - right_value)
+        return difference <= tolerance_value
 
 
 _CUSTODY_ROOT_FIELDS = {
@@ -378,7 +392,9 @@ _CUSTODY_ROLES = {
 }
 
 
-def _nonnegative_int(value: object, *, path: str, allow_none: bool = False) -> int | None:
+def _nonnegative_int(
+    value: object, *, path: str, allow_none: bool = False
+) -> int | None:
     if value is None and allow_none:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -389,7 +405,11 @@ def _nonnegative_int(value: object, *, path: str, allow_none: bool = False) -> i
 
 
 def _safe_relative_path(value: object, *, path: str) -> str:
-    if not isinstance(value, str) or not value or not _RELATIVE_PATH_RE.fullmatch(value):
+    if (
+        not isinstance(value, str)
+        or not value
+        or not _RELATIVE_PATH_RE.fullmatch(value)
+    ):
         _fail(path, "must be a safe relative path")
     if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
         _fail(path, "must be a safe relative path")
@@ -416,7 +436,9 @@ def _validate_media_metadata(value: object, *, path: str) -> dict[str, object]:
     return {
         "format": format_name,
         "width_px": _nonnegative_int(media["width_px"], path=f"{path}.width_px"),
-        "height_px": _nonnegative_int(media["height_px"], path=f"{path}.height_px"),
+        "height_px": _nonnegative_int(
+            media["height_px"], path=f"{path}.height_px"
+        ),
         "mode": mode,
         "dpi_x": _optional_canonical_dpi(media["dpi_x"], path=f"{path}.dpi_x"),
         "dpi_y": _optional_canonical_dpi(media["dpi_y"], path=f"{path}.dpi_y"),
@@ -434,9 +456,15 @@ def _validate_custody_item(
     reason = item["blocking_reason_code"]
     if state in _ELIGIBLE_CUSTODY_STATES:
         if reason is not None:
-            _fail(f"{path}.blocking_reason_code", "must be null for an eligible item")
+            _fail(
+                f"{path}.blocking_reason_code",
+                "must be null for an eligible item",
+            )
     elif not isinstance(reason, str) or not _REASON_RE.fullmatch(reason):
-        _fail(f"{path}.blocking_reason_code", "must be a sanitized blocking code")
+        _fail(
+            f"{path}.blocking_reason_code",
+            "must be a sanitized blocking code",
+        )
 
     identity_scheme = item["identity_scheme"]
     identity_version = item["identity_scheme_version"]
@@ -451,6 +479,63 @@ def _validate_custody_item(
     if root_revision != root["approved_root_revision"]:
         _fail(f"{path}.approved_root_revision", "must match the custody root")
 
+    declared_sha = _hash(
+        item["declared_sha256"], path=f"{path}.declared_sha256"
+    )
+    observed_sha = _optional_hash(
+        item["observed_sha256"], path=f"{path}.observed_sha256"
+    )
+    declared_media_type = item["declared_media_type"]
+    if not isinstance(declared_media_type, str) or not declared_media_type:
+        _fail(f"{path}.declared_media_type", "must be a non-empty string")
+    observed_media_type = item["observed_media_type"]
+    if observed_media_type is not None and (
+        not isinstance(observed_media_type, str) or not observed_media_type
+    ):
+        _fail(
+            f"{path}.observed_media_type",
+            "must be null or a non-empty string",
+        )
+    object_token = _optional_hash(
+        item["file_object_identity_token"],
+        path=f"{path}.file_object_identity_token",
+    )
+    path_binding = _optional_hash(
+        item["path_binding_sha256"], path=f"{path}.path_binding_sha256"
+    )
+
+    if state in _ELIGIBLE_CUSTODY_STATES:
+        if observed_sha is None:
+            _fail(
+                f"{path}.observed_sha256",
+                "is required for an eligible VERIFIED or DUPLICATE_BYTES item",
+            )
+        if observed_media_type is None:
+            _fail(
+                f"{path}.observed_media_type",
+                "is required for an eligible VERIFIED or DUPLICATE_BYTES item",
+            )
+        if object_token is None:
+            _fail(
+                f"{path}.file_object_identity_token",
+                "is required for an eligible VERIFIED or DUPLICATE_BYTES item",
+            )
+        if path_binding is None:
+            _fail(
+                f"{path}.path_binding_sha256",
+                "is required for an eligible VERIFIED or DUPLICATE_BYTES item",
+            )
+        if observed_sha != declared_sha:
+            _fail(
+                f"{path}.custody_state",
+                "cannot be eligible when declared and observed SHA-256 differ",
+            )
+        if observed_media_type != declared_media_type:
+            _fail(
+                f"{path}.custody_state",
+                "cannot be eligible when declared and observed media types differ",
+            )
+
     return {
         "source_id": _identifier(item["source_id"], path=f"{path}.source_id"),
         "kind": item["kind"]
@@ -462,40 +547,30 @@ def _validate_custody_item(
         "relative_path": _safe_relative_path(
             item["relative_path"], path=f"{path}.relative_path"
         ),
-        "declared_sha256": _hash(item["declared_sha256"], path=f"{path}.declared_sha256"),
-        "observed_sha256": _optional_hash(
-            item["observed_sha256"], path=f"{path}.observed_sha256"
-        ),
+        "declared_sha256": declared_sha,
+        "observed_sha256": observed_sha,
         "size_bytes": _nonnegative_int(
             item["size_bytes"], path=f"{path}.size_bytes", allow_none=True
         ),
-        "declared_media_type": item["declared_media_type"]
-        if isinstance(item["declared_media_type"], str)
-        and item["declared_media_type"]
-        else _fail(f"{path}.declared_media_type", "must be a non-empty string"),
-        "observed_media_type": item["observed_media_type"]
-        if item["observed_media_type"] is None
-        or (isinstance(item["observed_media_type"], str) and item["observed_media_type"])
-        else _fail(f"{path}.observed_media_type", "must be null or a non-empty string"),
+        "declared_media_type": declared_media_type,
+        "observed_media_type": observed_media_type,
         "media_metadata": _validate_media_metadata(
             item["media_metadata"], path=f"{path}.media_metadata"
         ),
         "page_ids": _identifier_list(item["page_ids"], path=f"{path}.page_ids"),
-        "region_ids": _identifier_list(item["region_ids"], path=f"{path}.region_ids"),
-        "file_object_identity_token": _optional_hash(
-            item["file_object_identity_token"],
-            path=f"{path}.file_object_identity_token",
+        "region_ids": _identifier_list(
+            item["region_ids"], path=f"{path}.region_ids"
         ),
-        "path_binding_sha256": _optional_hash(
-            item["path_binding_sha256"], path=f"{path}.path_binding_sha256"
-        ),
+        "file_object_identity_token": object_token,
+        "path_binding_sha256": path_binding,
         "identity_scheme": identity_scheme
         if identity_scheme == "HMAC-SHA-256"
         else _fail(f"{path}.identity_scheme", "must equal HMAC-SHA-256"),
         "identity_scheme_version": identity_version
         if identity_version == "r1c-file-identity-v1"
         else _fail(
-            f"{path}.identity_scheme_version", "must equal r1c-file-identity-v1"
+            f"{path}.identity_scheme_version",
+            "must equal r1c-file-identity-v1",
         ),
         "identity_key_revision": _identifier(
             key_revision, path=f"{path}.identity_key_revision"
@@ -505,31 +580,49 @@ def _validate_custody_item(
         ),
         "alias_group_id": None
         if item["alias_group_id"] is None
-        else _identifier(item["alias_group_id"], path=f"{path}.alias_group_id"),
+        else _identifier(
+            item["alias_group_id"], path=f"{path}.alias_group_id"
+        ),
         "custody_state": state,
         "blocking_reason_code": reason,
     }
 
 
-def _validate_alias_groups(value: object, *, item_ids: set[str]) -> list[dict[str, object]]:
+def _validate_alias_groups(
+    value: object, *, item_ids: set[str]
+) -> list[dict[str, object]]:
     if not isinstance(value, list):
         _fail("alias_groups", "must be an array")
     normalized: list[dict[str, object]] = []
     seen_ids: set[str] = set()
     for index, raw_group in enumerate(value):
         path = f"alias_groups[{index}]"
-        group = _closed_mapping(raw_group, required=_ALIAS_GROUP_FIELDS, path=path)
-        group_id = _identifier(group["alias_group_id"], path=f"{path}.alias_group_id")
+        group = _closed_mapping(
+            raw_group, required=_ALIAS_GROUP_FIELDS, path=path
+        )
+        group_id = _identifier(
+            group["alias_group_id"], path=f"{path}.alias_group_id"
+        )
         if group_id in seen_ids:
-            _fail("alias_groups", "must contain unique alias_group_id values")
+            _fail(
+                "alias_groups",
+                "must contain unique alias_group_id values",
+            )
         seen_ids.add(group_id)
         group_type = group["group_type"]
         if group_type not in {"SAME_FILE_ALIAS", "DUPLICATE_BYTES"}:
             _fail(f"{path}.group_type", "has an unsupported value")
-        source_ids = _identifier_list(group["source_ids"], path=f"{path}.source_ids")
+        source_ids = _identifier_list(
+            group["source_ids"], path=f"{path}.source_ids"
+        )
         if len(source_ids) < 2 or not set(source_ids).issubset(item_ids):
-            _fail(f"{path}.source_ids", "must contain at least two custody items")
-        observed_sha = _hash(group["observed_sha256"], path=f"{path}.observed_sha256")
+            _fail(
+                f"{path}.source_ids",
+                "must contain at least two custody items",
+            )
+        observed_sha = _hash(
+            group["observed_sha256"], path=f"{path}.observed_sha256"
+        )
         tokens = _hash_list(
             group["file_object_identity_tokens"],
             path=f"{path}.file_object_identity_tokens",
@@ -538,9 +631,15 @@ def _validate_alias_groups(value: object, *, item_ids: set[str]) -> list[dict[st
             group["path_bindings"], path=f"{path}.path_bindings"
         )
         if len(tokens) != 1 and group_type == "SAME_FILE_ALIAS":
-            _fail(f"{path}.file_object_identity_tokens", "must identify one shared object")
+            _fail(
+                f"{path}.file_object_identity_tokens",
+                "must identify one shared object",
+            )
         if len(tokens) < 2 and group_type == "DUPLICATE_BYTES":
-            _fail(f"{path}.file_object_identity_tokens", "must identify distinct objects")
+            _fail(
+                f"{path}.file_object_identity_tokens",
+                "must identify distinct objects",
+            )
         normalized.append(
             {
                 "alias_group_id": group_id,
@@ -557,20 +656,29 @@ def _validate_alias_groups(value: object, *, item_ids: set[str]) -> list[dict[st
 
 def validate_source_custody(payload: object) -> dict[str, object]:
     """Normalize a candidate custody mapping without inspecting source bytes."""
-    root = _closed_mapping(payload, required=_CUSTODY_ROOT_FIELDS, path="SourceCustody")
+    root = _closed_mapping(
+        payload, required=_CUSTODY_ROOT_FIELDS, path="SourceCustody"
+    )
     if root["schema_version"] != SOURCE_CUSTODY_SCHEMA_VERSION:
         _fail("schema_version", "must equal source-custody-1.0")
     if root["identity_scheme"] != "HMAC-SHA-256":
         _fail("identity_scheme", "must equal HMAC-SHA-256")
     if root["identity_scheme_version"] != "r1c-file-identity-v1":
-        _fail("identity_scheme_version", "must equal r1c-file-identity-v1")
+        _fail(
+            "identity_scheme_version",
+            "must equal r1c-file-identity-v1",
+        )
     if root["numeric_policy_version"] != R1C_NUMERIC_POLICY_VERSION:
         _fail("numeric_policy_version", "must equal r1c-numeric-v1")
     status = root["status"]
     if status not in {"READY", "BLOCKED"}:
         _fail("status", "must be READY or BLOCKED")
     items_value = root["items"]
-    if not isinstance(items_value, list) or not items_value or len(items_value) > 10000:
+    if (
+        not isinstance(items_value, list)
+        or not items_value
+        or len(items_value) > 10000
+    ):
         _fail("items", "must contain between 1 and 10000 entries")
     normalized_items = [
         _validate_custody_item(item, index=index, root=root)
@@ -583,14 +691,24 @@ def validate_source_custody(payload: object) -> dict[str, object]:
     if len(set(relative_paths)) != len(relative_paths):
         _fail("items", "relative_path values must be unique")
     normalized_items.sort(key=lambda item: str(item["source_id"]))
-    alias_groups = _validate_alias_groups(root["alias_groups"], item_ids=set(source_ids))
+    alias_groups = _validate_alias_groups(
+        root["alias_groups"], item_ids=set(source_ids)
+    )
     group_ids = {str(group["alias_group_id"]) for group in alias_groups}
-    items_by_id = {str(item["source_id"]): item for item in normalized_items}
+    items_by_id = {
+        str(item["source_id"]): item for item in normalized_items
+    }
     for item in normalized_items:
         group_id = item["alias_group_id"]
         if group_id is not None and group_id not in group_ids:
-            _fail("items.alias_group_id", "must reference an alias group")
-        if item["custody_state"] in {"SAME_FILE_ALIAS", "DUPLICATE_BYTES"} and group_id is None:
+            _fail(
+                "items.alias_group_id",
+                "must reference an alias group",
+            )
+        if (
+            item["custody_state"] in {"SAME_FILE_ALIAS", "DUPLICATE_BYTES"}
+            and group_id is None
+        ):
             _fail(
                 "items.alias_group_id",
                 "is required for alias or duplicate custody states",
@@ -610,14 +728,21 @@ def validate_source_custody(payload: object) -> dict[str, object]:
                 "source_ids and item alias_group_id membership must agree",
             )
 
-        member_items = [items_by_id[source_id] for source_id in group["source_ids"]]
-        if any(item["custody_state"] != group["group_type"] for item in member_items):
+        member_items = [
+            items_by_id[source_id] for source_id in group["source_ids"]
+        ]
+        if any(
+            item["custody_state"] != group["group_type"]
+            for item in member_items
+        ):
             _fail(
                 f"alias_groups.{group_id}",
                 "group_type must match every member custody_state",
             )
 
-        observed_hashes = {item["observed_sha256"] for item in member_items}
+        observed_hashes = {
+            item["observed_sha256"] for item in member_items
+        }
         if None in observed_hashes or len(observed_hashes) != 1:
             _fail(
                 f"alias_groups.{group_id}",
@@ -629,14 +754,23 @@ def validate_source_custody(payload: object) -> dict[str, object]:
                 "observed_sha256 does not match its members",
             )
 
-        member_tokens = [item["file_object_identity_token"] for item in member_items]
-        member_paths = [item["path_binding_sha256"] for item in member_items]
+        member_tokens = [
+            item["file_object_identity_token"] for item in member_items
+        ]
+        member_paths = [
+            item["path_binding_sha256"] for item in member_items
+        ]
         if any(token is None for token in member_tokens) or any(
             path_binding is None for path_binding in member_paths
         ):
             _fail(
                 f"alias_groups.{group_id}",
                 "member object and path identities are required",
+            )
+        if len(set(member_paths)) != len(member_items):
+            _fail(
+                f"alias_groups.{group_id}",
+                "member path bindings must be distinct",
             )
         expected_tokens = sorted(set(member_tokens))
         expected_paths = sorted(set(member_paths))
@@ -650,20 +784,26 @@ def validate_source_custody(payload: object) -> dict[str, object]:
                 f"alias_groups.{group_id}",
                 "path_bindings do not match its members",
             )
-        if group["group_type"] == "SAME_FILE_ALIAS" and len(expected_tokens) != 1:
+        if (
+            group["group_type"] == "SAME_FILE_ALIAS"
+            and len(expected_tokens) != 1
+        ):
             _fail(
                 f"alias_groups.{group_id}",
                 "SAME_FILE_ALIAS requires one shared object identity",
             )
         if group["group_type"] == "DUPLICATE_BYTES" and (
-            len(expected_tokens) < 2 or len(expected_tokens) != len(member_items)
+            len(expected_tokens) < 2
+            or len(expected_tokens) != len(member_items)
         ):
             _fail(
                 f"alias_groups.{group_id}",
                 "DUPLICATE_BYTES requires independent object identities",
             )
+
     eligible_count = sum(
-        item["custody_state"] in _ELIGIBLE_CUSTODY_STATES for item in normalized_items
+        item["custody_state"] in _ELIGIBLE_CUSTODY_STATES
+        for item in normalized_items
     )
     blocking_count = len(normalized_items) - eligible_count
     if root["eligible_count"] != eligible_count:
@@ -682,7 +822,9 @@ def validate_source_custody(payload: object) -> dict[str, object]:
         "source_bundle_sha256": _hash(
             root["source_bundle_sha256"], path="source_bundle_sha256"
         ),
-        "approved_root_id": _identifier(root["approved_root_id"], path="approved_root_id"),
+        "approved_root_id": _identifier(
+            root["approved_root_id"], path="approved_root_id"
+        ),
         "approved_root_revision": _identifier(
             root["approved_root_revision"], path="approved_root_revision"
         ),
@@ -731,34 +873,52 @@ _EVALUATION_STATUSES = {"REUSABLE", "BLOCKED_EXPIRED", "STALE"}
 
 def _evaluation_timestamp(value: object) -> str:
     if not isinstance(value, str) or not _UTC_EVALUATION_RE.fullmatch(value):
-        _fail("evaluation_time_utc", "must be RFC 3339 UTC with six fractional digits and Z")
+        _fail(
+            "evaluation_time_utc",
+            "must be RFC 3339 UTC with six fractional digits and Z",
+        )
     try:
         _datetime.datetime.fromisoformat(value[:-1])
     except ValueError as exc:
-        raise SourceIntegrityError("evaluation_time_utc must be a valid UTC timestamp") from exc
+        raise SourceIntegrityError(
+            "evaluation_time_utc must be a valid UTC timestamp"
+        ) from exc
     return value
 
 
 def validate_source_fusion_evaluation(payload: object) -> dict[str, object]:
     """Normalize injected evaluation evidence without reading an ambient clock."""
     value = _closed_mapping(
-        payload, required=_EVALUATION_FIELDS, path="SourceFusionEvaluation"
+        payload,
+        required=_EVALUATION_FIELDS,
+        path="SourceFusionEvaluation",
     )
     if value["schema_version"] != SOURCE_FUSION_EVALUATION_SCHEMA_VERSION:
-        _fail("schema_version", "must equal source-fusion-evaluation-1.0")
+        _fail(
+            "schema_version",
+            "must equal source-fusion-evaluation-1.0",
+        )
     if value["expiry_policy_version"] != R1C_EXPIRY_POLICY_VERSION:
         _fail("expiry_policy_version", "must equal r1c-expiry-v1")
     status = value["status"]
     if status not in _EVALUATION_STATUSES:
         _fail("status", "has an unsupported value")
-    blocking_codes = _identifier_list(value["blocking_codes"], path="blocking_codes")
+    blocking_codes = _identifier_list(
+        value["blocking_codes"], path="blocking_codes"
+    )
     if status == "REUSABLE" and blocking_codes:
         _fail("blocking_codes", "must be empty for REUSABLE")
     if status != "REUSABLE" and not blocking_codes:
-        _fail("blocking_codes", "must be non-empty for a blocked evaluation")
+        _fail(
+            "blocking_codes",
+            "must be non-empty for a blocked evaluation",
+        )
     source = value["evaluation_time_source"]
     if not isinstance(source, str) or not _IDENTIFIER_RE.fullmatch(source):
-        _fail("evaluation_time_source", "must be a closed server-owned identifier")
+        _fail(
+            "evaluation_time_source",
+            "must be a closed server-owned identifier",
+        )
     return {
         "schema_version": SOURCE_FUSION_EVALUATION_SCHEMA_VERSION,
         "run_id": _identifier(value["run_id"], path="run_id"),
@@ -768,7 +928,9 @@ def validate_source_fusion_evaluation(payload: object) -> dict[str, object]:
         "fusion_input_sha256": _hash(
             value["fusion_input_sha256"], path="fusion_input_sha256"
         ),
-        "evaluation_time_utc": _evaluation_timestamp(value["evaluation_time_utc"]),
+        "evaluation_time_utc": _evaluation_timestamp(
+            value["evaluation_time_utc"]
+        ),
         "evaluation_time_source": source,
         "evaluation_time_evidence_sha256": _hash(
             value["evaluation_time_evidence_sha256"],
@@ -776,7 +938,8 @@ def validate_source_fusion_evaluation(payload: object) -> dict[str, object]:
         ),
         "expiry_policy_version": R1C_EXPIRY_POLICY_VERSION,
         "evaluated_reference_hashes": _hash_list(
-            value["evaluated_reference_hashes"], path="evaluated_reference_hashes"
+            value["evaluated_reference_hashes"],
+            path="evaluated_reference_hashes",
         ),
         "status": status,
         "blocking_codes": blocking_codes,
