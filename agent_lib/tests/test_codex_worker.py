@@ -850,3 +850,321 @@ def test_32_candidate_output_is_explicitly_untrusted_and_grants_no_apply_cad_vis
     assert result.promotion_safe is False
     forbidden = {"apply", "approve", "publish", "cad_truth", "verdict", "repair"}
     assert forbidden.isdisjoint({name.lower() for name in dir(result)})
+
+
+# Remediation RED matrix for #103/#104. These tests intentionally land before
+# production changes and exercise the two accepted review blockers.
+
+def test_remediation_33_task3_process_owner_exposes_handle_bound_control_surface() -> None:
+    import agent_lib.codex_worker_process as process_owner
+
+    assert "control_channel" in inspect.signature(
+        process_owner.launch_worker_process
+    ).parameters
+    assert callable(getattr(process_owner, "exchange_worker_control", None))
+    assert callable(getattr(process_owner, "run_worker_control_child", None))
+
+
+def test_remediation_34_control_channel_rejects_forged_handle() -> None:
+    import agent_lib.codex_worker_process as process_owner
+
+    exchange = getattr(process_owner, "exchange_worker_control")
+    with pytest.raises(process_owner.WorkerProcessError) as caught:
+        exchange(object(), {"operation": "probe"})
+    assert caught.value.code == "WORKER_HANDLE_INVALID"
+    assert SENTINEL not in str(caught.value)
+
+
+@pytest.mark.parametrize("kind", ["malformed", "oversized", "unknown_version"])
+def test_remediation_35_child_control_frames_fail_closed_without_raw_detail(
+    kind: str,
+) -> None:
+    import io
+    import json
+    import struct
+
+    import agent_lib.codex_worker_process as process_owner
+
+    maximum = getattr(process_owner, "MAX_CONTROL_FRAME_BYTES")
+    if kind == "malformed":
+        body = b"{not-json " + SENTINEL.encode("utf-8")
+        frame = struct.pack(">I", len(body)) + body
+    elif kind == "oversized":
+        frame = struct.pack(">I", maximum + 1)
+    else:
+        body = json.dumps(
+            {"version": 999, "request_id": 1, "payload": {"probe": True}}
+        ).encode("utf-8")
+        frame = struct.pack(">I", len(body)) + body
+    output = io.BytesIO()
+    exit_code = process_owner.run_worker_control_child(
+        lambda _payload: {"status": "ok"},
+        input_stream=io.BytesIO(frame),
+        output_stream=output,
+    )
+    assert exit_code != 0
+    assert SENTINEL not in output.getvalue().decode("utf-8", errors="ignore")
+
+
+def test_remediation_36_task3_uses_explicit_minimal_handle_inheritance_only() -> None:
+    source = (Path(__file__).parents[1] / "codex_worker_process.py").read_text(
+        encoding="utf-8"
+    )
+    assert "PROC_THREAD_ATTRIBUTE_HANDLE_LIST" in source
+    assert "EXTENDED_STARTUPINFO_PRESENT" in source
+    for forbidden in ("socket", "mcp_integration_lib", "app-server", "codex exec"):
+        assert forbidden not in source
+
+
+@pytest.mark.skipif(
+    __import__("os").name != "nt",
+    reason="supported Windows child-control custody evidence",
+)
+def test_remediation_37_real_windows_child_control_is_job_bound_sanitized_and_closed(
+    tmp_path: Path,
+) -> None:
+    import os
+    import sys
+
+    import agent_lib.codex_worker_process as process_owner
+
+    root = tmp_path / "disposable"
+    cwd = root / "cwd"
+    cwd.mkdir(parents=True)
+    source_environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "SystemRoot": os.environ.get("SystemRoot", r"C:\Windows"),
+        "WINDIR": os.environ.get("WINDIR", r"C:\Windows"),
+        "COMSPEC": os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe"),
+        "PATHEXT": os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD"),
+        "CUSTOM_SECRET": SENTINEL,
+    }
+    prepared = process_owner.prepare_worker_environment(
+        disposable_root=root,
+        cwd=cwd,
+        source_environment=source_environment,
+    )
+    repo_root = str(Path(__file__).parents[2])
+    child_code = (
+        "import os,sys;"
+        f"sys.path.insert(0,{repo_root!r});"
+        "from agent_lib.codex_worker_process import run_worker_control_child;"
+        "handler=lambda payload:{'pid':os.getpid(),'keys':sorted(os.environ),"
+        "'secret_present':'CUSTOM_SECRET' in os.environ};"
+        "raise SystemExit(run_worker_control_child(handler))"
+    )
+    handle = process_owner.launch_worker_process(
+        environment=prepared,
+        expected_disposable_root=prepared.disposable_root,
+        expected_cwd=prepared.cwd,
+        executable=Path(sys.executable).resolve(),
+        argv=("-c", child_code),
+        cleanup_deadline_seconds=5.0,
+        max_processes=8,
+        control_channel=True,
+    )
+    response = process_owner.exchange_worker_control(handle, {"operation": "probe"})
+    tree = handle.snapshot_process_tree()
+    assert response["pid"] in tree.member_pids
+    assert response["secret_present"] is False
+    assert {"CODEX_HOME", "TEMP", "TMP"}.issubset(response["keys"])
+    cleanup = process_owner.cleanup_worker_process(handle)
+    assert cleanup.success is True and cleanup.survivor_count == 0
+    with pytest.raises(process_owner.WorkerProcessError) as caught:
+        process_owner.exchange_worker_control(handle, {"operation": "late"})
+    assert caught.value.code == "WORKER_CONTROL_CLOSED"
+
+
+class _ChildOnlyBoundary(_FakeProcessBoundary):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[AdapterRequest] = []
+        self.failures: dict[str, BaseException] = {}
+        self.responses: dict[str, object] = {}
+
+    def invoke(self, handle: object, request: AdapterRequest) -> object:
+        del handle
+        self.requests.append(request)
+        failure = self.failures.get(request.operation)
+        if failure is not None:
+            raise failure
+        if request.operation in self.responses:
+            return self.responses[request.operation]
+        return _FakeAdapter().invoke(request)
+
+
+def test_remediation_38_host_sdk_import_and_delegate_traps_are_not_invoked(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    process = _ChildOnlyBoundary()
+    imported: list[str] = []
+    built: list[bool] = []
+
+    def loader(name: str) -> object:
+        imported.append(name)
+        raise AssertionError("host must not import official SDK")
+
+    lazy = LazyOfficialSdkAdapter(
+        adapter_factory=lambda _module: built.append(True) or _FakeAdapter(),
+        compatibility_check=lambda: {"status": "compatible"},
+        module_loader=loader,
+    )
+    session = _start(fx, adapter=lazy, process_boundary=process)
+    session.turn({}, timeout_seconds=1.0, now=NOW)
+    session.steer({}, timeout_seconds=1.0, now=NOW)
+    session.close(timeout_seconds=1.0, now=NOW)
+    assert imported == [] and built == []
+    assert [request.operation for request in process.requests] == [
+        "start",
+        "turn",
+        "steer",
+        "close",
+    ]
+
+
+def test_remediation_39_interrupt_and_cancel_route_through_child_bound_seam(
+    tmp_path: Path,
+) -> None:
+    first = _fixture(tmp_path / "interrupt")
+    first_process = _ChildOnlyBoundary()
+    first_session = _start(first, process_boundary=first_process)
+    first_session.interrupt(timeout_seconds=1.0, now=NOW)
+    assert [request.operation for request in first_process.requests] == [
+        "start",
+        "interrupt",
+    ]
+
+    second = _fixture(tmp_path / "cancel")
+    second_process = _ChildOnlyBoundary()
+    second_session = _start(second, process_boundary=second_process)
+    second_session.cancel(timeout_seconds=1.0, now=NOW)
+    assert [request.operation for request in second_process.requests] == [
+        "start",
+        "interrupt",
+    ]
+    assert second_process.requests[-1].cancelled is True
+
+
+def _survivor_cleanup() -> WorkerCleanupResult:
+    return WorkerCleanupResult(
+        status="CLEANUP_FAILED",
+        success=False,
+        promotion_safe=False,
+        survivor_pids=(4102,),
+        survivor_count=1,
+        error_code="WORKER_CLEANUP_SURVIVORS",
+    )
+
+
+@pytest.mark.parametrize(
+    ("cleanup_mode", "expected_code"),
+    [
+        ("exception", "WORKER_CLEANUP_FAILED"),
+        ("malformed", "WORKER_CLEANUP_EVIDENCE_INVALID"),
+        ("survivor", "WORKER_CLEANUP_FAILED"),
+    ],
+)
+def test_remediation_40_start_provider_failure_preserves_cleanup_dominance(
+    tmp_path: Path,
+    cleanup_mode: str,
+    expected_code: str,
+) -> None:
+    fx = _fixture(tmp_path)
+    fx.adapter.failures["start"] = RuntimeError(SENTINEL)
+    if cleanup_mode == "exception":
+        def cleanup(_handle: object) -> object:
+            raise RuntimeError(SENTINEL)
+        fx.process.cleanup = cleanup  # type: ignore[method-assign]
+    elif cleanup_mode == "malformed":
+        fx.process.cleanup_result = SimpleNamespace(status="CLEANUP_FAILED", raw=SENTINEL)
+    else:
+        fx.process.cleanup_result = _survivor_cleanup()
+
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == expected_code
+    assert caught.value.primary_code == "WORKER_PROVIDER_FAILED"
+    assert SENTINEL not in str(caught.value) and SENTINEL not in repr(caught.value)
+    if cleanup_mode == "survivor":
+        assert caught.value.cleanup_result == _survivor_cleanup()
+
+
+def test_remediation_41_invalid_process_evidence_cannot_hide_cleanup_survivors(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    fx.process.cleanup_result = _survivor_cleanup()
+
+    def mutate(handle: object) -> None:
+        handle.tree = replace(handle.tree, verified=False)
+
+    fx.process.handle_mutator = mutate
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == "WORKER_CLEANUP_FAILED"
+    assert caught.value.primary_code == "WORKER_PROCESS_EVIDENCE_INVALID"
+    assert caught.value.cleanup_result == _survivor_cleanup()
+
+
+def test_remediation_42_malformed_start_response_cannot_hide_cleanup_survivors(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    fx.adapter.responses["start"] = {
+        "status": "mystery",
+        "thread_id": fx.binding.thread_id,
+        "events": [],
+    }
+    fx.process.cleanup_result = _survivor_cleanup()
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == "WORKER_CLEANUP_FAILED"
+    assert caught.value.primary_code == "WORKER_PROVIDER_RESPONSE_INVALID"
+    assert caught.value.cleanup_result == _survivor_cleanup()
+
+
+def test_remediation_43_start_timeout_cleanup_failure_dominates_timeout(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    fx.adapter.failures["start"] = TimeoutError(SENTINEL)
+    fx.process.cleanup_result = _survivor_cleanup()
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == "WORKER_CLEANUP_FAILED"
+    assert caught.value.primary_code == "WORKER_TIMEOUT"
+    assert caught.value.cleanup_result == _survivor_cleanup()
+
+
+def test_remediation_44_verified_cleanup_keeps_original_start_failure_category(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    fx.adapter.failures["start"] = RuntimeError(SENTINEL)
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == "WORKER_PROVIDER_FAILED"
+    assert caught.value.primary_code == "WORKER_PROVIDER_FAILED"
+    assert isinstance(caught.value.cleanup_result, WorkerCleanupResult)
+    assert caught.value.cleanup_result.success is True
+    assert SENTINEL not in str(caught.value)
+
+
+def test_remediation_45_no_forbidden_transport_or_real_provider_route_is_added() -> None:
+    worker_source = SOURCE_MODULE.read_text(encoding="utf-8").lower()
+    process_source = (Path(__file__).parents[1] / "codex_worker_process.py").read_text(
+        encoding="utf-8"
+    ).lower()
+    forbidden = (
+        "app-server",
+        "codex exec",
+        "mcp_integration_lib",
+        "socket.socket",
+        "http://",
+        "https://",
+        "tempfile.namedtemporaryfile",
+    )
+    for token in forbidden:
+        assert token not in worker_source
+        assert token not in process_source
