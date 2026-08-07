@@ -112,6 +112,8 @@ class _FakeProcessBoundary:
         )
         self.attestation_mutator = None
         self.handle_mutator = None
+        self.adapter: _FakeAdapter | None = None
+        self._compatible = False
 
     def start(
         self,
@@ -147,6 +149,17 @@ class _FakeProcessBoundary:
         if self.handle_mutator is not None:
             self.handle_mutator(handle)
         return attestation, handle
+
+    def invoke(self, handle: object, request: AdapterRequest) -> object:
+        del handle
+        self.calls.append(("invoke", request))
+        adapter = self.adapter
+        if adapter is None:
+            raise AssertionError("fake child adapter not configured")
+        if not self._compatible:
+            adapter.ensure_compatible()
+            self._compatible = True
+        return adapter.invoke(request)
 
     def cleanup(self, handle: object) -> object:
         self.calls.append(("cleanup", handle))
@@ -196,14 +209,17 @@ def _fixture(tmp_path: Path, *, thread_id: str = "THREAD-001") -> _Fixture:
         worker_context=worker_context,
         now=NOW,
     )
+    adapter = _FakeAdapter()
+    process = _FakeProcessBoundary()
+    process.adapter = adapter
     return _Fixture(
         schema_path=schema_path,
         handoff=handoff,
         authority=authority,
         worker_context=worker_context,
         binding=binding,
-        adapter=_FakeAdapter(),
-        process=_FakeProcessBoundary(),
+        adapter=adapter,
+        process=process,
     )
 
 
@@ -264,9 +280,7 @@ def _assert_failed(result: CodexWorkerResult, code: str | None = None) -> None:
         assert result.failure_code == code
 
 
-def test_01_start_valid_exact_binding_uses_fake_only_and_returns_session(
-    tmp_path: Path,
-) -> None:
+def test_01_start_valid_exact_binding_uses_fake_only_and_returns_session(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     session = _start(fx)
     assert isinstance(session, CodexWorkerSession)
@@ -320,10 +334,7 @@ def test_05_resume_rejects_model_or_config_drift(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     drifted = replace(
         fx.binding,
-        model_config_identity={
-            "model_identity": "other",
-            "config_sha256": "f" * 64,
-        },
+        model_config_identity={"model_identity": "other", "config_sha256": "f" * 64},
     )
     with pytest.raises(CodexWorkerError) as caught:
         resume_codex_worker(
@@ -344,11 +355,7 @@ def test_06_resume_rejects_instruction_source_drift(tmp_path: Path) -> None:
     drifted = replace(
         fx.binding,
         instruction_source_identity=(
-            {
-                "source_id": "foreign",
-                "role": "system",
-                "sha256": "f" * 64,
-            },
+            {"source_id": "foreign", "role": "system", "sha256": "f" * 64},
         ),
     )
     with pytest.raises(CodexWorkerError) as caught:
@@ -399,10 +406,7 @@ def test_08_schema_hash_validator_and_toctou_drift_fail_closed(tmp_path: Path) -
             _start(fx, binding=binding)
         assert caught.value.code == "WORKER_AUTHORITY_MISMATCH"
     session = _start(fx)
-    fx.schema_path.write_text(
-        '{"type":"object","changed":true}',
-        encoding="utf-8",
-    )
+    fx.schema_path.write_text('{"type":"object","changed":true}', encoding="utf-8")
     result = session.turn({"prompt": "untrusted"}, timeout_seconds=1.0, now=NOW)
     _assert_failed(result, "WORKER_AUTHORITY_MISMATCH")
     assert any(call[0] == "cleanup" for call in fx.process.calls)
@@ -459,10 +463,7 @@ def test_10_fork_rejects_reused_handoff(tmp_path: Path) -> None:
 
 def test_11_fork_rejects_inherited_approval(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
-    target = _fresh_target(
-        tmp_path / "target",
-        approval_reference=fx.binding.approval_reference,
-    )
+    target = _fresh_target(tmp_path / "target", approval_reference=fx.binding.approval_reference)
     with pytest.raises(CodexWorkerError) as caught:
         fork_codex_worker(
             source_handoff=fx.handoff,
@@ -534,11 +535,7 @@ def test_15_full_access_sandbox_is_rejected_before_provider_work(tmp_path: Path)
     fx = _fixture(tmp_path)
     bad = replace(
         fx.worker_context,
-        sandbox_policy={
-            "roots": ["C:/"],
-            "write_policy": "FULL_ACCESS",
-            "cwd": "C:/",
-        },
+        sandbox_policy={"roots": ["C:/"], "write_policy": "FULL_ACCESS", "cwd": "C:/"},
     )
     with pytest.raises(CodexWorkerError) as caught:
         _start(fx, worker_context=bad)
@@ -546,9 +543,7 @@ def test_15_full_access_sandbox_is_rejected_before_provider_work(tmp_path: Path)
     assert fx.adapter.calls == [] and fx.process.calls == []
 
 
-def test_16_public_lifecycle_has_no_mutable_caller_selected_schema_path(
-    tmp_path: Path,
-) -> None:
+def test_16_public_lifecycle_has_no_mutable_caller_selected_schema_path(tmp_path: Path) -> None:
     for function in (start_codex_worker, resume_codex_worker, fork_codex_worker):
         assert "schema_path" not in inspect.signature(function).parameters
     fx = _fixture(tmp_path)
@@ -566,9 +561,7 @@ def test_16_public_lifecycle_has_no_mutable_caller_selected_schema_path(
         )
 
 
-def test_17_unexpected_writable_root_or_environment_evidence_is_rejected(
-    tmp_path: Path,
-) -> None:
+def test_17_unexpected_writable_root_or_environment_evidence_is_rejected(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
 
     def mutate(attestation: WorkerEnvironmentAttestation) -> WorkerEnvironmentAttestation:
@@ -594,16 +587,10 @@ def test_18_turn_timeout_rejects_output_and_enters_cleanup(tmp_path: Path) -> No
     assert SENTINEL not in repr(result)
 
 
-def test_19_steer_preserves_exact_authority_policy_and_schema_binding(
-    tmp_path: Path,
-) -> None:
+def test_19_steer_preserves_exact_authority_policy_and_schema_binding(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     session = _start(fx)
-    result = session.steer(
-        {"instruction": "bounded"},
-        timeout_seconds=1.0,
-        now=NOW,
-    )
+    result = session.steer({"instruction": "bounded"}, timeout_seconds=1.0, now=NOW)
     assert result.success is True
     request = fx.adapter.calls[-1]
     assert request.operation == "steer"
@@ -625,9 +612,7 @@ def test_20_interrupt_failure_cannot_return_candidate_success(tmp_path: Path) ->
     assert any(call[0] == "cleanup" for call in fx.process.calls)
 
 
-def test_21_local_cancel_marks_cancelled_before_interrupt_and_rejects_late_output(
-    tmp_path: Path,
-) -> None:
+def test_21_local_cancel_marks_cancelled_before_interrupt_and_rejects_late_output(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     session = _start(fx)
     fx.adapter.responses["interrupt"] = {
@@ -645,18 +630,13 @@ def test_21_local_cancel_marks_cancelled_before_interrupt_and_rejects_late_outpu
 
 
 @pytest.mark.parametrize("mode", ["cancel", "timeout", "provider_failure"])
-def test_22_cancel_timeout_and_provider_failure_always_cleanup(
-    tmp_path: Path,
-    mode: str,
-) -> None:
+def test_22_cancel_timeout_and_provider_failure_always_cleanup(tmp_path: Path, mode: str) -> None:
     fx = _fixture(tmp_path)
     session = _start(fx)
     if mode == "cancel":
         session.cancel(timeout_seconds=1.0, now=NOW)
     else:
-        fx.adapter.failures["turn"] = (
-            TimeoutError() if mode == "timeout" else RuntimeError()
-        )
+        fx.adapter.failures["turn"] = TimeoutError() if mode == "timeout" else RuntimeError()
         session.turn({}, timeout_seconds=0.1, now=NOW)
     assert [name for name, _ in fx.process.calls].count("cleanup") == 1
 
@@ -693,9 +673,7 @@ def test_24_malformed_or_unverified_cleanup_evidence_is_failure(tmp_path: Path) 
     _assert_failed(result, "WORKER_CLEANUP_EVIDENCE_INVALID")
 
 
-def test_25_malformed_or_unknown_provider_terminal_event_is_failure(
-    tmp_path: Path,
-) -> None:
+def test_25_malformed_or_unknown_provider_terminal_event_is_failure(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     fx.adapter.responses["turn"] = {
         "status": "mystery",
@@ -710,9 +688,7 @@ def test_25_malformed_or_unknown_provider_terminal_event_is_failure(
     assert any(call[0] == "cleanup" for call in fx.process.calls)
 
 
-def test_26_provider_exception_becomes_categorical_sanitized_failure(
-    tmp_path: Path,
-) -> None:
+def test_26_provider_exception_becomes_categorical_sanitized_failure(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     fx.adapter.failures["turn"] = RuntimeError(SENTINEL)
     session = _start(fx)
@@ -721,9 +697,7 @@ def test_26_provider_exception_becomes_categorical_sanitized_failure(
     assert SENTINEL not in repr(result)
 
 
-def test_27_raw_prompt_env_stream_credential_or_path_never_appears_in_public_failure_or_events(
-    tmp_path: Path,
-) -> None:
+def test_27_raw_prompt_env_stream_credential_or_path_never_appears_in_public_failure_or_events(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     fx.adapter.responses["turn"] = {
         "status": "failed",
@@ -738,9 +712,7 @@ def test_27_raw_prompt_env_stream_credential_or_path_never_appears_in_public_fai
     assert all(SENTINEL not in repr(event) for event in result.events)
 
 
-def test_28_close_is_idempotent_after_verified_cleanup_and_sticky_after_failure(
-    tmp_path: Path,
-) -> None:
+def test_28_close_is_idempotent_after_verified_cleanup_and_sticky_after_failure(tmp_path: Path) -> None:
     good = _fixture(tmp_path / "good")
     session = _start(good)
     first = session.close(timeout_seconds=1.0, now=NOW)
@@ -789,25 +761,28 @@ def test_29_lazy_official_sdk_adapter_imports_only_official_sdk_and_has_no_impli
     assert "mcp_integration_lib" not in source
 
 
-def test_30_compatibility_rejection_stops_before_provider_or_process_work(
-    tmp_path: Path,
-) -> None:
+def test_30_compatibility_rejection_is_child_bound_and_cleanup_preserved(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
-    built: list[bool] = []
+    process = _ChildOnlyBoundary()
+    process.failures["start"] = CodexWorkerError("WORKER_SDK_INCOMPATIBLE")
+    imported: list[str] = []
 
-    def reject() -> object:
-        raise RuntimeError(SENTINEL)
+    def loader(name: str) -> object:
+        imported.append(name)
+        raise AssertionError("host must not import")
 
     lazy = LazyOfficialSdkAdapter(
-        adapter_factory=lambda _module: built.append(True) or _FakeAdapter(),
-        compatibility_check=reject,
-        module_loader=lambda _name: object(),
+        adapter_factory=lambda _module: _FakeAdapter(),
+        compatibility_check=lambda: {"status": "compatible"},
+        module_loader=loader,
     )
     with pytest.raises(CodexWorkerError) as caught:
-        _start(fx, adapter=lazy)
+        _start(fx, adapter=lazy, process_boundary=process)
     assert caught.value.code == "WORKER_SDK_INCOMPATIBLE"
-    assert built == [] and fx.process.calls == []
-    assert SENTINEL not in str(caught.value)
+    assert caught.value.primary_code == "WORKER_SDK_INCOMPATIBLE"
+    assert isinstance(caught.value.cleanup_result, WorkerCleanupResult)
+    assert imported == []
+    assert any(name == "cleanup" for name, _ in process.calls)
 
 
 def test_31_module_ownership_has_no_autocad_file_ipc_repair_verdict_publication_or_persistence_routes() -> None:
@@ -827,40 +802,26 @@ def test_31_module_ownership_has_no_autocad_file_ipc_repair_verdict_publication_
     }
     assert {name.split(".", 1)[0] for name in imported}.isdisjoint(forbidden)
     source = SOURCE_MODULE.read_text(encoding="utf-8").lower()
-    for token in (
-        "repair_executor",
-        "verified_publisher",
-        "manifest_store",
-        "checkpoint_store",
-    ):
+    for token in ("repair_executor", "verified_publisher", "manifest_store", "checkpoint_store"):
         assert token not in source
 
 
-def test_32_candidate_output_is_explicitly_untrusted_and_grants_no_apply_cad_visual_or_publication_authority(
-    tmp_path: Path,
-) -> None:
+def test_32_candidate_output_is_explicitly_untrusted_and_grants_no_apply_cad_visual_or_publication_authority(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     session = _start(fx)
     result = session.turn({}, timeout_seconds=1.0, now=NOW)
     assert result.success is True
-    assert result.candidate_output == MappingProxyType(
-        {"schema_version": "repair-plan-1.0"}
-    )
+    assert result.candidate_output == MappingProxyType({"schema_version": "repair-plan-1.0"})
     assert result.candidate_trusted is False
     assert result.promotion_safe is False
     forbidden = {"apply", "approve", "publish", "cad_truth", "verdict", "repair"}
     assert forbidden.isdisjoint({name.lower() for name in dir(result)})
 
 
-# Remediation RED matrix for #103/#104. These tests intentionally land before
-# production changes and exercise the two accepted review blockers.
-
 def test_remediation_33_task3_process_owner_exposes_handle_bound_control_surface() -> None:
     import agent_lib.codex_worker_process as process_owner
 
-    assert "control_channel" in inspect.signature(
-        process_owner.launch_worker_process
-    ).parameters
+    assert "control_channel" in inspect.signature(process_owner.launch_worker_process).parameters
     assert callable(getattr(process_owner, "exchange_worker_control", None))
     assert callable(getattr(process_owner, "run_worker_control_child", None))
 
@@ -876,13 +837,10 @@ def test_remediation_34_control_channel_rejects_forged_handle() -> None:
 
 
 @pytest.mark.parametrize("kind", ["malformed", "oversized", "unknown_version"])
-def test_remediation_35_child_control_frames_fail_closed_without_raw_detail(
-    kind: str,
-) -> None:
+def test_remediation_35_child_control_frames_fail_closed_without_raw_detail(kind: str) -> None:
     import io
     import json
     import struct
-
     import agent_lib.codex_worker_process as process_owner
 
     maximum = getattr(process_owner, "MAX_CONTROL_FRAME_BYTES")
@@ -892,9 +850,7 @@ def test_remediation_35_child_control_frames_fail_closed_without_raw_detail(
     elif kind == "oversized":
         frame = struct.pack(">I", maximum + 1)
     else:
-        body = json.dumps(
-            {"version": 999, "request_id": 1, "payload": {"probe": True}}
-        ).encode("utf-8")
+        body = json.dumps({"version": 999, "request_id": 1, "payload": {"probe": True}}).encode("utf-8")
         frame = struct.pack(">I", len(body)) + body
     output = io.BytesIO()
     exit_code = process_owner.run_worker_control_child(
@@ -907,25 +863,17 @@ def test_remediation_35_child_control_frames_fail_closed_without_raw_detail(
 
 
 def test_remediation_36_task3_uses_explicit_minimal_handle_inheritance_only() -> None:
-    source = (Path(__file__).parents[1] / "codex_worker_process.py").read_text(
-        encoding="utf-8"
-    )
+    source = (Path(__file__).parents[1] / "codex_worker_process.py").read_text(encoding="utf-8")
     assert "PROC_THREAD_ATTRIBUTE_HANDLE_LIST" in source
     assert "EXTENDED_STARTUPINFO_PRESENT" in source
     for forbidden in ("socket", "mcp_integration_lib", "app-server", "codex exec"):
         assert forbidden not in source
 
 
-@pytest.mark.skipif(
-    __import__("os").name != "nt",
-    reason="supported Windows child-control custody evidence",
-)
-def test_remediation_37_real_windows_child_control_is_job_bound_sanitized_and_closed(
-    tmp_path: Path,
-) -> None:
+@pytest.mark.skipif(__import__("os").name != "nt", reason="supported Windows child-control custody evidence")
+def test_remediation_37_real_windows_child_control_is_job_bound_sanitized_and_closed(tmp_path: Path) -> None:
     import os
     import sys
-
     import agent_lib.codex_worker_process as process_owner
 
     root = tmp_path / "disposable"
@@ -993,9 +941,7 @@ class _ChildOnlyBoundary(_FakeProcessBoundary):
         return _FakeAdapter().invoke(request)
 
 
-def test_remediation_38_host_sdk_import_and_delegate_traps_are_not_invoked(
-    tmp_path: Path,
-) -> None:
+def test_remediation_38_host_sdk_import_and_delegate_traps_are_not_invoked(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     process = _ChildOnlyBoundary()
     imported: list[str] = []
@@ -1015,34 +961,21 @@ def test_remediation_38_host_sdk_import_and_delegate_traps_are_not_invoked(
     session.steer({}, timeout_seconds=1.0, now=NOW)
     session.close(timeout_seconds=1.0, now=NOW)
     assert imported == [] and built == []
-    assert [request.operation for request in process.requests] == [
-        "start",
-        "turn",
-        "steer",
-        "close",
-    ]
+    assert [request.operation for request in process.requests] == ["start", "turn", "steer", "close"]
 
 
-def test_remediation_39_interrupt_and_cancel_route_through_child_bound_seam(
-    tmp_path: Path,
-) -> None:
+def test_remediation_39_interrupt_and_cancel_route_through_child_bound_seam(tmp_path: Path) -> None:
     first = _fixture(tmp_path / "interrupt")
     first_process = _ChildOnlyBoundary()
     first_session = _start(first, process_boundary=first_process)
     first_session.interrupt(timeout_seconds=1.0, now=NOW)
-    assert [request.operation for request in first_process.requests] == [
-        "start",
-        "interrupt",
-    ]
+    assert [request.operation for request in first_process.requests] == ["start", "interrupt"]
 
     second = _fixture(tmp_path / "cancel")
     second_process = _ChildOnlyBoundary()
     second_session = _start(second, process_boundary=second_process)
     second_session.cancel(timeout_seconds=1.0, now=NOW)
-    assert [request.operation for request in second_process.requests] == [
-        "start",
-        "interrupt",
-    ]
+    assert [request.operation for request in second_process.requests] == ["start", "interrupt"]
     assert second_process.requests[-1].cancelled is True
 
 
@@ -1090,9 +1023,7 @@ def test_remediation_40_start_provider_failure_preserves_cleanup_dominance(
         assert caught.value.cleanup_result == _survivor_cleanup()
 
 
-def test_remediation_41_invalid_process_evidence_cannot_hide_cleanup_survivors(
-    tmp_path: Path,
-) -> None:
+def test_remediation_41_invalid_process_evidence_cannot_hide_cleanup_survivors(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     fx.process.cleanup_result = _survivor_cleanup()
 
@@ -1107,9 +1038,7 @@ def test_remediation_41_invalid_process_evidence_cannot_hide_cleanup_survivors(
     assert caught.value.cleanup_result == _survivor_cleanup()
 
 
-def test_remediation_42_malformed_start_response_cannot_hide_cleanup_survivors(
-    tmp_path: Path,
-) -> None:
+def test_remediation_42_malformed_start_response_cannot_hide_cleanup_survivors(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     fx.adapter.responses["start"] = {
         "status": "mystery",
@@ -1124,9 +1053,7 @@ def test_remediation_42_malformed_start_response_cannot_hide_cleanup_survivors(
     assert caught.value.cleanup_result == _survivor_cleanup()
 
 
-def test_remediation_43_start_timeout_cleanup_failure_dominates_timeout(
-    tmp_path: Path,
-) -> None:
+def test_remediation_43_start_timeout_cleanup_failure_dominates_timeout(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     fx.adapter.failures["start"] = TimeoutError(SENTINEL)
     fx.process.cleanup_result = _survivor_cleanup()
@@ -1137,9 +1064,7 @@ def test_remediation_43_start_timeout_cleanup_failure_dominates_timeout(
     assert caught.value.cleanup_result == _survivor_cleanup()
 
 
-def test_remediation_44_verified_cleanup_keeps_original_start_failure_category(
-    tmp_path: Path,
-) -> None:
+def test_remediation_44_verified_cleanup_keeps_original_start_failure_category(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     fx.adapter.failures["start"] = RuntimeError(SENTINEL)
     with pytest.raises(CodexWorkerError) as caught:
@@ -1153,9 +1078,7 @@ def test_remediation_44_verified_cleanup_keeps_original_start_failure_category(
 
 def test_remediation_45_no_forbidden_transport_or_real_provider_route_is_added() -> None:
     worker_source = SOURCE_MODULE.read_text(encoding="utf-8").lower()
-    process_source = (Path(__file__).parents[1] / "codex_worker_process.py").read_text(
-        encoding="utf-8"
-    ).lower()
+    process_source = (Path(__file__).parents[1] / "codex_worker_process.py").read_text(encoding="utf-8").lower()
     forbidden = (
         "app-server",
         "codex exec",
