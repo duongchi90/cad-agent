@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_vision_handoff import _bind, _base_payload, _write_schema
+from tests.test_vision_handoff import _authority_context, _bind, _base_payload, _write_schema
 
 
 def _module():
@@ -66,4 +66,63 @@ def test_binding_rejects_changed_provider_schema_bytes(tmp_path: Path) -> None:
             schema_id="repair-plan",
             schema_version="repair-plan-1.0",
             validator_version="vision-handoff-validator-1.0",
+        )
+
+
+@pytest.mark.parametrize(
+    ("group", "field", "value"),
+    [
+        ("identity", "handoff_id", "FOREIGN-HANDOFF"),
+        ("source", "source", {"role": "foreign"}),
+        ("accepted_base", "accepted_base", {"role": "foreign"}),
+        ("scope", "scope", {"components": ["foreign"]}),
+        ("protected", "protected_constraints", {"handles": ["foreign"]}),
+        ("instruction", "instruction_sources", [{"source_id": "foreign"}]),
+        ("approval", "approval_reference", "FOREIGN-APPROVAL"),
+        ("workspace", "workspace", {"roots": ["C:/foreign"], "write_policy": "DISPOSABLE_ONLY"}),
+        ("allowed_operations", "allowed_operations", ["FOREIGN_OPERATION"]),
+        ("forbidden_mutations", "forbidden_mutations", ["FOREIGN_MUTATION"]),
+        ("required_verification_gates", "required_verification_gates", ["FOREIGN_GATE"]),
+        (
+            "provider",
+            "provider_policy",
+            {
+                "approval_mode": "deny_all",
+                "experimental_api": False,
+                "model_identity": "foreign-model",
+                "config_sha256": "f" * 64,
+            },
+        ),
+    ],
+)
+def test_every_authority_group_mismatch_fails_closed(
+    tmp_path: Path, group: str, field: str, value: object
+) -> None:
+    payload = _base_payload()
+    payload[field] = value
+    with pytest.raises(ValueError, match=group):
+        _bind(
+            _write_schema(tmp_path / "schema.json"),
+            payload,
+            authority_context=_authority_context(),
+        )
+
+
+def test_validate_compares_every_authority_group_against_context(tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    expected_payload = _base_payload()
+    expected_context = _authority_context(expected_payload)
+    handoff = _bind(schema_path, authority_context=expected_context)
+    foreign_payload = _base_payload()
+    foreign_payload["provider_policy"]["model_identity"] = "foreign-model"
+    foreign_context = _authority_context(foreign_payload)
+    with pytest.raises(ValueError, match="provider"):
+        module.validate_vision_handoff(
+            handoff.payload,
+            schema_path=schema_path,
+            schema_id="repair-plan",
+            schema_version="repair-plan-1.0",
+            validator_version="vision-handoff-validator-1.0",
+            authority_context=foreign_context,
         )

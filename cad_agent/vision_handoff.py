@@ -99,11 +99,19 @@ def _assert_finite_json(value: object, *, path: str = "$") -> None:
             _assert_finite_json(item, path=f"{path}[{index}]")
 
 
+def _canonical_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _canonical_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_value(item) for item in value]
+    return value
+
+
 def _canonical_bytes(value: object) -> bytes:
     _assert_finite_json(value)
     try:
         return json.dumps(
-            value,
+            _canonical_value(value),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -158,7 +166,7 @@ def _bool(value: object, *, path: str) -> bool:
 
 
 def _string_list(value: object, *, path: str, minimum: int = 0) -> list[str]:
-    if not isinstance(value, list) or len(value) < minimum:
+    if not isinstance(value, (list, tuple)) or len(value) < minimum:
         _fail(f"{path} must be a list with at least {minimum} items")
     result: list[str] = []
     for index, item in enumerate(value):
@@ -169,7 +177,7 @@ def _string_list(value: object, *, path: str, minimum: int = 0) -> list[str]:
 
 
 def _non_empty_string_list(value: object, *, path: str, minimum: int = 0) -> list[str]:
-    if not isinstance(value, list) or len(value) < minimum:
+    if not isinstance(value, (list, tuple)) or len(value) < minimum:
         _fail(f"{path} must be a list with at least {minimum} items")
     result = []
     for index, item in enumerate(value):
@@ -185,7 +193,7 @@ def _reject_forbidden_fields(value: object, *, path: str = "handoff") -> None:
             if key in _FORBIDDEN_AUTHORITY_FIELDS:
                 _fail(f"{path}.{key} is a forbidden authority field")
             _reject_forbidden_fields(nested, path=f"{path}.{key}")
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         for index, nested in enumerate(value):
             _reject_forbidden_fields(nested, path=f"{path}[{index}]")
 
@@ -227,7 +235,7 @@ def _validate_identity_section(payload: Mapping[str, Any], *, key: str) -> None:
 
 
 def _validate_list_object(value: object, *, fields: set[str], path: str) -> list[dict[str, Any]]:
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, (list, tuple)) or not value:
         _fail(f"{path} must be a non-empty list")
     result: list[dict[str, Any]] = []
     for index, item in enumerate(value):
@@ -385,9 +393,43 @@ def _snapshot_schema(path: Path, *, schema_id: str, schema_version: str, validat
 def _freeze(value: object) -> object:
     if isinstance(value, Mapping):
         return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
     return value
+
+
+def _thaw(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return copy.deepcopy(value)
+
+
+@dataclass(frozen=True)
+class ServerOwnedAuthorityContext:
+    """Complete immutable server-owned expectations for one handoff run."""
+
+    handoff_id: str
+    program_id: str
+    run_id: str
+    request_id: str
+    source: Mapping[str, object]
+    accepted_base: Mapping[str, object]
+    scope: Mapping[str, object]
+    protected_constraints: Mapping[str, object]
+    instruction_sources: Sequence[Mapping[str, object]]
+    approval_reference: str
+    approval_authority: str
+    workspace: Mapping[str, object]
+    allowed_operations: Sequence[str]
+    forbidden_mutations: Sequence[str]
+    required_verification_gates: Sequence[str]
+    provider_policy: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            object.__setattr__(self, field_name, _freeze(getattr(self, field_name)))
 
 
 @dataclass(frozen=True)
@@ -418,31 +460,132 @@ class ValidatedVisionHandoff:
         )
 
 
-def _compare_expected(actual: object, expected: object, *, name: str) -> None:
-    if _canonical_bytes(actual) != _canonical_bytes(expected):
-        _fail(f"{name} identity or boundary does not match the server-owned expectation")
+def _authority_context_payload(context: ServerOwnedAuthorityContext) -> dict[str, object]:
+    return {
+        "handoff_id": context.handoff_id,
+        "program_id": context.program_id,
+        "run_id": context.run_id,
+        "request_id": context.request_id,
+        "source": _thaw(context.source),
+        "accepted_base": _thaw(context.accepted_base),
+        "scope": _thaw(context.scope),
+        "protected_constraints": _thaw(context.protected_constraints),
+        "instruction_sources": _thaw(context.instruction_sources),
+        "approval_reference": context.approval_reference,
+        "approval_authority": context.approval_authority,
+        "workspace": _thaw(context.workspace),
+        "allowed_operations": _thaw(context.allowed_operations),
+        "forbidden_mutations": _thaw(context.forbidden_mutations),
+        "required_verification_gates": _thaw(context.required_verification_gates),
+        "provider_policy": _thaw(context.provider_policy),
+    }
 
 
-def _validate_server_expectations(
-    payload: Mapping[str, Any],
-    *,
-    expected_identity: Mapping[str, object] | None,
-    expected_scope: Mapping[str, object] | None,
-    expected_protected_constraints: Mapping[str, object] | None,
-    expected_instruction_sources: Sequence[Mapping[str, object]] | None,
+def _validate_authority_context(
+    payload: Mapping[str, Any], authority_context: object
 ) -> None:
-    if expected_identity is not None:
-        for key, expected in expected_identity.items():
-            if key not in {"handoff_id", "program_id", "run_id", "request_id", "source", "accepted_base"}:
-                _fail(f"unsupported expected identity field: {key}")
-            if key not in payload or payload[key] != expected:
-                _fail(f"{key} identity does not match the server-owned expectation")
-    if expected_scope is not None:
-        _compare_expected(payload["scope"], expected_scope, name="scope")
-    if expected_protected_constraints is not None:
-        _compare_expected(payload["protected_constraints"], expected_protected_constraints, name="protected constraints")
-    if expected_instruction_sources is not None:
-        _compare_expected(payload["instruction_sources"], list(expected_instruction_sources), name="instruction source")
+    if not isinstance(authority_context, ServerOwnedAuthorityContext):
+        _fail("authority context must be a complete ServerOwnedAuthorityContext")
+    expected = _authority_context_payload(authority_context)
+    for field in ("handoff_id", "program_id", "run_id", "request_id"):
+        _identifier(expected[field], path=f"authority_context.{field}")
+    _validate_file_identity(expected["source"], path="authority_context.source")
+    _validate_file_identity(expected["accepted_base"], path="authority_context.accepted_base")
+    scope = _keys(expected["scope"], required=set(_SCOPE_FIELDS), path="authority_context.scope")
+    for field in _SCOPE_FIELDS:
+        _string_list(scope[field], path=f"authority_context.scope.{field}", minimum=1)
+    protected = _keys(
+        expected["protected_constraints"],
+        required=set(_PROTECTED_FIELDS),
+        path="authority_context.protected_constraints",
+    )
+    for field in _PROTECTED_FIELDS:
+        _string_list(protected[field], path=f"authority_context.protected_constraints.{field}")
+    instruction_sources = _validate_list_object(
+        expected["instruction_sources"],
+        fields={"source_id", "role", "sha256"},
+        path="authority_context.instruction_sources",
+    )
+    for index, source in enumerate(instruction_sources):
+        _identifier(source["source_id"], path=f"authority_context.instruction_sources[{index}].source_id")
+        _identifier(source["role"], path=f"authority_context.instruction_sources[{index}].role")
+        _sha256(source["sha256"], path=f"authority_context.instruction_sources[{index}].sha256")
+    _identifier(expected["approval_reference"], path="authority_context.approval_reference")
+    if expected["approval_authority"] not in {"OWNER", "MASTER_PO"}:
+        _fail("authority_context.approval_authority is not owner-controlled")
+    workspace = _keys(expected["workspace"], required={"roots", "write_policy"}, path="authority_context.workspace")
+    _non_empty_string_list(workspace["roots"], path="authority_context.workspace.roots", minimum=1)
+    if workspace["write_policy"] != "DISPOSABLE_ONLY":
+        _fail("authority_context.workspace.write_policy must be DISPOSABLE_ONLY")
+    for field in ("allowed_operations", "forbidden_mutations", "required_verification_gates"):
+        _string_list(expected[field], path=f"authority_context.{field}", minimum=1)
+    policy = _keys(
+        expected["provider_policy"],
+        required={"approval_mode", "experimental_api", "model_identity", "config_sha256"},
+        path="authority_context.provider_policy",
+    )
+    if policy["approval_mode"] != "deny_all":
+        _fail("authority_context.provider_policy.approval_mode must be deny_all")
+    if _bool(policy["experimental_api"], path="authority_context.provider_policy.experimental_api") is not False:
+        _fail("authority_context.provider_policy.experimental_api must be false")
+    _identifier(policy["model_identity"], path="authority_context.provider_policy.model_identity")
+    _sha256(policy["config_sha256"], path="authority_context.provider_policy.config_sha256")
+
+    for field in (
+        "handoff_id",
+        "program_id",
+        "run_id",
+        "request_id",
+        "source",
+        "accepted_base",
+        "scope",
+        "protected_constraints",
+        "instruction_sources",
+        "approval_reference",
+        "approval_authority",
+        "workspace",
+        "allowed_operations",
+        "forbidden_mutations",
+        "required_verification_gates",
+        "provider_policy",
+    ):
+        if field not in payload:
+            _fail(f"payload missing required authority field: {field}")
+
+    identity = {field: payload[field] for field in ("handoff_id", "program_id", "run_id", "request_id")}
+    expected_identity = {field: expected[field] for field in identity}
+    groups = (
+        ("identity", identity, expected_identity),
+        ("source", payload["source"], expected["source"]),
+        ("accepted_base", payload["accepted_base"], expected["accepted_base"]),
+        ("scope", payload["scope"], expected["scope"]),
+        ("protected_constraints", payload["protected_constraints"], expected["protected_constraints"]),
+        ("instruction_sources", payload["instruction_sources"], expected["instruction_sources"]),
+        (
+            "approval",
+            {"reference": payload["approval_reference"], "authority": payload["approval_authority"]},
+            {"reference": expected["approval_reference"], "authority": expected["approval_authority"]},
+        ),
+        ("workspace", payload["workspace"], expected["workspace"]),
+        ("allowed_operations", payload["allowed_operations"], expected["allowed_operations"]),
+        ("forbidden_mutations", payload["forbidden_mutations"], expected["forbidden_mutations"]),
+        (
+            "required_verification_gates",
+            payload["required_verification_gates"],
+            expected["required_verification_gates"],
+        ),
+        ("provider", payload["provider_policy"], expected["provider_policy"]),
+    )
+    for group, actual, expected_value in groups:
+        if _canonical_bytes(actual) != _canonical_bytes(expected_value):
+            _fail(f"{group} authority context mismatch")
+
+
+def _normalize_now(now: datetime | None) -> datetime:
+    current = datetime.now(timezone.utc) if now is None else now
+    if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
+        _fail("now must be timezone-aware")
+    return current.astimezone(timezone.utc)
 
 
 def bind_vision_handoff(
@@ -452,10 +595,7 @@ def bind_vision_handoff(
     schema_id: str,
     schema_version: str,
     validator_version: str = DEFAULT_VALIDATOR_VERSION,
-    expected_identity: Mapping[str, object] | None = None,
-    expected_scope: Mapping[str, object] | None = None,
-    expected_protected_constraints: Mapping[str, object] | None = None,
-    expected_instruction_sources: Sequence[Mapping[str, object]] | None = None,
+    authority_context: ServerOwnedAuthorityContext,
     consumed_handoff_ids: Iterable[str] = (),
     now: datetime | None = None,
 ) -> ValidatedVisionHandoff:
@@ -484,20 +624,12 @@ def bind_vision_handoff(
     if supplied_handoff_hash is not None and supplied_handoff_hash != computed_handoff_hash:
         _fail("server-owned handoff_sha256 binding mismatch")
     bound["handoff_sha256"] = computed_handoff_hash
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        _fail("now must include a timezone")
+    current = _normalize_now(now)
+    _validate_authority_context(bound, authority_context)
     canonical_bytes = _validate_payload(
         bound,
-        now=current.astimezone(timezone.utc),
+        now=current,
         consumed_handoff_ids=set(consumed_handoff_ids),
-    )
-    _validate_server_expectations(
-        bound,
-        expected_identity=expected_identity,
-        expected_scope=expected_scope,
-        expected_protected_constraints=expected_protected_constraints,
-        expected_instruction_sources=expected_instruction_sources,
     )
     return ValidatedVisionHandoff(
         payload=_freeze(bound),
@@ -514,32 +646,23 @@ def validate_vision_handoff(
     schema_id: str,
     schema_version: str,
     validator_version: str = DEFAULT_VALIDATOR_VERSION,
-    expected_identity: Mapping[str, object] | None = None,
-    expected_scope: Mapping[str, object] | None = None,
-    expected_protected_constraints: Mapping[str, object] | None = None,
-    expected_instruction_sources: Sequence[Mapping[str, object]] | None = None,
+    authority_context: ServerOwnedAuthorityContext,
     consumed_handoff_ids: Iterable[str] = (),
     now: datetime | None = None,
 ) -> ValidatedVisionHandoff:
     """Validate an already server-bound handoff without rebinding its identity."""
 
+    current = _normalize_now(now)
     if not isinstance(payload, Mapping):
         _fail("handoff must be an object")
+    _validate_authority_context(payload, authority_context)
     snapshot = _snapshot_schema(
         Path(schema_path), schema_id=schema_id, schema_version=schema_version, validator_version=validator_version
     )
-    current = now or datetime.now(timezone.utc)
     canonical_bytes = _validate_payload(
         payload,
-        now=current.astimezone(timezone.utc),
+        now=current,
         consumed_handoff_ids=set(consumed_handoff_ids),
-    )
-    _validate_server_expectations(
-        payload,
-        expected_identity=expected_identity,
-        expected_scope=expected_scope,
-        expected_protected_constraints=expected_protected_constraints,
-        expected_instruction_sources=expected_instruction_sources,
     )
     if payload["output_schema_id"] != snapshot.schema_id:
         _fail("output schema ID does not match the server-owned snapshot")
@@ -592,6 +715,7 @@ def validate_output_schema_binding(
 __all__ = [
     "DEFAULT_VALIDATOR_VERSION",
     "HANDOFF_SCHEMA_VERSION",
+    "ServerOwnedAuthorityContext",
     "SchemaSnapshot",
     "ValidatedVisionHandoff",
     "VisionHandoffError",

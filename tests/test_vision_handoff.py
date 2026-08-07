@@ -125,14 +125,39 @@ def _base_payload() -> dict[str, Any]:
 
 def _bind(path: Path, payload: dict[str, Any] | None = None, **kwargs: object):
     module = _module()
+    source = payload or _base_payload()
+    kwargs.setdefault("authority_context", _authority_context(source))
     return module.bind_vision_handoff(
-        payload or _base_payload(),
+        source,
         schema_path=path,
         schema_id=SCHEMA_ID,
         schema_version=SCHEMA_VERSION,
         validator_version=VALIDATOR_VERSION,
         now=NOW,
         **kwargs,
+    )
+
+
+def _authority_context(payload: dict[str, Any] | None = None):
+    module = _module()
+    source = payload or _base_payload()
+    return module.ServerOwnedAuthorityContext(
+        handoff_id=source["handoff_id"],
+        program_id=source["program_id"],
+        run_id=source["run_id"],
+        request_id=source["request_id"],
+        source=source["source"],
+        accepted_base=source["accepted_base"],
+        scope=source["scope"],
+        protected_constraints=source["protected_constraints"],
+        instruction_sources=tuple(source["instruction_sources"]),
+        approval_reference=source["approval_reference"],
+        approval_authority=source["approval_authority"],
+        workspace=source["workspace"],
+        allowed_operations=tuple(source["allowed_operations"]),
+        forbidden_mutations=tuple(source["forbidden_mutations"]),
+        required_verification_gates=tuple(source["required_verification_gates"]),
+        provider_policy=source["provider_policy"],
     )
 
 
@@ -157,11 +182,27 @@ def test_handoff_rejects_missing_or_foreign_identity(tmp_path: Path, missing: st
     payload = _base_payload()
     payload.pop(missing)
     with pytest.raises(ValueError, match=missing):
-        _bind(schema_path, payload)
+        module = _module()
+        module.bind_vision_handoff(
+            payload,
+            schema_path=schema_path,
+            schema_id=SCHEMA_ID,
+            schema_version=SCHEMA_VERSION,
+            validator_version=VALIDATOR_VERSION,
+            authority_context=_authority_context(),
+            now=NOW,
+        )
 
     payload = _base_payload()
     with pytest.raises(ValueError, match="identity"):
-        _bind(schema_path, payload, expected_identity={"program_id": "FOREIGN-PROGRAM"})
+        foreign_context = _authority_context()
+        foreign_context = type(foreign_context)(
+            **{
+                field: ("FOREIGN-PROGRAM" if field == "program_id" else getattr(foreign_context, field))
+                for field in foreign_context.__dataclass_fields__
+            }
+        )
+        _bind(schema_path, payload, authority_context=foreign_context)
 
 
 def test_scope_widening_is_rejected(tmp_path: Path) -> None:
@@ -169,7 +210,7 @@ def test_scope_widening_is_rejected(tmp_path: Path) -> None:
     payload = _base_payload()
     payload["scope"]["regions"].append("region-foreign")
     with pytest.raises(ValueError, match="scope"):
-        _bind(schema_path, payload, expected_scope=_base_payload()["scope"])
+        _bind(schema_path, payload, authority_context=_authority_context())
 
 
 def test_protected_constraint_widening_is_rejected(tmp_path: Path) -> None:
@@ -180,7 +221,7 @@ def test_protected_constraint_widening_is_rejected(tmp_path: Path) -> None:
         _bind(
             schema_path,
             payload,
-            expected_protected_constraints=_base_payload()["protected_constraints"],
+            authority_context=_authority_context(),
         )
 
 
@@ -209,11 +250,10 @@ def test_stale_expired_or_reused_handoff_fails_closed(
 
 def test_changed_instruction_source_identity_is_rejected(tmp_path: Path) -> None:
     schema_path = _write_schema(tmp_path / "schema.json")
-    expected = _base_payload()["instruction_sources"]
     payload = _base_payload()
     payload["instruction_sources"][0]["sha256"] = "f" * 64
     with pytest.raises(ValueError, match="instruction"):
-        _bind(schema_path, payload, expected_instruction_sources=expected)
+        _bind(schema_path, payload, authority_context=_authority_context())
 
 
 @pytest.mark.parametrize(
@@ -234,3 +274,75 @@ def test_noncanonical_or_nonfinite_handoff_is_rejected(tmp_path: Path) -> None:
     payload["engineering_objective"] = float("nan")
     with pytest.raises(ValueError, match="canonical|finite"):
         _bind(schema_path, payload)
+
+
+def test_bind_requires_a_complete_server_owned_authority_context(tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    with pytest.raises((TypeError, ValueError), match="authority_context|authority context|server-owned"):
+        module.bind_vision_handoff(
+            _base_payload(),
+            schema_path=schema_path,
+            schema_id=SCHEMA_ID,
+            schema_version=SCHEMA_VERSION,
+            validator_version=VALIDATOR_VERSION,
+            now=NOW,
+        )
+
+
+def test_validate_requires_a_complete_server_owned_authority_context(tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    handoff = _bind(schema_path)
+    with pytest.raises((TypeError, ValueError), match="authority_context|authority context|server-owned"):
+        module.validate_vision_handoff(
+            handoff.payload,
+            schema_path=schema_path,
+            schema_id=SCHEMA_ID,
+            schema_version=SCHEMA_VERSION,
+            validator_version=VALIDATOR_VERSION,
+            now=NOW,
+        )
+
+
+def test_partial_authority_context_is_rejected(tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    with pytest.raises(ValueError, match="complete|ServerOwnedAuthorityContext"):
+        module.bind_vision_handoff(
+            _base_payload(),
+            schema_path=schema_path,
+            schema_id=SCHEMA_ID,
+            schema_version=SCHEMA_VERSION,
+            validator_version=VALIDATOR_VERSION,
+            authority_context={"handoff_id": "HANDOFF-001"},
+            now=NOW,
+        )
+
+
+def test_naive_now_is_rejected_by_bind_and_validate(tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    naive_now = datetime(2026, 8, 7, 5, 0)
+    with pytest.raises(ValueError, match="timezone|aware"):
+        module.bind_vision_handoff(
+            _base_payload(),
+            schema_path=schema_path,
+            schema_id=SCHEMA_ID,
+            schema_version=SCHEMA_VERSION,
+            validator_version=VALIDATOR_VERSION,
+            authority_context=_authority_context(),
+            now=naive_now,
+        )
+
+    handoff = _bind(schema_path)
+    with pytest.raises(ValueError, match="timezone|aware"):
+        module.validate_vision_handoff(
+            handoff.payload,
+            schema_path=schema_path,
+            schema_id=SCHEMA_ID,
+            schema_version=SCHEMA_VERSION,
+            validator_version=VALIDATOR_VERSION,
+            authority_context=_authority_context(),
+            now=naive_now,
+        )
