@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -120,15 +121,20 @@ def test_toc_tou_mutation_between_provider_snapshot_and_local_validation_fails_c
         )
 
 
-def test_symlink_schema_is_rejected_when_platform_allows_creation(tmp_path: Path) -> None:
-    target = _write_schema(tmp_path / "target.json")
-    link = tmp_path / "link.json"
-    try:
-        link.symlink_to(target)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"symlink creation unavailable: {exc}")
+def test_reparse_point_schema_is_rejected_when_platform_allows_creation(tmp_path: Path) -> None:
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    _write_schema(target_dir / "schema.json")
+    junction_dir = tmp_path / "junction"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction_dir), str(target_dir)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"junction creation unavailable: {result.stderr or result.stdout}")
     with pytest.raises(ValueError, match="reparse|symlink|schema"):
-        _bind(link)
+        _bind(junction_dir / "schema.json")
 
 
 def test_schema_binding_rejects_provider_identity_drift(tmp_path: Path) -> None:
