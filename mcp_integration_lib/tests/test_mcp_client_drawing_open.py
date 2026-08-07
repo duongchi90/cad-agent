@@ -39,6 +39,48 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         self.assertEqual([], command_sequences)
 
+    def test_post_activation_start_tab_sentinel_does_not_reenter_open(self):
+        raw_commands = []
+        command_sequences = []
+        client = self._client(raw_commands, command_sequences)
+
+        def dispatch(command, params):
+            if command == "ping":
+                raise MCPTimeoutError("start tab has no dispatcher")
+            return {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+
+        client._dispatch = dispatch
+
+        with self.assertRaisesRegex(MCPTimeoutError, "start tab has no dispatcher"):
+            client.drawing_open("C:/work/a.dxf")
+
+        self.assertEqual([], command_sequences)
+
+    def test_post_activation_start_tab_sentinel_with_probe_does_not_reenter_open(self):
+        raw_commands = []
+        command_sequences = []
+        client = FileIPCLiveMCPClient(
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        def dispatch(command, params):
+            if command == "ping":
+                raise MCPTimeoutError("start tab has no dispatcher")
+            return {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+
+        client._dispatch = dispatch
+
+        with self.assertRaisesRegex(MCPTimeoutError, "start tab has no dispatcher"):
+            client.drawing_open("C:/work/a.dxf")
+
+        self.assertEqual([], command_sequences)
+
     def test_already_open_active_target_is_not_reopened(self):
         raw_commands = []
         command_sequences = []

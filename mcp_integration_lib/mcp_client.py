@@ -212,26 +212,9 @@ class FileIPCLiveMCPClient:
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
                 time.sleep(self._document_settle_s)
                 self._active_drawing_path = expected_path
-                try:
-                    self._raw_lisp_trigger('(load "' + normalized_loader + '")')
-                    time.sleep(self._document_settle_s)
-                    self._wait_for_dispatcher()
-                except (MCPTimeoutError, MCPToolError) as exc:
-                    # Preserve the legacy Start-tab sentinel for callers that
-                    # can positively prove that no document exists. Generic
-                    # post-activation failures must never re-enter OPEN.
-                    if (
-                        self._command_trigger is None
-                        or attempt != 0
-                        or "start tab has no dispatcher" not in str(exc).casefold()
-                        or not self._start_tab_no_document_is_proven(exc)
-                    ):
-                        raise
-                    self._command_trigger('_.OPEN\r"' + normalized_path + '"')
-                    time.sleep(self._document_settle_s)
-                    self._raw_lisp_trigger('(load "' + normalized_loader + '")')
-                    time.sleep(self._document_settle_s)
-                    self._wait_for_dispatcher()
+                self._raw_lisp_trigger('(load "' + normalized_loader + '")')
+                time.sleep(self._document_settle_s)
+                self._wait_for_dispatcher()
                 variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
                 active_path = _normalized_autocad_path(
                     ntpath.join(
@@ -262,7 +245,7 @@ class FileIPCLiveMCPClient:
                 return bool(probe())
             except Exception:
                 return False
-        return "start tab has no dispatcher" in message
+        return False
 
     def _wait_for_dispatcher(self) -> None:
         deadline = time.time() + self._timeout

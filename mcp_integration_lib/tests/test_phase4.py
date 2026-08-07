@@ -234,23 +234,25 @@ class FileIPCClientTests(unittest.TestCase):
     def test_drawing_open_falls_back_to_command_when_start_tab_has_no_document(self):
         raw_commands = []
         command_sequences = []
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+            if command.startswith("(progn (vl-load-com)"):
+                raise MCPToolError("COM activation failed")
+
         client = FileIPCLiveMCPClient(
             trigger=lambda: None,
-            raw_lisp_trigger=raw_commands.append,
+            raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
             timeout_s=0.01,
             poll_interval_s=0,
             document_settle_s=0,
         )
-        ping_calls = 0
 
         def dispatch(command, params):
-            nonlocal ping_calls
             if command == "ping":
-                ping_calls += 1
-                if not command_sequences:
-                    raise MCPTimeoutError("Start tab has no dispatcher")
                 return {}
             if command == "drawing-get-variables":
                 return {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
