@@ -184,6 +184,7 @@ def _worker_context(
 
 
 def _fixture(tmp_path: Path, *, thread_id: str = "THREAD-001") -> _Fixture:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     schema_path = _write_schema(tmp_path / "schema.json")
     handoff = _bind(schema_path)
     authority = _authority_context(dict(handoff.payload))
@@ -228,6 +229,7 @@ def _fresh_target(
     thread_id: str = "THREAD-002",
     payload_mutator=None,
 ):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     schema_path = _write_schema(tmp_path / "target-schema.json")
     payload = _base_payload()
     payload.update(
