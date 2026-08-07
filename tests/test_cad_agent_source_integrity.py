@@ -1484,8 +1484,12 @@ def test_task2_require_match_cross_binds_r1a_declarations(
 
 
 def test_task2_test_fixture_requires_explicit_downstream_parser_facts() -> None:
-    test_source = Path(__file__).read_text(encoding="utf-8")
-    assert "def _task2_custody_from_evidence" not in test_source
+    function_names = {
+        node.name
+        for node in ast.walk(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "_task2_custody_from_evidence" not in function_names
     signature = inspect.signature(_truthful_downstream_custody_fixture)
     assert "observed_media_type" in signature.parameters
     assert "media_metadata" in signature.parameters
