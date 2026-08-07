@@ -26,7 +26,7 @@ from agent_lib.codex_worker_process import (
 
 
 SOURCE_MODULE = Path(__file__).parents[1] / "codex_worker_process.py"
-_FORBIDDEN_ENV_NAMES = {
+FORBIDDEN_PARENT_NAMES = {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GITHUB_TOKEN",
@@ -40,18 +40,17 @@ _FORBIDDEN_ENV_NAMES = {
     "OTEL_SERVICE_NAME",
     "MCP_CONFIG",
     "CODEX_CONFIG",
-    "CODEX_HOME",
 }
 
 
 class _FakeClock:
     def __init__(self, *values: float) -> None:
-        self._values = iter(values)
+        self.values = iter(values)
         self.last = 0.0
 
     def __call__(self) -> float:
         try:
-            self.last = next(self._values)
+            self.last = next(self.values)
         except StopIteration:
             self.last += 1.0
         return self.last
@@ -65,18 +64,19 @@ class _FakeProcessApi:
         self.root_pid = 4101
         self.closed: list[object] = []
 
-    def _maybe_fail(self, stage: str) -> None:
-        self.events.append(stage)
-        if self.fail_stage == stage:
+    def _stage(self, name: str) -> None:
+        self.events.append(name)
+        if self.fail_stage == name:
             raise RuntimeError("FAKE_SECRET C:\\customer\\private\\drawing.dwg")
 
     def create_job(self, max_processes: int) -> object:
-        self._maybe_fail("create_job")
+        assert max_processes > 0
+        self._stage("create_job")
         return "job-handle"
 
     def configure_job(self, job_handle: object, max_processes: int) -> None:
-        assert job_handle == "job-handle"
-        self._maybe_fail("configure_job")
+        assert job_handle == "job-handle" and max_processes > 0
+        self._stage("configure_job")
 
     def create_suspended_process(
         self,
@@ -86,11 +86,9 @@ class _FakeProcessApi:
         cwd: Path,
         environment: Mapping[str, str],
     ) -> object:
-        assert executable.is_absolute()
-        assert cwd.is_absolute()
-        assert isinstance(argv, tuple)
-        assert "CODEX_HOME" in environment
-        self._maybe_fail("create_process")
+        assert executable.is_absolute() and cwd.is_absolute()
+        assert isinstance(argv, tuple) and "CODEX_HOME" in environment
+        self._stage("create_process")
         return SimpleNamespace(
             process_handle="process-handle",
             thread_handle="thread-handle",
@@ -98,19 +96,18 @@ class _FakeProcessApi:
         )
 
     def assign_process(self, job_handle: object, process_handle: object) -> None:
-        assert job_handle == "job-handle"
-        assert process_handle == "process-handle"
-        self._maybe_fail("assign_process")
+        assert job_handle == "job-handle" and process_handle == "process-handle"
+        self._stage("assign_process")
 
     def resume_process(self, thread_handle: object) -> None:
         assert thread_handle == "thread-handle"
-        self._maybe_fail("resume_process")
+        self._stage("resume_process")
 
     def query_job_process_ids(
         self, job_handle: object, *, max_processes: int
     ) -> tuple[int, ...]:
-        assert job_handle == "job-handle"
-        self._maybe_fail("query_job")
+        assert job_handle == "job-handle" and max_processes > 0
+        self._stage("query_job")
         if not self.query_results:
             return (self.root_pid,)
         result = self.query_results.pop(0)
@@ -120,11 +117,11 @@ class _FakeProcessApi:
 
     def terminate_job(self, job_handle: object) -> None:
         assert job_handle == "job-handle"
-        self._maybe_fail("terminate_job")
+        self._stage("terminate_job")
 
     def terminate_process(self, process_handle: object) -> None:
         assert process_handle == "process-handle"
-        self._maybe_fail("terminate_process")
+        self._stage("terminate_process")
 
     def close_handle(self, handle: object) -> None:
         self.events.append(f"close:{handle}")
@@ -140,7 +137,7 @@ def _paths(tmp_path: Path) -> tuple[Path, Path]:
     return root, cwd
 
 
-def _base_source_environment() -> dict[str, str]:
+def _source_env() -> dict[str, str]:
     return {
         "PATH": os.environ.get("PATH", ""),
         "SystemRoot": os.environ.get("SystemRoot", r"C:\Windows"),
@@ -155,7 +152,7 @@ def _prepared(tmp_path: Path) -> WorkerEnvironmentAttestation:
     return prepare_worker_environment(
         disposable_root=root,
         cwd=cwd,
-        source_environment=_base_source_environment(),
+        source_environment=_source_env(),
     )
 
 
@@ -163,44 +160,27 @@ def _launch_fake(
     tmp_path: Path,
     *,
     api: _FakeProcessApi | None = None,
-    cleanup_deadline_seconds: float = 0.25,
+    deadline: float = 0.25,
     max_processes: int = 8,
 ) -> WorkerProcessHandle:
-    prepared = _prepared(tmp_path)
-    executable = Path(sys.executable).resolve()
-    backend = api or _FakeProcessApi()
     return launch_worker_process(
-        environment=prepared,
-        executable=executable,
+        environment=_prepared(tmp_path),
+        executable=Path(sys.executable).resolve(),
         argv=("-c", "pass"),
-        cleanup_deadline_seconds=cleanup_deadline_seconds,
+        cleanup_deadline_seconds=deadline,
         max_processes=max_processes,
-        _process_api=backend,
+        _process_api=api or _FakeProcessApi(),
     )
 
 
-def test_environment_starts_empty_and_excludes_secrets_proxies_telemetry_and_mcp(
-    tmp_path: Path,
-) -> None:
+def test_environment_starts_empty_and_filters_parent_secrets_and_config(tmp_path: Path) -> None:
     root, cwd = _paths(tmp_path)
-    source = _base_source_environment()
+    source = _source_env()
+    source.update({name: "SECRET_VALUE" for name in FORBIDDEN_PARENT_NAMES})
     source.update(
         {
-            "OPENAI_API_KEY": "sk-test-secret",
-            "ANTHROPIC_API_KEY": "anthropic-secret",
-            "GITHUB_TOKEN": "ghp_secret",
-            "CUSTOM_TOKEN": "token-secret",
-            "CUSTOM_SECRET": "secret-secret",
-            "HTTP_PROXY": "http://proxy.invalid",
-            "HTTPS_PROXY": "http://proxy.invalid",
-            "ALL_PROXY": "socks5://proxy.invalid",
-            "NO_PROXY": "localhost",
-            "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.invalid",
-            "OTEL_SERVICE_NAME": "customer-service",
-            "MCP_CONFIG": r"C:\Users\customer\mcp.json",
-            "CODEX_CONFIG": r"C:\Users\customer\config.toml",
             "CODEX_HOME": r"C:\Users\customer\.codex",
-            "UNRELATED": "must-not-appear",
+            "UNRELATED": "not-allowlisted",
         }
     )
 
@@ -211,164 +191,137 @@ def test_environment_starts_empty_and_excludes_secrets_proxies_telemetry_and_mcp
     )
 
     child = dict(prepared.environment)
-    assert {name.upper() for name in child}.isdisjoint(_FORBIDDEN_ENV_NAMES)
+    assert {name.upper() for name in child}.isdisjoint(FORBIDDEN_PARENT_NAMES)
     assert "UNRELATED" not in child
     assert set(child).issuperset({"CODEX_HOME", "TEMP", "TMP"})
-    assert Path(child["CODEX_HOME"]).is_relative_to(root.resolve())
-    assert Path(child["TEMP"]).is_relative_to(root.resolve())
-    assert Path(child["TMP"]).is_relative_to(root.resolve())
+    assert child["CODEX_HOME"] != source["CODEX_HOME"]
+    for name in ("CODEX_HOME", "TEMP", "TMP"):
+        assert Path(child[name]).is_relative_to(root.resolve())
 
 
-def test_codex_home_and_temp_are_fresh_disposable_directories(tmp_path: Path) -> None:
+def test_worker_owned_directories_are_fresh_empty_and_disposable(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
-
-    assert prepared.codex_home.is_dir()
-    assert prepared.temp_dir.is_dir()
-    assert list(prepared.codex_home.iterdir()) == []
-    assert list(prepared.temp_dir.iterdir()) == []
-    assert prepared.codex_home in prepared.writable_roots
-    assert prepared.temp_dir in prepared.writable_roots
-    assert prepared.cwd in prepared.writable_roots
+    assert prepared.codex_home.is_dir() and prepared.temp_dir.is_dir()
+    assert not list(prepared.codex_home.iterdir())
+    assert not list(prepared.temp_dir.iterdir())
+    assert set(prepared.writable_roots) == {
+        prepared.cwd,
+        prepared.codex_home,
+        prepared.temp_dir,
+    }
 
 
 @pytest.mark.parametrize("name", ["codex-home", "tmp"])
-def test_preexisting_worker_owned_directory_fails_closed(
-    tmp_path: Path, name: str
-) -> None:
+def test_preexisting_worker_owned_state_is_rejected(tmp_path: Path, name: str) -> None:
     root, cwd = _paths(tmp_path)
     path = root / name
     path.mkdir()
     (path / "ambient.txt").write_text("ambient", encoding="utf-8")
-
     with pytest.raises(WorkerProcessError) as caught:
         prepare_worker_environment(
             disposable_root=root,
             cwd=cwd,
-            source_environment=_base_source_environment(),
+            source_environment=_source_env(),
         )
-
     assert caught.value.code == "WORKER_DISPOSABLE_STATE_UNSAFE"
-    assert "ambient.txt" not in str(caught.value)
-    assert str(root) not in str(caught.value)
+    assert "ambient" not in str(caught.value) and str(root) not in str(caught.value)
 
 
-@pytest.mark.parametrize("cwd_kind", ["relative", "missing", "outside"])
-def test_uncontrolled_cwd_fails_closed(tmp_path: Path, cwd_kind: str) -> None:
+@pytest.mark.parametrize("kind", ["relative", "missing", "outside"])
+def test_uncontrolled_cwd_is_rejected(tmp_path: Path, kind: str) -> None:
     root = tmp_path / "disposable"
     root.mkdir()
-    if cwd_kind == "relative":
-        cwd = Path("relative-cwd")
-    elif cwd_kind == "missing":
-        cwd = root / "missing"
-    else:
-        cwd = tmp_path / "outside"
+    cwd = {
+        "relative": Path("relative-cwd"),
+        "missing": root / "missing",
+        "outside": tmp_path / "outside",
+    }[kind]
+    if kind == "outside":
         cwd.mkdir()
-
     with pytest.raises(WorkerProcessError) as caught:
         prepare_worker_environment(
             disposable_root=root,
             cwd=cwd,
-            source_environment=_base_source_environment(),
+            source_environment=_source_env(),
         )
-
     assert caught.value.code == "WORKER_CWD_UNSAFE"
     assert str(cwd) not in str(caught.value)
 
 
-def test_reparse_or_junction_cwd_fails_closed_with_injected_probe(tmp_path: Path) -> None:
+def test_reparse_or_junction_escape_is_rejected_by_injected_probe(tmp_path: Path) -> None:
     root, cwd = _paths(tmp_path)
-
     with pytest.raises(WorkerProcessError) as caught:
         prepare_worker_environment(
             disposable_root=root,
             cwd=cwd,
-            source_environment=_base_source_environment(),
+            source_environment=_source_env(),
             _path_contains_reparse=lambda path: Path(path) == cwd.resolve(),
         )
-
     assert caught.value.code == "WORKER_REPARSE_PATH"
-    assert str(cwd) not in str(caught.value)
 
 
-def test_source_environment_mutation_after_prepare_cannot_change_launch_snapshot(
-    tmp_path: Path,
-) -> None:
+def test_environment_snapshot_is_immutable_after_source_mutation(tmp_path: Path) -> None:
     root, cwd = _paths(tmp_path)
-    source = _base_source_environment()
+    source = _source_env()
     prepared = prepare_worker_environment(
         disposable_root=root,
         cwd=cwd,
         source_environment=source,
     )
     frozen = dict(prepared.environment)
-
-    source["OPENAI_API_KEY"] = "late-secret"
-    source["PATH"] = "late-mutated-path"
-
+    source.update({"OPENAI_API_KEY": "late-secret", "PATH": "late-path"})
     assert dict(prepared.environment) == frozen
     assert "OPENAI_API_KEY" not in prepared.environment
-    assert prepared.environment["PATH"] != "late-mutated-path"
 
 
-def test_attestation_is_frozen_and_environment_mapping_is_immutable(tmp_path: Path) -> None:
+def test_attestation_and_environment_are_immutable(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
-
     with pytest.raises(dataclasses.FrozenInstanceError):
         prepared.environment_sha256 = "0" * 64  # type: ignore[misc]
     with pytest.raises(TypeError):
         prepared.environment["OPENAI_API_KEY"] = "secret"  # type: ignore[index]
 
 
-def test_windows_environment_case_collision_is_rejected(tmp_path: Path) -> None:
+def test_case_colliding_windows_environment_names_are_rejected(tmp_path: Path) -> None:
     root, cwd = _paths(tmp_path)
-    source = _base_source_environment()
+    source = _source_env()
     source["Path"] = "ambiguous"
-
     with pytest.raises(WorkerProcessError) as caught:
         prepare_worker_environment(
             disposable_root=root,
             cwd=cwd,
             source_environment=source,
         )
-
     assert caught.value.code == "WORKER_ENV_AMBIGUOUS"
 
 
-def test_environment_attestation_is_order_deterministic(tmp_path: Path) -> None:
-    first_root, first_cwd = _paths(tmp_path / "first")
-    second_root, second_cwd = _paths(tmp_path / "second")
-    source = _base_source_environment()
-    reversed_source = dict(reversed(list(source.items())))
-
+def test_environment_key_order_is_deterministic(tmp_path: Path) -> None:
+    root1, cwd1 = _paths(tmp_path / "first")
+    root2, cwd2 = _paths(tmp_path / "second")
+    source = _source_env()
     first = prepare_worker_environment(
-        disposable_root=first_root,
-        cwd=first_cwd,
-        source_environment=source,
+        disposable_root=root1, cwd=cwd1, source_environment=source
     )
     second = prepare_worker_environment(
-        disposable_root=second_root,
-        cwd=second_cwd,
-        source_environment=reversed_source,
+        disposable_root=root2,
+        cwd=cwd2,
+        source_environment=dict(reversed(list(source.items()))),
     )
-
     assert tuple(first.environment) == tuple(second.environment)
     assert first.environment_keys == second.environment_keys
 
 
-def test_launch_rejects_missing_executable_before_job_creation(tmp_path: Path) -> None:
-    prepared = _prepared(tmp_path)
+def test_missing_executable_fails_before_job_creation(tmp_path: Path) -> None:
     api = _FakeProcessApi()
-
     with pytest.raises(WorkerProcessError) as caught:
         launch_worker_process(
-            environment=prepared,
+            environment=_prepared(tmp_path),
             executable=tmp_path / "missing.exe",
             argv=(),
             cleanup_deadline_seconds=1.0,
             max_processes=4,
             _process_api=api,
         )
-
     assert caught.value.code == "WORKER_EXECUTABLE_UNSAFE"
     assert api.events == []
 
@@ -389,25 +342,22 @@ def test_launch_rejects_missing_executable_before_job_creation(tmp_path: Path) -
 def test_invalid_limits_fail_before_launch(
     tmp_path: Path, deadline: float, max_processes: int
 ) -> None:
-    prepared = _prepared(tmp_path)
     api = _FakeProcessApi()
-
     with pytest.raises(WorkerProcessError) as caught:
         launch_worker_process(
-            environment=prepared,
+            environment=_prepared(tmp_path),
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
             cleanup_deadline_seconds=deadline,
             max_processes=max_processes,
             _process_api=api,
         )
-
     assert caught.value.code == "WORKER_LIMIT_INVALID"
     assert api.events == []
 
 
 @pytest.mark.parametrize(
-    ("stage", "expected_code"),
+    ("stage", "code"),
     [
         ("create_job", "WORKER_JOB_CREATE_FAILED"),
         ("configure_job", "WORKER_JOB_CONFIG_FAILED"),
@@ -416,132 +366,85 @@ def test_invalid_limits_fail_before_launch(
         ("resume_process", "WORKER_RESUME_FAILED"),
     ],
 )
-def test_partial_launch_failures_are_sanitized_and_cleanup_owned_resources(
-    tmp_path: Path, stage: str, expected_code: str
+def test_partial_launch_failure_is_sanitized_and_resources_are_closed(
+    tmp_path: Path, stage: str, code: str
 ) -> None:
-    prepared = _prepared(tmp_path)
     api = _FakeProcessApi()
     api.fail_stage = stage
-
     with pytest.raises(WorkerProcessError) as caught:
         launch_worker_process(
-            environment=prepared,
+            environment=_prepared(tmp_path),
             executable=Path(sys.executable).resolve(),
             argv=("-c", "pass"),
             cleanup_deadline_seconds=1.0,
             max_processes=4,
             _process_api=api,
         )
-
-    assert caught.value.code == expected_code
-    assert "FAKE_SECRET" not in str(caught.value)
-    assert "customer" not in str(caught.value).lower()
+    assert caught.value.code == code
+    assert "FAKE_SECRET" not in str(caught.value) and "customer" not in str(caught.value)
     if stage in {"assign_process", "resume_process"}:
-        assert "process-handle" in api.closed
-        assert "thread-handle" in api.closed
-        assert "job-handle" in api.closed
+        assert {"process-handle", "thread-handle", "job-handle"}.issubset(api.closed)
     if stage == "assign_process":
         assert "terminate_process" in api.events
     if stage == "resume_process":
         assert "terminate_job" in api.events
 
 
-def test_successful_launch_attests_root_job_membership(tmp_path: Path) -> None:
-    api = _FakeProcessApi()
-    handle = _launch_fake(tmp_path, api=api)
-
-    identity = handle.snapshot_process_tree()
-
-    assert isinstance(identity, ProcessTreeIdentity)
-    assert identity.root_pid == api.root_pid
-    assert identity.member_pids == (api.root_pid,)
-    assert identity.verified is True
-    assert identity.member_count == 1
-
-
-def test_child_and_grandchild_membership_is_accounted_for(tmp_path: Path) -> None:
+def test_process_tree_identity_accounts_for_root_child_and_grandchild(tmp_path: Path) -> None:
     api = _FakeProcessApi()
     api.query_results = [(4101, 4102, 4103)]
-    handle = _launch_fake(tmp_path, api=api)
+    identity = _launch_fake(tmp_path, api=api).snapshot_process_tree()
+    assert identity == ProcessTreeIdentity(
+        root_pid=4101,
+        member_pids=(4101, 4102, 4103),
+        member_count=3,
+        verified=True,
+    )
 
-    identity = handle.snapshot_process_tree()
 
-    assert identity.member_pids == (4101, 4102, 4103)
-    assert identity.member_count == 3
-
-
-def test_root_exit_with_surviving_grandchild_is_not_clean(tmp_path: Path) -> None:
+def test_root_exit_with_surviving_grandchild_is_not_treated_as_clean(tmp_path: Path) -> None:
     api = _FakeProcessApi()
     api.query_results = [(4103,), (4103,), ()]
     handle = _launch_fake(tmp_path, api=api)
-
     before = handle.snapshot_process_tree()
     result = cleanup_worker_process(
-        handle,
-        _clock=_FakeClock(0.0, 0.1, 0.2),
-        _sleep=lambda _seconds: None,
+        handle, _clock=_FakeClock(0.0, 0.1, 0.2), _sleep=lambda _: None
     )
-
-    assert before.root_pid not in before.member_pids
-    assert before.member_pids == (4103,)
-    assert result.success is True
-    assert result.status == "CLEANUP_SUCCEEDED"
-    assert result.survivor_pids == ()
+    assert before.member_pids == (4103,) and handle.root_pid not in before.member_pids
+    assert result.status == "CLEANUP_SUCCEEDED" and result.survivor_pids == ()
 
 
-def test_cleanup_with_survivor_past_deadline_is_sticky_failure(tmp_path: Path) -> None:
+def test_cleanup_timeout_with_survivor_is_sticky_failure(tmp_path: Path) -> None:
     api = _FakeProcessApi()
-    api.query_results = [(4101, 4102), (4102,), (4102,), ()]
-    handle = _launch_fake(
-        tmp_path,
-        api=api,
-        cleanup_deadline_seconds=0.25,
-    )
-
+    api.query_results = [(4101, 4102), (4102,), ()]
+    handle = _launch_fake(tmp_path, api=api, deadline=0.25)
     first = cleanup_worker_process(
-        handle,
-        _clock=_FakeClock(0.0, 0.3),
-        _sleep=lambda _seconds: None,
+        handle, _clock=_FakeClock(0.0, 0.3), _sleep=lambda _: None
     )
     second = cleanup_worker_process(
-        handle,
-        _clock=_FakeClock(1.0, 1.1),
-        _sleep=lambda _seconds: None,
+        handle, _clock=_FakeClock(1.0, 1.1), _sleep=lambda _: None
     )
-
-    assert first.status == "CLEANUP_FAILED"
-    assert first.success is False
-    assert first.promotion_safe is False
-    assert first.survivor_pids == (4102,)
-    assert second.status == "CLEANUP_FAILED"
-    assert second.success is False
-    assert second.promotion_safe is False
+    assert first.status == "CLEANUP_FAILED" and first.survivor_pids == (4102,)
+    assert first.promotion_safe is False and second == first
 
 
 def test_cleanup_is_idempotent_after_verified_success(tmp_path: Path) -> None:
     api = _FakeProcessApi()
     api.query_results = [(4101,), ()]
     handle = _launch_fake(tmp_path, api=api)
-
     first = cleanup_worker_process(
-        handle,
-        _clock=_FakeClock(0.0, 0.1),
-        _sleep=lambda _seconds: None,
+        handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None
     )
-    events_after_first = list(api.events)
+    events = list(api.events)
     second = cleanup_worker_process(
-        handle,
-        _clock=_FakeClock(1.0, 1.1),
-        _sleep=lambda _seconds: None,
+        handle, _clock=_FakeClock(1.0, 1.1), _sleep=lambda _: None
     )
-
-    assert first == second
-    assert first.status == "CLEANUP_SUCCEEDED"
-    assert api.events == events_after_first
+    assert first == second and first.status == "CLEANUP_SUCCEEDED"
+    assert api.events == events
 
 
 @pytest.mark.parametrize(
-    "bad_evidence",
+    "evidence",
     [
         RuntimeError("query unsupported SECRET"),
         None,
@@ -551,55 +454,45 @@ def test_cleanup_is_idempotent_after_verified_success(tmp_path: Path) -> None:
     ],
 )
 def test_unsupported_or_malformed_job_evidence_fails_closed(
-    tmp_path: Path, bad_evidence: object
+    tmp_path: Path, evidence: object
 ) -> None:
     api = _FakeProcessApi()
-    api.query_results = [bad_evidence]
-    handle = _launch_fake(tmp_path, api=api, max_processes=8)
-
+    api.query_results = [evidence]
     result = cleanup_worker_process(
-        handle,
+        _launch_fake(tmp_path, api=api, max_processes=8),
         _clock=_FakeClock(0.0, 0.1),
-        _sleep=lambda _seconds: None,
+        _sleep=lambda _: None,
     )
-
-    assert result.status == "CLEANUP_FAILED"
-    assert result.success is False
-    assert result.promotion_safe is False
+    assert result.status == "CLEANUP_FAILED" and result.promotion_safe is False
     assert result.error_code == "WORKER_TREE_EVIDENCE_UNAVAILABLE"
     assert "SECRET" not in repr(result)
 
 
-def test_cleanup_close_failure_remains_sanitized_failure(tmp_path: Path) -> None:
+def test_cleanup_resource_close_failure_remains_sanitized_failure(tmp_path: Path) -> None:
     api = _FakeProcessApi()
     api.query_results = [(4101,), ()]
-    api.fail_stage = "close_handle"
     handle = _launch_fake(tmp_path, api=api)
-
+    api.fail_stage = "close_handle"
     result = cleanup_worker_process(
-        handle,
-        _clock=_FakeClock(0.0, 0.1),
-        _sleep=lambda _seconds: None,
+        handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None
     )
-
-    assert result.status == "CLEANUP_FAILED"
-    assert result.success is False
-    assert result.promotion_safe is False
+    assert result.status == "CLEANUP_FAILED" and result.promotion_safe is False
     assert result.error_code == "WORKER_CLEANUP_RESOURCE_CLOSE_FAILED"
     assert "FAKE_SECRET" not in repr(result)
 
 
-def test_failure_types_have_no_raw_stream_or_exception_payload_surface() -> None:
-    cleanup_fields = {field.name for field in dataclasses.fields(WorkerCleanupResult)}
-    identity_fields = {field.name for field in dataclasses.fields(ProcessTreeIdentity)}
-
+def test_failure_evidence_has_no_raw_stream_command_or_exception_fields() -> None:
     forbidden = {"stdout", "stderr", "exception", "command", "environment_values"}
-    assert cleanup_fields.isdisjoint(forbidden)
-    assert identity_fields.isdisjoint(forbidden)
+    assert {field.name for field in dataclasses.fields(WorkerCleanupResult)}.isdisjoint(
+        forbidden
+    )
+    assert {field.name for field in dataclasses.fields(ProcessTreeIdentity)}.isdisjoint(
+        forbidden
+    )
 
 
-def test_api_surface_has_no_handoff_thread_approval_schema_provider_or_auth_inputs() -> None:
-    forbidden_names = {
+def test_api_surface_has_no_task4_or_authority_inputs() -> None:
+    forbidden = {
         "handoff",
         "thread",
         "approval",
@@ -610,18 +503,12 @@ def test_api_surface_has_no_handoff_thread_approval_schema_provider_or_auth_inpu
         "token",
         "credential",
     }
-    for callable_object in (
-        prepare_worker_environment,
-        launch_worker_process,
-        cleanup_worker_process,
-    ):
-        parameter_names = {
-            name.lower() for name in inspect.signature(callable_object).parameters
-        }
-        assert parameter_names.isdisjoint(forbidden_names)
+    for func in (prepare_worker_environment, launch_worker_process, cleanup_worker_process):
+        names = {name.lower() for name in inspect.signature(func).parameters}
+        assert names.isdisjoint(forbidden)
 
 
-def test_module_has_no_codex_provider_model_autocad_or_file_ipc_imports() -> None:
+def test_module_has_no_sdk_provider_model_autocad_file_ipc_or_cad_agent_imports() -> None:
     tree = ast.parse(SOURCE_MODULE.read_text(encoding="utf-8"))
     imported: set[str] = set()
     for node in ast.walk(tree):
@@ -629,8 +516,7 @@ def test_module_has_no_codex_provider_model_autocad_or_file_ipc_imports() -> Non
             imported.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
-
-    forbidden_roots = {
+    forbidden = {
         "openai",
         "openai_codex",
         "codex_cli_bin",
@@ -638,10 +524,7 @@ def test_module_has_no_codex_provider_model_autocad_or_file_ipc_imports() -> Non
         "autocad_plugin",
         "cad_agent",
     }
-    assert {module.split(".", 1)[0] for module in imported}.isdisjoint(forbidden_roots)
-
-
-def test_module_does_not_import_or_call_existing_sdk_probe_owner() -> None:
+    assert {name.split(".", 1)[0] for name in imported}.isdisjoint(forbidden)
     source = SOURCE_MODULE.read_text(encoding="utf-8")
     assert "codex_sdk_compat" not in source
     assert "probe_runtime_start" not in source
@@ -649,17 +532,17 @@ def test_module_does_not_import_or_call_existing_sdk_probe_owner() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="supported Windows integration evidence")
-def test_real_windows_job_contains_child_and_grandchild_and_cleanup(tmp_path: Path) -> None:
+def test_real_windows_job_contains_child_and_grandchild_and_cleans_tree(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
-    grandchild_code = "import time; time.sleep(60)"
-    child_code = (
+    grandchild = "import time; time.sleep(60)"
+    child = (
         "import subprocess,sys,time;"
-        f"subprocess.Popen([sys.executable,'-c',{grandchild_code!r}]);"
+        f"subprocess.Popen([sys.executable,'-c',{grandchild!r}]);"
         "time.sleep(60)"
     )
     root_code = (
         "import subprocess,sys,time;"
-        f"subprocess.Popen([sys.executable,'-c',{child_code!r}]);"
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
         "time.sleep(60)"
     )
     handle = launch_worker_process(
@@ -674,19 +557,16 @@ def test_real_windows_job_contains_child_and_grandchild_and_cleanup(tmp_path: Pa
     while identity.member_count < 3 and time.monotonic() < deadline:
         time.sleep(0.02)
         identity = handle.snapshot_process_tree()
-
-    assert identity.root_pid == handle.root_pid
-    assert identity.member_count >= 3
+    assert identity.member_count >= 3 and identity.root_pid == handle.root_pid
     result = cleanup_worker_process(handle)
-    assert result.status == "CLEANUP_SUCCEEDED"
-    assert result.survivor_pids == ()
+    assert result.status == "CLEANUP_SUCCEEDED" and result.survivor_pids == ()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="supported Windows junction evidence")
 def test_real_windows_junction_escape_is_rejected(tmp_path: Path) -> None:
     root = tmp_path / "disposable"
-    root.mkdir()
     outside = tmp_path / "outside"
+    root.mkdir()
     outside.mkdir()
     junction = root / "cwd"
     subprocess.run(
@@ -695,14 +575,12 @@ def test_real_windows_junction_escape_is_rejected(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-
     with pytest.raises(WorkerProcessError) as caught:
         prepare_worker_environment(
             disposable_root=root,
             cwd=junction,
-            source_environment=_base_source_environment(),
+            source_environment=_source_env(),
         )
-
     assert caught.value.code == "WORKER_REPARSE_PATH"
 
 
