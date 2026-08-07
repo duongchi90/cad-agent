@@ -32,6 +32,10 @@ _ALLOWED_INHERITED_ENVIRONMENT = (
     "SystemRoot",
     "WINDIR",
 )
+_REQUIRED_WORKER_ENVIRONMENT = ("CODEX_HOME", "TEMP", "TMP")
+_ALLOWED_WORKER_ENVIRONMENT = frozenset(
+    (*_ALLOWED_INHERITED_ENVIRONMENT, *_REQUIRED_WORKER_ENVIRONMENT)
+)
 
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
@@ -218,7 +222,6 @@ def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
         attributes & _FILE_ATTRIBUTE_REPARSE_POINT
     )
 
-
 def _canonical_existing_directory(
     value: Path,
     *,
@@ -247,11 +250,17 @@ def _is_contained(root: Path, candidate: Path) -> bool:
     return True
 
 
+def _reject_environment_nul(key: str, value: str) -> None:
+    if "\x00" in key or "\x00" in value:
+        _fail("WORKER_ENV_INVALID")
+
+
 def _normalized_source_environment(source: Mapping[str, str]) -> dict[str, str]:
     normalized: dict[str, tuple[str, str]] = {}
     for key, value in source.items():
         if not isinstance(key, str) or not isinstance(value, str):
             _fail("WORKER_ENV_AMBIGUOUS")
+        _reject_environment_nul(key, value)
         folded = key.casefold()
         if folded in normalized:
             _fail("WORKER_ENV_AMBIGUOUS")
@@ -292,6 +301,7 @@ def prepare_worker_environment(
     if not _is_contained(root, workdir):
         _fail("WORKER_CWD_UNSAFE")
 
+    source = _normalized_source_environment(source_environment or os.environ)
     codex_home = root / "codex-home"
     temp_dir = root / "tmp"
     if codex_home.exists() or temp_dir.exists():
@@ -314,7 +324,6 @@ def prepare_worker_environment(
     if _path_contains_reparse(codex_home) or _path_contains_reparse(temp_dir):
         _fail("WORKER_REPARSE_PATH")
 
-    source = _normalized_source_environment(source_environment or os.environ)
     environment: dict[str, str] = {}
     for canonical_name in _ALLOWED_INHERITED_ENVIRONMENT:
         value = source.get(canonical_name.casefold())
@@ -377,7 +386,45 @@ def _validate_attestation_filesystem(
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
     if not _is_contained(attestation.disposable_root, attestation.temp_dir):
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-    if _environment_digest(attestation.environment) != attestation.environment_sha256:
+
+
+def _validate_attestation_environment(
+    attestation: WorkerEnvironmentAttestation,
+) -> None:
+    environment = attestation.environment
+    keys = tuple(environment)
+    if any(not isinstance(key, str) for key in keys):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    expected_keys = tuple(sorted(keys, key=lambda name: name.casefold()))
+    if keys != expected_keys or attestation.environment_keys != expected_keys:
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if not set(_REQUIRED_WORKER_ENVIRONMENT).issubset(environment):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if any(key not in _ALLOWED_WORKER_ENVIRONMENT for key in keys):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if len({key.casefold() for key in keys}) != len(keys):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    for key, value in environment.items():
+        if not isinstance(value, str):
+            _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+        _reject_environment_nul(key, value)
+    if environment["CODEX_HOME"] != str(attestation.codex_home):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if environment["TEMP"] != str(attestation.temp_dir):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if environment["TMP"] != str(attestation.temp_dir):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if attestation.codex_home != attestation.disposable_root / "codex-home":
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if attestation.temp_dir != attestation.disposable_root / "tmp":
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if attestation.writable_roots != (
+        attestation.cwd,
+        attestation.codex_home,
+        attestation.temp_dir,
+    ):
+        _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if _environment_digest(environment) != attestation.environment_sha256:
         _fail("WORKER_ENV_ATTESTATION_MISMATCH")
 
 
@@ -453,6 +500,7 @@ def launch_worker_process(
         max_processes=max_processes,
     )
     _validate_attestation_filesystem(environment)
+    _validate_attestation_environment(environment)
     runtime = _validate_executable(Path(executable))
     arguments = _validate_argv(argv)
     api: _ProcessApi = _process_api or _CtypesWindowsProcessApi()
