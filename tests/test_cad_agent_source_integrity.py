@@ -675,3 +675,70 @@ def test_task1_module_has_no_filesystem_parser_model_or_clock_authority() -> Non
         assert expected_call in synthetic_calls
     assert "cad_agent.source_integrity" in source_module.__name__
     assert "datetime.now" not in inspect.getsource(source_module)
+
+
+def test_tolerance_classification_is_invariant_to_ambient_decimal_precision() -> None:
+    original_context = decimal.getcontext().copy()
+    observations: list[bool] = []
+    try:
+        for precision in (3, 6, 12, 28):
+            decimal.getcontext().prec = precision
+            observations.append(
+                r1c_quantity_within_tolerance(
+                    "1000000000",
+                    left_unit="mm",
+                    right="0.001",
+                    right_unit="mm",
+                    tolerance="999999999.999",
+                    tolerance_unit="mm",
+                    quantity="physical_length",
+                    tolerance_policy_version="r1c-tolerance-v1",
+                )
+            )
+    finally:
+        decimal.setcontext(original_context)
+
+    assert observations == [True, True, True, True]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "observed_sha256",
+        "file_object_identity_token",
+        "path_binding_sha256",
+        "observed_media_type",
+    ],
+)
+def test_verified_ready_requires_complete_observed_identity_evidence(field: str) -> None:
+    payload = _valid_custody_payload()
+    payload["items"][0][field] = None
+
+    with pytest.raises(SourceIntegrityError, match="VERIFIED|eligible|observed|identity|path|media"):
+        validate_source_custody(payload)
+
+
+def test_verified_ready_rejects_declared_observed_sha_mismatch() -> None:
+    payload = _valid_custody_payload()
+    payload["items"][0]["observed_sha256"] = "f" * 64
+
+    with pytest.raises(SourceIntegrityError, match="hash|SHA|declared|observed|VERIFIED"):
+        validate_source_custody(payload)
+
+
+def test_verified_ready_rejects_declared_observed_media_mismatch() -> None:
+    payload = _valid_custody_payload()
+    payload["items"][0]["observed_media_type"] = "image/jpeg"
+
+    with pytest.raises(SourceIntegrityError, match="media|declared|observed|VERIFIED"):
+        validate_source_custody(payload)
+
+
+def test_alias_group_members_require_distinct_path_bindings() -> None:
+    payload = _alias_group_payload("DUPLICATE_BYTES")
+    shared_binding = payload["items"][0]["path_binding_sha256"]
+    payload["items"][1]["path_binding_sha256"] = shared_binding
+    payload["alias_groups"][0]["path_bindings"] = [shared_binding]
+
+    with pytest.raises(SourceIntegrityError, match="path|binding|distinct|member"):
+        validate_source_custody(payload)
