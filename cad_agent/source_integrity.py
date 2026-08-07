@@ -47,13 +47,20 @@ class _QuantityPolicy:
         quantum: str,
         minimum: str,
         maximum: str,
-        units: Mapping[str, str],
+        units: Mapping[str, str | tuple[str, str]],
     ) -> None:
         self.canonical_unit = canonical_unit
         self.quantum = decimal.Decimal(quantum)
         self.minimum = decimal.Decimal(minimum)
         self.maximum = decimal.Decimal(maximum)
-        self.units = {unit: decimal.Decimal(factor) for unit, factor in units.items()}
+        self.units = {
+            unit: (
+                (decimal.Decimal(factor[0]), decimal.Decimal(factor[1]))
+                if isinstance(factor, tuple)
+                else (decimal.Decimal(factor), decimal.Decimal("1"))
+            )
+            for unit, factor in units.items()
+        }
 
 
 _PHYSICAL_LENGTH_POLICY = _QuantityPolicy(
@@ -69,11 +76,11 @@ _PDF_COORDINATE_POLICY = _QuantityPolicy(
     minimum="-1000000000",
     maximum="1000000000",
     units={
-        "pt": "1",
-        "in": "72",
-        "mm": str(decimal.Decimal(72) / decimal.Decimal("25.4")),
-        "cm": str(decimal.Decimal(720) / decimal.Decimal("25.4")),
-        "m": str(decimal.Decimal(72000) / decimal.Decimal("25.4")),
+        "pt": ("1", "1"),
+        "in": ("72", "1"),
+        "mm": ("72", "25.4"),
+        "cm": ("720", "25.4"),
+        "m": ("72000", "25.4"),
     },
 )
 _PIXEL_POLICY = _QuantityPolicy(
@@ -224,10 +231,12 @@ def canonicalize_r1c_quantity(
     if not isinstance(unit, str) or unit not in policy.units:
         _fail("unit", f"is unsupported for {quantity}")
     parsed = _decimal(value, path="value")
-    factor = policy.units[unit]
+    numerator, denominator = policy.units[unit]
     with decimal.localcontext() as context:
         context.prec = max(64, len(parsed.as_tuple().digits) + 32)
-        converted = parsed * factor
+        converted = parsed * numerator
+        if denominator != 1:
+            converted /= denominator
         if converted < policy.minimum or converted > policy.maximum:
             _fail("value", "is outside the closed range")
         if policy is _PIXEL_POLICY and converted != converted.to_integral_value():
@@ -576,10 +585,83 @@ def validate_source_custody(payload: object) -> dict[str, object]:
     normalized_items.sort(key=lambda item: str(item["source_id"]))
     alias_groups = _validate_alias_groups(root["alias_groups"], item_ids=set(source_ids))
     group_ids = {str(group["alias_group_id"]) for group in alias_groups}
+    items_by_id = {str(item["source_id"]): item for item in normalized_items}
     for item in normalized_items:
         group_id = item["alias_group_id"]
         if group_id is not None and group_id not in group_ids:
             _fail("items.alias_group_id", "must reference an alias group")
+        if item["custody_state"] in {"SAME_FILE_ALIAS", "DUPLICATE_BYTES"} and group_id is None:
+            _fail(
+                "items.alias_group_id",
+                "is required for alias or duplicate custody states",
+            )
+
+    for group in alias_groups:
+        group_id = str(group["alias_group_id"])
+        source_id_set = set(group["source_ids"])
+        referenced_ids = {
+            source_id
+            for source_id, item in items_by_id.items()
+            if item["alias_group_id"] == group_id
+        }
+        if referenced_ids != source_id_set:
+            _fail(
+                f"alias_groups.{group_id}",
+                "source_ids and item alias_group_id membership must agree",
+            )
+
+        member_items = [items_by_id[source_id] for source_id in group["source_ids"]]
+        if any(item["custody_state"] != group["group_type"] for item in member_items):
+            _fail(
+                f"alias_groups.{group_id}",
+                "group_type must match every member custody_state",
+            )
+
+        observed_hashes = {item["observed_sha256"] for item in member_items}
+        if None in observed_hashes or len(observed_hashes) != 1:
+            _fail(
+                f"alias_groups.{group_id}",
+                "observed_sha256 must match every member",
+            )
+        if group["observed_sha256"] != next(iter(observed_hashes)):
+            _fail(
+                f"alias_groups.{group_id}",
+                "observed_sha256 does not match its members",
+            )
+
+        member_tokens = [item["file_object_identity_token"] for item in member_items]
+        member_paths = [item["path_binding_sha256"] for item in member_items]
+        if any(token is None for token in member_tokens) or any(
+            path_binding is None for path_binding in member_paths
+        ):
+            _fail(
+                f"alias_groups.{group_id}",
+                "member object and path identities are required",
+            )
+        expected_tokens = sorted(set(member_tokens))
+        expected_paths = sorted(set(member_paths))
+        if group["file_object_identity_tokens"] != expected_tokens:
+            _fail(
+                f"alias_groups.{group_id}",
+                "file_object_identity_tokens do not match its members",
+            )
+        if group["path_bindings"] != expected_paths:
+            _fail(
+                f"alias_groups.{group_id}",
+                "path_bindings do not match its members",
+            )
+        if group["group_type"] == "SAME_FILE_ALIAS" and len(expected_tokens) != 1:
+            _fail(
+                f"alias_groups.{group_id}",
+                "SAME_FILE_ALIAS requires one shared object identity",
+            )
+        if group["group_type"] == "DUPLICATE_BYTES" and (
+            len(expected_tokens) < 2 or len(expected_tokens) != len(member_items)
+        ):
+            _fail(
+                f"alias_groups.{group_id}",
+                "DUPLICATE_BYTES requires independent object identities",
+            )
     eligible_count = sum(
         item["custody_state"] in _ELIGIBLE_CUSTODY_STATES for item in normalized_items
     )

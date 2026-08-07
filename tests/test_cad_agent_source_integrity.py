@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import copy
+import decimal
+import importlib
 import inspect
 from decimal import Decimal
 from pathlib import Path
@@ -131,6 +133,34 @@ def test_r1c_quantity_equivalence_and_negative_zero_are_canonical() -> None:
     )["value"] == "0"
 
 
+def test_pdf_coordinate_conversion_is_invariant_to_preimport_decimal_precision() -> None:
+    source_module = importlib.import_module("cad_agent.source_integrity")
+    original_context = decimal.getcontext().copy()
+    observations: list[tuple[dict[str, str], str]] = []
+    try:
+        for precision in (3, 6, 80):
+            decimal.getcontext().prec = precision
+            importlib.reload(source_module)
+            normalized = source_module.canonicalize_r1c_quantity(
+                "1", quantity="pdf_coordinate", unit="mm"
+            )
+            observations.append((normalized, canonical_json_sha256(normalized)))
+    finally:
+        decimal.setcontext(original_context)
+        importlib.reload(source_module)
+        globals()["SourceIntegrityError"] = source_module.SourceIntegrityError
+
+    with decimal.localcontext() as exact_context:
+        exact_context.prec = 80
+        exact_points = Decimal("1") * Decimal(72) / Decimal("25.4")
+        expected_value = format(
+            exact_points.quantize(Decimal("0.001"), rounding=decimal.ROUND_HALF_EVEN),
+            "f",
+        )
+    assert observations[0] == observations[1] == observations[2]
+    assert observations[0][0]["value"] == expected_value
+
+
 def test_tolerance_boundary_is_inclusive_and_classification_is_not_identity() -> None:
     assert r1c_quantity_within_tolerance(
         "10.000",
@@ -212,6 +242,164 @@ def _valid_custody_payload() -> dict[str, object]:
         ],
         "alias_groups": [],
     }
+
+
+def _alias_group_payload(group_type: str) -> dict[str, object]:
+    payload = _valid_custody_payload()
+    first = copy.deepcopy(payload["items"][0])
+    second = copy.deepcopy(first)
+    second.update(
+        {
+            "source_id": "IMAGE-002",
+            "relative_path": "sources/other.png",
+            "file_object_identity_token": "f" * 64,
+            "path_binding_sha256": "1" * 64,
+        }
+    )
+    first["alias_group_id"] = "GROUP-001"
+    second["alias_group_id"] = "GROUP-001"
+    if group_type == "SAME_FILE_ALIAS":
+        first.update(
+            {
+                "custody_state": "SAME_FILE_ALIAS",
+                "blocking_reason_code": "SAME_FILE_ALIAS",
+            }
+        )
+        second.update(
+            {
+                "custody_state": "SAME_FILE_ALIAS",
+                "blocking_reason_code": "SAME_FILE_ALIAS",
+            }
+        )
+        tokens = ["d" * 64]
+        status = "BLOCKED"
+        eligible_count = 0
+        blocking_count = 2
+        second["file_object_identity_token"] = "d" * 64
+    else:
+        first.update(
+            {"custody_state": "DUPLICATE_BYTES", "blocking_reason_code": None}
+        )
+        second.update(
+            {"custody_state": "DUPLICATE_BYTES", "blocking_reason_code": None}
+        )
+        tokens = ["d" * 64, "f" * 64]
+        status = "READY"
+        eligible_count = 2
+        blocking_count = 0
+    payload.update(
+        {
+            "status": status,
+            "eligible_count": eligible_count,
+            "blocking_count": blocking_count,
+            "items": [first, second],
+            "alias_groups": [
+                {
+                    "alias_group_id": "GROUP-001",
+                    "group_type": group_type,
+                    "source_ids": ["IMAGE-001", "IMAGE-002"],
+                    "observed_sha256": "c" * 64,
+                    "file_object_identity_tokens": tokens,
+                    "path_bindings": ["1" * 64, "e" * 64],
+                }
+            ],
+        }
+    )
+    return payload
+
+
+def test_same_file_alias_blocks_even_when_items_claim_verified() -> None:
+    payload = _alias_group_payload("SAME_FILE_ALIAS")
+    for item in payload["items"]:
+        item["custody_state"] = "VERIFIED"
+        item["blocking_reason_code"] = None
+    payload["status"] = "READY"
+    payload["eligible_count"] = 2
+    payload["blocking_count"] = 0
+
+    with pytest.raises(SourceIntegrityError, match="alias|SAME_FILE_ALIAS|blocking"):
+        validate_source_custody(payload)
+
+
+def test_same_file_alias_members_are_explicitly_blocked() -> None:
+    normalized = validate_source_custody(_alias_group_payload("SAME_FILE_ALIAS"))
+
+    assert normalized["status"] == "BLOCKED"
+    assert normalized["blocking_count"] == 2
+    assert all(
+        item["custody_state"] == "SAME_FILE_ALIAS"
+        for item in normalized["items"]
+    )
+
+
+def test_duplicate_bytes_requires_a_complete_independent_object_explanation() -> None:
+    normalized = validate_source_custody(_alias_group_payload("DUPLICATE_BYTES"))
+
+    assert normalized["status"] == "READY"
+    assert normalized["eligible_count"] == 2
+    assert normalized["alias_groups"][0]["group_type"] == "DUPLICATE_BYTES"
+
+
+def test_duplicate_bytes_without_a_matching_group_is_not_eligible() -> None:
+    payload = _alias_group_payload("DUPLICATE_BYTES")
+    for item in payload["items"]:
+        item["alias_group_id"] = None
+    payload["alias_groups"] = []
+
+    with pytest.raises(SourceIntegrityError, match="alias_group|duplicate|explanation"):
+        validate_source_custody(payload)
+
+
+def test_item_group_membership_must_be_bidirectional() -> None:
+    payload = _alias_group_payload("DUPLICATE_BYTES")
+    third = copy.deepcopy(payload["items"][1])
+    third.update(
+        {
+            "source_id": "IMAGE-003",
+            "relative_path": "sources/third.png",
+            "file_object_identity_token": "0" * 64,
+            "path_binding_sha256": "2" * 64,
+            "alias_group_id": None,
+        }
+    )
+    payload["items"].append(third)
+    payload["alias_groups"][0]["source_ids"] = ["IMAGE-002", "IMAGE-003"]
+    payload["alias_groups"][0]["file_object_identity_tokens"] = [
+        "0" * 64,
+        "f" * 64,
+    ]
+    payload["alias_groups"][0]["path_bindings"] = ["1" * 64, "2" * 64]
+    payload["eligible_count"] = 3
+
+    with pytest.raises(SourceIntegrityError, match="member|source_ids|alias_group"):
+        validate_source_custody(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("observed_sha256", "b" * 64),
+        ("file_object_identity_tokens", ["d" * 64, "0" * 64]),
+        ("path_bindings", ["e" * 64, "0" * 64]),
+    ],
+)
+def test_duplicate_bytes_group_must_match_member_identities(
+    field: str, value: object
+) -> None:
+    payload = _alias_group_payload("DUPLICATE_BYTES")
+    payload["alias_groups"][0][field] = value
+
+    with pytest.raises(SourceIntegrityError, match="group|member|duplicate|match"):
+        validate_source_custody(payload)
+
+
+def test_duplicate_bytes_group_type_must_match_member_states() -> None:
+    payload = _alias_group_payload("DUPLICATE_BYTES")
+    for item in payload["items"]:
+        item["custody_state"] = "VERIFIED"
+
+    with pytest.raises(SourceIntegrityError, match="group|DUPLICATE_BYTES|state"):
+        validate_source_custody(payload)
 
 
 def test_custody_candidate_is_closed_normalized_and_not_real_byte_authority() -> None:
@@ -414,6 +602,7 @@ def test_evaluation_hash_changes_with_injected_evidence_not_ambient_time() -> No
 
 def test_task1_module_has_no_filesystem_parser_model_or_clock_authority() -> None:
     tree = ast.parse(SOURCE_MODULE.read_text(encoding="utf-8"))
+    source_module = importlib.import_module("cad_agent.source_integrity")
     forbidden_import_roots = {
         "os",
         "pathlib",
@@ -451,10 +640,38 @@ def test_task1_module_has_no_filesystem_parser_model_or_clock_authority() -> Non
         "Popen",
         "system",
     }
+    def call_name(node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            prefix = call_name(node.value)
+            return f"{prefix}.{node.attr}"
+        return ""
+
     called_names = {
-        node.func.id
+        call_name(node.func)
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        if isinstance(node, ast.Call)
     }
     assert called_names.isdisjoint(forbidden_calls)
-    assert "datetime.now" not in inspect.getsource(__import__("cad_agent.source_integrity"))
+    forbidden_clock_calls = {
+        "datetime.now",
+        "datetime.utcnow",
+        "time.time",
+        "_datetime.datetime.now",
+        "_datetime.datetime.utcnow",
+    }
+    assert called_names.isdisjoint(forbidden_clock_calls)
+    for expression, expected_call in (
+        ("datetime.now()", "datetime.now"),
+        ("_datetime.datetime.utcnow()", "_datetime.datetime.utcnow"),
+        ("time.time()", "time.time"),
+    ):
+        synthetic_calls = {
+            call_name(node.func)
+            for node in ast.walk(ast.parse(expression))
+            if isinstance(node, ast.Call)
+        }
+        assert expected_call in synthetic_calls
+    assert "cad_agent.source_integrity" in source_module.__name__
+    assert "datetime.now" not in inspect.getsource(source_module)
