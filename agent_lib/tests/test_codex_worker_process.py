@@ -676,3 +676,111 @@ def test_prepare_rejects_embedded_nul_in_allowlisted_environment_value(
         )
     assert caught.value.code == "WORKER_ENV_INVALID"
     assert "injected-secret" not in str(caught.value)
+
+
+def test_prepare_rejects_embedded_nul_in_environment_name(tmp_path: Path) -> None:
+    root, cwd = _paths(tmp_path)
+    source = _source_env()
+    source["PATH\x00OPENAI_API_KEY"] = "injected-secret"
+
+    with pytest.raises(WorkerProcessError) as caught:
+        prepare_worker_environment(
+            disposable_root=root,
+            cwd=cwd,
+            source_environment=source,
+        )
+    assert caught.value.code == "WORKER_ENV_INVALID"
+    assert "injected-secret" not in str(caught.value)
+
+
+def test_launch_rejects_self_consistent_cwd_dotdot_escape(tmp_path: Path) -> None:
+    prepared = _prepared(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    forged_cwd = prepared.disposable_root / ".." / "outside"
+    assert forged_cwd.is_dir()
+
+    forged = dataclasses.replace(
+        prepared,
+        cwd=forged_cwd,
+        writable_roots=(forged_cwd, prepared.codex_home, prepared.temp_dir),
+    )
+    api = _FakeProcessApi()
+    with pytest.raises(WorkerProcessError) as caught:
+        launch_worker_process(
+            environment=forged,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=api,
+        )
+    assert caught.value.code == "WORKER_CWD_UNSAFE"
+    assert api.events == []
+
+
+def test_launch_rejects_self_consistent_unapproved_alternate_root(tmp_path: Path) -> None:
+    approved = _prepared(tmp_path / "approved")
+    alternate_root, alternate_cwd = _paths(tmp_path / "alternate")
+    alternate_codex_home = alternate_root / "codex-home"
+    alternate_temp = alternate_root / "tmp"
+    alternate_codex_home.mkdir()
+    alternate_temp.mkdir()
+    forged_environment = dict(approved.environment)
+    forged_environment.update(
+        {
+            "CODEX_HOME": str(alternate_codex_home.resolve()),
+            "TEMP": str(alternate_temp.resolve()),
+            "TMP": str(alternate_temp.resolve()),
+        }
+    )
+    forged = dataclasses.replace(
+        approved,
+        environment=forged_environment,
+        environment_sha256=_test_environment_digest(forged_environment),
+        disposable_root=alternate_root.resolve(),
+        cwd=alternate_cwd.resolve(),
+        codex_home=alternate_codex_home.resolve(),
+        temp_dir=alternate_temp.resolve(),
+        writable_roots=(
+            alternate_cwd.resolve(),
+            alternate_codex_home.resolve(),
+            alternate_temp.resolve(),
+        ),
+    )
+
+    api = _FakeProcessApi()
+    with pytest.raises(WorkerProcessError) as caught:
+        launch_worker_process(
+            environment=forged,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=api,
+        )
+    assert caught.value.code == "WORKER_DISPOSABLE_ROOT_UNSAFE"
+    assert api.events == []
+
+
+@pytest.mark.parametrize("target", ["codex_home", "temp_dir"])
+def test_launch_rejects_worker_state_populated_after_preparation(
+    tmp_path: Path, target: str
+) -> None:
+    prepared = _prepared(tmp_path)
+    stale_dir = getattr(prepared, target)
+    (stale_dir / "stale.txt").write_text("stale-private-data", encoding="utf-8")
+
+    api = _FakeProcessApi()
+    with pytest.raises(WorkerProcessError) as caught:
+        launch_worker_process(
+            environment=prepared,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=api,
+        )
+    assert caught.value.code == "WORKER_DISPOSABLE_STATE_UNSAFE"
+    assert "stale-private-data" not in str(caught.value)
+    assert api.events == []
