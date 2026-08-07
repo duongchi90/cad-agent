@@ -995,6 +995,8 @@ _POLICY_LIMIT_KEYS = {
 _MAX_FINAL_PATH_CHARS = 32768
 _MAX_HASH_CHUNK_SIZE = 16 * 1024 * 1024
 _MAX_INT64 = 2**63 - 1
+_FILE_ID_INFO_CLASS = 18
+_FILE_ID_BYTES = 16
 
 
 def _frame_parts(*parts: bytes) -> bytes:
@@ -1015,6 +1017,12 @@ def _u64_part(value: object) -> bytes:
     if value > 2**64 - 1:
         raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
     return struct.pack(">Q", value)
+
+
+def _file_id_part(value: object) -> bytes:
+    if not isinstance(value, bytes) or len(value) != _FILE_ID_BYTES:
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+    return value
 
 
 def _hmac_token(key: bytes, domain: bytes, *parts: bytes) -> str:
@@ -1087,7 +1095,7 @@ def _final_relative_path(
     try:
         common = ntpath.commonpath([root, source])
         relative = ntpath.relpath(source, root)
-    except ValueError as exc:
+    except ValueError:
         raise SourceIntegrityError("FINAL_PATH_OUTSIDE_ROOT") from None
     if common != root or relative in {".", ".."} or relative.startswith("..\\"):
         raise SourceIntegrityError("FINAL_PATH_OUTSIDE_ROOT")
@@ -1097,10 +1105,12 @@ def _final_relative_path(
     return normalized_relative.replace("\\", "/")
 
 
-def _snapshot_identity(snapshot: Mapping[str, object]) -> tuple[int, int]:
+def _snapshot_identity(snapshot: Mapping[str, object]) -> tuple[int, bytes]:
+    volume = snapshot.get("volume_serial")
+    file_id = snapshot.get("file_id")
     return (
-        int.from_bytes(_u64_part(snapshot.get("volume_serial")), "big"),
-        int.from_bytes(_u64_part(snapshot.get("file_index")), "big"),
+        int.from_bytes(_u64_part(volume), "big"),
+        _file_id_part(file_id),
     )
 
 
@@ -1122,7 +1132,7 @@ def _safe_snapshot(
         raise SourceIntegrityError("EVIDENCE_UNAVAILABLE") from None
     if not isinstance(raw, Mapping):
         raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
-    required = {"final_path", "volume_serial", "file_index", "size", "reparse"}
+    required = {"final_path", "volume_serial", "file_id", "size", "reparse"}
     if set(raw) != required or not isinstance(raw["reparse"], bool):
         raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
     _normalize_windows_final_path(raw["final_path"])
@@ -1134,7 +1144,7 @@ def _safe_snapshot(
 def _object_identity_token(
     *, key: bytes, key_revision: str, snapshot: Mapping[str, object]
 ) -> str:
-    volume, file_index = _snapshot_identity(snapshot)
+    volume, file_id = _snapshot_identity(snapshot)
     return _hmac_token(
         key,
         _FILE_OBJECT_DOMAIN,
@@ -1142,7 +1152,7 @@ def _object_identity_token(
         _text_part(_IDENTITY_SCHEME_VERSION),
         _text_part(key_revision),
         _u64_part(volume),
-        _u64_part(file_index),
+        _file_id_part(file_id),
     )
 
 
@@ -1155,7 +1165,7 @@ def _approved_root_configuration_sha256(
     root_snapshot: Mapping[str, object],
     policy_limits: Mapping[str, int],
 ) -> str:
-    volume, file_index = _snapshot_identity(root_snapshot)
+    volume, file_id = _snapshot_identity(root_snapshot)
     root_path = _normalize_windows_final_path(root_snapshot["final_path"])
     limits_sha = canonical_json_sha256(dict(policy_limits))
     return _hmac_token(
@@ -1167,7 +1177,7 @@ def _approved_root_configuration_sha256(
         _text_part(_IDENTITY_SCHEME_VERSION),
         _text_part(identity_key_revision),
         _u64_part(volume),
-        _u64_part(file_index),
+        _file_id_part(file_id),
         _text_part(root_path),
         _text_part(limits_sha),
     )
@@ -1257,17 +1267,20 @@ def _derive_groups(items: list[dict[str, object]]) -> list[dict[str, object]]:
         for item in members:
             item["byte_custody_state"] = "SAME_FILE_ALIAS"
             assigned.add(str(item["source_id"]))
-        group = {
-            "alias_group_id": _group_id("SAME_FILE_ALIAS", members),
-            "group_type": "SAME_FILE_ALIAS",
-            "source_ids": sorted(str(item["source_id"]) for item in members),
-            "observed_sha256": str(members[0]["observed_sha256"]),
-            "file_object_identity_tokens": sorted(
-                {str(item["file_object_identity_token"]) for item in members}
-            ),
-            "path_bindings": sorted(str(item["path_binding_sha256"]) for item in members),
-        }
-        groups.append(group)
+        groups.append(
+            {
+                "alias_group_id": _group_id("SAME_FILE_ALIAS", members),
+                "group_type": "SAME_FILE_ALIAS",
+                "source_ids": sorted(str(item["source_id"]) for item in members),
+                "observed_sha256": str(members[0]["observed_sha256"]),
+                "file_object_identity_tokens": sorted(
+                    {str(item["file_object_identity_token"]) for item in members}
+                ),
+                "path_bindings": sorted(
+                    str(item["path_binding_sha256"]) for item in members
+                ),
+            }
+        )
 
     by_hash: dict[str, list[dict[str, object]]] = {}
     for item in items:
@@ -1281,15 +1294,18 @@ def _derive_groups(items: list[dict[str, object]]) -> list[dict[str, object]]:
             raise SourceIntegrityError("IDENTITY_CHANGED")
         for item in members:
             item["byte_custody_state"] = "DUPLICATE_BYTES"
-        group = {
-            "alias_group_id": _group_id("DUPLICATE_BYTES", members),
-            "group_type": "DUPLICATE_BYTES",
-            "source_ids": sorted(str(item["source_id"]) for item in members),
-            "observed_sha256": str(members[0]["observed_sha256"]),
-            "file_object_identity_tokens": sorted(tokens),
-            "path_bindings": sorted(str(item["path_binding_sha256"]) for item in members),
-        }
-        groups.append(group)
+        groups.append(
+            {
+                "alias_group_id": _group_id("DUPLICATE_BYTES", members),
+                "group_type": "DUPLICATE_BYTES",
+                "source_ids": sorted(str(item["source_id"]) for item in members),
+                "observed_sha256": str(members[0]["observed_sha256"]),
+                "file_object_identity_tokens": sorted(tokens),
+                "path_bindings": sorted(
+                    str(item["path_binding_sha256"]) for item in members
+                ),
+            }
+        )
     groups.sort(key=lambda group: str(group["alias_group_id"]))
     return groups
 
@@ -1303,7 +1319,8 @@ class _WindowsHandle:
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self._kernel32.CloseHandle(wintypes.HANDLE(self.value))
+        if not self._kernel32.CloseHandle(wintypes.HANDLE(self.value)):
+            raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
 
 
 class _ByHandleFileInformation(ctypes.Structure):
@@ -1321,11 +1338,21 @@ class _ByHandleFileInformation(ctypes.Structure):
     ]
 
 
+class _FileId128(ctypes.Structure):
+    _fields_ = [("Identifier", ctypes.c_ubyte * _FILE_ID_BYTES)]
+
+
+class _FileIdInfo(ctypes.Structure):
+    _fields_ = [
+        ("VolumeSerialNumber", ctypes.c_ulonglong),
+        ("FileId", _FileId128),
+    ]
+
+
 class _WindowsHandleAdapter:
     _GENERIC_READ = 0x80000000
     _FILE_READ_ATTRIBUTES = 0x80
     _FILE_SHARE_READ = 0x1
-    _FILE_SHARE_WRITE = 0x2
     _FILE_SHARE_DELETE = 0x4
     _OPEN_EXISTING = 3
     _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
@@ -1340,6 +1367,55 @@ class _WindowsHandleAdapter:
         self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self._invalid_handle = ctypes.c_void_p(-1).value
 
+        self._kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        self._kernel32.CreateFileW.restype = wintypes.HANDLE
+        self._kernel32.GetFileAttributesW.argtypes = [wintypes.LPCWSTR]
+        self._kernel32.GetFileAttributesW.restype = wintypes.DWORD
+        self._kernel32.GetFinalPathNameByHandleW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        self._kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+        self._kernel32.GetFileInformationByHandle.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_ByHandleFileInformation),
+        ]
+        self._kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+        self._kernel32.GetFileInformationByHandleEx.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        self._kernel32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+        self._kernel32.SetFilePointerEx.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_longlong,
+            ctypes.POINTER(ctypes.c_longlong),
+            wintypes.DWORD,
+        ]
+        self._kernel32.SetFilePointerEx.restype = wintypes.BOOL
+        self._kernel32.ReadFile.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPVOID,
+        ]
+        self._kernel32.ReadFile.restype = wintypes.BOOL
+        self._kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel32.CloseHandle.restype = wintypes.BOOL
+
     def _create(self, path: str, *, directory: bool) -> _WindowsHandle:
         access = self._FILE_READ_ATTRIBUTES if directory else (
             self._GENERIC_READ | self._FILE_READ_ATTRIBUTES
@@ -1348,9 +1424,9 @@ class _WindowsHandleAdapter:
         if directory:
             flags |= self._FILE_FLAG_BACKUP_SEMANTICS
         handle = self._kernel32.CreateFileW(
-            ctypes.c_wchar_p(path),
+            path,
             access,
-            self._FILE_SHARE_READ | self._FILE_SHARE_WRITE | self._FILE_SHARE_DELETE,
+            self._FILE_SHARE_READ | self._FILE_SHARE_DELETE,
             None,
             self._OPEN_EXISTING,
             flags,
@@ -1365,7 +1441,11 @@ class _WindowsHandleAdapter:
         return self._create(str(approved_root), directory=True)
 
     def _root_path(self, root_handle: _WindowsHandle, max_final_path_chars: int) -> str:
-        return str(self.snapshot(root_handle, max_final_path_chars=max_final_path_chars)["final_path"])
+        return str(
+            self.snapshot(
+                root_handle, max_final_path_chars=max_final_path_chars
+            )["final_path"]
+        )
 
     def open_source(
         self,
@@ -1375,7 +1455,10 @@ class _WindowsHandleAdapter:
         max_final_path_chars: int,
     ) -> _WindowsHandle:
         root = self._root_path(root_handle, max_final_path_chars)
-        return self._create(ntpath.join(root, relative_path.replace("/", "\\")), directory=False)
+        return self._create(
+            ntpath.join(root, relative_path.replace("/", "\\")),
+            directory=False,
+        )
 
     def reopen_source(
         self,
@@ -1395,7 +1478,7 @@ class _WindowsHandleAdapter:
         current = root
         for component in relative_path.replace("/", "\\").split("\\"):
             current = ntpath.join(current, component)
-            attributes = self._kernel32.GetFileAttributesW(ctypes.c_wchar_p(current))
+            attributes = int(self._kernel32.GetFileAttributesW(current)) & 0xFFFFFFFF
             if attributes == self._INVALID_FILE_ATTRIBUTES:
                 raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
             if attributes & self._FILE_ATTRIBUTE_REPARSE_POINT:
@@ -1417,24 +1500,37 @@ class _WindowsHandleAdapter:
                 final_path = buffer.value
                 break
             next_size = max(buffer_size * 2, int(length) + 1)
-            if next_size <= buffer_size:
+            if next_size <= buffer_size or next_size > max_final_path_chars:
                 break
             buffer_size = next_size
         if final_path is None or len(final_path) > max_final_path_chars:
             raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
-        info = _ByHandleFileInformation()
+
+        basic = _ByHandleFileInformation()
         if not self._kernel32.GetFileInformationByHandle(
-            wintypes.HANDLE(handle.value), ctypes.byref(info)
+            wintypes.HANDLE(handle.value), ctypes.byref(basic)
         ):
             raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
-        size = (int(info.nFileSizeHigh) << 32) | int(info.nFileSizeLow)
-        file_index = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
+        file_id_info = _FileIdInfo()
+        if not self._kernel32.GetFileInformationByHandleEx(
+            wintypes.HANDLE(handle.value),
+            _FILE_ID_INFO_CLASS,
+            ctypes.byref(file_id_info),
+            ctypes.sizeof(file_id_info),
+        ):
+            raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+        size = (int(basic.nFileSizeHigh) << 32) | int(basic.nFileSizeLow)
+        file_id = bytes(file_id_info.FileId.Identifier)
+        if len(file_id) != _FILE_ID_BYTES:
+            raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
         return {
             "final_path": final_path,
-            "volume_serial": int(info.dwVolumeSerialNumber),
-            "file_index": file_index,
+            "volume_serial": int(file_id_info.VolumeSerialNumber),
+            "file_id": file_id,
             "size": size,
-            "reparse": bool(info.dwFileAttributes & self._FILE_ATTRIBUTE_REPARSE_POINT),
+            "reparse": bool(
+                basic.dwFileAttributes & self._FILE_ATTRIBUTE_REPARSE_POINT
+            ),
         }
 
     def rewind(self, handle: _WindowsHandle) -> None:
@@ -1539,6 +1635,8 @@ def inspect_source_bundle(
                     expected_size = _snapshot_size(before)
                     if expected_size > limits["max_file_bytes"]:
                         raise SourceIntegrityError("RESOURCE_LIMIT")
+                    if total_bytes + expected_size > limits["max_total_bytes"]:
+                        raise SourceIntegrityError("RESOURCE_LIMIT")
                     object_token = _object_identity_token(
                         key=key,
                         key_revision=key_revision,
@@ -1572,28 +1670,29 @@ def inspect_source_bundle(
                         declared=relative_path,
                     )
                     adapter.check_no_reparse(root_handle, relative_path)
-                with adapter.reopen_source(
-                    root_handle,
-                    relative_path,
-                    max_final_path_chars=limits["max_final_path_chars"],
-                ) as reopened_handle:
-                    reopened = _safe_snapshot(
-                        adapter,
-                        reopened_handle,
+                    with adapter.reopen_source(
+                        root_handle,
+                        relative_path,
                         max_final_path_chars=limits["max_final_path_chars"],
-                    )
-                    if reopened["reparse"]:
-                        raise SourceIntegrityError("REPARSE_POINT")
-                    reopened_relative = _final_relative_path(
-                        root_final_path=root_snapshot["final_path"],
-                        source_final_path=reopened["final_path"],
-                        declared=relative_path,
-                    )
-                    if (
-                        _snapshot_identity(reopened) != _snapshot_identity(before)
-                        or reopened_relative != final_relative
-                    ):
-                        raise SourceIntegrityError("IDENTITY_CHANGED_REPLACED")
+                    ) as reopened_handle:
+                        reopened = _safe_snapshot(
+                            adapter,
+                            reopened_handle,
+                            max_final_path_chars=limits["max_final_path_chars"],
+                        )
+                        if reopened["reparse"]:
+                            raise SourceIntegrityError("REPARSE_POINT")
+                        reopened_relative = _final_relative_path(
+                            root_final_path=root_snapshot["final_path"],
+                            source_final_path=reopened["final_path"],
+                            declared=relative_path,
+                        )
+                        if (
+                            _snapshot_identity(reopened) != _snapshot_identity(before)
+                            or reopened_relative != final_relative
+                            or _snapshot_size(reopened) != expected_size
+                        ):
+                            raise SourceIntegrityError("IDENTITY_CHANGED_REPLACED")
                 if not hmac.compare_digest(observed_sha, str(item["sha256"])):
                     raise SourceIntegrityError("HASH_MISMATCH")
                 total_bytes += read_size
@@ -1671,6 +1770,10 @@ def require_source_custody_match(
         policy_limits=policy_limits,
         source_bundle=source_bundle,
     )
+    if normalized["bundle_id"] != evidence["bundle_id"]:
+        raise SourceIntegrityError("CUSTODY_STALE_DECLARATION")
+    if normalized["run_id"] != evidence["run_id"]:
+        raise SourceIntegrityError("CUSTODY_STALE_DECLARATION")
     for field in (
         "source_bundle_sha256",
         "approved_root_configuration_sha256",
@@ -1681,8 +1784,17 @@ def require_source_custody_match(
     custody_by_id = {str(item["source_id"]): item for item in normalized["items"]}
     if set(current_by_id) != set(custody_by_id):
         raise SourceIntegrityError("CUSTODY_STALE_SOURCE_SET")
+    declaration_fields = (
+        "kind",
+        "role",
+        "declared_media_type",
+        "page_ids",
+        "region_ids",
+    )
     for source_id, current in current_by_id.items():
         prior = custody_by_id[source_id]
+        if any(prior[field] != current[field] for field in declaration_fields):
+            raise SourceIntegrityError("CUSTODY_STALE_DECLARATION")
         if prior["relative_path"] != current["relative_path"]:
             raise SourceIntegrityError("CUSTODY_STALE_PATH")
         if prior["size_bytes"] != current["size_bytes"]:
