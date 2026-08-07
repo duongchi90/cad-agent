@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 from pathlib import Path
 
 import pytest
 
-from tests.test_vision_handoff import _authority_context, _bind, _base_payload, _write_schema
+from tests.test_vision_handoff import (
+    _authority_context,
+    _bind,
+    _base_payload,
+    _legacy_authority_context,
+    _lifecycle_authority_context,
+    NOW,
+    _write_schema,
+)
 
 
 def _module():
@@ -126,3 +135,101 @@ def test_validate_compares_every_authority_group_against_context(tmp_path: Path)
             validator_version="vision-handoff-validator-1.0",
             authority_context=foreign_context,
         )
+
+
+@pytest.mark.parametrize("api", ["bind", "validate"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("expires_at", "2026-08-07T07:00:00Z"),
+        ("created_at", "2026-08-07T04:01:00Z"),
+        ("single_use", False),
+        ("consumed", True),
+    ],
+)
+def test_lifecycle_drift_fails_closed_in_bind_and_validate(
+    tmp_path: Path, api: str, field: str, value: object
+) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    context = _lifecycle_authority_context()
+    payload = _base_payload()
+    payload[field] = value
+    with pytest.raises(ValueError, match="lifecycle"):
+        if api == "bind":
+            _bind(schema_path, payload, authority_context=context)
+        else:
+            handoff = _bind(schema_path)
+            changed = dict(handoff.payload)
+            changed[field] = value
+            module.validate_vision_handoff(
+                changed,
+                schema_path=schema_path,
+                schema_id="repair-plan",
+                schema_version="repair-plan-1.0",
+                validator_version="vision-handoff-validator-1.0",
+                authority_context=context,
+                now=NOW,
+            )
+
+
+@pytest.mark.parametrize("api", ["bind", "validate"])
+def test_consumption_evidence_cannot_be_omitted(api: str, tmp_path: Path) -> None:
+    module = _module()
+    assert "consumed_handoff_ids" not in inspect.signature(getattr(module, f"{api}_vision_handoff")).parameters
+
+    schema_path = _write_schema(tmp_path / "schema.json")
+    with pytest.raises((TypeError, ValueError), match="required|lifecycle|consum|authority|created_at"):
+        if api == "bind":
+            _bind(schema_path, authority_context=_legacy_authority_context())
+        else:
+            handoff = _bind(schema_path)
+            module.validate_vision_handoff(
+                handoff.payload,
+                schema_path=schema_path,
+                schema_id="repair-plan",
+                schema_version="repair-plan-1.0",
+                validator_version="vision-handoff-validator-1.0",
+                authority_context=_legacy_authority_context(),
+            )
+
+
+@pytest.mark.parametrize("api", ["bind", "validate"])
+def test_explicit_empty_consumption_snapshot_allows_first_use(api: str, tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    context = _lifecycle_authority_context(consumed_handoff_ids=())
+    if api == "bind":
+        handoff = _bind(schema_path, authority_context=context)
+    else:
+        handoff = _bind(schema_path, authority_context=context)
+        handoff = module.validate_vision_handoff(
+            handoff.payload,
+            schema_path=schema_path,
+            schema_id="repair-plan",
+            schema_version="repair-plan-1.0",
+            validator_version="vision-handoff-validator-1.0",
+            authority_context=context,
+            now=NOW,
+        )
+    assert handoff.payload["handoff_id"] == "HANDOFF-001"
+
+
+@pytest.mark.parametrize("api", ["bind", "validate"])
+def test_consumed_snapshot_rejects_handoff_reuse(api: str, tmp_path: Path) -> None:
+    module = _module()
+    schema_path = _write_schema(tmp_path / "schema.json")
+    context = _lifecycle_authority_context(consumed_handoff_ids=("HANDOFF-001",))
+    with pytest.raises(ValueError, match="reused"):
+        if api == "bind":
+            _bind(schema_path, authority_context=context)
+        else:
+            handoff = _bind(schema_path)
+            module.validate_vision_handoff(
+                handoff.payload,
+                schema_path=schema_path,
+                schema_id="repair-plan",
+                schema_version="repair-plan-1.0",
+                validator_version="vision-handoff-validator-1.0",
+                authority_context=context,
+            )

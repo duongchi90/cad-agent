@@ -146,6 +146,10 @@ def _authority_context(payload: dict[str, Any] | None = None):
         program_id=source["program_id"],
         run_id=source["run_id"],
         request_id=source["request_id"],
+        created_at=source["created_at"],
+        expires_at=source["expires_at"],
+        single_use=source["single_use"],
+        consumed=source["consumed"],
         source=source["source"],
         accepted_base=source["accepted_base"],
         scope=source["scope"],
@@ -158,6 +162,70 @@ def _authority_context(payload: dict[str, Any] | None = None):
         forbidden_mutations=tuple(source["forbidden_mutations"]),
         required_verification_gates=tuple(source["required_verification_gates"]),
         provider_policy=source["provider_policy"],
+        consumed_handoff_ids=(),
+    )
+
+
+def _legacy_authority_context(payload: dict[str, Any] | None = None):
+    """Build the pre-lifecycle context to prove omission fails closed."""
+
+    module = _module()
+    source = payload or _base_payload()
+    return module.ServerOwnedAuthorityContext(
+        handoff_id=source["handoff_id"],
+        program_id=source["program_id"],
+        run_id=source["run_id"],
+        request_id=source["request_id"],
+        source=source["source"],
+        accepted_base=source["accepted_base"],
+        scope=source["scope"],
+        protected_constraints=source["protected_constraints"],
+        instruction_sources=tuple(source["instruction_sources"]),
+        approval_reference=source["approval_reference"],
+        approval_authority=source["approval_authority"],
+        workspace=source["workspace"],
+        allowed_operations=tuple(source["allowed_operations"]),
+        forbidden_mutations=tuple(source["forbidden_mutations"]),
+        required_verification_gates=tuple(source["required_verification_gates"]),
+        provider_policy=source["provider_policy"],
+    )
+
+
+def _lifecycle_authority_context(
+    payload: dict[str, Any] | None = None,
+    *,
+    created_at: str | None = None,
+    expires_at: str | None = None,
+    single_use: bool | None = None,
+    consumed: bool | None = None,
+    consumed_handoff_ids: tuple[str, ...] = (),
+):
+    """Build the required lifecycle-aware context expected by the follow-up."""
+
+    module = _module()
+    source = payload or _base_payload()
+    return module.ServerOwnedAuthorityContext(
+        handoff_id=source["handoff_id"],
+        program_id=source["program_id"],
+        run_id=source["run_id"],
+        request_id=source["request_id"],
+        created_at=created_at or source["created_at"],
+        expires_at=expires_at or source["expires_at"],
+        single_use=source["single_use"] if single_use is None else single_use,
+        consumed=source["consumed"] if consumed is None else consumed,
+        source=source["source"],
+        accepted_base=source["accepted_base"],
+        scope=source["scope"],
+        protected_constraints=source["protected_constraints"],
+        instruction_sources=tuple(source["instruction_sources"]),
+        approval_reference=source["approval_reference"],
+        approval_authority=source["approval_authority"],
+        workspace=source["workspace"],
+        allowed_operations=tuple(source["allowed_operations"]),
+        forbidden_mutations=tuple(source["forbidden_mutations"]),
+        required_verification_gates=tuple(source["required_verification_gates"]),
+        provider_policy=source["provider_policy"],
+        consumed_handoff_ids=consumed_handoff_ids,
     )
 
 
@@ -245,7 +313,14 @@ def test_stale_expired_or_reused_handoff_fails_closed(
     if message == "consumed":
         payload = _base_payload()
         with pytest.raises(ValueError, match="reused"):
-            _bind(schema_path, payload, consumed_handoff_ids={payload["handoff_id"]})
+            _bind(
+                schema_path,
+                payload,
+                authority_context=_lifecycle_authority_context(
+                    payload,
+                    consumed_handoff_ids=(payload["handoff_id"],),
+                ),
+            )
 
 
 def test_changed_instruction_source_identity_is_rejected(tmp_path: Path) -> None:

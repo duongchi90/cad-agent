@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,7 +244,7 @@ def _validate_list_object(value: object, *, fields: set[str], path: str) -> list
     return result
 
 
-def _validate_payload(payload: Mapping[str, Any], *, now: datetime, consumed_handoff_ids: set[str]) -> bytes:
+def _validate_payload(payload: Mapping[str, Any], *, now: datetime, consumed_handoff_ids: frozenset[str]) -> bytes:
     _assert_finite_json(payload)
     _reject_forbidden_fields(payload)
     root = _keys(payload, required=set(_REQUIRED_TOP_LEVEL), optional=set(_OPTIONAL_TOP_LEVEL), path="handoff")
@@ -323,7 +323,7 @@ def _validate_payload(payload: Mapping[str, Any], *, now: datetime, consumed_han
     _identifier(root["output_schema_version"], path="output_schema_version")
     _sha256(root["output_schema_sha256"], path="output_schema_sha256")
     _identifier(root["output_validator_version"], path="output_validator_version")
-    canonical_without_hash = copy.deepcopy(dict(root))
+    canonical_without_hash = _thaw(root)
     canonical_without_hash.pop("handoff_sha256")
     canonical_bytes = _canonical_bytes(canonical_without_hash)
     expected_hash = hashlib.sha256(canonical_bytes).hexdigest()
@@ -414,6 +414,10 @@ class ServerOwnedAuthorityContext:
     program_id: str
     run_id: str
     request_id: str
+    created_at: str
+    expires_at: str
+    single_use: bool
+    consumed: bool
     source: Mapping[str, object]
     accepted_base: Mapping[str, object]
     scope: Mapping[str, object]
@@ -426,6 +430,7 @@ class ServerOwnedAuthorityContext:
     forbidden_mutations: Sequence[str]
     required_verification_gates: Sequence[str]
     provider_policy: Mapping[str, object]
+    consumed_handoff_ids: Sequence[str]
 
     def __post_init__(self) -> None:
         for field_name in self.__dataclass_fields__:
@@ -466,6 +471,10 @@ def _authority_context_payload(context: ServerOwnedAuthorityContext) -> dict[str
         "program_id": context.program_id,
         "run_id": context.run_id,
         "request_id": context.request_id,
+        "created_at": context.created_at,
+        "expires_at": context.expires_at,
+        "single_use": context.single_use,
+        "consumed": context.consumed,
         "source": _thaw(context.source),
         "accepted_base": _thaw(context.accepted_base),
         "scope": _thaw(context.scope),
@@ -478,17 +487,34 @@ def _authority_context_payload(context: ServerOwnedAuthorityContext) -> dict[str
         "forbidden_mutations": _thaw(context.forbidden_mutations),
         "required_verification_gates": _thaw(context.required_verification_gates),
         "provider_policy": _thaw(context.provider_policy),
+        "consumed_handoff_ids": _thaw(context.consumed_handoff_ids),
     }
 
 
 def _validate_authority_context(
     payload: Mapping[str, Any], authority_context: object
-) -> None:
+) -> frozenset[str]:
     if not isinstance(authority_context, ServerOwnedAuthorityContext):
         _fail("authority context must be a complete ServerOwnedAuthorityContext")
     expected = _authority_context_payload(authority_context)
     for field in ("handoff_id", "program_id", "run_id", "request_id"):
         _identifier(expected[field], path=f"authority_context.{field}")
+    created_at = _parse_time(expected["created_at"], path="authority_context.created_at")
+    expires_at = _parse_time(expected["expires_at"], path="authority_context.expires_at")
+    if expires_at <= created_at:
+        _fail("authority_context.expires_at must be after created_at")
+    if _bool(expected["single_use"], path="authority_context.single_use") is not True:
+        _fail("authority_context.single_use must be true")
+    if _bool(expected["consumed"], path="authority_context.consumed") is not False:
+        _fail("authority_context.consumed must be false")
+    consumed_handoff_ids = _string_list(
+        expected["consumed_handoff_ids"],
+        path="authority_context.consumed_handoff_ids",
+    )
+    for index, handoff_id in enumerate(consumed_handoff_ids):
+        _identifier(handoff_id, path=f"authority_context.consumed_handoff_ids[{index}]")
+    if len(consumed_handoff_ids) != len(set(consumed_handoff_ids)):
+        _fail("authority_context.consumed_handoff_ids must not contain duplicates")
     _validate_file_identity(expected["source"], path="authority_context.source")
     _validate_file_identity(expected["accepted_base"], path="authority_context.accepted_base")
     scope = _keys(expected["scope"], required=set(_SCOPE_FIELDS), path="authority_context.scope")
@@ -536,6 +562,10 @@ def _validate_authority_context(
         "program_id",
         "run_id",
         "request_id",
+        "created_at",
+        "expires_at",
+        "single_use",
+        "consumed",
         "source",
         "accepted_base",
         "scope",
@@ -556,6 +586,21 @@ def _validate_authority_context(
     expected_identity = {field: expected[field] for field in identity}
     groups = (
         ("identity", identity, expected_identity),
+        (
+            "lifecycle",
+            {
+                "created_at": payload["created_at"],
+                "expires_at": payload["expires_at"],
+                "single_use": payload["single_use"],
+                "consumed": payload["consumed"],
+            },
+            {
+                "created_at": expected["created_at"],
+                "expires_at": expected["expires_at"],
+                "single_use": expected["single_use"],
+                "consumed": expected["consumed"],
+            },
+        ),
         ("source", payload["source"], expected["source"]),
         ("accepted_base", payload["accepted_base"], expected["accepted_base"]),
         ("scope", payload["scope"], expected["scope"]),
@@ -579,6 +624,7 @@ def _validate_authority_context(
     for group, actual, expected_value in groups:
         if _canonical_bytes(actual) != _canonical_bytes(expected_value):
             _fail(f"{group} authority context mismatch")
+    return frozenset(consumed_handoff_ids)
 
 
 def _normalize_now(now: datetime | None) -> datetime:
@@ -596,7 +642,6 @@ def bind_vision_handoff(
     schema_version: str,
     validator_version: str = DEFAULT_VALIDATOR_VERSION,
     authority_context: ServerOwnedAuthorityContext,
-    consumed_handoff_ids: Iterable[str] = (),
     now: datetime | None = None,
 ) -> ValidatedVisionHandoff:
     """Bind server-owned schema/hash fields and validate one closed handoff."""
@@ -625,11 +670,11 @@ def bind_vision_handoff(
         _fail("server-owned handoff_sha256 binding mismatch")
     bound["handoff_sha256"] = computed_handoff_hash
     current = _normalize_now(now)
-    _validate_authority_context(bound, authority_context)
+    consumed_handoff_ids = _validate_authority_context(bound, authority_context)
     canonical_bytes = _validate_payload(
         bound,
         now=current,
-        consumed_handoff_ids=set(consumed_handoff_ids),
+        consumed_handoff_ids=consumed_handoff_ids,
     )
     return ValidatedVisionHandoff(
         payload=_freeze(bound),
@@ -647,7 +692,6 @@ def validate_vision_handoff(
     schema_version: str,
     validator_version: str = DEFAULT_VALIDATOR_VERSION,
     authority_context: ServerOwnedAuthorityContext,
-    consumed_handoff_ids: Iterable[str] = (),
     now: datetime | None = None,
 ) -> ValidatedVisionHandoff:
     """Validate an already server-bound handoff without rebinding its identity."""
@@ -655,14 +699,14 @@ def validate_vision_handoff(
     current = _normalize_now(now)
     if not isinstance(payload, Mapping):
         _fail("handoff must be an object")
-    _validate_authority_context(payload, authority_context)
+    consumed_handoff_ids = _validate_authority_context(payload, authority_context)
     snapshot = _snapshot_schema(
         Path(schema_path), schema_id=schema_id, schema_version=schema_version, validator_version=validator_version
     )
     canonical_bytes = _validate_payload(
         payload,
         now=current,
-        consumed_handoff_ids=set(consumed_handoff_ids),
+        consumed_handoff_ids=consumed_handoff_ids,
     )
     if payload["output_schema_id"] != snapshot.schema_id:
         _fail("output schema ID does not match the server-owned snapshot")
@@ -673,7 +717,7 @@ def validate_vision_handoff(
     if payload["output_validator_version"] != snapshot.validator_version:
         _fail("output validator version does not match the server-owned snapshot")
     return ValidatedVisionHandoff(
-        payload=_freeze(copy.deepcopy(dict(payload))),
+        payload=_freeze(_thaw(payload)),
         canonical_bytes=canonical_bytes,
         handoff_sha256=payload["handoff_sha256"],
         schema_snapshot=snapshot,
