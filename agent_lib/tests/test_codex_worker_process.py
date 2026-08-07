@@ -784,15 +784,19 @@ def test_remediation_unrelated_inheritable_handle_is_not_inherited_by_control_ch
     prepared = _prepared(tmp_path)
     repo_root = str(Path(__file__).parents[2])
     child_code = (
-        "import ctypes,sys;from ctypes import wintypes;"
-        f"sys.path.insert(0,{repo_root!r});"
-        "from agent_lib.codex_worker_process import run_worker_control_child;"
-        "k=ctypes.WinDLL('kernel32',use_last_error=True);"
-        "k.GetHandleInformation.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)];"
-        "k.GetHandleInformation.restype=wintypes.BOOL;"
-        f"sentinel={sentinel_value};"
-        "def h(payload):\n flags=wintypes.DWORD(); inherited=bool(k.GetHandleInformation(wintypes.HANDLE(sentinel),ctypes.byref(flags))); return {'inherited':inherited}\n"
-        "raise SystemExit(run_worker_control_child(h))"
+        "import ctypes,sys\n"
+        "from ctypes import wintypes\n"
+        f"sys.path.insert(0,{repo_root!r})\n"
+        "from agent_lib.codex_worker_process import run_worker_control_child\n"
+        "k=ctypes.WinDLL('kernel32',use_last_error=True)\n"
+        "k.GetHandleInformation.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)]\n"
+        "k.GetHandleInformation.restype=wintypes.BOOL\n"
+        f"sentinel={sentinel_value}\n"
+        "def h(payload):\n"
+        "    flags=wintypes.DWORD()\n"
+        "    inherited=bool(k.GetHandleInformation(wintypes.HANDLE(sentinel),ctypes.byref(flags)))\n"
+        "    return {'inherited':inherited}\n"
+        "raise SystemExit(run_worker_control_child(h))\n"
     )
     handle = None
     try:
