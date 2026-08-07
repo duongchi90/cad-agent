@@ -201,19 +201,8 @@ def test_environment_starts_empty_and_filters_parent_secrets_and_config(tmp_path
     root, cwd = _paths(tmp_path)
     source = _source_env()
     source.update({name: "SECRET_VALUE" for name in FORBIDDEN_PARENT_NAMES})
-    source.update(
-        {
-            "CODEX_HOME": r"C:\Users\customer\.codex",
-            "UNRELATED": "not-allowlisted",
-        }
-    )
-
-    prepared = prepare_worker_environment(
-        disposable_root=root,
-        cwd=cwd,
-        source_environment=source,
-    )
-
+    source.update({"CODEX_HOME": r"C:\Users\customer\.codex", "UNRELATED": "not-allowlisted"})
+    prepared = prepare_worker_environment(disposable_root=root, cwd=cwd, source_environment=source)
     child = dict(prepared.environment)
     assert {name.upper() for name in child}.isdisjoint(FORBIDDEN_PARENT_NAMES)
     assert "UNRELATED" not in child
@@ -228,11 +217,7 @@ def test_worker_owned_directories_are_fresh_empty_and_disposable(tmp_path: Path)
     assert prepared.codex_home.is_dir() and prepared.temp_dir.is_dir()
     assert not list(prepared.codex_home.iterdir())
     assert not list(prepared.temp_dir.iterdir())
-    assert set(prepared.writable_roots) == {
-        prepared.cwd,
-        prepared.codex_home,
-        prepared.temp_dir,
-    }
+    assert set(prepared.writable_roots) == {prepared.cwd, prepared.codex_home, prepared.temp_dir}
 
 
 @pytest.mark.parametrize("name", ["codex-home", "tmp"])
@@ -242,11 +227,7 @@ def test_preexisting_worker_owned_state_is_rejected(tmp_path: Path, name: str) -
     path.mkdir()
     (path / "ambient.txt").write_text("ambient", encoding="utf-8")
     with pytest.raises(WorkerProcessError) as caught:
-        prepare_worker_environment(
-            disposable_root=root,
-            cwd=cwd,
-            source_environment=_source_env(),
-        )
+        prepare_worker_environment(disposable_root=root, cwd=cwd, source_environment=_source_env())
     assert caught.value.code == "WORKER_DISPOSABLE_STATE_UNSAFE"
     assert "ambient" not in str(caught.value) and str(root) not in str(caught.value)
 
@@ -255,19 +236,11 @@ def test_preexisting_worker_owned_state_is_rejected(tmp_path: Path, name: str) -
 def test_uncontrolled_cwd_is_rejected(tmp_path: Path, kind: str) -> None:
     root = tmp_path / "disposable"
     root.mkdir()
-    cwd = {
-        "relative": Path("relative-cwd"),
-        "missing": root / "missing",
-        "outside": tmp_path / "outside",
-    }[kind]
+    cwd = {"relative": Path("relative-cwd"), "missing": root / "missing", "outside": tmp_path / "outside"}[kind]
     if kind == "outside":
         cwd.mkdir()
     with pytest.raises(WorkerProcessError) as caught:
-        prepare_worker_environment(
-            disposable_root=root,
-            cwd=cwd,
-            source_environment=_source_env(),
-        )
+        prepare_worker_environment(disposable_root=root, cwd=cwd, source_environment=_source_env())
     assert caught.value.code == "WORKER_CWD_UNSAFE"
     assert str(cwd) not in str(caught.value)
 
@@ -287,11 +260,7 @@ def test_reparse_or_junction_escape_is_rejected_by_injected_probe(tmp_path: Path
 def test_environment_snapshot_is_immutable_after_source_mutation(tmp_path: Path) -> None:
     root, cwd = _paths(tmp_path)
     source = _source_env()
-    prepared = prepare_worker_environment(
-        disposable_root=root,
-        cwd=cwd,
-        source_environment=source,
-    )
+    prepared = prepare_worker_environment(disposable_root=root, cwd=cwd, source_environment=source)
     frozen = dict(prepared.environment)
     source.update({"OPENAI_API_KEY": "late-secret", "PATH": "late-path"})
     assert dict(prepared.environment) == frozen
@@ -311,11 +280,7 @@ def test_case_colliding_windows_environment_names_are_rejected(tmp_path: Path) -
     source = _source_env()
     source["Path"] = "ambiguous"
     with pytest.raises(WorkerProcessError) as caught:
-        prepare_worker_environment(
-            disposable_root=root,
-            cwd=cwd,
-            source_environment=source,
-        )
+        prepare_worker_environment(disposable_root=root, cwd=cwd, source_environment=source)
     assert caught.value.code == "WORKER_ENV_AMBIGUOUS"
 
 
@@ -323,9 +288,7 @@ def test_environment_key_order_is_deterministic(tmp_path: Path) -> None:
     root1, cwd1 = _paths(tmp_path / "first")
     root2, cwd2 = _paths(tmp_path / "second")
     source = _source_env()
-    first = prepare_worker_environment(
-        disposable_root=root1, cwd=cwd1, source_environment=source
-    )
+    first = prepare_worker_environment(disposable_root=root1, cwd=cwd1, source_environment=source)
     second = prepare_worker_environment(
         disposable_root=root2,
         cwd=cwd2,
@@ -353,20 +316,9 @@ def test_missing_executable_fails_before_job_creation(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("deadline", "max_processes"),
-    [
-        (0.0, 4),
-        (-1.0, 4),
-        (float("nan"), 4),
-        (float("inf"), 4),
-        (31.0, 4),
-        (1.0, 0),
-        (1.0, -1),
-        (1.0, 65),
-    ],
+    [(0.0, 4), (-1.0, 4), (float("nan"), 4), (float("inf"), 4), (31.0, 4), (1.0, 0), (1.0, -1), (1.0, 65)],
 )
-def test_invalid_limits_fail_before_launch(
-    tmp_path: Path, deadline: float, max_processes: int
-) -> None:
+def test_invalid_limits_fail_before_launch(tmp_path: Path, deadline: float, max_processes: int) -> None:
     api = _FakeProcessApi()
     prepared = _prepared(tmp_path)
     with pytest.raises(WorkerProcessError) as caught:
@@ -392,9 +344,7 @@ def test_invalid_limits_fail_before_launch(
         ("resume_process", "WORKER_RESUME_FAILED"),
     ],
 )
-def test_partial_launch_failure_is_sanitized_and_resources_are_closed(
-    tmp_path: Path, stage: str, code: str
-) -> None:
+def test_partial_launch_failure_is_sanitized_and_resources_are_closed(tmp_path: Path, stage: str, code: str) -> None:
     api = _FakeProcessApi()
     api.fail_stage = stage
     prepared = _prepared(tmp_path)
@@ -421,12 +371,7 @@ def test_process_tree_identity_accounts_for_root_child_and_grandchild(tmp_path: 
     api = _FakeProcessApi()
     api.query_results = [(4101, 4102, 4103)]
     identity = _launch_fake(tmp_path, api=api).snapshot_process_tree()
-    assert identity == ProcessTreeIdentity(
-        root_pid=4101,
-        member_pids=(4101, 4102, 4103),
-        member_count=3,
-        verified=True,
-    )
+    assert identity == ProcessTreeIdentity(root_pid=4101, member_pids=(4101, 4102, 4103), member_count=3, verified=True)
 
 
 def test_root_exit_with_surviving_grandchild_is_not_treated_as_clean(tmp_path: Path) -> None:
@@ -434,9 +379,7 @@ def test_root_exit_with_surviving_grandchild_is_not_treated_as_clean(tmp_path: P
     api.query_results = [(4103,), (4103,), ()]
     handle = _launch_fake(tmp_path, api=api)
     before = handle.snapshot_process_tree()
-    result = cleanup_worker_process(
-        handle, _clock=_FakeClock(0.0, 0.1, 0.2), _sleep=lambda _: None
-    )
+    result = cleanup_worker_process(handle, _clock=_FakeClock(0.0, 0.1, 0.2), _sleep=lambda _: None)
     assert before.member_pids == (4103,) and handle.root_pid not in before.member_pids
     assert result.status == "CLEANUP_SUCCEEDED" and result.survivor_pids == ()
 
@@ -445,12 +388,8 @@ def test_cleanup_timeout_with_survivor_is_sticky_failure(tmp_path: Path) -> None
     api = _FakeProcessApi()
     api.query_results = [(4101, 4102), (4102,), ()]
     handle = _launch_fake(tmp_path, api=api, deadline=0.25)
-    first = cleanup_worker_process(
-        handle, _clock=_FakeClock(0.0, 0.3), _sleep=lambda _: None
-    )
-    second = cleanup_worker_process(
-        handle, _clock=_FakeClock(1.0, 1.1), _sleep=lambda _: None
-    )
+    first = cleanup_worker_process(handle, _clock=_FakeClock(0.0, 0.3), _sleep=lambda _: None)
+    second = cleanup_worker_process(handle, _clock=_FakeClock(1.0, 1.1), _sleep=lambda _: None)
     assert first.status == "CLEANUP_FAILED" and first.survivor_pids == (4102,)
     assert first.promotion_safe is False and second == first
 
@@ -459,30 +398,18 @@ def test_cleanup_is_idempotent_after_verified_success(tmp_path: Path) -> None:
     api = _FakeProcessApi()
     api.query_results = [(4101,), ()]
     handle = _launch_fake(tmp_path, api=api)
-    first = cleanup_worker_process(
-        handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None
-    )
+    first = cleanup_worker_process(handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None)
     events = list(api.events)
-    second = cleanup_worker_process(
-        handle, _clock=_FakeClock(1.0, 1.1), _sleep=lambda _: None
-    )
+    second = cleanup_worker_process(handle, _clock=_FakeClock(1.0, 1.1), _sleep=lambda _: None)
     assert first == second and first.status == "CLEANUP_SUCCEEDED"
     assert api.events == events
 
 
 @pytest.mark.parametrize(
     "evidence",
-    [
-        RuntimeError("query unsupported SECRET"),
-        None,
-        (4101, "bad-pid"),
-        (-7,),
-        tuple(range(100, 170)),
-    ],
+    [RuntimeError("query unsupported SECRET"), None, (4101, "bad-pid"), (-7,), tuple(range(100, 170))],
 )
-def test_unsupported_or_malformed_job_evidence_fails_closed(
-    tmp_path: Path, evidence: object
-) -> None:
+def test_unsupported_or_malformed_job_evidence_fails_closed(tmp_path: Path, evidence: object) -> None:
     api = _FakeProcessApi()
     api.query_results = [evidence]
     result = cleanup_worker_process(
@@ -500,9 +427,7 @@ def test_cleanup_resource_close_failure_remains_sanitized_failure(tmp_path: Path
     api.query_results = [(4101,), ()]
     handle = _launch_fake(tmp_path, api=api)
     api.fail_stage = "close_handle"
-    result = cleanup_worker_process(
-        handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None
-    )
+    result = cleanup_worker_process(handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None)
     assert result.status == "CLEANUP_FAILED" and result.promotion_safe is False
     assert result.error_code == "WORKER_CLEANUP_RESOURCE_CLOSE_FAILED"
     assert "FAKE_SECRET" not in repr(result)
@@ -510,26 +435,12 @@ def test_cleanup_resource_close_failure_remains_sanitized_failure(tmp_path: Path
 
 def test_failure_evidence_has_no_raw_stream_command_or_exception_fields() -> None:
     forbidden = {"stdout", "stderr", "exception", "command", "environment_values"}
-    assert {field.name for field in dataclasses.fields(WorkerCleanupResult)}.isdisjoint(
-        forbidden
-    )
-    assert {field.name for field in dataclasses.fields(ProcessTreeIdentity)}.isdisjoint(
-        forbidden
-    )
+    assert {field.name for field in dataclasses.fields(WorkerCleanupResult)}.isdisjoint(forbidden)
+    assert {field.name for field in dataclasses.fields(ProcessTreeIdentity)}.isdisjoint(forbidden)
 
 
 def test_api_surface_has_no_task4_or_authority_inputs() -> None:
-    forbidden = {
-        "handoff",
-        "thread",
-        "approval",
-        "schema",
-        "provider",
-        "model",
-        "auth",
-        "token",
-        "credential",
-    }
+    forbidden = {"handoff", "thread", "approval", "schema", "provider", "model", "auth", "token", "credential"}
     for func in (prepare_worker_environment, launch_worker_process, cleanup_worker_process):
         names = {name.lower() for name in inspect.signature(func).parameters}
         assert names.isdisjoint(forbidden)
@@ -543,14 +454,7 @@ def test_module_has_no_sdk_provider_model_autocad_file_ipc_or_cad_agent_imports(
             imported.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
-    forbidden = {
-        "openai",
-        "openai_codex",
-        "codex_cli_bin",
-        "mcp_integration_lib",
-        "autocad_plugin",
-        "cad_agent",
-    }
+    forbidden = {"openai", "openai_codex", "codex_cli_bin", "mcp_integration_lib", "autocad_plugin", "cad_agent"}
     assert {name.split(".", 1)[0] for name in imported}.isdisjoint(forbidden)
     source = SOURCE_MODULE.read_text(encoding="utf-8")
     assert "codex_sdk_compat" not in source
@@ -562,16 +466,8 @@ def test_module_has_no_sdk_provider_model_autocad_file_ipc_or_cad_agent_imports(
 def test_real_windows_job_contains_child_and_grandchild_and_cleans_tree(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
     grandchild = "import time; time.sleep(60)"
-    child = (
-        "import subprocess,sys,time;"
-        f"subprocess.Popen([sys.executable,'-c',{grandchild!r}]);"
-        "time.sleep(60)"
-    )
-    root_code = (
-        "import subprocess,sys,time;"
-        f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
-        "time.sleep(60)"
-    )
+    child = "import subprocess,sys,time;" + f"subprocess.Popen([sys.executable,'-c',{grandchild!r}]);" + "time.sleep(60)"
+    root_code = "import subprocess,sys,time;" + f"subprocess.Popen([sys.executable,'-c',{child!r}]);" + "time.sleep(60)"
     handle = _launch_with_boundary(
         environment=prepared,
         executable=Path(sys.executable).resolve(),
@@ -603,11 +499,7 @@ def test_real_windows_junction_escape_is_rejected(tmp_path: Path) -> None:
         text=True,
     )
     with pytest.raises(WorkerProcessError) as caught:
-        prepare_worker_environment(
-            disposable_root=root,
-            cwd=junction,
-            source_environment=_source_env(),
-        )
+        prepare_worker_environment(disposable_root=root, cwd=junction, source_environment=_source_env())
     assert caught.value.code == "WORKER_REPARSE_PATH"
 
 
@@ -620,7 +512,6 @@ def test_public_evidence_dataclasses_are_frozen() -> None:
 def _test_environment_digest(environment: Mapping[str, str]) -> str:
     import hashlib
     import json
-
     payload = json.dumps(
         sorted(environment.items(), key=lambda item: item[0].casefold()),
         ensure_ascii=False,
@@ -631,27 +522,16 @@ def _test_environment_digest(environment: Mapping[str, str]) -> str:
 
 @pytest.mark.parametrize(
     "forgery",
-    [
-        "unauthorized_key",
-        "environment_keys",
-        "codex_home_value",
-        "temp_tmp_values",
-        "writable_roots",
-    ],
+    ["unauthorized_key", "environment_keys", "codex_home_value", "temp_tmp_values", "writable_roots"],
 )
-def test_launch_rejects_forged_self_consistent_environment_attestation(
-    tmp_path: Path, forgery: str
-) -> None:
+def test_launch_rejects_forged_self_consistent_environment_attestation(tmp_path: Path, forgery: str) -> None:
     prepared = _prepared(tmp_path)
     forged_environment = dict(prepared.environment)
     environment_keys = prepared.environment_keys
     writable_roots = prepared.writable_roots
-
     if forgery == "unauthorized_key":
         forged_environment["OPENAI_API_KEY"] = "forged-secret"
-        environment_keys = tuple(
-            sorted(forged_environment, key=lambda name: name.casefold())
-        )
+        environment_keys = tuple(sorted(forged_environment, key=lambda name: name.casefold()))
     elif forgery == "environment_keys":
         environment_keys = tuple(reversed(prepared.environment_keys))
     elif forgery == "codex_home_value":
@@ -661,7 +541,6 @@ def test_launch_rejects_forged_self_consistent_environment_attestation(
         forged_environment["TMP"] = str(prepared.cwd)
     else:
         writable_roots = (prepared.codex_home, prepared.temp_dir)
-
     forged = dataclasses.replace(
         prepared,
         environment=forged_environment,
@@ -670,7 +549,6 @@ def test_launch_rejects_forged_self_consistent_environment_attestation(
         writable_roots=writable_roots,
     )
     assert forged.environment_sha256 == _test_environment_digest(forged.environment)
-
     api = _FakeProcessApi()
     with pytest.raises(WorkerProcessError) as caught:
         _launch_with_boundary(
@@ -687,22 +565,13 @@ def test_launch_rejects_forged_self_consistent_environment_attestation(
     assert api.events == []
 
 
-@pytest.mark.parametrize(
-    "name", ["PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"]
-)
-def test_prepare_rejects_embedded_nul_in_allowlisted_environment_value(
-    tmp_path: Path, name: str
-) -> None:
+@pytest.mark.parametrize("name", ["PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"])
+def test_prepare_rejects_embedded_nul_in_allowlisted_environment_value(tmp_path: Path, name: str) -> None:
     root, cwd = _paths(tmp_path)
     source = _source_env()
     source[name] = "trusted\x00OPENAI_API_KEY=injected-secret"
-
     with pytest.raises(WorkerProcessError) as caught:
-        prepare_worker_environment(
-            disposable_root=root,
-            cwd=cwd,
-            source_environment=source,
-        )
+        prepare_worker_environment(disposable_root=root, cwd=cwd, source_environment=source)
     assert caught.value.code == "WORKER_ENV_INVALID"
     assert "injected-secret" not in str(caught.value)
 
@@ -711,13 +580,8 @@ def test_prepare_rejects_embedded_nul_in_environment_name(tmp_path: Path) -> Non
     root, cwd = _paths(tmp_path)
     source = _source_env()
     source["PATH\x00OPENAI_API_KEY"] = "injected-secret"
-
     with pytest.raises(WorkerProcessError) as caught:
-        prepare_worker_environment(
-            disposable_root=root,
-            cwd=cwd,
-            source_environment=source,
-        )
+        prepare_worker_environment(disposable_root=root, cwd=cwd, source_environment=source)
     assert caught.value.code == "WORKER_ENV_INVALID"
     assert "injected-secret" not in str(caught.value)
 
@@ -728,7 +592,6 @@ def test_launch_rejects_self_consistent_cwd_dotdot_escape(tmp_path: Path) -> Non
     outside.mkdir()
     forged_cwd = prepared.disposable_root / ".." / "outside"
     assert forged_cwd.is_dir()
-
     forged = dataclasses.replace(
         prepared,
         cwd=forged_cwd,
@@ -772,13 +635,8 @@ def test_launch_rejects_self_consistent_unapproved_alternate_root(tmp_path: Path
         cwd=alternate_cwd.resolve(),
         codex_home=alternate_codex_home.resolve(),
         temp_dir=alternate_temp.resolve(),
-        writable_roots=(
-            alternate_cwd.resolve(),
-            alternate_codex_home.resolve(),
-            alternate_temp.resolve(),
-        ),
+        writable_roots=(alternate_cwd.resolve(), alternate_codex_home.resolve(), alternate_temp.resolve()),
     )
-
     api = _FakeProcessApi()
     with pytest.raises(WorkerProcessError) as caught:
         _launch_with_boundary(
@@ -795,13 +653,10 @@ def test_launch_rejects_self_consistent_unapproved_alternate_root(tmp_path: Path
 
 
 @pytest.mark.parametrize("target", ["codex_home", "temp_dir"])
-def test_launch_rejects_worker_state_populated_after_preparation(
-    tmp_path: Path, target: str
-) -> None:
+def test_launch_rejects_worker_state_populated_after_preparation(tmp_path: Path, target: str) -> None:
     prepared = _prepared(tmp_path)
     stale_dir = getattr(prepared, target)
     (stale_dir / "stale.txt").write_text("stale-private-data", encoding="utf-8")
-
     api = _FakeProcessApi()
     with pytest.raises(WorkerProcessError) as caught:
         _launch_with_boundary(
@@ -815,3 +670,145 @@ def test_launch_rejects_worker_state_populated_after_preparation(
     assert caught.value.code == "WORKER_DISPOSABLE_STATE_UNSAFE"
     assert "stale-private-data" not in str(caught.value)
     assert api.events == []
+
+
+class _FakeControlApi(_FakeProcessApi):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pending = b""
+
+    def create_suspended_process_with_control(
+        self,
+        *,
+        executable: Path,
+        argv: tuple[str, ...],
+        cwd: Path,
+        environment: Mapping[str, str],
+    ) -> object:
+        assert executable.is_absolute() and cwd.is_absolute()
+        assert isinstance(argv, tuple) and "CODEX_HOME" in environment
+        self._stage("create_process_control")
+        return SimpleNamespace(
+            process_handle="process-handle",
+            thread_handle="thread-handle",
+            pid=self.root_pid,
+            control_read_handle="control-read",
+            control_write_handle="control-write",
+        )
+
+    def write_handle(self, handle: object, data: bytes) -> int:
+        import json
+        import struct
+        assert handle == "control-write"
+        length = struct.unpack(">I", data[:4])[0]
+        request = json.loads(data[4 : 4 + length].decode("utf-8"))
+        response = json.dumps(
+            {
+                "version": request["version"],
+                "request_id": request["request_id"],
+                "payload": {"echo": request["payload"]},
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.pending += struct.pack(">I", len(response)) + response
+        return len(data)
+
+    def read_handle(self, handle: object, size: int) -> bytes:
+        assert handle == "control-read"
+        chunk = self.pending[:size]
+        self.pending = self.pending[size:]
+        return chunk
+
+
+def test_remediation_control_exchange_is_bound_to_exact_handle_and_cleanup_closes_it(tmp_path: Path) -> None:
+    import agent_lib.codex_worker_process as process_owner
+
+    prepared = _prepared(tmp_path)
+    api = _FakeControlApi()
+    api.query_results = [(4101,), ()]
+    handle = launch_worker_process(
+        environment=prepared,
+        expected_disposable_root=prepared.disposable_root,
+        expected_cwd=prepared.cwd,
+        executable=Path(sys.executable).resolve(),
+        argv=("-c", "pass"),
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+        control_channel=True,
+        _process_api=api,
+    )
+    response = process_owner.exchange_worker_control(handle, {"operation": "probe"})
+    assert response == {"echo": {"operation": "probe"}}
+    cleanup = cleanup_worker_process(
+        handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None
+    )
+    assert cleanup.success is True
+    assert {"control-read", "control-write"}.issubset(api.closed)
+    with pytest.raises(WorkerProcessError) as caught:
+        process_owner.exchange_worker_control(handle, {"operation": "late"})
+    assert caught.value.code == "WORKER_CONTROL_CLOSED"
+
+
+def test_remediation_forged_handle_is_rejected_without_detail() -> None:
+    import agent_lib.codex_worker_process as process_owner
+
+    with pytest.raises(WorkerProcessError) as caught:
+        process_owner.exchange_worker_control(object(), {"secret": "do-not-echo"})
+    assert caught.value.code == "WORKER_HANDLE_INVALID"
+    assert "do-not-echo" not in str(caught.value)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="supported Windows explicit handle inheritance evidence")
+def test_remediation_unrelated_inheritable_handle_is_not_inherited_by_control_child(tmp_path: Path) -> None:
+    import ctypes
+    from ctypes import wintypes
+    import agent_lib.codex_worker_process as process_owner
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", ctypes.c_void_p),
+            ("bInheritHandle", wintypes.BOOL),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateEventW.argtypes = [ctypes.POINTER(SecurityAttributes), wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    security = SecurityAttributes(ctypes.sizeof(SecurityAttributes), None, True)
+    sentinel_handle = kernel32.CreateEventW(ctypes.byref(security), False, False, None)
+    assert sentinel_handle
+    sentinel_value = int(ctypes.cast(sentinel_handle, ctypes.c_void_p).value)
+
+    prepared = _prepared(tmp_path)
+    repo_root = str(Path(__file__).parents[2])
+    child_code = (
+        "import ctypes,sys;from ctypes import wintypes;"
+        f"sys.path.insert(0,{repo_root!r});"
+        "from agent_lib.codex_worker_process import run_worker_control_child;"
+        "k=ctypes.WinDLL('kernel32',use_last_error=True);"
+        "k.GetHandleInformation.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)];"
+        "k.GetHandleInformation.restype=wintypes.BOOL;"
+        f"sentinel={sentinel_value};"
+        "def h(payload):\n flags=wintypes.DWORD(); inherited=bool(k.GetHandleInformation(wintypes.HANDLE(sentinel),ctypes.byref(flags))); return {'inherited':inherited}\n"
+        "raise SystemExit(run_worker_control_child(h))"
+    )
+    handle = None
+    try:
+        handle = launch_worker_process(
+            environment=prepared,
+            expected_disposable_root=prepared.disposable_root,
+            expected_cwd=prepared.cwd,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", child_code),
+            cleanup_deadline_seconds=5.0,
+            max_processes=8,
+            control_channel=True,
+        )
+        response = process_owner.exchange_worker_control(handle, {"operation": "probe"})
+        assert response["inherited"] is False
+    finally:
+        if handle is not None:
+            cleanup_worker_process(handle)
+        kernel32.CloseHandle(sentinel_handle)
