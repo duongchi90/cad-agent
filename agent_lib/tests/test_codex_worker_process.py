@@ -198,7 +198,6 @@ def test_environment_starts_empty_and_filters_parent_secrets_and_config(tmp_path
     for name in ("CODEX_HOME", "TEMP", "TMP"):
         assert Path(child[name]).is_relative_to(root.resolve())
 
-
 def test_worker_owned_directories_are_fresh_empty_and_disposable(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
     assert prepared.codex_home.is_dir() and prepared.temp_dir.is_dir()
@@ -588,3 +587,92 @@ def test_public_evidence_dataclasses_are_frozen() -> None:
     assert WorkerEnvironmentAttestation.__dataclass_params__.frozen is True
     assert ProcessTreeIdentity.__dataclass_params__.frozen is True
     assert WorkerCleanupResult.__dataclass_params__.frozen is True
+
+
+def _test_environment_digest(environment: Mapping[str, str]) -> str:
+    import hashlib
+    import json
+
+    payload = json.dumps(
+        sorted(environment.items(), key=lambda item: item[0].casefold()),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    [
+        "unauthorized_key",
+        "environment_keys",
+        "codex_home_value",
+        "temp_tmp_values",
+        "writable_roots",
+    ],
+)
+def test_launch_rejects_forged_self_consistent_environment_attestation(
+    tmp_path: Path, forgery: str
+) -> None:
+    prepared = _prepared(tmp_path)
+    forged_environment = dict(prepared.environment)
+    environment_keys = prepared.environment_keys
+    writable_roots = prepared.writable_roots
+
+    if forgery == "unauthorized_key":
+        forged_environment["OPENAI_API_KEY"] = "forged-secret"
+        environment_keys = tuple(
+            sorted(forged_environment, key=lambda name: name.casefold())
+        )
+    elif forgery == "environment_keys":
+        environment_keys = tuple(reversed(prepared.environment_keys))
+    elif forgery == "codex_home_value":
+        forged_environment["CODEX_HOME"] = str(prepared.cwd)
+    elif forgery == "temp_tmp_values":
+        forged_environment["TEMP"] = str(prepared.cwd)
+        forged_environment["TMP"] = str(prepared.cwd)
+    else:
+        writable_roots = (prepared.codex_home, prepared.temp_dir)
+
+    forged = dataclasses.replace(
+        prepared,
+        environment=forged_environment,
+        environment_keys=environment_keys,
+        environment_sha256=_test_environment_digest(forged_environment),
+        writable_roots=writable_roots,
+    )
+    assert forged.environment_sha256 == _test_environment_digest(forged.environment)
+
+    api = _FakeProcessApi()
+    with pytest.raises(WorkerProcessError) as caught:
+        launch_worker_process(
+            environment=forged,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=api,
+        )
+    assert caught.value.code == "WORKER_ENV_ATTESTATION_MISMATCH"
+    assert "forged-secret" not in str(caught.value)
+    assert api.events == []
+
+
+@pytest.mark.parametrize(
+    "name", ["PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"]
+)
+def test_prepare_rejects_embedded_nul_in_allowlisted_environment_value(
+    tmp_path: Path, name: str
+) -> None:
+    root, cwd = _paths(tmp_path)
+    source = _source_env()
+    source[name] = "trusted\x00OPENAI_API_KEY=injected-secret"
+
+    with pytest.raises(WorkerProcessError) as caught:
+        prepare_worker_environment(
+            disposable_root=root,
+            cwd=cwd,
+            source_environment=source,
+        )
+    assert caught.value.code == "WORKER_ENV_INVALID"
+    assert "injected-secret" not in str(caught.value)
