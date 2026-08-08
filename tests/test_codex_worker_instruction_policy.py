@@ -1048,3 +1048,18 @@ def test_47_caller_cleanup_cannot_mint_task3_zero_survivor_evidence(
     finally:
         if boundary.handle is not None:
             real_cleanup(boundary.handle)
+
+
+# Round-2 policy tests share the same test-only canonical cleanup-owner double
+# as the worker regression module. This patches only the imported production
+# owner symbol; it never calls or trusts process_boundary.cleanup().
+@pytest.fixture(autouse=True)
+def _task5_round2_authorized_cleanup_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_lib.codex_worker as worker_module
+    from agent_lib.tests.test_codex_worker import _task3_harness_cleanup_worker_process
+
+    monkeypatch.setattr(
+        worker_module,
+        "cleanup_worker_process",
+        _task3_harness_cleanup_worker_process,
+    )
