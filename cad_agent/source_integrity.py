@@ -1818,3 +1818,938 @@ def require_source_custody_match(
 
 
 __all__.extend(["inspect_source_bundle", "require_source_custody_match"])
+
+# R1C Task 3 read-only media observation. Parsers receive only handle-derived
+# readers or bounded custody-owned snapshots; source pathnames never become parser authority.
+_TASK3_MEDIA_LIMIT_KEYS = {
+    "max_image_pixels",
+    "max_pdf_pages",
+    "max_cad_header_bytes",
+    "max_json_depth",
+    "max_json_containers",
+    "max_json_string_chars",
+    "max_json_key_chars",
+    "max_json_number_chars",
+}
+_TASK3_OPTIONAL_MEDIA_LIMIT_KEYS = {
+    "max_image_dimension_px",
+    "max_pdf_box_span_pt",
+    "max_dxf_header_bytes",
+    "max_json_object_keys",
+    "max_json_array_items",
+}
+
+
+def _validate_media_limits(value: object) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        raise SourceIntegrityError("MEDIA_LIMITS_INVALID")
+    keys = set(value)
+    if not _TASK3_MEDIA_LIMIT_KEYS.issubset(keys):
+        raise SourceIntegrityError("MEDIA_LIMITS_INVALID")
+    if not keys.issubset(_TASK3_MEDIA_LIMIT_KEYS | _TASK3_OPTIONAL_MEDIA_LIMIT_KEYS):
+        raise SourceIntegrityError("MEDIA_LIMITS_INVALID")
+    normalized: dict[str, int] = {}
+    for name in sorted(keys):
+        raw = value[name]
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0 or raw > _MAX_INT64:
+            raise SourceIntegrityError("MEDIA_LIMITS_INVALID")
+        normalized[name] = raw
+    normalized.setdefault("max_image_dimension_px", normalized["max_image_pixels"])
+    normalized.setdefault("max_pdf_box_span_pt", 1_000_000_000)
+    normalized.setdefault("max_dxf_header_bytes", normalized["max_cad_header_bytes"])
+    normalized.setdefault("max_json_object_keys", normalized["max_json_containers"])
+    normalized.setdefault("max_json_array_items", normalized["max_json_containers"])
+    return normalized
+
+
+def _task3_image_metadata(value: Mapping[str, object], *, path: str) -> dict[str, object]:
+    if set(value) != _MEDIA_FIELDS:
+        _fail(path, "contains unsupported media metadata properties")
+    format_name = value["format"]
+    mode = value["mode"]
+    if format_name not in {"PNG", "JPEG"}:
+        _fail(f"{path}.format", "has an unsupported image format")
+    if not isinstance(mode, str) or not mode:
+        _fail(f"{path}.mode", "must be a non-empty string")
+    return {
+        "format": format_name,
+        "width_px": _nonnegative_int(value["width_px"], path=f"{path}.width_px"),
+        "height_px": _nonnegative_int(value["height_px"], path=f"{path}.height_px"),
+        "mode": mode,
+        "dpi_x": _optional_canonical_dpi(value["dpi_x"], path=f"{path}.dpi_x"),
+        "dpi_y": _optional_canonical_dpi(value["dpi_y"], path=f"{path}.dpi_y"),
+    }
+
+
+def _task3_pdf_metadata(value: Mapping[str, object], *, path: str) -> dict[str, object]:
+    required = {"format", "pdf_version", "page_count", "pages"}
+    if set(value) != required or value.get("format") != "PDF":
+        _fail(path, "contains unsupported PDF metadata")
+    pdf_version = value["pdf_version"]
+    if not isinstance(pdf_version, str) or not re.fullmatch(r"\d\.\d", pdf_version):
+        _fail(f"{path}.pdf_version", "must be a bounded PDF version")
+    page_count = _nonnegative_int(value["page_count"], path=f"{path}.page_count")
+    pages = value["pages"]
+    if not isinstance(pages, list) or len(pages) != page_count:
+        _fail(f"{path}.pages", "must match page_count")
+    normalized_pages: list[dict[str, object]] = []
+    for index, page in enumerate(pages):
+        page_path = f"{path}.pages[{index}]"
+        page_value = _closed_mapping(
+            page,
+            required={"page_index", "media_box", "crop_box", "rotation", "user_unit"},
+            path=page_path,
+        )
+        if page_value["page_index"] != index:
+            _fail(f"{page_path}.page_index", "must be deterministic physical page order")
+        boxes: dict[str, list[str]] = {}
+        for name in ("media_box", "crop_box"):
+            raw_box = page_value[name]
+            if not isinstance(raw_box, list) or len(raw_box) != 4:
+                _fail(f"{page_path}.{name}", "must contain four PDF coordinates")
+            boxes[name] = [
+                canonicalize_r1c_quantity(raw, quantity="pdf_coordinate", unit="pt")["value"]
+                for raw in raw_box
+            ]
+        rotation = page_value["rotation"]
+        if isinstance(rotation, bool) or not isinstance(rotation, int) or rotation not in {0, 90, 180, 270}:
+            _fail(f"{page_path}.rotation", "must be a normalized right-angle rotation")
+        user_unit = canonicalize_r1c_quantity(
+            page_value["user_unit"], quantity="scale", unit="ratio"
+        )["value"]
+        if decimal.Decimal(user_unit) <= 0:
+            _fail(f"{page_path}.user_unit", "must be positive")
+        normalized_pages.append(
+            {
+                "page_index": index,
+                "media_box": boxes["media_box"],
+                "crop_box": boxes["crop_box"],
+                "rotation": rotation,
+                "user_unit": user_unit,
+            }
+        )
+    return {
+        "format": "PDF",
+        "pdf_version": pdf_version,
+        "page_count": page_count,
+        "pages": normalized_pages,
+    }
+
+
+def _task3_cad_metadata(value: Mapping[str, object], *, path: str) -> dict[str, object]:
+    if set(value) not in ({"format"}, {"format", "version"}):
+        _fail(path, "contains unsupported CAD header metadata")
+    format_name = value.get("format")
+    if format_name not in {"DWG", "DXF"}:
+        _fail(f"{path}.format", "has an unsupported CAD header format")
+    version = value.get("version")
+    if version is not None and (
+        not isinstance(version, str) or not re.fullmatch(r"AC10\d{2}", version)
+    ):
+        _fail(f"{path}.version", "must be a bounded AutoCAD version signature")
+    result: dict[str, object] = {"format": format_name}
+    if version is not None:
+        result["version"] = version
+    return result
+
+
+def _task3_json_metadata(value: Mapping[str, object], *, path: str) -> dict[str, object]:
+    required = {
+        "format",
+        "root_type",
+        "max_depth",
+        "container_count",
+        "object_key_count",
+        "array_item_count",
+        "max_string_chars",
+        "number_count",
+    }
+    if set(value) != required or value.get("format") != "JSON" or value.get("root_type") != "object":
+        _fail(path, "contains unsupported JSON structural metadata")
+    result: dict[str, object] = {"format": "JSON", "root_type": "object"}
+    for name in (
+        "max_depth",
+        "container_count",
+        "object_key_count",
+        "array_item_count",
+        "max_string_chars",
+        "number_count",
+    ):
+        result[name] = _nonnegative_int(value[name], path=f"{path}.{name}")
+    return result
+
+
+def _validate_media_metadata(value: object, *, path: str) -> dict[str, object]:
+    """Validate the existing image shape plus Task-3 bounded structural shapes."""
+    if not isinstance(value, Mapping):
+        _fail(path, "must be an object")
+    format_name = value.get("format")
+    if format_name in {"PNG", "JPEG"}:
+        return _task3_image_metadata(value, path=path)
+    if format_name == "PDF":
+        return _task3_pdf_metadata(value, path=path)
+    if format_name in {"DWG", "DXF"}:
+        return _task3_cad_metadata(value, path=path)
+    if format_name == "JSON":
+        return _task3_json_metadata(value, path=path)
+    _fail(f"{path}.format", "has an unsupported media format")
+
+
+def _windows_duplicate_for_parser(self: object, source_handle: object) -> object:
+    """Create an independent read-only parser stream from an already-open handle."""
+    import msvcrt
+    import os
+
+    kernel32 = self._kernel32
+    kernel32.ReOpenFile.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    kernel32.ReOpenFile.restype = wintypes.HANDLE
+    raw = kernel32.ReOpenFile(
+        wintypes.HANDLE(source_handle.value),
+        self._GENERIC_READ | self._FILE_READ_ATTRIBUTES,
+        self._FILE_SHARE_READ | self._FILE_SHARE_DELETE,
+        self._FILE_FLAG_OPEN_REPARSE_POINT,
+    )
+    value = ctypes.cast(raw, ctypes.c_void_p).value
+    if value in {None, self._invalid_handle}:
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+    try:
+        fd = msvcrt.open_osfhandle(int(value), os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except Exception:
+        kernel32.CloseHandle(wintypes.HANDLE(value))
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE") from None
+    try:
+        return os.fdopen(fd, "rb", buffering=0)
+    except Exception:
+        os.close(fd)
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE") from None
+
+
+_WindowsHandleAdapter.duplicate_for_parser = _windows_duplicate_for_parser
+
+
+def _parser_file_sha256(parser_file: object, *, chunk_size: int, max_file_bytes: int) -> tuple[str, int]:
+    try:
+        parser_file.seek(0)
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = parser_file.read(chunk_size)
+            if not isinstance(chunk, bytes):
+                raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_file_bytes:
+                raise SourceIntegrityError("RESOURCE_LIMIT")
+            digest.update(chunk)
+        parser_file.seek(0)
+        return digest.hexdigest(), total
+    except SourceIntegrityError:
+        raise
+    except Exception:
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE") from None
+
+
+def _snapshot_parser_file(
+    adapter: object,
+    source_handle: object,
+    *,
+    chunk_size: int,
+    max_file_bytes: int,
+) -> object:
+    import io
+
+    adapter.rewind(source_handle)
+    data = bytearray()
+    while True:
+        chunk = adapter.read(source_handle, chunk_size)
+        if not isinstance(chunk, bytes):
+            raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+        if not chunk:
+            break
+        if len(data) + len(chunk) > max_file_bytes:
+            raise SourceIntegrityError("RESOURCE_LIMIT")
+        data.extend(chunk)
+    return io.BufferedReader(io.BytesIO(bytes(data)))
+
+
+def _parser_reader(
+    adapter: object,
+    source_handle: object,
+    *,
+    chunk_size: int,
+    max_file_bytes: int,
+) -> object:
+    duplicate = getattr(adapter, "duplicate_for_parser", None)
+    if callable(duplicate):
+        try:
+            return duplicate(source_handle)
+        except SourceIntegrityError:
+            raise
+        except Exception:
+            raise SourceIntegrityError("EVIDENCE_UNAVAILABLE") from None
+    return _snapshot_parser_file(
+        adapter,
+        source_handle,
+        chunk_size=chunk_size,
+        max_file_bytes=max_file_bytes,
+    )
+
+
+def _observe_image(
+    *, declared_media_type: str, parser_file: object, media_limits: Mapping[str, int]
+) -> dict[str, object]:
+    import warnings
+    from PIL import Image
+
+    try:
+        parser_file.seek(0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            image = Image.open(parser_file, mode="r", formats=("PNG", "JPEG"))
+            try:
+                format_name = image.format
+                if format_name not in {"PNG", "JPEG"}:
+                    raise SourceIntegrityError("UNSUPPORTED_MEDIA")
+                observed_type = "image/png" if format_name == "PNG" else "image/jpeg"
+                if observed_type != declared_media_type:
+                    raise SourceIntegrityError("MEDIA_MISMATCH")
+                width, height = image.size
+                if (
+                    isinstance(width, bool)
+                    or isinstance(height, bool)
+                    or not isinstance(width, int)
+                    or not isinstance(height, int)
+                    or width <= 0
+                    or height <= 0
+                    or width > media_limits["max_image_dimension_px"]
+                    or height > media_limits["max_image_dimension_px"]
+                    or width * height > media_limits["max_image_pixels"]
+                ):
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+                if getattr(image, "is_animated", False) or int(getattr(image, "n_frames", 1)) != 1:
+                    raise SourceIntegrityError("UNSUPPORTED_MEDIA")
+                dpi_x: object = None
+                dpi_y: object = None
+                dpi = image.info.get("dpi")
+                if isinstance(dpi, (tuple, list)) and len(dpi) >= 2:
+                    dpi_x, dpi_y = dpi[0], dpi[1]
+                elif isinstance(dpi, (int, float, decimal.Decimal)) and not isinstance(dpi, bool):
+                    dpi_x = dpi_y = dpi
+                metadata = {
+                    "format": format_name,
+                    "width_px": width,
+                    "height_px": height,
+                    "mode": str(image.mode),
+                    "dpi_x": _optional_canonical_dpi(dpi_x, path="image.dpi_x"),
+                    "dpi_y": _optional_canonical_dpi(dpi_y, path="image.dpi_y"),
+                }
+                image.verify()
+            finally:
+                image.close()
+        return {"observed_media_type": observed_type, "media_metadata": metadata}
+    except SourceIntegrityError:
+        raise
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError):
+        raise SourceIntegrityError("RESOURCE_LIMIT") from None
+    except Exception:
+        raise SourceIntegrityError("MALFORMED_MEDIA") from None
+
+
+def _pdf_coordinate(value: object) -> str:
+    return canonicalize_r1c_quantity(value, quantity="pdf_coordinate", unit="pt")["value"]
+
+
+def _observe_pdf(
+    *, declared_media_type: str, parser_file: object, media_limits: Mapping[str, int]
+) -> dict[str, object]:
+    if declared_media_type != "application/pdf":
+        raise SourceIntegrityError("MEDIA_MISMATCH")
+    try:
+        parser_file.seek(0)
+        header = parser_file.read(16)
+        match = re.match(rb"%PDF-(\d\.\d)", header)
+        if match is None:
+            raise SourceIntegrityError("MALFORMED_MEDIA")
+        pdf_version = match.group(1).decode("ascii")
+        parser_file.seek(0)
+        from pypdf import PdfReader
+
+        reader = PdfReader(parser_file, strict=True, password=None)
+        if reader.is_encrypted:
+            raise SourceIntegrityError("PDF_ENCRYPTED")
+        page_count = len(reader.pages)
+        if page_count > media_limits["max_pdf_pages"]:
+            raise SourceIntegrityError("RESOURCE_LIMIT")
+        pages: list[dict[str, object]] = []
+        max_span = decimal.Decimal(media_limits["max_pdf_box_span_pt"])
+        for index, page in enumerate(reader.pages):
+            boxes: dict[str, list[str]] = {}
+            for name, box in (("media_box", page.mediabox), ("crop_box", page.cropbox)):
+                coords = [
+                    _pdf_coordinate(box.left),
+                    _pdf_coordinate(box.bottom),
+                    _pdf_coordinate(box.right),
+                    _pdf_coordinate(box.top),
+                ]
+                numeric = [decimal.Decimal(item) for item in coords]
+                if abs(numeric[2] - numeric[0]) > max_span or abs(numeric[3] - numeric[1]) > max_span:
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+                boxes[name] = coords
+            raw_rotation = page.get("/Rotate", 0)
+            rotation_decimal = decimal.Decimal(str(raw_rotation))
+            if not rotation_decimal.is_finite() or rotation_decimal != rotation_decimal.to_integral_value():
+                raise SourceIntegrityError("MALFORMED_MEDIA")
+            rotation = int(rotation_decimal)
+            if rotation % 90:
+                raise SourceIntegrityError("MALFORMED_MEDIA")
+            rotation %= 360
+            raw_user_unit = page.get("/UserUnit", 1)
+            user_unit = canonicalize_r1c_quantity(
+                raw_user_unit, quantity="scale", unit="ratio"
+            )["value"]
+            if decimal.Decimal(user_unit) <= 0:
+                raise SourceIntegrityError("MALFORMED_MEDIA")
+            pages.append(
+                {
+                    "page_index": index,
+                    "media_box": boxes["media_box"],
+                    "crop_box": boxes["crop_box"],
+                    "rotation": rotation,
+                    "user_unit": user_unit,
+                }
+            )
+        return {
+            "observed_media_type": "application/pdf",
+            "media_metadata": {
+                "format": "PDF",
+                "pdf_version": pdf_version,
+                "page_count": page_count,
+                "pages": pages,
+            },
+        }
+    except SourceIntegrityError:
+        raise
+    except Exception:
+        raise SourceIntegrityError("MALFORMED_MEDIA") from None
+
+
+def _observe_cad(
+    *, declared_media_type: str, parser_file: object, media_limits: Mapping[str, int]
+) -> dict[str, object]:
+    try:
+        parser_file.seek(0)
+        prefix = parser_file.read(
+            max(media_limits["max_cad_header_bytes"], media_limits["max_dxf_header_bytes"])
+        )
+        if not isinstance(prefix, bytes):
+            raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+        dwg = re.match(rb"^(AC10\d{2})", prefix)
+        if dwg is not None:
+            observed_type = "application/acad"
+            metadata: dict[str, object] = {
+                "format": "DWG",
+                "version": dwg.group(1).decode("ascii"),
+            }
+        elif prefix.startswith(b"AutoCAD Binary DXF\r\n\x1a\x00"):
+            observed_type = "application/dxf"
+            metadata = {"format": "DXF"}
+        else:
+            text = prefix[: media_limits["max_dxf_header_bytes"]]
+            try:
+                decoded = text.decode("ascii")
+            except UnicodeDecodeError:
+                raise SourceIntegrityError("MALFORMED_MEDIA") from None
+            normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
+            if re.match(r"^\s*0\s*\n\s*SECTION\s*\n\s*2\s*\n\s*HEADER(?:\s*\n|\s*$)", normalized) is None:
+                raise SourceIntegrityError("MALFORMED_MEDIA")
+            observed_type = "application/dxf"
+            metadata = {"format": "DXF"}
+            version = re.search(
+                r"(?:^|\n)\s*9\s*\n\s*\$ACADVER\s*\n\s*1\s*\n\s*(AC10\d{2})(?:\s*\n|\s*$)",
+                normalized,
+            )
+            if version is not None:
+                metadata["version"] = version.group(1)
+        if declared_media_type not in {"application/acad", "application/dxf"}:
+            raise SourceIntegrityError("UNSUPPORTED_MEDIA")
+        if observed_type != declared_media_type:
+            raise SourceIntegrityError("MEDIA_MISMATCH")
+        return {"observed_media_type": observed_type, "media_metadata": metadata}
+    except SourceIntegrityError:
+        raise
+    except Exception:
+        raise SourceIntegrityError("MALFORMED_MEDIA") from None
+
+
+def _json_pairs_hook(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise SourceIntegrityError("JSON_DUPLICATE_KEY")
+        result[key] = value
+    return result
+
+
+def _json_number_parser(max_chars: int):
+    def parse_number(text: str) -> decimal.Decimal:
+        if len(text) > max_chars:
+            raise SourceIntegrityError("RESOURCE_LIMIT")
+        exponent = re.search(r"[eE]([+-]?\d+)$", text)
+        if exponent is not None and abs(int(exponent.group(1))) > max_chars * 10:
+            raise SourceIntegrityError("RESOURCE_LIMIT")
+        try:
+            value = decimal.Decimal(text)
+        except decimal.InvalidOperation:
+            raise SourceIntegrityError("JSON_INVALID_NUMBER") from None
+        if not value.is_finite():
+            raise SourceIntegrityError("JSON_INVALID_NUMBER")
+        return value
+
+    return parse_number
+
+
+def _observe_json(
+    *, declared_media_type: str, parser_file: object, media_limits: Mapping[str, int]
+) -> dict[str, object]:
+    if declared_media_type != "application/json":
+        raise SourceIntegrityError("MEDIA_MISMATCH")
+    import json
+
+    try:
+        parser_file.seek(0)
+        raw = parser_file.read()
+        if not isinstance(raw, bytes):
+            raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+        try:
+            text = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            raise SourceIntegrityError("JSON_INVALID_UTF8") from None
+
+        def reject_constant(_value: str) -> object:
+            raise SourceIntegrityError("JSON_NONSTANDARD_CONSTANT")
+
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_json_pairs_hook,
+            parse_constant=reject_constant,
+            parse_int=_json_number_parser(media_limits["max_json_number_chars"]),
+            parse_float=_json_number_parser(media_limits["max_json_number_chars"]),
+        )
+        if not isinstance(parsed, dict):
+            raise SourceIntegrityError("JSON_ROOT_NOT_OBJECT")
+        stats = {
+            "max_depth": 0,
+            "container_count": 0,
+            "object_key_count": 0,
+            "array_item_count": 0,
+            "max_string_chars": 0,
+            "number_count": 0,
+        }
+
+        def visit(value: object, depth: int) -> None:
+            if depth > media_limits["max_json_depth"]:
+                raise SourceIntegrityError("RESOURCE_LIMIT")
+            stats["max_depth"] = max(stats["max_depth"], depth)
+            if isinstance(value, dict):
+                stats["container_count"] += 1
+                if stats["container_count"] > media_limits["max_json_containers"]:
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+                stats["object_key_count"] += len(value)
+                if stats["object_key_count"] > media_limits["max_json_object_keys"]:
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+                if set(value) == {"quantity", "unit", "value"}:
+                    try:
+                        canonicalize_r1c_quantity(
+                            value["value"],
+                            quantity=value["quantity"],
+                            unit=value["unit"],
+                        )
+                    except Exception:
+                        raise SourceIntegrityError("JSON_UNSUPPORTED_UNIT") from None
+                for key, item in value.items():
+                    if len(key) > media_limits["max_json_key_chars"]:
+                        raise SourceIntegrityError("RESOURCE_LIMIT")
+                    visit(item, depth + 1)
+            elif isinstance(value, list):
+                stats["container_count"] += 1
+                if stats["container_count"] > media_limits["max_json_containers"]:
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+                stats["array_item_count"] += len(value)
+                if stats["array_item_count"] > media_limits["max_json_array_items"]:
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+                for item in value:
+                    visit(item, depth + 1)
+            elif isinstance(value, str):
+                length = len(value)
+                if length > media_limits["max_json_string_chars"]:
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+                stats["max_string_chars"] = max(stats["max_string_chars"], length)
+            elif isinstance(value, decimal.Decimal):
+                stats["number_count"] += 1
+            elif value is None or isinstance(value, (bool, int)):
+                return
+            else:
+                raise SourceIntegrityError("JSON_INVALID_VALUE")
+
+        visit(parsed, 1)
+        return {
+            "observed_media_type": "application/json",
+            "media_metadata": {"format": "JSON", "root_type": "object", **stats},
+        }
+    except SourceIntegrityError:
+        raise
+    except (json.JSONDecodeError, UnicodeError, ValueError, TypeError):
+        raise SourceIntegrityError("JSON_INVALID") from None
+    except Exception:
+        raise SourceIntegrityError("JSON_INVALID") from None
+
+
+def _observe_media(
+    *,
+    kind: str,
+    declared_media_type: str,
+    parser_file: object,
+    media_limits: Mapping[str, int],
+) -> dict[str, object]:
+    limits = _validate_media_limits(media_limits)
+    if kind == "IMAGE":
+        return _observe_image(
+            declared_media_type=declared_media_type,
+            parser_file=parser_file,
+            media_limits=limits,
+        )
+    if kind == "PDF":
+        return _observe_pdf(
+            declared_media_type=declared_media_type,
+            parser_file=parser_file,
+            media_limits=limits,
+        )
+    if kind == "EXACT_BASE_CAD":
+        return _observe_cad(
+            declared_media_type=declared_media_type,
+            parser_file=parser_file,
+            media_limits=limits,
+        )
+    if kind == "ENGINEER_RECORD":
+        return _observe_json(
+            declared_media_type=declared_media_type,
+            parser_file=parser_file,
+            media_limits=limits,
+        )
+    raise SourceIntegrityError("UNSUPPORTED_MEDIA")
+
+
+def _task3_complete_custody(
+    *,
+    bundle: Mapping[str, object],
+    bundle_hash: str,
+    root_id: str,
+    root_revision: str,
+    root_config: str,
+    key_revision: str,
+    observed_items: list[dict[str, object]],
+) -> dict[str, object]:
+    observed_items.sort(key=lambda item: str(item["source_id"]))
+    groups = _derive_groups(observed_items)
+    memberships: dict[str, tuple[str, str]] = {}
+    for group in groups:
+        for source_id in group["source_ids"]:
+            memberships[str(source_id)] = (
+                str(group["alias_group_id"]),
+                str(group["group_type"]),
+            )
+    items: list[dict[str, object]] = []
+    for observed in observed_items:
+        source_id = str(observed["source_id"])
+        membership = memberships.get(source_id)
+        group_type = membership[1] if membership else None
+        state = group_type or "VERIFIED"
+        blocking = "SAME_FILE_ALIAS" if state == "SAME_FILE_ALIAS" else None
+        items.append(
+            {
+                "source_id": source_id,
+                "kind": observed["kind"],
+                "role": observed["role"],
+                "relative_path": observed["relative_path"],
+                "declared_sha256": observed["declared_sha256"],
+                "observed_sha256": observed["observed_sha256"],
+                "size_bytes": observed["size_bytes"],
+                "declared_media_type": observed["declared_media_type"],
+                "observed_media_type": observed["observed_media_type"],
+                "media_metadata": copy.deepcopy(observed["media_metadata"]),
+                "page_ids": copy.deepcopy(observed["page_ids"]),
+                "region_ids": copy.deepcopy(observed["region_ids"]),
+                "file_object_identity_token": observed["file_object_identity_token"],
+                "path_binding_sha256": observed["path_binding_sha256"],
+                "identity_scheme": _IDENTITY_SCHEME,
+                "identity_scheme_version": _IDENTITY_SCHEME_VERSION,
+                "identity_key_revision": key_revision,
+                "approved_root_revision": root_revision,
+                "alias_group_id": membership[0] if membership else None,
+                "custody_state": state,
+                "blocking_reason_code": blocking,
+            }
+        )
+    blocking_count = sum(item["custody_state"] == "SAME_FILE_ALIAS" for item in items)
+    candidate = {
+        "schema_version": SOURCE_CUSTODY_SCHEMA_VERSION,
+        "bundle_id": bundle["bundle_id"],
+        "run_id": bundle["run_id"],
+        "source_bundle_sha256": bundle_hash,
+        "approved_root_id": root_id,
+        "approved_root_revision": root_revision,
+        "approved_root_configuration_sha256": root_config,
+        "identity_scheme": _IDENTITY_SCHEME,
+        "identity_scheme_version": _IDENTITY_SCHEME_VERSION,
+        "identity_key_revision": key_revision,
+        "numeric_policy_version": R1C_NUMERIC_POLICY_VERSION,
+        "status": "BLOCKED" if blocking_count else "READY",
+        "eligible_count": len(items) - blocking_count,
+        "blocking_count": blocking_count,
+        "items": items,
+        "alias_groups": groups,
+    }
+    return validate_source_custody(candidate)
+
+
+def inspect_source_bundle_media(
+    *,
+    approved_root_id: str,
+    approved_root_revision: str,
+    approved_root: object,
+    identity_key: bytes,
+    identity_key_revision: str,
+    policy_limits: Mapping[str, int],
+    media_limits: Mapping[str, int],
+    source_bundle: object,
+) -> dict[str, object]:
+    """Attest media facts only after two stable original-handle hashes and replacement proof."""
+    root_id = _identifier(approved_root_id, path="approved_root_id")
+    root_revision = _identifier(approved_root_revision, path="approved_root_revision")
+    key_revision = _identifier(identity_key_revision, path="identity_key_revision")
+    key = _validate_identity_key(identity_key)
+    limits = _validate_policy_limits(policy_limits)
+    parser_limits = _validate_media_limits(media_limits)
+    try:
+        bundle = validate_source_bundle(source_bundle)
+        bundle_hash = source_bundle_sha256(bundle)
+    except Exception as exc:
+        if exc.__class__.__name__ == "SourceBundleError":
+            raise SourceIntegrityError("SOURCE_BUNDLE_INVALID") from None
+        raise
+    items_value = bundle["items"]
+    if not isinstance(items_value, list) or len(items_value) > limits["max_items"]:
+        raise SourceIntegrityError("RESOURCE_LIMIT")
+    bound_limits = dict(limits)
+    bound_limits.update({f"media:{name}": parser_limits[name] for name in sorted(parser_limits)})
+    try:
+        adapter = _WINDOWS_ADAPTER_FACTORY()
+        with adapter.open_root(
+            approved_root,
+            max_final_path_chars=limits["max_final_path_chars"],
+        ) as root_handle:
+            root_snapshot = _safe_snapshot(
+                adapter,
+                root_handle,
+                max_final_path_chars=limits["max_final_path_chars"],
+            )
+            if root_snapshot["reparse"]:
+                raise SourceIntegrityError("REPARSE_POINT")
+            root_config = _approved_root_configuration_sha256(
+                key=key,
+                approved_root_id=root_id,
+                approved_root_revision=root_revision,
+                identity_key_revision=key_revision,
+                root_snapshot=root_snapshot,
+                policy_limits=bound_limits,
+            )
+            observed_items: list[dict[str, object]] = []
+            total_bytes = 0
+            for item in items_value:
+                relative_path = str(item["relative_path"])
+                _normalize_declared_relative_path(relative_path)
+                adapter.check_no_reparse(root_handle, relative_path)
+                with adapter.open_source(
+                    root_handle,
+                    relative_path,
+                    max_final_path_chars=limits["max_final_path_chars"],
+                ) as source_handle:
+                    before = _safe_snapshot(
+                        adapter,
+                        source_handle,
+                        max_final_path_chars=limits["max_final_path_chars"],
+                    )
+                    if before["reparse"]:
+                        raise SourceIntegrityError("REPARSE_POINT")
+                    final_relative = _final_relative_path(
+                        root_final_path=root_snapshot["final_path"],
+                        source_final_path=before["final_path"],
+                        declared=relative_path,
+                    )
+                    expected_size = _snapshot_size(before)
+                    if expected_size > limits["max_file_bytes"] or total_bytes + expected_size > limits["max_total_bytes"]:
+                        raise SourceIntegrityError("RESOURCE_LIMIT")
+                    object_token = _object_identity_token(
+                        key=key, key_revision=key_revision, snapshot=before
+                    )
+                    path_binding = _path_binding_sha256(
+                        key=key,
+                        approved_root_configuration_sha256=root_config,
+                        approved_root_revision=root_revision,
+                        relative_path=final_relative,
+                        object_token=object_token,
+                    )
+                    first_sha, first_size = _stream_handle_sha256(
+                        adapter,
+                        source_handle,
+                        chunk_size=limits["hash_chunk_size"],
+                        max_file_bytes=limits["max_file_bytes"],
+                    )
+                    if first_size != expected_size:
+                        raise SourceIntegrityError("CHANGED_DURING_READ")
+                    if not hmac.compare_digest(first_sha, str(item["sha256"])):
+                        raise SourceIntegrityError("HASH_MISMATCH")
+                    parser_error: SourceIntegrityError | None = None
+                    observation: dict[str, object] | None = None
+                    try:
+                        parser_file = _parser_reader(
+                            adapter,
+                            source_handle,
+                            chunk_size=limits["hash_chunk_size"],
+                            max_file_bytes=limits["max_file_bytes"],
+                        )
+                        if hasattr(parser_file, "__enter__"):
+                            with parser_file as isolated:
+                                parser_sha, parser_size = _parser_file_sha256(
+                                    isolated,
+                                    chunk_size=limits["hash_chunk_size"],
+                                    max_file_bytes=limits["max_file_bytes"],
+                                )
+                                if parser_size != expected_size or not hmac.compare_digest(parser_sha, first_sha):
+                                    raise SourceIntegrityError("CHANGED_DURING_READ")
+                                observation = _observe_media(
+                                    kind=str(item["kind"]),
+                                    declared_media_type=str(item["media_type"]),
+                                    parser_file=isolated,
+                                    media_limits=parser_limits,
+                                )
+                        else:
+                            try:
+                                parser_sha, parser_size = _parser_file_sha256(
+                                    parser_file,
+                                    chunk_size=limits["hash_chunk_size"],
+                                    max_file_bytes=limits["max_file_bytes"],
+                                )
+                                if parser_size != expected_size or not hmac.compare_digest(parser_sha, first_sha):
+                                    raise SourceIntegrityError("CHANGED_DURING_READ")
+                                observation = _observe_media(
+                                    kind=str(item["kind"]),
+                                    declared_media_type=str(item["media_type"]),
+                                    parser_file=parser_file,
+                                    media_limits=parser_limits,
+                                )
+                            finally:
+                                close = getattr(parser_file, "close", None)
+                                if callable(close):
+                                    close()
+                    except SourceIntegrityError as exc:
+                        parser_error = exc
+                    except Exception:
+                        parser_error = SourceIntegrityError("MALFORMED_MEDIA")
+
+                    second_sha, second_size = _stream_handle_sha256(
+                        adapter,
+                        source_handle,
+                        chunk_size=limits["hash_chunk_size"],
+                        max_file_bytes=limits["max_file_bytes"],
+                    )
+                    after = _safe_snapshot(
+                        adapter,
+                        source_handle,
+                        max_final_path_chars=limits["max_final_path_chars"],
+                    )
+                    if after["reparse"]:
+                        raise SourceIntegrityError("REPARSE_POINT")
+                    if (
+                        not _same_snapshot(before, after)
+                        or second_size != expected_size
+                        or not hmac.compare_digest(first_sha, second_sha)
+                    ):
+                        raise SourceIntegrityError("CHANGED_DURING_READ")
+                    _final_relative_path(
+                        root_final_path=root_snapshot["final_path"],
+                        source_final_path=after["final_path"],
+                        declared=relative_path,
+                    )
+                    adapter.check_no_reparse(root_handle, relative_path)
+                    with adapter.reopen_source(
+                        root_handle,
+                        relative_path,
+                        max_final_path_chars=limits["max_final_path_chars"],
+                    ) as reopened_handle:
+                        reopened = _safe_snapshot(
+                            adapter,
+                            reopened_handle,
+                            max_final_path_chars=limits["max_final_path_chars"],
+                        )
+                        if reopened["reparse"]:
+                            raise SourceIntegrityError("REPARSE_POINT")
+                        reopened_relative = _final_relative_path(
+                            root_final_path=root_snapshot["final_path"],
+                            source_final_path=reopened["final_path"],
+                            declared=relative_path,
+                        )
+                        if (
+                            _snapshot_identity(reopened) != _snapshot_identity(before)
+                            or reopened_relative != final_relative
+                            or _snapshot_size(reopened) != expected_size
+                        ):
+                            raise SourceIntegrityError("IDENTITY_CHANGED_REPLACED")
+                    if parser_error is not None:
+                        raise parser_error
+                    if observation is None:
+                        raise SourceIntegrityError("MALFORMED_MEDIA")
+                    observed_items.append(
+                        {
+                            "source_id": item["source_id"],
+                            "kind": item["kind"],
+                            "role": item["role"],
+                            "relative_path": item["relative_path"],
+                            "declared_sha256": item["sha256"],
+                            "observed_sha256": first_sha,
+                            "size_bytes": first_size,
+                            "declared_media_type": item["media_type"],
+                            "observed_media_type": observation["observed_media_type"],
+                            "media_metadata": copy.deepcopy(observation["media_metadata"]),
+                            "page_ids": copy.deepcopy(item["page_ids"]),
+                            "region_ids": copy.deepcopy(item["region_ids"]),
+                            "file_object_identity_token": object_token,
+                            "path_binding_sha256": path_binding,
+                            "byte_custody_state": "VERIFIED_BYTES",
+                        }
+                    )
+                total_bytes += expected_size
+                if total_bytes > limits["max_total_bytes"]:
+                    raise SourceIntegrityError("RESOURCE_LIMIT")
+            return _task3_complete_custody(
+                bundle=bundle,
+                bundle_hash=bundle_hash,
+                root_id=root_id,
+                root_revision=root_revision,
+                root_config=root_config,
+                key_revision=key_revision,
+                observed_items=observed_items,
+            )
+    except SourceIntegrityError:
+        raise
+    except Exception:
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE") from None
+
+
+__all__.extend(["inspect_source_bundle_media"])
