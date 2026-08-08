@@ -613,6 +613,9 @@ def test_task1_module_has_no_filesystem_parser_model_or_clock_authority() -> Non
         "PIL",
         "pypdf",
         "ezdxf",
+        "pytesseract",
+        "openai",
+        "anthropic",
         "mcp_integration_lib",
         "autocad_plugin",
         "agent_lib",
@@ -620,13 +623,53 @@ def test_task1_module_has_no_filesystem_parser_model_or_clock_authority() -> Non
         "semantic_ir_lib",
         "dxf_builder_lib",
     }
-    imported_roots: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported_roots.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported_roots.add(node.module.split(".")[0])
-    assert imported_roots.isdisjoint(forbidden_import_roots)
+    authorized_task3_local_imports = {
+        "_windows_duplicate_for_parser": {"os"},
+        "_observe_image": {"PIL"},
+        "_observe_pdf": {"pypdf"},
+    }
+
+    class ImportAuthorityVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope = ["<module>"]
+            self.violations: list[tuple[str, str]] = []
+            self.authorized_seen: set[tuple[str, str]] = set()
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.scope.append(node.name)
+            self.generic_visit(node)
+            self.scope.pop()
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self.scope.append(node.name)
+            self.generic_visit(node)
+            self.scope.pop()
+
+        def check_root(self, root: str) -> None:
+            if root not in forbidden_import_roots:
+                return
+            owner = self.scope[-1]
+            if root in authorized_task3_local_imports.get(owner, set()):
+                self.authorized_seen.add((owner, root))
+                return
+            self.violations.append((owner, root))
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                self.check_root(alias.name.split(".")[0])
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            if node.module:
+                self.check_root(node.module.split(".")[0])
+
+    authority_visitor = ImportAuthorityVisitor()
+    authority_visitor.visit(tree)
+    assert authority_visitor.violations == []
+    assert authority_visitor.authorized_seen == {
+        ("_windows_duplicate_for_parser", "os"),
+        ("_observe_image", "PIL"),
+        ("_observe_pdf", "pypdf"),
+    }
 
     forbidden_calls = {
         "now",
@@ -763,7 +806,7 @@ _TASK2_LIMITS = {
 _TASK2_KEY = b"server-owned-test-key-32-bytes!!"
 _TASK2_ROOT = Path("C:/approved")
 _PNG_1X1 = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zf5sAAAAASUVORK5CYII="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNg+A8AAQIBAEK+vGgAAAAASUVORK5CYII="
 )
 _PNG_1X1_METADATA = {
     "format": "PNG",
