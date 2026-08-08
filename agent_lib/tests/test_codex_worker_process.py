@@ -1001,7 +1001,7 @@ def test_remediation_round3_stale_weakref_cleanup_cannot_revoke_later_same_id_re
     first_api = _FakeProcessApi()
     first = _launch_fake(tmp_path / "first", api=first_api)
     second_api = _FakeProcessApi()
-    second_api.query_results = [(4101,), ()]
+    second_api.query_results = [(4101,), (), ()]
     second = _launch_fake(tmp_path / "second", api=second_api)
     first_ref = weakref.ref(first)
 
