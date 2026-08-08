@@ -720,3 +720,154 @@ def test_45_session_lifecycle_rejects_caller_minted_provenance_and_cleans_withou
     assert fx.adapter.calls == []
     assert [name for name, _ in process.calls].count("cleanup") == 1
     assert [request.operation for request in process.attest_calls] == [operation]
+
+
+# Task-5 remediation harness: provider-observed evidence is supplied only by
+# the authorized Task-3 control seam. Raw custom boundaries remain untrusted.
+@pytest.fixture(autouse=True)
+def _task5_authorized_child_control(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_lib.codex_worker as worker_module
+    from agent_lib.tests.test_codex_worker import _task3_harness_exchange
+
+    monkeypatch.setattr(worker_module, "exchange_worker_control", _task3_harness_exchange)
+
+
+def _enable_attestation(fx: object) -> object:  # noqa: F811
+    from agent_lib.tests.test_codex_worker import _Task3HarnessBoundary
+
+    process = fx.process
+    assert isinstance(process, _Task3HarnessBoundary)
+    return process
+
+
+def test_25_fork_requires_fresh_target_attestation_not_inherited_source_history(  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    source = _fixture(tmp_path / "source")
+    target = _fresh_target(tmp_path / "target")
+    process = source.process
+    process.attestation_factory = lambda _request: _observation(
+        source.authority, source.binding, source.worker_context
+    )
+    with pytest.raises(CodexWorkerError) as caught:
+        fork_codex_worker(
+            source_handoff=source.handoff,
+            source_binding=source.binding,
+            source_authority_context=source.authority,
+            source_worker_context=source.worker_context,
+            handoff=target[0],
+            binding=target[3],
+            authority_context=target[1],
+            worker_context=target[2],
+            adapter=source.adapter,
+            process_boundary=process,
+            timeout_seconds=1.0,
+            now=NOW,
+        )
+    assert caught.value.code == MISMATCH
+    assert [request.operation for request in process.attest_calls] == ["fork"]
+    assert source.adapter.calls == []
+
+
+def test_41_missing_attestation_on_custom_start_boundary_fails_closed_before_provider_invoke(  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    process = _FakeProcessBoundary()
+    process.adapter = fx.adapter
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx, process_boundary=process)
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert fx.adapter.calls == []
+    assert [name for name, _ in process.calls] == ["start", "cleanup"]
+
+
+def test_42_caller_minted_matching_mapping_is_not_authorized_provider_provenance(  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    process = _AttestingBoundary(
+        lambda _request: _observation(fx.authority, fx.binding, fx.worker_context)
+    )
+    process.adapter = fx.adapter
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx, process_boundary=process)
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert fx.adapter.calls == []
+    assert process.attest_calls == []
+    assert [name for name, _ in process.calls] == ["start", "cleanup"]
+
+
+def test_43_resume_with_missing_attestation_fails_gap_before_provider_invoke(  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    process = _FakeProcessBoundary()
+    process.adapter = fx.adapter
+    with pytest.raises(CodexWorkerError) as caught:
+        resume_codex_worker(
+            handoff=fx.handoff,
+            binding=fx.binding,
+            authority_context=fx.authority,
+            worker_context=fx.worker_context,
+            adapter=fx.adapter,
+            process_boundary=process,
+            timeout_seconds=1.0,
+            now=NOW,
+        )
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert fx.adapter.calls == []
+    assert [name for name, _ in process.calls] == ["start", "cleanup"]
+
+
+def test_44_fork_rejects_perfect_matching_mapping_from_caller_controlled_boundary(  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    source = _fixture(tmp_path / "source")
+    target = _fresh_target(tmp_path / "target")
+    process = _AttestingBoundary(
+        lambda _request: _observation(target[1], target[3], target[2])
+    )
+    process.adapter = source.adapter
+    with pytest.raises(CodexWorkerError) as caught:
+        fork_codex_worker(
+            source_handoff=source.handoff,
+            source_binding=source.binding,
+            source_authority_context=source.authority,
+            source_worker_context=source.worker_context,
+            handoff=target[0],
+            binding=target[3],
+            authority_context=target[1],
+            worker_context=target[2],
+            adapter=source.adapter,
+            process_boundary=process,
+            timeout_seconds=1.0,
+            now=NOW,
+        )
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert source.adapter.calls == []
+    assert process.attest_calls == []
+    assert [name for name, _ in process.calls] == ["start", "cleanup"]
+
+
+@pytest.mark.parametrize("operation", ["turn", "steer"])
+def test_45_session_lifecycle_rejects_caller_minted_provenance_and_cleans_without_candidate(  # noqa: F811
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    fx = _fixture(tmp_path)
+    process = _AttestingBoundary(
+        lambda _request: _observation(fx.authority, fx.binding, fx.worker_context)
+    )
+    session = _raw_session(fx, process)
+    result = getattr(session, operation)({}, timeout_seconds=1.0, now=NOW)
+    _assert_failed(result, GAP)
+    assert result.candidate_output is None
+    assert result.promotion_safe is False
+    assert fx.adapter.calls == []
+    assert [name for name, _ in process.calls].count("cleanup") == 1
+    assert process.attest_calls == []
