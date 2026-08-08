@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -156,6 +157,7 @@ class WorkerProcessHandle:
         "_request_id",
         "environment_attestation",
         "root_pid",
+        "__weakref__",
     )
 
     def __init__(
@@ -184,6 +186,7 @@ class WorkerProcessHandle:
         self._request_id = 0
 
     def snapshot_process_tree(self) -> ProcessTreeIdentity:
+        _require_issued_handle(self)
         try:
             raw = self._api.query_job_process_ids(
                 self._job_handle, max_processes=self._max_processes
@@ -199,8 +202,17 @@ class WorkerProcessHandle:
         )
 
 
+_ISSUED_WORKER_HANDLES: weakref.WeakSet[WorkerProcessHandle] = weakref.WeakSet()
+
+
 def _fail(code: str) -> None:
     raise WorkerProcessError(code)
+
+
+def _require_issued_handle(handle: object) -> WorkerProcessHandle:
+    if not isinstance(handle, WorkerProcessHandle) or handle not in _ISSUED_WORKER_HANDLES:
+        _fail("WORKER_HANDLE_INVALID")
+    return handle
 
 
 def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
@@ -618,7 +630,7 @@ def launch_worker_process(
             _safe_terminate_job(api, job_handle)
             _fail("WORKER_LAUNCH_RESOURCE_CLOSE_FAILED")
         thread_handle = None
-        return WorkerProcessHandle(
+        handle = WorkerProcessHandle(
             api=api,
             job_handle=job_handle,
             process_handle=process_handle,
@@ -629,6 +641,8 @@ def launch_worker_process(
             control_read_handle=control_read_handle,
             control_write_handle=control_write_handle,
         )
+        _ISSUED_WORKER_HANDLES.add(handle)
+        return handle
     except WorkerProcessError:
         _safe_close(api, control_read_handle)
         _safe_close(api, control_write_handle)
@@ -715,8 +729,7 @@ def _api_read_exact(api: object, handle: object, size: int) -> bytes:
 def exchange_worker_control(
     handle: WorkerProcessHandle, payload: Mapping[str, object]
 ) -> Mapping[str, object]:
-    if not isinstance(handle, WorkerProcessHandle):
-        _fail("WORKER_HANDLE_INVALID")
+    handle = _require_issued_handle(handle)
     if not isinstance(payload, Mapping):
         _fail("WORKER_CONTROL_FRAME_INVALID")
     if (
@@ -855,8 +868,7 @@ def cleanup_worker_process(
     _clock: Callable[[], float] = time.monotonic,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> WorkerCleanupResult:
-    if not isinstance(handle, WorkerProcessHandle):
-        _fail("WORKER_HANDLE_INVALID")
+    handle = _require_issued_handle(handle)
     if handle._cleanup_result is not None:
         return handle._cleanup_result
     control_close_ok = _close_control_handles(handle)
