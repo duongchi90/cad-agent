@@ -565,11 +565,25 @@ def test_40_module_ownership_does_not_expand_into_forbidden_authority_owners() -
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         imported: set[str] = set()
+        authority_symbols: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported.update(alias.name for alias in node.names)
+                authority_symbols.update(
+                    (alias.asname or alias.name.rsplit(".", 1)[-1]).lower()
+                    for alias in node.names
+                )
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.add(node.module)
+                authority_symbols.update(
+                    (alias.asname or alias.name).lower() for alias in node.names
+                )
+            elif isinstance(node, ast.Name):
+                authority_symbols.add(node.id.lower())
+            elif isinstance(node, ast.Attribute):
+                authority_symbols.add(node.attr.lower())
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                authority_symbols.add(node.name.lower())
         roots = {name.split(".", 1)[0] for name in imported}
         assert roots.isdisjoint(
             {
@@ -587,8 +601,9 @@ def test_40_module_ownership_does_not_expand_into_forbidden_authority_owners() -
             "verified_publisher",
             "manifest_store",
             "checkpoint_store",
-            "cad_truth_authority",
         ):
             assert token not in lowered
+        assert "cad_truth_authority" not in authority_symbols
     worker_lowered = WORKER_SOURCE.read_text(encoding="utf-8").lower()
     assert "file_ipc" not in worker_lowered
+    assert "cad_truth_authority" not in worker_lowered
