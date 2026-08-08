@@ -851,3 +851,140 @@ def test_remediation_round2_caller_constructed_handle_never_acquires_task3_autho
                 _sleep=lambda _: None,
             )
     assert caught.value.code == "WORKER_HANDLE_INVALID"
+
+
+class _Round3AttackerApi(_FakeControlApi):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attacker_touches: list[str] = []
+
+    def query_job_process_ids(
+        self, job_handle: object, *, max_processes: int
+    ) -> tuple[int, ...]:
+        self.attacker_touches.append("query_job")
+        return super().query_job_process_ids(job_handle, max_processes=max_processes)
+
+    def write_handle(self, handle: object, data: bytes) -> int:
+        self.attacker_touches.append("write_control")
+        return super().write_handle(handle, data)
+
+    def read_handle(self, handle: object, size: int) -> bytes:
+        self.attacker_touches.append("read_control")
+        return super().read_handle(handle, size)
+
+    def terminate_job(self, job_handle: object) -> None:
+        self.attacker_touches.append("terminate_job")
+        super().terminate_job(job_handle)
+
+    def close_handle(self, handle: object) -> None:
+        self.attacker_touches.append("close_handle")
+        super().close_handle(handle)
+
+
+class _Round3EqualitySpoofingHandle(WorkerProcessHandle):
+    __slots__ = ("_issued_target",)
+
+    def __init__(self, *, issued_target: WorkerProcessHandle, **kwargs: object) -> None:
+        self._issued_target = issued_target
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+
+    def __hash__(self) -> int:
+        return hash(self._issued_target)
+
+    def __eq__(self, other: object) -> bool:
+        return other is self._issued_target or other is self
+
+
+@pytest.mark.parametrize("operation", ["snapshot", "exchange", "cleanup"])
+def test_remediation_round3_equality_spoof_cannot_acquire_exact_handle_authority(
+    tmp_path: Path, operation: str
+) -> None:
+    import agent_lib.codex_worker_process as process_owner
+
+    issued_api = _FakeProcessApi()
+    issued_api.query_results = [(4101,), ()]
+    issued = _launch_fake(tmp_path / "issued", api=issued_api)
+    attacker_api = _Round3AttackerApi()
+    attacker_api.query_results = [(4101,), ()]
+    forged = _Round3EqualitySpoofingHandle(
+        issued_target=issued,
+        api=attacker_api,
+        job_handle="job-handle",
+        process_handle="process-handle",
+        root_pid=4101,
+        environment_attestation=_prepared(tmp_path / "forged"),
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+        control_read_handle="control-read",
+        control_write_handle="control-write",
+    )
+
+    code: str | None = None
+    try:
+        if operation == "snapshot":
+            forged.snapshot_process_tree()
+        elif operation == "exchange":
+            process_owner.exchange_worker_control(forged, {"operation": "probe"})
+        else:
+            process_owner.cleanup_worker_process(
+                forged,
+                _clock=_FakeClock(0.0, 0.1),
+                _sleep=lambda _: None,
+            )
+    except WorkerProcessError as exc:
+        code = exc.code
+    finally:
+        cleanup_worker_process(
+            issued,
+            _clock=_FakeClock(0.0, 0.1),
+            _sleep=lambda _: None,
+        )
+
+    assert attacker_api.attacker_touches == []
+    assert code == "WORKER_HANDLE_INVALID"
+
+
+def test_remediation_round3_dead_issued_referent_does_not_transfer_authority(
+    tmp_path: Path,
+) -> None:
+    import gc
+    import weakref
+    import agent_lib.codex_worker_process as process_owner
+
+    issued_api = _FakeProcessApi()
+    issued_api.query_results = [(4101,), ()]
+    issued = _launch_fake(tmp_path / "issued", api=issued_api)
+    issued_hash = hash(issued)
+    issued_ref = weakref.ref(issued)
+    cleanup_worker_process(
+        issued,
+        _clock=_FakeClock(0.0, 0.1),
+        _sleep=lambda _: None,
+    )
+    del issued
+    gc.collect()
+    assert issued_ref() is None
+
+    class DeadReferentCollider(WorkerProcessHandle):
+        def __hash__(self) -> int:
+            return issued_hash
+
+        def __eq__(self, other: object) -> bool:
+            return True
+
+    attacker_api = _Round3AttackerApi()
+    forged = DeadReferentCollider(
+        api=attacker_api,
+        job_handle="job-handle",
+        process_handle="process-handle",
+        root_pid=4101,
+        environment_attestation=_prepared(tmp_path / "forged"),
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+        control_read_handle="control-read",
+        control_write_handle="control-write",
+    )
+    with pytest.raises(WorkerProcessError) as caught:
+        process_owner.exchange_worker_control(forged, {"operation": "probe"})
+    assert caught.value.code == "WORKER_HANDLE_INVALID"
+    assert attacker_api.attacker_touches == []
