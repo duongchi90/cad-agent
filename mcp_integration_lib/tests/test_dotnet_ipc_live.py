@@ -55,10 +55,12 @@ def _lean_setup_prerequisites_available() -> bool:
 
 
 def _s2c_live_prerequisites_available() -> bool:
-    return (
-        os.getenv("CAD_AGENT_S2C_LIVE") == "1"
-        and _live_prerequisites_available()
-        and bool(os.getenv("CAD_AGENT_LEAN_DISPOSABLE_DWG"))
+    return os.getenv("CAD_AGENT_S2C_LIVE") == "1" and _live_prerequisites_available() and all(
+        bool(os.getenv(name))
+        for name in (
+            "CAD_AGENT_DOTNET_IPC_DIR",
+            "CAD_AGENT_LEAN_DISPOSABLE_DWG",
+        )
     )
 
 
