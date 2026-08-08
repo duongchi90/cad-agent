@@ -229,10 +229,10 @@ git diff --check
 
 git diff --cached --check
 
-git diff --name-only <TASK_1_BASE>..HEAD
+git diff --name-only HEAD~2..HEAD
 ```
 
-Changed-file audit must show exactly the two Task-1 paths. Commit normally; no amend/rebase/squash/force-push.
+Task 1 has exactly two forward commits after its issuance base: one RED-only test commit and one minimal production commit. Therefore `HEAD~2` is the Task-1 issuance base for this cumulative audit. Changed-file output must show exactly the two Task-1 paths. Commit normally; no amend/rebase/squash/force-push.
 
 **Paired independent reviewer:** architecture/reuse + determinism reviewer. Reviewer must specifically attack volatile-handle/UUID/path/order identity leakage and second-owner imports.
 
