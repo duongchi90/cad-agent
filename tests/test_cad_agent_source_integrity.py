@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ast
+import base64
 import copy
 import decimal
 import importlib
 import inspect
+import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -640,6 +642,7 @@ def test_task1_module_has_no_filesystem_parser_model_or_clock_authority() -> Non
         "Popen",
         "system",
     }
+
     def call_name(node: ast.AST) -> str:
         if isinstance(node, ast.Name):
             return node.id
@@ -742,3 +745,822 @@ def test_alias_group_members_require_distinct_path_bindings() -> None:
 
     with pytest.raises(SourceIntegrityError, match="path|binding|distinct|member"):
         validate_source_custody(payload)
+
+
+# --- R1C Task 2: server-keyed opened-handle source-byte custody ---
+
+import hashlib
+import cad_agent.source_integrity as _source_integrity_task2
+
+
+_TASK2_LIMITS = {
+    "max_items": 10000,
+    "max_total_bytes": 1024 * 1024,
+    "max_file_bytes": 1024 * 1024,
+    "hash_chunk_size": 3,
+    "max_final_path_chars": 32768,
+}
+_TASK2_KEY = b"server-owned-test-key-32-bytes!!"
+_TASK2_ROOT = Path("C:/approved")
+_PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zf5sAAAAASUVORK5CYII="
+)
+_PNG_1X1_METADATA = {
+    "format": "PNG",
+    "width_px": 1,
+    "height_px": 1,
+    "mode": "LA",
+    "dpi_x": None,
+    "dpi_y": None,
+}
+
+
+def _task2_item(source_id: str, relative_path: str, data: bytes) -> dict[str, object]:
+    return {
+        "source_id": source_id,
+        "kind": "IMAGE",
+        "role": "DETAIL",
+        "relative_path": relative_path,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "media_type": "image/png",
+        "page_ids": [],
+        "region_ids": [f"REGION-{source_id}"],
+        "captured_at_utc": "2026-08-07T12:00:00Z",
+        "quality": {"distortion": "NONE", "legibility": "GOOD"},
+    }
+
+
+def _task2_bundle(*items: dict[str, object]) -> dict[str, object]:
+    return {
+        "schema_version": "source-bundle-1.0",
+        "bundle_id": "BUNDLE-TASK2",
+        "run_id": "RUN-TASK2",
+        "created_at_utc": "2026-08-07T12:00:00Z",
+        "items": list(items),
+    }
+
+
+def _fake_file_id(value: int) -> bytes:
+    return value.to_bytes(16, "big")
+
+
+class _FakeHandle:
+    def __init__(self, adapter: "_FakeCustodyAdapter", key: str, *, reopen: bool = False) -> None:
+        self.adapter = adapter
+        self.key = key
+        self.reopen = reopen
+        self.snapshot_count = 0
+        self.offset = 0
+
+    def __enter__(self) -> "_FakeHandle":
+        if self.key != "<root>" and not self.reopen:
+            self.adapter.custody_open += 1
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self.key != "<root>" and not self.reopen:
+            self.adapter.custody_open -= 1
+        return None
+
+
+class _FakeCustodyAdapter:
+    def __init__(
+        self,
+        files: dict[str, dict[str, object]],
+        *,
+        root_final_path: str = r"C:\approved",
+        root_identity: tuple[int, int] = (101, 202),
+        after_overrides: dict[str, dict[str, object]] | None = None,
+        reopen_overrides: dict[str, dict[str, object]] | None = None,
+        reparse_paths: set[str] | None = None,
+        raw_error: Exception | None = None,
+    ) -> None:
+        self.files = files
+        self.root_final_path = root_final_path
+        self.root_identity = root_identity
+        self.after_overrides = after_overrides or {}
+        self.reopen_overrides = reopen_overrides or {}
+        self.reparse_paths = reparse_paths or set()
+        self.raw_error = raw_error
+        self.read_counts: dict[str, int] = {}
+        self.custody_open = 0
+
+    def open_root(self, approved_root: Path, *, max_final_path_chars: int) -> _FakeHandle:
+        return _FakeHandle(self, "<root>")
+
+    def open_source(
+        self,
+        root_handle: _FakeHandle,
+        relative_path: str,
+        *,
+        max_final_path_chars: int,
+    ) -> _FakeHandle:
+        return _FakeHandle(self, relative_path)
+
+    def reopen_source(
+        self,
+        root_handle: _FakeHandle,
+        relative_path: str,
+        *,
+        max_final_path_chars: int,
+    ) -> _FakeHandle:
+        if self.custody_open <= 0:
+            raise SourceIntegrityError("UNGUARDED_REOPEN")
+        return _FakeHandle(self, relative_path, reopen=True)
+
+    def check_no_reparse(self, root_handle: _FakeHandle, relative_path: str) -> None:
+        if relative_path in self.reparse_paths:
+            raise SourceIntegrityError("REPARSE_POINT")
+
+    def snapshot(self, handle: _FakeHandle, *, max_final_path_chars: int) -> dict[str, object]:
+        if self.raw_error is not None:
+            raise self.raw_error
+        if handle.key == "<root>":
+            return {
+                "final_path": self.root_final_path,
+                "volume_serial": self.root_identity[0],
+                "file_id": _fake_file_id(self.root_identity[1]),
+                "size": 0,
+                "reparse": False,
+            }
+        base = dict(self.files[handle.key])
+        if handle.reopen:
+            base.update(self.reopen_overrides.get(handle.key, {}))
+        elif handle.snapshot_count > 0:
+            base.update(self.after_overrides.get(handle.key, {}))
+        handle.snapshot_count += 1
+        return {
+            "final_path": base.get(
+                "final_path",
+                self.root_final_path + "\\" + handle.key.replace("/", "\\"),
+            ),
+            "volume_serial": base["volume_serial"],
+            "file_id": base.get("file_id", _fake_file_id(int(base["file_index"]))),
+            "size": len(base["data"]) if "size" not in base else base["size"],
+            "reparse": bool(base.get("reparse", False)),
+        }
+
+    def rewind(self, handle: _FakeHandle) -> None:
+        handle.offset = 0
+
+    def read(self, handle: _FakeHandle, size: int) -> bytes:
+        self.read_counts[handle.key] = self.read_counts.get(handle.key, 0) + 1
+        data = bytes(self.files[handle.key]["data"])
+        result = data[handle.offset : handle.offset + size]
+        handle.offset += len(result)
+        return result
+
+
+def _fake_file(
+    data: bytes,
+    *,
+    volume_serial: int,
+    file_index: int,
+    final_path: str | None = None,
+) -> dict[str, object]:
+    value: dict[str, object] = {
+        "data": data,
+        "volume_serial": volume_serial,
+        "file_index": file_index,
+    }
+    if final_path is not None:
+        value["final_path"] = final_path
+    return value
+
+
+def _task2_inspect(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: _FakeCustodyAdapter,
+    bundle: dict[str, object],
+    *,
+    root_revision: str = "ROOT-REV-1",
+    key: bytes = _TASK2_KEY,
+    key_revision: str = "KEY-REV-1",
+    policy_limits: dict[str, int] | None = None,
+) -> dict[str, object]:
+    assert hasattr(_source_integrity_task2, "inspect_source_bundle"), (
+        "R1C Task 2 RED: inspect_source_bundle is not implemented"
+    )
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        lambda: adapter,
+        raising=False,
+    )
+    return _source_integrity_task2.inspect_source_bundle(
+        approved_root_id="ROOT-SYNTHETIC",
+        approved_root_revision=root_revision,
+        approved_root=_TASK2_ROOT,
+        identity_key=key,
+        identity_key_revision=key_revision,
+        policy_limits=dict(_TASK2_LIMITS if policy_limits is None else policy_limits),
+        source_bundle=bundle,
+    )
+
+
+def _truthful_downstream_custody_fixture(
+    evidence: dict[str, object],
+    *,
+    observed_media_type: str,
+    media_metadata: dict[str, object],
+) -> dict[str, object]:
+    """Build complete downstream custody from explicit parser facts, never Task-2 inference."""
+    items = []
+    groups = copy.deepcopy(evidence["alias_groups"])
+    group_by_source: dict[str, tuple[str, str]] = {}
+    for group in groups:
+        for source_id in group["source_ids"]:
+            group_by_source[str(source_id)] = (
+                str(group["alias_group_id"]),
+                str(group["group_type"]),
+            )
+    for observed in evidence["items"]:
+        source_id = str(observed["source_id"])
+        membership = group_by_source.get(source_id)
+        group_type = membership[1] if membership else None
+        state = group_type or "VERIFIED"
+        blocking = "SAME_FILE_ALIAS" if state == "SAME_FILE_ALIAS" else None
+        items.append(
+            {
+                "source_id": source_id,
+                "kind": observed["kind"],
+                "role": observed["role"],
+                "relative_path": observed["relative_path"],
+                "declared_sha256": observed["declared_sha256"],
+                "observed_sha256": observed["observed_sha256"],
+                "size_bytes": observed["size_bytes"],
+                "declared_media_type": observed["declared_media_type"],
+                "observed_media_type": observed_media_type,
+                "media_metadata": copy.deepcopy(media_metadata),
+                "page_ids": observed["page_ids"],
+                "region_ids": observed["region_ids"],
+                "file_object_identity_token": observed["file_object_identity_token"],
+                "path_binding_sha256": observed["path_binding_sha256"],
+                "identity_scheme": evidence["identity_scheme"],
+                "identity_scheme_version": evidence["identity_scheme_version"],
+                "identity_key_revision": evidence["identity_key_revision"],
+                "approved_root_revision": evidence["approved_root_revision"],
+                "alias_group_id": membership[0] if membership else None,
+                "custody_state": state,
+                "blocking_reason_code": blocking,
+            }
+        )
+    blocking_count = sum(item["custody_state"] == "SAME_FILE_ALIAS" for item in items)
+    return {
+        "schema_version": SOURCE_CUSTODY_SCHEMA_VERSION,
+        "bundle_id": evidence["bundle_id"],
+        "run_id": evidence["run_id"],
+        "source_bundle_sha256": evidence["source_bundle_sha256"],
+        "approved_root_id": evidence["approved_root_id"],
+        "approved_root_revision": evidence["approved_root_revision"],
+        "approved_root_configuration_sha256": evidence[
+            "approved_root_configuration_sha256"
+        ],
+        "identity_scheme": evidence["identity_scheme"],
+        "identity_scheme_version": evidence["identity_scheme_version"],
+        "identity_key_revision": evidence["identity_key_revision"],
+        "numeric_policy_version": R1C_NUMERIC_POLICY_VERSION,
+        "status": "BLOCKED" if blocking_count else "READY",
+        "eligible_count": len(items) - blocking_count,
+        "blocking_count": blocking_count,
+        "items": items,
+        "alias_groups": groups,
+    }
+
+
+def _png_downstream_custody(evidence: dict[str, object]) -> dict[str, object]:
+    return _truthful_downstream_custody_fixture(
+        evidence,
+        observed_media_type="image/png",
+        media_metadata=_PNG_1X1_METADATA,
+    )
+
+
+def test_task2_hardlink_same_object_is_blocking_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"same-object"
+    bundle = _task2_bundle(
+        _task2_item("IMAGE-001", "sources/a.png", data),
+        _task2_item("IMAGE-002", "sources/b.png", data),
+    )
+    adapter = _FakeCustodyAdapter(
+        {
+            "sources/a.png": _fake_file(data, volume_serial=7, file_index=99),
+            "sources/b.png": _fake_file(data, volume_serial=7, file_index=99),
+        }
+    )
+    evidence = _task2_inspect(monkeypatch, adapter, bundle)
+    first, second = evidence["items"]
+    assert first["file_object_identity_token"] == second["file_object_identity_token"]
+    assert first["path_binding_sha256"] != second["path_binding_sha256"]
+    assert {item["byte_custody_state"] for item in evidence["items"]} == {
+        "SAME_FILE_ALIAS"
+    }
+    assert evidence["alias_groups"][0]["group_type"] == "SAME_FILE_ALIAS"
+
+
+def test_task2_rename_keeps_object_token_but_changes_path_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"rename"
+    old_bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/old.png", data))
+    new_bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/new.png", data))
+    old = _task2_inspect(
+        monkeypatch,
+        _FakeCustodyAdapter(
+            {"sources/old.png": _fake_file(data, volume_serial=4, file_index=8)}
+        ),
+        old_bundle,
+    )
+    new = _task2_inspect(
+        monkeypatch,
+        _FakeCustodyAdapter(
+            {"sources/new.png": _fake_file(data, volume_serial=4, file_index=8)}
+        ),
+        new_bundle,
+    )
+    assert old["items"][0]["file_object_identity_token"] == new["items"][0][
+        "file_object_identity_token"
+    ]
+    assert old["items"][0]["path_binding_sha256"] != new["items"][0][
+        "path_binding_sha256"
+    ]
+
+
+def test_task2_copy_equal_bytes_has_distinct_objects_and_duplicate_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"copied-bytes"
+    bundle = _task2_bundle(
+        _task2_item("IMAGE-001", "sources/a.png", data),
+        _task2_item("IMAGE-002", "sources/b.png", data),
+    )
+    evidence = _task2_inspect(
+        monkeypatch,
+        _FakeCustodyAdapter(
+            {
+                "sources/a.png": _fake_file(data, volume_serial=7, file_index=10),
+                "sources/b.png": _fake_file(data, volume_serial=7, file_index=11),
+            }
+        ),
+        bundle,
+    )
+    assert len({item["observed_sha256"] for item in evidence["items"]}) == 1
+    assert len({item["file_object_identity_token"] for item in evidence["items"]}) == 2
+    assert {item["byte_custody_state"] for item in evidence["items"]} == {
+        "DUPLICATE_BYTES"
+    }
+    assert evidence["alias_groups"][0]["group_type"] == "DUPLICATE_BYTES"
+
+
+def test_task2_same_path_equal_byte_replacement_stales_prior_custody(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = _PNG_1X1
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    initial_adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)}
+    )
+    initial = _task2_inspect(monkeypatch, initial_adapter, bundle)
+    custody = _png_downstream_custody(initial)
+    replacement_adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=11)}
+    )
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        lambda: replacement_adapter,
+        raising=False,
+    )
+    with pytest.raises(SourceIntegrityError, match="CUSTODY_STALE|IDENTITY"):
+        _source_integrity_task2.require_source_custody_match(
+            approved_root_id="ROOT-SYNTHETIC",
+            approved_root_revision="ROOT-REV-1",
+            approved_root=_TASK2_ROOT,
+            identity_key=_TASK2_KEY,
+            identity_key_revision="KEY-REV-1",
+            policy_limits=dict(_TASK2_LIMITS),
+            source_bundle=bundle,
+            custody=custody,
+        )
+
+
+@pytest.mark.parametrize(
+    ("root_revision", "key_revision", "match"),
+    [
+        ("ROOT-REV-2", "KEY-REV-1", "ROOT|CUSTODY_STALE"),
+        ("ROOT-REV-1", "KEY-REV-2", "KEY|CUSTODY_STALE"),
+    ],
+)
+def test_task2_root_or_key_revision_drift_invalidates_custody(
+    monkeypatch: pytest.MonkeyPatch,
+    root_revision: str,
+    key_revision: str,
+    match: str,
+) -> None:
+    data = _PNG_1X1
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)}
+    )
+    initial = _task2_inspect(monkeypatch, adapter, bundle)
+    custody = _png_downstream_custody(initial)
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        lambda: adapter,
+        raising=False,
+    )
+    with pytest.raises(SourceIntegrityError, match=match):
+        _source_integrity_task2.require_source_custody_match(
+            approved_root_id="ROOT-SYNTHETIC",
+            approved_root_revision=root_revision,
+            approved_root=_TASK2_ROOT,
+            identity_key=_TASK2_KEY,
+            identity_key_revision=key_revision,
+            policy_limits=dict(_TASK2_LIMITS),
+            source_bundle=bundle,
+            custody=custody,
+        )
+
+
+def test_task2_hmac_domains_and_unrelated_keys_are_separate(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"domain"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)}
+    )
+    first = _task2_inspect(monkeypatch, adapter, bundle)
+    second = _task2_inspect(monkeypatch, adapter, bundle, key=b"unrelated-server-key")
+    item = first["items"][0]
+    assert item["file_object_identity_token"] != item["path_binding_sha256"]
+    assert item["file_object_identity_token"] != second["items"][0][
+        "file_object_identity_token"
+    ]
+    assert item["path_binding_sha256"] != second["items"][0]["path_binding_sha256"]
+
+
+def test_task2_artifacts_and_errors_do_not_expose_raw_identity_or_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"privacy"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=123456, file_index=987654)}
+    )
+    evidence = _task2_inspect(monkeypatch, adapter, bundle, key=b"TOP-SECRET-KEY")
+    rendered = repr(evidence)
+    assert r"C:\approved" not in rendered
+    assert "123456" not in rendered
+    assert "987654" not in rendered
+    assert "TOP-SECRET-KEY" not in rendered
+    assert "volume_serial" not in rendered
+    assert "file_id" not in rendered
+
+    raw = OSError(r"C:\secret\drawing.png volume=123456 handle=99 TOP-SECRET-KEY")
+    bad_adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=1, file_index=2)},
+        raw_error=raw,
+    )
+    with pytest.raises(SourceIntegrityError) as exc_info:
+        _task2_inspect(monkeypatch, bad_adapter, bundle)
+    message = str(exc_info.value)
+    assert "secret" not in message.lower()
+    assert "123456" not in message
+    assert "TOP-SECRET-KEY" not in message
+
+
+def test_task2_final_handle_outside_root_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"escape"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {
+            "sources/a.png": _fake_file(
+                data,
+                volume_serial=7,
+                file_index=10,
+                final_path=r"C:\outside\a.png",
+            )
+        }
+    )
+    with pytest.raises(SourceIntegrityError, match="FINAL_PATH_OUTSIDE_ROOT"):
+        _task2_inspect(monkeypatch, adapter, bundle)
+
+
+def test_task2_reparse_evidence_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"reparse"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)},
+        reparse_paths={"sources/a.png"},
+    )
+    with pytest.raises(SourceIntegrityError, match="REPARSE_POINT"):
+        _task2_inspect(monkeypatch, adapter, bundle)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"file_index": 11},
+        {"size": 999},
+        {"final_path": r"C:\approved\sources\renamed.png"},
+    ],
+)
+def test_task2_identity_path_or_size_change_during_read_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, override: dict[str, object]
+) -> None:
+    data = b"race"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)},
+        after_overrides={"sources/a.png": override},
+    )
+    with pytest.raises(SourceIntegrityError, match="CHANGED_DURING_READ|IDENTITY_CHANGED"):
+        _task2_inspect(monkeypatch, adapter, bundle)
+
+
+def test_task2_final_reopen_detects_replacement_race(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"reopen-race"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)},
+        reopen_overrides={"sources/a.png": {"file_index": 12}},
+    )
+    with pytest.raises(SourceIntegrityError, match="IDENTITY_CHANGED|REPLACED"):
+        _task2_inspect(monkeypatch, adapter, bundle)
+
+
+def test_task2_final_path_evidence_unavailable_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"unavailable"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)},
+        raw_error=OSError("GetFinalPathNameByHandleW failed raw=5"),
+    )
+    with pytest.raises(SourceIntegrityError, match="EVIDENCE_UNAVAILABLE"):
+        _task2_inspect(monkeypatch, adapter, bundle)
+
+
+def test_task2_unsupported_platform_has_no_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"unsupported"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+
+    def unavailable() -> object:
+        raise SourceIntegrityError("WINDOWS_HANDLE_EVIDENCE_UNAVAILABLE")
+
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        unavailable,
+        raising=False,
+    )
+    with pytest.raises(SourceIntegrityError, match="WINDOWS_HANDLE_EVIDENCE_UNAVAILABLE"):
+        _source_integrity_task2.inspect_source_bundle(
+            approved_root_id="ROOT-SYNTHETIC",
+            approved_root_revision="ROOT-REV-1",
+            approved_root=_TASK2_ROOT,
+            identity_key=_TASK2_KEY,
+            identity_key_revision="KEY-REV-1",
+            policy_limits=dict(_TASK2_LIMITS),
+            source_bundle=bundle,
+        )
+
+
+def test_task2_does_not_fabricate_media_or_ready_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"no-media-parser"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    evidence = _task2_inspect(
+        monkeypatch,
+        _FakeCustodyAdapter(
+            {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)}
+        ),
+        bundle,
+    )
+    assert "status" not in evidence
+    assert "observed_media_type" not in evidence["items"][0]
+    assert "media_metadata" not in evidence["items"][0]
+    assert evidence["items"][0]["byte_custody_state"] == "VERIFIED_BYTES"
+
+
+def test_task2_policy_limits_are_closed_and_server_owned(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"limits"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)}
+    )
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        lambda: adapter,
+        raising=False,
+    )
+    for bad_limits in (
+        {},
+        {**_TASK2_LIMITS, "unknown": 1},
+        {**_TASK2_LIMITS, "hash_chunk_size": True},
+        {**_TASK2_LIMITS, "max_file_bytes": -1},
+    ):
+        with pytest.raises(SourceIntegrityError, match="POLICY_LIMITS"):
+            _source_integrity_task2.inspect_source_bundle(
+                approved_root_id="ROOT-SYNTHETIC",
+                approved_root_revision="ROOT-REV-1",
+                approved_root=_TASK2_ROOT,
+                identity_key=_TASK2_KEY,
+                identity_key_revision="KEY-REV-1",
+                policy_limits=bad_limits,
+                source_bundle=bundle,
+            )
+
+
+# --- R1C Task 2 consolidated remediation matrix ---
+
+
+def test_task2_win32_adapter_declares_explicit_abi_prototypes() -> None:
+    source = inspect.getsource(_source_integrity_task2._WindowsHandleAdapter.__init__)
+    for name in (
+        "CreateFileW",
+        "GetFileAttributesW",
+        "GetFinalPathNameByHandleW",
+        "GetFileInformationByHandle",
+        "GetFileInformationByHandleEx",
+        "SetFilePointerEx",
+        "ReadFile",
+        "CloseHandle",
+    ):
+        assert f"{name}.argtypes" in source, f"missing explicit argtypes for {name}"
+        assert f"{name}.restype" in source, f"missing explicit restype for {name}"
+    assert "CreateFileW.restype = wintypes.HANDLE" in source
+    assert "GetFileAttributesW.restype = wintypes.DWORD" in source
+
+
+def test_task2_win32_source_open_does_not_grant_write_share() -> None:
+    source = inspect.getsource(_source_integrity_task2._WindowsHandleAdapter._create)
+    assert "_FILE_SHARE_WRITE" not in source
+    assert "_FILE_SHARE_READ | self._FILE_SHARE_DELETE" in source
+
+
+def test_task2_uses_opened_handle_file_id_info_identity() -> None:
+    source = inspect.getsource(_source_integrity_task2._WindowsHandleAdapter.snapshot)
+    assert "GetFileInformationByHandleEx" in source
+    assert "_FILE_ID_INFO_CLASS" in source
+    assert "file_id" in source
+    assert "nFileIndexHigh" not in source
+    assert "nFileIndexLow" not in source
+
+
+class _MutateAtHashBoundaryAdapter(_FakeCustodyAdapter):
+    def __init__(self, *args: object, replacement: bytes, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.replacement = replacement
+        self.mutated = False
+        self.mutation_blocked = False
+
+    def read(self, handle: _FakeHandle, size: int) -> bytes:
+        result = super().read(handle, size)
+        if not result and handle.key != "<root>" and not self.mutated:
+            if self.custody_open > 0:
+                self.mutation_blocked = True
+                raise SourceIntegrityError("WRITE_SHARING_DENIED")
+            self.files[handle.key]["data"] = self.replacement
+            self.mutated = True
+        return result
+
+
+def test_task2_same_object_same_size_mutation_after_hash_cannot_silently_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = b"AAAA"
+    mutated = b"BBBB"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", original))
+    adapter = _MutateAtHashBoundaryAdapter(
+        {"sources/a.png": _fake_file(original, volume_serial=7, file_index=10)},
+        replacement=mutated,
+    )
+    with pytest.raises(SourceIntegrityError, match="WRITE_SHARING_DENIED"):
+        _task2_inspect(monkeypatch, adapter, bundle)
+    assert adapter.mutation_blocked is True
+    assert adapter.mutated is False
+
+
+@pytest.mark.parametrize(
+    ("scope", "field", "mutated_value"),
+    [
+        ("root", "bundle_id", "BUNDLE-TAMPERED"),
+        ("root", "run_id", "RUN-TAMPERED"),
+        ("item", "kind", "PDF"),
+        ("item", "role", "OVERALL"),
+        ("item", "declared_media_type", "image/jpeg"),
+        ("item", "page_ids", ["PAGE-TAMPERED"]),
+        ("item", "region_ids", ["REGION-TAMPERED"]),
+    ],
+)
+def test_task2_require_match_cross_binds_r1a_declarations(
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str,
+    field: str,
+    mutated_value: object,
+) -> None:
+    data = _PNG_1X1
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)}
+    )
+    evidence = _task2_inspect(monkeypatch, adapter, bundle)
+    custody = _png_downstream_custody(evidence)
+    if scope == "root":
+        custody[field] = mutated_value
+    else:
+        custody["items"][0][field] = mutated_value
+        if field == "declared_media_type":
+            custody["items"][0]["observed_media_type"] = mutated_value
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        lambda: adapter,
+        raising=False,
+    )
+    with pytest.raises(SourceIntegrityError, match="CUSTODY_STALE_DECLARATION"):
+        _source_integrity_task2.require_source_custody_match(
+            approved_root_id="ROOT-SYNTHETIC",
+            approved_root_revision="ROOT-REV-1",
+            approved_root=_TASK2_ROOT,
+            identity_key=_TASK2_KEY,
+            identity_key_revision="KEY-REV-1",
+            policy_limits=dict(_TASK2_LIMITS),
+            source_bundle=bundle,
+            custody=custody,
+        )
+
+
+def test_task2_test_fixture_requires_explicit_downstream_parser_facts() -> None:
+    function_names = {
+        node.name
+        for node in ast.walk(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "_task2_custody_from_evidence" not in function_names
+    signature = inspect.signature(_truthful_downstream_custody_fixture)
+    assert "observed_media_type" in signature.parameters
+    assert "media_metadata" in signature.parameters
+    assert signature.parameters["observed_media_type"].default is inspect.Parameter.empty
+    assert signature.parameters["media_metadata"].default is inspect.Parameter.empty
+
+
+def test_task2_aggregate_budget_rejects_before_second_file_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = b"1111"
+    second = b"2222"
+    bundle = _task2_bundle(
+        _task2_item("IMAGE-001", "sources/a.png", first),
+        _task2_item("IMAGE-002", "sources/b.png", second),
+    )
+    adapter = _FakeCustodyAdapter(
+        {
+            "sources/a.png": _fake_file(first, volume_serial=7, file_index=10),
+            "sources/b.png": _fake_file(second, volume_serial=7, file_index=11),
+        }
+    )
+    limits = dict(_TASK2_LIMITS)
+    limits.update(max_file_bytes=4, max_total_bytes=6, hash_chunk_size=2)
+    with pytest.raises(SourceIntegrityError, match="RESOURCE_LIMIT"):
+        _task2_inspect(monkeypatch, adapter, bundle, policy_limits=limits)
+    assert adapter.read_counts.get("sources/b.png", 0) == 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-native custody evidence")
+def test_task2_windows_native_adapter_opens_hashes_reopens_and_denies_write(
+    tmp_path: Path,
+) -> None:
+    data = b"native-windows-custody"
+    source_path = tmp_path / "source.bin"
+    source_path.write_bytes(data)
+    adapter = _source_integrity_task2._WindowsHandleAdapter()
+    with adapter.open_root(tmp_path, max_final_path_chars=32768) as root_handle:
+        with adapter.open_source(
+            root_handle,
+            "source.bin",
+            max_final_path_chars=32768,
+        ) as source_handle:
+            before = adapter.snapshot(source_handle, max_final_path_chars=32768)
+            digest, size = _source_integrity_task2._stream_handle_sha256(
+                adapter,
+                source_handle,
+                chunk_size=4,
+                max_file_bytes=1024,
+            )
+            assert digest == hashlib.sha256(data).hexdigest()
+            assert size == len(data)
+            writer = adapter._kernel32.CreateFileW(
+                str(source_path),
+                0x40000000,
+                adapter._FILE_SHARE_READ | adapter._FILE_SHARE_DELETE,
+                None,
+                adapter._OPEN_EXISTING,
+                0,
+                None,
+            )
+            writer_value = __import__("ctypes").cast(
+                writer, __import__("ctypes").c_void_p
+            ).value
+            assert writer_value in {None, adapter._invalid_handle}
+            with adapter.reopen_source(
+                root_handle,
+                "source.bin",
+                max_final_path_chars=32768,
+            ) as reopened_handle:
+                reopened = adapter.snapshot(reopened_handle, max_final_path_chars=32768)
+                assert _source_integrity_task2._snapshot_identity(reopened) == (
+                    _source_integrity_task2._snapshot_identity(before)
+                )
