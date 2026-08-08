@@ -1326,3 +1326,79 @@ __all__ = [
 
 if __name__ == "__main__":
     raise SystemExit(_child_main())
+
+
+# Task-5 remediation: provider observation provenance is the Task-3 issued
+# process handle plus the Task-3 control channel. Caller-supplied boundary
+# methods are not evidence and are never used for provider observation/work.
+def _task5_exchange_child_control(
+    handle: object,
+    request: AdapterRequest,
+    *,
+    attestation: bool,
+) -> object:
+    outbound = request
+    if attestation:
+        if request.operation not in _ATTESTED_OPERATIONS:
+            _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+        outbound = replace(
+            request,
+            operation=f"{_ATTESTATION_OPERATION_PREFIX}{request.operation}",
+            input_payload=None,
+            cancelled=False,
+        )
+    try:
+        response = exchange_worker_control(handle, _request_to_wire(outbound))  # type: ignore[arg-type]
+    except WorkerProcessError:
+        _fail("WORKER_SDK_ATTESTATION_GAP" if attestation else "WORKER_PROVIDER_FAILED")
+    if not isinstance(response, Mapping):
+        _fail("WORKER_SDK_ATTESTATION_GAP" if attestation else "WORKER_PROVIDER_RESPONSE_INVALID")
+    worker_error = response.get("_worker_error")
+    if worker_error is not None:
+        if not isinstance(worker_error, str) or worker_error not in _CHILD_ERROR_CODES:
+            _fail("WORKER_SDK_ATTESTATION_GAP" if attestation else "WORKER_PROVIDER_FAILED")
+        _fail(worker_error)
+    return response
+
+
+def _task5_secure_invoke_child(
+    process_boundary: WorkerProcessBoundary,
+    handle: object,
+    request: AdapterRequest,
+) -> object:
+    del process_boundary
+    return _task5_exchange_child_control(handle, request, attestation=False)
+
+
+def _task5_secure_attest_provider_boundary(
+    process_boundary: WorkerProcessBoundary,
+    handle: object,
+    request: AdapterRequest,
+    *,
+    binding: BoundWorkerThread,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+) -> None:
+    del process_boundary
+    observed = _task5_exchange_child_control(handle, request, attestation=True)
+    if not isinstance(observed, Mapping):
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    try:
+        observed_fields = set(observed)
+    except Exception:
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    if not _PROVIDER_ATTESTATION_FIELDS.issubset(observed_fields):
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    try:
+        validate_provider_effective_attestation(
+            observed,
+            binding=binding,
+            authority_context=authority_context,
+            worker_context=worker_context,
+        )
+    except VisionHandoffError:
+        _fail("WORKER_AUTHORITY_MISMATCH")
+
+
+_invoke_child = _task5_secure_invoke_child
+_attest_provider_boundary = _task5_secure_attest_provider_boundary
