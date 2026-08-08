@@ -999,18 +999,12 @@ def test_remediation_round3_stale_weakref_cleanup_cannot_revoke_later_same_id_re
 
     monkeypatch.setattr(process_owner, "id", lambda _handle: 9001, raising=False)
     first_api = _FakeProcessApi()
-    first_api.query_results = [(4101,), ()]
     first = _launch_fake(tmp_path / "first", api=first_api)
     second_api = _FakeProcessApi()
     second_api.query_results = [(4101,), ()]
     second = _launch_fake(tmp_path / "second", api=second_api)
     first_ref = weakref.ref(first)
 
-    cleanup_worker_process(
-        first,
-        _clock=_FakeClock(0.0, 0.1),
-        _sleep=lambda _: None,
-    )
     del first
     gc.collect()
     assert first_ref() is None
