@@ -779,8 +779,6 @@ def _attest_provider_boundary(
 ) -> None:
     attest = getattr(process_boundary, "attest", None)
     if not callable(attest):
-        # Accepted Task-4 injected test boundaries predate Task 5. The concrete
-        # runtime boundary always exposes attestation and therefore fails closed.
         if isinstance(process_boundary, Task3ProcessBoundary):
             _fail("WORKER_SDK_ATTESTATION_GAP")
         return
@@ -1402,3 +1400,113 @@ def _task5_secure_attest_provider_boundary(
 
 _invoke_child = _task5_secure_invoke_child
 _attest_provider_boundary = _task5_secure_attest_provider_boundary
+
+
+# Task-5 Round-2 remediation. Canonical child identity is derived from this
+# accepted module, never asserted by a caller boundary or child response.
+def _task5_round2_canonical_launch_identity() -> tuple[Path, tuple[str, ...]]:
+    executable = Path(sys.executable).resolve()
+    repo_root = str(Path(__file__).resolve().parents[1])
+    child_code = (
+        "import sys;"
+        f"sys.path.insert(0,{repo_root!r});"
+        "from agent_lib.codex_worker import _child_main;"
+        "raise SystemExit(_child_main())"
+    )
+    return executable, ("-c", child_code)
+
+
+def _task5_round2_is_canonical_boundary(
+    process_boundary: WorkerProcessBoundary,
+) -> bool:
+    if type(process_boundary) is not Task3ProcessBoundary:
+        return False
+    executable, argv = _task5_round2_canonical_launch_identity()
+    return (
+        process_boundary._executable == executable
+        and process_boundary._argv == argv
+    )
+
+
+_task5_round1_open_codex_worker = _open_codex_worker
+
+
+def _task5_round2_open_codex_worker(
+    *,
+    operation: str,
+    handoff: ValidatedVisionHandoff,
+    binding: BoundWorkerThread,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+    adapter: WorkerAdapter,
+    process_boundary: WorkerProcessBoundary,
+    timeout_seconds: float,
+    now: datetime | None,
+) -> CodexWorkerSession:
+    if type(process_boundary) is Task3ProcessBoundary and not _task5_round2_is_canonical_boundary(
+        process_boundary
+    ):
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    return _task5_round1_open_codex_worker(
+        operation=operation,
+        handoff=handoff,
+        binding=binding,
+        authority_context=authority_context,
+        worker_context=worker_context,
+        adapter=adapter,
+        process_boundary=process_boundary,
+        timeout_seconds=timeout_seconds,
+        now=now,
+    )
+
+
+_task5_round1_attest_provider_boundary = _attest_provider_boundary
+
+
+def _task5_round2_secure_attest_provider_boundary(
+    process_boundary: WorkerProcessBoundary,
+    handle: object,
+    request: AdapterRequest,
+    *,
+    binding: BoundWorkerThread,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+) -> None:
+    if not _task5_round2_is_canonical_boundary(process_boundary):
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    _task5_round1_attest_provider_boundary(
+        process_boundary,
+        handle,
+        request,
+        binding=binding,
+        authority_context=authority_context,
+        worker_context=worker_context,
+    )
+
+
+def _task5_round2_cleanup_evidence(
+    process_boundary: WorkerProcessBoundary,
+    handle: object,
+) -> tuple[WorkerCleanupResult | None, str | None]:
+    del process_boundary
+    try:
+        result = cleanup_worker_process(handle)  # type: ignore[arg-type]
+    except Exception:
+        return None, "WORKER_CLEANUP_FAILED"
+    if not isinstance(result, WorkerCleanupResult):
+        return None, "WORKER_CLEANUP_EVIDENCE_INVALID"
+    if (
+        result.status == "CLEANUP_SUCCEEDED"
+        and result.success is True
+        and result.promotion_safe is True
+        and result.survivor_pids == ()
+        and result.survivor_count == 0
+        and result.error_code is None
+    ):
+        return result, None
+    return result, "WORKER_CLEANUP_FAILED"
+
+
+_open_codex_worker = _task5_round2_open_codex_worker
+_attest_provider_boundary = _task5_round2_secure_attest_provider_boundary
+_cleanup_evidence = _task5_round2_cleanup_evidence
