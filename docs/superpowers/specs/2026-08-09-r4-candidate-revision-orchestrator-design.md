@@ -7,145 +7,125 @@
 - Exact planning base: `b217ebfd597260d7b59badc3ffbcfbe7b1139754`
 - Planning branch: `planning/issue-133-r4-candidate-revision-orchestrator`
 - Planning date: `2026-08-09`
-- This document is planning/design only. It authorizes no runtime implementation, AutoCAD operation, private/customer CAD access, acceptance, promotion, publication, or merge.
+- Planning only. No runtime implementation, live AutoCAD operation, private/customer CAD access, acceptance, promotion, publication, or merge authority is granted here.
 
-R4 runtime remains **BLOCKED** until all of the following are true:
+R4 runtime remains **BLOCKED** until R1, R2 runtime, and R3 runtime are accepted/merged and Master PO performs a fresh post-R3 rebaseline on exact current `main`.
 
-1. R1 Source Bundle/Fusion is accepted and merged;
-2. R2 Base CAD Adapter runtime is accepted and merged;
-3. R3 Component/View Registry runtime is accepted and merged;
-4. Master PO performs a fresh post-R3 rebaseline against exact current `main`;
-5. Master PO explicitly issues bounded R4 runtime work with an exact base, branch, allowlist, and reviewer topology.
-
-PR #129 is planning-only and held DRAFT. Moving R3 Issue #128 is also planning-only. Neither is an accepted runtime API for this design. Any R2/R3 concept named below is a **semantic seam requirement**, not a claim that a symbol or field currently exists.
+PR #129 is planning-only and held DRAFT. Moving R3 Issue #128 is planning-only. Neither is treated as an accepted runtime contract. Any R2/R3 concept below is a semantic seam requirement whose exact accepted symbol/field must be resolved by the post-R3 rebaseline.
 
 ## 1. Decision summary
 
-R4 will be one thin **Candidate Revision Orchestrator** in `cad_agent` that creates deterministic immutable candidate-revision records from already validated upstream evidence and candidate artifact identities.
+R4 is one thin **Candidate Revision Orchestrator** in `cad_agent`.
 
-The selected architecture separates five concepts that must never be collapsed:
+It owns deterministic immutable candidate-revision lineage and a separate non-authoritative selection-for-review binding. It does not own CAD generation/mutation, a component registry, visual or engineering approval, promotion, publication, or another manifest/revision database.
+
+The selected lifecycle is:
 
 ```text
-mutable candidate workspace
-    -> sealed candidate revision
-    -> selected candidate for downstream review
+mutable disposable candidate workspace
+    -> SEALED_CANDIDATE revision
+    -> SELECTED_FOR_REVIEW binding
     -> accepted candidate (external authority)
     -> published/current production revision (R7 authority)
 ```
 
 The governing rule is:
 
-> R4 may create immutable candidate lineage and bind an explicit selection-for-review. R4 may not make a candidate accepted, published, or production-current.
+> R4 may seal immutable candidate lineage and bind an explicit candidate selection for downstream review. R4 may never make that candidate accepted, production-current, release-eligible, or published.
 
-R4 does not parse CAD, generate DXF, mutate AutoCAD, execute repair, issue approval, produce a visual/engineering verdict, publish files, or own a second manifest/checkpoint/revision database.
-
-The durable owner remains the existing `cad_agent.manifest` lifecycle. R4 core returns closed JSON-compatible records; a separately bounded integration task may bind immutable revision references and selection history through that existing manifest owner.
+Durable R4 references, when added, live only under the existing `cad_agent.manifest` / PDF manifest lifecycle.
 
 ## 2. Why R4 is genuinely missing
 
-The accepted repository reuse inventory classifies `candidate-revision-synchronization` as `NEW_MISSING_CAPABILITY`.
+The accepted reuse inventory classifies `candidate-revision-synchronization` as `NEW_MISSING_CAPABILITY`.
 
-Current capabilities already provide:
+Already present:
 
-- atomic staged run manifests and checkpoint/resume;
-- source and artifact SHA-256 checks;
+- atomic run manifests/checkpoints/resume;
+- exact artifact hashes;
 - native DXF generation;
-- Visual Supervisor evidence freshness through mutation hashes;
-- AutoCAD/File IPC mutation and review boundaries;
-- verified repair backup and rollback mechanics;
-- source/base-CAD provenance and, after R2/R3 acceptance, linked component/view evidence.
+- Visual Supervisor freshness/mutation evidence;
+- AutoCAD/File IPC execution boundaries;
+- verified repair backup/rollback;
+- R1 source/fusion identity;
+- after R2 acceptance, frozen Base-CAD provenance;
+- after R3 acceptance, linked logical component/view identity and impact projection.
 
-What is missing is one deterministic orchestration boundary that can say:
+Still missing is one deterministic orchestration boundary that proves:
 
 ```text
-this immutable candidate artifact
-came from this immutable parent/baseline
-using these exact upstream R1/R2/R3 identities
-with this exact component/view impact closure
-and this exact mutation/backup evidence
+this candidate artifact
+is an immutable child of this exact baseline/parent
+under these exact accepted R1/R2/R3 identities
+with this exact component/view impact/provenance scope
+and these exact mutation/recovery evidence hashes
 ```
 
-while preserving every prior candidate and keeping selection, acceptance, and publication as separate authority transitions.
+while preserving every predecessor and keeping selection, acceptance, current-production status, and publication separate.
 
-R4 fills only that orchestration gap.
+That is the only new R4 capability.
 
 ## 3. Alternatives considered
 
-### Option A — selected: stateless R4 core + existing-manifest integration
+### Option A — selected: stateless R4 core + existing manifest integration
 
-Create an adjacent pure-Python R4 core that validates upstream context, seals candidate revision records, evaluates freshness, and builds non-authoritative selection records. Persist only references/history through `cad_agent.manifest` in a separately bounded task.
+Add one adjacent pure-Python core for revision identity/lineage/freshness/selection. Add optional durable references later through `cad_agent.manifest` and `cad_agent.pdf` only.
 
-Benefits:
+This avoids a second store and keeps R4 testable with synthetic data and no AutoCAD.
 
-- no second revision store;
-- no overlap with R3 registry ownership;
-- no direct CAD/AutoCAD transport dependency;
-- deterministic offline RED/GREEN tests with synthetic records;
-- legacy manifests remain compatible when optional R4 fields are absent;
-- promotion remains cleanly downstream.
+### Option B — rejected: R4 database/CAS/revision directory
 
-This is the selected architecture.
-
-### Option B — rejected: dedicated R4 revision database or filesystem tree
-
-A new SQLite/JSONL/CAS/database directory containing candidate history would duplicate the existing manifest/checkpoint truth owner and violate the reuse-first roadmap.
+A new SQLite, JSONL, CAS, or filesystem revision tree would duplicate the existing manifest/checkpoint truth owner.
 
 Classification: `REJECT_DUPLICATE_OWNER`.
 
-### Option C — rejected: put revision lifecycle inside R3 registry
+### Option C — rejected: revision state inside R3 registry
 
-R3 owns logical component/view relationships. If R3 also minted candidate lineage, selected revisions, or rollback state, component/view identity would become coupled to revision policy and R4 would disappear as a distinct authority boundary.
+R3 owns logical component/view relationships. Candidate lineage/current/promotion state inside R3 would merge registry and revision authorities.
 
 Classification: `REJECT_DUPLICATE_OWNER`.
 
-### Option D — rejected: revision control inside AutoCAD/File IPC
+### Option D — rejected: revision truth inside AutoCAD/File IPC
 
-File IPC and the .NET plugin own transport/live CAD behavior. Making them the source of candidate lineage or current/published state would make runtime session state a revision truth store and would bind offline orchestration to AutoCAD availability.
+Runtime session state, drawings, or dispatcher payloads are not an acceptable revision store.
 
 Classification: `REJECT_DUPLICATE_OWNER`.
 
 ## 4. Reuse-first ownership map
 
-| Capability | Current/expected owner | R4 classification | R4 use |
+| Capability | Current/expected owner | Classification | R4 rule |
 |---|---|---|---|
-| Atomic run manifest/checkpoint/resume | `cad_agent/manifest.py`, `cad_agent/pdf.py`, existing CLI run/resume | `EXTEND_WITH_ADAPTER` | Optional R4 references and selection history are bound through this owner only. No second store. |
-| Canonical JSON SHA-256 | `cad_agent.drawing_contracts.canonical_json_sha256()` | `REUSE_AS_IS` | Sole canonical identity/hash owner for R4 records. |
-| Source/artifact file SHA-256 | existing `cad_agent.manifest.sha256_file()` and accepted upstream owners | `REUSE_AS_IS` | Used only at the existing owner boundary where a file must be verified. R4 core consumes hashes and does not reopen CAD. |
-| R1 Source Bundle/Fusion identity | final accepted R1 owner after merge | `EXTEND_WITH_ADAPTER` after rebaseline | R4 records accepted upstream identity transitively/directly as resolved after R3. It does not re-fuse sources. |
-| R2 frozen Base-CAD reuse evidence | final accepted R2 owner after runtime acceptance | `EXTEND_WITH_ADAPTER` after rebaseline | When reused components exist, R4 binds the accepted R2 handoff identity/source revision without re-extraction. |
-| R3 Component/View Registry | final accepted R3 owner after runtime acceptance | `REUSE_AS_IS` after rebaseline | Primary component/view impact/provenance seam. R4 never becomes a registry. |
-| Native DXF/entity generation | `dxf_builder_lib` | `REUSE_AS_IS` | Candidate artifact may come from this owner; R4 never writes geometry. |
-| AutoCAD/File IPC transport | `mcp_integration_lib` + AutoCAD .NET plugin | `REJECT_DUPLICATE_OWNER` | R4 core makes no transport call. Candidate mutation remains with accepted live owners. |
-| Visual evidence freshness | `cad_agent.visual_evidence`, `cad_agent.visual_contracts` | `REUSE_AS_IS` | R4 may bind a mutation/evidence hash. It does not issue visual PASS. |
-| Repair backup/rollback | `cad_agent.live.repair_live()` and existing repair owners | `REUSE_AS_IS` | R4 may bind verified backup/rollback evidence; it never copies/restores CAD itself. |
-| Approval/proposal/apply | existing approved `agent_lib`/server-owned authority gates | `REJECT_DUPLICATE_OWNER` | R4 may consume an externally authorized selection input if required; it never issues approval. |
-| Independent visual/engineering verdict | future R5 and existing evidence owners | `REJECT_DUPLICATE_OWNER` | R4 candidate state is never a PASS/verdict. |
-| Verified promotion/publication | future R7 + existing promotion boundary | `REJECT_DUPLICATE_OWNER` | R4 cannot mark accepted/current/published. |
-| Candidate revision synchronization | no complete owner | `NEW_MISSING_CAPABILITY` | This is the narrow capability R4 owns. |
+| Atomic manifest/checkpoint/resume | `cad_agent/manifest.py`, `cad_agent/pdf.py`, current run/resume | `EXTEND_WITH_ADAPTER` | Optional R4 refs/history live here only. |
+| Canonical JSON SHA-256 | `cad_agent.drawing_contracts.canonical_json_sha256()` | `REUSE_AS_IS` | Sole canonical R4 identity/hash owner. |
+| File SHA-256 | existing manifest/upstream hash owners | `REUSE_AS_IS` | Existing owner may verify files; R4 core consumes hashes and does not reopen CAD. |
+| R1 source/fusion identity | final accepted R1 | `EXTEND_WITH_ADAPTER` after rebaseline | Bind accepted digest transitively/directly; do not re-fuse. |
+| R2 frozen Base-CAD evidence | final accepted R2 | `EXTEND_WITH_ADAPTER` after rebaseline | Bind accepted handoff/source revision where reuse exists; do not re-extract. |
+| R3 Component/View Registry | final accepted R3 | `REUSE_AS_IS` after rebaseline | Bind registry/impact/provenance identity; never become a registry. |
+| Native CAD/DXF generation | `dxf_builder_lib` | `REUSE_AS_IS` | Candidate artifacts may originate here; no R4 geometry write. |
+| AutoCAD/File IPC transport | `mcp_integration_lib` + plugin | `REJECT_DUPLICATE_OWNER` | No R4 transport/runtime-session authority. |
+| Visual evidence freshness | `cad_agent.visual_evidence`, `visual_contracts` | `REUSE_AS_IS` | Bind evidence hash only; no visual PASS. |
+| Repair backup/rollback | `cad_agent.live` + repair owners | `REUSE_AS_IS` | Bind verified evidence only; no copy/restore/repair. |
+| Approval/proposal/apply | existing server/agent gates | `REJECT_DUPLICATE_OWNER` | R4 issues no approval. |
+| Independent verdict | future R5 / existing evidence owners | `REJECT_DUPLICATE_OWNER` | R4 emits no verdict. |
+| Repair execution | future R6 / existing executors | `REJECT_DUPLICATE_OWNER` | R4 executes no repair. |
+| Promotion/publication | future R7 / existing promotion gate | `REJECT_DUPLICATE_OWNER` | R4 never changes current/published state. |
+| Candidate revision synchronization | no complete owner | `NEW_MISSING_CAPABILITY` | Narrow R4 responsibility. |
 
 ## 5. Mandatory post-R3 rebaseline and non-invention rule
 
-Before the first R4 runtime Issue, Master PO must map each semantic dependency below to an **exact accepted symbol and field** on fresh current `main`.
+Before any R4 runtime branch exists, Master PO must map every semantic seam below to an exact accepted path/symbol/field/test on fresh `main`.
 
-### 5.1 Required final R1 seam
+### 5.1 Final R1 seam
 
-R4 needs only the final immutable source/fusion identity required to prove that the R3/R2 context is still bound to the accepted reconstruction input.
+Resolve the final validator/hash and exact immutable source/fusion digest transitively bound by R3. R4 must not re-interpret source conflicts already closed by accepted R1/R3 validation.
 
-R4 must not directly interpret R1 conflict internals when R3 already exposes a validated upstream binding.
+### 5.2 Final R2 seam
 
-The runtime rebaseline records:
-
-- exact validator/hash symbol(s);
-- exact accepted upstream digest(s) that R3 transitively binds;
-- exact stale/unresolved state that blocks a candidate.
-
-### 5.2 Required final R2 seam
-
-When a candidate contains reused Base-CAD components, accepted R2 must expose enough validated evidence to bind:
+When reused Base-CAD content exists, accepted R2/R3 must prove:
 
 ```text
 R2 handoff identity/hash
-base source identity
+base source ID
 base source SHA-256
 base source revision
 reused logical component membership
@@ -153,137 +133,112 @@ candidate/source provenance binding
 stale/re-extraction state
 ```
 
-If final R3 already validates and carries this R2 binding transitively, R4 reuses that proof rather than validating a duplicate parallel copy.
+If accepted R3 already validates/carries R2 transitively, R4 reuses that proof rather than constructing a parallel validator.
 
-No R2 planning-time API from PR #129 is assumed.
+No proposed API from PR #129 is assumed.
 
-### 5.3 Required final R3 seam
+### 5.3 Final R3 seam
 
-Accepted R3 must expose enough validated data to obtain, without geometry parsing:
+Accepted R3 must expose enough validated evidence to obtain without CAD parsing:
 
 ```text
 registry snapshot identity/hash
-candidate drawing identity/hash or accepted candidate binding
+candidate drawing/binding identity
 stable logical component IDs
 stable logical view IDs
 component/view provenance references
-linked-view/component impact closure for an intended change
-accepted upstream R1/R2 bindings
-stale/foreign candidate detection
+linked component/view/layout impact closure
+upstream R1/R2 binding
+stale/foreign candidate refusal
 ```
 
-R4 also requires a deterministic way to bind a component/view identity in one registry snapshot to the same logical identity in a parent snapshot. This may be an accepted per-record digest, stable logical ID plus validated snapshot hash, or another final R3-owned canonical mechanism.
+R4 also requires an accepted deterministic mechanism for cross-snapshot logical correspondence: a per-record digest, stable logical ID plus validated snapshot identity, or the final R3 equivalent.
 
-R4 must not invent that mechanism if R3 does not provide it.
+If R3 cannot prove this, R4 stops rather than inventing component/view correspondence.
 
-### 5.4 Required current-baseline seam
+### 5.4 Current-baseline seam
 
-R4 needs one server-owned immutable **baseline revision reference** from the existing accepted manifest/promotion lifecycle containing at least:
+R4 requires one read-only server-owned baseline reference from the accepted manifest/promotion lifecycle containing at least:
 
 ```text
 baseline revision identity/hash
 baseline drawing SHA-256
-run/project identity sufficient to prevent cross-run rebinding
+run/project scope
 ```
 
-R4 does not create the production-current pointer. If no accepted owner can provide this reference after R3 merges, runtime stops rather than creating a second current-revision store.
+R4 does not create the production-current pointer. Missing baseline ownership is a rebaseline failure, not permission for a new store.
 
-### 5.5 Rebaseline failure state
+### 5.5 Rebaseline failure
 
-Any material gap above returns:
+Any missing/materially inconsistent seam returns exactly:
 
 ```text
 R4 REBASELINE REQUIRED
 ```
 
-The first R4 runtime Issue is not widened to patch R1, R2, R3, manifest, transport, verdict, or publisher ownership.
+No R1/R2/R3/manifest/transport/publisher patch is implicitly authorized.
 
 ## 6. R4 responsibility boundary
 
 R4 owns only:
 
-1. validation of an already accepted R1/R2/R3/current-baseline context through accepted owner seams;
+1. accepted-context validation through Gate-0 mapped owner APIs;
 2. deterministic candidate-revision identity;
-3. immutable parent/ancestor lineage;
-4. binding of candidate artifact hashes to exact component/view impact/provenance identity;
-5. freshness/staleness evaluation against current accepted upstream identities;
-6. construction of a non-authoritative selected-candidate-for-review record from an explicit caller/server selection;
-7. supersession/selection rollback semantics that preserve all old candidate evidence;
-8. deterministic hashes for the R4 records through the existing canonical owner;
-9. optional manifest integration through the existing manifest/checkpoint lifecycle.
+3. immutable baseline/parent lineage;
+4. binding candidate artifact hashes to exact R3 component/view impact/provenance identity;
+5. freshness/staleness evaluation;
+6. binding an explicit caller/server candidate choice into `SELECTED_FOR_REVIEW`;
+7. supersession/logical-selection rollback that preserves all old evidence;
+8. R4 record hashes through the existing canonical owner;
+9. optional durable references under the existing manifest owner.
 
-R4 does **not** own:
+R4 does not own source fusion, Base-CAD extraction, the Component/View Registry, geometry solving, DXF writing, AutoCAD transport, CAD mutation, repair, backup copying, verdict, approval, acceptance, production-current promotion, publication, or a database/CAS/revision store.
 
-- source fusion or source custody;
-- Base-CAD eligibility/extraction;
-- component/view registry construction;
-- Primitive/Semantic geometry or solving;
-- DXF/native CAD generation;
-- AutoCAD/File IPC transport;
-- candidate CAD mutation execution;
-- repair execution or backup copying;
-- visual/engineering verdict;
-- approval issuance;
-- candidate acceptance;
-- production-current promotion;
-- publication;
-- a database, CAS, revision directory, or second manifest/checkpoint store.
-
-## 7. State model: candidate is not current, accepted, or published
-
-R4 uses explicit authority separation rather than one overloaded `status` field.
+## 7. State and authority model
 
 ### 7.1 Mutable candidate workspace
 
-A workspace is a disposable CAD target owned by an existing generator/repair/synchronization/AutoCAD executor.
-
-It may change while work is in progress.
-
-It is **not** a revision and is never durable revision truth.
+A workspace is a disposable target owned by an existing generator, synchronization, repair, or AutoCAD executor. It may mutate and is not durable revision truth.
 
 ### 7.2 Sealed candidate revision
 
-A workspace becomes an R4 candidate revision only after the accepted owner supplies all required immutable artifact and evidence hashes.
-
-The sealed R4 state is exactly:
+After accepted owners provide complete immutable candidate artifact/evidence hashes and a fresh R3 registry binding, R4 may seal exactly:
 
 ```text
 SEALED_CANDIDATE
 ```
 
-A sealed candidate revision is immutable. Any later CAD mutation requires a new disposable workspace and a new sealed candidate revision.
+A sealed revision is immutable. Any later CAD change requires a new workspace and child candidate revision.
 
-### 7.3 Selected candidate for review
+### 7.3 Selected candidate
 
-R4 may bind an explicit exact candidate hash into a separate selection record:
+R4 may bind exactly:
 
 ```text
 SELECTED_FOR_REVIEW
 ```
 
-This means only “this is the candidate downstream review should inspect.” It does not mean visually correct, engineer-approved, accepted, current, or published.
+The exact candidate hash is explicitly supplied by caller/server authority. R4 validates/binds; it does not rank candidates or infer a winner from quality evidence.
 
-R4 must never choose a candidate by inventing a quality score or by converting evidence into approval.
+### 7.4 Accepted state
 
-### 7.4 Accepted candidate
+Acceptance is external R5/engineer/approval authority. `ACCEPTED` is not an R4 state.
 
-Acceptance belongs to downstream visual/engineering/approval authority. R4 does not emit `ACCEPTED` state and rejects attempts to inject acceptance authority into an R4 candidate or selection record.
+### 7.5 Published/current production state
 
-### 7.5 Published/current production revision
+R7/existing promotion gates own production-current/publication. R4 cannot set `published`, `production_current`, release eligibility, or equivalent state.
 
-Promotion/publication belongs to R7 Verified Publisher and existing promotion gates. R4 cannot set production-current, published, release, or authoritative-eligible state.
+Current/baseline production identity is read-only R4 input.
 
-The current production/baseline revision is read-only input to R4.
+## 8. Candidate revision record
 
-## 8. Candidate revision artifact
-
-The initial closed R4 runtime artifact is conceptually:
+The initial closed artifact is:
 
 ```text
 candidate-revision-1.0
 ```
 
-The root contains these concepts:
+Exact root concepts:
 
 ```text
 schema_version
@@ -291,7 +246,7 @@ revision_id
 state = SEALED_CANDIDATE
 run_id
 baseline_revision
-parent_candidate_revision
+parent_candidate_revision_sha256
 upstream_bindings
 candidate_artifacts
 change_scope
@@ -301,65 +256,53 @@ mutation_evidence
 candidate_revision_sha256
 ```
 
-### 8.1 Baseline revision reference
+### 8.1 Baseline revision
 
-`baseline_revision` is a read-only reference supplied from the accepted current-baseline owner after rebaseline. It contains only the minimum exact identity required to reject cross-run/current drift.
+A minimal read-only reference supplied by the Gate-0 accepted baseline owner. It carries only exact identity/hash/scope needed to reject baseline drift.
 
-R4 does not update it.
+### 8.2 Parent candidate
 
-### 8.2 Parent candidate reference
+`parent_candidate_revision_sha256` is null for a first child of the baseline and otherwise binds one complete prior sealed R4 candidate SHA-256.
 
-`parent_candidate_revision` is null for the first candidate descended directly from the baseline. A later candidate may point to one prior sealed candidate revision.
-
-The parent reference binds the full parent candidate revision SHA-256, not a mutable ordinal such as `v2` or a filename.
-
-Cycles, missing parents, cross-run parents, and self-parenting fail closed.
+Self-parenting, cycles, foreign run/project, and baseline mismatch fail closed.
 
 ### 8.3 Upstream bindings
 
-`upstream_bindings` records only accepted identity hashes needed to prove the revision's reconstruction context, including final R3 registry snapshot identity and, where final accepted architecture requires, R1/R2 upstream digests.
-
-Absolute paths, source bytes, timestamps, approval state, and transport/session identifiers are not revision identity.
+Closed accepted identity digests required by Gate 0, including the R3 registry hash and, where applicable, accepted R1/R2 digests. No paths/source bytes/session IDs/approval state.
 
 ### 8.4 Candidate artifacts
 
-`candidate_artifacts` is a closed sorted set of immutable artifact references supplied by accepted owners. The first R4 slice requires at least the candidate drawing SHA-256 and the exact R3 registry/candidate binding identity needed to locate its logical content.
+Closed sorted immutable artifact identity records. At minimum the candidate drawing hash and accepted R3 candidate/registry binding required by the post-R3 issue.
 
-Additional evidence hashes may be present only when the post-R3 runtime Issue explicitly closes the field set.
-
-R4 core does not open or hash the drawing path itself.
+R4 core never opens/hashes CAD itself.
 
 ### 8.5 Change scope
 
-`change_scope` is derived from accepted R3 graph/impact evidence, never from R4 geometry inspection.
-
-It binds deterministic sorted identities for:
+Derived from accepted R3 impact evidence, never from R4 geometry inspection:
 
 ```text
 changed component IDs
 impacted component IDs
 impacted view IDs
 impacted layout bindings
-impact-closure evidence hash
+impact-closure evidence SHA-256
 ```
 
-A caller may not silently omit a linked impacted view proven by R3.
+A caller cannot omit an R3-linked impact.
 
 ### 8.6 Component/view lineage
 
-R4 records references, not a second registry.
-
-For each affected logical component/view, the lineage binds:
+References only, never a copied registry:
 
 ```text
 logical ID
 parent registry snapshot identity
 current registry snapshot identity
-accepted R3-owned binding identity sufficient to prove same/different logical object
+R3-owned binding identity proving correspondence
 change class
 ```
 
-Initial closed change classes are:
+Closed change classes:
 
 ```text
 UNCHANGED
@@ -368,101 +311,71 @@ NEW
 REMOVED
 ```
 
-R4 does not infer these classes from CAD geometry. They must be consistent with accepted R3 identity/impact evidence.
-
-If R3 cannot prove a logical cross-snapshot relationship, R4 fails closed rather than inventing correspondence.
+R4 checks consistency with accepted R3 evidence. It never infers correspondence from CAD geometry, handles, filenames, or naming similarity.
 
 ### 8.7 Mutation evidence
 
-R4 may bind exact hashes/identities of already produced evidence such as:
+Only hashes/identities already emitted by accepted owners, e.g. latest mutation evidence, build/review evidence, and verified backup/rollback evidence when applicable.
 
-```text
-latest mutation identity/hash
-build/review evidence hash
-verified backup/rollback evidence hash when applicable
-```
+No mutation, backup, verdict, or approval is performed by R4.
 
-The field is evidence only. R4 does not perform the mutation, review, backup, rollback, or approval.
+## 9. Deterministic revision identity
 
-## 9. Deterministic revision identity and checksum
+R4 uses `cad_agent.drawing_contracts.canonical_json_sha256()` only.
 
-R4 uses only `cad_agent.drawing_contracts.canonical_json_sha256()` for canonical JSON identities.
-
-### 9.1 Revision ID
-
-The deterministic revision ID is derived from identity material containing:
+`revision_id` is derived from normalized identity material containing:
 
 ```text
 schema/version domain
 run identity
-baseline revision identity
-parent candidate revision SHA-256
+baseline identity
+parent candidate SHA-256
 accepted upstream binding hashes
 candidate artifact hashes
 change-scope hash
 component/view lineage identities
-mutation evidence hashes required by the closed contract
+required mutation-evidence hashes
 ```
 
-The runtime implementation may encode the full canonical digest as a prefixed identifier, for example:
+The first runtime may encode the complete digest as:
 
 ```text
 candidate:<64-lowercase-hex-digest>
 ```
 
-No truncated hash is required by the first design.
+`candidate_revision_sha256` is the canonical hash of the complete normalized record excluding its own checksum field.
 
-### 9.2 Candidate revision SHA-256
+Identity must exclude wall-clock time, timestamped backup filenames, path traversal order, private paths, AutoCAD PID/HWND/session, random UUIDs, reviewer/approval identity, verdict, publication state, and caller list order.
 
-`candidate_revision_sha256` is the canonical hash of the complete normalized revision record with the checksum field excluded from its own input.
+A volatile CAD handle is never logical revision identity unless final accepted R3 explicitly includes it in a candidate snapshot binding digest; R4 never promotes a raw handle into logical component identity.
 
-### 9.3 Forbidden identity inputs
+## 10. Immutable lineage invariants
 
-Revision identity must not depend on:
-
-- wall-clock time;
-- backup filenames;
-- filesystem traversal order;
-- absolute/private paths;
-- AutoCAD HWND/PID/session IDs;
-- random UUIDs;
-- volatile entity handles unless the accepted R3 candidate binding explicitly makes a handle part of the snapshot artifact identity;
-- approval/reviewer name;
-- visual verdict;
-- publication state;
-- caller list order.
-
-Timestamped backup filenames in the existing live repair owner are operational recovery artifacts, not R4 revision IDs.
-
-## 10. Immutable lineage rules
-
-Every sealed candidate revision satisfies:
+Every candidate binds one exact:
 
 ```text
-one exact run/project scope
-one exact baseline revision
-zero or one exact parent candidate revision
-one exact current R3 registry snapshot
-one exact candidate artifact set
-one exact change/impact scope
+run/project scope
+baseline revision
+zero-or-one parent candidate
+current R3 registry snapshot
+candidate artifact set
+change/impact scope
 ```
 
 Rules:
 
-- a sealed revision cannot be rebound to a different registry, baseline, R2 source revision, candidate drawing hash, or parent;
-- parent candidate artifacts remain intact;
-- a revision cannot point to a descendant or itself;
-- parent and child must use the same run/project scope;
-- changing one candidate artifact hash creates a different revision identity;
-- changing only list order must not change identity;
-- a candidate derived from stale upstream evidence is blocked, not silently rebound;
-- supersession never deletes a predecessor.
+- no revision rebind to another registry/baseline/R2 source revision/drawing/parent;
+- parent remains intact;
+- no cycles/self-parent;
+- parent/child scope must match;
+- artifact hash change creates a distinct revision;
+- caller order changes do not;
+- stale upstream creates a new candidate cycle after upstream refresh; old candidate is never rewritten;
+- supersession never deletes predecessor evidence.
 
-## 11. Stale upstream behavior
+## 11. Freshness model
 
-R4 evaluates freshness at every candidate creation, selection, resume, and downstream handoff boundary.
-
-Closed initial freshness states:
+Closed first states:
 
 ```text
 CURRENT
@@ -471,49 +384,37 @@ STALE_BASELINE
 FOREIGN_SCOPE
 ```
 
-### `CURRENT`
+R4 checks freshness on candidate creation/validation, selection, resume binding, and downstream handoff.
 
-All accepted R1/R2/R3/current-baseline identities match the sealed revision context required for the operation.
+`STALE_UPSTREAM` means accepted R3 or transitively required R1/R2 identity changed. The old candidate remains historical evidence but cannot silently operate under the new context.
 
-### `STALE_UPSTREAM`
+`STALE_BASELINE` means the server-owned baseline reference changed. The candidate is not automatically rebased.
 
-The final accepted R3 registry or transitively bound R1/R2 identity changed after this candidate was sealed.
+`FOREIGN_SCOPE` means a run/project/baseline/candidate belongs elsewhere.
 
-The existing candidate remains valid historical evidence but cannot be silently selected as if it described the new upstream context.
+Only `CURRENT` may be selected for new downstream review.
 
-### `STALE_BASELINE`
+## 12. Base-CAD revision changes
 
-The server-owned current baseline reference changed. The candidate does not become the child of the new baseline automatically.
+If accepted R2/R3 reports changed Base-CAD source SHA/revision:
 
-### `FOREIGN_SCOPE`
+1. preserve the old R4 candidate unchanged;
+2. classify it stale against new upstream context;
+3. do not overwrite reused components;
+4. do not call extraction from R4;
+5. require a new accepted R2 extraction/workspace;
+6. require a new accepted R3 registry snapshot;
+7. seal a new R4 candidate only after those owners complete.
 
-Run/project/baseline/candidate identity belongs to another scope.
+## 13. Candidate selection record
 
-All non-`CURRENT` states fail closed for new selection/promotion handoff. R4 never rewrites old revisions to fix freshness.
-
-## 12. Base-CAD source revision changes
-
-If reused components are present and accepted R2/R3 evidence reports that the exact Base-CAD source SHA/revision changed:
-
-1. the old candidate revision remains immutable and historically correct for the source revision it used;
-2. R4 marks it stale for the new upstream context;
-3. R4 does not overwrite reused components;
-4. R4 does not call extraction;
-5. a new approved R2 extraction/workspace must be produced by the existing owner;
-6. R3 must produce a fresh accepted registry snapshot;
-7. only then may R4 seal a new candidate revision.
-
-This preserves the frozen-copy rule from the accepted exact-base architecture.
-
-## 13. Selection-for-review record
-
-Selection is a separate closed artifact, conceptually:
+Closed artifact:
 
 ```text
 candidate-selection-1.0
 ```
 
-It contains:
+Exact concepts:
 
 ```text
 schema_version
@@ -530,51 +431,32 @@ candidate_selection_sha256
 
 Rules:
 
-- the selected revision must be one of the explicitly supplied eligible sealed candidates;
-- all candidate records must be `CURRENT` against the exact selection context;
-- candidate and baseline scopes must match;
-- caller order does not affect normalized eligible set;
-- R4 does not rank candidates;
-- no evidence score can be converted into acceptance;
-- no approval, visual PASS, engineer PASS, publish, or production-current field is allowed;
-- selecting candidate B does not delete candidate A;
-- a later selection may supersede the selection pointer while preserving both selection records/history.
+- selected candidate must be among explicitly supplied eligible sealed candidates;
+- all candidates participating in one selection are exact-scope records;
+- selected candidate must be `CURRENT`;
+- candidate list order does not matter;
+- R4 performs no quality ranking;
+- no acceptance/PASS/publish/current-production field;
+- selecting B never deletes A;
+- a later selection may point back to A while preserving prior selection records.
 
-The caller/server chooses the exact candidate hash. R4 only validates and binds the choice.
+## 14. Rollback and supersession
 
-## 14. Rollback and supersession semantics
+### 14.1 Workspace/CAD rollback
 
-R4 has two different rollback concepts and must not conflate them.
+Existing execution owners retain CAD backup/recovery. `cad_agent.live.repair_live()` already verifies copies/hashes, second review, save conditions, and backup reopening. R4 only binds the resulting evidence digest.
 
-### 14.1 Candidate-workspace mutation rollback
+### 14.2 Logical revision/selection rollback
 
-This belongs to existing execution owners such as `cad_agent.live.repair_live()` and accepted AutoCAD/S3 mutation boundaries.
+Logical rollback means a **new selection record** points downstream review to a previously sealed candidate. It never edits/deletes candidate revisions or prior selection records.
 
-R4 may bind verified backup/rollback evidence after the fact.
+A rejected/failed candidate remains historical evidence. A repair creates a new disposable workspace; after accepted owners finish, R4 seals a new child candidate.
 
-R4 never copies, restores, opens, saves, closes, or reopens CAD files.
+## 15. Existing manifest/checkpoint integration
 
-### 14.2 Revision/selection rollback
+R4 core has no writer/store.
 
-This is orchestration only.
-
-A failed or rejected candidate remains as immutable evidence. To return downstream review to a prior candidate, the manifest selection pointer may be changed through the existing manifest owner while preserving:
-
-- every candidate revision reference;
-- every prior selection record/reference;
-- prior hashes;
-- parent lineage;
-- failure/rejection evidence owned downstream.
-
-No candidate revision artifact is edited or deleted.
-
-A later candidate supersedes a predecessor by lineage/reference, not by overwriting its files or record.
-
-## 15. Manifest/checkpoint integration without a second revision store
-
-R4 core owns no persistence mechanism.
-
-A separately bounded integration task may extend `cad_agent.manifest` with optional closed references using the same compatibility principles as the accepted SourceBundle binding:
+A separate bounded task may extend `cad_agent.manifest` with optional fields:
 
 ```text
 candidate_revision_refs[]
@@ -582,154 +464,103 @@ candidate_selection_refs[]
 selected_candidate_revision_sha256
 ```
 
-Exact field names are proposed R4-owned manifest integration names and may be finalized only by the runtime Issue after the post-R3 rebaseline.
+Manifest owner rules:
 
-Required behavior:
-
-- `cad_agent.manifest` remains the sole validator/binder for durable references;
+- `cad_agent.manifest` owns validation/binding;
 - `write_manifest()` remains the atomic writer;
-- existing run/resume and PDF run/resume remain authoritative;
-- absent R4 fields remain absent for legacy manifests;
-- no migration rewrites old manifests;
-- adding the same revision reference is idempotent;
-- conflicting same-ID/different-hash binding fails closed;
-- selection can reference only an already bound revision;
-- moving a selected-candidate pointer does not remove historical candidate/selection refs;
-- R4 integration may not change `release_profile`, `authoritative_release_eligible`, acceptance, or publication fields;
-- a malformed optional R4 reference blocks resume before stage work rather than being ignored.
+- `read_manifest()` and, where applicable, `read_pdf_manifest()` validate the same manifest-owned reference semantics;
+- absent R4 fields remain absent in legacy manifests;
+- same reference rebind is idempotent;
+- same ID/different hash fails closed;
+- selection points only to a bound candidate;
+- moving selection pointer preserves all candidate/selection references;
+- no change to `release_profile`, `authoritative_release_eligible`, acceptance, production-current, or publication authority;
+- malformed optional R4 fields block resume before stage work.
 
-`cad_agent.pdf.read_pdf_manifest()` must use the same manifest-owned validators if PDF manifests can carry the optional R4 references after final rebaseline. R4 must not create a PDF-specific revision owner.
+PDF does not get a second revision validator.
 
-## 16. Existing backup and rollback capability reuse
+## 16. Candidate-only mutation boundary
 
-`cad_agent.live` already provides verified repair backup semantics:
-
-```text
-hash original DXF/evidence
-copy backup
-re-hash source and backup
-refuse mutation when verification fails
-repair through existing executor
-second review
-save only on acceptable repair result
-otherwise close modified original without save and reopen verified backup
-```
-
-R4 reuses this as execution evidence.
-
-R4 must not duplicate:
-
-- backup naming;
-- `shutil.copy2` behavior;
-- document open/close/save logic;
-- AutoCAD recovery;
-- repair execution;
-- second review.
-
-An R4 candidate can bind the resulting report/evidence hash, but not reinterpret it as candidate acceptance.
-
-## 17. Candidate-only mutation boundary
-
-A source, exact Base-CAD source, accepted drawing, or production-current drawing is never an R4 mutation target.
-
-The allowed flow is:
+Allowed flow:
 
 ```text
 immutable current/baseline reference
-    -> existing owner creates a new disposable candidate workspace
-    -> existing authorized executor mutates only that workspace
-    -> existing owner emits artifact/evidence hashes
-    -> R3 emits a fresh registry/candidate binding
-    -> R4 seals an immutable candidate revision
+    -> existing owner creates disposable candidate workspace
+    -> existing authorized executor mutates only workspace
+    -> accepted owner emits artifact/evidence hashes
+    -> R3 emits fresh registry/candidate binding
+    -> R4 seals immutable candidate revision
 ```
 
-Any request to mutate an already sealed candidate revision must instead create a new workspace and child revision.
+R4 itself performs no CAD mutation.
 
-R4 itself performs no CAD mutation in the first runtime architecture.
+Source, exact Base-CAD source, accepted drawing, production-current drawing, and an already sealed candidate revision are never mutable R4 targets.
 
-## 18. Creation, selection, acceptance, and promotion authority
+## 17. Authority separation
 
 | Transition | Owner | R4 authority |
 |---|---|---|
-| Create disposable candidate workspace | existing DXF/R2/repair/AutoCAD execution owner | none |
-| Seal candidate revision identity/lineage | R4 | yes |
-| Select exact candidate for downstream review | caller/server chooses; R4 validates/binds | validation/binding only |
-| Visual/engineering acceptance | R5/existing engineer approval authority | none |
-| Repair execution | R6/existing repair executor | none |
-| Promote to production-current / publish | R7 Verified Publisher + existing promotion gate | none |
+| Create/mutate disposable workspace | existing DXF/R2/repair/AutoCAD owner | none |
+| Seal candidate revision | R4 | yes |
+| Select exact candidate for downstream review | caller/server chooses; R4 validates/binds | binding only |
+| Visual/engineering acceptance | R5/existing engineer authority | none |
+| Repair execution | R6/existing executor | none |
+| Promote/publish/current | R7/existing promotion gate | none |
 
-R4 validators reject any field or operation that attempts to make R4 an approval, verdict, repair, or publication owner.
+## 18. Compatibility with visual evidence
 
-## 19. Compatibility with existing visual evidence
+Existing visual evidence already binds to `latest_mutation_sha256` and fails on stale drawing/session state.
 
-Existing visual evidence binds read-only evidence to `latest_mutation_sha256` and rejects stale render/session state.
+R4 may bind its accepted mutation/evidence identity so R5 can verify evidence against an exact candidate revision SHA.
 
-R4 may include an accepted mutation/evidence identity in a candidate revision so downstream R5 can prove that evidence refers to the exact candidate.
+R4 does not call visual-verdict requirements to turn evidence into acceptance.
 
-R4 does not call `require_region_verified()`, convert a region status into candidate acceptance, or issue a visual verdict.
+## 19. Privacy
 
-The downstream direction is:
-
-```text
-R4 sealed candidate revision
-    -> R5 evidence/verdict bound to exact candidate revision SHA
-    -> R6 repair may create another candidate workspace/revision
-    -> R7 promotion only after accepted gates
-```
-
-## 20. Privacy and evidence minimization
-
-R4 artifacts and public errors must not contain:
+R4 artifacts/errors exclude:
 
 - absolute/private source paths;
-- raw customer content;
-- AutoCAD process/HWND/session identity;
-- HMAC/key material;
+- customer content/source bytes;
+- AutoCAD PID/HWND/session;
+- keys/secrets;
 - raw parser/transport exception text;
-- source bytes;
-- provider/model prompts;
+- prompts/provider content;
 - approval secrets.
 
-Where an accepted owner uses an absolute path operationally, R4 records only the accepted opaque/hash identity required by the revision contract.
+Operational paths remain inside their existing owner. R4 records only opaque/hash identity required by revision lineage.
 
-Synthetic first-runtime tests use generated mappings and disposable files only.
+## 20. Proposed R4 public API
 
-## 21. Proposed R4 public API
-
-The first R4 core runtime is proposed as one adjacent module:
+Preferred core paths:
 
 ```text
 cad_agent/candidate_revision.py
-```
-
-with a focused test owner:
-
-```text
 tests/test_cad_agent_candidate_revision.py
 ```
 
-Proposed public surface:
+Task-1 surface:
 
 ```python
 CANDIDATE_REVISION_SCHEMA_VERSION = "candidate-revision-1.0"
-CANDIDATE_SELECTION_SCHEMA_VERSION = "candidate-selection-1.0"
 
 class CandidateRevisionError(ValueError): ...
 
 def build_candidate_revision(
     *,
-    upstream_context: object,
+    registry: object,
+    base_cad_handoff: object | None,
     baseline_context: object,
     parent_candidate: object | None,
     candidate_artifacts: object,
-    change_scope: object,
+    change_impact: object,
     mutation_evidence: object,
 ) -> dict[str, object]: ...
 
 def validate_candidate_revision(
     payload: object,
     *,
-    upstream_context: object,
+    registry: object,
+    base_cad_handoff: object | None,
     baseline_context: object,
     parent_candidate: object | None = None,
 ) -> dict[str, object]: ...
@@ -737,7 +568,8 @@ def validate_candidate_revision(
 def candidate_revision_sha256(
     payload: object,
     *,
-    upstream_context: object,
+    registry: object,
+    base_cad_handoff: object | None,
     baseline_context: object,
     parent_candidate: object | None = None,
 ) -> str: ...
@@ -745,15 +577,23 @@ def candidate_revision_sha256(
 def evaluate_candidate_revision_freshness(
     *,
     revision: object,
-    upstream_context: object,
+    registry: object,
+    base_cad_handoff: object | None,
     baseline_context: object,
 ) -> dict[str, object]: ...
+```
+
+Task-2 adds:
+
+```python
+CANDIDATE_SELECTION_SCHEMA_VERSION = "candidate-selection-1.0"
 
 def build_candidate_selection(
     *,
     revisions: object,
     selected_revision_sha256: str,
-    upstream_context: object,
+    registry: object,
+    base_cad_handoff: object | None,
     baseline_context: object,
 ) -> dict[str, object]: ...
 
@@ -761,29 +601,26 @@ def validate_candidate_selection(
     payload: object,
     *,
     revisions: object,
-    upstream_context: object,
+    registry: object,
+    base_cad_handoff: object | None,
     baseline_context: object,
 ) -> dict[str, object]: ...
 ```
 
-`upstream_context` and `baseline_context` are R4 call-parameter names, not invented R1/R2/R3/current-store contracts. The future runtime Issue must map them to exact accepted validators/fields during Gate 0 before any code is written.
+`registry`, `base_cad_handoff`, and `baseline_context` are R4 call-parameter names, not claims about planning-time R2/R3 API names. Private normalizers must call only the exact accepted symbols resolved by Gate 0.
 
-The core module must remain pure orchestration: no filesystem, CAD parser, DXF builder, IPC, network, subprocess, model, approval, verdict, repair, publication, or database behavior.
+The core remains pure orchestration: no filesystem/CAD/DXF/IPC/network/subprocess/model/approval/verdict/repair/publication/database behavior.
 
-## 22. Proposed minimal runtime write-set
+## 21. Proposed minimal runtime write-set
 
-### R4 core Tasks 1–2
-
-Create/modify only:
+### Tasks 1–2 core
 
 ```text
 cad_agent/candidate_revision.py
 tests/test_cad_agent_candidate_revision.py
 ```
 
-### R4 manifest integration Task 3
-
-Only after core acceptance and a fresh overlap check:
+### Task 3 manifest integration
 
 ```text
 MODIFY cad_agent/manifest.py
@@ -791,188 +628,164 @@ MODIFY cad_agent/pdf.py
 MODIFY tests/test_cad_agent_candidate_revision.py
 ```
 
-No R4 production module modification is required merely to persist already validated references unless final current-main behavior proves otherwise.
+Task 3 does not modify the accepted R4 core unless Master PO issues a fresh write-set amendment.
 
-If a third production owner beyond `manifest.py`/`pdf.py` appears necessary for persistence, stop and rebaseline rather than adding a store or CLI workflow by convenience.
+No CLI or fourth production owner is presumed.
 
-## 23. Runtime task decomposition
+## 22. Runtime task decomposition
 
-The detailed implementation plan will split R4 into:
+1. **Candidate revision core** — deterministic identity, immutable lineage, upstream/candidate binding, stale/fail-closed behavior.
+2. **Selection and supersession** — explicit selection-for-review and logical rollback without deletion/overwrite.
+3. **Existing-manifest integration** — durable revision/selection references and selected-candidate pointer under existing manifest/PDF readers.
 
-1. **Candidate revision core** — deterministic identity, immutable lineage, accepted upstream/candidate binding, stale/fail-closed behavior;
-2. **Selection and supersession** — explicit selection-for-review, parent/child lineage, stale selection refusal, logical rollback without deleting prior evidence;
-3. **Existing-manifest integration** — optional durable revision/selection references and selected-candidate pointer under the existing manifest/PDF readers only.
+No task implements approval, verdict, repair, publisher, or AutoCAD live work.
 
-No task implements approval, verdict, repair execution, publisher behavior, or AutoCAD live work.
+## 23. RED-first adversarial matrix
 
-## 24. RED-first adversarial requirements
+### Determinism
 
-The runtime plan must prove meaningful RED before production edits for at least:
-
-### Identity/determinism
-
-- same semantic input in different caller order -> same revision ID/hash;
-- changed candidate drawing hash -> different revision;
-- changed registry snapshot -> different revision;
-- changed baseline/parent -> different revision;
-- changed impact closure -> different revision;
-- timestamp/path/UUID/session changes that are non-authoritative -> no identity change;
-- NaN/noncanonical upstream data rejected by accepted upstream owner;
+- same semantics/different caller order -> same revision ID/hash;
+- changed candidate drawing hash/registry/baseline/parent/impact -> changed identity;
+- non-authoritative path/timestamp/UUID/session change -> no identity change;
+- invalid/noncanonical upstream values fail through accepted owner;
 - unknown R4 fields fail closed.
 
-### Lineage
+### Lineage/staleness
 
-- self-parent rejected;
-- missing/foreign parent rejected;
-- cross-run parent rejected;
+- self/foreign/cross-run parent rejected;
 - stale baseline rejected;
 - stale R1/R2/R3 binding rejected;
 - child cannot rewrite parent;
-- prior candidate survives supersession.
+- predecessor survives supersession;
+- old stale candidate remains historical only.
 
 ### R2/R3 provenance
 
-- reused Base-CAD source SHA/revision mismatch -> stale/block;
-- component/view logical mismatch -> block;
-- omitted R3-linked impacted view -> block;
-- caller-forged component correspondence -> block;
-- candidate handle/path cannot replace R3 logical identity.
+- Base-CAD source SHA/revision mismatch -> stale/block;
+- component/view correspondence not proven by R3 -> block;
+- omitted linked impact -> block;
+- target CAD handle/path cannot replace R3 logical identity.
 
 ### State/authority
 
-- `SEALED_CANDIDATE` is never accepted/published/current;
-- attempt to inject approval/verdict/publish fields -> reject;
-- selection of unknown candidate -> reject;
-- selection of stale candidate -> reject;
-- R4 cannot rank candidates automatically;
-- moving selection preserves all candidate evidence;
-- rollback selection does not mutate CAD.
+- `SEALED_CANDIDATE` never accepted/current/published;
+- injected approval/verdict/publish fields rejected;
+- unknown/stale selection rejected;
+- no automatic candidate ranking;
+- logical selection rollback performs no CAD rollback.
 
-### Persistence
+### Manifest persistence
 
-- legacy manifests without R4 fields remain byte/behavior compatible when not rewritten;
-- optional references validate through manifest owner;
-- duplicate same reference is idempotent;
-- same revision ID/different hash conflicts;
-- selection pointer must target a bound candidate;
-- changing pointer preserves reference/history arrays;
-- malformed optional R4 field blocks resume;
-- PDF reader uses same manifest-owned validator;
-- no authoritative release/publish field changes.
+- legacy image/PDF manifests unchanged when R4 fields absent;
+- optional refs validate through manifest owner;
+- idempotent same reference;
+- same ID/different hash conflict;
+- selection must point to a bound candidate;
+- pointer movement preserves history refs;
+- malformed R4 ref blocks resume;
+- no release/acceptance/publication field changes.
 
 ### Ownership/privacy
 
-- no AutoCAD/File IPC call;
-- no parser/DXF writer import;
+- no AutoCAD/File IPC;
+- no CAD parser/DXF writer;
 - no backup implementation duplication;
-- no component registry creation;
+- no R3 registry creation;
 - no approval/verdict/publisher owner;
-- no private path/raw source leakage;
+- no path/private-source leakage;
 - no new dependency/store/schema directory.
 
-## 25. Verification model
+## 24. Verification model
 
-Every future R4 runtime task must run:
+Every runtime child task runs:
 
-- its exact focused RED/GREEN suite;
-- accepted final R1 tests named by Gate 0 where relevant;
-- accepted final R2 tests named by Gate 0 where relevant;
-- accepted final R3 tests named by Gate 0;
-- manifest/PDF run/resume regressions when Task 3 is involved;
-- existing backup/rollback tests when evidence bindings are involved, without live mutation;
+- exact focused RED/GREEN;
+- Gate-0 accepted R1/R2/R3 focused tests where relevant;
+- manifest/PDF run/resume regressions for Task 3;
+- existing backup/rollback regression tests when evidence bindings are affected, without live mutation;
 - Ruff on exact changed Python paths;
 - architecture/reuse ratchet;
 - `git diff --check`;
-- exact changed-file audit;
-- canonical `scripts/verify.ps1 -SkipAutoCADDotNet`;
+- exact changed-file audit from issuance base;
+- `scripts/verify.ps1 -SkipAutoCADDotNet`;
 - hosted `tests` and `reuse-declaration` on exact head/current-main synthetic;
-- independent authority/determinism reviewer;
-- independent integration/CI/write-set reviewer.
+- paired independent domain review;
+- independent integration/CI review.
 
-AutoCAD live/private-data gates remain `NOT RUN` unless a separately authorized local evidence Issue explicitly runs them. They are never promoted from `SKIP`/`NOT RUN` to `PASS`.
+AutoCAD/private-data states remain literal `NOT RUN`/`SKIP` unless separately authorized and actually executed.
 
-## 26. PASS / FAIL / SKIP / NOT RUN semantics
+## 25. PASS / FAIL / SKIP / NOT RUN
 
-| State | R4 meaning |
+| State | Meaning |
 |---|---|
-| `PASS` | The named check actually executed against the exact stated revision/head/evidence and satisfied all assertions. |
-| `FAIL` | The check executed and contradicted a required invariant. Progression is blocked. |
-| `SKIP` | An explicitly optional/gated probe was intentionally skipped under a declared prerequisite. It is not acceptance evidence. |
-| `NOT RUN` | A required live/private/environment operation was unavailable or not attempted. It is never treated as PASS. |
+| `PASS` | Exact check executed against stated head/evidence and met every assertion. |
+| `FAIL` | Exact check executed and contradicted an invariant; progression stops. |
+| `SKIP` | Explicitly optional/gated probe skipped under declared prerequisite; not acceptance evidence. |
+| `NOT RUN` | Required live/private/environment operation unavailable or unattempted; never promoted to PASS. |
 
-## 27. Dependency and overlap matrix
+## 26. Dependency and overlap matrix
 
-| Lane / owner | Relationship to R4 | R4 rule |
+| Lane/owner | Relationship | R4 rule |
 |---|---|---|
-| Active R1 Source Fusion | Upstream runtime dependency | R4 runtime cannot start until final R1 accepted/merged. No R1 path changes. |
-| PR #129 R2 planning | Planning input only; HOLD MERGE | Do not assume its proposed API. Final accepted R2 runtime seam is resolved post-R3. |
-| Issue #128 R3 planning | Moving planning input only | Do not assume its proposed API or paths are accepted. R4 records semantic seam requirements only. |
-| Final R2 runtime | Upstream evidence dependency where Base-CAD reuse exists | Consume accepted frozen provenance; no extraction/AutoCAD logic. |
-| Final R3 runtime | Immediate upstream dependency | Consume validated registry/impact identity read-only. No registry write. |
-| `cad_agent.manifest` / PDF lifecycle | Existing durable owner | Task 3 only after exact overlap check; no second store. |
-| Luna / AutoCAD local lane | Live operator authority | R4 core requires no live AutoCAD. No simultaneous session control. |
-| `dxf_builder_lib` | Candidate geometry producer | Read accepted artifact identity only; no write. |
-| `cad_agent.live` / repair owners | Backup/rollback executor | Bind evidence only; no duplicated repair/backup code. |
-| Future R5 | Consumer of exact sealed candidate revision | R5 verdict must bind R4 revision SHA; R4 cannot pre-emit verdict. |
-| Future R6 | May create a repaired candidate workspace | Repair produces evidence/workspace; R4 seals the resulting child revision. |
-| Future R7 | Promotion/publication owner | R7 may consume accepted candidate revision; R4 never sets current/published. |
+| Active/final R1 | upstream runtime dependency | R4 waits for accepted merge; no R1 writes. |
+| PR #129 R2 planning | planning input only/HOLD MERGE | no planning-time API assumption. |
+| Final R2 runtime | upstream evidence where Base-CAD reuse exists | accepted evidence read-only; no R2 writes. |
+| Moving #128 R3 planning | planning input only | no moving API assumption. |
+| Final R3 runtime | immediate upstream | accepted registry/impact read-only; no R3 write. |
+| manifest/PDF owner | Task 3 persistence | fresh overlap check before Task 3. |
+| Luna/AutoCAD local lane | live operator | R4 core has no live AutoCAD/session control. |
+| DXF builder | candidate artifact producer | read identity only. |
+| `cad_agent.live`/repair | backup/rollback executor | evidence only; no duplicate execution. |
+| Future R5 | consumer/verdict | R4 cannot pre-emit verdict. |
+| Future R6 | may create repaired workspace | R4 seals resulting child; no repair execution. |
+| Future R7 | promotion/publication | R4 never sets production-current/published. |
 
-## 28. Migration and rollback
+## 27. Migration and rollback
 
-### Planning PR
+Planning PR: no migration; reverting the two docs removes planning only.
 
-No runtime migration exists. Reverting the two planning docs removes only planning guidance.
+Core runtime: additive two-path module/test. Revert removes R4 core without changing existing owners.
 
-### Future R4 core
+Manifest integration: optional fields only; legacy manifests stay readable and are not rewritten on read. Revert removes bindings without deleting candidate artifacts.
 
-Migration is additive: add the adjacent R4 core/test without changing existing artifacts or stores.
+CAD rollback remains existing live-owner responsibility. R4 logical rollback is a new selection reference to a prior sealed candidate while preserving all prior revision/selection evidence.
 
-Rollback: remove/revert the R4 core. Existing R1/R2/R3, manifests, DXF, repair, Visual Supervisor, and AutoCAD workflows remain unchanged.
+## 28. STOP conditions
 
-### Future manifest integration
+Stop and report `R4 REBASELINE REQUIRED` if:
 
-Migration is optional fields only. Legacy manifests without R4 references remain valid and unchanged.
-
-Rollback removes the optional binding behavior. Existing manifests/checkpoints remain authoritative and candidate artifact files are not deleted by rollback.
-
-No destructive data migration is allowed in the first R4 sequence.
-
-## 29. STOP conditions
-
-Stop and report `R4 REBASELINE REQUIRED` rather than widening scope if any of these are true:
-
-- final accepted R1/R2/R3 symbols or identity semantics materially differ from the required seams;
-- R3 cannot provide deterministic logical component/view correspondence without R4 rebuilding a registry;
-- R2/Base-CAD provenance must be reopened or re-extracted by R4;
-- no accepted owner can provide the current/baseline revision identity required to reject drift;
-- candidate lineage would require a new database/CAS/revision directory;
-- manifest/checkpoint behavior cannot be extended compatibly;
-- an R4 task would need to modify R3 production merely for convenience;
-- AutoCAD/File IPC transport must be added to R4;
-- CAD parsing/DXF generation is required in R4;
-- R4 would need to execute repair or implement backup/restore;
-- a visual/engineering verdict is needed to build an R4 record;
-- R4 would need to issue approval;
-- R4 would need to set accepted, production-current, release-eligible, or published state;
+- final R1/R2/R3 semantics cannot supply the required immutable seam;
+- R3 cannot prove cross-snapshot logical correspondence;
+- no accepted baseline/current reference owner exists;
+- R4 must parse CAD/DXF or infer geometry correspondence;
+- R4 must call Base-CAD extraction;
+- R4 must modify R3 production for convenience;
+- R4 needs database/CAS/revision directory/second manifest;
+- R4 needs AutoCAD/File IPC;
+- R4 needs backup/restore or repair execution;
+- R4 needs approval issuance;
+- R4 needs visual/engineering PASS;
+- R4 needs accepted/current/published/release-eligible authority;
+- dependency/lock/workflow/schema-directory change appears necessary;
 - private/customer CAD is required for first runtime tests;
-- dependency/lock/workflow/schema-directory changes are required;
-- any accepted upstream test must be weakened/skipped to obtain GREEN;
-- any runtime task needs a path outside its exact issued allowlist.
+- accepted upstream tests must be weakened/skipped;
+- any child task needs a path outside its exact issued allowlist.
 
-## 30. Acceptance for this planning slice
+Do not solve a STOP by inventing an adapter that duplicates another owner.
 
-This planning task is acceptable only when:
+## 29. Planning acceptance
 
-- exactly the two Issue #133 planning documents are created;
-- the design references current accepted architecture/reuse owners instead of duplicating them;
-- PR #129 and moving R3 #128 remain explicitly non-authoritative planning inputs;
-- candidate/current/accepted/published states are separated;
-- candidate revision identity and lineage are deterministic and immutable;
-- manifest/checkpoint remains the sole durable owner;
-- backup/rollback is reused rather than reimplemented;
-- R2/R3 semantic seams and post-R3 rebaseline conditions are explicit;
-- the runtime plan is RED-first with bounded candidate write-sets;
-- no runtime/test/workflow/dependency/CAD/private-data change exists in this planning PR;
-- hosted tests/reuse/docs checks are GREEN on the exact final planning head/current-main synthetic;
-- the PR remains DRAFT;
-- writer stops repository writes after final hosted GREEN.
+This planning slice is complete only when:
+
+- exactly the two Issue #133 planning docs are changed;
+- candidate/current/accepted/published separation is explicit;
+- immutable deterministic candidate lineage is defined;
+- moving PR #129 / Issue #128 APIs remain non-authoritative;
+- post-R3 Gate 0 is explicit;
+- existing manifest/checkpoint remains sole durable owner;
+- existing backup/rollback is reused;
+- runtime write-sets and RED-first matrices are executable;
+- no runtime/test/workflow/dependency/CAD/private-data write exists in this planning PR;
+- hosted tests/reuse/docs checks are GREEN on exact final planning head/current-main synthetic;
+- PR remains DRAFT;
+- writer stops repository writes after hosted GREEN.
