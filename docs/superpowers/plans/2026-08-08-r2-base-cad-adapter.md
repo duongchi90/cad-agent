@@ -20,18 +20,25 @@
 - No component/view registry, revision store/current pointer, repair executor, visual/engineering verdict, publisher, OCR/model/provider call, CAD parser, DXF builder, new transport, new dispatcher, or new manifest/checkpoint store.
 - First runtime tests are synthetic only. No private/customer/accepted CAD and no live AutoCAD operation in hosted tests.
 - No schema-directory, dependency, lock, workflow, `agent_lib/**`, `cad_agent/source_fusion.py`, `mcp_integration_lib/**`, or `autocad_plugin/**` changes are presumed by this plan.
-- Each task starts with meaningful RED before production edits, ends in a normal forward commit, and keeps PASS / FAIL / SKIP / NOT RUN literal.
+- Each runtime child Issue supplies a fresh exact current-main SHA, creates one isolated branch from that SHA, and records it before the first test edit with:
+
+```powershell
+$env:R2_TASK_BASE_SHA = (git rev-parse HEAD).Trim()
+git rev-parse HEAD
+```
+
+- Every task starts with meaningful RED before production edits, ends in a normal forward commit, and keeps PASS / FAIL / SKIP / NOT RUN literal.
 - No amend, rebase, squash, force-push, or main-sync after a runtime branch is issued.
 
 ---
 
 ## Pre-issuance Gate: Fresh R1/S3 Rebaseline
 
-This is a mandatory read-only gate before Task 1 is issued; it creates no files.
+This gate is read-only and must complete before Task 1 is issued.
 
 - [ ] **Step 1: Verify final accepted R1 current-main identity**
 
-Record exact `main` SHA after the full R1 Source Bundle/Fusion Adapter merges. Confirm no active R1 writer remains on `cad_agent/source_fusion.py` or its tests.
+Record the exact `main` SHA after the complete R1 Source Bundle/Fusion Adapter merges. Confirm no active R1 writer remains on `cad_agent/source_fusion.py` or its tests.
 
 - [ ] **Step 2: Verify the final R1 seam**
 
@@ -48,11 +55,11 @@ require_source_fusion_match(
 ) -> None
 ```
 
-Confirm a reusable/ready fusion packet can be distinguished from a blocking unresolved packet without R2 interpreting conflict internals.
+Confirm a reusable/ready fusion packet is distinguishable from a blocking unresolved packet without R2 interpreting conflict internals.
 
 - [ ] **Step 3: Verify exact-base identity can be bound without reopening a path**
 
-Prove R2 can derive one exact-base item from the validated SourceBundle and accepted custody with:
+Prove R2 can derive exactly one base source from validated SourceBundle + accepted custody using:
 
 ```text
 kind = EXACT_BASE_CAD
@@ -67,7 +74,7 @@ If zero/multiple base sources require arbitration, or final R1 does not expose s
 
 - [ ] **Step 4: Verify S3A/S3B accepted APIs remain intact**
 
-Read-only verify:
+Read-only verify these exact owner seams:
 
 ```python
 mcp_integration_lib.exact_base_xref.validate_xref_inspection
@@ -81,7 +88,7 @@ Confirm S3B still owns approval equality, canonical path/root/alias policy, sour
 
 - [ ] **Step 5: Verify accepted S3B live evidence**
 
-Require all of:
+Require all four states:
 
 ```text
 S3B live inspection: PASS
@@ -136,54 +143,46 @@ tests/test_cad_agent_base_cad_adapter.py
 - `.github/workflows/**`
 - private/source/accepted CAD
 
-Any need for a third path is a STOP condition for the current runtime issue, not implicit permission to widen it.
+Any need for a third path is a STOP condition for the current runtime Issue, not implicit permission to widen it.
 
 ---
 
 ## Task 1: Bind Final R1 Fusion to One Eligible Live Exact Base
 
-**Conceptual deliverable:** one closed deterministic `base-cad-binding-1.0` record proving that the accepted R1 source/custody/fusion identity and one fresh S3A-compatible S3B live inspection describe the same eligible exact base.
+**Conceptual output:** one closed deterministic `base-cad-binding-1.0` record proving that accepted R1 source/custody/fusion identity and one fresh S3A-compatible S3B live inspection describe the same eligible exact base.
 
 **Files:**
 
-- Create: `tests/test_cad_agent_base_cad_adapter.py`
-- Create after meaningful RED: `cad_agent/base_cad_adapter.py`
+- Create first: `tests/test_cad_agent_base_cad_adapter.py`
+- Create only after meaningful RED: `cad_agent/base_cad_adapter.py`
 - Modify: none
 
-**Interfaces:**
+**Interfaces consumed:**
 
-- Consumes:
-  - `cad_agent.source_bundle.validate_source_bundle()`
-  - `cad_agent.source_bundle.source_bundle_sha256()`
-  - `cad_agent.source_integrity.validate_source_custody()`
-  - `cad_agent.source_integrity.source_custody_sha256()`
-  - final accepted `cad_agent.source_fusion.validate_source_fusion_packet()`
-  - final accepted `cad_agent.source_fusion.source_fusion_sha256()`
-  - final accepted `cad_agent.source_fusion.require_source_fusion_match()`
-  - `mcp_integration_lib.exact_base_xref.validate_xref_inspection()`
-  - `mcp_integration_lib.exact_base_xref.TRANSFORM_POLICY`
-  - `cad_agent.drawing_contracts.canonical_json_sha256()`
-- Produces:
-
-```python
-BASE_CAD_BINDING_SCHEMA_VERSION = "base-cad-binding-1.0"
-
-class BaseCadAdapterError(ValueError): ...
-
-def build_base_cad_binding(
-    *,
-    source_bundle: object,
-    custody: object,
-    fusion: object,
-    live_inspection: object,
-) -> dict[str, object]: ...
-
-def validate_base_cad_binding(payload: object) -> dict[str, object]: ...
-
-def base_cad_binding_sha256(payload: object) -> str: ...
+```text
+cad_agent.source_bundle.validate_source_bundle
+cad_agent.source_bundle.source_bundle_sha256
+cad_agent.source_integrity.validate_source_custody
+cad_agent.source_integrity.source_custody_sha256
+cad_agent.source_fusion.validate_source_fusion_packet
+cad_agent.source_fusion.source_fusion_sha256
+cad_agent.source_fusion.require_source_fusion_match
+mcp_integration_lib.exact_base_xref.validate_xref_inspection
+mcp_integration_lib.exact_base_xref.TRANSFORM_POLICY
+cad_agent.drawing_contracts.canonical_json_sha256
 ```
 
-Normalized binding fields are exactly:
+**Public API produced:**
+
+```text
+BASE_CAD_BINDING_SCHEMA_VERSION = "base-cad-binding-1.0"
+BaseCadAdapterError(ValueError)
+build_base_cad_binding(*, source_bundle, custody, fusion, live_inspection) -> dict[str, object]
+validate_base_cad_binding(payload) -> dict[str, object]
+base_cad_binding_sha256(payload) -> str
+```
+
+The normalized binding has exactly:
 
 ```text
 schema_version
@@ -200,15 +199,13 @@ transform_policy
 state = READY_FOR_SELECTION
 ```
 
-- [ ] **Step 1: Add Task-1 test imports and a complete synthetic fixture set**
+- [ ] **Step 1: Create the test file with complete synthetic R1/S3 fixtures**
 
-Create `tests/test_cad_agent_base_cad_adapter.py` with synthetic R1 bundle/custody/fusion fixtures matching the final accepted contracts and an S3A inspection fixture with one exact base, vehicle/model PASS, all five required critical dimensions PASS, `changed=false`, equal DBMOD, read-only Xref, and two inspected BLOCK components.
+Use current accepted R1 fixture shapes after the pre-issuance rebaseline. The S3 inspection fixture must contain one exact base, vehicle/model PASS, all five required critical dimensions PASS, `changed=false`, equal DBMOD, read-only Xref, and two inspected BLOCK components.
 
-Import the planned Task-1 APIs only from `cad_agent.base_cad_adapter`.
+- [ ] **Step 2: Add the Task-1 RED matrix**
 
-- [ ] **Step 2: Add RED tests for the exact R1/S3 binding matrix**
-
-Cover at minimum:
+Cover all of:
 
 ```text
 valid READY R1 + eligible S3 inspection -> READY_FOR_SELECTION
@@ -226,36 +223,24 @@ changed=true or DBMOD drift -> fail closed through S3A validator
 missing vehicle/model/critical dimension -> fail closed through S3A validator
 relative_path spelling alone cannot authorize a mismatched source hash
 unknown binding field -> validation failure
-absolute path/private path fields are absent from binding and error strings
+absolute/private path fields are absent from binding and sanitized errors
 ```
 
 - [ ] **Step 3: Add deterministic identity tests**
 
-Assert:
+The test must build the same binding twice, permute inspected component order, and require identical normalized output/hash. Changing source SHA, revision, inspection ID, target drawing SHA, or eligible component membership must change the binding hash.
 
-```python
-left = build_base_cad_binding(...)
-right = build_base_cad_binding(...)
-assert left == right
-assert base_cad_binding_sha256(left) == base_cad_binding_sha256(right)
-assert left["eligible_component_ids"] == sorted(left["eligible_component_ids"])
-```
-
-Permute input component order without changing semantics and require the same normalized binding/hash. Change source SHA, revision, inspection ID, target drawing SHA, or eligible component membership and require a different binding hash.
-
-- [ ] **Step 4: Run focused RED before creating production code**
+- [ ] **Step 4: Run focused RED before production creation**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_base_cad_adapter.py -q -p no:cacheprovider
 ```
 
-Expected: meaningful collection/import failure because `cad_agent.base_cad_adapter` does not exist. Record command, exact failure count, and reason.
+Expected: collection/import failure because `cad_agent.base_cad_adapter` is absent. Record exact failure count and reason.
 
-- [ ] **Step 5: Implement the smallest closed binding owner**
+- [ ] **Step 5: Implement only the Task-1 owner**
 
-Create `cad_agent/base_cad_adapter.py` and implement the Task-1 APIs only.
-
-The builder must:
+The builder must execute the accepted owner sequence:
 
 ```python
 normalized_bundle = validate_source_bundle(source_bundle)
@@ -269,27 +254,15 @@ require_source_fusion_match(
 normalized_inspection = validate_xref_inspection(live_inspection)
 ```
 
-Then require:
+Then it must require exactly one `EXACT_BASE_CAD/BASE_CAD` item; find the corresponding custody item by `source_id`; bind SourceBundle declared SHA to custody observed SHA and S3 inspection SHA; bind run IDs; require S3A eligibility; take `revision` only from validated inspection; sort component IDs; never reopen a path; validate the closed record before return; hash only through `canonical_json_sha256()`.
 
-- custody/fusion are reusable according to the final accepted R1 public contract;
-- exactly one SourceBundle item has `kind == "EXACT_BASE_CAD"` and `role == "BASE_CAD"`;
-- the corresponding custody item's `observed_sha256` agrees with the SourceBundle SHA;
-- inspection `run_id`, `base_source.source_id`, and `base_source.sha256` agree with R1;
-- inspection is eligible and already proves read-only/no-conflict/no-mutation conditions through S3A;
-- `base_source.revision` comes only from the validated S3 inspection;
-- no path string participates in authority checks;
-- component IDs are sorted and unique;
-- the binding is validated before return.
-
-Hash only validated normalized records with existing `canonical_json_sha256()`.
-
-- [ ] **Step 6: Run Task-1 focused GREEN**
+- [ ] **Step 6: Run focused GREEN**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_base_cad_adapter.py -q -p no:cacheprovider
 ```
 
-Expected: PASS, zero skips for the Task-1 synthetic suite.
+Expected: PASS with zero Task-1 skips.
 
 - [ ] **Step 7: Run focused reuse regressions**
 
@@ -303,104 +276,88 @@ Expected: PASS, zero skips for the Task-1 synthetic suite.
   -q -p no:cacheprovider
 ```
 
-Expected: PASS. Any failure in accepted R1/S3 behavior is a Task-1 blocker; do not weaken upstream tests.
+Any accepted R1/S3 regression failure blocks the task; upstream tests are not weakened.
 
-- [ ] **Step 8: Run static/architecture/diff gates**
+- [ ] **Step 8: Run Ruff, architecture, diff and exact write-set gates**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m ruff check cad_agent/base_cad_adapter.py tests/test_cad_agent_base_cad_adapter.py
 .\.venv-py311\Scripts\python.exe scripts/check_architecture_boundaries.py check --repo-root . --baseline contracts/reuse-integration/architecture-boundaries.json
 git diff --check
-git diff --name-only <TASK1_BASE>..HEAD
+git diff --name-only "$env:R2_TASK_BASE_SHA"..HEAD
 ```
 
-The final command must list exactly the two Task-1 CREATE paths.
+The path audit must list exactly:
 
-- [ ] **Step 9: Run canonical verifier supported by the runtime environment**
+```text
+cad_agent/base_cad_adapter.py
+tests/test_cad_agent_base_cad_adapter.py
+```
+
+- [ ] **Step 9: Run canonical verifier**
 
 ```powershell
 .\scripts\verify.ps1 -SkipAutoCADDotNet
 ```
 
-Record exact PASS/FAIL/SKIP/NOT RUN counts. AutoCAD live is not rerun by this hosted/offline task.
+Record literal PASS/FAIL/SKIP/NOT RUN counts. AutoCAD live is not rerun by this hosted/offline task.
 
-- [ ] **Step 10: Commit Task 1 normally**
+- [ ] **Step 10: Commit normally**
 
 ```powershell
 git add cad_agent/base_cad_adapter.py tests/test_cad_agent_base_cad_adapter.py
 git commit -m "feat: bind R1 fusion to eligible exact base"
 ```
 
-**Paired independent reviewer domains:** source-integrity/provenance/reuse authority reviewer + integration/CI/write-set reviewer.
+**Paired independent reviewer domains:** source-integrity/provenance/reuse authority + integration/CI/write-set/current-main synthetic.
 
-**Task-1 STOP conditions:** final R1 seam differs materially; third path required; source bytes/path must be reopened; S3A eligibility must be duplicated; multiple base-source arbitration is required; path strings would become authority; accepted R1/S3 test must be weakened; dependency/schema/manifest change appears necessary.
+**STOP:** final R1 seam differs materially; a third path is required; source bytes/path must be reopened; S3A eligibility must be duplicated; multiple base-source arbitration is required; path strings would become authority; dependency/schema/manifest change appears necessary.
 
 ---
 
-## Task 2: Build Only Proposed S3A Extraction Selections and Revalidate External Approval
+## Task 2: Build Proposed S3A Extraction and Revalidate External Approval
 
-**Conceptual deliverable:** deterministic extraction proposal generation through S3A, plus a fail-closed check that an externally approved S3A plan still matches the exact R2 binding and inspection. R2 issues no approval.
+**Conceptual output:** deterministic proposal construction through S3A plus a fail-closed check that an externally approved S3A plan still matches the exact binding and inspection. R2 issues no approval.
 
 **Files:**
 
-- Modify: `tests/test_cad_agent_base_cad_adapter.py`
-- Modify after meaningful RED: `cad_agent/base_cad_adapter.py`
+- Modify first for RED: `tests/test_cad_agent_base_cad_adapter.py`
+- Modify only after meaningful RED: `cad_agent/base_cad_adapter.py`
 - Create: none
 
-**Interfaces:**
+**Interfaces consumed:** Task-1 APIs plus `build_extraction_plan()`, `validate_extraction_plan()`, `REUSED_FROM_BASE_CAD`, and `TRANSFORM_POLICY` from `mcp_integration_lib.exact_base_xref`.
 
-- Consumes Task-1 binding APIs plus:
-  - `mcp_integration_lib.exact_base_xref.build_extraction_plan()`
-  - `mcp_integration_lib.exact_base_xref.validate_extraction_plan()`
-  - `mcp_integration_lib.exact_base_xref.REUSED_FROM_BASE_CAD`
-  - `mcp_integration_lib.exact_base_xref.TRANSFORM_POLICY`
-- Produces:
+**Public API produced:**
 
-```python
-def build_proposed_base_cad_extraction(
-    *,
-    binding: object,
-    live_inspection: object,
-    selections: object,
-    impacted_views: object,
-    plan_id: str,
-) -> dict[str, object]: ...
-
-def require_approved_base_cad_extraction_match(
-    *,
-    binding: object,
-    live_inspection: object,
-    approved_extraction_plan: object,
-) -> dict[str, object]: ...
+```text
+build_proposed_base_cad_extraction(*, binding, live_inspection, selections, impacted_views, plan_id) -> dict[str, object]
+require_approved_base_cad_extraction_match(*, binding, live_inspection, approved_extraction_plan) -> dict[str, object]
 ```
 
-The second helper returns the normalized already-approved S3A plan or raises. It never changes approval state.
-
-- [ ] **Step 1: Add RED proposal/reuse tests**
+- [ ] **Step 1: Add RED proposal tests**
 
 Cover:
 
 ```text
-valid subset -> S3A plan with approval.status=PROPOSED and reference=null
-proposal source/run/inspection/target hashes exactly match binding
+valid inspected subset -> S3A plan remains PROPOSED with null approval reference
+proposal source/run/inspection/target identity exactly matches binding
 component metadata comes from inspection, never caller
 uninspected logical_component_id -> fail closed
-caller-supplied source_handle/layer/block/candidate_handle -> rejected by S3A shape
+caller-supplied source_handle/layer/block/candidate_handle -> rejected
 translation + rotation + positive uniform scale -> allowed
 zero/negative scale -> rejected
 non-uniform/global matrix/reflection/global_transform -> rejected
 whole-drawing/global scale field -> rejected
-permutation of selection order -> deterministic normalized plan
-caller input mutation after return cannot mutate normalized adapter output
+selection-order permutation -> deterministic normalized plan
 ```
 
 - [ ] **Step 2: Add RED external-approval tests**
 
-Construct an S3A plan that is already `APPROVED` by external test data and verify:
+Construct already-APPROVED S3A fixture data and require:
 
 ```text
 APPROVED + exact binding/inspection -> accepted normalized plan
-PROPOSED plan passed to approval-match helper -> fail closed
+PROPOSED passed to approval-match helper -> fail closed
 changed approval reference -> fail closed
 changed source revision/hash -> fail closed
 changed target drawing SHA -> fail closed
@@ -411,40 +368,23 @@ transform changed after approval -> fail closed
 
 No test calls an approval issuer.
 
-- [ ] **Step 3: Run Task-2 RED against the Task-1 head**
+- [ ] **Step 3: Run Task-2 RED against the accepted Task-1 head**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_base_cad_adapter.py -q -p no:cacheprovider
 ```
 
-Expected: FAIL because Task-2 functions are absent. Record exact failures attributable to the missing behavior.
+Expected: FAIL because the Task-2 APIs are absent. Record exact failures attributable to missing Task-2 behavior.
 
 - [ ] **Step 4: Implement proposal construction strictly through S3A**
 
-`build_proposed_base_cad_extraction()` must:
-
-1. validate the binding;
-2. validate the current inspection with S3A;
-3. recompute and compare inspection hash/binding source facts;
-4. call `build_extraction_plan()` with the caller's logical IDs/local transforms and `impacted_views`;
-5. require S3A's returned plan to remain `PROPOSED` with null approval reference;
-6. return only the normalized S3A plan.
-
-Do not reconstruct S3A component records or transforms manually.
+`build_proposed_base_cad_extraction()` must validate the binding and current inspection, compare the inspection hash/source identity with the binding, call `build_extraction_plan()` with only logical IDs/local transforms/impacted views, and require the returned plan to remain `PROPOSED` with null approval reference. It must not reconstruct S3A component records or transform rules.
 
 - [ ] **Step 5: Implement approval-match as validation only**
 
-`require_approved_base_cad_extraction_match()` must:
+`require_approved_base_cad_extraction_match()` must validate binding + inspection; call `validate_extraction_plan(approved_extraction_plan, inspection=normalized_inspection)`; require plan source/run/inspection/target identity to equal the binding; require existing S3A `approval.status == "APPROVED"` and non-empty reference; return a deep normalized copy. It must never add/replace/synthesize approval fields.
 
-1. validate the same binding and inspection;
-2. call `validate_extraction_plan(approved_extraction_plan, inspection=normalized_inspection)`;
-3. require plan source/run/inspection/target identity to equal the binding;
-4. require `approval.status == "APPROVED"` and a non-empty reference under existing S3A semantics;
-5. return a deep normalized copy.
-
-It must not add, replace, or synthesize approval fields.
-
-- [ ] **Step 6: Run Task-2 focused GREEN and repeat for determinism**
+- [ ] **Step 6: Run focused GREEN three times**
 
 ```powershell
 1..3 | ForEach-Object {
@@ -452,9 +392,9 @@ It must not add, replace, or synthesize approval fields.
 }
 ```
 
-All three runs must PASS with identical test counts.
+All three runs must PASS with identical counts.
 
-- [ ] **Step 7: Run S3A + R1 regressions and static gates**
+- [ ] **Step 7: Run S3A/R1 regressions and static gates**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest \
@@ -465,72 +405,48 @@ All three runs must PASS with identical test counts.
 .\.venv-py311\Scripts\python.exe -m ruff check cad_agent/base_cad_adapter.py tests/test_cad_agent_base_cad_adapter.py
 .\.venv-py311\Scripts\python.exe scripts/check_architecture_boundaries.py check --repo-root . --baseline contracts/reuse-integration/architecture-boundaries.json
 git diff --check
-git diff --name-only <TASK2_BASE>..HEAD
+git diff --name-only "$env:R2_TASK_BASE_SHA"..HEAD
 ```
 
-Task-2 diff must contain only the same two R2 paths.
+The path audit must list only the same two R2 paths.
 
 - [ ] **Step 8: Run canonical verifier and commit**
 
 ```powershell
 .\scripts\verify.ps1 -SkipAutoCADDotNet
 git add cad_agent/base_cad_adapter.py tests/test_cad_agent_base_cad_adapter.py
-git commit -m "feat: propose approved-bound base CAD extraction"
+git commit -m "feat: bind proposed base CAD extraction"
 ```
 
-**Paired independent reviewer domains:** exact-base/S3A transform-and-approval-boundary reviewer + integration/CI/write-set reviewer.
+**Paired independent reviewer domains:** exact-base/S3A transform-and-approval boundary + integration/CI/write-set/current-main synthetic.
 
-**Task-2 STOP conditions:** any approval issuer is needed; S3A must be changed to accept the proposal; global deformation is requested; component membership must be inferred outside inspection; a generic CAD/extraction plan owner appears; any third path is needed.
+**STOP:** an approval issuer is needed; S3A must be changed; global deformation is requested; component membership must be inferred outside inspection; a generic extraction-plan owner appears; any third path is needed.
 
 ---
 
 ## Task 3: Delegate to S3B and Emit Frozen R2-to-R3 Reuse Handoff
 
-**Conceptual deliverable:** one live-delegation API that calls the existing S3B exact-base extraction method without bypasses, validates result invariants, emits `base-cad-reuse-handoff-1.0`, and evaluates later source/revision drift without overwriting frozen geometry.
+**Conceptual output:** one exact live delegation through the accepted S3B extraction method, a deterministic `base-cad-reuse-handoff-1.0`, and stale/re-extraction evaluation that never overwrites frozen geometry.
 
 **Files:**
 
-- Modify: `tests/test_cad_agent_base_cad_adapter.py`
-- Modify after meaningful RED: `cad_agent/base_cad_adapter.py`
+- Modify first for RED: `tests/test_cad_agent_base_cad_adapter.py`
+- Modify only after meaningful RED: `cad_agent/base_cad_adapter.py`
 - Create: none
 
-**Interfaces:**
+**Interface consumed:** `mcp_integration_lib.dotnet_ipc.DotNetIPCClient.exact_base_xref_extraction()` plus Task-1/2 APIs and accepted S3B extraction-result semantics.
 
-- Consumes Task-1/2 APIs plus:
-  - `mcp_integration_lib.dotnet_ipc.DotNetIPCClient.exact_base_xref_extraction()`
-  - existing S3B validated result shape.
-- Produces:
+**Public API produced:**
 
-```python
+```text
 BASE_CAD_REUSE_HANDOFF_SCHEMA_VERSION = "base-cad-reuse-handoff-1.0"
-
-def execute_base_cad_extraction(
-    *,
-    client: object,
-    binding: object,
-    live_inspection: object,
-    approved_extraction_plan: object,
-    approval: object,
-    drawing_full_path: object,
-    drawing_sha256: str,
-    source_full_path: object,
-    candidate_output_path: object,
-) -> dict[str, object]: ...
-
-def validate_base_cad_reuse_handoff(payload: object) -> dict[str, object]: ...
-
-def base_cad_reuse_handoff_sha256(payload: object) -> str: ...
-
-def evaluate_frozen_base_cad_reuse(
-    *,
-    handoff: object,
-    current_live_inspection: object,
-) -> dict[str, object]: ...
+execute_base_cad_extraction(*, client, binding, live_inspection, approved_extraction_plan, approval, drawing_full_path, drawing_sha256, source_full_path, candidate_output_path) -> dict[str, object]
+validate_base_cad_reuse_handoff(payload) -> dict[str, object]
+base_cad_reuse_handoff_sha256(payload) -> str
+evaluate_frozen_base_cad_reuse(*, handoff, current_live_inspection) -> dict[str, object]
 ```
 
-`execute_base_cad_extraction()` returns the normalized R2 handoff, not a new transport envelope.
-
-Handoff fields are exactly:
+The normalized handoff has exactly:
 
 ```text
 schema_version
@@ -559,17 +475,11 @@ components[] {
 source_handle_to_candidate_handle[]
 ```
 
-No absolute paths or timestamps are stored in the handoff.
+No absolute path or timestamp is stored in the handoff.
 
-- [ ] **Step 1: Add a strict fake/client spy for hosted tests**
+- [ ] **Step 1: Add a strict S3B client spy**
 
-The fake exposes only:
-
-```python
-def exact_base_xref_extraction(self, *args, **kwargs) -> dict[str, object]: ...
-```
-
-It records call count/arguments and returns a synthetic result matching the accepted public S3B extraction-result example. It has no `request()` method so tests cannot accidentally exercise a generic transport path.
+The test spy exposes only `exact_base_xref_extraction()`; it records call count/arguments and returns synthetic data matching the accepted public S3B extraction-result example. It deliberately has no generic `request()` method.
 
 - [ ] **Step 2: Add RED delegation tests**
 
@@ -579,14 +489,14 @@ Cover:
 exact approved binding -> exactly one exact_base_xref_extraction call
 PROPOSED plan -> zero S3B calls + fail closed
 stale binding/inspection -> zero S3B calls + fail closed
-approval object missing/mismatched -> zero S3B calls + fail closed before or through existing S3B equality semantics
-adapter never calls generic request()/alternate operation
-candidate/source/drawing path values are only passed to S3B and never persisted in handoff
+missing/mismatched approval -> zero successful extraction + fail closed
+adapter has no generic request()/alternate operation path
+source/drawing/candidate path values are passed only to S3B and never persisted in handoff
 ```
 
-- [ ] **Step 3: Add RED S3B-result invariant tests**
+- [ ] **Step 3: Add RED returned-invariant tests**
 
-Require handoff refusal when synthetic S3B result claims any of:
+Refuse a handoff when synthetic S3B result claims any of:
 
 ```text
 success != true
@@ -604,52 +514,27 @@ candidate_output_sha256 missing/invalid
 component source metadata differs from approved plan
 candidate handle missing or duplicate
 source_handle_to_candidate_handle incomplete/inconsistent
-unexpected provenance != REUSED_FROM_BASE_CAD
+provenance != REUSED_FROM_BASE_CAD
 ```
 
-These are adapter-boundary cross-checks over returned accepted S3B facts, not a second implementation of S3B path or AutoCAD logic.
+These are cross-boundary checks over accepted S3B facts, not a second path-policy or AutoCAD implementation.
 
 - [ ] **Step 4: Add RED frozen provenance/determinism tests**
 
-Assert every handoff component freezes:
-
-```text
-source_sha256
-source_revision
-source_handle
-source_layer
-source_block
-local transform
-candidate_handle
-REUSED_FROM_BASE_CAD
-```
-
-Permute S3B component/mapping order and require deterministic normalized ordering/hash. Change any frozen source/candidate/provenance fact and require a different handoff hash.
+Every handoff component must freeze exact source SHA/revision/handle/layer/block, local transform, candidate handle, and `REUSED_FROM_BASE_CAD`. Permuting S3B component/mapping order must normalize to the same handoff/hash. Changing any frozen source/candidate/provenance fact must change the handoff hash.
 
 - [ ] **Step 5: Add RED stale/re-extraction tests**
 
-`evaluate_frozen_base_cad_reuse()` must return exactly one of:
+`evaluate_frozen_base_cad_reuse()` must return only:
 
 ```text
 CURRENT
 STALE_REEXTRACTION_REQUIRED
 ```
 
-Use a fresh S3A-valid inspection as the current source identity.
+Use a fresh S3A-valid inspection as current identity. Same `source_id + sha256 + revision` => `CURRENT` with no affected components. Any source ID/hash/revision change => `STALE_REEXTRACTION_REQUIRED` with sorted affected logical component IDs, prior/current source identity and deterministic reason codes. The stale result contains no approval, candidate-handle rewrite, current pointer, or mutation instruction.
 
-Require:
-
-```text
-same source_id + sha256 + revision -> CURRENT, no affected components
-changed sha256 -> STALE_REEXTRACTION_REQUIRED
-changed revision -> STALE_REEXTRACTION_REQUIRED
-changed source_id -> STALE_REEXTRACTION_REQUIRED
-stale result lists sorted affected logical_component_ids
-stale result contains old/new source identity + reason codes
-stale result contains no approval, candidate-handle rewrite, current-pointer, or mutation instruction
-```
-
-- [ ] **Step 6: Run Task-3 RED against Task-2 head**
+- [ ] **Step 6: Run Task-3 RED against the accepted Task-2 head**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest tests/test_cad_agent_base_cad_adapter.py -q -p no:cacheprovider
@@ -659,45 +544,17 @@ Expected: FAIL only because Task-3 APIs/behavior are missing.
 
 - [ ] **Step 7: Implement exact S3B delegation**
 
-`execute_base_cad_extraction()` must:
+`execute_base_cad_extraction()` must validate binding; validate the current S3A inspection and compare its canonical identity to the binding; call `require_approved_base_cad_extraction_match()`; call exactly `client.exact_base_xref_extraction(...)` with the already approved plan and approval object; never construct a raw generic IPC operation; normalize/check the returned extraction result; emit the closed handoff only after all invariants pass.
 
-1. validate the Task-1 binding;
-2. validate current S3A inspection and compare its canonical hash/source identity with the binding;
-3. call `require_approved_base_cad_extraction_match()`;
-4. call exactly `client.exact_base_xref_extraction(...)` with the already-approved plan and approval object;
-5. never call a generic `request()` or construct raw IPC operations;
-6. normalize/check the returned extraction result;
-7. emit the closed R2 handoff only after all invariants pass.
-
-For production, runtime issuance must require the accepted `DotNetIPCClient` instance or an equally strict typed seam approved by the architecture checker; a generic transport callable is not an alternate authority.
+Production runtime issuance must use the accepted `DotNetIPCClient` seam. The test spy exists only for synthetic tests and does not become a transport abstraction owner.
 
 - [ ] **Step 8: Implement frozen handoff validation/hash**
 
-Use closed exact fields, deep normalized copies, sorted component/mapping lists, strict lowercase SHA-256 fields, and `canonical_json_sha256()` only.
+Use closed exact fields, deep normalized copies, sorted component/mapping lists, strict lowercase SHA-256 values, and existing `canonical_json_sha256()` only. Exclude absolute paths, timestamps, raw S3B exception text, component-current/revision state, view ownership, verdict, approval, repair and publication fields.
 
-Do not include:
+- [ ] **Step 9: Implement stale evaluation without mutation authority**
 
-```text
-absolute drawing/source/candidate paths
-started_at/completed_at/capture timestamp
-raw S3B error text
-component current/revision-registry state
-view/layout ownership
-visual/engineering verdict
-approval/publish/repair fields
-```
-
-- [ ] **Step 9: Implement stale evaluation with no mutation authority**
-
-Validate both the prior handoff and fresh current inspection. Compare only canonical source identity:
-
-```text
-source_id
-sha256
-revision
-```
-
-Return deterministic reason codes and affected logical component IDs. Do not call S3B extraction from the stale evaluator; re-extraction remains a proposal requiring a new approval/execution cycle.
+Validate prior handoff + fresh current inspection, compare only `source_id`, `sha256`, `revision`, and return deterministic state/reason/affected IDs. The evaluator never calls extraction; re-extraction requires a new proposal/approval/execution cycle.
 
 - [ ] **Step 10: Run focused and broader GREEN**
 
@@ -712,79 +569,64 @@ Return deterministic reason codes and affected logical component IDs. Do not cal
   -q -p no:cacheprovider
 ```
 
-Hosted/offline tests must PASS. Any gated AutoCAD Mechanical live test remains `NOT RUN` or `SKIP` in this code task and must not be promoted to PASS.
+Hosted/offline tests must PASS. Gated AutoCAD Mechanical tests remain literal `SKIP`/`NOT RUN` where not executed.
 
-- [ ] **Step 11: Run static, architecture, diff, canonical gates**
+- [ ] **Step 11: Run Ruff, architecture, diff, canonical and exact path gates**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m ruff check cad_agent/base_cad_adapter.py tests/test_cad_agent_base_cad_adapter.py
 .\.venv-py311\Scripts\python.exe scripts/check_architecture_boundaries.py check --repo-root . --baseline contracts/reuse-integration/architecture-boundaries.json
 git diff --check
-git diff --name-only <R2_RUNTIME_BASE>..HEAD
+git diff --name-only "$env:R2_TASK_BASE_SHA"..HEAD
 .\scripts\verify.ps1 -SkipAutoCADDotNet
 ```
 
-Cumulative R2 runtime diff must remain exactly:
+The path audit must list only the two R2 paths.
 
-```text
-cad_agent/base_cad_adapter.py
-tests/test_cad_agent_base_cad_adapter.py
-```
+- [ ] **Step 12: Prove no second authority owner**
 
-- [ ] **Step 12: Run no-second-owner architecture assertions**
+Focused architecture assertions must prove R2 does not define/import ownership for CAD parsing, DXF building, component/view registry, revision/current store, repair execution, visual verdict, approval issuance, publication, a new IPC request/operation builder, source-byte opening, OCR, model or provider execution. Direct reuse imports from accepted R1/S3 and the canonical hash owner are allowed.
 
-Focused tests must inspect the R2 module or import graph and prove it does not define/import ownership for:
-
-```text
-CAD parsing
-DXF building
-component/view registry
-revision/current store
-repair execution
-visual verdict
-approval issuance
-publication
-new IPC operation/request builder
-filesystem source-byte opening
-OCR/model/provider execution
-```
-
-Direct reuse imports from accepted R1/S3 and canonical hash owners are allowed.
-
-- [ ] **Step 13: Commit Task 3 normally**
+- [ ] **Step 13: Commit normally**
 
 ```powershell
 git add cad_agent/base_cad_adapter.py tests/test_cad_agent_base_cad_adapter.py
 git commit -m "feat: freeze exact-base reuse provenance"
 ```
 
-**Paired independent reviewer domains:** AutoCAD/S3B candidate-mutation and provenance-boundary reviewer + integration/CI/current-main synthetic reviewer. Luna/local operator remains the live-evidence owner, not a repository writer for this task.
+**Paired independent reviewer domains:** AutoCAD/S3B candidate-mutation + provenance boundary, and integration/CI/write-set/current-main synthetic. Luna/local operator remains the live-evidence owner, not the repository writer.
 
-**Task-3 STOP conditions:** any S3B production edit is required; a new transport/dispatcher/path policy is needed; an accepted/current drawing must be mutated; live preflight would be duplicated or bypassed; R2 must persist component/current revision state; private CAD is needed; source/accepted immutability cannot be proven; result semantics cannot be normalized without schema change.
+**STOP:** any S3B production edit is required; a new transport/dispatcher/path policy is needed; accepted/current drawing mutation is required; live preflight would be duplicated/bypassed; R2 must persist component/current revision state; private CAD is needed; source/accepted immutability cannot be proven; result normalization requires schema change.
 
 ---
 
 ## Whole-R2 Verification and Handoff Gate
 
-After Task 3, before R2 is declared complete:
+After Task 3, the union of the three independently audited child-issue diffs must contain only:
 
-- [ ] **Focused R2 tests** — PASS, zero skips for synthetic adapter tests.
-- [ ] **R1 regressions** — SourceBundle, custody, final source-fusion tests PASS.
-- [ ] **S3A regressions** — exact-base inspection/plan tests PASS.
-- [ ] **S3B Python regressions** — `test_dotnet_ipc.py` PASS; live-only prerequisites remain literal `SKIP`/`NOT RUN` where not executed.
-- [ ] **Ruff** — PASS on exactly the two R2 files.
-- [ ] **Architecture ratchet** — PASS.
-- [ ] **`git diff --check`** — PASS.
-- [ ] **Cumulative path audit** — exactly the two R2 runtime paths.
-- [ ] **Canonical verifier** — record exact PASS/FAIL/SKIP/NOT RUN counts.
-- [ ] **Hosted `tests`** — PASS on exact head/current-main synthetic.
-- [ ] **Hosted `reuse-declaration`** — PASS.
-- [ ] **Other required hosted checks** — PASS.
-- [ ] **Unresolved review threads** — 0 before Master PO acceptance.
-- [ ] **Independent provenance/authority review** — PASS.
-- [ ] **Independent integration/CI review** — PASS.
+```text
+cad_agent/base_cad_adapter.py
+tests/test_cad_agent_base_cad_adapter.py
+```
 
-No result from an unavailable live gate may be relabeled PASS.
+Before R2 is declared complete:
+
+- [ ] focused R2 synthetic tests — PASS, zero R2 skips;
+- [ ] R1 SourceBundle/custody/final-fusion regressions — PASS;
+- [ ] S3A inspection/extraction-plan regressions — PASS;
+- [ ] S3B Python transport regressions — PASS;
+- [ ] Ruff on exactly the two R2 paths — PASS;
+- [ ] architecture ratchet — PASS;
+- [ ] `git diff --check` — PASS;
+- [ ] canonical verifier — exact counts recorded;
+- [ ] hosted `tests` — PASS on exact child head/current-main synthetic;
+- [ ] hosted `reuse-declaration` — PASS;
+- [ ] all additional required hosted checks — PASS;
+- [ ] unresolved review threads — 0 before Master PO acceptance;
+- [ ] independent provenance/authority review — PASS;
+- [ ] independent integration/CI review — PASS.
+
+No unavailable live gate may be relabeled PASS.
 
 ## PASS / FAIL / SKIP / NOT RUN Semantics
 
@@ -802,33 +644,26 @@ Historical accepted S3B live PASS may satisfy the pre-issuance dependency only w
 | Lane / owner | Paths or authority | R2 overlap result | Rule |
 |---|---|---|---|
 | Wave 1A active/future worker control | `agent_lib/**`, `cad_agent/vision_handoff.py`, worker-policy tests | `NONE` | R2 never modifies worker/provider control. |
-| Active/future R1 Source Fusion | `cad_agent/source_fusion.py`, `tests/test_cad_agent_source_fusion.py`, possible final manifest-reference work | `NONE` in planned R2 write-set | R2 runtime waits for complete R1 merge and then imports the accepted seam read-only. |
+| Active/future R1 Source Fusion | `cad_agent/source_fusion.py`, `tests/test_cad_agent_source_fusion.py`, possible final manifest-reference work | `NONE` | R2 waits for complete R1 merge and imports the accepted seam read-only. |
 | S3A exact-base contract | `mcp_integration_lib/exact_base_xref.py`, its tests | `READ-ONLY REUSE` | No modification; plan/inspection semantics stay S3A-owned. |
 | S3B transport/.NET | `mcp_integration_lib/dotnet_ipc.py`, `autocad_plugin/**`, IPC contracts | `READ-ONLY REUSE` | R2 delegates through accepted methods; any production change requires rebaseline. |
-| Luna / Issue #72 local lane | local AutoCAD session, live harness, potentially bounded live-test defect paths under separate Issues | `NO REPOSITORY OVERLAP` | Live AutoCAD remains serialized under one local operator; R2 writer does not control the same session. |
-| Existing manifest/checkpoint owner | `cad_agent/manifest.py`, `cad_agent/pdf.py`, CLI run/resume | `NONE` in first R2 sequence | No second store/reference field is added. |
+| Luna / Issue #72 local lane | local AutoCAD session and live evidence harness | `NO REPOSITORY OVERLAP` | Live AutoCAD remains serialized under one local operator; R2 writer does not control the same session. |
+| Existing manifest/checkpoint owner | `cad_agent/manifest.py`, `cad_agent/pdf.py`, CLI run/resume | `NONE` | No second store/reference field is added in first R2 sequence. |
 | DXF/native geometry owner | `dxf_builder_lib/**` | `NONE` | R2 does not generate changed/new geometry. |
-| Future R3 registry | future `cad_agent` component/view-registry owner and tests | `NONE` | R2 emits transfer evidence only; no component/current/revision persistence. |
+| Future R3 registry | future component/view-registry owner/tests | `NONE` | R2 emits transfer evidence only; no component/current/revision persistence. |
 | Future R4 revision orchestrator | future candidate-revision owner | `NONE` | R2 does not mark current/accepted revision or own rollback history. |
 
 ## R3 Handoff Contract
 
-R3 may rely only on the validated `base-cad-reuse-handoff-1.0` fields and its canonical SHA-256. R3 must not rely on:
+R3 may rely only on validated `base-cad-reuse-handoff-1.0` fields and its canonical SHA-256. R3 must not rely on R2 process memory, absolute S3B paths, a current-component state inside R2, implicit candidate ordering, ambient AutoCAD session state, or old inspection IDs as mutation authority.
 
-- R2 process memory;
-- absolute S3B paths;
-- a “current component” state inside R2;
-- implicit candidate ordering;
-- ambient AutoCAD session state;
-- old inspection IDs as mutation authority.
-
-A future R3 plan may register the candidate handles and provenance under its own separately accepted store/contract. R2 remains stateless.
+A future R3 task may register candidate handles/provenance under its separately accepted store/contract. R2 remains stateless.
 
 ## Migration and Rollback
 
 **Migration:** none. No existing schema, manifest, CAD file, registry, revision store, IPC contract, or producer artifact changes in the planned first R2 sequence.
 
-**Rollback:** revert the R2 commits/remove the two R2 files. R1, S3A, S3B, manifests, DXF builder, and future R3/R4 owners remain unchanged. Disposable candidates from separately authorized live operations are cleaned by existing S3B/local-operator rules; source/accepted CAD require no rollback because they must never change.
+**Rollback:** revert the R2 commits/remove the two R2 files. R1, S3A, S3B, manifests, DXF builder and future R3/R4 owners remain unchanged. Disposable candidates from separately authorized live operations are cleaned by existing S3B/local-operator rules; source/accepted CAD require no rollback because they must never change.
 
 ## Runtime Issue Issuance Order
 
@@ -844,13 +679,13 @@ R2 Task 3 — Existing S3B delegation + frozen provenance handoff + stale propos
 R2 complete -> fresh R3 planning/runtime rebaseline
 ```
 
-Each child Issue receives a fresh exact current-main SHA and only its exact two-path CREATE/MODIFY allowlist above. If any child needs a third path or wider authority, stop and return to Master PO instead of editing this plan ad hoc.
+Each child Issue receives a fresh exact current-main SHA and only its exact two-path CREATE/MODIFY allowlist. If any child needs a third path or wider authority, stop and return to Master PO instead of widening the issue.
 
 ## Final STOP Conditions
 
-Stop and report `R2 REBASELINE REQUIRED` rather than widening scope if any of these becomes true:
+Stop and report `R2 REBASELINE REQUIRED` rather than widening scope if:
 
-- final accepted R1 API/source identity is insufficient for Section 5 binding;
+- final accepted R1 API/source identity is insufficient for the binding;
 - R1 requires source arbitration that R2 would have to invent;
 - S3A/S3B accepted API or fresh-preflight semantics materially changed;
 - S3B live acceptance is not PASS;
