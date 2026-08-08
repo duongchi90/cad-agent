@@ -1,9 +1,10 @@
 """Dependency-free sanitized Windows worker process boundary.
 
-This module owns only local process isolation facts: a start-empty child
-environment, disposable worker directories, Windows Job Object supervision,
-and bounded descendant cleanup evidence. It does not import or invoke Codex,
-provider/model/auth, AutoCAD, File IPC, approval, or persistence owners.
+This module owns local process isolation facts: a start-empty child environment,
+disposable worker directories, Windows Job Object supervision, a narrow
+handle-bound child control channel, and bounded descendant cleanup evidence.
+It does not import or invoke Codex, provider/model/auth, AutoCAD, File IPC,
+approval, or persistence owners.
 """
 
 from __future__ import annotations
@@ -13,18 +14,23 @@ import hashlib
 import json
 import math
 import os
+import struct
 import subprocess
+import sys
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Protocol
+from typing import BinaryIO, Protocol
 
 
 MAX_CLEANUP_DEADLINE_SECONDS = 30.0
 MAX_ACTIVE_PROCESSES = 64
+MAX_CONTROL_FRAME_BYTES = 1_048_576
+_CONTROL_FRAME_VERSION = 1
 _ALLOWED_INHERITED_ENVIRONMENT = (
     "COMSPEC",
     "PATH",
@@ -39,10 +45,18 @@ _ALLOWED_WORKER_ENVIRONMENT = frozenset(
 
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
-
 _CREATE_SUSPENDED = 0x00000004
 _CREATE_UNICODE_ENVIRONMENT = 0x00000400
 _CREATE_NO_WINDOW = 0x08000000
+EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+_STARTF_USESTDHANDLES = 0x00000100
+PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+_HANDLE_FLAG_INHERIT = 0x00000001
+_GENERIC_WRITE = 0x40000000
+_FILE_SHARE_READ = 0x00000001
+_FILE_SHARE_WRITE = 0x00000002
+_OPEN_EXISTING = 3
+_FILE_ATTRIBUTE_NORMAL = 0x00000080
 _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
@@ -71,8 +85,7 @@ class WorkerEnvironmentAttestation:
     writable_roots: tuple[Path, ...]
 
     def __post_init__(self) -> None:
-        frozen_environment = MappingProxyType(dict(self.environment))
-        object.__setattr__(self, "environment", frozen_environment)
+        object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
         object.__setattr__(self, "environment_keys", tuple(self.environment_keys))
         object.__setattr__(self, "writable_roots", tuple(self.writable_roots))
 
@@ -104,13 +117,13 @@ class _CreatedProcess:
     process_handle: object
     thread_handle: object
     pid: int
+    control_read_handle: object | None = None
+    control_write_handle: object | None = None
 
 
 class _ProcessApi(Protocol):
     def create_job(self, max_processes: int) -> object: ...
-
     def configure_job(self, job_handle: object, max_processes: int) -> None: ...
-
     def create_suspended_process(
         self,
         *,
@@ -119,19 +132,13 @@ class _ProcessApi(Protocol):
         cwd: Path,
         environment: Mapping[str, str],
     ) -> object: ...
-
     def assign_process(self, job_handle: object, process_handle: object) -> None: ...
-
     def resume_process(self, thread_handle: object) -> None: ...
-
     def query_job_process_ids(
         self, job_handle: object, *, max_processes: int
     ) -> tuple[int, ...]: ...
-
     def terminate_job(self, job_handle: object) -> None: ...
-
     def terminate_process(self, process_handle: object) -> None: ...
-
     def close_handle(self, handle: object) -> None: ...
 
 
@@ -142,11 +149,15 @@ class WorkerProcessHandle:
         "_api",
         "_cleanup_deadline_seconds",
         "_cleanup_result",
+        "_control_read_handle",
+        "_control_write_handle",
         "_job_handle",
         "_max_processes",
         "_process_handle",
+        "_request_id",
         "environment_attestation",
         "root_pid",
+        "__weakref__",
     )
 
     def __init__(
@@ -159,6 +170,8 @@ class WorkerProcessHandle:
         environment_attestation: WorkerEnvironmentAttestation,
         cleanup_deadline_seconds: float,
         max_processes: int,
+        control_read_handle: object | None = None,
+        control_write_handle: object | None = None,
     ) -> None:
         self._api = api
         self._job_handle = job_handle
@@ -168,10 +181,12 @@ class WorkerProcessHandle:
         self._cleanup_deadline_seconds = cleanup_deadline_seconds
         self._max_processes = max_processes
         self._cleanup_result: WorkerCleanupResult | None = None
+        self._control_read_handle = control_read_handle
+        self._control_write_handle = control_write_handle
+        self._request_id = 0
 
     def snapshot_process_tree(self) -> ProcessTreeIdentity:
-        """Return current Job membership or fail closed when evidence is invalid."""
-
+        _require_issued_handle(self)
         try:
             raw = self._api.query_job_process_ids(
                 self._job_handle, max_processes=self._max_processes
@@ -187,8 +202,33 @@ class WorkerProcessHandle:
         )
 
 
+_ISSUED_WORKER_HANDLES: dict[
+    int, weakref.ReferenceType[WorkerProcessHandle]
+] = {}
+
+
 def _fail(code: str) -> None:
     raise WorkerProcessError(code)
+
+
+def _register_issued_handle(handle: WorkerProcessHandle) -> None:
+    handle_id = id(handle)
+
+    def discard(expired_ref: weakref.ReferenceType[WorkerProcessHandle]) -> None:
+        current = _ISSUED_WORKER_HANDLES.get(handle_id)
+        if current is expired_ref:
+            _ISSUED_WORKER_HANDLES.pop(handle_id, None)
+
+    _ISSUED_WORKER_HANDLES[handle_id] = weakref.ref(handle, discard)
+
+
+def _require_issued_handle(handle: object) -> WorkerProcessHandle:
+    if not isinstance(handle, WorkerProcessHandle):
+        _fail("WORKER_HANDLE_INVALID")
+    reference = _ISSUED_WORKER_HANDLES.get(id(handle))
+    if reference is None or reference() is not handle:
+        _fail("WORKER_HANDLE_INVALID")
+    return handle
 
 
 def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
@@ -197,7 +237,6 @@ def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
         candidate = Path.cwd() / candidate
     if os.name != "nt":
         return any(component.is_symlink() for component in (candidate, *candidate.parents))
-
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         get_attributes = kernel32.GetFileAttributesW
@@ -205,7 +244,6 @@ def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
         get_attributes.restype = wintypes.DWORD
     except (AttributeError, OSError):
         return True
-
     components = list(candidate.parts)
     if not components:
         return True
@@ -252,9 +290,7 @@ def _is_contained(root: Path, candidate: Path) -> bool:
 
 
 def _canonical_launch_boundary(
-    *,
-    expected_disposable_root: Path,
-    expected_cwd: Path,
+    *, expected_disposable_root: Path, expected_cwd: Path
 ) -> tuple[Path, Path]:
     root = _canonical_existing_directory(
         Path(expected_disposable_root),
@@ -307,8 +343,6 @@ def prepare_worker_environment(
         [str | os.PathLike[str]], bool
     ] = _path_contains_windows_reparse_point,
 ) -> WorkerEnvironmentAttestation:
-    """Prepare one immutable, start-empty worker environment under a safe root."""
-
     root = _canonical_existing_directory(
         Path(disposable_root),
         error_code="WORKER_DISPOSABLE_ROOT_UNSAFE",
@@ -321,13 +355,11 @@ def prepare_worker_environment(
     )
     if not _is_contained(root, workdir):
         _fail("WORKER_CWD_UNSAFE")
-
     source = _normalized_source_environment(source_environment or os.environ)
     codex_home = root / "codex-home"
     temp_dir = root / "tmp"
     if codex_home.exists() or temp_dir.exists():
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-
     created: list[Path] = []
     try:
         codex_home.mkdir()
@@ -341,21 +373,15 @@ def prepare_worker_environment(
             except OSError:
                 pass
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-
     if _path_contains_reparse(codex_home) or _path_contains_reparse(temp_dir):
         _fail("WORKER_REPARSE_PATH")
-
     environment: dict[str, str] = {}
     for canonical_name in _ALLOWED_INHERITED_ENVIRONMENT:
         value = source.get(canonical_name.casefold())
         if value:
             environment[canonical_name] = value
     environment.update(
-        {
-            "CODEX_HOME": str(codex_home),
-            "TEMP": str(temp_dir),
-            "TMP": str(temp_dir),
-        }
+        {"CODEX_HOME": str(codex_home), "TEMP": str(temp_dir), "TMP": str(temp_dir)}
     )
     ordered = dict(sorted(environment.items(), key=lambda item: item[0].casefold()))
     return WorkerEnvironmentAttestation(
@@ -390,9 +416,7 @@ def _validate_limits(*, cleanup_deadline_seconds: float, max_processes: int) -> 
 
 def _validate_attestation_filesystem(
     attestation: WorkerEnvironmentAttestation,
-    *,
-    expected_disposable_root: Path,
-    expected_cwd: Path,
+    *, expected_disposable_root: Path, expected_cwd: Path
 ) -> Path:
     approved_root, approved_cwd = _canonical_launch_boundary(
         expected_disposable_root=expected_disposable_root,
@@ -418,7 +442,6 @@ def _validate_attestation_filesystem(
         error_code="WORKER_DISPOSABLE_STATE_UNSAFE",
         path_contains_reparse=_path_contains_windows_reparse_point,
     )
-
     if Path(attestation.disposable_root) != attested_root or attested_root != approved_root:
         _fail("WORKER_DISPOSABLE_ROOT_UNSAFE")
     if Path(attestation.cwd) != attested_cwd or attested_cwd != approved_cwd:
@@ -439,7 +462,6 @@ def _validate_attestation_filesystem(
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
     if not _is_contained(approved_root, attested_temp):
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-
     try:
         if any(attested_codex_home.iterdir()) or any(attested_temp.iterdir()):
             _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
@@ -448,9 +470,7 @@ def _validate_attestation_filesystem(
     return attested_cwd
 
 
-def _validate_attestation_environment(
-    attestation: WorkerEnvironmentAttestation,
-) -> None:
+def _validate_attestation_environment(attestation: WorkerEnvironmentAttestation) -> None:
     environment = attestation.environment
     keys = tuple(environment)
     if any(not isinstance(key, str) for key in keys):
@@ -525,21 +545,19 @@ def _safe_close(api: _ProcessApi, handle: object | None) -> bool:
 
 
 def _safe_terminate_process(api: _ProcessApi, process_handle: object | None) -> None:
-    if process_handle is None:
-        return
-    try:
-        api.terminate_process(process_handle)
-    except Exception:
-        pass
+    if process_handle is not None:
+        try:
+            api.terminate_process(process_handle)
+        except Exception:
+            pass
 
 
 def _safe_terminate_job(api: _ProcessApi, job_handle: object | None) -> None:
-    if job_handle is None:
-        return
-    try:
-        api.terminate_job(job_handle)
-    except Exception:
-        pass
+    if job_handle is not None:
+        try:
+            api.terminate_job(job_handle)
+        except Exception:
+            pass
 
 
 def launch_worker_process(
@@ -551,15 +569,15 @@ def launch_worker_process(
     argv: Sequence[str],
     cleanup_deadline_seconds: float,
     max_processes: int,
+    control_channel: bool = False,
     _process_api: _ProcessApi | None = None,
 ) -> WorkerProcessHandle:
-    """Launch suspended, assign to a kill-on-close Job, then resume."""
-
     if not isinstance(environment, WorkerEnvironmentAttestation):
         _fail("WORKER_ENV_ATTESTATION_MISMATCH")
+    if not isinstance(control_channel, bool):
+        _fail("WORKER_ARGUMENTS_INVALID")
     _validate_limits(
-        cleanup_deadline_seconds=cleanup_deadline_seconds,
-        max_processes=max_processes,
+        cleanup_deadline_seconds=cleanup_deadline_seconds, max_processes=max_processes
     )
     workdir = _validate_attestation_filesystem(
         environment,
@@ -570,10 +588,8 @@ def launch_worker_process(
     runtime = _validate_executable(Path(executable))
     arguments = _validate_argv(argv)
     api: _ProcessApi = _process_api or _CtypesWindowsProcessApi()
-
-    job_handle: object | None = None
-    process_handle: object | None = None
-    thread_handle: object | None = None
+    job_handle = process_handle = thread_handle = None
+    control_read_handle = control_write_handle = None
     try:
         try:
             job_handle = api.create_job(max_processes)
@@ -584,17 +600,34 @@ def launch_worker_process(
         except Exception:
             _fail("WORKER_JOB_CONFIG_FAILED")
         try:
-            created = api.create_suspended_process(
-                executable=runtime,
-                argv=arguments,
-                cwd=workdir,
-                environment=environment.environment,
-            )
+            if control_channel:
+                create_controlled = getattr(api, "create_suspended_process_with_control", None)
+                if not callable(create_controlled):
+                    _fail("WORKER_CONTROL_UNAVAILABLE")
+                created = create_controlled(
+                    executable=runtime,
+                    argv=arguments,
+                    cwd=workdir,
+                    environment=environment.environment,
+                )
+            else:
+                created = api.create_suspended_process(
+                    executable=runtime,
+                    argv=arguments,
+                    cwd=workdir,
+                    environment=environment.environment,
+                )
             process_handle = created.process_handle
             thread_handle = created.thread_handle
+            control_read_handle = getattr(created, "control_read_handle", None)
+            control_write_handle = getattr(created, "control_write_handle", None)
             root_pid = created.pid
             if isinstance(root_pid, bool) or not isinstance(root_pid, int) or root_pid <= 0:
                 _fail("WORKER_LAUNCH_FAILED")
+            if control_channel and (
+                control_read_handle is None or control_write_handle is None
+            ):
+                _fail("WORKER_CONTROL_UNAVAILABLE")
         except WorkerProcessError:
             raise
         except Exception:
@@ -613,7 +646,7 @@ def launch_worker_process(
             _safe_terminate_job(api, job_handle)
             _fail("WORKER_LAUNCH_RESOURCE_CLOSE_FAILED")
         thread_handle = None
-        return WorkerProcessHandle(
+        handle = WorkerProcessHandle(
             api=api,
             job_handle=job_handle,
             process_handle=process_handle,
@@ -621,17 +654,21 @@ def launch_worker_process(
             environment_attestation=environment,
             cleanup_deadline_seconds=float(cleanup_deadline_seconds),
             max_processes=max_processes,
+            control_read_handle=control_read_handle,
+            control_write_handle=control_write_handle,
         )
+        _register_issued_handle(handle)
+        return handle
     except WorkerProcessError:
+        _safe_close(api, control_read_handle)
+        _safe_close(api, control_write_handle)
         _safe_close(api, thread_handle)
         _safe_close(api, process_handle)
         _safe_close(api, job_handle)
         raise
 
 
-def _normalize_member_pids(
-    value: object, *, max_processes: int
-) -> tuple[int, ...]:
+def _normalize_member_pids(value: object, *, max_processes: int) -> tuple[int, ...]:
     if not isinstance(value, tuple):
         _fail("WORKER_TREE_EVIDENCE_UNAVAILABLE")
     pids: list[int] = []
@@ -645,10 +682,169 @@ def _normalize_member_pids(
     return normalized
 
 
+def _encode_control_frame(payload: Mapping[str, object]) -> bytes:
+    try:
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    if not body or len(body) > MAX_CONTROL_FRAME_BYTES:
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    return struct.pack(">I", len(body)) + body
+
+
+def _decode_control_body(body: bytes) -> Mapping[str, object]:
+    if not body or len(body) > MAX_CONTROL_FRAME_BYTES:
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    if not isinstance(value, Mapping):
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    return value
+
+
+def _api_write_all(api: object, handle: object, data: bytes) -> None:
+    writer = getattr(api, "write_handle", None)
+    if not callable(writer):
+        _fail("WORKER_CONTROL_UNAVAILABLE")
+    offset = 0
+    while offset < len(data):
+        try:
+            written = writer(handle, data[offset:])
+        except Exception:
+            _fail("WORKER_CONTROL_IO_FAILED")
+        if isinstance(written, bool) or not isinstance(written, int) or written <= 0:
+            _fail("WORKER_CONTROL_IO_FAILED")
+        offset += written
+
+
+def _api_read_exact(api: object, handle: object, size: int) -> bytes:
+    reader = getattr(api, "read_handle", None)
+    if not callable(reader):
+        _fail("WORKER_CONTROL_UNAVAILABLE")
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        try:
+            chunk = reader(handle, remaining)
+        except Exception:
+            _fail("WORKER_CONTROL_IO_FAILED")
+        if not isinstance(chunk, bytes) or not chunk:
+            _fail("WORKER_CONTROL_IO_FAILED")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def exchange_worker_control(
+    handle: WorkerProcessHandle, payload: Mapping[str, object]
+) -> Mapping[str, object]:
+    handle = _require_issued_handle(handle)
+    if not isinstance(payload, Mapping):
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    if (
+        handle._cleanup_result is not None
+        or handle._control_read_handle is None
+        or handle._control_write_handle is None
+    ):
+        _fail("WORKER_CONTROL_CLOSED")
+    handle._request_id += 1
+    request_id = handle._request_id
+    frame = _encode_control_frame(
+        {"version": _CONTROL_FRAME_VERSION, "request_id": request_id, "payload": dict(payload)}
+    )
+    _api_write_all(handle._api, handle._control_write_handle, frame)
+    header = _api_read_exact(handle._api, handle._control_read_handle, 4)
+    length = struct.unpack(">I", header)[0]
+    if length <= 0 or length > MAX_CONTROL_FRAME_BYTES:
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    body = _api_read_exact(handle._api, handle._control_read_handle, length)
+    envelope = _decode_control_body(body)
+    if (
+        envelope.get("version") != _CONTROL_FRAME_VERSION
+        or envelope.get("request_id") != request_id
+    ):
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    response = envelope.get("payload")
+    if not isinstance(response, Mapping):
+        _fail("WORKER_CONTROL_FRAME_INVALID")
+    return MappingProxyType(dict(response))
+
+
+def _stream_read_exact(
+    stream: BinaryIO, size: int, *, allow_clean_eof: bool = False
+) -> bytes | None:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            if allow_clean_eof and not chunks:
+                return None
+            raise WorkerProcessError("WORKER_CONTROL_FRAME_INVALID")
+        if not isinstance(chunk, bytes):
+            raise WorkerProcessError("WORKER_CONTROL_FRAME_INVALID")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def run_worker_control_child(
+    handler: Callable[[Mapping[str, object]], Mapping[str, object]],
+    *, input_stream: BinaryIO | None = None, output_stream: BinaryIO | None = None
+) -> int:
+    source = input_stream if input_stream is not None else sys.stdin.buffer
+    sink = output_stream if output_stream is not None else sys.stdout.buffer
+    while True:
+        try:
+            header = _stream_read_exact(source, 4, allow_clean_eof=True)
+            if header is None:
+                return 0
+            length = struct.unpack(">I", header)[0]
+            if length <= 0 or length > MAX_CONTROL_FRAME_BYTES:
+                return 2
+            body = _stream_read_exact(source, length)
+            if body is None:
+                return 2
+            envelope = _decode_control_body(body)
+            if envelope.get("version") != _CONTROL_FRAME_VERSION:
+                return 2
+            request_id = envelope.get("request_id")
+            payload = envelope.get("payload")
+            if (
+                isinstance(request_id, bool)
+                or not isinstance(request_id, int)
+                or request_id <= 0
+                or not isinstance(payload, Mapping)
+            ):
+                return 2
+            try:
+                response = handler(payload)
+            except Exception:
+                response = {"_worker_error": "WORKER_CONTROL_HANDLER_FAILED"}
+            if not isinstance(response, Mapping):
+                response = {"_worker_error": "WORKER_CONTROL_RESPONSE_INVALID"}
+            frame = _encode_control_frame(
+                {
+                    "version": _CONTROL_FRAME_VERSION,
+                    "request_id": request_id,
+                    "payload": dict(response),
+                }
+            )
+            sink.write(frame)
+            sink.flush()
+        except (WorkerProcessError, OSError, ValueError, TypeError):
+            return 2
+
+
 def _cleanup_failure(
-    *,
-    code: str,
-    survivors: tuple[int, ...] = (),
+    *, code: str, survivors: tuple[int, ...] = ()
 ) -> WorkerCleanupResult:
     return WorkerCleanupResult(
         status="CLEANUP_FAILED",
@@ -660,8 +856,19 @@ def _cleanup_failure(
     )
 
 
-def _close_cleanup_handles(handle: WorkerProcessHandle) -> bool:
+def _close_control_handles(handle: WorkerProcessHandle) -> bool:
     okay = True
+    if handle._control_write_handle is not None:
+        okay = _safe_close(handle._api, handle._control_write_handle) and okay
+        handle._control_write_handle = None
+    if handle._control_read_handle is not None:
+        okay = _safe_close(handle._api, handle._control_read_handle) and okay
+        handle._control_read_handle = None
+    return okay
+
+
+def _close_cleanup_handles(handle: WorkerProcessHandle) -> bool:
+    okay = _close_control_handles(handle)
     if handle._process_handle is not None:
         okay = _safe_close(handle._api, handle._process_handle) and okay
         handle._process_handle = None
@@ -677,13 +884,10 @@ def cleanup_worker_process(
     _clock: Callable[[], float] = time.monotonic,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> WorkerCleanupResult:
-    """Terminate the Job and prove zero survivors within the bounded deadline."""
-
-    if not isinstance(handle, WorkerProcessHandle):
-        _fail("WORKER_HANDLE_INVALID")
+    handle = _require_issued_handle(handle)
     if handle._cleanup_result is not None:
         return handle._cleanup_result
-
+    control_close_ok = _close_control_handles(handle)
     try:
         before = handle.snapshot_process_tree()
     except WorkerProcessError:
@@ -692,19 +896,15 @@ def cleanup_worker_process(
         result = _cleanup_failure(code="WORKER_TREE_EVIDENCE_UNAVAILABLE")
         handle._cleanup_result = result
         return result
-
     try:
         handle._api.terminate_job(handle._job_handle)
     except Exception:
-        survivors = before.member_pids
         _close_cleanup_handles(handle)
         result = _cleanup_failure(
-            code="WORKER_CLEANUP_TERMINATE_FAILED",
-            survivors=survivors,
+            code="WORKER_CLEANUP_TERMINATE_FAILED", survivors=before.member_pids
         )
         handle._cleanup_result = result
         return result
-
     deadline = _clock() + handle._cleanup_deadline_seconds
     survivors = before.member_pids
     while True:
@@ -721,14 +921,13 @@ def cleanup_worker_process(
         if _clock() >= deadline:
             _close_cleanup_handles(handle)
             result = _cleanup_failure(
-                code="WORKER_CLEANUP_SURVIVORS",
-                survivors=survivors,
+                code="WORKER_CLEANUP_SURVIVORS", survivors=survivors
             )
             handle._cleanup_result = result
             return result
         _sleep(0.01)
-
-    if not _close_cleanup_handles(handle):
+    resource_close_ok = _close_cleanup_handles(handle)
+    if not control_close_ok or not resource_close_ok:
         result = _cleanup_failure(code="WORKER_CLEANUP_RESOURCE_CLOSE_FAILED")
         handle._cleanup_result = result
         return result
@@ -803,12 +1002,24 @@ class _STARTUPINFOW(ctypes.Structure):
     ]
 
 
+class _STARTUPINFOEXW(ctypes.Structure):
+    _fields_ = [("StartupInfo", _STARTUPINFOW), ("lpAttributeList", ctypes.c_void_p)]
+
+
 class _PROCESS_INFORMATION(ctypes.Structure):
     _fields_ = [
         ("hProcess", wintypes.HANDLE),
         ("hThread", wintypes.HANDLE),
         ("dwProcessId", wintypes.DWORD),
         ("dwThreadId", wintypes.DWORD),
+    ]
+
+
+class _SECURITY_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [
+        ("nLength", wintypes.DWORD),
+        ("lpSecurityDescriptor", ctypes.c_void_p),
+        ("bInheritHandle", wintypes.BOOL),
     ]
 
 
@@ -829,10 +1040,7 @@ class _CtypesWindowsProcessApi:
         k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
         k32.CreateJobObjectW.restype = wintypes.HANDLE
         k32.SetInformationJobObject.argtypes = [
-            wintypes.HANDLE,
-            ctypes.c_int,
-            ctypes.c_void_p,
-            wintypes.DWORD,
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD
         ]
         k32.SetInformationJobObject.restype = wintypes.BOOL
         k32.CreateProcessW.argtypes = [
@@ -844,7 +1052,7 @@ class _CtypesWindowsProcessApi:
             wintypes.DWORD,
             ctypes.c_void_p,
             wintypes.LPCWSTR,
-            ctypes.POINTER(_STARTUPINFOW),
+            ctypes.c_void_p,
             ctypes.POINTER(_PROCESS_INFORMATION),
         ]
         k32.CreateProcessW.restype = wintypes.BOOL
@@ -866,6 +1074,57 @@ class _CtypesWindowsProcessApi:
         k32.TerminateProcess.restype = wintypes.BOOL
         k32.CloseHandle.argtypes = [wintypes.HANDLE]
         k32.CloseHandle.restype = wintypes.BOOL
+        k32.CreatePipe.argtypes = [
+            ctypes.POINTER(wintypes.HANDLE),
+            ctypes.POINTER(wintypes.HANDLE),
+            ctypes.POINTER(_SECURITY_ATTRIBUTES),
+            wintypes.DWORD,
+        ]
+        k32.CreatePipe.restype = wintypes.BOOL
+        k32.SetHandleInformation.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD]
+        k32.SetHandleInformation.restype = wintypes.BOOL
+        k32.InitializeProcThreadAttributeList.argtypes = [
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.c_size_t)
+        ]
+        k32.InitializeProcThreadAttributeList.restype = wintypes.BOOL
+        k32.UpdateProcThreadAttribute.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        k32.UpdateProcThreadAttribute.restype = wintypes.BOOL
+        k32.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+        k32.DeleteProcThreadAttributeList.restype = None
+        k32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(_SECURITY_ATTRIBUTES),
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.ReadFile.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        k32.ReadFile.restype = wintypes.BOOL
+        k32.WriteFile.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        k32.WriteFile.restype = wintypes.BOOL
 
     def create_job(self, max_processes: int) -> object:
         handle = self._kernel32.CreateJobObjectW(None, None)
@@ -887,13 +1146,17 @@ class _CtypesWindowsProcessApi:
         ):
             raise OSError
 
+    @staticmethod
+    def _environment_buffer(environment: Mapping[str, str]):
+        block = "\0".join(
+            f"{key}={value}"
+            for key, value in sorted(environment.items(), key=lambda item: item[0].casefold())
+        ) + "\0\0"
+        return ctypes.create_unicode_buffer(block)
+
     def create_suspended_process(
         self,
-        *,
-        executable: Path,
-        argv: tuple[str, ...],
-        cwd: Path,
-        environment: Mapping[str, str],
+        *, executable: Path, argv: tuple[str, ...], cwd: Path, environment: Mapping[str, str]
     ) -> _CreatedProcess:
         startup = _STARTUPINFOW()
         startup.cb = ctypes.sizeof(startup)
@@ -901,13 +1164,7 @@ class _CtypesWindowsProcessApi:
         command_line = ctypes.create_unicode_buffer(
             subprocess.list2cmdline([str(executable), *argv])
         )
-        environment_block = "\0".join(
-            f"{key}={value}"
-            for key, value in sorted(
-                environment.items(), key=lambda item: item[0].casefold()
-            )
-        ) + "\0\0"
-        environment_buffer = ctypes.create_unicode_buffer(environment_block)
+        environment_buffer = self._environment_buffer(environment)
         flags = _CREATE_SUSPENDED | _CREATE_UNICODE_ENVIRONMENT | _CREATE_NO_WINDOW
         if not self._kernel32.CreateProcessW(
             str(executable),
@@ -928,13 +1185,155 @@ class _CtypesWindowsProcessApi:
             pid=int(process.dwProcessId),
         )
 
+    def _create_pipe(self) -> tuple[object, object]:
+        security = _SECURITY_ATTRIBUTES(
+            nLength=ctypes.sizeof(_SECURITY_ATTRIBUTES),
+            lpSecurityDescriptor=None,
+            bInheritHandle=True,
+        )
+        read_handle = wintypes.HANDLE()
+        write_handle = wintypes.HANDLE()
+        if not self._kernel32.CreatePipe(
+            ctypes.byref(read_handle), ctypes.byref(write_handle), ctypes.byref(security), 0
+        ):
+            raise OSError
+        return read_handle, write_handle
+
+    def _set_not_inheritable(self, handle: object) -> None:
+        if not self._kernel32.SetHandleInformation(handle, _HANDLE_FLAG_INHERIT, 0):
+            raise OSError
+
+    def _create_null_writer(self, security: _SECURITY_ATTRIBUTES) -> object:
+        handle = self._kernel32.CreateFileW(
+            "NUL",
+            _GENERIC_WRITE,
+            _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            ctypes.byref(security),
+            _OPEN_EXISTING,
+            _FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+        invalid = ctypes.c_void_p(-1).value
+        if not handle or ctypes.cast(handle, ctypes.c_void_p).value == invalid:
+            raise OSError
+        return handle
+
+    def create_suspended_process_with_control(
+        self,
+        *, executable: Path, argv: tuple[str, ...], cwd: Path, environment: Mapping[str, str]
+    ) -> _CreatedProcess:
+        child_read = child_write = parent_read = parent_write = stderr_handle = None
+        attribute_list = None
+        process = _PROCESS_INFORMATION()
+        attribute_buffer = None
+        try:
+            child_read, parent_write = self._create_pipe()
+            parent_read, child_write = self._create_pipe()
+            self._set_not_inheritable(parent_write)
+            self._set_not_inheritable(parent_read)
+            security = _SECURITY_ATTRIBUTES(
+                nLength=ctypes.sizeof(_SECURITY_ATTRIBUTES),
+                lpSecurityDescriptor=None,
+                bInheritHandle=True,
+            )
+            stderr_handle = self._create_null_writer(security)
+            size = ctypes.c_size_t(0)
+            self._kernel32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+            if size.value <= 0:
+                raise OSError
+            attribute_buffer = ctypes.create_string_buffer(size.value)
+            attribute_list = ctypes.cast(attribute_buffer, ctypes.c_void_p)
+            if not self._kernel32.InitializeProcThreadAttributeList(
+                attribute_list, 1, 0, ctypes.byref(size)
+            ):
+                raise OSError
+            inherited = (wintypes.HANDLE * 3)(child_read, child_write, stderr_handle)
+            if not self._kernel32.UpdateProcThreadAttribute(
+                attribute_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                ctypes.cast(inherited, ctypes.c_void_p),
+                ctypes.sizeof(inherited),
+                None,
+                None,
+            ):
+                raise OSError
+            startup = _STARTUPINFOEXW()
+            startup.StartupInfo.cb = ctypes.sizeof(startup)
+            startup.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
+            startup.StartupInfo.hStdInput = child_read
+            startup.StartupInfo.hStdOutput = child_write
+            startup.StartupInfo.hStdError = stderr_handle
+            startup.lpAttributeList = attribute_list
+            command_line = ctypes.create_unicode_buffer(
+                subprocess.list2cmdline([str(executable), *argv])
+            )
+            environment_buffer = self._environment_buffer(environment)
+            flags = (
+                _CREATE_SUSPENDED
+                | _CREATE_UNICODE_ENVIRONMENT
+                | _CREATE_NO_WINDOW
+                | EXTENDED_STARTUPINFO_PRESENT
+            )
+            if not self._kernel32.CreateProcessW(
+                str(executable),
+                command_line,
+                None,
+                None,
+                True,
+                flags,
+                ctypes.cast(environment_buffer, ctypes.c_void_p),
+                str(cwd),
+                ctypes.byref(startup),
+                ctypes.byref(process),
+            ):
+                raise OSError
+            return _CreatedProcess(
+                process_handle=process.hProcess,
+                thread_handle=process.hThread,
+                pid=int(process.dwProcessId),
+                control_read_handle=parent_read,
+                control_write_handle=parent_write,
+            )
+        except Exception:
+            for handle in (parent_read, parent_write):
+                if handle is not None:
+                    _safe_close(self, handle)
+            raise
+        finally:
+            for handle in (child_read, child_write, stderr_handle):
+                if handle is not None:
+                    _safe_close(self, handle)
+            if attribute_list is not None:
+                self._kernel32.DeleteProcThreadAttributeList(attribute_list)
+            del attribute_buffer
+
+    def read_handle(self, handle: object, size: int) -> bytes:
+        requested = min(size, 64 * 1024)
+        buffer = ctypes.create_string_buffer(requested)
+        read = wintypes.DWORD()
+        if not self._kernel32.ReadFile(
+            handle, buffer, requested, ctypes.byref(read), None
+        ):
+            raise OSError
+        return bytes(buffer.raw[: int(read.value)])
+
+    def write_handle(self, handle: object, data: bytes) -> int:
+        chunk = data[: 64 * 1024]
+        buffer = ctypes.create_string_buffer(chunk, len(chunk))
+        written = wintypes.DWORD()
+        if not self._kernel32.WriteFile(
+            handle, buffer, len(chunk), ctypes.byref(written), None
+        ):
+            raise OSError
+        return int(written.value)
+
     def assign_process(self, job_handle: object, process_handle: object) -> None:
         if not self._kernel32.AssignProcessToJobObject(job_handle, process_handle):
             raise OSError
 
     def resume_process(self, thread_handle: object) -> None:
-        result = self._kernel32.ResumeThread(thread_handle)
-        if result == 0xFFFFFFFF:
+        if self._kernel32.ResumeThread(thread_handle) == 0xFFFFFFFF:
             raise OSError
 
     def query_job_process_ids(
@@ -946,7 +1345,6 @@ class _CtypesWindowsProcessApi:
                 ("NumberOfProcessIdsInList", wintypes.DWORD),
                 ("ProcessIdList", ctypes.c_size_t * max_processes),
             ]
-
         payload = _PROCESS_ID_LIST()
         returned = wintypes.DWORD()
         if not self._kernel32.QueryInformationJobObject(
@@ -977,12 +1375,15 @@ class _CtypesWindowsProcessApi:
 
 
 __all__ = [
+    "MAX_CONTROL_FRAME_BYTES",
     "ProcessTreeIdentity",
     "WorkerCleanupResult",
     "WorkerEnvironmentAttestation",
     "WorkerProcessError",
     "WorkerProcessHandle",
     "cleanup_worker_process",
+    "exchange_worker_control",
     "launch_worker_process",
     "prepare_worker_environment",
+    "run_worker_control_child",
 ]
