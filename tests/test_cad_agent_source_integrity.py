@@ -1564,3 +1564,160 @@ def test_task2_windows_native_adapter_opens_hashes_reopens_and_denies_write(
                 assert _source_integrity_task2._snapshot_identity(reopened) == (
                     _source_integrity_task2._snapshot_identity(before)
                 )
+
+
+# --- R1C Task 3 RED: read-only media adapters and strict Engineer JSON ---
+
+_TASK3_MEDIA_LIMITS = {
+    "max_image_pixels": 16_000_000,
+    "max_pdf_pages": 64,
+    "max_cad_header_bytes": 4096,
+    "max_json_depth": 16,
+    "max_json_containers": 4096,
+    "max_json_string_chars": 65_536,
+    "max_json_key_chars": 1024,
+    "max_json_number_chars": 128,
+}
+
+
+def _task3_observe(kind: str, media_type: str, payload: bytes) -> dict[str, object]:
+    import io
+
+    observer = getattr(_source_integrity_task2, "_observe_media", None)
+    assert observer is not None, "R1C Task 3 RED: media observer is missing"
+    return observer(
+        kind=kind,
+        declared_media_type=media_type,
+        parser_file=io.BytesIO(payload),
+        media_limits=dict(_TASK3_MEDIA_LIMITS),
+    )
+
+
+def test_task3_requires_parser_isolated_duplicate_handle_api() -> None:
+    assert hasattr(_source_integrity_task2._WindowsHandleAdapter, "duplicate_for_parser"), (
+        "R1C Task 3 RED: parser-isolated duplicate-handle custody is missing"
+    )
+
+
+def test_task3_requires_complete_media_custody_entrypoint() -> None:
+    assert hasattr(_source_integrity_task2, "inspect_source_bundle_media"), (
+        "R1C Task 3 RED: complete media-custody entrypoint is missing"
+    )
+
+
+def test_task3_png_content_observation_is_bounded_and_structural() -> None:
+    observed = _task3_observe("IMAGE", "image/png", _PNG_1X1)
+    assert observed["observed_media_type"] == "image/png"
+    assert observed["media_metadata"] == _PNG_1X1_METADATA
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not-an-image",
+        b"\x89PNG\r\n\x1a\ntruncated",
+    ],
+)
+def test_task3_image_malformed_or_truncated_blocks(payload: bytes) -> None:
+    with pytest.raises(SourceIntegrityError, match="UNSUPPORTED_MEDIA|MALFORMED_MEDIA"):
+        _task3_observe("IMAGE", "image/png", payload)
+
+
+def test_task3_declared_vs_observed_media_mismatch_blocks() -> None:
+    with pytest.raises(SourceIntegrityError, match="MEDIA_MISMATCH"):
+        _task3_observe("IMAGE", "image/jpeg", _PNG_1X1)
+
+
+def test_task3_pdf_strict_parser_observes_only_bounded_structure() -> None:
+    import io
+    from pypdf import PdfWriter
+
+    buffer = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=144)
+    writer.write(buffer)
+    observed = _task3_observe("PDF", "application/pdf", buffer.getvalue())
+    assert observed["observed_media_type"] == "application/pdf"
+    metadata = observed["media_metadata"]
+    assert metadata["format"] == "PDF"
+    assert metadata["page_count"] == 1
+    assert "text" not in repr(metadata).lower()
+
+
+def test_task3_pdf_malformed_blocks_without_non_strict_fallback() -> None:
+    with pytest.raises(SourceIntegrityError, match="MALFORMED_MEDIA|UNSUPPORTED_MEDIA"):
+        _task3_observe("PDF", "application/pdf", b"%PDF-1.7\nnot-a-real-pdf")
+
+
+@pytest.mark.parametrize(
+    ("media_type", "payload", "expected_format"),
+    [
+        ("application/acad", b"AC1032\x00rest", "DWG"),
+        ("application/dxf", b"0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1032\n", "DXF"),
+        ("application/dxf", b"AutoCAD Binary DXF\r\n\x1a\x00rest", "DXF"),
+    ],
+)
+def test_task3_cad_header_only_observation(
+    media_type: str, payload: bytes, expected_format: str
+) -> None:
+    observed = _task3_observe("EXACT_BASE_CAD", media_type, payload)
+    assert observed["observed_media_type"] == media_type
+    assert observed["media_metadata"]["format"] == expected_format
+    assert set(observed["media_metadata"]) <= {"format", "version"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"AC10", b"UNKNOWN", b"0\nSECTION\n2\nENTITIES\n"],
+)
+def test_task3_cad_unknown_or_non_header_input_blocks(payload: bytes) -> None:
+    with pytest.raises(SourceIntegrityError, match="UNSUPPORTED_MEDIA|MALFORMED_MEDIA"):
+        _task3_observe("EXACT_BASE_CAD", "application/acad", payload)
+
+
+def test_task3_engineer_json_is_strict_and_structural() -> None:
+    observed = _task3_observe(
+        "ENGINEER_RECORD",
+        "application/json",
+        b'{"alpha":1,"nested":{"ok":true}}',
+    )
+    assert observed["observed_media_type"] == "application/json"
+    metadata = observed["media_metadata"]
+    assert metadata["format"] == "JSON"
+    assert metadata["root_type"] == "object"
+    assert "alpha" not in repr(metadata)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"a":1,"a":2}',
+        b'{"n":NaN}',
+        b'{"n":Infinity}',
+        b'[]',
+        b'\xff',
+    ],
+)
+def test_task3_engineer_json_rejects_ambiguous_or_unsafe_inputs(payload: bytes) -> None:
+    with pytest.raises(SourceIntegrityError, match="JSON_|UNSUPPORTED_MEDIA|RESOURCE_LIMIT"):
+        _task3_observe("ENGINEER_RECORD", "application/json", payload)
+
+
+def test_task3_engineer_json_depth_limit_is_server_owned() -> None:
+    deep = ("{\"a\":" * 20 + "0" + "}" * 20).encode("utf-8")
+    with pytest.raises(SourceIntegrityError, match="RESOURCE_LIMIT"):
+        _task3_observe("ENGINEER_RECORD", "application/json", deep)
+
+
+def test_task3_source_contains_no_ezdxf_ocr_model_provider_or_autocad_authority() -> None:
+    source = SOURCE_MODULE.read_text(encoding="utf-8")
+    for forbidden in (
+        "import ezdxf",
+        "primitive_ir_lib",
+        "pytesseract",
+        "openai",
+        "anthropic",
+        "autocad_plugin",
+        "mcp_integration_lib",
+    ):
+        assert forbidden not in source
