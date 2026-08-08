@@ -607,3 +607,116 @@ def test_40_module_ownership_does_not_expand_into_forbidden_authority_owners() -
     worker_lowered = WORKER_SOURCE.read_text(encoding="utf-8").lower()
     assert "file_ipc" not in worker_lowered
     assert "cad_truth_authority" not in worker_lowered
+
+
+def _raw_session(fx: object, process: _FakeProcessBoundary) -> CodexWorkerSession:
+    process.adapter = fx.adapter
+    sandbox = fx.worker_context.sandbox_policy
+    attestation, handle = process.start(
+        expected_disposable_root=Path(sandbox["roots"][0]),
+        expected_cwd=Path(sandbox["cwd"]),
+    )
+    return CodexWorkerSession(
+        handoff=fx.handoff,
+        binding=fx.binding,
+        authority_context=fx.authority,
+        worker_context=fx.worker_context,
+        process_boundary=process,
+        environment_attestation=attestation,
+        process_handle=handle,
+    )
+
+
+def test_41_missing_attestation_on_custom_start_boundary_fails_closed_before_provider_invoke(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert fx.adapter.calls == []
+    assert [name for name, _ in fx.process.calls] == ["start", "cleanup"]
+
+
+def test_42_caller_minted_matching_mapping_is_not_authorized_provider_provenance(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    process = _enable_attestation(fx)
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert fx.adapter.calls == []
+    assert [name for name, _ in process.calls] == ["start", "attest", "cleanup"]
+
+
+def test_43_resume_with_missing_attestation_fails_gap_before_provider_invoke(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    with pytest.raises(CodexWorkerError) as caught:
+        resume_codex_worker(
+            handoff=fx.handoff,
+            binding=fx.binding,
+            authority_context=fx.authority,
+            worker_context=fx.worker_context,
+            adapter=fx.adapter,
+            process_boundary=fx.process,
+            timeout_seconds=1.0,
+            now=NOW,
+        )
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert fx.adapter.calls == []
+    assert [name for name, _ in fx.process.calls] == ["start", "cleanup"]
+
+
+def test_44_fork_rejects_perfect_matching_mapping_from_caller_controlled_boundary(
+    tmp_path: Path,
+) -> None:
+    source = _fixture(tmp_path / "source")
+    target = _fresh_target(tmp_path / "target")
+    process = _AttestingBoundary(
+        lambda _request: _observation(target[1], target[3], target[2])
+    )
+    process.adapter = source.adapter
+    with pytest.raises(CodexWorkerError) as caught:
+        fork_codex_worker(
+            source_handoff=source.handoff,
+            source_binding=source.binding,
+            source_authority_context=source.authority,
+            source_worker_context=source.worker_context,
+            handoff=target[0],
+            binding=target[3],
+            authority_context=target[1],
+            worker_context=target[2],
+            adapter=source.adapter,
+            process_boundary=process,
+            timeout_seconds=1.0,
+            now=NOW,
+        )
+    assert caught.value.code == GAP
+    assert caught.value.primary_code == GAP
+    assert source.adapter.calls == []
+    assert [name for name, _ in process.calls] == ["start", "attest", "cleanup"]
+
+
+@pytest.mark.parametrize("operation", ["turn", "steer"])
+def test_45_session_lifecycle_rejects_caller_minted_provenance_and_cleans_without_candidate(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    fx = _fixture(tmp_path)
+    process = _AttestingBoundary(
+        lambda _request: _observation(fx.authority, fx.binding, fx.worker_context)
+    )
+    session = _raw_session(fx, process)
+    result = getattr(session, operation)({}, timeout_seconds=1.0, now=NOW)
+    _assert_failed(result, GAP)
+    assert result.candidate_output is None
+    assert result.promotion_safe is False
+    assert fx.adapter.calls == []
+    assert [name for name, _ in process.calls].count("cleanup") == 1
+    assert [request.operation for request in process.attest_calls] == [operation]
