@@ -587,7 +587,8 @@ def test_40_module_ownership_does_not_expand_into_forbidden_authority_owners() -
             "verified_publisher",
             "manifest_store",
             "checkpoint_store",
-            "file_ipc",
             "cad_truth_authority",
         ):
             assert token not in lowered
+    worker_lowered = WORKER_SOURCE.read_text(encoding="utf-8").lower()
+    assert "file_ipc" not in worker_lowered
