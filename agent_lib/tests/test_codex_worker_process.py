@@ -988,3 +988,38 @@ def test_remediation_round3_dead_issued_referent_does_not_transfer_authority(
         process_owner.exchange_worker_control(forged, {"operation": "probe"})
     assert caught.value.code == "WORKER_HANDLE_INVALID"
     assert attacker_api.attacker_touches == []
+
+
+def test_remediation_round3_stale_weakref_cleanup_cannot_revoke_later_same_id_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import gc
+    import weakref
+    import agent_lib.codex_worker_process as process_owner
+
+    monkeypatch.setattr(process_owner, "id", lambda _handle: 9001, raising=False)
+    first_api = _FakeProcessApi()
+    first_api.query_results = [(4101,), ()]
+    first = _launch_fake(tmp_path / "first", api=first_api)
+    second_api = _FakeProcessApi()
+    second_api.query_results = [(4101,), ()]
+    second = _launch_fake(tmp_path / "second", api=second_api)
+    first_ref = weakref.ref(first)
+
+    cleanup_worker_process(
+        first,
+        _clock=_FakeClock(0.0, 0.1),
+        _sleep=lambda _: None,
+    )
+    del first
+    gc.collect()
+    assert first_ref() is None
+
+    identity = second.snapshot_process_tree()
+    assert identity.verified is True and identity.root_pid == 4101
+    cleanup = cleanup_worker_process(
+        second,
+        _clock=_FakeClock(0.0, 0.1),
+        _sleep=lambda _: None,
+    )
+    assert cleanup.success is True
