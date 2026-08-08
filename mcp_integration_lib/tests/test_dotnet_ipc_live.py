@@ -55,10 +55,12 @@ def _lean_setup_prerequisites_available() -> bool:
 
 
 def _s2c_live_prerequisites_available() -> bool:
-    return (
-        os.getenv("CAD_AGENT_S2C_LIVE") == "1"
-        and _live_prerequisites_available()
-        and bool(os.getenv("CAD_AGENT_LEAN_DISPOSABLE_DWG"))
+    return os.getenv("CAD_AGENT_S2C_LIVE") == "1" and _live_prerequisites_available() and all(
+        bool(os.getenv(name))
+        for name in (
+            "CAD_AGENT_DOTNET_IPC_DIR",
+            "CAD_AGENT_LEAN_DISPOSABLE_DWG",
+        )
     )
 
 
@@ -172,6 +174,40 @@ class NativeRenderRequestShapeTests(unittest.TestCase):
             "publication",
         ):
             self.assertNotIn(forbidden_field, request)
+
+
+class LivePrerequisiteGuardTests(unittest.TestCase):
+    def test_s2c_live_requires_dotnet_ipc_directory(self) -> None:
+        names = (
+            "CAD_AGENT_S2C_LIVE",
+            "CAD_AGENT_FILE_IPC",
+            "CAD_AGENT_AUTOCAD_HWND",
+            "CAD_AGENT_AUTOCAD_LISP_PATH",
+            "CAD_AGENT_LEAN_DISPOSABLE_DWG",
+            "CAD_AGENT_DOTNET_IPC_DIR",
+        )
+        previous = {name: os.environ.get(name) for name in names}
+        try:
+            for name in names:
+                os.environ.pop(name, None)
+            os.environ.update(
+                {
+                    "CAD_AGENT_S2C_LIVE": "1",
+                    "CAD_AGENT_FILE_IPC": "1",
+                    "CAD_AGENT_AUTOCAD_HWND": "1234",
+                    "CAD_AGENT_AUTOCAD_LISP_PATH": r"C:\temp\synthetic-dispatch.lsp",
+                    "CAD_AGENT_LEAN_DISPOSABLE_DWG": (
+                        r"C:\temp\synthetic\lean-synthetic.dwg"
+                    ),
+                }
+            )
+            self.assertFalse(_s2c_live_prerequisites_available())
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
 
 def _cleanup_disposable_fixture_directory(
