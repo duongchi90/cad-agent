@@ -15,7 +15,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -41,6 +41,7 @@ from cad_agent.vision_handoff import (
     VisionHandoffError,
     fork_worker_thread,
     resume_worker_thread,
+    validate_provider_effective_attestation,
 )
 
 MAX_OPERATION_TIMEOUT_SECONDS = 30.0
@@ -56,9 +57,31 @@ _ALLOWED_EVENTS = frozenset(
         "provider.failed",
     }
 )
+_ATTESTED_OPERATIONS = frozenset({"start", "resume", "fork", "turn", "steer"})
+_ATTESTATION_OPERATION_PREFIX = "__attest__."
+_PROVIDER_ATTESTATION_FIELDS = frozenset(
+    {
+        "thread_id",
+        "instruction_sources",
+        "approval_mode",
+        "experimental_api",
+        "model_identity",
+        "config_sha256",
+        "adapter_version",
+        "sandbox_write_policy",
+        "cwd",
+        "writable_roots",
+        "full_access",
+        "auto_review",
+        "approval_escalation",
+        "transport",
+        "alternate_transports",
+    }
+)
 _CHILD_ERROR_CODES = frozenset(
     {
         "WORKER_SDK_INCOMPATIBLE",
+        "WORKER_SDK_ATTESTATION_GAP",
         "WORKER_PROVIDER_FAILED",
         "WORKER_PROVIDER_RESPONSE_INVALID",
         "WORKER_TIMEOUT",
@@ -67,7 +90,7 @@ _CHILD_ERROR_CODES = frozenset(
 
 
 class CodexWorkerError(RuntimeError):
-    """Categorical Task-4 failure without raw provider/private detail."""
+    """Categorical Task-4/5 failure without raw provider/private detail."""
 
     def __init__(
         self,
@@ -207,6 +230,7 @@ class CodexWorkerResult:
 class WorkerAdapter(Protocol):
     def ensure_compatible(self) -> None: ...
     def invoke(self, request: AdapterRequest) -> object: ...
+    def attest(self, request: AdapterRequest) -> object: ...
 
 
 class WorkerProcessBoundary(Protocol):
@@ -217,6 +241,7 @@ class WorkerProcessBoundary(Protocol):
         expected_cwd: Path,
     ) -> tuple[WorkerEnvironmentAttestation, object]: ...
     def invoke(self, handle: object, request: AdapterRequest) -> object: ...
+    def attest(self, handle: object, request: AdapterRequest) -> object: ...
     def cleanup(self, handle: object) -> object: ...
 
 
@@ -324,7 +349,7 @@ def _request_from_wire(value: Mapping[str, object]) -> AdapterRequest:
 
 
 class Task3ProcessBoundary:
-    """Concrete Task-3 child-control client for Task-4 lifecycle requests."""
+    """Concrete Task-3 child-control client for Task-4/5 lifecycle requests."""
 
     def __init__(
         self,
@@ -372,7 +397,7 @@ class Task3ProcessBoundary:
         )
         return attestation, handle
 
-    def invoke(self, handle: object, request: AdapterRequest) -> object:
+    def _exchange(self, handle: object, request: AdapterRequest) -> object:
         try:
             response = exchange_worker_control(handle, _request_to_wire(request))  # type: ignore[arg-type]
         except WorkerProcessError:
@@ -383,6 +408,20 @@ class Task3ProcessBoundary:
                 _fail("WORKER_PROVIDER_FAILED")
             _fail(worker_error)
         return response
+
+    def invoke(self, handle: object, request: AdapterRequest) -> object:
+        return self._exchange(handle, request)
+
+    def attest(self, handle: object, request: AdapterRequest) -> object:
+        if request.operation not in _ATTESTED_OPERATIONS:
+            _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+        attestation_request = replace(
+            request,
+            operation=f"{_ATTESTATION_OPERATION_PREFIX}{request.operation}",
+            input_payload=None,
+            cancelled=False,
+        )
+        return self._exchange(handle, attestation_request)
 
     def cleanup(self, handle: object) -> object:
         return cleanup_worker_process(handle)  # type: ignore[arg-type]
@@ -425,6 +464,21 @@ class LazyOfficialSdkAdapter:
             _fail("WORKER_SDK_INCOMPATIBLE")
         return delegate.invoke(request)
 
+    def attest(self, request: AdapterRequest) -> object:
+        self.ensure_compatible()
+        delegate = self._delegate
+        if delegate is None:
+            _fail("WORKER_SDK_INCOMPATIBLE")
+        provider_attest = getattr(delegate, "attest", None)
+        if not callable(provider_attest):
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        try:
+            return provider_attest(request)
+        except CodexWorkerError:
+            raise
+        except Exception:
+            _fail("WORKER_PROVIDER_FAILED")
+
 
 def run_codex_worker_child(
     *,
@@ -443,12 +497,32 @@ def run_codex_worker_child(
     def handler(payload: Mapping[str, object]) -> Mapping[str, object]:
         try:
             request = _request_from_wire(payload)
-            response = lazy.invoke(request)
+            attestation_operation = request.operation.startswith(_ATTESTATION_OPERATION_PREFIX)
+            if attestation_operation:
+                operation = request.operation[len(_ATTESTATION_OPERATION_PREFIX) :]
+                if operation not in _ATTESTED_OPERATIONS:
+                    return {"_worker_error": "WORKER_PROVIDER_RESPONSE_INVALID"}
+                request = replace(request, operation=operation)
+                response = lazy.attest(request)
+            else:
+                response = lazy.invoke(request)
             if not isinstance(response, Mapping):
-                return {"_worker_error": "WORKER_PROVIDER_RESPONSE_INVALID"}
+                return {
+                    "_worker_error": (
+                        "WORKER_SDK_ATTESTATION_GAP"
+                        if attestation_operation
+                        else "WORKER_PROVIDER_RESPONSE_INVALID"
+                    )
+                }
             thawed = _thaw_json_like(response)
             if not isinstance(thawed, Mapping):
-                return {"_worker_error": "WORKER_PROVIDER_RESPONSE_INVALID"}
+                return {
+                    "_worker_error": (
+                        "WORKER_SDK_ATTESTATION_GAP"
+                        if attestation_operation
+                        else "WORKER_PROVIDER_RESPONSE_INVALID"
+                    )
+                }
             return thawed
         except TimeoutError:
             return {"_worker_error": "WORKER_TIMEOUT"}
@@ -694,6 +768,47 @@ def _invoke_child(
         raise CodexWorkerError("WORKER_PROVIDER_FAILED") from None
 
 
+def _attest_provider_boundary(
+    process_boundary: WorkerProcessBoundary,
+    handle: object,
+    request: AdapterRequest,
+    *,
+    binding: BoundWorkerThread,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+) -> None:
+    attest = getattr(process_boundary, "attest", None)
+    if not callable(attest):
+        # Accepted Task-4 injected test boundaries predate Task 5. The concrete
+        # runtime boundary always exposes attestation and therefore fails closed.
+        if isinstance(process_boundary, Task3ProcessBoundary):
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        return
+    try:
+        observed = attest(handle, request)
+    except CodexWorkerError:
+        raise
+    except Exception:
+        _fail("WORKER_PROVIDER_FAILED")
+    if not isinstance(observed, Mapping):
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    try:
+        observed_fields = set(observed)
+    except Exception:
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    if not _PROVIDER_ATTESTATION_FIELDS.issubset(observed_fields):
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    try:
+        validate_provider_effective_attestation(
+            observed,
+            binding=binding,
+            authority_context=authority_context,
+            worker_context=worker_context,
+        )
+    except VisionHandoffError:
+        _fail("WORKER_AUTHORITY_MISMATCH")
+
+
 class CodexWorkerSession:
     __slots__ = (
         "_authority_context",
@@ -842,6 +957,22 @@ class CodexWorkerSession:
             )
         except CodexWorkerError:
             return self._cleanup_failure(operation, "WORKER_AUTHORITY_MISMATCH")
+        try:
+            _attest_provider_boundary(
+                self._process_boundary,
+                self._process_handle,
+                request,
+                binding=self._binding,
+                authority_context=self._authority_context,
+                worker_context=self._worker_context,
+            )
+        except CodexWorkerError as exc:
+            code = (
+                exc.code
+                if exc.code in {"WORKER_AUTHORITY_MISMATCH", "WORKER_SDK_ATTESTATION_GAP"}
+                else "WORKER_PROVIDER_FAILED"
+            )
+            return self._cleanup_failure(operation, code)
         started = time.monotonic()
         try:
             response = _invoke_child(self._process_boundary, self._process_handle, request)
@@ -1039,6 +1170,22 @@ def _open_codex_worker(
         cwd=str(cwd),
         timeout_seconds=timeout,
     )
+    try:
+        _attest_provider_boundary(
+            process_boundary,
+            handle,
+            request,
+            binding=binding,
+            authority_context=authority_context,
+            worker_context=worker_context,
+        )
+    except CodexWorkerError as exc:
+        primary = (
+            exc.code
+            if exc.code in {"WORKER_AUTHORITY_MISMATCH", "WORKER_SDK_ATTESTATION_GAP"}
+            else "WORKER_PROVIDER_FAILED"
+        )
+        _raise_open_failure(process_boundary, handle, primary)
     started = time.monotonic()
     try:
         response = _invoke_child(process_boundary, handle, request)
