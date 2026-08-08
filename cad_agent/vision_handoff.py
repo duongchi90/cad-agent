@@ -77,6 +77,25 @@ _DIMENSION_FIELDS = frozenset({"confirmed", "reference", "derived", "conflicting
 _PROTECTED_FIELDS = frozenset(
     {"datums", "geometry", "dimensions", "constraints", "layers", "blocks", "handles"}
 )
+_PROVIDER_EFFECTIVE_ATTESTATION_FIELDS = frozenset(
+    {
+        "thread_id",
+        "instruction_sources",
+        "approval_mode",
+        "experimental_api",
+        "model_identity",
+        "config_sha256",
+        "adapter_version",
+        "sandbox_write_policy",
+        "cwd",
+        "writable_roots",
+        "full_access",
+        "auto_review",
+        "approval_escalation",
+        "transport",
+        "alternate_transports",
+    }
+)
 
 
 class VisionHandoffError(ValueError):
@@ -570,6 +589,123 @@ def _worker_authority_context_identity(
         "policy_identity": policy_identity,
     }
     return _canonical_sha256(authority_payload)
+
+
+def validate_provider_effective_attestation(
+    value: object,
+    *,
+    binding: BoundWorkerThread,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+) -> None:
+    """Match provider-observed effective policy to existing server-owned authority."""
+
+    if not isinstance(value, Mapping) or set(value) != _PROVIDER_EFFECTIVE_ATTESTATION_FIELDS:
+        _fail("provider effective attestation shape mismatch")
+    if not isinstance(binding, BoundWorkerThread):
+        _fail("provider effective attestation authority mismatch")
+    if not isinstance(authority_context, ServerOwnedAuthorityContext):
+        _fail("provider effective attestation authority mismatch")
+    if not isinstance(worker_context, ServerOwnedWorkerBindingContext):
+        _fail("provider effective attestation authority mismatch")
+
+    instruction_sources = _validate_list_object(
+        value["instruction_sources"],
+        fields={"source_id", "role", "sha256"},
+        path="provider_effective_attestation.instruction_sources",
+    )
+    for index, source in enumerate(instruction_sources):
+        _identifier(
+            source["source_id"],
+            path=f"provider_effective_attestation.instruction_sources[{index}].source_id",
+        )
+        _identifier(
+            source["role"],
+            path=f"provider_effective_attestation.instruction_sources[{index}].role",
+        )
+        _sha256(
+            source["sha256"],
+            path=f"provider_effective_attestation.instruction_sources[{index}].sha256",
+        )
+    if len({source["source_id"] for source in instruction_sources}) != len(instruction_sources):
+        _fail("provider effective attestation instruction source mismatch")
+    if (
+        _canonical_bytes(instruction_sources)
+        != _canonical_bytes(binding.instruction_source_identity)
+        or _canonical_bytes(instruction_sources)
+        != _canonical_bytes(authority_context.instruction_sources)
+    ):
+        _fail("provider effective attestation instruction source mismatch")
+
+    provider_policy = authority_context.provider_policy
+    if not isinstance(provider_policy, Mapping) or set(provider_policy) != {
+        "approval_mode",
+        "experimental_api",
+        "model_identity",
+        "config_sha256",
+    }:
+        _fail("provider effective attestation authority mismatch")
+    model_config = binding.model_config_identity
+    if not isinstance(model_config, Mapping) or set(model_config) != {
+        "model_identity",
+        "config_sha256",
+    }:
+        _fail("provider effective attestation authority mismatch")
+    sandbox = binding.sandbox_policy
+    worker_sandbox = worker_context.sandbox_policy
+    if (
+        not isinstance(sandbox, Mapping)
+        or set(sandbox) != {"roots", "write_policy", "cwd"}
+        or not isinstance(worker_sandbox, Mapping)
+        or set(worker_sandbox) != {"roots", "write_policy", "cwd"}
+        or _canonical_bytes(sandbox) != _canonical_bytes(worker_sandbox)
+    ):
+        _fail("provider effective attestation authority mismatch")
+    writable_roots = _non_empty_string_list(
+        value["writable_roots"],
+        path="provider_effective_attestation.writable_roots",
+        minimum=1,
+    )
+
+    expected_policy_identity = _worker_policy_identity(authority_context, sandbox)
+    expected_authority_identity = _worker_authority_context_identity(
+        authority_context, expected_policy_identity
+    )
+    if (
+        binding.policy_identity != expected_policy_identity
+        or binding.authority_context_identity != expected_authority_identity
+        or binding.adapter_version != worker_context.adapter_version
+        or binding.adapter_version != SERVER_OWNED_ADAPTER_VERSION
+        or binding.thread_id != worker_context.observed_thread_id
+        or provider_policy["approval_mode"] != "deny_all"
+        or provider_policy["experimental_api"] is not False
+        or provider_policy["model_identity"] != model_config["model_identity"]
+        or provider_policy["config_sha256"] != model_config["config_sha256"]
+        or sandbox["write_policy"] != "DISPOSABLE_ONLY"
+        or sandbox["cwd"] != sandbox["roots"][0]
+    ):
+        _fail("provider effective attestation authority mismatch")
+
+    if (
+        value["thread_id"] != binding.thread_id
+        or value["approval_mode"] != "deny_all"
+        or value["approval_mode"] != provider_policy["approval_mode"]
+        or value["experimental_api"] is not False
+        or value["experimental_api"] != provider_policy["experimental_api"]
+        or value["model_identity"] != model_config["model_identity"]
+        or value["config_sha256"] != model_config["config_sha256"]
+        or value["adapter_version"] != binding.adapter_version
+        or value["sandbox_write_policy"] != sandbox["write_policy"]
+        or value["cwd"] != sandbox["cwd"]
+        or _canonical_bytes(writable_roots) != _canonical_bytes(sandbox["roots"])
+        or value["full_access"] is not False
+        or value["auto_review"] is not False
+        or value["approval_escalation"] is not False
+        or value["transport"] != "official_sdk"
+        or not isinstance(value["alternate_transports"], (list, tuple))
+        or len(value["alternate_transports"]) != 0
+    ):
+        _fail("provider effective attestation policy mismatch")
 
 
 def _validate_authority_context(
@@ -1124,5 +1260,6 @@ __all__ = [
     "fork_worker_thread",
     "resume_worker_thread",
     "validate_output_schema_binding",
+    "validate_provider_effective_attestation",
     "validate_vision_handoff",
 ]
