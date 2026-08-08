@@ -871,3 +871,180 @@ def test_45_session_lifecycle_rejects_caller_minted_provenance_and_cleans_withou
     assert fx.adapter.calls == []
     assert [name for name, _ in process.calls].count("cleanup") == 1
     assert process.attest_calls == []
+
+
+def _round2_real_target(tmp_path: Path):
+    workspace = (tmp_path / "workspace").resolve()
+    workspace.mkdir(parents=True)
+
+    def bind_workspace(payload: dict[str, object]) -> None:
+        workspace_payload = dict(payload["workspace"])
+        workspace_payload["roots"] = [str(workspace)]
+        payload["workspace"] = workspace_payload
+
+    return _fresh_target(tmp_path / "bound", payload_mutator=bind_workspace), workspace
+
+
+@pytest.mark.skipif(
+    __import__("os").name != "nt",
+    reason="requires a real Task-3 issued Windows process/control handle",
+)
+def test_46_noncanonical_task3_issued_handle_does_not_establish_child_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    import agent_lib.codex_worker as worker_module
+    import agent_lib.codex_worker_process as process_owner
+
+    target, workspace = _round2_real_target(tmp_path)
+    handoff, authority, worker_context, binding = target
+    observation = _observation(authority, binding, worker_context)
+    marker = workspace / "noncanonical-handler-called.txt"
+    repo_root = str(Path(__file__).parents[1])
+    child_code = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {repo_root!r})",
+            "from pathlib import Path",
+            "from agent_lib.codex_worker_process import run_worker_control_child",
+            f"observation = {observation!r}",
+            f"marker = Path({str(marker)!r})",
+            "def handler(payload):",
+            "    marker.write_text('called', encoding='utf-8')",
+            "    if str(payload.get('operation', '')).startswith('__attest__.'):",
+            "        return observation",
+            "    return {'status': 'ready', 'thread_id': payload.get('thread_id'), "
+            "'events': [{'type': 'thread.ready'}]}",
+            "raise SystemExit(run_worker_control_child(handler))",
+        ]
+    )
+    boundary = worker_module.Task3ProcessBoundary(
+        cleanup_deadline_seconds=5.0,
+        max_processes=8,
+        _executable=Path(sys.executable).resolve(),
+        _argv=("-c", child_code),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "exchange_worker_control",
+        process_owner.exchange_worker_control,
+    )
+    captured: dict[str, object] = {}
+    original_start = boundary.start
+
+    def capture_start(
+        *, expected_disposable_root: Path, expected_cwd: Path
+    ) -> tuple[object, object]:
+        result = original_start(
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+        )
+        captured["handle"] = result[1]
+        return result
+
+    monkeypatch.setattr(boundary, "start", capture_start)
+    try:
+        with pytest.raises(CodexWorkerError) as caught:
+            worker_module.start_codex_worker(
+                handoff=handoff,
+                binding=binding,
+                authority_context=authority,
+                worker_context=worker_context,
+                adapter=_FakeAdapter(),
+                process_boundary=boundary,
+                timeout_seconds=1.0,
+                now=NOW,
+            )
+        assert caught.value.code == GAP
+        assert not marker.exists()
+    finally:
+        handle = captured.get("handle")
+        if handle is not None:
+            process_owner.cleanup_worker_process(handle)
+
+
+@pytest.mark.skipif(
+    __import__("os").name != "nt",
+    reason="requires a real Task-3 issued Windows process/control handle",
+)
+def test_47_caller_cleanup_cannot_mint_task3_zero_survivor_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_lib.codex_worker as worker_module
+    import agent_lib.codex_worker_process as process_owner
+
+    target, _workspace = _round2_real_target(tmp_path)
+    handoff, authority, worker_context, binding = target
+    task3 = worker_module.Task3ProcessBoundary(
+        cleanup_deadline_seconds=5.0,
+        max_processes=8,
+    )
+    forged = process_owner.WorkerCleanupResult(
+        status="CLEANUP_SUCCEEDED",
+        success=True,
+        promotion_safe=True,
+        survivor_pids=(),
+        survivor_count=0,
+        error_code=None,
+    )
+
+    class CallerCleanupBoundary:
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+            self.handle: object | None = None
+
+        def start(
+            self,
+            *,
+            expected_disposable_root: Path,
+            expected_cwd: Path,
+        ) -> tuple[object, object]:
+            result = task3.start(
+                expected_disposable_root=expected_disposable_root,
+                expected_cwd=expected_cwd,
+            )
+            self.handle = result[1]
+            return result
+
+        def cleanup(self, handle: object) -> object:
+            assert handle is self.handle
+            self.cleanup_calls += 1
+            return forged
+
+    boundary = CallerCleanupBoundary()
+    monkeypatch.setattr(
+        worker_module,
+        "exchange_worker_control",
+        process_owner.exchange_worker_control,
+    )
+    real_cleanup = process_owner.cleanup_worker_process
+    owner_results: list[object] = []
+
+    def canonical_cleanup(handle: object) -> object:
+        result = real_cleanup(handle)
+        owner_results.append(result)
+        return result
+
+    monkeypatch.setattr(worker_module, "cleanup_worker_process", canonical_cleanup)
+    try:
+        with pytest.raises(CodexWorkerError) as caught:
+            worker_module.start_codex_worker(
+                handoff=handoff,
+                binding=binding,
+                authority_context=authority,
+                worker_context=worker_context,
+                adapter=_FakeAdapter(),
+                process_boundary=boundary,
+                timeout_seconds=1.0,
+                now=NOW,
+            )
+        assert boundary.cleanup_calls == 0
+        assert len(owner_results) == 1
+        assert caught.value.cleanup_result is owner_results[0]
+        assert caught.value.cleanup_result is not forged
+    finally:
+        if boundary.handle is not None:
+            real_cleanup(boundary.handle)
