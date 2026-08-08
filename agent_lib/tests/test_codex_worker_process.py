@@ -816,3 +816,38 @@ def test_remediation_unrelated_inheritable_handle_is_not_inherited_by_control_ch
         if handle is not None:
             cleanup_worker_process(handle)
         kernel32.CloseHandle(sentinel_handle)
+
+
+@pytest.mark.parametrize("operation", ["snapshot", "exchange", "cleanup"])
+def test_remediation_round2_caller_constructed_handle_never_acquires_task3_authority(
+    tmp_path: Path, operation: str
+) -> None:
+    import agent_lib.codex_worker_process as process_owner
+
+    prepared = _prepared(tmp_path)
+    api = _FakeControlApi()
+    api.query_results = [(4101,), ()]
+    forged = WorkerProcessHandle(
+        api=api,
+        job_handle="job-handle",
+        process_handle="process-handle",
+        root_pid=4101,
+        environment_attestation=prepared,
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+        control_read_handle="control-read",
+        control_write_handle="control-write",
+    )
+
+    with pytest.raises(WorkerProcessError) as caught:
+        if operation == "snapshot":
+            forged.snapshot_process_tree()
+        elif operation == "exchange":
+            process_owner.exchange_worker_control(forged, {"operation": "probe"})
+        else:
+            process_owner.cleanup_worker_process(
+                forged,
+                _clock=_FakeClock(0.0, 0.1),
+                _sleep=lambda _: None,
+            )
+    assert caught.value.code == "WORKER_HANDLE_INVALID"
