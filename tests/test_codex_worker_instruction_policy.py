@@ -1063,3 +1063,97 @@ def _task5_round2_authorized_cleanup_owner(monkeypatch: pytest.MonkeyPatch) -> N
         "cleanup_worker_process",
         _task3_harness_cleanup_worker_process,
     )
+
+
+@pytest.mark.skipif(
+    __import__("os").name != "nt",
+    reason="requires a real Task-3 issued Windows process/control handle",
+)
+def test_48_canonical_identity_with_caller_overridden_start_cannot_launch_foreign_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    import agent_lib.codex_worker as worker_module
+    import agent_lib.codex_worker_process as process_owner
+
+    target, workspace = _round2_real_target(tmp_path)
+    handoff, authority, worker_context, binding = target
+    observation = _observation(authority, binding, worker_context)
+    marker = workspace / "round3-foreign-child-called.txt"
+    repo_root = str(Path(__file__).parents[1])
+    child_code = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {repo_root!r})",
+            "from pathlib import Path",
+            "from agent_lib.codex_worker_process import run_worker_control_child",
+            f"observation = {observation!r}",
+            f"marker = Path({str(marker)!r})",
+            "def handler(payload):",
+            "    marker.write_text(str(payload.get('operation', 'called')), encoding='utf-8')",
+            "    if str(payload.get('operation', '')).startswith('__attest__.'):",
+            "        return observation",
+            "    return {'status': 'ready', 'thread_id': payload.get('thread_id'), "
+            "'events': [{'type': 'thread.ready'}]}",
+            "raise SystemExit(run_worker_control_child(handler))",
+        ]
+    )
+    boundary = worker_module.Task3ProcessBoundary(
+        cleanup_deadline_seconds=5.0,
+        max_processes=8,
+    )
+    canonical_executable, canonical_argv = worker_module._task5_round2_canonical_launch_identity()
+    assert type(boundary) is worker_module.Task3ProcessBoundary
+    assert boundary._executable == canonical_executable
+    assert boundary._argv == canonical_argv
+
+    captured: dict[str, object] = {}
+
+    def caller_start(
+        *,
+        expected_disposable_root: Path,
+        expected_cwd: Path,
+    ) -> tuple[object, object]:
+        attestation = process_owner.prepare_worker_environment(
+            disposable_root=expected_disposable_root,
+            cwd=expected_cwd,
+        )
+        handle = process_owner.launch_worker_process(
+            environment=attestation,
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", child_code),
+            cleanup_deadline_seconds=5.0,
+            max_processes=8,
+            control_channel=True,
+        )
+        captured["handle"] = handle
+        return attestation, handle
+
+    monkeypatch.setattr(boundary, "start", caller_start)
+    monkeypatch.setattr(
+        worker_module,
+        "exchange_worker_control",
+        process_owner.exchange_worker_control,
+    )
+    try:
+        with pytest.raises(CodexWorkerError) as caught:
+            worker_module.start_codex_worker(
+                handoff=handoff,
+                binding=binding,
+                authority_context=authority,
+                worker_context=worker_context,
+                adapter=_FakeAdapter(),
+                process_boundary=boundary,
+                timeout_seconds=1.0,
+                now=NOW,
+            )
+        assert caught.value.code == GAP
+        assert not marker.exists()
+    finally:
+        handle = captured.get("handle")
+        if handle is not None:
+            process_owner.cleanup_worker_process(handle)
