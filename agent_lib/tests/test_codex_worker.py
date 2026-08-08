@@ -878,6 +878,7 @@ def test_remediation_37_real_windows_child_control_is_job_bound_sanitized_and_cl
 
     root = tmp_path / "disposable"
     cwd = root / "cwd"
+    root.mkdir(parents=True)
     cwd.mkdir(parents=True)
     source_environment = {
         "PATH": os.environ.get("PATH", ""),
@@ -1595,3 +1596,113 @@ def test_remediation_40_start_provider_failure_preserves_cleanup_dominance(  # n
     assert SENTINEL not in str(caught.value) and SENTINEL not in repr(caught.value)
     if cleanup_mode == "survivor":
         assert caught.value.cleanup_result == _survivor_cleanup()
+
+
+# Round-3 harness adaptation: keep the exact concrete Task3ProcessBoundary and
+# its canonical start dispatch. Only the pre-existing Task-3 owner functions
+# are doubled for registered trusted test boundaries; all other calls delegate
+# to the real Task-3 owner implementation.
+_task3_round3_real_prepare = _worker_module.prepare_worker_environment
+_task3_round3_real_launch = _worker_module.launch_worker_process
+_TASK3_ROUND3_SOURCE_BOUNDARIES: dict[int, object] = {}
+_TASK3_ROUND3_PENDING_HANDLES: dict[int, object] = {}
+
+
+def _new_task3_round2_harness_boundary(*, child_only: bool = False) -> object:  # noqa: F811
+    source_environment: dict[str, str] = {}
+    boundary = _worker_module.Task3ProcessBoundary(
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+        source_environment=source_environment,
+    )
+    boundary.calls = []
+    boundary.cleanup_result = _task3_round2_successful_cleanup()
+    boundary.cleanup_failure = None
+    boundary.attestation_mutator = None
+    boundary.handle_mutator = None
+    boundary.adapter = None
+    boundary._compatible = False
+    boundary.attestation_factory = None
+    boundary.attest_calls = []
+    boundary.attestation_mutators = {}
+    boundary.attestation_responses = {}
+    boundary.attestation_failures = {}
+    boundary.requests = []
+    boundary.failures = {}
+    boundary.responses = {}
+    _TASK3_ROUND3_SOURCE_BOUNDARIES[id(source_environment)] = boundary
+    _TASK3_ROUND2_HARNESS_BOUNDARIES.add(boundary)
+    if child_only:
+        _TASK3_ROUND2_CHILD_ONLY_BOUNDARIES.add(boundary)
+    return boundary
+
+
+def _task3_round3_prepare_worker_environment(
+    *,
+    disposable_root: Path,
+    cwd: Path,
+    source_environment: Mapping[str, str] | None = None,
+    **kwargs: object,
+) -> WorkerEnvironmentAttestation:
+    boundary = (
+        None
+        if source_environment is None
+        else _TASK3_ROUND3_SOURCE_BOUNDARIES.get(id(source_environment))
+    )
+    if boundary is None:
+        return _task3_round3_real_prepare(
+            disposable_root=disposable_root,
+            cwd=cwd,
+            source_environment=source_environment,
+            **kwargs,
+        )
+    attestation, handle = _task3_round2_harness_start(
+        boundary,
+        expected_disposable_root=disposable_root,
+        expected_cwd=cwd,
+    )
+    _TASK3_ROUND3_PENDING_HANDLES[id(attestation)] = handle
+    return attestation
+
+
+def _task3_round3_launch_worker_process(
+    *,
+    environment: WorkerEnvironmentAttestation,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+    executable: Path,
+    argv: object,
+    cleanup_deadline_seconds: float,
+    max_processes: int,
+    control_channel: bool = False,
+    **kwargs: object,
+) -> object:
+    handle = _TASK3_ROUND3_PENDING_HANDLES.pop(id(environment), None)
+    if handle is None:
+        return _task3_round3_real_launch(
+            environment=environment,
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+            executable=executable,
+            argv=argv,
+            cleanup_deadline_seconds=cleanup_deadline_seconds,
+            max_processes=max_processes,
+            control_channel=control_channel,
+            **kwargs,
+        )
+    boundary = handle.boundary
+    if control_channel is not True:
+        raise AssertionError("trusted Task3 harness requires child control")
+    if Path(executable).resolve() != boundary._executable:
+        raise AssertionError("trusted Task3 harness executable drift")
+    if tuple(argv) != boundary._argv:
+        raise AssertionError("trusted Task3 harness argv drift")
+    if environment.disposable_root != Path(expected_disposable_root):
+        raise AssertionError("trusted Task3 harness root drift")
+    if environment.cwd != Path(expected_cwd):
+        raise AssertionError("trusted Task3 harness cwd drift")
+    return handle
+
+
+_worker_module.prepare_worker_environment = _task3_round3_prepare_worker_environment
+_worker_module.launch_worker_process = _task3_round3_launch_worker_process
