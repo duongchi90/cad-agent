@@ -202,15 +202,31 @@ class WorkerProcessHandle:
         )
 
 
-_ISSUED_WORKER_HANDLES: weakref.WeakSet[WorkerProcessHandle] = weakref.WeakSet()
+_ISSUED_WORKER_HANDLES: dict[
+    int, weakref.ReferenceType[WorkerProcessHandle]
+] = {}
 
 
 def _fail(code: str) -> None:
     raise WorkerProcessError(code)
 
 
+def _register_issued_handle(handle: WorkerProcessHandle) -> None:
+    handle_id = id(handle)
+
+    def discard(expired_ref: weakref.ReferenceType[WorkerProcessHandle]) -> None:
+        current = _ISSUED_WORKER_HANDLES.get(handle_id)
+        if current is expired_ref:
+            _ISSUED_WORKER_HANDLES.pop(handle_id, None)
+
+    _ISSUED_WORKER_HANDLES[handle_id] = weakref.ref(handle, discard)
+
+
 def _require_issued_handle(handle: object) -> WorkerProcessHandle:
-    if not isinstance(handle, WorkerProcessHandle) or handle not in _ISSUED_WORKER_HANDLES:
+    if not isinstance(handle, WorkerProcessHandle):
+        _fail("WORKER_HANDLE_INVALID")
+    reference = _ISSUED_WORKER_HANDLES.get(id(handle))
+    if reference is None or reference() is not handle:
         _fail("WORKER_HANDLE_INVALID")
     return handle
 
@@ -641,7 +657,7 @@ def launch_worker_process(
             control_read_handle=control_read_handle,
             control_write_handle=control_write_handle,
         )
-        _ISSUED_WORKER_HANDLES.add(handle)
+        _register_issued_handle(handle)
         return handle
     except WorkerProcessError:
         _safe_close(api, control_read_handle)
