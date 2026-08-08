@@ -1655,3 +1655,375 @@ def test_task4_has_no_parser_renderer_ocr_model_provider_autocad_or_filesystem_o
         "file ipc",
     ):
         assert forbidden_text not in source
+
+
+def test_task4_rejects_bundle_content_hash_mismatch_with_same_context_ids() -> None:
+    sf = _sf()
+    bundle = _source_bundle()
+    custody = _custody(bundle)
+    changed_bundle = copy.deepcopy(bundle)
+    changed_bundle["items"][0]["relative_path"] = "sources/rebound-customer-drawing.pdf"
+    assert changed_bundle["bundle_id"] == bundle["bundle_id"]
+    assert changed_bundle["run_id"] == bundle["run_id"]
+    with pytest.raises(sf.SourceFusionError, match=r"^CUSTODY_CONTEXT_MISMATCH$"):
+        sf.validate_page_locators(
+            _page_payload(custody),
+            source_bundle=changed_bundle,
+            custody=custody,
+        )
+
+
+def test_page_locator_rejects_mismatched_observed_pdf_sha256() -> None:
+    sf = _sf()
+    bundle = _source_bundle()
+    custody = _custody(bundle)
+    payload = _page_payload(custody)
+    payload[0]["observed_pdf_sha256"] = "9" * 64
+    payload[0]["page_locator_sha256"] = _page_locator_sha256(payload[0])
+    with pytest.raises(sf.SourceFusionError, match=r"^PAGE_FACT_MISMATCH$"):
+        sf.validate_page_locators(payload, source_bundle=bundle, custody=custody)
+
+
+def test_page_locator_rejects_mismatched_numeric_policy_version() -> None:
+    sf = _sf()
+    bundle = _source_bundle()
+    custody = _custody(bundle)
+    payload = _page_payload(custody)
+    payload[0]["numeric_policy_version"] = "r1c-numeric-policy-untrusted"
+    with pytest.raises(sf.SourceFusionError, match=r"^PAGE_LOCATOR_INVALID$"):
+        sf.validate_page_locators(payload, source_bundle=bundle, custody=custody)
+
+
+def test_page_locator_rejects_bool_physical_index() -> None:
+    sf = _sf()
+    bundle = _source_bundle()
+    custody = _custody(bundle)
+    payload = _page_payload(custody)
+    payload[0]["page_index"] = True
+    with pytest.raises(sf.SourceFusionError, match=r"^PAGE_LOCATOR_INVALID$"):
+        sf.validate_page_locators(payload, source_bundle=bundle, custody=custody)
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        ["12", "12", "12", "60"],
+        ["60", "12", "12", "60"],
+    ],
+)
+def test_pdf_region_rejects_reversed_or_degenerate_bounds(bounds: list[str]) -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    payload = _region_payload(custody, pages)
+    target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER)
+    target["bounds"] = _box(bounds)
+    target["region_locator_sha256"] = _region_locator_sha256(target)
+    with pytest.raises(sf.SourceFusionError, match=r"^REGION_BOUNDS_INVALID$"):
+        sf.validate_region_locators(payload, page_locators=pages, custody=custody)
+
+
+def test_pdf_region_rejects_bounds_inside_media_box_but_outside_selected_crop_box() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    payload = _region_payload(custody, pages)
+    target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER)
+    parent = _page_by_id(pages, _PAGE_99)
+    target["page_locator_sha256"] = parent["page_locator_sha256"]
+    target["box_kind"] = "CROP_BOX"
+    target["rotation"] = parent["rotation"]
+    target["user_unit"] = copy.deepcopy(parent["user_unit"])
+    target["bounds"] = _box(["0", "10", "10", "20"])
+    target["region_locator_sha256"] = _region_locator_sha256(target)
+    with pytest.raises(sf.SourceFusionError, match=r"^REGION_BOUNDS_OUT_OF_RANGE$"):
+        sf.validate_region_locators(payload, page_locators=pages, custody=custody)
+
+
+def test_region_rejects_arbitrary_third_coordinate_convention() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    payload = _region_payload(custody, pages)
+    target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER)
+    target["coordinate_convention"] = "PDF_TOP_LEFT_X_RIGHT_Y_DOWN"
+    with pytest.raises(sf.SourceFusionError, match=r"^REGION_LOCATOR_INVALID$"):
+        sf.validate_region_locators(payload, page_locators=pages, custody=custody)
+
+
+@pytest.mark.parametrize("field", ["page_locator_sha256", "render_provenance_sha256"])
+def test_direct_image_raster_region_rejects_non_null_parent_refs(field: str) -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    payload = _region_payload(custody, pages)
+    target = next(record for record in payload if record["region_id"] == _IMAGE_REGION_VIEW)
+    target[field] = "a" * 64
+    target["region_locator_sha256"] = _region_locator_sha256(target)
+    with pytest.raises(sf.SourceFusionError, match=r"^REGION_PARENT_MISMATCH$"):
+        sf.validate_region_locators(payload, page_locators=pages, custody=custody)
+
+
+def test_render_provenance_rejects_unknown_kind() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _pdf_render_record(custody, pages)
+    record["provenance_kind"] = "PDF_RASTERIZED"
+    with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
+        sf.validate_render_provenance(
+            [record],
+            page_locators=pages,
+            custody=custody,
+            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        )
+
+
+def test_pdf_render_accepts_valid_crop_box_binding() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    parent = _page_by_id(pages, _PAGE_99)
+    record = _pdf_render_record(custody, pages)
+    record["box_kind"] = "CROP_BOX"
+    record["selected_box"] = copy.deepcopy(parent["crop_box"])
+    record["render_provenance_sha256"] = _render_provenance_sha256(record)
+    normalized = sf.validate_render_provenance(
+        [record],
+        page_locators=pages,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )
+    assert normalized == _normalized_render([record])
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("sha256", "9" * 64),
+        ("image_width_px", 639),
+        ("image_height_px", 479),
+    ],
+)
+def test_direct_image_render_rejects_nested_primitive_source_document_mismatch(
+    field: str,
+    value: object,
+) -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _direct_image_render_record(custody)
+    record["primitive_source_document"][field] = value
+    record["render_provenance_sha256"] = _render_provenance_sha256(record)
+    with pytest.raises(sf.SourceFusionError, match=r"^PRIMITIVE_BINDING_MISMATCH$"):
+        sf.validate_render_provenance(
+            [record],
+            page_locators=pages,
+            custody=custody,
+            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,bad_value",
+    [
+        ("render_dpi", float("nan")),
+        ("render_dpi", float("inf")),
+        ("render_matrix", float("nan")),
+        ("render_matrix", float("-inf")),
+    ],
+)
+def test_pdf_render_rejects_nonfinite_dpi_or_matrix(
+    field: str,
+    bad_value: float,
+) -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _pdf_render_record(custody, pages)
+    if field == "render_dpi":
+        record[field] = _dpi(bad_value)
+    else:
+        record[field] = _matrix([bad_value, "0", "0", "-2", "0", "144"])
+    with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
+        sf.validate_render_provenance(
+            [record],
+            page_locators=pages,
+            custody=custody,
+            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,bad_value",
+    [
+        ("raster_width_px", True),
+        ("raster_height_px", -1),
+    ],
+)
+def test_direct_image_render_rejects_bool_or_negative_raster_dimensions(
+    field: str,
+    bad_value: object,
+) -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _direct_image_render_record(custody)
+    record[field] = bad_value
+    with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
+        sf.validate_render_provenance(
+            [record],
+            page_locators=pages,
+            custody=custody,
+            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        )
+
+
+def test_pdf_render_rejects_bool_pdf_page_index() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _pdf_render_record(custody, pages)
+    record["pdf_page_index"] = True
+    with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
+        sf.validate_render_provenance(
+            [record],
+            page_locators=pages,
+            custody=custody,
+            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        )
+
+
+def test_pdf_render_rejects_negative_primitive_source_page_index() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _pdf_render_record(custody, pages)
+    record["primitive_source_document"]["page_index"] = -1
+    with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
+        sf.validate_render_provenance(
+            [record],
+            page_locators=pages,
+            custody=custody,
+            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        )
+
+
+def test_pdf_render_filename_is_not_identity_authority() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    first = _pdf_render_record(custody, pages, file_name="customer-secret-page.png")
+    second = _pdf_render_record(custody, pages, file_name="renamed-transient-output.png")
+    assert first["render_provenance_sha256"] == second["render_provenance_sha256"]
+    assert sf.validate_render_provenance(
+        [first],
+        page_locators=pages,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    ) == sf.validate_render_provenance(
+        [second],
+        page_locators=pages,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )
+
+
+def test_render_provenance_closed_record_rejects_extra_path_field() -> None:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _pdf_render_record(custody, pages)
+    record["relative_path"] = r"C:\customer\volatile\render.png"
+    with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
+        sf.validate_render_provenance(
+            [record],
+            page_locators=pages,
+            custody=custody,
+            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        )
+
+
+def test_task4_architecture_uses_only_accepted_internal_owners_and_no_authority_surfaces() -> None:
+    _sf()
+    tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
+    allowed_internal_modules = {
+        "cad_agent.drawing_contracts",
+        "cad_agent.source_bundle",
+        "cad_agent.source_integrity",
+    }
+    internal_modules: set[str] = set()
+    imported_roots: set[str] = set()
+    canonical_owner_imported = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported_roots.add(alias.name.split(".")[0])
+                if alias.name == "cad_agent" or alias.name.startswith("cad_agent."):
+                    internal_modules.add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split(".")[0])
+            if node.module == "cad_agent" or node.module.startswith("cad_agent."):
+                internal_modules.add(node.module)
+            if node.module == "cad_agent.source_integrity":
+                canonical_owner_imported = canonical_owner_imported or any(
+                    alias.name == "canonicalize_r1c_quantity" for alias in node.names
+                )
+    assert internal_modules <= allowed_internal_modules
+    assert canonical_owner_imported
+
+    forbidden_import_roots = {
+        "importlib",
+        "socket",
+        "urllib",
+        "http",
+        "tempfile",
+        "glob",
+        "shutil",
+        "os",
+        "pathlib",
+        "subprocess",
+        "requests",
+        "builtins",
+        "io",
+        "PIL",
+        "pypdf",
+        "fitz",
+        "cv2",
+        "pytesseract",
+        "primitive_ir_lib",
+        "agent_lib",
+        "autocad_plugin",
+        "mcp_integration_lib",
+    }
+    assert imported_roots.isdisjoint(forbidden_import_roots)
+
+    def call_name(node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            prefix = call_name(node.value)
+            return f"{prefix}.{node.attr}" if prefix else node.attr
+        return ""
+
+    called_names = {
+        call_name(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    forbidden_calls = {
+        "__import__",
+        "builtins.__import__",
+        "importlib.import_module",
+        "open",
+        "builtins.open",
+        "io.open",
+        "eval",
+        "exec",
+    }
+    assert called_names.isdisjoint(forbidden_calls)
+    assert not any(
+        name == "round" or name.endswith(".quantize") or name.endswith(".normalize")
+        for name in called_names
+    )
+    assert "_canonicalize_r1c_quantity" in called_names
