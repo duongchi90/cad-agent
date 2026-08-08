@@ -427,6 +427,9 @@ class Task3ProcessBoundary:
         return cleanup_worker_process(handle)  # type: ignore[arg-type]
 
 
+_TASK3_CANONICAL_START = Task3ProcessBoundary.start
+
+
 class LazyOfficialSdkAdapter:
     """Lazy official-SDK import seam intended to execute inside the child."""
 
@@ -1135,9 +1138,16 @@ def _open_codex_worker(
         now=now,
     )
     try:
-        attestation, handle = process_boundary.start(
-            expected_disposable_root=root, expected_cwd=cwd
-        )
+        if type(process_boundary) is Task3ProcessBoundary:
+            attestation, handle = _TASK3_CANONICAL_START(
+                process_boundary,
+                expected_disposable_root=root,
+                expected_cwd=cwd,
+            )
+        else:
+            attestation, handle = process_boundary.start(
+                expected_disposable_root=root, expected_cwd=cwd
+            )
     except Exception:
         _fail("WORKER_PROCESS_START_FAILED")
     try:
@@ -1428,6 +1438,19 @@ def _task5_round2_is_canonical_boundary(
     )
 
 
+def _task5_round3_has_canonical_start_dispatch(
+    process_boundary: WorkerProcessBoundary,
+) -> bool:
+    if type(process_boundary) is not Task3ProcessBoundary:
+        return False
+    start = getattr(process_boundary, "start", None)
+    return (
+        callable(start)
+        and getattr(start, "__self__", None) is process_boundary
+        and getattr(start, "__func__", None) is _TASK3_CANONICAL_START
+    )
+
+
 _task5_round1_open_codex_worker = _open_codex_worker
 
 
@@ -1443,8 +1466,9 @@ def _task5_round2_open_codex_worker(
     timeout_seconds: float,
     now: datetime | None,
 ) -> CodexWorkerSession:
-    if type(process_boundary) is Task3ProcessBoundary and not _task5_round2_is_canonical_boundary(
-        process_boundary
+    if type(process_boundary) is Task3ProcessBoundary and (
+        not _task5_round2_is_canonical_boundary(process_boundary)
+        or not _task5_round3_has_canonical_start_dispatch(process_boundary)
     ):
         _fail("WORKER_SDK_ATTESTATION_GAP")
     return _task5_round1_open_codex_worker(
