@@ -328,3 +328,626 @@ def test_30_task5_canonical_start_guard_remains_effective() -> None:
     source = inspect.getsource(worker._task5_round2_open_codex_worker)
     assert "_task5_round2_is_canonical_boundary" in source
     assert "_task5_round3_has_canonical_start_dispatch" in source
+
+
+PRIVATE_SENTINEL = (
+    r"RAW_SECRET C:\customer\private\drawing.dwg "
+    "OPENAI_API_KEY=token stdout stderr"
+)
+
+
+class _MutableClock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+        self.calls = 0
+
+    def __call__(self) -> float:
+        self.calls += 1
+        return self.now
+
+
+class _ScriptedClock:
+    def __init__(self, *values: float) -> None:
+        self._values = iter(values)
+        self.last = 0.0
+
+    def __call__(self) -> float:
+        try:
+            self.last = next(self._values)
+        except StopIteration:
+            pass
+        return self.last
+
+
+class _DeadlineEvent(dict):
+    def __init__(
+        self,
+        *args,
+        clock: _MutableClock,
+        deadline: float,
+        expire_after_type: bool = False,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.clock = clock
+        self.deadline = deadline
+        self.expire_after_type = expire_after_type
+
+    def get(self, key, default=None):
+        if key == "type" and self.clock.now >= self.deadline:
+            raise AssertionError("event processed after operation deadline")
+        value = super().get(key, default)
+        if key == "type" and self.expire_after_type:
+            self.clock.now = self.deadline
+        return value
+
+
+def _assert_timeout(callable_obj) -> None:
+    with pytest.raises(CodexWorkerError) as caught:
+        callable_obj()
+    assert caught.value.code == "WORKER_TIMEOUT"
+    assert str(caught.value) == "WORKER_TIMEOUT"
+    assert PRIVATE_SENTINEL not in str(caught.value)
+
+
+def _adapter_request(
+    operation: str, *, timeout_seconds: float = 1.0, cancelled: bool = False
+) -> worker.AdapterRequest:
+    return worker.AdapterRequest(
+        operation=operation,
+        thread_id=THREAD_ID,
+        handoff_sha256="a" * 64,
+        run_id="RUN-001",
+        approval_mode="deny_all",
+        experimental_api=False,
+        model_identity="model-1",
+        config_sha256="b" * 64,
+        output_schema_bytes=b"{}",
+        output_schema_sha256="c" * 64,
+        output_validator_version="validator-1",
+        sandbox_roots=("C:/disposable/task6",),
+        cwd="C:/disposable/task6",
+        timeout_seconds=timeout_seconds,
+        cancelled=cancelled,
+    )
+
+
+def _clean_cleanup() -> worker_process.WorkerCleanupResult:
+    return worker_process.WorkerCleanupResult(
+        status="CLEANUP_SUCCEEDED",
+        success=True,
+        promotion_safe=True,
+        survivor_pids=(),
+        survivor_count=0,
+        error_code=None,
+    )
+
+
+def _bare_session(*, candidate: object = CANDIDATE) -> worker.CodexWorkerSession:
+    class _Binding:
+        thread_id = THREAD_ID
+
+    session = object.__new__(worker.CodexWorkerSession)
+    session._authority_context = object()
+    session._binding = _Binding()
+    session._cleanup_result = None
+    session._environment_attestation = None
+    session._handoff = object()
+    session._pending_candidate = candidate
+    session._process_boundary = object()
+    session._process_handle = object()
+    session._status = "READY"
+    session._terminal_result = None
+    session._worker_context = object()
+    return session
+
+
+def _install_request_builder(monkeypatch) -> None:
+    def build_request(
+        _self,
+        operation: str,
+        *,
+        input_payload: object | None,
+        timeout_seconds: float,
+        now,
+        cancelled: bool = False,
+    ):
+        del input_payload, now
+        return _adapter_request(
+            operation, timeout_seconds=timeout_seconds, cancelled=cancelled
+        )
+
+    monkeypatch.setattr(worker.CodexWorkerSession, "_request_with_now", build_request)
+
+
+def _install_clean_cleanup(monkeypatch, calls: list[object] | None = None) -> None:
+    def cleanup(process_boundary, handle):
+        del process_boundary
+        if calls is not None:
+            calls.append(handle)
+        return _clean_cleanup(), None
+
+    monkeypatch.setattr(worker, "_cleanup_evidence", cleanup)
+
+
+# Cell-4 RED hardening: non-turn lifecycle grammar must be closed too.
+@pytest.mark.parametrize(
+    ("operation", "events"),
+    [
+        ("resume", []),
+        ("resume", [_event("thread.ready"), _event("thread.ready")]),
+        ("resume", [_event("thread.ready"), _event("turn.completed")]),
+        ("fork", []),
+        ("fork", [_event("thread.ready"), _event("thread.ready")]),
+        ("fork", [_event("turn.completed")]),
+        ("steer", []),
+        ("steer", [_event("thread.ready")]),
+        ("steer", [_event("turn.completed"), _event("turn.completed")]),
+        ("steer", [_event("turn.completed"), _event("turn.started")]),
+        ("interrupt", []),
+        ("interrupt", [_event("turn.completed")]),
+        ("interrupt", [_event("turn.interrupted"), _event("turn.interrupted")]),
+        ("interrupt", [_event("turn.interrupted"), _event("turn.completed")]),
+        ("close", []),
+        ("close", [_event("turn.completed")]),
+        ("close", [_event("thread.closed"), _event("thread.closed")]),
+        ("close", [_event("thread.closed"), _event("turn.completed")]),
+    ],
+)
+def test_31_nonturn_lifecycle_rejects_missing_foreign_duplicate_or_late_events(
+    operation: str, events: list[dict[str, object]]
+) -> None:
+    _assert_provider_invalid(
+        _response(operation=operation, events=events), operation=operation
+    )
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [
+            _event("turn.started", sequence=10),
+            _event("turn.completed", sequence=12),
+        ],
+        [
+            _event("turn.started", sequence=10),
+            _event("turn.completed", sequence=9),
+        ],
+        [
+            _event("turn.started", sequence=10),
+            _event("turn.completed", sequence=10),
+        ],
+    ],
+)
+def test_32_steer_rejects_sequence_gap_rewind_or_duplicate(
+    events: list[dict[str, object]],
+) -> None:
+    _assert_provider_invalid(_response(operation="steer", events=events), operation="steer")
+
+
+@pytest.mark.parametrize(
+    ("operation", "terminal"),
+    [
+        ("resume", "thread.ready"),
+        ("fork", "thread.ready"),
+        ("steer", "turn.completed"),
+        ("interrupt", "turn.interrupted"),
+        ("close", "thread.closed"),
+    ],
+)
+def test_33_nonturn_malformed_unknown_failures_do_not_leak_private_payload(
+    operation: str, terminal: str
+) -> None:
+    response = _response(
+        operation=operation,
+        events=[
+            _event(terminal),
+            {"type": "foreign.event", "payload": PRIVATE_SENTINEL},
+        ],
+    )
+    with pytest.raises(CodexWorkerError) as caught:
+        _normalize(response, operation=operation)
+    assert caught.value.code == "WORKER_PROVIDER_RESPONSE_INVALID"
+    assert str(caught.value) == "WORKER_PROVIDER_RESPONSE_INVALID"
+    assert PRIVATE_SENTINEL not in str(caught.value)
+
+
+# The same absolute deadline must govern event acceptance. Adding a parameter
+# but checking only before/after the whole response is insufficient.
+def test_34_timeout_before_first_event_preempts_acceptance(monkeypatch) -> None:
+    deadline = 10.0
+    clock = _MutableClock(deadline)
+    event = _DeadlineEvent(
+        _event("turn.completed", sequence=1),
+        clock=clock,
+        deadline=deadline,
+    )
+    monkeypatch.setattr(worker.time, "monotonic", clock)
+
+    _assert_timeout(
+        lambda: worker._normalize_response(
+            _response(events=[event], candidate={"private": PRIVATE_SENTINEL}),
+            operation="turn",
+            expected_thread_id=THREAD_ID,
+            deadline=deadline,
+        )
+    )
+
+
+def test_35_timeout_between_progress_and_terminal_cannot_reset(monkeypatch) -> None:
+    deadline = 20.0
+    clock = _MutableClock(19.0)
+    progress = _DeadlineEvent(
+        _event("turn.started", sequence=1),
+        clock=clock,
+        deadline=deadline,
+        expire_after_type=True,
+    )
+    terminal = _DeadlineEvent(
+        _event("turn.completed", sequence=2),
+        clock=clock,
+        deadline=deadline,
+    )
+    monkeypatch.setattr(worker.time, "monotonic", clock)
+
+    _assert_timeout(
+        lambda: worker._normalize_response(
+            _response(events=[progress, terminal]),
+            operation="turn",
+            expected_thread_id=THREAD_ID,
+            deadline=deadline,
+        )
+    )
+
+
+def test_36_candidate_present_before_terminal_is_discarded_on_timeout(
+    monkeypatch,
+) -> None:
+    deadline = 30.0
+    clock = _MutableClock(29.0)
+    progress = _DeadlineEvent(
+        _event("turn.started", sequence=1, payload={"private": PRIVATE_SENTINEL}),
+        clock=clock,
+        deadline=deadline,
+        expire_after_type=True,
+    )
+    terminal = _DeadlineEvent(
+        _event("turn.completed", sequence=2),
+        clock=clock,
+        deadline=deadline,
+    )
+    monkeypatch.setattr(worker.time, "monotonic", clock)
+
+    _assert_timeout(
+        lambda: worker._normalize_response(
+            _response(
+                events=[progress, terminal],
+                candidate={"private": PRIVATE_SENTINEL},
+            ),
+            operation="turn",
+            expected_thread_id=THREAD_ID,
+            deadline=deadline,
+        )
+    )
+
+
+def test_37_one_deadline_is_minted_before_attestation_and_reused_for_invoke(
+    monkeypatch,
+) -> None:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    clock = _MutableClock(100.0)
+    monkeypatch.setattr(worker.time, "monotonic", clock)
+    seen: list[tuple[str, float | None, int]] = []
+
+    def attest(
+        process_boundary,
+        handle,
+        request,
+        *,
+        binding,
+        authority_context,
+        worker_context,
+        deadline=None,
+    ) -> None:
+        del process_boundary, handle, request, binding, authority_context, worker_context
+        seen.append(("attest", deadline, clock.calls))
+
+    def invoke(process_boundary, handle, request, *, deadline=None):
+        del process_boundary, handle, request
+        seen.append(("invoke", deadline, clock.calls))
+        return _response(events=[_event("turn.completed")])
+
+    monkeypatch.setattr(worker, "_attest_provider_boundary", attest)
+    monkeypatch.setattr(worker, "_invoke_child", invoke)
+
+    result = session.turn({"prompt": "safe"}, timeout_seconds=2.0)
+
+    assert result.success is True
+    assert [name for name, _deadline, _calls in seen] == ["attest", "invoke"]
+    assert seen[0][2] >= 1
+    assert seen[0][1] == seen[1][1] == 102.0
+
+
+def test_38_task5_attestation_and_work_forward_exact_same_control_deadline(
+    monkeypatch,
+) -> None:
+    seen: list[float | None] = []
+
+    def exchange(handle, payload, *, deadline=None):
+        del handle, payload
+        seen.append(deadline)
+        return {}
+
+    monkeypatch.setattr(worker, "exchange_worker_control", exchange)
+    request = _adapter_request("turn")
+    absolute_deadline = 250.5
+
+    worker._task5_exchange_child_control(
+        object(), request, attestation=True, deadline=absolute_deadline
+    )
+    worker._task5_exchange_child_control(
+        object(), request, attestation=False, deadline=absolute_deadline
+    )
+
+    assert seen == [absolute_deadline, absolute_deadline]
+
+
+@pytest.mark.skipif(
+    worker_process.os.name != "nt",
+    reason="Windows native control-pipe preemption evidence",
+)
+def test_39_blocked_control_read_is_preempted_by_absolute_deadline(tmp_path: Path) -> None:
+    root = tmp_path / "blocked-control"
+    cwd = root / "cwd"
+    cwd.mkdir(parents=True)
+    environment = worker_process.prepare_worker_environment(
+        disposable_root=root,
+        cwd=cwd,
+    )
+    handle = worker_process.launch_worker_process(
+        environment=environment,
+        expected_disposable_root=root,
+        expected_cwd=cwd,
+        executable=Path(worker.sys.executable).resolve(),
+        argv=("-c", "import time; time.sleep(30)"),
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+        control_channel=True,
+    )
+    started = worker_process.time.monotonic()
+    try:
+        with pytest.raises(worker_process.WorkerProcessError) as caught:
+            worker_process.exchange_worker_control(
+                handle,
+                {"operation": "probe"},
+                deadline=started + 0.25,
+            )
+        assert caught.value.code == "WORKER_TIMEOUT"
+        assert str(caught.value) == "WORKER_TIMEOUT"
+        assert worker_process.time.monotonic() - started < 2.0
+    finally:
+        cleanup = worker_process.cleanup_worker_process(handle)
+        assert cleanup.survivor_count == 0
+        assert cleanup.promotion_safe is True
+
+
+# Local CANCELLED must win before interrupt/ack and late provider output.
+def test_40_cancel_is_local_first_deadline_bounded_and_cleanup_always_runs(
+    monkeypatch,
+) -> None:
+    session = _bare_session(candidate={"private": PRIVATE_SENTINEL})
+    _install_request_builder(monkeypatch)
+    cleanup_calls: list[object] = []
+    _install_clean_cleanup(monkeypatch, cleanup_calls)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(300.0))
+    seen: list[tuple[str, float | None, bool]] = []
+
+    def invoke(process_boundary, handle, request, *, deadline=None):
+        del process_boundary, handle
+        seen.append((session.status, deadline, request.cancelled))
+        return _response(operation="interrupt", events=[_event("turn.interrupted")])
+
+    monkeypatch.setattr(worker, "_invoke_child", invoke)
+    result = session.cancel(timeout_seconds=1.0)
+
+    assert seen == [("CANCELLED", 301.0, True)]
+    assert cleanup_calls == [session._process_handle]
+    assert result.status == "CANCELLED"
+    assert result.candidate_output is None
+    assert result.promotion_safe is False
+    assert PRIVATE_SENTINEL not in repr(result)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _response(operation="interrupt", events=[]),
+        {
+            "status": "completed",
+            "thread_id": THREAD_ID,
+            "turn_id": TURN_ID,
+            "events": [
+                _event("turn.completed", payload={"private": PRIVATE_SENTINEL})
+            ],
+            "candidate_output": {"private": PRIVATE_SENTINEL},
+        },
+        {
+            "status": "cancelled",
+            "thread_id": THREAD_ID,
+            "events": [
+                _event("turn.interrupted", payload={"private": PRIVATE_SENTINEL})
+            ],
+            "failure_code": "WORKER_TIMEOUT",
+        },
+    ],
+)
+def test_41_cancel_rejects_missing_forged_late_or_provider_minted_ack(
+    monkeypatch, response: object
+) -> None:
+    session = _bare_session(candidate={"private": PRIVATE_SENTINEL})
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(400.0))
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: response,
+    )
+
+    result = session.cancel(timeout_seconds=1.0)
+
+    assert result.status == "CANCELLED"
+    assert result.candidate_output is None
+    assert result.promotion_safe is False
+    assert result.failure_code in {
+        "WORKER_INTERRUPT_FAILED",
+        "WORKER_PROVIDER_RESPONSE_INVALID",
+    }
+    assert PRIVATE_SENTINEL not in repr(result)
+
+
+def test_42_duplicate_interrupt_is_idempotent_and_ack_is_deadline_bounded(
+    monkeypatch,
+) -> None:
+    session = _bare_session(candidate={"private": PRIVATE_SENTINEL})
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(500.0))
+    deadlines: list[float | None] = []
+
+    def invoke(process_boundary, handle, request, *, deadline=None):
+        del process_boundary, handle, request
+        deadlines.append(deadline)
+        return _response(operation="interrupt", events=[_event("turn.interrupted")])
+
+    monkeypatch.setattr(worker, "_invoke_child", invoke)
+    first = session.interrupt(timeout_seconds=1.0)
+    second = session.interrupt(timeout_seconds=1.0)
+
+    assert second is first
+    assert deadlines == [501.0]
+    assert first.candidate_output is None
+    assert first.promotion_safe is False
+
+
+def test_43_timeout_terminal_ignores_all_late_provider_output(monkeypatch) -> None:
+    session = _bare_session(candidate={"private": PRIVATE_SENTINEL})
+    cleanup_calls: list[object] = []
+    _install_clean_cleanup(monkeypatch, cleanup_calls)
+    terminal = session._cleanup_failure("turn", "WORKER_TIMEOUT")
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: pytest.fail("late provider work ran after timeout"),
+    )
+
+    late = session.turn({"private": PRIVATE_SENTINEL}, timeout_seconds=1.0)
+
+    assert late is terminal
+    assert late.failure_code == "WORKER_TIMEOUT"
+    assert late.candidate_output is None
+    assert late.promotion_safe is False
+    assert cleanup_calls == [session._process_handle]
+    assert PRIVATE_SENTINEL not in repr(late)
+
+
+# Cleanup remains canonical Task-3 ownership with its own bounded deadline.
+def test_44_cleanup_survivor_dominates_primary_failure_and_blocks_promotion(
+    monkeypatch,
+) -> None:
+    class _CallerBoundary:
+        def cleanup(self, _handle):
+            raise AssertionError("caller cleanup authority must not run")
+
+    failed = worker_process.WorkerCleanupResult(
+        status="CLEANUP_FAILED",
+        success=False,
+        promotion_safe=False,
+        survivor_pids=(4102,),
+        survivor_count=1,
+        error_code="WORKER_CLEANUP_SURVIVORS",
+    )
+    canonical_calls: list[object] = []
+
+    def canonical(handle):
+        canonical_calls.append(handle)
+        return failed
+
+    monkeypatch.setattr(worker, "cleanup_worker_process", canonical)
+    session = _bare_session(candidate={"private": PRIVATE_SENTINEL})
+    session._process_boundary = _CallerBoundary()
+    result = session._cleanup_failure("turn", "WORKER_TIMEOUT")
+
+    assert canonical_calls == [session._process_handle]
+    assert result.failure_code == "WORKER_CLEANUP_FAILED"
+    assert result.cleanup_result == failed
+    assert result.candidate_output is None
+    assert result.promotion_safe is False
+    assert PRIVATE_SENTINEL not in repr(result)
+
+
+def test_45_cleanup_deadline_is_separate_bounded_and_sticky() -> None:
+    class _CleanupApi:
+        def __init__(self) -> None:
+            self.results = [(4101, 4102), (4102,)]
+
+        def query_job_process_ids(self, _job, *, max_processes: int):
+            assert max_processes == 8
+            return self.results.pop(0)
+
+        def terminate_job(self, _job) -> None:
+            return None
+
+        def close_handle(self, _handle) -> None:
+            return None
+
+    api = _CleanupApi()
+    handle = worker_process.WorkerProcessHandle(
+        api=api,
+        job_handle="job",
+        process_handle="process",
+        root_pid=4101,
+        environment_attestation=object(),
+        cleanup_deadline_seconds=0.1,
+        max_processes=8,
+    )
+    worker_process._register_issued_handle(handle)
+    first = worker_process.cleanup_worker_process(
+        handle,
+        _clock=_ScriptedClock(50.0, 50.2),
+        _sleep=lambda _seconds: None,
+    )
+    second = worker_process.cleanup_worker_process(
+        handle,
+        _clock=_ScriptedClock(99.0),
+        _sleep=lambda _seconds: None,
+    )
+
+    assert first.status == "CLEANUP_FAILED"
+    assert first.error_code == "WORKER_CLEANUP_SURVIVORS"
+    assert first.survivor_pids == (4102,)
+    assert first.promotion_safe is False
+    assert second == first
+
+
+@pytest.mark.parametrize(
+    "primary",
+    ["WORKER_TIMEOUT", "WORKER_CANCELLED", "WORKER_PROVIDER_FAILED"],
+)
+def test_46_timeout_cancel_provider_failure_all_cleanup_without_promotion(
+    monkeypatch, primary: str
+) -> None:
+    session = _bare_session(candidate={"private": PRIVATE_SENTINEL})
+    cleanup_calls: list[object] = []
+    _install_clean_cleanup(monkeypatch, cleanup_calls)
+    if primary == "WORKER_CANCELLED":
+        session._status = "CANCELLED"
+
+    result = session._cleanup_failure("turn", primary)
+
+    assert cleanup_calls == [session._process_handle]
+    assert result.candidate_output is None
+    assert result.promotion_safe is False
+    assert result.cleanup_result == _clean_cleanup()
+    assert PRIVATE_SENTINEL not in repr(result)
