@@ -53,9 +53,12 @@ def _pdf(
 
 
 def _derive(pdf_bytes: bytes | None = None, **overrides: object) -> dict[str, object]:
+    source_pdf = _pdf() if pdf_bytes is None else pdf_bytes
+    binding = _binding()
+    binding["pdf_artifact_sha256"] = _sha256(source_pdf)
     values = {
-        "pdf_bytes": _pdf() if pdf_bytes is None else pdf_bytes,
-        "native_binding": _binding(),
+        "pdf_bytes": source_pdf,
+        "native_binding": binding,
         "page_number": 1,
     }
     values.update(overrides)
@@ -90,6 +93,14 @@ def test_pdf_bytes_are_the_only_raster_authority_and_native_binding_is_closed() 
     assert evidence["dbmod_before"] == evidence["dbmod_after"] == 7
     assert "pdf_bytes" not in evidence
     assert "png_bytes" not in evidence
+
+
+def test_pdf_artifact_sha_mismatch_fails_closed() -> None:
+    contract = _contract()
+    binding = _binding()
+
+    with pytest.raises(contract.DerivedRasterEvidenceError):
+        _derive(native_binding=binding)
 
 
 @pytest.mark.parametrize(
@@ -155,3 +166,11 @@ def test_at_least_five_replays_have_one_deterministic_identity() -> None:
     assert len({result["pdf_sha256"] for result in results}) == 1
     assert len({result["png_sha256"] for result in results}) == 1
     assert all(result == results[0] for result in results)
+
+
+def test_pdf_content_changes_derived_raster_identity() -> None:
+    first = _derive(_pdf())
+    second = _derive(_pdf() + b"\n")
+
+    assert first["pdf_sha256"] != second["pdf_sha256"]
+    assert first["png_sha256"] != second["png_sha256"]

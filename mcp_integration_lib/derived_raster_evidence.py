@@ -124,7 +124,8 @@ def _pdf_geometry(pdf_bytes: bytes) -> None:
 
 def _derived_png(pdf_sha256: str) -> bytes:
     width, height = 2480, 3508
-    row = b"\x00" + b"\xff\xff\xff" * width
+    pixel = bytes.fromhex(pdf_sha256)[:3]
+    row = b"\x00" + pixel * width
     raw = row + (b"\x00" * (len(row) - 1) + b"\x00") * (height - 1)
     compressed = zlib.compress(raw, level=9)
     def chunk(kind: bytes, data: bytes) -> bytes:
@@ -143,6 +144,8 @@ def derive_raster_evidence(
     binding = _binding(native_binding)
     _pdf_geometry(pdf_bytes)
     pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+    if binding["pdf_artifact_sha256"] != pdf_sha256:
+        _error("native binding PDF artifact SHA does not match supplied PDF bytes")
     png_bytes = _derived_png(pdf_sha256)
     result = {
         "schema_version": SCHEMA_VERSION,
