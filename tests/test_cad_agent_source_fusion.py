@@ -2680,6 +2680,8 @@ def test_task6_public_surface_adds_only_the_four_planned_packet_apis() -> None:
         "validate_source_fusion_packet",
         "source_fusion_sha256",
         "require_source_fusion_match",
+        "build_source_fusion_evaluation",
+        "require_source_fusion_evaluation_match",
     ]
     assert sf.__all__ == expected
     assert list(inspect.signature(sf.build_source_fusion_packet).parameters) == [

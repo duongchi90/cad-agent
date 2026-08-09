@@ -18,10 +18,14 @@ from cad_agent.source_bundle import (
     validate_source_bundle as _validate_source_bundle,
 )
 from cad_agent.source_integrity import (
+    R1C_EXPIRY_POLICY_VERSION as _R1C_EXPIRY_POLICY_VERSION,
     R1C_NUMERIC_POLICY_VERSION as _R1C_NUMERIC_POLICY_VERSION,
+    SOURCE_FUSION_EVALUATION_SCHEMA_VERSION as _SOURCE_FUSION_EVALUATION_SCHEMA_VERSION,
     canonicalize_r1c_quantity as _canonicalize_r1c_quantity,
     source_custody_sha256 as _source_custody_sha256,
+    validate_source_fusion_evaluation as _validate_source_fusion_evaluation,
     validate_source_custody as _validate_source_custody,
+    _evaluation_timestamp as _evaluation_timestamp,
 )
 
 
@@ -2739,6 +2743,127 @@ def require_source_fusion_match(
         _fail("SOURCE_FUSION_MISMATCH")
 
 
+_TASK7_REFERENCE_FIELDS = {
+    "reference_sha256",
+    "issued_at_utc",
+    "expires_at_utc",
+}
+
+
+def _task7_timestamp(value: object, code: str) -> str:
+    try:
+        return _evaluation_timestamp(value)
+    except Exception:
+        _fail(code)
+
+
+def _task7_evaluated_reference_hashes(
+    value: object,
+    *,
+    evaluation_time_utc: object,
+) -> tuple[list[str], list[str]]:
+    if not isinstance(value, list):
+        _fail("EVALUATED_REFERENCES_INVALID")
+    evaluation_time = _task7_timestamp(
+        evaluation_time_utc,
+        "EVALUATION_TIME_INVALID",
+    )
+    normalized_hashes: list[str] = []
+    seen_hashes: set[str] = set()
+    blocking_codes: set[str] = set()
+    for reference in value:
+        reference_record = _closed(
+            reference,
+            _TASK7_REFERENCE_FIELDS,
+            "EVALUATED_REFERENCES_INVALID",
+        )
+        reference_hash = _sha256(
+            reference_record["reference_sha256"],
+            "EVALUATED_REFERENCES_INVALID",
+        )
+        if reference_hash in seen_hashes:
+            _fail("EVALUATED_REFERENCES_INVALID")
+        seen_hashes.add(reference_hash)
+        issued_at = _task7_timestamp(
+            reference_record["issued_at_utc"],
+            "EVALUATED_REFERENCES_INVALID",
+        )
+        expires_at = _task7_timestamp(
+            reference_record["expires_at_utc"],
+            "EVALUATED_REFERENCES_INVALID",
+        )
+        if expires_at <= issued_at:
+            _fail("EVALUATED_REFERENCES_INVALID")
+        if evaluation_time < issued_at:
+            blocking_codes.add("STALE_REFERENCE")
+        elif evaluation_time >= expires_at:
+            blocking_codes.add("EXPIRED_REFERENCE")
+        normalized_hashes.append(reference_hash)
+    return sorted(normalized_hashes), sorted(blocking_codes)
+
+
+def build_source_fusion_evaluation(
+    *,
+    fusion: object,
+    evaluation_time_utc: str,
+    evaluation_time_source: str,
+    evaluation_time_evidence_sha256: str,
+    expiry_policy_version: str,
+    evaluated_references: object,
+) -> dict[str, object]:
+    """Build deterministic injected-time reuse evidence for an immutable fusion."""
+    normalized_fusion = validate_source_fusion_packet(fusion)
+    if expiry_policy_version != _R1C_EXPIRY_POLICY_VERSION:
+        _fail("EXPIRY_POLICY_INVALID")
+    reference_hashes, blocking_codes = _task7_evaluated_reference_hashes(
+        evaluated_references,
+        evaluation_time_utc=evaluation_time_utc,
+    )
+    if "STALE_REFERENCE" in blocking_codes:
+        status = "STALE"
+    elif blocking_codes:
+        status = "BLOCKED_EXPIRED"
+    else:
+        status = "REUSABLE"
+    candidate = {
+        "schema_version": _SOURCE_FUSION_EVALUATION_SCHEMA_VERSION,
+        "run_id": str(normalized_fusion["source_bundle_sha256"]),
+        "source_fusion_sha256": source_fusion_sha256(normalized_fusion),
+        "fusion_input_sha256": normalized_fusion["fusion_input_sha256"],
+        "evaluation_time_utc": evaluation_time_utc,
+        "evaluation_time_source": evaluation_time_source,
+        "evaluation_time_evidence_sha256": evaluation_time_evidence_sha256,
+        "expiry_policy_version": expiry_policy_version,
+        "evaluated_reference_hashes": reference_hashes,
+        "status": status,
+        "blocking_codes": blocking_codes,
+    }
+    try:
+        return _validate_source_fusion_evaluation(candidate)
+    except Exception:
+        _fail("SOURCE_FUSION_EVALUATION_INVALID")
+
+
+def require_source_fusion_evaluation_match(
+    *,
+    fusion: object,
+    evaluation: object,
+) -> None:
+    """Require evaluation evidence to bind exactly to the supplied fusion."""
+    normalized_fusion = validate_source_fusion_packet(fusion)
+    try:
+        normalized_evaluation = _validate_source_fusion_evaluation(evaluation)
+    except Exception:
+        _fail("SOURCE_FUSION_EVALUATION_INVALID")
+    if (
+        normalized_evaluation["source_fusion_sha256"]
+        != source_fusion_sha256(normalized_fusion)
+        or normalized_evaluation["fusion_input_sha256"]
+        != normalized_fusion["fusion_input_sha256"]
+    ):
+        _fail("SOURCE_FUSION_EVALUATION_MISMATCH")
+
+
 __all__ = [
     "SOURCE_FUSION_SCHEMA_VERSION",
     "SourceFusionError",
@@ -2751,4 +2876,6 @@ __all__ = [
     "validate_source_fusion_packet",
     "source_fusion_sha256",
     "require_source_fusion_match",
+    "build_source_fusion_evaluation",
+    "require_source_fusion_evaluation_match",
 ]
