@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import importlib
+import inspect
 import json
 from pathlib import Path
 
@@ -267,9 +268,9 @@ def _handoff() -> dict[str, object]:
         "inspection_sha256": "5" * 64,
         "extraction_plan_sha256": "6" * 64,
         "base_source": {
-            "source_id": "base-cad-001",
-            "sha256": "7" * 64,
-            "revision": "rev-A",
+            "source_id": "base-vehicle-001",
+            "sha256": "a" * 64,
+            "revision": "rev-2026-08-05-01",
         },
         "candidate_input_sha256": "8" * 64,
         "candidate_output_sha256": "9" * 64,
@@ -280,8 +281,8 @@ def _handoff() -> dict[str, object]:
                 "source_handle": "A1B2",
                 "source_layer": "BODY",
                 "source_block": "CHASSIS_MAIN",
-                "source_sha256": "b" * 64,
-                "source_revision": "rev-A",
+                "source_sha256": "a" * 64,
+                "source_revision": "rev-2026-08-05-01",
                 "candidate_handle": "C3D4",
                 "transform": {
                     "rotation_degrees": 0.0,
@@ -295,20 +296,32 @@ def _handoff() -> dict[str, object]:
     }
 
 
-def _source(*, revision: str = "rev-A", sha256: str = "7" * 64) -> dict[str, str]:
-    return {"source_id": "base-cad-001", "sha256": sha256, "revision": revision}
+def _source(
+    *,
+    source_id: str = "base-vehicle-001",
+    revision: str = "rev-2026-08-05-01",
+    sha256: str = "a" * 64,
+) -> dict[str, str]:
+    return {"source_id": source_id, "sha256": sha256, "revision": revision}
+
+
+def _live_inspection() -> dict[str, object]:
+    fixture = Path(__file__).parents[1] / "mcp_integration_lib" / "tests" / "fixtures" / "exact-base-xref-inspection.json"
+    return json.loads(fixture.read_text(encoding="utf-8"))["inspection"]
 
 
 def test_reuse_handoff_is_closed_detached_and_canonical_hashable() -> None:
     module = _module()
     payload = _handoff()
     normalized = module.validate_base_cad_reuse_handoff(payload)
+    baseline_hash = module.base_cad_reuse_handoff_sha256(payload)
     assert normalized is not payload
     assert normalized["components"] is not payload["components"]
     assert normalized["schema_version"] == "base-cad-reuse-handoff-1.0"
     payload["base_source"]["revision"] = "mutated"
-    assert normalized["base_source"]["revision"] == "rev-A"
-    assert module.base_cad_reuse_handoff_sha256(payload) == module.base_cad_reuse_handoff_sha256(normalized)
+    assert normalized["base_source"]["revision"] == "rev-2026-08-05-01"
+    assert module.base_cad_reuse_handoff_sha256(payload) != baseline_hash
+    assert module.base_cad_reuse_handoff_sha256(normalized) == baseline_hash
 
 
 def test_reuse_handoff_hash_uses_existing_canonical_owner() -> None:
@@ -341,27 +354,220 @@ def test_reuse_handoff_malformed_or_forbidden_shape_fails_closed(mutation: dict[
 def test_frozen_reuse_evaluation_is_current_for_exact_source_identity() -> None:
     module = _module()
     result = module.evaluate_frozen_base_cad_reuse(
-        handoff=_handoff(), current_base_source=_source()
+        handoff=_handoff(), current_live_inspection=_live_inspection()
     )
     assert result["state"] == "CURRENT"
     assert result["affected_component_ids"] == []
 
 
-@pytest.mark.parametrize("current", [_source(revision="rev-B"), _source(sha256="c" * 64), _source(revision="rev-B", sha256="c" * 64)])
-def test_frozen_reuse_evaluation_requires_reextraction_on_identity_drift(current: dict[str, str]) -> None:
+@pytest.mark.parametrize(
+    ("current", "reason_codes"),
+    [
+        (_source(source_id="base-vehicle-002"), ["SOURCE_ID_CHANGED"]),
+        (_source(sha256="c" * 64), ["SOURCE_SHA256_CHANGED"]),
+        (_source(revision="rev-B"), ["SOURCE_REVISION_CHANGED"]),
+        (
+            _source(source_id="base-vehicle-002", revision="rev-B", sha256="c" * 64),
+            ["SOURCE_ID_CHANGED", "SOURCE_REVISION_CHANGED", "SOURCE_SHA256_CHANGED"],
+        ),
+    ],
+)
+def test_frozen_reuse_evaluation_requires_reextraction_on_identity_drift(
+    current: dict[str, str], reason_codes: list[str]
+) -> None:
     module = _module()
+    inspection = _live_inspection()
+    inspection["base_source"] = current
     result = module.evaluate_frozen_base_cad_reuse(
-        handoff=_handoff(), current_base_source=current
+        handoff=_handoff(), current_live_inspection=inspection
     )
     assert result["state"] == "STALE_REEXTRACTION_REQUIRED"
     assert result["affected_component_ids"] == ["component-A"]
+    assert result["affected_component_ids"] == sorted(result["affected_component_ids"])
+    assert result["reason_codes"] == sorted(reason_codes)
     assert result["previous_source"] == _handoff()["base_source"]
     assert result["current_source"] == current
 
 
 def test_reuse_evaluation_has_no_live_execution_or_current_pointer_fields() -> None:
     module = _module()
+    assert list(inspect.signature(module.evaluate_frozen_base_cad_reuse).parameters) == [
+        "handoff", "current_live_inspection"
+    ]
     result = module.evaluate_frozen_base_cad_reuse(
-        handoff=_handoff(), current_base_source=_source()
+        handoff=_handoff(), current_live_inspection=_live_inspection()
     )
-    assert set(result) == {"state", "prior_handoff_sha256", "affected_component_ids", "previous_source", "current_source"}
+    assert set(result) == {
+        "state", "prior_handoff_sha256", "affected_component_ids", "previous_source",
+        "current_source", "reason_codes",
+    }
+
+
+def test_current_live_inspection_must_match_root_and_component_source_identity() -> None:
+    module = _module()
+    payload = _handoff()
+    with pytest.raises(module.BaseCadAdapterError):
+        payload["components"][0]["source_sha256"] = "c" * 64
+        module.validate_base_cad_reuse_handoff(payload)
+
+    payload = _handoff()
+    with pytest.raises(module.BaseCadAdapterError):
+        payload["components"][0]["source_revision"] = "rev-B"
+        module.validate_base_cad_reuse_handoff(payload)
+
+    inspection = _live_inspection()
+    inspection["base_source"] = _source(source_id="base-vehicle-002")
+    result = module.evaluate_frozen_base_cad_reuse(
+        handoff=_handoff(), current_live_inspection=inspection
+    )
+    assert result["reason_codes"] == ["SOURCE_ID_CHANGED"]
+
+
+def _handoff_with_two_components() -> dict[str, object]:
+    payload = _handoff()
+    second = deepcopy(payload["components"][0])
+    second.update(
+        {
+            "logical_component_id": "component-B",
+            "source_handle": "C3D4",
+            "source_block": "CABIN_MAIN",
+            "candidate_handle": "E5F6",
+        }
+    )
+    payload["components"] = [second, payload["components"][0]]
+    payload["source_handle_to_candidate_handle"] = [
+        {"source_handle": "C3D4", "candidate_handle": "E5F6"},
+        {"source_handle": "A1B2", "candidate_handle": "C3D4"},
+    ]
+    return payload
+
+
+def test_handoff_component_and_mapping_permutations_are_deterministic() -> None:
+    module = _module()
+    first = _handoff_with_two_components()
+    second = deepcopy(first)
+    second["components"] = list(reversed(second["components"]))
+    second["source_handle_to_candidate_handle"] = list(reversed(second["source_handle_to_candidate_handle"]))
+    assert module.validate_base_cad_reuse_handoff(first) == module.validate_base_cad_reuse_handoff(second)
+    assert module.base_cad_reuse_handoff_sha256(first) == module.base_cad_reuse_handoff_sha256(second)
+
+
+def test_reversed_source_candidate_mapping_fails_closed() -> None:
+    module = _module()
+    payload = _handoff_with_two_components()
+    payload["source_handle_to_candidate_handle"] = [
+        {"source_handle": "A1B2", "candidate_handle": "E5F6"},
+        {"source_handle": "C3D4", "candidate_handle": "C3D4"},
+    ]
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload["components"].append(deepcopy(payload["components"][0])),
+        lambda payload: payload["components"][1].__setitem__("logical_component_id", "component-A"),
+        lambda payload: payload["components"][1].__setitem__("source_handle", "a1b2"),
+        lambda payload: payload["source_handle_to_candidate_handle"].pop(),
+        lambda payload: payload["source_handle_to_candidate_handle"].__setitem__(
+            0, {"source_handle": "orphan", "candidate_handle": "E5F6"}
+        ),
+        lambda payload: payload["source_handle_to_candidate_handle"].append(
+            {"source_handle": "extra", "candidate_handle": "extra-candidate"}
+        ),
+    ],
+)
+def test_duplicate_case_alias_or_orphan_mapping_fails_closed(mutation) -> None:
+    module = _module()
+    payload = _handoff_with_two_components()
+    mutation(payload)
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("components.0.source_sha256", "c" * 64),
+        ("components.0.source_revision", "rev-B"),
+        ("components.0.provenance", "GENERATED"),
+        ("components.0.source_handle", "changed-handle"),
+        ("components.0.candidate_handle", "changed-candidate"),
+    ],
+)
+def test_root_component_provenance_and_handle_mutations_fail_or_change_identity(
+    field: str, value: object
+) -> None:
+    module = _module()
+    payload = _handoff()
+    target = payload["components"][0]
+    target[field.split(".")[-1]] = value
+    if field.endswith("source_handle"):
+        with pytest.raises(module.BaseCadAdapterError):
+            module.validate_base_cad_reuse_handoff(payload)
+    elif field.endswith("candidate_handle"):
+        with pytest.raises(module.BaseCadAdapterError):
+            module.validate_base_cad_reuse_handoff(payload)
+    else:
+        with pytest.raises(module.BaseCadAdapterError):
+            module.validate_base_cad_reuse_handoff(payload)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload["components"][0]["transform"].__setitem__("path", "private"),
+        lambda payload: payload["components"][0]["transform"].pop("translation"),
+        lambda payload: payload["components"][0].__setitem__("unknown", "value"),
+        lambda payload: payload["base_source"].pop("revision"),
+    ],
+)
+def test_nested_forbidden_unknown_or_missing_fields_fail_closed(mutation) -> None:
+    module = _module()
+    payload = _handoff()
+    mutation(payload)
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
+
+
+def test_malformed_current_s3a_inspection_fails_closed_without_live_fallback() -> None:
+    module = _module()
+    inspection = _live_inspection()
+    inspection.pop("base_source")
+    with pytest.raises(module.BaseCadAdapterError):
+        module.evaluate_frozen_base_cad_reuse(
+            handoff=_handoff(), current_live_inspection=inspection
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda inspection: inspection.__setitem__("eligible", False),
+        lambda inspection: inspection.__setitem__("schema_version", "foreign-inspection-1.0"),
+        lambda inspection: inspection["base_source"].__setitem__("sha256", "C" * 64),
+        lambda inspection: inspection["components"].__getitem__(0).__setitem__(
+            "source_handle", "not-a-live-handle"
+        ),
+    ],
+)
+def test_foreign_or_ineligible_current_inspection_fails_closed(mutation) -> None:
+    module = _module()
+    inspection = _live_inspection()
+    mutation(inspection)
+    with pytest.raises(module.BaseCadAdapterError):
+        module.evaluate_frozen_base_cad_reuse(
+            handoff=_handoff(), current_live_inspection=inspection
+        )
+
+
+def test_slice_two_has_no_extraction_transport_or_current_pointer_owner() -> None:
+    module = _module()
+    assert not hasattr(module, "execute_base_cad_extraction")
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    for forbidden in (
+        "DotNetIPCClient", "exact_base_xref_extraction", "subprocess", "socket",
+        "current_pointer", "registry", "revision_store", "approval_issuer",
+    ):
+        assert forbidden not in source
