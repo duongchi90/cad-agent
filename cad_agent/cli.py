@@ -737,6 +737,7 @@ def _fidelity_review_queue_command(args: argparse.Namespace) -> int:
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
+        _validate_file_ipc_root,
         make_windows_dispatch_trigger,
         make_windows_lisp_trigger,
     )
@@ -747,7 +748,15 @@ def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
         raise CommandError("--timeout-s must be positive.")
     if not dispatcher.is_file():
         raise CommandError(f"AutoCAD dispatcher does not exist: {dispatcher}")
+    ipc_dir_value = os.environ.get("CAD_AGENT_FILE_IPC_DIR")
+    try:
+        ipc_root = _validate_file_ipc_root(ipc_dir_value)
+    except (OSError, ValueError) as exc:
+        raise CommandError("IPC_ROOT_INVALID: CAD_AGENT_FILE_IPC_DIR is invalid") from exc
+    if Path(ipc_dir_value) != ipc_root:
+        raise CommandError("IPC_ROOT_INVALID: CAD_AGENT_FILE_IPC_DIR is invalid")
     return FileIPCLiveMCPClient(
+        ipc_dir=str(ipc_root),
         trigger=make_windows_dispatch_trigger(hwnd),
         raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
         bootstrap_lisp_path=str(dispatcher),
