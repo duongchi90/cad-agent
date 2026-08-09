@@ -2485,3 +2485,93 @@ def test_task5_primitive_projection_preserves_full_task4_custody_binding_semanti
     for record in projection:
         assert isinstance(record, dict)
         assert _task5_mapping_contains_authoritative_binding(record, binding)
+
+
+def _task5_stable_task4_lineage_material(binding: dict[str, object]) -> dict[str, object]:
+    return {
+        key: copy.deepcopy(value)
+        for key, value in binding.items()
+        if key not in {"render_provenance_sha256", "primitive_artifact_sha256"}
+    }
+
+
+def test_task5_primitive_identity_changes_across_distinct_authoritative_task4_lineage() -> None:
+    artifact = _task5_primitive_artifact([_task5_primitive("prim-a")])
+    first_binding = _task5_source_bindings()[0]
+    alternate_binding = _task5_alternate_valid_source_binding()[0]
+
+    assert first_binding["source_id"] == alternate_binding["source_id"]
+    assert first_binding["observed_source_sha256"] == alternate_binding["observed_source_sha256"]
+    assert first_binding["raster_sha256"] == alternate_binding["raster_sha256"]
+    assert first_binding["source_custody_sha256"] != alternate_binding["source_custody_sha256"]
+    assert (
+        _task5_stable_task4_lineage_material(first_binding)
+        != _task5_stable_task4_lineage_material(alternate_binding)
+    )
+
+    first = _task5_project_primitive(artifact, bindings=[first_binding])
+    alternate = _task5_project_primitive(artifact, bindings=[alternate_binding])
+    assert _task5_primitive_signature(first) != _task5_primitive_signature(alternate)
+
+
+def test_task5_primitive_identity_lineage_mutation_is_not_binding_order_authority() -> None:
+    artifact = _task5_primitive_artifact([_task5_primitive("prim-a")])
+    for binding in (
+        _task5_source_bindings()[0],
+        _task5_alternate_valid_source_binding()[0],
+    ):
+        duplicated = [copy.deepcopy(binding), copy.deepcopy(binding)]
+        forward = _task5_project_primitive(artifact, bindings=duplicated)
+        reverse = _task5_project_primitive(artifact, bindings=list(reversed(duplicated)))
+        single = _task5_project_primitive(artifact, bindings=[binding])
+        assert _task5_primitive_signature(forward) == _task5_primitive_signature(reverse)
+        assert _task5_primitive_signature(forward) == _task5_primitive_signature(single)
+
+
+@pytest.mark.parametrize(
+    "constraint_ids",
+    [
+        ["dup-a"],
+        ["dup-a", "dup-b"],
+    ],
+    ids=["constraint-selects-1-of-3", "constraint-selects-2-of-3"],
+)
+def test_task5_each_semantic_object_rejects_its_own_duplicate_class_proper_subset(
+    constraint_ids: list[str],
+) -> None:
+    sf = _sf()
+    primitive_projection = _task5_three_duplicate_projection()
+    semantic = _task5_semantic_artifact(
+        primitive_ids=["dup-a", "dup-b", "dup-c"],
+        primitive_count=3,
+    )
+    assert semantic["parts"][0]["primitive_ids"] == ["dup-a", "dup-b", "dup-c"]
+    semantic["constraints"][0]["primitive_ids"] = list(constraint_ids)
+
+    with pytest.raises(
+        sf.SourceFusionError,
+        match=r"^DUPLICATE_OBSERVATION_AMBIGUITY$",
+    ):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+def test_task5_each_semantic_object_complete_duplicate_class_is_permutation_stable() -> None:
+    primitive_projection = _task5_three_duplicate_projection()
+    forward = _task5_semantic_artifact(
+        primitive_ids=["dup-a", "dup-b", "dup-c"],
+        primitive_count=3,
+    )
+    forward["constraints"][0]["primitive_ids"] = ["dup-a", "dup-b", "dup-c"]
+    reverse = _task5_semantic_artifact(
+        primitive_ids=["dup-c", "dup-b", "dup-a"],
+        primitive_count=3,
+        part_id="part-regenerated",
+        constraint_id="constraint-regenerated",
+    )
+    reverse["constraints"][0]["primitive_ids"] = ["dup-c", "dup-b", "dup-a"]
+
+    assert _task5_semantic_signature(
+        _task5_project_semantic(forward, primitive_projection)
+    ) == _task5_semantic_signature(
+        _task5_project_semantic(reverse, primitive_projection)
+    )
