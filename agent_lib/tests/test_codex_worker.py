@@ -878,6 +878,7 @@ def test_remediation_37_real_windows_child_control_is_job_bound_sanitized_and_cl
 
     root = tmp_path / "disposable"
     cwd = root / "cwd"
+    root.mkdir(parents=True)
     cwd.mkdir(parents=True)
     source_environment = {
         "PATH": os.environ.get("PATH", ""),
@@ -1091,3 +1092,617 @@ def test_remediation_45_no_forbidden_transport_or_real_provider_route_is_added()
     for token in forbidden:
         assert token not in worker_source
         assert token not in process_source
+
+
+# Task-5 test-harness amendment. Successful legacy regressions model the
+# authorized Task-3 child control seam; the original _FakeProcessBoundary stays
+# intentionally untrusted for provenance-adversarial tests.
+import agent_lib.codex_worker as _worker_module
+from agent_lib.codex_worker_process import WorkerProcessError as _HarnessWorkerProcessError
+
+_HARNESS_UNSET = object()
+
+
+def _harness_observation(
+    authority: object,
+    binding: object,
+    worker_context: object,
+) -> dict[str, object]:
+    policy = authority.provider_policy
+    sandbox = worker_context.sandbox_policy
+    return {
+        "thread_id": binding.thread_id,
+        "instruction_sources": [dict(item) for item in binding.instruction_source_identity],
+        "approval_mode": policy["approval_mode"],
+        "experimental_api": policy["experimental_api"],
+        "model_identity": binding.model_config_identity["model_identity"],
+        "config_sha256": binding.model_config_identity["config_sha256"],
+        "adapter_version": binding.adapter_version,
+        "sandbox_write_policy": sandbox["write_policy"],
+        "cwd": sandbox["cwd"],
+        "writable_roots": list(sandbox["roots"]),
+        "full_access": False,
+        "auto_review": False,
+        "approval_escalation": False,
+        "transport": "official_sdk",
+        "alternate_transports": [],
+    }
+
+
+class _Task3HarnessHandle(_FakeProcessHandle):
+    def __init__(
+        self,
+        attestation: WorkerEnvironmentAttestation,
+        boundary: "_Task3HarnessBoundary",
+    ) -> None:
+        super().__init__(attestation)
+        self.boundary = boundary
+
+
+class _Task3HarnessBoundary(_FakeProcessBoundary):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attestation_factory = None
+        self.attest_calls: list[AdapterRequest] = []
+        self.attestation_mutators: dict[str, object] = {}
+        self.attestation_responses: dict[str, object] = {}
+        self.attestation_failures: dict[str, BaseException] = {}
+        self.requests: list[AdapterRequest] = []
+
+    def start(
+        self,
+        *,
+        expected_disposable_root: Path,
+        expected_cwd: Path,
+    ) -> tuple[WorkerEnvironmentAttestation, object]:
+        attestation, raw_handle = super().start(
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+        )
+        handle = _Task3HarnessHandle(attestation, self)
+        handle.tree = raw_handle.tree
+        return attestation, handle
+
+    def control_attest(self, request: AdapterRequest) -> object:
+        self.calls.append(("attest", request))
+        self.attest_calls.append(request)
+        failure = self.attestation_failures.get(request.operation)
+        if failure is not None:
+            raise failure
+        response = self.attestation_responses.get(request.operation, _HARNESS_UNSET)
+        if response is not _HARNESS_UNSET:
+            return response
+        factory = self.attestation_factory
+        if not callable(factory):
+            raise CodexWorkerError("WORKER_SDK_ATTESTATION_GAP")
+        observed = factory(request)
+        if not isinstance(observed, dict):
+            return observed
+        copied = {
+            key: (
+                [dict(item) for item in value]
+                if key == "instruction_sources"
+                else list(value)
+                if key in {"writable_roots", "alternate_transports"}
+                else value
+            )
+            for key, value in observed.items()
+        }
+        mutator = self.attestation_mutators.get(request.operation)
+        if callable(mutator):
+            mutator(copied)
+        return copied
+
+    def control_invoke(self, request: AdapterRequest) -> object:
+        self.calls.append(("invoke", request))
+        self.requests.append(request)
+        adapter = self.adapter
+        if adapter is None:
+            raise AssertionError("fake child adapter not configured")
+        if not self._compatible:
+            adapter.ensure_compatible()
+            self._compatible = True
+        return adapter.invoke(request)
+
+
+class _ChildOnlyBoundary(_Task3HarnessBoundary):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: dict[str, BaseException] = {}
+        self.responses: dict[str, object] = {}
+
+    def control_invoke(self, request: AdapterRequest) -> object:
+        self.calls.append(("invoke", request))
+        self.requests.append(request)
+        failure = self.failures.get(request.operation)
+        if failure is not None:
+            raise failure
+        if request.operation in self.responses:
+            return self.responses[request.operation]
+        return _FakeAdapter().invoke(request)
+
+
+def _task3_harness_exchange(handle: object, payload: Mapping[str, object]) -> object:
+    if not isinstance(handle, _Task3HarnessHandle):
+        raise _HarnessWorkerProcessError("WORKER_HANDLE_INVALID")
+    request = _worker_module._request_from_wire(payload)
+    boundary = handle.boundary
+    try:
+        if request.operation.startswith(_worker_module._ATTESTATION_OPERATION_PREFIX):
+            operation = request.operation[len(_worker_module._ATTESTATION_OPERATION_PREFIX) :]
+            request = replace(request, operation=operation)
+            return boundary.control_attest(request)
+        return boundary.control_invoke(request)
+    except TimeoutError:
+        return {"_worker_error": "WORKER_TIMEOUT"}
+    except CodexWorkerError as exc:
+        return {"_worker_error": exc.code}
+    except Exception:
+        return {"_worker_error": "WORKER_PROVIDER_FAILED"}
+
+
+@pytest.fixture(autouse=True)
+def _authorized_task3_control_harness(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_worker_module, "exchange_worker_control", _task3_harness_exchange)
+
+
+def _fixture(tmp_path: Path, *, thread_id: str = "THREAD-001") -> _Fixture:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    schema_path = _write_schema(tmp_path / "schema.json")
+    handoff = _bind(schema_path)
+    authority = _authority_context(dict(handoff.payload))
+    worker_context = _worker_context(handoff, thread_id=thread_id)
+    binding = bind_worker_thread(
+        handoff,
+        thread_id=thread_id,
+        authority_context=authority,
+        worker_context=worker_context,
+        now=NOW,
+    )
+    adapter = _FakeAdapter()
+    process = _Task3HarnessBoundary()
+    process.adapter = adapter
+    process.attestation_factory = lambda _request: _harness_observation(
+        authority, binding, worker_context
+    )
+    return _Fixture(
+        schema_path=schema_path,
+        handoff=handoff,
+        authority=authority,
+        worker_context=worker_context,
+        binding=binding,
+        adapter=adapter,
+        process=process,
+    )
+
+
+def _start(fx: _Fixture, **overrides: object) -> CodexWorkerSession:
+    values = {
+        "handoff": fx.handoff,
+        "binding": fx.binding,
+        "authority_context": fx.authority,
+        "worker_context": fx.worker_context,
+        "adapter": fx.adapter,
+        "process_boundary": fx.process,
+        "timeout_seconds": 1.0,
+        "now": NOW,
+    }
+    values.update(overrides)
+    boundary = values.get("process_boundary")
+    if isinstance(boundary, _Task3HarnessBoundary):
+        if boundary.adapter is None:
+            boundary.adapter = fx.adapter
+        if boundary.attestation_factory is None:
+            boundary.attestation_factory = fx.process.attestation_factory
+    return start_codex_worker(**values)
+
+
+# Task-5 Round-2 test harness. Trusted behavior tests use the exact concrete
+# canonical Task3ProcessBoundary type while child control and cleanup evidence
+# remain test-only doubles of the existing Task-3 owner seams.
+import weakref
+
+_task3_round2_real_exchange = _worker_module.exchange_worker_control
+_task3_round2_real_cleanup = _worker_module.cleanup_worker_process
+_TASK3_ROUND2_HARNESS_BOUNDARIES: weakref.WeakSet[object] = weakref.WeakSet()
+_TASK3_ROUND2_CHILD_ONLY_BOUNDARIES: weakref.WeakSet[object] = weakref.WeakSet()
+
+# Export the trusted harness identity as the production concrete class. Tests
+# that import this name therefore verify the same exact-type predicate used by
+# production instead of a subclass or look-alike.
+_Task3HarnessBoundary = _worker_module.Task3ProcessBoundary
+
+
+def _task3_round2_successful_cleanup() -> WorkerCleanupResult:
+    return WorkerCleanupResult(
+        status="CLEANUP_SUCCEEDED",
+        success=True,
+        promotion_safe=True,
+        survivor_pids=(),
+        survivor_count=0,
+        error_code=None,
+    )
+
+
+def _task3_round2_harness_start(
+    boundary: object,
+    *,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+) -> tuple[WorkerEnvironmentAttestation, object]:
+    boundary.calls.append(("start", (expected_disposable_root, expected_cwd)))
+    root = Path(expected_disposable_root)
+    cwd = Path(expected_cwd)
+    codex_home = root / "codex-home"
+    temp_dir = root / "tmp"
+    attestation = WorkerEnvironmentAttestation(
+        environment=MappingProxyType(
+            {
+                "CODEX_HOME": str(codex_home),
+                "TEMP": str(temp_dir),
+                "TMP": str(temp_dir),
+            }
+        ),
+        environment_keys=("CODEX_HOME", "TEMP", "TMP"),
+        environment_sha256="a" * 64,
+        disposable_root=root,
+        cwd=cwd,
+        codex_home=codex_home,
+        temp_dir=temp_dir,
+        writable_roots=(cwd, codex_home, temp_dir),
+    )
+    mutator = boundary.attestation_mutator
+    if callable(mutator):
+        attestation = mutator(attestation)
+    handle = _Task3HarnessHandle(attestation, boundary)
+    handle_mutator = boundary.handle_mutator
+    if callable(handle_mutator):
+        handle_mutator(handle)
+    return attestation, handle
+
+
+def _new_task3_round2_harness_boundary(*, child_only: bool = False) -> object:
+    boundary = _worker_module.Task3ProcessBoundary(
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+    )
+    boundary.calls = []
+    boundary.cleanup_result = _task3_round2_successful_cleanup()
+    boundary.cleanup_failure = None
+    boundary.attestation_mutator = None
+    boundary.handle_mutator = None
+    boundary.adapter = None
+    boundary._compatible = False
+    boundary.attestation_factory = None
+    boundary.attest_calls = []
+    boundary.attestation_mutators = {}
+    boundary.attestation_responses = {}
+    boundary.attestation_failures = {}
+    boundary.requests = []
+    boundary.failures = {}
+    boundary.responses = {}
+
+    def start(
+        *,
+        expected_disposable_root: Path,
+        expected_cwd: Path,
+    ) -> tuple[WorkerEnvironmentAttestation, object]:
+        return _task3_round2_harness_start(
+            boundary,
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+        )
+
+    boundary.start = start
+    _TASK3_ROUND2_HARNESS_BOUNDARIES.add(boundary)
+    if child_only:
+        _TASK3_ROUND2_CHILD_ONLY_BOUNDARIES.add(boundary)
+    return boundary
+
+
+def _task3_round2_control_attest(boundary: object, request: AdapterRequest) -> object:
+    boundary.calls.append(("attest", request))
+    boundary.attest_calls.append(request)
+    failure = boundary.attestation_failures.get(request.operation)
+    if failure is not None:
+        raise failure
+    response = boundary.attestation_responses.get(request.operation, _HARNESS_UNSET)
+    if response is not _HARNESS_UNSET:
+        return response
+    factory = boundary.attestation_factory
+    if not callable(factory):
+        raise CodexWorkerError("WORKER_SDK_ATTESTATION_GAP")
+    observed = factory(request)
+    if not isinstance(observed, dict):
+        return observed
+    copied = {
+        key: (
+            [dict(item) for item in value]
+            if key == "instruction_sources"
+            else list(value)
+            if key in {"writable_roots", "alternate_transports"}
+            else value
+        )
+        for key, value in observed.items()
+    }
+    mutator = boundary.attestation_mutators.get(request.operation)
+    if callable(mutator):
+        mutator(copied)
+    return copied
+
+
+def _task3_round2_control_invoke(boundary: object, request: AdapterRequest) -> object:
+    boundary.calls.append(("invoke", request))
+    boundary.requests.append(request)
+    if boundary in _TASK3_ROUND2_CHILD_ONLY_BOUNDARIES:
+        failure = boundary.failures.get(request.operation)
+        if failure is not None:
+            raise failure
+        if request.operation in boundary.responses:
+            return boundary.responses[request.operation]
+        return _FakeAdapter().invoke(request)
+    adapter = boundary.adapter
+    if adapter is None:
+        raise AssertionError("fake child adapter not configured")
+    if not boundary._compatible:
+        adapter.ensure_compatible()
+        boundary._compatible = True
+    return adapter.invoke(request)
+
+
+def _task3_harness_exchange(handle: object, payload: Mapping[str, object]) -> object:  # noqa: F811
+    if not isinstance(handle, _Task3HarnessHandle):
+        return _task3_round2_real_exchange(handle, payload)
+    request = _worker_module._request_from_wire(payload)
+    boundary = handle.boundary
+    try:
+        if request.operation.startswith(_worker_module._ATTESTATION_OPERATION_PREFIX):
+            operation = request.operation[len(_worker_module._ATTESTATION_OPERATION_PREFIX) :]
+            request = replace(request, operation=operation)
+            return _task3_round2_control_attest(boundary, request)
+        return _task3_round2_control_invoke(boundary, request)
+    except TimeoutError:
+        return {"_worker_error": "WORKER_TIMEOUT"}
+    except CodexWorkerError as exc:
+        return {"_worker_error": exc.code}
+    except Exception:
+        return {"_worker_error": "WORKER_PROVIDER_FAILED"}
+
+
+def _task3_harness_cleanup_worker_process(handle: object) -> object:
+    boundary = getattr(handle, "boundary", None)
+    if boundary is None:
+        return _task3_round2_real_cleanup(handle)
+    calls = getattr(boundary, "calls", None)
+    if isinstance(calls, list):
+        calls.append(("cleanup", handle))
+    failure = getattr(boundary, "cleanup_failure", None)
+    if failure is not None:
+        raise failure
+    return getattr(boundary, "cleanup_result", _task3_round2_successful_cleanup())
+
+
+_task3_round2_original_fake_start = _FakeProcessBoundary.start
+
+
+def _task3_round2_fake_start(
+    self: _FakeProcessBoundary,
+    *,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+) -> tuple[WorkerEnvironmentAttestation, object]:
+    attestation, handle = _task3_round2_original_fake_start(
+        self,
+        expected_disposable_root=expected_disposable_root,
+        expected_cwd=expected_cwd,
+    )
+    handle.boundary = self
+    return attestation, handle
+
+
+_FakeProcessBoundary.start = _task3_round2_fake_start
+
+
+@pytest.fixture(autouse=True)
+def _authorized_task3_round2_cleanup_harness(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _worker_module,
+        "cleanup_worker_process",
+        _task3_harness_cleanup_worker_process,
+    )
+
+
+def _ChildOnlyBoundary() -> object:  # noqa: N802,F811
+    return _new_task3_round2_harness_boundary(child_only=True)
+
+
+def _fixture(tmp_path: Path, *, thread_id: str = "THREAD-001") -> _Fixture:  # noqa: F811
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    schema_path = _write_schema(tmp_path / "schema.json")
+    handoff = _bind(schema_path)
+    authority = _authority_context(dict(handoff.payload))
+    worker_context = _worker_context(handoff, thread_id=thread_id)
+    binding = bind_worker_thread(
+        handoff,
+        thread_id=thread_id,
+        authority_context=authority,
+        worker_context=worker_context,
+        now=NOW,
+    )
+    adapter = _FakeAdapter()
+    process = _new_task3_round2_harness_boundary()
+    process.adapter = adapter
+    process.attestation_factory = lambda _request: _harness_observation(
+        authority, binding, worker_context
+    )
+    return _Fixture(
+        schema_path=schema_path,
+        handoff=handoff,
+        authority=authority,
+        worker_context=worker_context,
+        binding=binding,
+        adapter=adapter,
+        process=process,
+    )
+
+
+def _start(fx: _Fixture, **overrides: object) -> CodexWorkerSession:  # noqa: F811
+    values = {
+        "handoff": fx.handoff,
+        "binding": fx.binding,
+        "authority_context": fx.authority,
+        "worker_context": fx.worker_context,
+        "adapter": fx.adapter,
+        "process_boundary": fx.process,
+        "timeout_seconds": 1.0,
+        "now": NOW,
+    }
+    values.update(overrides)
+    boundary = values.get("process_boundary")
+    if boundary in _TASK3_ROUND2_HARNESS_BOUNDARIES:
+        if boundary.adapter is None:
+            boundary.adapter = fx.adapter
+        if boundary.attestation_factory is None:
+            boundary.attestation_factory = fx.process.attestation_factory
+    return start_codex_worker(**values)
+
+
+@pytest.mark.parametrize(
+    ("cleanup_mode", "expected_code"),
+    [
+        ("exception", "WORKER_CLEANUP_FAILED"),
+        ("malformed", "WORKER_CLEANUP_EVIDENCE_INVALID"),
+        ("survivor", "WORKER_CLEANUP_FAILED"),
+    ],
+)
+def test_remediation_40_start_provider_failure_preserves_cleanup_dominance(  # noqa: F811
+    tmp_path: Path,
+    cleanup_mode: str,
+    expected_code: str,
+) -> None:
+    fx = _fixture(tmp_path)
+    fx.adapter.failures["start"] = RuntimeError(SENTINEL)
+    if cleanup_mode == "exception":
+        fx.process.cleanup_failure = RuntimeError(SENTINEL)
+    elif cleanup_mode == "malformed":
+        fx.process.cleanup_result = SimpleNamespace(status="CLEANUP_FAILED", raw=SENTINEL)
+    else:
+        fx.process.cleanup_result = _survivor_cleanup()
+
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx)
+    assert caught.value.code == expected_code
+    assert caught.value.primary_code == "WORKER_PROVIDER_FAILED"
+    assert SENTINEL not in str(caught.value) and SENTINEL not in repr(caught.value)
+    if cleanup_mode == "survivor":
+        assert caught.value.cleanup_result == _survivor_cleanup()
+
+
+# Round-3 harness adaptation: keep the exact concrete Task3ProcessBoundary and
+# its canonical start dispatch. Only the pre-existing Task-3 owner functions
+# are doubled for registered trusted test boundaries; all other calls delegate
+# to the real Task-3 owner implementation.
+_task3_round3_real_prepare = _worker_module.prepare_worker_environment
+_task3_round3_real_launch = _worker_module.launch_worker_process
+_TASK3_ROUND3_SOURCE_BOUNDARIES: dict[int, object] = {}
+_TASK3_ROUND3_PENDING_HANDLES: dict[int, object] = {}
+
+
+def _new_task3_round2_harness_boundary(*, child_only: bool = False) -> object:  # noqa: F811
+    source_environment: dict[str, str] = {}
+    boundary = _worker_module.Task3ProcessBoundary(
+        cleanup_deadline_seconds=1.0,
+        max_processes=8,
+        source_environment=source_environment,
+    )
+    boundary.calls = []
+    boundary.cleanup_result = _task3_round2_successful_cleanup()
+    boundary.cleanup_failure = None
+    boundary.attestation_mutator = None
+    boundary.handle_mutator = None
+    boundary.adapter = None
+    boundary._compatible = False
+    boundary.attestation_factory = None
+    boundary.attest_calls = []
+    boundary.attestation_mutators = {}
+    boundary.attestation_responses = {}
+    boundary.attestation_failures = {}
+    boundary.requests = []
+    boundary.failures = {}
+    boundary.responses = {}
+    _TASK3_ROUND3_SOURCE_BOUNDARIES[id(source_environment)] = boundary
+    _TASK3_ROUND2_HARNESS_BOUNDARIES.add(boundary)
+    if child_only:
+        _TASK3_ROUND2_CHILD_ONLY_BOUNDARIES.add(boundary)
+    return boundary
+
+
+def _task3_round3_prepare_worker_environment(
+    *,
+    disposable_root: Path,
+    cwd: Path,
+    source_environment: Mapping[str, str] | None = None,
+    **kwargs: object,
+) -> WorkerEnvironmentAttestation:
+    boundary = (
+        None
+        if source_environment is None
+        else _TASK3_ROUND3_SOURCE_BOUNDARIES.get(id(source_environment))
+    )
+    if boundary is None:
+        return _task3_round3_real_prepare(
+            disposable_root=disposable_root,
+            cwd=cwd,
+            source_environment=source_environment,
+            **kwargs,
+        )
+    attestation, handle = _task3_round2_harness_start(
+        boundary,
+        expected_disposable_root=disposable_root,
+        expected_cwd=cwd,
+    )
+    _TASK3_ROUND3_PENDING_HANDLES[id(attestation)] = handle
+    return attestation
+
+
+def _task3_round3_launch_worker_process(
+    *,
+    environment: WorkerEnvironmentAttestation,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+    executable: Path,
+    argv: object,
+    cleanup_deadline_seconds: float,
+    max_processes: int,
+    control_channel: bool = False,
+    **kwargs: object,
+) -> object:
+    handle = _TASK3_ROUND3_PENDING_HANDLES.pop(id(environment), None)
+    if handle is None:
+        return _task3_round3_real_launch(
+            environment=environment,
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+            executable=executable,
+            argv=argv,
+            cleanup_deadline_seconds=cleanup_deadline_seconds,
+            max_processes=max_processes,
+            control_channel=control_channel,
+            **kwargs,
+        )
+    boundary = handle.boundary
+    if control_channel is not True:
+        raise AssertionError("trusted Task3 harness requires child control")
+    if Path(executable).resolve() != boundary._executable:
+        raise AssertionError("trusted Task3 harness executable drift")
+    if tuple(argv) != boundary._argv:
+        raise AssertionError("trusted Task3 harness argv drift")
+    if environment.disposable_root != Path(expected_disposable_root):
+        raise AssertionError("trusted Task3 harness root drift")
+    if environment.cwd != Path(expected_cwd):
+        raise AssertionError("trusted Task3 harness cwd drift")
+    return handle
+
+
+_worker_module.prepare_worker_environment = _task3_round3_prepare_worker_environment
+_worker_module.launch_worker_process = _task3_round3_launch_worker_process
