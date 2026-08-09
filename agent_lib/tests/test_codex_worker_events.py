@@ -1012,7 +1012,9 @@ def test_48_process_owner_retains_single_supervisor_transport_and_cleanup_author
     for marker in forbidden:
         assert marker not in process_source
 
+    concrete_api_source = inspect.getsource(worker_process._CtypesWindowsProcessApi)
     assert process_source.count("CreateJobObjectW(") == 1
-    assert process_source.count("def create_job(") == 1
+    assert concrete_api_source.count("def create_job(") == 1
+    assert concrete_api_source.count("CreateJobObjectW(") == 1
     assert process_source.count("def exchange_worker_control(") == 1
     assert process_source.count("def cleanup_worker_process(") == 1
