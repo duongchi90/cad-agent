@@ -80,6 +80,14 @@
   (vl-directory-files root "autocad_mcp_cmd_*.json" 1)
 )
 
+(defun mcp-request-part-candidates (root)
+  (vl-directory-files root "autocad_mcp_cmd_*.json.part" 1)
+)
+
+(defun mcp-result-part-candidates (root)
+  (vl-directory-files root "autocad_mcp_result_*.json.part" 1)
+)
+
 (defun mcp-file-size-valid-p (path / size)
   (setq size (vl-file-size path))
   (and size (<= size *mcp-max-json-bytes*))
@@ -1011,7 +1019,7 @@
   )
 )
 
-(defun mcp-dispatch-core (root request-name / request-id request-path request-text parsed request params command result envelope final-path)
+(defun mcp-dispatch-core (root request-name / request-id request-path request-text parsed request params command result envelope final-path part-path)
   (setq request-id (mcp-request-id-from-name request-name))
   (if (not request-id)
     (list nil *mcp-error-request-id*)
@@ -1035,8 +1043,10 @@
                       (list request-id *mcp-error-request-id*)
                       (progn
                         (setq final-path
-                          (mcp-path root (strcat *mcp-result-prefix* request-id ".json")))
-                        (if (vl-file-size final-path)
+                          (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
+                              part-path
+                          (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
+                        (if (or (vl-file-size final-path) (vl-file-size part-path))
                           (list request-id *mcp-error-result-conflict*)
                           (progn
                             (setq command (mcp-json-get request "command")
@@ -1072,7 +1082,7 @@
   )
 )
 
-(defun c:mcp-dispatch (/ root candidates request-name outcome request-id error-code)
+(defun c:mcp-dispatch (/ root candidates request-parts result-parts request-name outcome request-id error-code)
   (setq root
     (if (boundp '*cad-agent-file-ipc-root*)
       *cad-agent-file-ipc-root*
@@ -1084,34 +1094,46 @@
       (princ (strcat "\n" *mcp-error-root*))
     )
     (T
-      (setq candidates (mcp-request-candidates root))
+      (setq request-parts (mcp-request-part-candidates root)
+            result-parts (mcp-result-part-candidates root))
       (cond
-        ((not candidates)
-          (princ (strcat "\n" *mcp-error-missing*))
+        (request-parts
+          (princ (strcat "\n" *mcp-error-request*))
         )
-        ((> (length candidates) 1)
-          (princ (strcat "\n" *mcp-error-ambiguous*))
+        (result-parts
+          (princ (strcat "\n" *mcp-error-result-conflict*))
         )
         (T
-          (setq request-name (car candidates)
-                outcome (mcp-dispatch-core root request-name)
-                request-id (car outcome)
-                error-code (cadr outcome))
-          (if error-code
-            (progn
-              (if
-                (and
-                  request-id
-                  (mcp-hex-string-p request-id)
-                  (not
-                    (vl-file-size
-                      (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
+          (setq candidates (mcp-request-candidates root))
+          (cond
+            ((not candidates)
+              (princ (strcat "\n" *mcp-error-missing*))
+            )
+            ((> (length candidates) 1)
+              (princ (strcat "\n" *mcp-error-ambiguous*))
+            )
+            (T
+              (setq request-name (car candidates)
+                    outcome (mcp-dispatch-core root request-name)
+                    request-id (car outcome)
+                    error-code (cadr outcome))
+              (if error-code
+                (progn
+                  (if
+                    (and
+                      request-id
+                      (mcp-hex-string-p request-id)
+                      (not
+                        (vl-file-size
+                          (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
+                        )
+                      )
                     )
+                    (mcp-write-result root request-id (mcp-failure request-id error-code))
                   )
+                  (princ (strcat "\n" error-code))
                 )
-                (mcp-write-result root request-id (mcp-failure request-id error-code))
               )
-              (princ (strcat "\n" error-code))
             )
           )
         )
