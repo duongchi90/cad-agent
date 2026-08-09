@@ -1254,6 +1254,21 @@ class CodexWorkerSession:
                 deadline=deadline,
             )
         except CodexWorkerError as exc:
+            # Cancellation owns the terminal state, but malformed interrupt
+            # acknowledgements remain observable as failures. A completed
+            # response carrying late candidate output is the one exception:
+            # it must be discarded without changing the local cancellation.
+            if (
+                exc.code == "WORKER_PROVIDER_RESPONSE_INVALID"
+                and isinstance(response, Mapping)
+                and response.get("status") == "completed"
+                and response.get("candidate_output") is not None
+                and all(
+                    not isinstance(event, Mapping) or "payload" not in event
+                    for event in response.get("events", ())
+                )
+            ):
+                return self._cleanup_failure("cancel", "WORKER_CANCELLED")
             code = (
                 "WORKER_PROVIDER_RESPONSE_INVALID"
                 if exc.code == "WORKER_PROVIDER_RESPONSE_INVALID"
