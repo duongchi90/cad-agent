@@ -2,20 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add one pure, deterministic, bounded adapter that converts exact bytes from an already validated AutoCAD-native PDF artifact into one derived PNG page plus closed hash-bound evidence, without creating a second native renderer, source-custody owner, Primitive/OCR path, visual verdict owner, or persistence store.
+**Goal:** Add one pure, deterministic, bounded adapter that converts exact bytes from an already validated AutoCAD-native PDF artifact into one derived PNG page plus closed hash-bound evidence, while rejecting encrypted PDFs before page access and proving A4 from physical PDF page geometry.
 
-**Architecture:** Create one adjacent `mcp_integration_lib/derived_raster_evidence.py` module and one focused test file. The module reuses `mcp_integration_lib.autocad_render_evidence` unchanged for native request/evidence authority, verifies exact PDF bytes, rasterizes one page with the already locked PyMuPDF runtime, validates PNG bytes in memory, and hashes closed records only through `cad_agent.drawing_contracts.canonical_json_sha256()`. No AutoCAD/File IPC integration or persistence belongs in the first slice.
+**Architecture:** Create one adjacent `mcp_integration_lib/derived_raster_evidence.py` module and one focused test file. Reuse `mcp_integration_lib.autocad_render_evidence` unchanged for native authority, accept immutable `pdf_bytes`, fail closed on encryption, derive physical sheet identity from MediaBox + UserUnit, use CropBox only as selected visible raster extent, render one page directly with the locked PyMuPDF runtime, validate PNG bytes in memory, and hash closed records only through `cad_agent.drawing_contracts.canonical_json_sha256()`.
 
-**Tech Stack:** Python 3.11; PyMuPDF 1.28.0 from the accepted Windows lock; existing Pillow runtime dependency for PNG structural inspection; `mcp_integration_lib.autocad_render_evidence`; `cad_agent.drawing_contracts.canonical_json_sha256`; pytest; Ruff; repository architecture checker; canonical verifier.
+**Tech Stack:** Python 3.11; PyMuPDF 1.28.0; existing Pillow runtime dependency; accepted native render contract; canonical JSON hash owner; pytest; Ruff; architecture checker; canonical verifier.
 
 ## Global Constraints
 
-- Runtime is not authorized by Issue #144; every future runtime child Issue needs a fresh exact current-main SHA and explicit Master PO authorization.
-- Native `DWG -> PDF` authority remains the existing AutoCAD/.NET path plus `mcp_integration_lib.autocad_render_evidence`.
-- `cad_agent.source_fusion` remains input-source PDF custody/render provenance only.
+- Issue #144 / PR #145 remain planning only until Master PO issues a separate runtime task on a fresh exact current-main SHA.
+- Native `DWG -> PDF` authority remains existing AutoCAD/.NET + `mcp_integration_lib.autocad_render_evidence`.
+- `cad_agent.source_fusion` remains input-source custody/provenance only.
 - `cad_agent.visual_evidence` remains downstream packaging/freshness, not rendering.
 - `primitive_ir_lib.run_pdf()` remains Primitive/OCR/calibration orchestration and is not called by S2C.
-- First runtime slice adds no dependency, lock, workflow, contract-schema-directory, manifest, File IPC, AutoCAD, PC3/PMP/profile, OCR/model/provider, approval, verdict, repair or publisher change.
+- First runtime slice adds no dependency, lock, workflow, contract-directory, manifest, File IPC, AutoCAD, PC3/PMP/profile, OCR/model/provider, approval, verdict, repair or publisher change.
 - First runtime slice cumulative write-set is exactly:
 
 ```text
@@ -23,29 +23,27 @@ mcp_integration_lib/derived_raster_evidence.py
 mcp_integration_lib/tests/test_derived_raster_evidence.py
 ```
 
-- Every task is RED-first with a committed meaningful RED before its production edit.
-- Use forward commits only; no amend, rebase, squash, force-push or main-sync after a child branch is issued.
-- `PASS`, `FAIL`, `SKIP`, and `NOT RUN` remain literal.
-- AutoCAD Mechanical live and private/customer data are not required for first-slice offline acceptance.
+- Every runtime task is RED-first with a committed meaningful RED before its production edit.
+- Forward commits only; no amend/rebase/squash/force-push/main-sync after issuance.
+- `PASS`, `FAIL`, `SKIP`, `NOT RUN` remain literal.
+- AutoCAD Mechanical live/private data are not required for first-slice offline acceptance.
 
 ---
 
 ## 0. Mandatory runtime issuance rebaseline — READ ONLY
 
-No repository write occurs in this gate.
-
-- [ ] **Step 1: record exact current main**
+- [ ] **Step 1: fresh-fetch and record exact current main**
 
 ```powershell
 git fetch origin
 git rev-parse origin/main
 ```
 
-Use that exact SHA as the runtime issuance base.
+Master PO must issue that exact SHA before branch creation.
 
-- [ ] **Step 2: map accepted native symbols**
+- [ ] **Step 2: remap accepted owners**
 
-Record the exact current-main paths/symbols semantically equivalent to:
+Confirm current-main equivalents of:
 
 ```python
 mcp_integration_lib.autocad_render_evidence.validate_render_request
@@ -53,53 +51,40 @@ mcp_integration_lib.autocad_render_evidence.validate_render_evidence
 cad_agent.drawing_contracts.canonical_json_sha256
 ```
 
-Require the accepted native PDF evidence to still bind native artifact SHA-256, PDF page count, drawing/latest-mutation/Visual-Run-Manifest identity, layout, render options, `AUTOCAD_NATIVE`, read-only `changed=false`, and equal DBMOD.
+Require native PDF evidence still binds artifact SHA/page count, drawing/latest-mutation/Visual-Run-Manifest identity, layout/render options, `AUTOCAD_NATIVE`, `changed=false`, and equal DBMOD.
 
-Material contract drift blocks branch creation and requires Master PO rebaseline.
+Material drift -> STOP/rebaseline.
 
-- [ ] **Step 3: verify accepted renderer dependencies**
+- [ ] **Step 3: verify locked dependencies**
 
-Confirm the current accepted lock supplies PyMuPDF and Pillow without dependency changes. Record exact versions.
+Confirm PyMuPDF and Pillow remain accepted locked dependencies. A dependency/lock edit blocks this slice.
 
-A new dependency or lock edit blocks first-slice issuance.
+- [ ] **Step 4: verify no overlap**
 
-- [ ] **Step 4: verify path overlap**
+No active writer may own either exact S2C path.
 
-Require no active writer on:
+- [ ] **Step 5: verify byte-only boundary**
 
-```text
-mcp_integration_lib/derived_raster_evidence.py
-mcp_integration_lib/tests/test_derived_raster_evidence.py
-```
+First slice receives exact `pdf_bytes`; it does not discover/read a File IPC pathname.
 
-- [ ] **Step 5: verify clean bytes boundary**
-
-The first slice accepts `pdf_bytes` directly and does not change File IPC/artifact transport.
-
-If the system cannot obtain exact native PDF bytes through an existing approved handoff without adding a second path/File-IPC owner, return:
+If an additional path/File-IPC owner is required:
 
 ```text
 S2C DERIVED-RASTER SCOPE GAP — MASTER PO DECISION REQUIRED
 ```
 
-- [ ] **Step 6: create isolated runtime branch from exact issuance SHA**
-
-Do this only after Steps 1–5 pass.
-
 ---
 
 ## Runtime file structure
 
-### Task 1 creates
+### Exact cumulative write-set
 
 ```text
-mcp_integration_lib/derived_raster_evidence.py
-mcp_integration_lib/tests/test_derived_raster_evidence.py
+CREATE mcp_integration_lib/derived_raster_evidence.py
+CREATE mcp_integration_lib/tests/test_derived_raster_evidence.py
 ```
 
-### Tasks 2–3 modify
-
-Only the same two paths.
+Tasks 2–3 may modify only those same two paths.
 
 ### Do not modify
 
@@ -117,27 +102,11 @@ requirements/**
 .github/workflows/**
 ```
 
-Any third path is a STOP condition.
+Any third path -> STOP.
 
 ---
 
-### Task 1: Native PDF binding and closed evidence core
-
-**Files:**
-- Create first for RED: `mcp_integration_lib/tests/test_derived_raster_evidence.py`
-- Create after meaningful RED: `mcp_integration_lib/derived_raster_evidence.py`
-
-**Interfaces:**
-
-Consumes:
-
-```python
-validate_render_request(payload: object) -> dict[str, object]
-validate_render_evidence(payload: object, request: object | None = None) -> dict[str, object]
-canonical_json_sha256(payload: Mapping[str, object]) -> str
-```
-
-Produces:
+## Proposed public surface
 
 ```python
 DERIVED_RASTER_EVIDENCE_SCHEMA_VERSION = "derived-raster-evidence-1.0"
@@ -154,7 +123,8 @@ def derive_native_pdf_page(
     native_evidence: object,
     page_index: int,
     render_dpi: int = 300,
-) -> tuple[bytes, dict[str, object]]: ...
+) -> tuple[bytes, dict[str, object]]:
+    ...
 
 
 def validate_derived_raster_evidence(
@@ -164,7 +134,8 @@ def validate_derived_raster_evidence(
     png_bytes: bytes,
     native_request: object,
     native_evidence: object,
-) -> dict[str, object]: ...
+) -> dict[str, object]:
+    ...
 
 
 def derived_raster_evidence_sha256(
@@ -174,151 +145,109 @@ def derived_raster_evidence_sha256(
     png_bytes: bytes,
     native_request: object,
     native_evidence: object,
-) -> str: ...
+) -> str:
+    ...
 ```
 
-The `...` above denotes Python return-type notation for the future public API only; production implementation must contain no placeholder body.
+No pathname/output-path/password parameters may be added.
 
-- [ ] **Step 1: write synthetic native fixtures in the RED-only test file**
+---
 
-Use in-memory PyMuPDF PDFs. The basic non-A4 fixture must declare a neutral paper label so later A4 geometry enforcement does not invalidate Task-1 tests:
+### Task 1: Native binding, encryption refusal and closed evidence core
 
-```python
-import hashlib
-import fitz
+**Files:**
+- RED first: `mcp_integration_lib/tests/test_derived_raster_evidence.py`
+- Production only after meaningful RED: `mcp_integration_lib/derived_raster_evidence.py`
 
+**Consumes:** accepted native request/evidence validators and canonical JSON SHA owner.
 
-def make_pdf_bytes(width_pt: float = 200.0, height_pt: float = 100.0) -> bytes:
-    document = fitz.open()
-    page = document.new_page(width=width_pt, height=height_pt)
-    page.draw_line((10, 10), (190, 90), color=(0, 0, 0), width=1)
-    result = document.tobytes()
-    document.close()
-    return result
+**Produces:** the public surface above.
 
+- [ ] **Step 1: create synthetic in-memory PDF fixtures**
 
-def native_pair(pdf_bytes: bytes) -> tuple[dict[str, object], dict[str, object]]:
-    digest = hashlib.sha256(pdf_bytes).hexdigest()
-    request = {
-        "schema_version": "autocad-native-render-request-1.0",
-        "request_id": "native-pdf-001",
-        "run_id": "run-001",
-        "drawing_sha256": "a" * 64,
-        "latest_mutation_sha256": "b" * 64,
-        "visual_run_manifest_sha256": "c" * 64,
-        "layout": {"identity": "layout-001", "name": "Layout1"},
-        "artifact_kind": "PDF",
-        "render_options": {
-            "background": "white",
-            "dpi": 300,
-            "fit_to_paper": True,
-            "paper_size": "SYNTHETIC_CUSTOM",
-            "plot_style": "monochrome.ctb",
-        },
-        "requested_at": "2026-08-09T00:00:00Z",
-    }
-    evidence = {
-        "schema_version": "autocad-native-render-evidence-1.0",
-        "request_id": request["request_id"],
-        "run_id": request["run_id"],
-        "drawing_sha256": request["drawing_sha256"],
-        "latest_mutation_sha256": request["latest_mutation_sha256"],
-        "visual_run_manifest_sha256": request["visual_run_manifest_sha256"],
-        "layout": request["layout"],
-        "artifact_kind": "PDF",
-        "render_options": request["render_options"],
-        "renderer": "AUTOCAD_NATIVE",
-        "artifact": {"relative_path": "artifacts/layout.pdf", "sha256": digest, "page_count": 1},
-        "capture_timestamp": "2026-08-09T00:00:01Z",
-        "changed": False,
-        "dbmod_before": 0,
-        "dbmod_after": 0,
-        "warnings": [],
-    }
-    return request, evidence
-```
-
-- [ ] **Step 2: add Task-1 RED matrix**
-
-Cover:
+Use PyMuPDF-generated bytes only. Include:
 
 ```text
-missing module/public surface -> meaningful RED
-valid PDF pair + exact bytes -> PNG bytes + closed evidence
-request kind PNG -> reject
-evidence kind PNG -> reject
-request/evidence identity mismatch -> existing validator reject
-wrong PDF bytes -> NATIVE_PDF_HASH_MISMATCH
-parsed/native page-count mismatch -> PAGE_COUNT_MISMATCH
-negative/bool/non-int/out-of-range page index -> reject
-unknown derived field -> reject
-approval/verdict/repair/publication/current fields -> reject
-unsafe native relative path -> existing validator reject
-native request/evidence digest change -> derived identity change
+one-page unencrypted custom PDF
+one-page password-protected PDF
+one encrypted PDF whose trailer contains /Encrypt
+multi-page PDF
+malformed/truncated byte fixtures
 ```
 
-- [ ] **Step 3: run RED and commit tests only**
+No private/customer files.
+
+- [ ] **Step 2: add native-binding RED**
+
+Require:
+
+```text
+valid native PDF request/evidence + matching bytes -> accepted
+request/evidence kind PNG -> reject
+request/evidence identity mismatch -> reject
+wrong PDF bytes -> NATIVE_PDF_HASH_MISMATCH
+parsed/native page-count mismatch -> PAGE_COUNT_MISMATCH
+strict zero-based page index
+unknown/approval/verdict/repair/publication/current fields -> reject
+unsafe native relative path -> accepted native validator rejects
+native request/evidence hash change -> derived identity changes
+```
+
+- [ ] **Step 3: add encryption RED before production**
+
+Required tests:
+
+```text
+test_password_protected_pdf_fails_pdf_encrypted_before_page_access
+test_encrypt_trailer_fails_even_without_password_prompt
+test_encrypted_pdf_never_calls_authenticate
+test_encrypted_pdf_never_loads_page_or_renders_pixmap
+test_encrypted_failure_returns_no_png_or_evidence
+```
+
+The production contract must reject if any of:
+
+```text
+document.needs_pass is True
+document.is_encrypted is True
+PDF trailer contains /Encrypt
+document metadata reports non-null encryption
+```
+
+No `authenticate()` / password / decrypt path is allowed.
+
+- [ ] **Step 4: prove meaningful RED and commit tests only**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest mcp_integration_lib/tests/test_derived_raster_evidence.py -q -p no:cacheprovider
-```
-
-Expected: import/public-surface failures caused by the absent S2C module.
-
-```powershell
 git add mcp_integration_lib/tests/test_derived_raster_evidence.py
-git commit -m "test: define derived raster evidence contract"
+git commit -m "test: define encrypted-safe derived raster contract"
 ```
 
-- [ ] **Step 4: implement native binding and privacy-safe errors**
+Expected RED must be due to absent S2C behavior, not fixture/environment failure.
 
-Create the production module with this exact ownership pattern:
+- [ ] **Step 5: create minimal production module**
 
-```python
-import hashlib
-import fitz
+Native binding order:
 
-from cad_agent.drawing_contracts import canonical_json_sha256
-from mcp_integration_lib.autocad_render_evidence import (
-    AutoCADRenderEvidenceError,
-    validate_render_evidence,
-    validate_render_request,
-)
-
-
-def _fail(code: str) -> None:
-    raise DerivedRasterEvidenceError(code)
-
-
-def _sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def _validated_native_pdf(
-    *,
-    pdf_bytes: bytes,
-    native_request: object,
-    native_evidence: object,
-) -> tuple[dict[str, object], dict[str, object]]:
-    if type(pdf_bytes) is not bytes:
-        _fail("PDF_BYTES_INVALID")
-    try:
-        request = validate_render_request(native_request)
-        evidence = validate_render_evidence(native_evidence, request=request)
-    except AutoCADRenderEvidenceError:
-        _fail("NATIVE_RENDER_EVIDENCE_INVALID")
-    if request["artifact_kind"] != "PDF" or evidence["artifact_kind"] != "PDF":
-        _fail("NATIVE_ARTIFACT_NOT_PDF")
-    if _sha256_bytes(pdf_bytes) != evidence["artifact"]["sha256"]:
-        _fail("NATIVE_PDF_HASH_MISMATCH")
-    return request, evidence
+```text
+validate type/size
+validate native request/evidence
+require PDF/AUTOCAD_NATIVE
+verify sha256(pdf_bytes)
+fitz.open(stream=pdf_bytes, filetype="pdf")
+ENCRYPTION GATE
+page_count
+page_index
 ```
 
-Do not interpolate upstream exception strings.
+Encryption gate must execute before `page_count`, `load_page()` or `get_pixmap()`.
 
-- [ ] **Step 5: implement closed evidence root and canonical native digests**
+If trailer inspection cannot be completed safely, map to `PDF_MALFORMED`; do not rasterize.
 
-The validator accepts exactly:
+- [ ] **Step 6: add closed evidence root**
+
+Accept exactly:
 
 ```text
 schema_version
@@ -333,7 +262,9 @@ layout_identity
 native_pdf_sha256
 native_pdf_page_count
 page_index
+media_box
 selected_page_box
+physical_page_size_mm
 rotation_degrees
 user_unit
 render_dpi
@@ -346,80 +277,104 @@ alpha_policy
 background_policy
 ```
 
-Canonical native digests must be computed only with `canonical_json_sha256()` over the accepted normalized native request/evidence mappings.
+Use `canonical_json_sha256()` for normalized native and derived record identity.
 
-- [ ] **Step 6: implement one-page byte-only parsing**
+- [ ] **Step 7: self-validation and GREEN**
 
-```python
-with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
-    if document.page_count != evidence["artifact"]["page_count"]:
-        _fail("PAGE_COUNT_MISMATCH")
-    if type(page_index) is not int or not 0 <= page_index < document.page_count:
-        _fail("PAGE_INDEX_OUT_OF_RANGE")
-    page = document.load_page(page_index)
-```
+Builder returns only after `validate_derived_raster_evidence()` accepts exact PDF + PNG bytes + record.
 
-Render only the selected page. No filesystem open and no call to `primitive_ir_lib.run_pdf()`.
+Run focused + native-contract regressions.
 
-- [ ] **Step 7: make builder self-validate**
+- [ ] **Step 8: commit production Task 1**
 
-Before return, call `validate_derived_raster_evidence()` with exact PDF and produced PNG bytes.
-
-`derived_raster_evidence_sha256()` must return `canonical_json_sha256()` of that validated record.
-
-- [ ] **Step 8: focused GREEN + native regressions**
-
-```powershell
-.\.venv-py311\Scripts\python.exe -m pytest \
-  mcp_integration_lib/tests/test_derived_raster_evidence.py \
-  mcp_integration_lib/tests/test_autocad_render_evidence.py \
-  -q -p no:cacheprovider
-```
-
-- [ ] **Step 9: Ruff/diff/commit**
-
-```powershell
-.\.venv-py311\Scripts\python.exe -m ruff check \
-  mcp_integration_lib/derived_raster_evidence.py \
-  mcp_integration_lib/tests/test_derived_raster_evidence.py
-
-git diff --check
-git diff --name-only "$env:S2C_TASK_BASE_SHA"..HEAD
-```
-
-Exact cumulative paths: two S2C paths only.
-
-```powershell
-git add mcp_integration_lib/derived_raster_evidence.py mcp_integration_lib/tests/test_derived_raster_evidence.py
-git commit -m "feat: bind native PDF to derived raster evidence"
-```
-
-**Reviewer:** native-evidence/provenance + architecture/reuse.
+Only the exact two S2C paths may be staged.
 
 ---
 
-### Task 2: Page geometry, exact A4/300 DPI, matrix, alpha and renderer identity
+### Task 2: Physical MediaBox A4 geometry, CropBox, rotation, UserUnit and direct raster matrix
 
-**Files:** modify only the same two S2C paths; test first.
+**Files:** modify only the two S2C paths; test first.
 
 **Public surface:** unchanged.
 
-- [ ] **Step 1: add RED fixtures**
-
-Synthetic in-memory PDFs must cover:
+**Locked physical policy:**
 
 ```text
-crop == media
-crop != media
-rotation 0/90/180/270
-UserUnit absent
-UserUnit 2
-A4 portrait
-A4 landscape
-non-A4 while native request claims A4
+A4_CANONICAL_WIDTH_MM  = 210.00
+A4_CANONICAL_HEIGHT_MM = 297.00
+A4_PHYSICAL_TOLERANCE_MM = 0.10
 ```
 
-- [ ] **Step 2: lock exact A4 assertions**
+- [ ] **Step 1: add RED physical-geometry fixtures**
+
+Cover:
+
+```text
+MediaBox == CropBox
+A4 MediaBox with smaller CropBox
+595x842 point A4 approximation
+exact 210x297 mm equivalent
+Letter 612x792 points
+rotation 0/90/180/270
+UserUnit absent
+non-1 UserUnit producing A4 physical size
+invalid UserUnit
+non-A4 custom page
+```
+
+- [ ] **Step 2: lock MediaBox vs CropBox semantics**
+
+Tests must prove:
+
+```text
+MediaBox + UserUnit = physical sheet identity
+CropBox = selected visible raster extent
+Page.rect / output pixels / request paper_size alone != physical A4 authority
+```
+
+Record both `media_box` and `selected_page_box`, plus recomputed `physical_page_size_mm`.
+
+- [ ] **Step 3: lock A4 physical classification**
+
+Using deterministic Decimal/rational arithmetic, require each unrotated physical MediaBox dimension to be within inclusive ±0.10 mm of canonical A4 dimensions in either orientation.
+
+Tests:
+
+```text
+595x842 pt under UserUnit=1 -> A4 physical classification accepted
+612x792 pt -> not A4
+A4 request + non-A4 MediaBox -> PAGE_GEOMETRY_MISMATCH
+```
+
+- [ ] **Step 4: lock full-sheet selected-box rule**
+
+For native `paper_size == "A4"`, require CropBox four physical edges to coincide with MediaBox within the same ±0.10 mm policy.
+
+Tests:
+
+```text
+A4 MediaBox + full-sheet CropBox -> accepted
+A4 MediaBox + smaller CropBox -> PAGE_GEOMETRY_MISMATCH
+edge offset >0.10 mm -> PAGE_GEOMETRY_MISMATCH
+```
+
+This check occurs before pixmap creation.
+
+- [ ] **Step 5: lock UserUnit exactly once**
+
+Absent -> 1. Positive finite may be accepted. Zero/negative/non-finite/excessive -> reject.
+
+A non-1 fixture must prove physical A4 size and target pixels are unchanged when the underlying point coordinates scale inversely.
+
+- [ ] **Step 6: lock rotation**
+
+Accept only `0 | 90 | 180 | 270`.
+
+MediaBox/CropBox evidence remains unrotated PDF page-space geometry; orientation is derived after applying rotation exactly once.
+
+- [ ] **Step 7: lock exact A4 300-DPI output**
+
+For accepted full-sheet A4 physical geometry:
 
 ```python
 assert portrait_record["width_px"] == 2480
@@ -428,40 +383,35 @@ assert landscape_record["width_px"] == 3508
 assert landscape_record["height_px"] == 2480
 ```
 
-A forged one-pixel difference must fail validation.
-
-- [ ] **Step 3: lock decimal dimension policy**
-
-Use an explicit nearest-integer half-up rule:
-
-```python
-from decimal import Decimal, ROUND_HALF_UP
-
-
-def expected_pixels(points: str, dpi: int) -> int:
-    value = Decimal(points) * Decimal(dpi) / Decimal(72)
-    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-```
-
-Tests require deterministic matrix recomputation, deterministic rotation/orientation, UserUnit applied exactly once, and `PAGE_GEOMETRY_MISMATCH` for A4 claim vs non-A4 observed geometry.
-
-- [ ] **Step 4: add alpha/background RED**
-
-Decode returned PNG with existing Pillow and require:
+Target pixels derive from canonical A4 physical millimetres:
 
 ```text
-format = PNG
-size = evidence width/height
-mode has no alpha/transparency
-alpha_policy = OPAQUE_NO_ALPHA
-background_policy = WHITE
+pixels = mm / 25.4 * DPI
 ```
 
-Forged alpha/background must fail.
+with deterministic nearest-integer half-up.
 
-- [ ] **Step 5: add renderer identity RED**
+Do not derive A4 target pixels from integer-rounded PDF points such as 595x842.
 
-Evidence must record runtime-observed:
+- [ ] **Step 8: lock direct render matrix**
+
+Derive exact six coefficients from selected full-sheet box, physical A4 classification, rotation and DPI.
+
+Forbidden:
+
+```text
+render then resize
+render then crop to force A4
+fit-to-content
+caller matrix
+arbitrary shear
+```
+
+If exact A4 cannot be direct-rendered without destructive post-processing, STOP with scope-gap verdict.
+
+- [ ] **Step 9: PNG and renderer identity RED**
+
+Require PNG format, evidence dimensions, no alpha/transparency, `OPAQUE_NO_ALPHA`, `WHITE`, and runtime-observed:
 
 ```python
 {
@@ -471,43 +421,21 @@ Evidence must record runtime-observed:
 }
 ```
 
-Version drift must change evidence identity and cannot count as exact replay.
+Version drift changes evidence identity.
 
-- [ ] **Step 6: prove RED and commit test-only change**
+- [ ] **Step 10: prove RED and commit test-only change**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest mcp_integration_lib/tests/test_derived_raster_evidence.py -q -p no:cacheprovider
 git add mcp_integration_lib/tests/test_derived_raster_evidence.py
-git commit -m "test: lock derived raster geometry and renderer policy"
+git commit -m "test: lock physical A4 raster geometry"
 ```
 
-- [ ] **Step 7: implement page geometry**
+- [ ] **Step 11: implement minimum geometry/matrix behavior**
 
-Production helpers must return closed normalized values for:
+Do not widen public surface or paths.
 
-```text
-effective crop-box coordinates in points
-rotation in {0,90,180,270}
-canonical UserUnit
-physical width/height after accepted PyMuPDF UserUnit semantics
-target integer width/height using Decimal + ROUND_HALF_UP
-```
-
-Use PyMuPDF page geometry consistently; do not multiply UserUnit twice.
-
-- [ ] **Step 8: implement direct target raster matrix**
-
-Derive the six coefficients from observed box/rotation, requested DPI and target integer dimensions. Render directly to that target raster with `alpha=False`.
-
-Do **not** render at an implicit size and then resize/crop to force A4.
-
-If exact A4 dimensions require content-destructive post-processing, stop with the scope-gap verdict.
-
-- [ ] **Step 9: implement exact PNG validation**
-
-`validate_derived_raster_evidence()` must verify PNG SHA, decoded size, PNG format and no-alpha policy from `png_bytes` rather than trusting the record.
-
-- [ ] **Step 10: 5x deterministic GREEN**
+- [ ] **Step 12: 5x focused GREEN**
 
 ```powershell
 1..5 | ForEach-Object {
@@ -516,34 +444,31 @@ If exact A4 dimensions require content-destructive post-processing, stop with th
 }
 ```
 
-- [ ] **Step 11: upstream regressions and commit**
+- [ ] **Step 13: upstream regressions + Ruff + commit**
 
 ```powershell
-.\.venv-py311\Scripts\python.exe -m pytest \
-  mcp_integration_lib/tests/test_autocad_render_evidence.py \
-  primitive_ir_lib/tests/test_run_pdf.py \
-  mcp_integration_lib/tests/test_derived_raster_evidence.py \
+.\.venv-py311\Scripts\python.exe -m pytest `
+  mcp_integration_lib/tests/test_autocad_render_evidence.py `
+  primitive_ir_lib/tests/test_run_pdf.py `
+  mcp_integration_lib/tests/test_derived_raster_evidence.py `
   -q -p no:cacheprovider
 
-.\.venv-py311\Scripts\python.exe -m ruff check \
-  mcp_integration_lib/derived_raster_evidence.py \
+.\.venv-py311\Scripts\python.exe -m ruff check `
+  mcp_integration_lib/derived_raster_evidence.py `
   mcp_integration_lib/tests/test_derived_raster_evidence.py
 
 git diff --check
-
-git add mcp_integration_lib/derived_raster_evidence.py mcp_integration_lib/tests/test_derived_raster_evidence.py
-git commit -m "feat: lock deterministic PDF raster geometry"
 ```
 
-**Reviewer:** raster determinism/page geometry + no-second-renderer authority.
+Commit only the two S2C paths.
 
 ---
 
-### Task 3: Resource containment, replay, privacy and final ownership gates
+### Task 3: Resource containment, malformed/truncated refusal, replay, privacy and ownership
 
-**Files:** modify only the same two paths; test first.
+**Files:** modify only the same two S2C paths; test first.
 
-**Locked proposed bounds:**
+**Locked bounds:**
 
 ```text
 MAX_PDF_BYTES         = 64 * 1024 * 1024
@@ -555,51 +480,77 @@ MIN_RENDER_DPI        = 72
 MAX_RENDER_DPI        = 600
 ```
 
-A future runtime Issue may tighten these before RED from synthetic evidence; it may not widen them implicitly during implementation.
+- [ ] **Step 1: add resource/error RED**
 
-- [ ] **Step 1: add RED resource tests**
-
-Require categorical failures:
+Require:
 
 ```text
+PDF_ENCRYPTED
+PDF_MALFORMED
 PDF_TOO_LARGE
 PDF_PAGE_COUNT_LIMIT
+PAGE_COUNT_MISMATCH
 PAGE_INDEX_OUT_OF_RANGE
+PAGE_GEOMETRY_MISMATCH
 PAGE_DIMENSION_LIMIT
 RENDER_DPI_OUT_OF_RANGE
 PNG_SIZE_LIMIT
-PDF_MALFORMED
-RENDER_RESOURCE_FAILURE
 PNG_INVALID
+RENDER_RESOURCE_FAILURE
 ```
 
-Use fakes/monkeypatching for logically huge values instead of allocating dangerous payloads. Prove edge/pixel limits run before pixmap creation.
+Use fakes/monkeypatches for huge logical values; do not allocate dangerous payloads.
 
-- [ ] **Step 2: add privacy RED**
+- [ ] **Step 2: add fail-fast ordering RED**
 
-Inject parser/render exceptions containing fake paths/content and assert public S2C exceptions contain only categorical codes, never upstream message/path/content.
+Prove edge/pixel bounds before pixmap creation and encryption before page access.
 
-- [ ] **Step 3: add exact replay RED**
-
-For identical native request/evidence/PDF/page/DPI/runtime version, run derivation at least five times and require identical PNG bytes, normalized record and canonical record hash.
-
-Change one input at a time and require identity change or refusal:
+Required order:
 
 ```text
-native request digest
-native evidence digest
-PDF digest
-page index/page count
-box/rotation/UserUnit
-DPI/matrix
-PyMuPDF binding version
-MuPDF engine version
-alpha/background policy
+input type/byte length
+native request/evidence
+native PDF SHA
+open exact bounded bytes
+encryption/trailer gate
+page count
+page index
+MediaBox/CropBox/UserUnit/rotation
+A4 physical classification if claimed
+DPI
+target dimensions
+edge/pixel limits
+one pixmap
+PNG encode
+PNG size
+self-validation
+return
 ```
 
-- [ ] **Step 4: add static authority RED**
+- [ ] **Step 3: privacy RED**
 
-Parse production AST and prohibit imports from:
+Inject parser/render exceptions containing fake paths/content and assert public exception is only categorical. Do not interpolate upstream messages.
+
+- [ ] **Step 4: no-partial-output RED**
+
+For encrypted, malformed, geometry-mismatch and resource failures require:
+
+```text
+no PNG returned
+no evidence returned
+no file written
+no manifest/cache/store/current pointer mutation
+```
+
+- [ ] **Step 5: exact replay RED**
+
+Identical native request/evidence/PDF/page/DPI/geometry/runtime versions repeated at least five times must produce byte-identical PNG, identical normalized evidence and identical canonical hash.
+
+Change one input at a time -> identity change or refusal.
+
+- [ ] **Step 6: static authority RED**
+
+Prohibit production imports from:
 
 ```text
 ctypes
@@ -617,45 +568,25 @@ cad_agent.visual_evidence
 cad_agent.manifest
 ```
 
-Also prohibit arbitrary filesystem `open()`/`Path.read_bytes()` in S2C. `fitz.open(stream=pdf_bytes, filetype="pdf")` is allowed.
+Also prohibit arbitrary filesystem open/read. Allowed PDF open is only:
 
-- [ ] **Step 5: prove RED and commit test-only change**
+```python
+fitz.open(stream=pdf_bytes, filetype="pdf")
+```
+
+- [ ] **Step 7: prove RED and commit test-only**
 
 ```powershell
 .\.venv-py311\Scripts\python.exe -m pytest mcp_integration_lib/tests/test_derived_raster_evidence.py -q -p no:cacheprovider
 git add mcp_integration_lib/tests/test_derived_raster_evidence.py
-git commit -m "test: harden derived raster resource and replay gates"
+git commit -m "test: harden derived raster refusal and replay gates"
 ```
 
-- [ ] **Step 6: implement fail-fast resource order**
+- [ ] **Step 8: implement minimum hardening**
 
-Required order:
+No retry may change DPI, page box, renderer, encryption handling or alpha/background policy.
 
-```text
-validate input type/byte length
-validate native request/evidence
-verify native PDF SHA
-open bounded bytes
-validate page count
-validate page index
-observe geometry
-validate DPI
-compute target dimensions
-validate edge/pixel limits
-render one pixmap
-encode PNG
-validate PNG byte length
-self-validate PDF+PNG+evidence
-return
-```
-
-No retry may change DPI, page box, renderer or alpha policy.
-
-- [ ] **Step 7: implement privacy-safe exception mapping**
-
-Catch expected PyMuPDF/Pillow/resource exceptions and map to categorical S2C codes without interpolating source exceptions. Do not hide programmer assertions/type bugs or process-control exceptions.
-
-- [ ] **Step 8: complete GREEN**
+- [ ] **Step 9: complete focused/upstream GREEN**
 
 ```powershell
 1..5 | ForEach-Object {
@@ -663,142 +594,159 @@ Catch expected PyMuPDF/Pillow/resource exceptions and map to categorical S2C cod
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-.\.venv-py311\Scripts\python.exe -m pytest \
-  mcp_integration_lib/tests/test_autocad_render_evidence.py \
-  primitive_ir_lib/tests/test_run_pdf.py \
-  mcp_integration_lib/tests/test_derived_raster_evidence.py \
+.\.venv-py311\Scripts\python.exe -m pytest `
+  mcp_integration_lib/tests/test_autocad_render_evidence.py `
+  primitive_ir_lib/tests/test_run_pdf.py `
+  mcp_integration_lib/tests/test_derived_raster_evidence.py `
   -q -p no:cacheprovider
 ```
 
-- [ ] **Step 9: architecture/Ruff/diff**
+- [ ] **Step 10: architecture/Ruff/diff**
 
 ```powershell
-.\.venv-py311\Scripts\python.exe -m ruff check \
-  mcp_integration_lib/derived_raster_evidence.py \
+.\.venv-py311\Scripts\python.exe -m ruff check `
+  mcp_integration_lib/derived_raster_evidence.py `
   mcp_integration_lib/tests/test_derived_raster_evidence.py
 
-.\.venv-py311\Scripts\python.exe scripts/check_architecture_boundaries.py check \
-  --repo-root . \
+.\.venv-py311\Scripts\python.exe scripts/check_architecture_boundaries.py check `
+  --repo-root . `
   --baseline contracts/reuse-integration/architecture-boundaries.json
 
 git diff --check
 git diff --name-only "$env:S2C_TASK_BASE_SHA"..HEAD
 ```
 
-Exact cumulative path set remains the two S2C paths.
+Exact cumulative result must be exactly two S2C paths.
 
-- [ ] **Step 10: canonical verifier**
+- [ ] **Step 11: canonical verifier**
 
 ```powershell
 .\scripts\verify.ps1 -SkipAutoCADDotNet
 ```
 
-Record exact PASS/FAIL/SKIP/NOT RUN. AutoCAD live remains `NOT RUN` in first-slice offline acceptance.
+Record literal PASS/FAIL/SKIP/NOT RUN. Offline success cannot promote AutoCAD live to PASS.
 
-- [ ] **Step 11: commit hardening**
+- [ ] **Step 12: commit hardening**
 
-```powershell
-git add mcp_integration_lib/derived_raster_evidence.py mcp_integration_lib/tests/test_derived_raster_evidence.py
-git commit -m "feat: harden derived raster replay and limits"
-```
-
-- [ ] **Step 12: hosted/current-main synthetic**
-
-Open/retain a DRAFT PR only after focused GREEN and require:
-
-```text
-tests = PASS
-reuse-declaration = PASS
-```
-
-Independent review binds verdict to exact main/head/synthetic SHA triple.
-
-**Reviewer:** security/resource/privacy + integration/CI/write-set.
+Forward commit only, exact two paths.
 
 ---
 
-## Future integration task — separate Issue only
+## Focused mandatory test inventory
 
-After the pure slice is accepted, a separate Master PO Issue may connect exact verified native PDF artifact bytes to S2C.
-
-It must first identify the existing artifact-byte handoff owner. Do not assume `mcp_integration_lib/dotnet_ipc.py` must change.
-
-Any need to modify:
+At minimum implement tests semantically equivalent to:
 
 ```text
-mcp_integration_lib/dotnet_ipc.py
-cad_agent.visual_evidence.py
-contracts/**
-autocad_plugin/**
+test_exact_native_pdf_bytes_build_closed_derived_evidence
+test_wrong_native_pdf_sha_fails_closed
+test_native_request_evidence_mismatch_fails_closed
+test_native_page_count_mismatch_fails_closed
+test_page_index_is_zero_based_strict_and_bounded
+test_password_protected_pdf_fails_before_page_access
+test_encrypt_trailer_fails_even_without_password_prompt
+test_encrypted_pdf_never_authenticates_or_renders
+test_media_box_and_crop_box_have_distinct_authority
+test_physical_page_size_comes_from_media_box_and_user_unit
+test_a4_595x842_point_encoding_is_physical_a4
+test_letter_media_box_is_not_a4
+test_a4_media_with_smaller_crop_fails_full_sheet_gate
+test_a4_portrait_300dpi_is_exact_2480x3508
+test_a4_landscape_300dpi_is_exact_3508x2480
+test_rotation_90_and_270_are_deterministic
+test_user_unit_is_applied_exactly_once
+test_forged_matrix_or_dimensions_fail_closed
+test_png_is_opaque_white_and_has_no_alpha
+test_renderer_identity_is_runtime_observed
+test_renderer_version_drift_changes_evidence_identity
+test_identical_inputs_replay_byte_identically_five_times
+test_truncated_or_malformed_pdf_fails_privately
+test_resource_limits_fail_before_pixmap_creation
+test_failure_returns_no_partial_output
+test_module_has_no_path_reopen_or_forbidden_authority_imports
 ```
 
-requires a fresh exact write-set and overlap review.
+---
 
-## Future live acceptance — separate authorization only
+## Migration / rollback
 
-Use synthetic disposable data:
+Additive only:
 
 ```text
-accepted isolated AutoCAD profile/media configuration
--> existing AutoCAD/.NET native A4 PDF
--> validate native request/evidence
--> obtain exact verified PDF bytes through existing owner
--> S2C derive page 0 at 300 DPI
--> require 2480x3508 portrait OR 3508x2480 landscape from observed geometry
--> repeat and require byte-identical PNG/evidence
--> prove native PDF/drawing/DBMOD unchanged
--> downstream read-only evidence handoff
--> existing cleanup owner
+no existing schema migration
+no manifest migration
+no dependency/lock change
+no workflow change
+no AutoCAD/plugin change
+no Primitive change
+no stored-data migration
 ```
 
-Truthful status:
+Rollback: remove/revert exactly the two new S2C runtime paths.
+
+---
+
+## Hosted verification
+
+After local/offline GREEN:
+
+1. forward commits only;
+2. DRAFT PR;
+3. hosted `tests = SUCCESS`;
+4. hosted `reuse-declaration = SUCCESS`;
+5. record exact current-main / runtime-head / hosted-synthetic SHA triple;
+6. independent review binds verdict to that exact triple;
+7. STOP WRITE at frozen review-ready state.
+
+Runtime PR reuse declaration must state that native renderer, File IPC/path policy, source custody/fusion, Primitive/OCR/calibration, visual verdict, manifest/store, repair, approval and publication remain existing owners and are not duplicated.
+
+---
+
+## Future live acceptance — separate Issue only
+
+Do not add live-harness paths to this slice.
+
+A later separately issued live gate must reuse existing disposable-DWG/session/open/close/cleanup owners and separately prove:
 
 ```text
-missing profile/PC3/PMP/native PDF prerequisite = NOT RUN
-unavailable-state probe = SKIP only, never PASS
-executed synthetic live gate satisfying exact postconditions = PASS
-private/customer CAD = not required
+native PDF evidence valid
+source DWG SHA unchanged
+native changed=false / DBMOD stable
+physical MediaBox/UserUnit classifies A4
+full-sheet CropBox equivalent to MediaBox
+300 DPI exact PNG dimensions
+opaque white / no alpha
+renderer fingerprint
+request/artifact cleanup
+zero survivor processes
+PC3/PMP unchanged
 ```
 
-S2C never mutates PC3/PMP/profile configuration.
+Offline PASS never implies AutoCAD/File IPC/live-cleanup PASS.
 
-## Future runtime PR reuse declaration
-
-**Existing capability inspected:** native render contract/tests, AutoCAD/.NET native path, source-fusion provenance, visual packaging, Primitive `run_pdf`, canonical hashing, current PyMuPDF/Pillow lock.
-
-**Existing API reused:** `validate_render_request`, `validate_render_evidence`, `canonical_json_sha256`, existing PyMuPDF/Pillow dependencies.
-
-**Adapter required:** one pure native-PDF-bytes -> PNG/evidence module.
-
-**New capability genuinely missing:** deterministic derived-raster evidence for generated native PDF artifacts.
-
-**Files allowed to change:** exact two S2C paths.
-
-**Files forbidden to duplicate:** native renderer, File IPC/path policy, source custody/fusion, Primitive/OCR/calibration, visual verdict, manifest/store, repair, approval, publisher.
-
-**Compatibility behavior:** existing owners and `run_pdf()` remain unchanged.
-
-**Migration/rollback:** additive two-path feature; remove/revert it with no schema/store migration.
+---
 
 ## Program-level STOP conditions
 
-Stop and request Master PO disposition if:
+Stop and return Master PO disposition if:
 
-- native PDF bytes need a new File IPC/path authority;
-- native evidence cannot safely bind exact bytes;
-- native render schema must change;
-- `primitive_ir_lib.run_pdf()` must be called wholesale;
-- source custody, OCR, calibration, Primitive/Semantic, model/provider, visual verdict, approval, repair or publication behavior is required;
-- a new manifest/store/cache/current pointer is required;
-- dependency/lock/workflow/contract change is required;
-- wall-clock containment requires a new process supervisor;
-- exact A4 dimensions require destructive post-render resize/crop;
-- renderer version identity cannot be captured/replayed deterministically;
-- private/customer CAD is required for first-slice acceptance;
 - any third first-slice path is required;
-- current main or an active writer overlaps the two-path write-set.
+- native PDF bytes require a new File IPC/path owner;
+- native render schema must change;
+- accepted native evidence cannot bind exact PDF bytes;
+- encrypted PDFs can only be handled by authentication/decryption/password logic;
+- physical A4 identity cannot be established from MediaBox + UserUnit under the locked policy;
+- exact A4 output requires destructive post-render resize/crop;
+- `primitive_ir_lib.run_pdf()` must be called wholesale;
+- Primitive/OCR/calibration/Semantic/source-fusion/visual-evidence authority must move;
+- new manifest/store/cache/current pointer is required;
+- dependency/lock/workflow/contract change is required;
+- process supervisor is required for first offline slice;
+- renderer identity/version cannot be observed deterministically;
+- private/customer CAD is required;
+- current main or an active writer overlaps either exact S2C path;
+- an accepted regression must be weakened/skipped to obtain GREEN.
 
-Architectural ownership failure result:
+Architectural failure result:
 
 ```text
 S2C DERIVED-RASTER SCOPE GAP — MASTER PO DECISION REQUIRED
@@ -806,4 +754,4 @@ S2C DERIVED-RASTER SCOPE GAP — MASTER PO DECISION REQUIRED
 
 ## Planning handoff
 
-The plan is executable after a fresh runtime issuance rebaseline. First slice remains two new pure-Python paths, no AutoCAD live execution, no private CAD, no dependency migration, and no modification of existing native/Primitive/visual/source-fusion owners.
+This plan is executable only after fresh runtime issuance. The first slice remains two new pure-Python paths, byte-only, unencrypted-input-only, pathless, persistence-free, no AutoCAD live execution, no private CAD, no dependency migration, and no change to accepted native/Primitive/visual/source-fusion owners.
