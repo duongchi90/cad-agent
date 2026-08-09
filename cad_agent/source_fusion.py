@@ -1894,3 +1894,861 @@ __all__ = [
     "project_primitive_observations",
     "project_semantic_observations",
 ]
+
+
+# ---------------------------------------------------------- Task 6 runtime ---
+
+from cad_agent.source_integrity import (
+    R1C_TOLERANCE_POLICY_VERSION as _R1C_TOLERANCE_POLICY_VERSION,
+    r1c_quantity_within_tolerance as _r1c_quantity_within_tolerance,
+)
+
+
+_TASK6_TOLERANCE_FIELDS = {
+    "tolerance_policy_version",
+    "quantity",
+    "unit",
+    "value",
+}
+_TASK6_PRIMITIVE_FIELDS = {
+    "observation_key",
+    "occurrence_count",
+    "legacy_ids",
+    "numeric_policy_version",
+    "primitive_artifact_sha256",
+    "source_binding",
+    "content",
+}
+_TASK6_SEMANTIC_FIELDS = {
+    "observation_key",
+    "primitive_observation_keys",
+    "semantic_artifact_sha256",
+    "primitive_checkpoint_sha256",
+    "numeric_policy_version",
+    "content",
+}
+_TASK6_CONFLICT_FIELDS = {
+    "conflict_id",
+    "type",
+    "state",
+    "blocking",
+    "subject_sha256",
+    "evidence_observation_keys",
+    "tolerance_policy_version",
+}
+_TASK6_PACKET_FIELDS = {
+    "schema_version",
+    "status",
+    "source_bundle_sha256",
+    "source_custody_sha256",
+    "numeric_policy_version",
+    "tolerance_policy",
+    "page_locators",
+    "region_locators",
+    "render_provenance",
+    "primitive_observations",
+    "semantic_observations",
+    "conflicts",
+    "fusion_input_sha256",
+}
+_TASK6_STATUS = {"READY", "BLOCKED_UNRESOLVED"}
+
+
+def _task6_tolerance_policy(value: object) -> dict[str, str]:
+    code = "FUSION_TOLERANCE_INVALID"
+    policy = _closed(value, _TASK6_TOLERANCE_FIELDS, code)
+    if policy["tolerance_policy_version"] != _R1C_TOLERANCE_POLICY_VERSION:
+        _fail(code)
+    quantity = policy["quantity"]
+    unit = policy["unit"]
+    if not isinstance(quantity, str) or not isinstance(unit, str):
+        _fail(code)
+    try:
+        normalized = _canonicalize_r1c_quantity(
+            policy["value"],
+            quantity=quantity,
+            unit=unit,
+        )
+        if not _r1c_quantity_within_tolerance(
+            normalized["value"],
+            left_unit=normalized["unit"],
+            right=normalized["value"],
+            right_unit=normalized["unit"],
+            tolerance=normalized["value"],
+            tolerance_unit=normalized["unit"],
+            quantity=quantity,
+            tolerance_policy_version=_R1C_TOLERANCE_POLICY_VERSION,
+        ):
+            _fail(code)
+    except Exception:
+        _fail(code)
+    if _decimal.Decimal(normalized["value"]) < 0:
+        _fail(code)
+    return {
+        "tolerance_policy_version": _R1C_TOLERANCE_POLICY_VERSION,
+        "quantity": quantity,
+        "unit": normalized["unit"],
+        "value": normalized["value"],
+    }
+
+
+def _task6_render_checkpoint(render_provenance: object) -> str:
+    if not isinstance(render_provenance, list) or not render_provenance:
+        _fail("FUSION_RENDER_PROVENANCE_INVALID")
+    checkpoints: set[str] = set()
+    for value in render_provenance:
+        if not isinstance(value, _Mapping):
+            _fail("FUSION_RENDER_PROVENANCE_INVALID")
+        checkpoints.add(
+            _sha256(
+                value.get("primitive_artifact_sha256"),
+                "FUSION_RENDER_PROVENANCE_INVALID",
+            )
+        )
+    if len(checkpoints) != 1:
+        _fail("FUSION_RENDER_BINDING_AMBIGUITY")
+    return next(iter(checkpoints))
+
+
+def _task6_render_map(
+    render_provenance: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for record in render_provenance:
+        digest = str(record["render_provenance_sha256"])
+        if digest in result:
+            _fail("FUSION_RENDER_PROVENANCE_INVALID")
+        result[digest] = record
+    return result
+
+
+def _task6_render_provenance(
+    value: object,
+    *,
+    page_locators: list[dict[str, object]],
+    custody: dict[str, object],
+    primitive_artifact_sha256: str | None = None,
+) -> list[dict[str, object]]:
+    """Revalidate raw or already-normalized Task 4 render evidence."""
+    if not isinstance(value, list) or not value:
+        _fail("FUSION_RENDER_PROVENANCE_INVALID")
+    raw: list[dict[str, object]] = []
+    artifact = primitive_artifact_sha256
+    for item in value:
+        if not isinstance(item, _Mapping):
+            _fail("FUSION_RENDER_PROVENANCE_INVALID")
+        record = _copy.deepcopy(dict(item))
+        document = record.get("primitive_source_document")
+        if isinstance(document, _Mapping):
+            document_fields = set(document)
+            if document_fields == _TASK5_DIRECT_BINDING_DOCUMENT_FIELDS:
+                page_index = 0
+            elif document_fields == _TASK5_PDF_BINDING_DOCUMENT_FIELDS:
+                page_index = document["primitive_source_page_index"]
+            else:
+                page_index = document.get("page_index")
+            if "file_name" not in document or "page_index" not in document:
+                record["primitive_source_document"] = {
+                    "file_name": "task6-source-document",
+                    "page_index": page_index,
+                    "image_width_px": document.get("image_width_px"),
+                    "image_height_px": document.get("image_height_px"),
+                    "sha256": document.get("sha256"),
+                }
+        if artifact is None:
+            artifact = record.get("primitive_artifact_sha256")
+        raw.append(record)
+    if artifact is None:
+        _fail("FUSION_RENDER_PROVENANCE_INVALID")
+    return validate_render_provenance(
+        raw,
+        page_locators=page_locators,
+        custody=custody,
+        primitive_artifact_sha256=artifact,
+    )
+
+
+def _task6_validate_primitive_observations(
+    value: object,
+    *,
+    primitive_checkpoint_sha256: str,
+    renders: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    code = "FUSION_PRIMITIVE_OBSERVATIONS_INVALID"
+    if not isinstance(value, list) or not value:
+        _fail(code)
+    normalized: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
+    for item in value:
+        record = _closed(item, _TASK6_PRIMITIVE_FIELDS, code)
+        observation_key = _sha256(record["observation_key"], code)
+        if observation_key in seen_keys:
+            _fail(code)
+        seen_keys.add(observation_key)
+        occurrence_count = _strict_positive_int(record["occurrence_count"], code)
+        if record["numeric_policy_version"] != _R1C_NUMERIC_POLICY_VERSION:
+            _fail(code)
+        if (
+            _sha256(record["primitive_artifact_sha256"], code)
+            != primitive_checkpoint_sha256
+        ):
+            _fail("PRIMITIVE_CHECKPOINT_MISMATCH")
+        legacy_ids = record["legacy_ids"]
+        if not isinstance(legacy_ids, list) or len(legacy_ids) != occurrence_count:
+            _fail(code)
+        normalized_ids: list[str] = []
+        for raw_id in legacy_ids:
+            legacy_id = _identifier(raw_id, code)
+            if legacy_id in normalized_ids:
+                _fail(code)
+            normalized_ids.append(legacy_id)
+
+        binding = record["source_binding"]
+        if not isinstance(binding, _Mapping):
+            _fail("FUSION_PRIMITIVE_BINDING_MISMATCH")
+        binding_digest = _sha256(
+            binding.get("render_provenance_sha256"),
+            "FUSION_PRIMITIVE_BINDING_MISMATCH",
+        )
+        accepted = renders.get(binding_digest)
+        if accepted is None or dict(binding) != accepted:
+            _fail("FUSION_PRIMITIVE_BINDING_MISMATCH")
+        if (
+            _sha256(
+                binding.get("primitive_artifact_sha256"),
+                "FUSION_PRIMITIVE_BINDING_MISMATCH",
+            )
+            != primitive_checkpoint_sha256
+        ):
+            _fail("FUSION_PRIMITIVE_BINDING_MISMATCH")
+        if not isinstance(record["content"], _Mapping):
+            _fail(code)
+        identity_material = {
+            "identity_kind": "r1c-task5-projection-fixture-v1",
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "task4_lineage": _task5_task4_lineage_material(binding),
+            "source_id": binding.get("source_id"),
+            "content": dict(record["content"]),
+        }
+        if _canonical_json_sha256(identity_material) != observation_key:
+            _fail("FUSION_PRIMITIVE_IDENTITY_MISMATCH")
+        normalized.append(
+            {
+                "observation_key": observation_key,
+                "occurrence_count": occurrence_count,
+                "legacy_ids": sorted(normalized_ids),
+                "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+                "primitive_artifact_sha256": primitive_checkpoint_sha256,
+                "source_binding": _copy.deepcopy(accepted),
+                "content": _copy.deepcopy(dict(record["content"])),
+            }
+        )
+    normalized.sort(key=lambda record: str(record["observation_key"]))
+    return normalized
+
+
+def _task6_validate_semantic_observations(
+    value: object,
+    *,
+    primitive_checkpoint_sha256: str,
+    primitive_observations: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    code = "FUSION_SEMANTIC_OBSERVATIONS_INVALID"
+    if not isinstance(value, list):
+        _fail(code)
+    primitive_by_key = {
+        str(record["observation_key"]): record
+        for record in primitive_observations
+    }
+    normalized: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
+    for item in value:
+        record = _closed(item, _TASK6_SEMANTIC_FIELDS, code)
+        observation_key = _sha256(record["observation_key"], code)
+        if observation_key in seen_keys:
+            _fail(code)
+        seen_keys.add(observation_key)
+        semantic_sha256 = _sha256(record["semantic_artifact_sha256"], code)
+        if (
+            _sha256(record["primitive_checkpoint_sha256"], code)
+            != primitive_checkpoint_sha256
+        ):
+            _fail("PRIMITIVE_CHECKPOINT_MISMATCH")
+        if record["numeric_policy_version"] != _R1C_NUMERIC_POLICY_VERSION:
+            _fail(code)
+        raw_keys = record["primitive_observation_keys"]
+        if not isinstance(raw_keys, list) or not raw_keys:
+            _fail(code)
+        primitive_keys = [_sha256(key, code) for key in raw_keys]
+        counts: dict[str, int] = {}
+        for key in primitive_keys:
+            primitive_record = primitive_by_key.get(key)
+            if primitive_record is None:
+                _fail("FUSION_SEMANTIC_REFERENCE_MISMATCH")
+            counts[key] = counts.get(key, 0) + 1
+        for key, count in counts.items():
+            occurrence_count = int(primitive_by_key[key]["occurrence_count"])
+            if count != occurrence_count:
+                _fail("DUPLICATE_OBSERVATION_AMBIGUITY")
+        content = record["content"]
+        if not isinstance(content, _Mapping):
+            _fail(code)
+        content_copy = _copy.deepcopy(dict(content))
+        nested_keys = content_copy.get("primitive_observation_keys")
+        if nested_keys is not None:
+            if not isinstance(nested_keys, list):
+                _fail(code)
+            normalized_nested = sorted(_sha256(key, code) for key in nested_keys)
+            if normalized_nested != sorted(primitive_keys):
+                _fail("FUSION_SEMANTIC_REFERENCE_MISMATCH")
+        identity_material = {
+            "identity_kind": "r1c-semantic-observation-v1",
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "content": content_copy,
+        }
+        if _canonical_json_sha256(identity_material) != observation_key:
+            _fail("FUSION_SEMANTIC_IDENTITY_MISMATCH")
+        normalized.append(
+            {
+                "observation_key": observation_key,
+                "primitive_observation_keys": sorted(primitive_keys),
+                "semantic_artifact_sha256": semantic_sha256,
+                "primitive_checkpoint_sha256": primitive_checkpoint_sha256,
+                "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+                "content": content_copy,
+            }
+        )
+    normalized.sort(
+        key=lambda record: (
+            str(record["observation_key"]),
+            tuple(record["primitive_observation_keys"]),
+        )
+    )
+    return normalized
+
+
+def _task6_subject_material(record: _Mapping[str, object]) -> dict[str, object]:
+    content = record["content"]
+    return {
+        "logical_subject_ids": sorted(str(value) for value in record["legacy_ids"]),
+        "kind": content.get("kind"),
+    }
+
+
+def _task6_conflicts(
+    primitive_observations: list[dict[str, object]],
+    *,
+    source_bundle_sha256: str,
+    source_custody_sha256: str,
+    tolerance_policy: dict[str, str],
+) -> list[dict[str, object]]:
+    groups: dict[str, list[dict[str, object]]] = {}
+    subjects: dict[str, dict[str, object]] = {}
+    for record in primitive_observations:
+        subject = _task6_subject_material(record)
+        subject_sha256 = _canonical_json_sha256(
+            {
+                "identity_kind": "r1c-source-fusion-subject-v1",
+                "source_fusion_schema_version": SOURCE_FUSION_SCHEMA_VERSION,
+                "subject": subject,
+            }
+        )
+        subjects[subject_sha256] = subject
+        groups.setdefault(subject_sha256, []).append(record)
+
+    conflicts: list[dict[str, object]] = []
+    for subject_sha256 in sorted(groups):
+        group = groups[subject_sha256]
+        if len(group) < 2:
+            continue
+        evidence_keys = sorted(str(record["observation_key"]) for record in group)
+        conflict_type = (
+            "MEASUREMENT"
+            if subjects[subject_sha256].get("kind") == "text"
+            else "GEOMETRY"
+        )
+        material = {
+            "identity_kind": "r1c-source-fusion-conflict-v1",
+            "source_fusion_schema_version": SOURCE_FUSION_SCHEMA_VERSION,
+            "source_bundle_sha256": source_bundle_sha256,
+            "source_custody_sha256": source_custody_sha256,
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "tolerance_policy": tolerance_policy,
+            "type": conflict_type,
+            "subject_sha256": subject_sha256,
+            "evidence_observation_keys": evidence_keys,
+        }
+        conflicts.append(
+            {
+                "conflict_id": _canonical_json_sha256(material),
+                "type": conflict_type,
+                "state": "UNRESOLVED",
+                "blocking": True,
+                "subject_sha256": subject_sha256,
+                "evidence_observation_keys": evidence_keys,
+                "tolerance_policy_version": _R1C_TOLERANCE_POLICY_VERSION,
+            }
+        )
+    conflicts.sort(key=lambda record: str(record["conflict_id"]))
+    return conflicts
+
+
+def _task6_fusion_input_material(
+    *,
+    source_bundle_sha256: str,
+    source_custody_sha256: str,
+    tolerance_policy: dict[str, str],
+    page_locators: list[dict[str, object]],
+    region_locators: list[dict[str, object]],
+    render_provenance: list[dict[str, object]],
+    primitive_observations: list[dict[str, object]],
+    semantic_observations: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "identity_kind": "r1c-source-fusion-input-v1",
+        "source_fusion_schema_version": SOURCE_FUSION_SCHEMA_VERSION,
+        "source_bundle_sha256": source_bundle_sha256,
+        "source_custody_sha256": source_custody_sha256,
+        "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+        "tolerance_policy": tolerance_policy,
+        "page_locators": page_locators,
+        "region_locators": region_locators,
+        "render_provenance": render_provenance,
+        "primitive_observations": primitive_observations,
+        "semantic_observations": semantic_observations,
+    }
+
+
+def _task6_identity_order(
+    records: list[dict[str, object]],
+    identity_field: str,
+) -> list[dict[str, object]]:
+    return sorted(
+        (_copy.deepcopy(record) for record in records),
+        key=lambda record: str(record[identity_field]),
+    )
+
+
+def build_source_fusion_packet(
+    *,
+    source_bundle: object,
+    custody: object,
+    page_locators: object,
+    region_locators: object,
+    render_provenance: object,
+    primitive_observations: object,
+    semantic_observations: object,
+    tolerance_policy: object,
+) -> dict[str, object]:
+    try:
+        bundle = _validate_source_bundle(source_bundle)
+        bundle_sha256 = _source_bundle_sha256(bundle)
+    except Exception:
+        _fail("SOURCE_BUNDLE_INVALID")
+    normalized_custody = _validated_custody(custody)
+    custody_sha256 = _custody_digest(normalized_custody)
+    if (
+        normalized_custody["bundle_id"] != bundle["bundle_id"]
+        or normalized_custody["run_id"] != bundle["run_id"]
+        or normalized_custody["source_bundle_sha256"] != bundle_sha256
+    ):
+        _fail("CUSTODY_CONTEXT_MISMATCH")
+
+    pages = validate_page_locators(
+        page_locators,
+        source_bundle=bundle,
+        custody=normalized_custody,
+    )
+    regions = validate_region_locators(
+        region_locators,
+        page_locators=pages,
+        custody=normalized_custody,
+    )
+    checkpoint_sha256 = _task6_render_checkpoint(render_provenance)
+    renders = _task6_render_provenance(
+        render_provenance,
+        page_locators=pages,
+        custody=normalized_custody,
+        primitive_artifact_sha256=checkpoint_sha256,
+    )
+    render_by_id = _task6_render_map(renders)
+    primitives = _task6_validate_primitive_observations(
+        primitive_observations,
+        primitive_checkpoint_sha256=checkpoint_sha256,
+        renders=render_by_id,
+    )
+    semantics = _task6_validate_semantic_observations(
+        semantic_observations,
+        primitive_checkpoint_sha256=checkpoint_sha256,
+        primitive_observations=primitives,
+    )
+    policy = _task6_tolerance_policy(tolerance_policy)
+
+    pages = _task6_identity_order(pages, "page_locator_sha256")
+    regions = _task6_identity_order(regions, "region_locator_sha256")
+    renders = _task6_identity_order(renders, "render_provenance_sha256")
+    primitives = _task6_identity_order(primitives, "observation_key")
+    semantics = _task6_identity_order(semantics, "observation_key")
+
+    conflicts = _task6_conflicts(
+        primitives,
+        source_bundle_sha256=bundle_sha256,
+        source_custody_sha256=custody_sha256,
+        tolerance_policy=policy,
+    )
+    fusion_input_sha256 = _canonical_json_sha256(
+        _task6_fusion_input_material(
+            source_bundle_sha256=bundle_sha256,
+            source_custody_sha256=custody_sha256,
+            tolerance_policy=policy,
+            page_locators=pages,
+            region_locators=regions,
+            render_provenance=renders,
+            primitive_observations=primitives,
+            semantic_observations=semantics,
+        )
+    )
+    packet = {
+        "schema_version": SOURCE_FUSION_SCHEMA_VERSION,
+        "status": "BLOCKED_UNRESOLVED" if conflicts else "READY",
+        "source_bundle_sha256": bundle_sha256,
+        "source_custody_sha256": custody_sha256,
+        "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+        "tolerance_policy": policy,
+        "page_locators": pages,
+        "region_locators": regions,
+        "render_provenance": renders,
+        "primitive_observations": primitives,
+        "semantic_observations": semantics,
+        "conflicts": conflicts,
+        "fusion_input_sha256": fusion_input_sha256,
+    }
+    return _task6_validate_source_fusion_packet(
+        packet,
+        source_bundle=bundle,
+        custody=normalized_custody,
+    )
+
+
+def _task6_validate_conflicts(
+    value: object,
+    *,
+    source_bundle_sha256: str,
+    source_custody_sha256: str,
+    tolerance_policy: dict[str, str],
+    primitive_observation_keys: set[str],
+) -> list[dict[str, object]]:
+    code = "SOURCE_FUSION_PACKET_INVALID"
+    if not isinstance(value, list):
+        _fail(code)
+    normalized: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
+    allowed_types = {
+        "GEOMETRY",
+        "MEASUREMENT",
+        "CALIBRATION",
+        "LOCATOR_RENDER",
+        "DUPLICATE_OBSERVATION",
+    }
+    for item in value:
+        conflict = _closed(item, _TASK6_CONFLICT_FIELDS, code)
+        conflict_id = _sha256(conflict["conflict_id"], code)
+        if conflict_id in seen_ids:
+            _fail(code)
+        seen_ids.add(conflict_id)
+        if conflict["type"] not in allowed_types:
+            _fail(code)
+        if conflict["state"] != "UNRESOLVED" or conflict["blocking"] is not True:
+            _fail(code)
+        subject_sha256 = _sha256(conflict["subject_sha256"], code)
+        if conflict["tolerance_policy_version"] != _R1C_TOLERANCE_POLICY_VERSION:
+            _fail(code)
+        evidence = conflict["evidence_observation_keys"]
+        if not isinstance(evidence, list) or len(evidence) < 2:
+            _fail(code)
+        evidence_keys = sorted(_sha256(key, code) for key in evidence)
+        if len(evidence_keys) != len(set(evidence_keys)):
+            _fail(code)
+        if any(key not in primitive_observation_keys for key in evidence_keys):
+            _fail(code)
+        material = {
+            "identity_kind": "r1c-source-fusion-conflict-v1",
+            "source_fusion_schema_version": SOURCE_FUSION_SCHEMA_VERSION,
+            "source_bundle_sha256": source_bundle_sha256,
+            "source_custody_sha256": source_custody_sha256,
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "tolerance_policy": tolerance_policy,
+            "type": conflict["type"],
+            "subject_sha256": subject_sha256,
+            "evidence_observation_keys": evidence_keys,
+        }
+        if _canonical_json_sha256(material) != conflict_id:
+            _fail("DETERMINISTIC_ID_MISMATCH")
+        normalized.append(
+            {
+                "conflict_id": conflict_id,
+                "type": conflict["type"],
+                "state": "UNRESOLVED",
+                "blocking": True,
+                "subject_sha256": subject_sha256,
+                "evidence_observation_keys": evidence_keys,
+                "tolerance_policy_version": _R1C_TOLERANCE_POLICY_VERSION,
+            }
+        )
+    normalized.sort(key=lambda record: str(record["conflict_id"]))
+    return normalized
+
+
+def _task6_revalidate_identity_collection(
+    value: object,
+    *,
+    identity_field: str,
+    identity_function: object,
+    code: str,
+) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        _fail(code)
+    records: list[dict[str, object]] = []
+    identities: set[str] = set()
+    for item in value:
+        if not isinstance(item, _Mapping):
+            _fail(code)
+        record = dict(item)
+        supplied = _sha256(record.get(identity_field), code)
+        try:
+            expected = identity_function(record)
+        except SourceFusionError:
+            raise
+        except Exception:
+            _fail(code)
+        if expected != supplied:
+            _fail("DETERMINISTIC_ID_MISMATCH")
+        if supplied in identities:
+            _fail(code)
+        identities.add(supplied)
+        records.append(_copy.deepcopy(record))
+    records.sort(key=lambda record: str(record[identity_field]))
+    return records
+
+
+def _task6_packet_evidence(
+    packet: dict[str, object],
+    *,
+    source_bundle: object | None = None,
+    custody: object | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    pages = _task6_revalidate_identity_collection(
+        packet["page_locators"],
+        identity_field="page_locator_sha256",
+        identity_function=_page_identity,
+        code="PAGE_LOCATOR_INVALID",
+    )
+    regions = _task6_revalidate_identity_collection(
+        packet["region_locators"],
+        identity_field="region_locator_sha256",
+        identity_function=_region_identity,
+        code="REGION_LOCATOR_INVALID",
+    )
+    renders = _task6_revalidate_identity_collection(
+        packet["render_provenance"],
+        identity_field="render_provenance_sha256",
+        identity_function=_render_identity,
+        code="RENDER_PROVENANCE_INVALID",
+    )
+
+    if (source_bundle is None) != (custody is None):
+        _fail("SOURCE_FUSION_PACKET_INVALID")
+    if source_bundle is not None and custody is not None:
+        try:
+            bundle = _validate_source_bundle(source_bundle)
+            normalized_custody = _validated_custody(custody)
+            bundle_sha256 = _source_bundle_sha256(bundle)
+            custody_sha256 = _custody_digest(normalized_custody)
+        except Exception:
+            _fail("SOURCE_BUNDLE_INVALID")
+        if (
+            bundle_sha256 != packet["source_bundle_sha256"]
+            or custody_sha256 != packet["source_custody_sha256"]
+            or normalized_custody["bundle_id"] != bundle["bundle_id"]
+            or normalized_custody["run_id"] != bundle["run_id"]
+            or normalized_custody["source_bundle_sha256"] != bundle_sha256
+        ):
+            _fail("CUSTODY_CONTEXT_MISMATCH")
+        pages = validate_page_locators(
+            packet["page_locators"],
+            source_bundle=bundle,
+            custody=normalized_custody,
+        )
+        regions = validate_region_locators(
+            packet["region_locators"],
+            page_locators=pages,
+            custody=normalized_custody,
+        )
+        checkpoint_sha256 = _task6_render_checkpoint(packet["render_provenance"])
+        renders = _task6_render_provenance(
+            packet["render_provenance"],
+            page_locators=pages,
+            custody=normalized_custody,
+            primitive_artifact_sha256=checkpoint_sha256,
+        )
+    checkpoint_sha256 = _task6_render_checkpoint(renders)
+    primitive_observations = _task6_validate_primitive_observations(
+        packet["primitive_observations"],
+        primitive_checkpoint_sha256=checkpoint_sha256,
+        renders=_task6_render_map(renders),
+    )
+    semantic_observations = _task6_validate_semantic_observations(
+        packet["semantic_observations"],
+        primitive_checkpoint_sha256=checkpoint_sha256,
+        primitive_observations=primitive_observations,
+    )
+    return {
+        "page_locators": _task6_identity_order(pages, "page_locator_sha256"),
+        "region_locators": _task6_identity_order(regions, "region_locator_sha256"),
+        "render_provenance": _task6_identity_order(
+            renders,
+            "render_provenance_sha256",
+        ),
+        "primitive_observations": _task6_identity_order(
+            primitive_observations,
+            "observation_key",
+        ),
+        "semantic_observations": _task6_identity_order(
+            semantic_observations,
+            "observation_key",
+        ),
+    }
+
+
+def _task6_validate_source_fusion_packet(
+    payload: object,
+    *,
+    source_bundle: object | None = None,
+    custody: object | None = None,
+) -> dict[str, object]:
+    code = "SOURCE_FUSION_PACKET_INVALID"
+    packet = _closed(payload, _TASK6_PACKET_FIELDS, code)
+    if packet["schema_version"] != SOURCE_FUSION_SCHEMA_VERSION:
+        _fail(code)
+    status = packet["status"]
+    if status not in _TASK6_STATUS:
+        _fail(code)
+    bundle_sha256 = _sha256(packet["source_bundle_sha256"], code)
+    custody_sha256 = _sha256(packet["source_custody_sha256"], code)
+    if packet["numeric_policy_version"] != _R1C_NUMERIC_POLICY_VERSION:
+        _fail(code)
+    policy = _task6_tolerance_policy(packet["tolerance_policy"])
+
+    normalized_collections = _task6_packet_evidence(
+        packet,
+        source_bundle=source_bundle,
+        custody=custody,
+    )
+
+    primitive_keys = {
+        str(record["observation_key"])
+        for record in normalized_collections["primitive_observations"]
+    }
+    conflicts = _task6_validate_conflicts(
+        packet["conflicts"],
+        source_bundle_sha256=bundle_sha256,
+        source_custody_sha256=custody_sha256,
+        tolerance_policy=policy,
+        primitive_observation_keys=primitive_keys,
+    )
+    expected_conflicts = _task6_conflicts(
+        normalized_collections["primitive_observations"],
+        source_bundle_sha256=bundle_sha256,
+        source_custody_sha256=custody_sha256,
+        tolerance_policy=policy,
+    )
+    if conflicts != expected_conflicts:
+        _fail("SOURCE_FUSION_CONFLICT_MISMATCH")
+    expected_status = "BLOCKED_UNRESOLVED" if conflicts else "READY"
+    if status != expected_status:
+        _fail(code)
+
+    fusion_input_sha256 = _sha256(packet["fusion_input_sha256"], code)
+    expected_input_sha256 = _canonical_json_sha256(
+        _task6_fusion_input_material(
+            source_bundle_sha256=bundle_sha256,
+            source_custody_sha256=custody_sha256,
+            tolerance_policy=policy,
+            page_locators=normalized_collections["page_locators"],
+            region_locators=normalized_collections["region_locators"],
+            render_provenance=normalized_collections["render_provenance"],
+            primitive_observations=normalized_collections["primitive_observations"],
+            semantic_observations=normalized_collections["semantic_observations"],
+        )
+    )
+    if fusion_input_sha256 != expected_input_sha256:
+        _fail("SOURCE_FUSION_INPUT_MISMATCH")
+    return {
+        "schema_version": SOURCE_FUSION_SCHEMA_VERSION,
+        "status": expected_status,
+        "source_bundle_sha256": bundle_sha256,
+        "source_custody_sha256": custody_sha256,
+        "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+        "tolerance_policy": policy,
+        "page_locators": normalized_collections["page_locators"],
+        "region_locators": normalized_collections["region_locators"],
+        "render_provenance": normalized_collections["render_provenance"],
+        "primitive_observations": normalized_collections["primitive_observations"],
+        "semantic_observations": normalized_collections["semantic_observations"],
+        "conflicts": conflicts,
+        "fusion_input_sha256": fusion_input_sha256,
+    }
+
+
+def validate_source_fusion_packet(payload: object) -> dict[str, object]:
+    return _task6_validate_source_fusion_packet(payload)
+
+
+def source_fusion_sha256(payload: object) -> str:
+    return _canonical_json_sha256(validate_source_fusion_packet(payload))
+
+
+def require_source_fusion_match(
+    *,
+    source_bundle: object,
+    custody: object,
+    fusion: object,
+) -> None:
+    try:
+        bundle = _validate_source_bundle(source_bundle)
+        bundle_sha256 = _source_bundle_sha256(bundle)
+    except Exception:
+        _fail("SOURCE_BUNDLE_INVALID")
+    normalized_custody = _validated_custody(custody)
+    custody_sha256 = _custody_digest(normalized_custody)
+    if (
+        normalized_custody["bundle_id"] != bundle["bundle_id"]
+        or normalized_custody["run_id"] != bundle["run_id"]
+        or normalized_custody["source_bundle_sha256"] != bundle_sha256
+    ):
+        _fail("CUSTODY_CONTEXT_MISMATCH")
+    packet = _task6_validate_source_fusion_packet(
+        fusion,
+        source_bundle=bundle,
+        custody=normalized_custody,
+    )
+    if (
+        packet["source_bundle_sha256"] != bundle_sha256
+        or packet["source_custody_sha256"] != custody_sha256
+    ):
+        _fail("SOURCE_FUSION_MISMATCH")
+
+
+__all__ = [
+    "SOURCE_FUSION_SCHEMA_VERSION",
+    "SourceFusionError",
+    "validate_page_locators",
+    "validate_region_locators",
+    "validate_render_provenance",
+    "project_primitive_observations",
+    "project_semantic_observations",
+    "build_source_fusion_packet",
+    "validate_source_fusion_packet",
+    "source_fusion_sha256",
+    "require_source_fusion_match",
+]
