@@ -152,3 +152,60 @@ def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp
     assert captured["timeout_s"] == 60.0
     with pytest.raises(CommandError, match="timeout"):
         _live_client(42, dispatcher, timeout_s=0.0)
+
+
+def test_live_client_forwards_explicit_file_ipc_dir_before_construction(monkeypatch, tmp_path: Path) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    ipc_dir = tmp_path / "ipc-root"
+    ipc_dir.mkdir()
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(ipc_dir))
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    _live_client(42, dispatcher, timeout_s=60.0)
+
+    assert captured["ipc_dir"] == str(ipc_dir)
+
+
+@pytest.mark.parametrize(
+    "ipc_dir",
+    [
+        None,
+        "",
+        "relative\\ipc-root",
+        r"\\server\share\ipc-root",
+        r"C:\base\..\escape",
+    ],
+)
+def test_live_client_rejects_invalid_file_ipc_dir_before_construction(
+    monkeypatch, tmp_path: Path, ipc_dir: str | None
+) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    constructed = False
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            nonlocal constructed
+            constructed = True
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    if ipc_dir is None:
+        monkeypatch.delenv("CAD_AGENT_FILE_IPC_DIR", raising=False)
+    else:
+        monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", ipc_dir)
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    with pytest.raises(CommandError, match="IPC_ROOT_INVALID|CAD_AGENT_FILE_IPC_DIR"):
+        _live_client(42, dispatcher)
+
+    assert not constructed
