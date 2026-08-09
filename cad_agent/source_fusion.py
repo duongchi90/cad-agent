@@ -1501,6 +1501,24 @@ def _task5_primitive_content(
     return legacy_id, content
 
 
+def _task6_primitive_identity_material(
+    *,
+    binding: _Mapping[str, object],
+    content: _Mapping[str, object],
+    legacy_ids: object,
+) -> dict[str, object]:
+    if not isinstance(legacy_ids, list):
+        _fail("PRIMITIVE_OBSERVATIONS_INVALID")
+    return {
+        "identity_kind": "r1c-task5-projection-fixture-v1",
+        "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+        "task4_lineage": _task5_task4_lineage_material(binding),
+        "source_id": binding.get("source_id"),
+        "legacy_ids": sorted(str(value) for value in legacy_ids),
+        "content": dict(content),
+    }
+
+
 def project_primitive_observations(
     *,
     primitive_artifact: object,
@@ -1567,6 +1585,13 @@ def project_primitive_observations(
     normalized = list(classes.values())
     for record in normalized:
         record["legacy_ids"] = sorted(record["legacy_ids"])
+        record["observation_key"] = canonical_json_sha256(
+            _task6_primitive_identity_material(
+                binding=record["source_binding"],
+                content=record["content"],
+                legacy_ids=record["legacy_ids"],
+            )
+        )
     normalized.sort(key=lambda record: str(record["observation_key"]))
     return _copy.deepcopy(normalized)
 
@@ -2127,13 +2152,11 @@ def _task6_validate_primitive_observations(
             _fail("FUSION_PRIMITIVE_BINDING_MISMATCH")
         if not isinstance(record["content"], _Mapping):
             _fail(code)
-        identity_material = {
-            "identity_kind": "r1c-task5-projection-fixture-v1",
-            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
-            "task4_lineage": _task5_task4_lineage_material(binding),
-            "source_id": binding.get("source_id"),
-            "content": dict(record["content"]),
-        }
+        identity_material = _task6_primitive_identity_material(
+            binding=binding,
+            content=record["content"],
+            legacy_ids=normalized_ids,
+        )
         if _canonical_json_sha256(identity_material) != observation_key:
             _fail("FUSION_PRIMITIVE_IDENTITY_MISMATCH")
         normalized.append(

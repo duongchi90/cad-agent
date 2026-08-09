@@ -1857,15 +1857,15 @@ def test_task5_public_surface_adds_exactly_two_projection_apis() -> None:
     assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in inspect.signature(sf.project_semantic_observations).parameters.values())
 
 
-def test_task5_primitive_identity_ignores_uuid_handle_timestamp_notes_filename_and_order() -> None:
+def test_task5_primitive_identity_ignores_handle_timestamp_notes_filename_and_order() -> None:
     first = _task5_primitive_artifact([_task5_primitive("prim-a", handle="HANDLE-A", extracted_at="2026-08-08T12:00:00Z"), _task5_primitive("prim-b", end_x=20.0, handle="HANDLE-B")], file_name="customer-secret-a.png", reference_note="reference A")
-    second = _task5_primitive_artifact([_task5_primitive("regen-222", end_x=20, handle=None, extracted_at=None, validation_status="reviewer2_fail", validation_notes="different volatile review"), _task5_primitive("regen-111", handle="CHANGED", extracted_at="2099-01-01T00:00:00Z", validation_status="repaired", validation_notes=None)], file_name=r"C:\volatile\renamed-source.png", reference_note=None)
+    second = _task5_primitive_artifact([_task5_primitive("prim-b", end_x=20, handle=None, extracted_at=None, validation_status="reviewer2_fail", validation_notes="different volatile review"), _task5_primitive("prim-a", handle="CHANGED", extracted_at="2099-01-01T00:00:00Z", validation_status="repaired", validation_notes=None)], file_name=r"C:\volatile\renamed-source.png", reference_note=None)
     assert _task5_primitive_signature(_task5_project_primitive(first)) == _task5_primitive_signature(_task5_project_primitive(second))
 
 
 def test_task5_primitive_equivalent_units_numeric_forms_and_negative_zero_are_canonical() -> None:
     mm = _task5_primitive_artifact([_task5_primitive("prim-a", start_x=-0.0, end_x=10)], unit="mm", pixel_to_unit_scale=1, origin_x=-0.0)
-    cm = _task5_primitive_artifact([_task5_primitive("prim-z", start_x=0, end_x=10.0, handle=None, extracted_at=None)], unit="cm", pixel_to_unit_scale=0.1, origin_x=0)
+    cm = _task5_primitive_artifact([_task5_primitive("prim-a", start_x=0, end_x=10.0, handle=None, extracted_at=None)], unit="cm", pixel_to_unit_scale=0.1, origin_x=0)
     assert _task5_primitive_signature(_task5_project_primitive(mm)) == _task5_primitive_signature(_task5_project_primitive(cm))
 
 
@@ -1902,7 +1902,7 @@ def test_task5_primitive_duplicate_legacy_ids_fail_closed() -> None:
 
 def test_task5_artifact_checkpoint_and_task4_render_hash_are_not_observation_identity() -> None:
     first = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-old")]), artifact_sha256=PRIMITIVE_ARTIFACT_SHA256, bindings=_task5_source_bindings(PRIMITIVE_ARTIFACT_SHA256))
-    second = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-regenerated", handle=None, extracted_at=None)]), artifact_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256, bindings=_task5_source_bindings(TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256))
+    second = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-old", handle=None, extracted_at=None)]), artifact_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256, bindings=_task5_source_bindings(TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256))
     assert _task5_primitive_signature(first) == _task5_primitive_signature(second)
 
 
@@ -1929,9 +1929,9 @@ def test_task5_semantic_proper_subset_of_duplicate_class_fails_exact_ambiguity_c
 
 def test_task5_semantic_complete_duplicate_class_is_deterministic() -> None:
     first_primitives = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("dup-a"), _task5_primitive("dup-b", handle=None)]))
-    second_primitives = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("regen-b", handle="changed", extracted_at=None), _task5_primitive("regen-a", handle=None, extracted_at="2099-01-01T00:00:00Z")]))
+    second_primitives = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("dup-b", handle="changed", extracted_at=None), _task5_primitive("dup-a", handle=None, extracted_at="2099-01-01T00:00:00Z")]))
     first_semantic = _task5_semantic_artifact(primitive_ids=["dup-a", "dup-b"], primitive_count=2)
-    second_semantic = _task5_semantic_artifact(primitive_ids=["regen-b", "regen-a"], primitive_count=2, part_id="new-part-id", reverse_membership=True)
+    second_semantic = _task5_semantic_artifact(primitive_ids=["dup-b", "dup-a"], primitive_count=2, part_id="new-part-id", reverse_membership=True)
     assert _task5_semantic_signature(_task5_project_semantic(first_semantic, first_primitives)) == _task5_semantic_signature(_task5_project_semantic(second_semantic, second_primitives))
 
 
@@ -2011,6 +2011,7 @@ def test_task5_cross_platform_canonical_digest_fixture_uses_existing_hash_owner(
             "source_id": _IMAGE_SOURCE_ID,
         },
         "source_id": _IMAGE_SOURCE_ID,
+        "legacy_ids": ["prim-a"],
         "content": {
             "kind": "line",
             "confidence": "0.875",
@@ -2018,7 +2019,7 @@ def test_task5_cross_platform_canonical_digest_fixture_uses_existing_hash_owner(
             "end_mm": ["10", "0"],
         },
     }
-    assert canonical_json_sha256(expected_material) == "edba06cc715888c38f5471ec1c482a17f4618d5a531c0d814fda1ec5f64be58a"
+    assert canonical_json_sha256(expected_material) == "0f78ece41f78e984e0db55d42bd6dfef47e6f34749f9e0ea63d512c8c8689e29"
     projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")]))
     assert _task5_primitive_signature(projection)[0][0] == canonical_json_sha256(expected_material)
 
@@ -2290,7 +2291,7 @@ def test_task5_semantic_identity_ignores_artifact_sha_and_matching_checkpoint_re
     )
     second_primitives = _task5_project_primitive(
         _task5_primitive_artifact(
-            [_task5_primitive("prim-regenerated", handle=None, extracted_at=None)]
+            [_task5_primitive("prim-old", handle=None, extracted_at=None)]
         ),
         artifact_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256,
         bindings=_task5_source_bindings(TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256),
@@ -2301,7 +2302,7 @@ def test_task5_semantic_identity_ignores_artifact_sha_and_matching_checkpoint_re
         primitive_sha256=PRIMITIVE_ARTIFACT_SHA256,
     )
     second_semantic = _task5_semantic_artifact(
-        primitive_ids=["prim-regenerated"],
+        primitive_ids=["prim-old"],
         primitive_count=1,
         primitive_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256,
         part_id="part-regenerated",
@@ -2453,7 +2454,7 @@ def test_task5_focused_projection_replay_permutation_is_stable_for_five_executio
     baseline_primitive = None
     baseline_semantic = None
     for iteration in range(5):
-        ids = [f"regen-{iteration}-{index}" for index in range(3)]
+        ids = ["prim-a", "prim-b", "prim-c"]
         primitives = [
             _task5_primitive(
                 ids[0],
