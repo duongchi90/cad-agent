@@ -324,6 +324,7 @@ def test_reuse_handoff_is_closed_detached_and_canonical_hashable() -> None:
     assert normalized["components"] is not payload["components"]
     assert normalized["schema_version"] == "base-cad-reuse-handoff-1.0"
     payload["base_source"]["revision"] = "mutated"
+    payload["components"][0]["source_revision"] = "mutated"
     assert normalized["base_source"]["revision"] == "rev-2026-08-05-01"
     assert module.base_cad_reuse_handoff_sha256(payload) != baseline_hash
     assert module.base_cad_reuse_handoff_sha256(normalized) == baseline_hash
@@ -502,7 +503,7 @@ def _casefold_duplicate_source_handle_with_valid_mapping(payload: dict[str, obje
     "mutation",
     [
         lambda payload: payload["components"].append(deepcopy(payload["components"][0])),
-        lambda payload: payload["components"][1].__setitem__("logical_component_id", "component-A"),
+        lambda payload: payload["components"][0].__setitem__("logical_component_id", "component-A"),
         _casefold_duplicate_source_handle_with_valid_mapping,
         lambda payload: payload["source_handle_to_candidate_handle"].pop(),
         lambda payload: payload["source_handle_to_candidate_handle"].__setitem__(
