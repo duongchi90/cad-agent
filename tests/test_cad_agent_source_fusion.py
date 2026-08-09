@@ -685,6 +685,8 @@ def test_task4_public_surface_is_exact() -> None:
         "validate_page_locators",
         "validate_region_locators",
         "validate_render_provenance",
+        "project_primitive_observations",
+        "project_semantic_observations",
     ]
     for name in sf.__all__[2:]:
         assert callable(getattr(sf, name))
@@ -1473,8 +1475,6 @@ def test_all_task4_outputs_are_permutation_stable() -> None:
 
     direct = _direct_image_render_record(custody)
     pdf = _pdf_render_record(custody, pages)
-    # A single validation call is bound to one Primitive artifact SHA. Use the
-    # same explicit artifact SHA for both synthetic records in this permutation test.
     provenance = [pdf, direct]
     forward = sf.validate_render_provenance(
         provenance,
@@ -1583,24 +1583,9 @@ def test_task4_has_no_parser_renderer_ocr_model_provider_autocad_or_filesystem_o
     _sf()
     tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
     forbidden_import_roots = {
-        "os",
-        "pathlib",
-        "subprocess",
-        "requests",
-        "hashlib",
-        "uuid",
-        "random",
-        "datetime",
-        "time",
-        "PIL",
-        "pypdf",
-        "fitz",
-        "cv2",
-        "pytesseract",
-        "primitive_ir_lib",
-        "agent_lib",
-        "autocad_plugin",
-        "mcp_integration_lib",
+        "os", "pathlib", "subprocess", "requests", "hashlib", "uuid", "random",
+        "datetime", "time", "PIL", "pypdf", "fitz", "cv2", "pytesseract",
+        "primitive_ir_lib", "agent_lib", "autocad_plugin", "mcp_integration_lib",
     }
     imported_roots: set[str] = set()
     for node in ast.walk(tree):
@@ -1618,42 +1603,11 @@ def test_task4_has_no_parser_renderer_ocr_model_provider_autocad_or_filesystem_o
             return f"{prefix}.{node.attr}" if prefix else node.attr
         return ""
 
-    called_names = {
-        call_name(node.func)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-    }
-    forbidden_calls = {
-        "open",
-        "Path",
-        "read_text",
-        "read_bytes",
-        "write_text",
-        "write_bytes",
-        "mkdir",
-        "unlink",
-        "replace",
-        "remove",
-        "run",
-        "Popen",
-        "system",
-        "uuid4",
-        "random",
-        "time",
-        "now",
-        "utcnow",
-    }
+    called_names = {call_name(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    forbidden_calls = {"open", "Path", "read_text", "read_bytes", "write_text", "write_bytes", "mkdir", "unlink", "replace", "remove", "run", "Popen", "system", "uuid4", "random", "time", "now", "utcnow"}
     assert called_names.isdisjoint(forbidden_calls)
     source = SOURCE_FUSION_FILE.read_text(encoding="utf-8").lower()
-    for forbidden_text in (
-        "pypdf",
-        "pymupdf",
-        "tesseract",
-        "openai",
-        "anthropic",
-        "autocad",
-        "file ipc",
-    ):
+    for forbidden_text in ("pypdf", "pymupdf", "tesseract", "openai", "anthropic", "autocad", "file ipc"):
         assert forbidden_text not in source
 
 
@@ -1666,18 +1620,11 @@ def test_task4_rejects_bundle_content_hash_mismatch_with_same_context_ids() -> N
     assert changed_bundle["bundle_id"] == bundle["bundle_id"]
     assert changed_bundle["run_id"] == bundle["run_id"]
     with pytest.raises(sf.SourceFusionError, match=r"^CUSTODY_CONTEXT_MISMATCH$"):
-        sf.validate_page_locators(
-            _page_payload(custody),
-            source_bundle=changed_bundle,
-            custody=custody,
-        )
+        sf.validate_page_locators(_page_payload(custody), source_bundle=changed_bundle, custody=custody)
 
 
 def test_page_locator_rejects_mismatched_observed_pdf_sha256() -> None:
-    sf = _sf()
-    bundle = _source_bundle()
-    custody = _custody(bundle)
-    payload = _page_payload(custody)
+    sf = _sf(); bundle = _source_bundle(); custody = _custody(bundle); payload = _page_payload(custody)
     payload[0]["observed_pdf_sha256"] = "9" * 64
     payload[0]["page_locator_sha256"] = _page_locator_sha256(payload[0])
     with pytest.raises(sf.SourceFusionError, match=r"^PAGE_FACT_MISMATCH$"):
@@ -1685,276 +1632,113 @@ def test_page_locator_rejects_mismatched_observed_pdf_sha256() -> None:
 
 
 def test_page_locator_rejects_mismatched_numeric_policy_version() -> None:
-    sf = _sf()
-    bundle = _source_bundle()
-    custody = _custody(bundle)
-    payload = _page_payload(custody)
+    sf = _sf(); bundle = _source_bundle(); custody = _custody(bundle); payload = _page_payload(custody)
     payload[0]["numeric_policy_version"] = "r1c-numeric-policy-untrusted"
     with pytest.raises(sf.SourceFusionError, match=r"^PAGE_LOCATOR_INVALID$"):
         sf.validate_page_locators(payload, source_bundle=bundle, custody=custody)
 
 
 def test_page_locator_rejects_bool_physical_index() -> None:
-    sf = _sf()
-    bundle = _source_bundle()
-    custody = _custody(bundle)
-    payload = _page_payload(custody)
+    sf = _sf(); bundle = _source_bundle(); custody = _custody(bundle); payload = _page_payload(custody)
     payload[0]["page_index"] = True
     with pytest.raises(sf.SourceFusionError, match=r"^PAGE_LOCATOR_INVALID$"):
         sf.validate_page_locators(payload, source_bundle=bundle, custody=custody)
 
 
-@pytest.mark.parametrize(
-    "bounds",
-    [
-        ["12", "12", "12", "60"],
-        ["60", "12", "12", "60"],
-    ],
-)
+@pytest.mark.parametrize("bounds", [["12", "12", "12", "60"], ["60", "12", "12", "60"]])
 def test_pdf_region_rejects_reversed_or_degenerate_bounds(bounds: list[str]) -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    payload = _region_payload(custody, pages)
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); payload = _region_payload(custody, pages)
     target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER)
-    target["bounds"] = _box(bounds)
-    target["region_locator_sha256"] = _region_locator_sha256(target)
+    target["bounds"] = _box(bounds); target["region_locator_sha256"] = _region_locator_sha256(target)
     with pytest.raises(sf.SourceFusionError, match=r"^REGION_BOUNDS_INVALID$"):
         sf.validate_region_locators(payload, page_locators=pages, custody=custody)
 
 
 def test_pdf_region_rejects_bounds_inside_media_box_but_outside_selected_crop_box() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    payload = _region_payload(custody, pages)
-    target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER)
-    parent = _page_by_id(pages, _PAGE_99)
-    target["page_locator_sha256"] = parent["page_locator_sha256"]
-    target["box_kind"] = "CROP_BOX"
-    target["rotation"] = parent["rotation"]
-    target["user_unit"] = copy.deepcopy(parent["user_unit"])
-    target["bounds"] = _box(["0", "10", "10", "20"])
-    target["region_locator_sha256"] = _region_locator_sha256(target)
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); payload = _region_payload(custody, pages)
+    target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER); parent = _page_by_id(pages, _PAGE_99)
+    target["page_locator_sha256"] = parent["page_locator_sha256"]; target["box_kind"] = "CROP_BOX"; target["rotation"] = parent["rotation"]; target["user_unit"] = copy.deepcopy(parent["user_unit"]); target["bounds"] = _box(["0", "10", "10", "20"]); target["region_locator_sha256"] = _region_locator_sha256(target)
     with pytest.raises(sf.SourceFusionError, match=r"^REGION_BOUNDS_OUT_OF_RANGE$"):
         sf.validate_region_locators(payload, page_locators=pages, custody=custody)
 
 
 def test_region_rejects_arbitrary_third_coordinate_convention() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    payload = _region_payload(custody, pages)
-    target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER)
-    target["coordinate_convention"] = "PDF_TOP_LEFT_X_RIGHT_Y_DOWN"
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); payload = _region_payload(custody, pages)
+    target = next(record for record in payload if record["region_id"] == _PDF_REGION_USER); target["coordinate_convention"] = "PDF_TOP_LEFT_X_RIGHT_Y_DOWN"
     with pytest.raises(sf.SourceFusionError, match=r"^REGION_LOCATOR_INVALID$"):
         sf.validate_region_locators(payload, page_locators=pages, custody=custody)
 
 
 @pytest.mark.parametrize("field", ["page_locator_sha256", "render_provenance_sha256"])
 def test_direct_image_raster_region_rejects_non_null_parent_refs(field: str) -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    payload = _region_payload(custody, pages)
-    target = next(record for record in payload if record["region_id"] == _IMAGE_REGION_VIEW)
-    target[field] = "a" * 64
-    target["region_locator_sha256"] = _region_locator_sha256(target)
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); payload = _region_payload(custody, pages)
+    target = next(record for record in payload if record["region_id"] == _IMAGE_REGION_VIEW); target[field] = "a" * 64; target["region_locator_sha256"] = _region_locator_sha256(target)
     with pytest.raises(sf.SourceFusionError, match=r"^REGION_PARENT_MISMATCH$"):
         sf.validate_region_locators(payload, page_locators=pages, custody=custody)
 
 
 def test_render_provenance_rejects_unknown_kind() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    record = _pdf_render_record(custody, pages)
-    record["provenance_kind"] = "PDF_RASTERIZED"
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); record = _pdf_render_record(custody, pages); record["provenance_kind"] = "PDF_RASTERIZED"
     with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
-        sf.validate_render_provenance(
-            [record],
-            page_locators=pages,
-            custody=custody,
-            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-        )
+        sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
 def test_pdf_render_accepts_valid_crop_box_binding() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    parent = _page_by_id(pages, _PAGE_99)
-    record = _pdf_render_record(custody, pages)
-    record["box_kind"] = "CROP_BOX"
-    record["selected_box"] = copy.deepcopy(parent["crop_box"])
-    record["render_provenance_sha256"] = _render_provenance_sha256(record)
-    normalized = sf.validate_render_provenance(
-        [record],
-        page_locators=pages,
-        custody=custody,
-        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-    )
-    assert normalized == _normalized_render([record])
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); parent = _page_by_id(pages, _PAGE_99); record = _pdf_render_record(custody, pages)
+    record["box_kind"] = "CROP_BOX"; record["selected_box"] = copy.deepcopy(parent["crop_box"]); record["render_provenance_sha256"] = _render_provenance_sha256(record)
+    assert sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256) == _normalized_render([record])
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("sha256", "9" * 64),
-        ("image_width_px", 639),
-        ("image_height_px", 479),
-    ],
-)
-def test_direct_image_render_rejects_nested_primitive_source_document_mismatch(
-    field: str,
-    value: object,
-) -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    record = _direct_image_render_record(custody)
-    record["primitive_source_document"][field] = value
-    record["render_provenance_sha256"] = _render_provenance_sha256(record)
+@pytest.mark.parametrize("field,value", [("sha256", "9" * 64), ("image_width_px", 639), ("image_height_px", 479)])
+def test_direct_image_render_rejects_nested_primitive_source_document_mismatch(field: str, value: object) -> None:
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); record = _direct_image_render_record(custody); record["primitive_source_document"][field] = value; record["render_provenance_sha256"] = _render_provenance_sha256(record)
     with pytest.raises(sf.SourceFusionError, match=r"^PRIMITIVE_BINDING_MISMATCH$"):
-        sf.validate_render_provenance(
-            [record],
-            page_locators=pages,
-            custody=custody,
-            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-        )
+        sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
-@pytest.mark.parametrize(
-    "field,bad_value",
-    [
-        ("render_dpi", float("nan")),
-        ("render_dpi", float("inf")),
-        ("render_matrix", float("nan")),
-        ("render_matrix", float("-inf")),
-    ],
-)
-def test_pdf_render_rejects_nonfinite_dpi_or_matrix(
-    field: str,
-    bad_value: float,
-) -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    record = _pdf_render_record(custody, pages)
-    if field == "render_dpi":
-        record[field] = _dpi(bad_value)
-    else:
-        record[field] = _matrix([bad_value, "0", "0", "-2", "0", "144"])
+@pytest.mark.parametrize("field,bad_value", [("render_dpi", float("nan")), ("render_dpi", float("inf")), ("render_matrix", float("nan")), ("render_matrix", float("-inf"))])
+def test_pdf_render_rejects_nonfinite_dpi_or_matrix(field: str, bad_value: float) -> None:
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); record = _pdf_render_record(custody, pages)
+    record[field] = _dpi(bad_value) if field == "render_dpi" else _matrix([bad_value, "0", "0", "-2", "0", "144"])
     with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
-        sf.validate_render_provenance(
-            [record],
-            page_locators=pages,
-            custody=custody,
-            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-        )
+        sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
-@pytest.mark.parametrize(
-    "field,bad_value",
-    [
-        ("raster_width_px", True),
-        ("raster_height_px", -1),
-    ],
-)
-def test_direct_image_render_rejects_bool_or_negative_raster_dimensions(
-    field: str,
-    bad_value: object,
-) -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    record = _direct_image_render_record(custody)
-    record[field] = bad_value
+@pytest.mark.parametrize("field,bad_value", [("raster_width_px", True), ("raster_height_px", -1)])
+def test_direct_image_render_rejects_bool_or_negative_raster_dimensions(field: str, bad_value: object) -> None:
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); record = _direct_image_render_record(custody); record[field] = bad_value
     with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
-        sf.validate_render_provenance(
-            [record],
-            page_locators=pages,
-            custody=custody,
-            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-        )
+        sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
 def test_pdf_render_rejects_bool_pdf_page_index() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    record = _pdf_render_record(custody, pages)
-    record["pdf_page_index"] = True
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); record = _pdf_render_record(custody, pages); record["pdf_page_index"] = True
     with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
-        sf.validate_render_provenance(
-            [record],
-            page_locators=pages,
-            custody=custody,
-            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-        )
+        sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
 def test_pdf_render_rejects_negative_primitive_source_page_index() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    record = _pdf_render_record(custody, pages)
-    record["primitive_source_document"]["page_index"] = -1
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); record = _pdf_render_record(custody, pages); record["primitive_source_document"]["page_index"] = -1
     with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
-        sf.validate_render_provenance(
-            [record],
-            page_locators=pages,
-            custody=custody,
-            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-        )
+        sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
 def test_pdf_render_filename_is_not_identity_authority() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    first = _pdf_render_record(custody, pages, file_name="customer-secret-page.png")
-    second = _pdf_render_record(custody, pages, file_name="renamed-transient-output.png")
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); first = _pdf_render_record(custody, pages, file_name="customer-secret-page.png"); second = _pdf_render_record(custody, pages, file_name="renamed-transient-output.png")
     assert first["render_provenance_sha256"] == second["render_provenance_sha256"]
-    assert sf.validate_render_provenance(
-        [first],
-        page_locators=pages,
-        custody=custody,
-        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-    ) == sf.validate_render_provenance(
-        [second],
-        page_locators=pages,
-        custody=custody,
-        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-    )
+    assert sf.validate_render_provenance([first], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256) == sf.validate_render_provenance([second], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
 def test_render_provenance_closed_record_rejects_extra_path_field() -> None:
-    sf = _sf()
-    custody = _custody()
-    pages = _page_payload(custody)
-    record = _pdf_render_record(custody, pages)
-    record["relative_path"] = r"C:\customer\volatile\render.png"
+    sf = _sf(); custody = _custody(); pages = _page_payload(custody); record = _pdf_render_record(custody, pages); record["relative_path"] = r"C:\customer\volatile\render.png"
     with pytest.raises(sf.SourceFusionError, match=r"^RENDER_PROVENANCE_INVALID$"):
-        sf.validate_render_provenance(
-            [record],
-            page_locators=pages,
-            custody=custody,
-            primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
-        )
+        sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256)
 
 
 def test_task4_architecture_uses_only_accepted_internal_owners_and_no_authority_surfaces() -> None:
-    _sf()
-    tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
-    allowed_internal_modules = {
-        "cad_agent.drawing_contracts",
-        "cad_agent.source_bundle",
-        "cad_agent.source_integrity",
-    }
-    internal_modules: set[str] = set()
-    imported_roots: set[str] = set()
-    canonical_owner_imported = False
+    _sf(); tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
+    allowed_internal_modules = {"cad_agent.drawing_contracts", "cad_agent.source_bundle", "cad_agent.source_integrity"}
+    internal_modules: set[str] = set(); imported_roots: set[str] = set(); canonical_owner_imported = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -1966,37 +1750,364 @@ def test_task4_architecture_uses_only_accepted_internal_owners_and_no_authority_
             if node.module == "cad_agent" or node.module.startswith("cad_agent."):
                 internal_modules.add(node.module)
             if node.module == "cad_agent.source_integrity":
-                canonical_owner_imported = canonical_owner_imported or any(
-                    alias.name == "canonicalize_r1c_quantity" for alias in node.names
-                )
+                canonical_owner_imported = canonical_owner_imported or any(alias.name == "canonicalize_r1c_quantity" for alias in node.names)
     assert internal_modules <= allowed_internal_modules
     assert canonical_owner_imported
-
-    forbidden_import_roots = {
-        "importlib",
-        "socket",
-        "urllib",
-        "http",
-        "tempfile",
-        "glob",
-        "shutil",
-        "os",
-        "pathlib",
-        "subprocess",
-        "requests",
-        "builtins",
-        "io",
-        "PIL",
-        "pypdf",
-        "fitz",
-        "cv2",
-        "pytesseract",
-        "primitive_ir_lib",
-        "agent_lib",
-        "autocad_plugin",
-        "mcp_integration_lib",
-    }
+    forbidden_import_roots = {"importlib", "socket", "urllib", "http", "tempfile", "glob", "shutil", "os", "pathlib", "subprocess", "requests", "builtins", "io", "PIL", "pypdf", "fitz", "cv2", "pytesseract", "primitive_ir_lib", "agent_lib", "autocad_plugin", "mcp_integration_lib"}
     assert imported_roots.isdisjoint(forbidden_import_roots)
+
+    def call_name(node: ast.AST) -> str:
+        if isinstance(node, ast.Name): return node.id
+        if isinstance(node, ast.Attribute):
+            prefix = call_name(node.value); return f"{prefix}.{node.attr}" if prefix else node.attr
+        return ""
+
+    called_names = {call_name(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    forbidden_calls = {"__import__", "builtins.__import__", "importlib.import_module", "open", "builtins.open", "io.open", "eval", "exec"}
+    assert called_names.isdisjoint(forbidden_calls)
+    assert not any(name == "round" or name.endswith(".quantize") or name.endswith(".normalize") for name in called_names)
+    assert "_canonicalize_r1c_quantity" in called_names
+
+
+# ----------------------------------------------------------------- Task 5 RED ---
+
+TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256 = "7" * 64
+TASK5_SEMANTIC_ARTIFACT_SHA256 = "8" * 64
+_TASK5_PRIMITIVE_IR_BASENAME = "primitive_ir.json"
+
+
+def _task5_source_bindings(primitive_artifact_sha256: str = PRIMITIVE_ARTIFACT_SHA256) -> list[dict[str, object]]:
+    sf = _sf()
+    custody = _custody()
+    pages = _page_payload(custody)
+    record = _direct_image_render_record(custody, primitive_artifact_sha256=primitive_artifact_sha256, file_name="volatile-render-name.png")
+    return sf.validate_render_provenance([record], page_locators=pages, custody=custody, primitive_artifact_sha256=primitive_artifact_sha256)
+
+
+def _task5_primitive(primitive_id: str, *, end_x: object = 10.0, start_x: object = 0.0, handle: object = "ABCD", extracted_at: object = "2026-08-08T12:00:00Z", validation_status: str = "unreviewed", validation_notes: object = "volatile reviewer note") -> dict[str, object]:
+    return {"id": primitive_id, "type": "line", "source": "geometry_opencv", "confidence": 0.875, "layer": "GEOMETRY", "handle": handle, "trace": {"bbox_px": [0, 0, 10, 10], "extraction_tool": "opencv-line", "extracted_at": extracted_at}, "validation": {"status": validation_status, "notes": validation_notes}, "geometry": {"start": {"x": start_x, "y": 0.0}, "end": {"x": end_x, "y": 0.0}}}
+
+
+def _task5_primitive_artifact(primitives: list[dict[str, object]] | None = None, *, file_name: str = "source-customer-name.png", unit: str = "mm", pixel_to_unit_scale: object = 1.0, origin_x: object = 0.0, reference_note: object = "volatile calibration note") -> dict[str, object]:
+    if primitives is None:
+        primitives = [_task5_primitive("prim-a")]
+    calibration = {"unit": unit, "pixel_to_unit_scale": pixel_to_unit_scale, "origin_px": [origin_x, 480.0], "method": "manual_override", "status": "verified", "source_sha256": IMAGE_SHA256}
+    if reference_note is not None:
+        calibration["reference_note"] = reference_note
+    return {"schema_version": "1.0.0", "source_document": {"file_name": file_name, "page_index": 0, "image_width_px": 640, "image_height_px": 480, "sha256": IMAGE_SHA256}, "calibration": calibration, "primitives": copy.deepcopy(primitives), "cross_validations": []}
+
+
+def _task5_project_primitive(artifact: dict[str, object], *, artifact_sha256: str = PRIMITIVE_ARTIFACT_SHA256, bindings: list[dict[str, object]] | None = None):
+    sf = _sf()
+    if bindings is None:
+        bindings = _task5_source_bindings(artifact_sha256)
+    return sf.project_primitive_observations(primitive_artifact=artifact, primitive_artifact_sha256=artifact_sha256, source_bindings=bindings)
+
+
+def _task5_primitive_signature(projection: object) -> list[tuple[str, int]]:
+    assert isinstance(projection, list)
+    result = []
+    for record in projection:
+        assert isinstance(record, dict)
+        key = record["observation_key"]
+        count = record["occurrence_count"]
+        assert isinstance(key, str) and len(key) == 64
+        assert isinstance(count, int) and not isinstance(count, bool) and count > 0
+        result.append((key, count))
+    return sorted(result)
+
+
+def _task5_semantic_artifact(*, primitive_ids: list[str], primitive_count: int, file_name: str = _TASK5_PRIMITIVE_IR_BASENAME, primitive_sha256: object = None, part_id: str = "part-a", constraint_id: str = "cst-a", reverse_membership: bool = False) -> dict[str, object]:
+    ref = {"file_name": file_name, "primitive_count": primitive_count}
+    if primitive_sha256 is not None:
+        ref["sha256"] = primitive_sha256
+    member_ids = list(reversed(primitive_ids)) if reverse_membership else list(primitive_ids)
+    parts = [{"id": part_id, "part_type": "thanh_ngang", "primitive_ids": member_ids, "confidence": 0.9, "source": "rule_geometry", "validation": {"status": "unreviewed", "notes": "volatile semantic review"}, "geometry_summary": {"length_mm": 10.0, "orientation_deg": -0.0}}]
+    constraints = []
+    if len(primitive_ids) >= 2:
+        constraints.append({"id": constraint_id, "type": "parallel", "primitive_ids": member_ids[:2], "confidence": 0.8, "tolerance": {"angle_deg": 1.0}, "measured": {"angle_diff_deg": -0.0}})
+    return {"schema_version": "1.0.0", "primitive_ir_ref": ref, "parts": parts, "constraints": constraints}
+
+
+def _task5_project_semantic(semantic_artifact: dict[str, object], primitive_projection: object, *, semantic_artifact_sha256: str = TASK5_SEMANTIC_ARTIFACT_SHA256, primitive_checkpoint_sha256: str = PRIMITIVE_ARTIFACT_SHA256):
+    return _sf().project_semantic_observations(semantic_artifact=semantic_artifact, semantic_artifact_sha256=semantic_artifact_sha256, primitive_checkpoint_sha256=primitive_checkpoint_sha256, primitive_observations=primitive_projection)
+
+
+def _task5_semantic_signature(projection: object) -> list[tuple[str, tuple[str, ...]]]:
+    assert isinstance(projection, list)
+    result = []
+    for record in projection:
+        assert isinstance(record, dict)
+        key = record["observation_key"]
+        primitive_keys = tuple(sorted(record["primitive_observation_keys"]))
+        assert isinstance(key, str) and len(key) == 64
+        result.append((key, primitive_keys))
+    return sorted(result)
+
+
+def test_task5_public_surface_adds_exactly_two_projection_apis() -> None:
+    sf = _sf()
+    assert sf.__all__ == ["SOURCE_FUSION_SCHEMA_VERSION", "SourceFusionError", "validate_page_locators", "validate_region_locators", "validate_render_provenance", "project_primitive_observations", "project_semantic_observations"]
+    assert list(inspect.signature(sf.project_primitive_observations).parameters) == ["primitive_artifact", "primitive_artifact_sha256", "source_bindings"]
+    assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in inspect.signature(sf.project_primitive_observations).parameters.values())
+    assert list(inspect.signature(sf.project_semantic_observations).parameters) == ["semantic_artifact", "semantic_artifact_sha256", "primitive_checkpoint_sha256", "primitive_observations"]
+    assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in inspect.signature(sf.project_semantic_observations).parameters.values())
+
+
+def test_task5_primitive_identity_ignores_uuid_handle_timestamp_notes_filename_and_order() -> None:
+    first = _task5_primitive_artifact([_task5_primitive("prim-a", handle="HANDLE-A", extracted_at="2026-08-08T12:00:00Z"), _task5_primitive("prim-b", end_x=20.0, handle="HANDLE-B")], file_name="customer-secret-a.png", reference_note="reference A")
+    second = _task5_primitive_artifact([_task5_primitive("regen-222", end_x=20, handle=None, extracted_at=None, validation_status="reviewer2_fail", validation_notes="different volatile review"), _task5_primitive("regen-111", handle="CHANGED", extracted_at="2099-01-01T00:00:00Z", validation_status="repaired", validation_notes=None)], file_name=r"C:\volatile\renamed-source.png", reference_note=None)
+    assert _task5_primitive_signature(_task5_project_primitive(first)) == _task5_primitive_signature(_task5_project_primitive(second))
+
+
+def test_task5_primitive_equivalent_units_numeric_forms_and_negative_zero_are_canonical() -> None:
+    mm = _task5_primitive_artifact([_task5_primitive("prim-a", start_x=-0.0, end_x=10)], unit="mm", pixel_to_unit_scale=1, origin_x=-0.0)
+    cm = _task5_primitive_artifact([_task5_primitive("prim-z", start_x=0, end_x=10.0, handle=None, extracted_at=None)], unit="cm", pixel_to_unit_scale=0.1, origin_x=0)
+    assert _task5_primitive_signature(_task5_project_primitive(mm)) == _task5_primitive_signature(_task5_project_primitive(cm))
+
+
+def test_task5_primitive_content_change_changes_observation_key() -> None:
+    first = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a", end_x=10)]))
+    second = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a", end_x=11)]))
+    assert _task5_primitive_signature(first) != _task5_primitive_signature(second)
+
+
+def test_task5_primitive_checkpoint_must_match_task4_binding() -> None:
+    sf = _sf(); artifact = _task5_primitive_artifact(); bindings = _task5_source_bindings(PRIMITIVE_ARTIFACT_SHA256)
+    with pytest.raises(sf.SourceFusionError):
+        sf.project_primitive_observations(primitive_artifact=artifact, primitive_artifact_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256, source_bindings=bindings)
+
+
+@pytest.mark.parametrize("field,value", [("sha256", "f" * 64), ("image_width_px", 639), ("image_height_px", 479), ("page_index", 1)])
+def test_task5_primitive_source_document_must_match_task4_binding(field: str, value: object) -> None:
+    sf = _sf(); artifact = _task5_primitive_artifact(); artifact["source_document"][field] = value
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_primitive(artifact)
+
+
+def test_task5_primitive_identical_observations_form_deterministic_multiset() -> None:
+    projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("legacy-a"), _task5_primitive("legacy-b", handle=None, extracted_at=None, validation_status="reviewer1_fail", validation_notes=None)]))
+    signature = _task5_primitive_signature(projection)
+    assert len(signature) == 1 and signature[0][1] == 2
+
+
+def test_task5_primitive_duplicate_legacy_ids_fail_closed() -> None:
+    sf = _sf(); artifact = _task5_primitive_artifact([_task5_primitive("legacy-dup"), _task5_primitive("legacy-dup", end_x=20)])
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_primitive(artifact)
+
+
+def test_task5_artifact_checkpoint_and_task4_render_hash_are_not_observation_identity() -> None:
+    first = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-old")]), artifact_sha256=PRIMITIVE_ARTIFACT_SHA256, bindings=_task5_source_bindings(PRIMITIVE_ARTIFACT_SHA256))
+    second = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-regenerated", handle=None, extracted_at=None)]), artifact_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256, bindings=_task5_source_bindings(TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256))
+    assert _task5_primitive_signature(first) == _task5_primitive_signature(second)
+
+
+def test_task5_semantic_identity_ignores_part_constraint_uuid_and_order() -> None:
+    primitive_projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a"), _task5_primitive("prim-b", end_x=20)]))
+    first = _task5_semantic_artifact(primitive_ids=["prim-a", "prim-b"], primitive_count=2, part_id="part-old", constraint_id="constraint-old")
+    second = _task5_semantic_artifact(primitive_ids=["prim-a", "prim-b"], primitive_count=2, part_id="part-regenerated", constraint_id="constraint-regenerated", reverse_membership=True)
+    second["parts"] = list(reversed(second["parts"])); second["constraints"] = list(reversed(second["constraints"]))
+    assert _task5_semantic_signature(_task5_project_semantic(first, primitive_projection)) == _task5_semantic_signature(_task5_project_semantic(second, primitive_projection))
+
+
+def test_task5_semantic_membership_maps_to_primitive_observation_keys() -> None:
+    primitive_projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")]))
+    primitive_key = _task5_primitive_signature(primitive_projection)[0][0]
+    semantic = _task5_project_semantic(_task5_semantic_artifact(primitive_ids=["prim-a"], primitive_count=1), primitive_projection)
+    assert _task5_semantic_signature(semantic)[0][1] == (primitive_key,)
+
+
+def test_task5_semantic_proper_subset_of_duplicate_class_fails_exact_ambiguity_code() -> None:
+    sf = _sf(); primitive_projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("dup-a"), _task5_primitive("dup-b", handle=None)])); semantic = _task5_semantic_artifact(primitive_ids=["dup-a"], primitive_count=2)
+    with pytest.raises(sf.SourceFusionError, match=r"^DUPLICATE_OBSERVATION_AMBIGUITY$"):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+def test_task5_semantic_complete_duplicate_class_is_deterministic() -> None:
+    first_primitives = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("dup-a"), _task5_primitive("dup-b", handle=None)]))
+    second_primitives = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("regen-b", handle="changed", extracted_at=None), _task5_primitive("regen-a", handle=None, extracted_at="2099-01-01T00:00:00Z")]))
+    first_semantic = _task5_semantic_artifact(primitive_ids=["dup-a", "dup-b"], primitive_count=2)
+    second_semantic = _task5_semantic_artifact(primitive_ids=["regen-b", "regen-a"], primitive_count=2, part_id="new-part-id", reverse_membership=True)
+    assert _task5_semantic_signature(_task5_project_semantic(first_semantic, first_primitives)) == _task5_semantic_signature(_task5_project_semantic(second_semantic, second_primitives))
+
+
+def test_task5_semantic_missing_primitive_reference_fails_closed() -> None:
+    sf = _sf(); primitive_projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")])); semantic = _task5_semantic_artifact(primitive_ids=["missing-legacy-id"], primitive_count=1)
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+def test_task5_primitive_ir_ref_allows_optional_sha_absent() -> None:
+    primitive_projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")]))
+    semantic = _task5_semantic_artifact(primitive_ids=["prim-a"], primitive_count=1, primitive_sha256=None)
+    _task5_project_semantic(semantic, primitive_projection)
+
+
+def test_task5_primitive_ir_ref_optional_sha_must_equal_external_checkpoint() -> None:
+    sf = _sf(); primitive_projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")]))
+    matching = _task5_semantic_artifact(primitive_ids=["prim-a"], primitive_count=1, primitive_sha256=PRIMITIVE_ARTIFACT_SHA256)
+    _task5_project_semantic(matching, primitive_projection)
+    mismatch = copy.deepcopy(matching); mismatch["primitive_ir_ref"]["sha256"] = TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_semantic(mismatch, primitive_projection)
+
+
+@pytest.mark.parametrize("field,value", [("file_name", "wrong-name.json"), ("primitive_count", 2)])
+def test_task5_primitive_ir_ref_wrong_filename_or_total_multiplicity_blocks(field: str, value: object) -> None:
+    sf = _sf(); primitive_projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")]))
+    semantic = _task5_semantic_artifact(primitive_ids=["prim-a"], primitive_count=1); semantic["primitive_ir_ref"][field] = value
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_task5_projection_rejects_nonfinite_numeric_evidence(bad: float) -> None:
+    sf = _sf(); artifact = _task5_primitive_artifact([_task5_primitive("prim-a")]); artifact["primitives"][0]["confidence"] = bad
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_primitive(artifact)
+
+
+def test_task5_projection_rejects_noncanonical_numeric_evidence() -> None:
+    sf = _sf(); artifact = _task5_primitive_artifact([_task5_primitive("prim-a")]); artifact["primitives"][0]["geometry"]["end"]["x"] = object()
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_primitive(artifact)
+
+
+def test_task5_projection_replay_and_permutation_are_deterministic() -> None:
+    primitives = [_task5_primitive("prim-a"), _task5_primitive("prim-b", end_x=20), _task5_primitive("prim-c", end_x=30)]
+    first_artifact = _task5_primitive_artifact(primitives); second_artifact = _task5_primitive_artifact(list(reversed(primitives)))
+    first = _task5_project_primitive(copy.deepcopy(first_artifact)); second = _task5_project_primitive(copy.deepcopy(second_artifact))
+    assert _task5_primitive_signature(first) == _task5_primitive_signature(second) == _task5_primitive_signature(_task5_project_primitive(copy.deepcopy(first_artifact)))
+
+
+def test_task5_projection_errors_are_privacy_safe() -> None:
+    sf = _sf(); sentinel = r"C:\TOP-SECRET-CUSTOMER\primitive.json"; artifact = _task5_primitive_artifact([_task5_primitive("prim-a")]); artifact["source_document"]["file_name"] = sentinel; artifact["primitives"][0]["confidence"] = float("nan")
+    with pytest.raises(sf.SourceFusionError) as exc_info:
+        _task5_project_primitive(artifact)
+    assert sentinel not in str(exc_info.value) and "TOP-SECRET-CUSTOMER" not in str(exc_info.value)
+
+
+def test_task5_cross_platform_canonical_digest_fixture_uses_existing_hash_owner() -> None:
+    expected_material = {
+        "identity_kind": "r1c-task5-projection-fixture-v1",
+        "numeric_policy_version": R1C_NUMERIC_POLICY_VERSION,
+        "task4_lineage": {
+            "numeric_policy_version": R1C_NUMERIC_POLICY_VERSION,
+            "observed_source_sha256": IMAGE_SHA256,
+            "primitive_source_document": {
+                "image_height_px": 480,
+                "image_width_px": 640,
+                "sha256": IMAGE_SHA256,
+            },
+            "provenance_kind": "DIRECT_IMAGE",
+            "raster_height_px": 480,
+            "raster_sha256": IMAGE_SHA256,
+            "raster_width_px": 640,
+            "source_custody_sha256": "ca0fc7efafdd73b0b7c77e1ca78cfd7e0ca38b6da80030a4b25d960cf4f3d4d9",
+            "source_id": _IMAGE_SOURCE_ID,
+        },
+        "source_id": _IMAGE_SOURCE_ID,
+        "content": {
+            "kind": "line",
+            "confidence": "0.875",
+            "start_mm": ["0", "0"],
+            "end_mm": ["10", "0"],
+        },
+    }
+    assert canonical_json_sha256(expected_material) == "edba06cc715888c38f5471ec1c482a17f4618d5a531c0d814fda1ec5f64be58a"
+    projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")]))
+    assert _task5_primitive_signature(projection)[0][0] == canonical_json_sha256(expected_material)
+
+
+def test_task5_static_no_second_owner_gates_cover_projection_dependencies() -> None:
+    _sf(); tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
+    forbidden = {"hashlib", "json", "uuid", "random", "datetime", "time", "os", "pathlib", "subprocess", "requests", "socket", "urllib", "http", "tempfile", "glob", "shutil", "sqlite3", "PIL", "pypdf", "fitz", "cv2", "pytesseract", "primitive_ir_lib", "semantic_ir_lib", "agent_lib", "autocad_plugin", "mcp_integration_lib"}
+    roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import): roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module: roots.add(node.module.split(".")[0])
+    assert roots.isdisjoint(forbidden)
+    calls = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert {"open", "__import__", "round", "hash"}.isdisjoint(calls)
+
+
+# -------------------------------------------------------- Task 5 hardened RED ---
+
+TASK5_OTHER_SEMANTIC_ARTIFACT_SHA256 = "9" * 64
+
+
+def _task5_three_duplicate_projection() -> object:
+    return _task5_project_primitive(
+        _task5_primitive_artifact(
+            [
+                _task5_primitive("dup-a"),
+                _task5_primitive("dup-b", handle=None, extracted_at=None),
+                _task5_primitive("dup-c", handle="CHANGED", extracted_at="2099-01-01T00:00:00Z"),
+            ]
+        )
+    )
+
+
+def _task5_alternate_valid_source_binding(
+    primitive_artifact_sha256: str = PRIMITIVE_ARTIFACT_SHA256,
+) -> list[dict[str, object]]:
+    sf = _sf()
+    alternate = copy.deepcopy(_custody())
+    alternate["approved_root_revision"] = "ROOT-REV-ALT"
+    for item in alternate["items"]:
+        item["approved_root_revision"] = "ROOT-REV-ALT"
+    alternate = validate_source_custody(alternate)
+    pages = _page_payload(alternate)
+    record = _direct_image_render_record(
+        alternate,
+        primitive_artifact_sha256=primitive_artifact_sha256,
+        file_name="other-valid-task4-binding.png",
+    )
+    return sf.validate_render_provenance(
+        [record],
+        page_locators=pages,
+        custody=alternate,
+        primitive_artifact_sha256=primitive_artifact_sha256,
+    )
+
+
+def _task5_mapping_contains_authoritative_binding(
+    value: object,
+    binding: dict[str, object],
+) -> bool:
+    required = {
+        "render_provenance_sha256",
+        "source_custody_sha256",
+        "source_id",
+        "observed_source_sha256",
+        "raster_sha256",
+        "raster_width_px",
+        "raster_height_px",
+    }
+    if isinstance(value, dict):
+        if required.issubset(value) and all(value[key] == binding[key] for key in required):
+            return True
+        return any(
+            _task5_mapping_contains_authoritative_binding(child, binding)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(
+            _task5_mapping_contains_authoritative_binding(child, binding)
+            for child in value
+        )
+    return False
+
+
+def _task5_reachable_calls(function_name: str) -> set[str]:
+    tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert function_name in functions
 
     def call_name(node: ast.AST) -> str:
         if isinstance(node, ast.Name):
@@ -2006,24 +2117,488 @@ def test_task4_architecture_uses_only_accepted_internal_owners_and_no_authority_
             return f"{prefix}.{node.attr}" if prefix else node.attr
         return ""
 
-    called_names = {
-        call_name(node.func)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-    }
-    forbidden_calls = {
-        "__import__",
-        "builtins.__import__",
-        "importlib.import_module",
-        "open",
-        "builtins.open",
-        "io.open",
-        "eval",
-        "exec",
-    }
-    assert called_names.isdisjoint(forbidden_calls)
-    assert not any(
-        name == "round" or name.endswith(".quantize") or name.endswith(".normalize")
-        for name in called_names
+    pending = [function_name]
+    visited: set[str] = set()
+    calls: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        node = functions[current]
+        direct = {
+            call_name(call.func)
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        }
+        calls.update(direct)
+        pending.extend(name for name in direct if name in functions and name not in visited)
+    return calls
+
+
+def test_task5_duplicate_class_multiplicity_three_requires_complete_selection() -> None:
+    sf = _sf()
+    primitive_projection = _task5_three_duplicate_projection()
+    for selected in (["dup-a"], ["dup-a", "dup-b"]):
+        semantic = _task5_semantic_artifact(
+            primitive_ids=list(selected),
+            primitive_count=3,
+        )
+        with pytest.raises(
+            sf.SourceFusionError,
+            match=r"^DUPLICATE_OBSERVATION_AMBIGUITY$",
+        ):
+            _task5_project_semantic(semantic, primitive_projection)
+
+    complete = _task5_semantic_artifact(
+        primitive_ids=["dup-a", "dup-b", "dup-c"],
+        primitive_count=3,
     )
-    assert "_canonicalize_r1c_quantity" in called_names
+    complete["constraints"][0]["primitive_ids"] = ["dup-a", "dup-b", "dup-c"]
+    reverse = _task5_semantic_artifact(
+        primitive_ids=["dup-c", "dup-b", "dup-a"],
+        primitive_count=3,
+        part_id="part-regenerated",
+    )
+    reverse["constraints"][0]["primitive_ids"] = ["dup-c", "dup-b", "dup-a"]
+    assert _task5_semantic_signature(
+        _task5_project_semantic(complete, primitive_projection)
+    ) == _task5_semantic_signature(
+        _task5_project_semantic(reverse, primitive_projection)
+    )
+
+
+def test_task5_reused_legacy_ids_cannot_spoof_duplicate_multiplicity() -> None:
+    sf = _sf()
+    primitive_projection = _task5_three_duplicate_projection()
+    repeated = _task5_semantic_artifact(
+        primitive_ids=["dup-a", "dup-a", "dup-a"],
+        primitive_count=3,
+    )
+    with pytest.raises(
+        sf.SourceFusionError,
+        match=r"^DUPLICATE_OBSERVATION_AMBIGUITY$",
+    ):
+        _task5_project_semantic(repeated, primitive_projection)
+
+    split = _task5_semantic_artifact(
+        primitive_ids=["dup-a"],
+        primitive_count=3,
+    )
+    split["parts"] = [
+        {**copy.deepcopy(split["parts"][0]), "id": "part-a", "primitive_ids": ["dup-a"]},
+        {**copy.deepcopy(split["parts"][0]), "id": "part-b", "primitive_ids": ["dup-b"]},
+        {**copy.deepcopy(split["parts"][0]), "id": "part-c", "primitive_ids": ["dup-c"]},
+    ]
+    with pytest.raises(
+        sf.SourceFusionError,
+        match=r"^DUPLICATE_OBSERVATION_AMBIGUITY$",
+    ):
+        _task5_project_semantic(split, primitive_projection)
+
+
+@pytest.mark.parametrize("same_content", [True, False])
+def test_task5_duplicate_primitive_legacy_id_always_fails_closed(
+    same_content: bool,
+) -> None:
+    sf = _sf()
+    second = _task5_primitive("legacy-dup", end_x=10 if same_content else 20)
+    artifact = _task5_primitive_artifact(
+        [_task5_primitive("legacy-dup"), second]
+    )
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_primitive(artifact)
+
+
+def test_task5_task4_binding_duplicates_are_order_neutral_but_incompatible_valid_bindings_fail() -> None:
+    sf = _sf()
+    artifact = _task5_primitive_artifact()
+    first = _task5_source_bindings()
+    duplicated = [copy.deepcopy(first[0]), copy.deepcopy(first[0])]
+    forward = _task5_project_primitive(artifact, bindings=duplicated)
+    reverse = _task5_project_primitive(artifact, bindings=list(reversed(duplicated)))
+    single = _task5_project_primitive(artifact, bindings=first)
+    assert _task5_primitive_signature(forward) == _task5_primitive_signature(reverse)
+    assert _task5_primitive_signature(forward) == _task5_primitive_signature(single)
+
+    alternate = _task5_alternate_valid_source_binding()
+    assert alternate[0]["raster_sha256"] == first[0]["raster_sha256"]
+    assert alternate[0]["source_custody_sha256"] != first[0]["source_custody_sha256"]
+    for bindings in ([first[0], alternate[0]], [alternate[0], first[0]]):
+        with pytest.raises(sf.SourceFusionError):
+            _task5_project_primitive(artifact, bindings=list(bindings))
+
+    stale = copy.deepcopy(first[0])
+    stale["primitive_artifact_sha256"] = TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_primitive(artifact, bindings=[first[0], stale])
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    [
+        "../primitive_ir.json",
+        r"C:\primitive_ir.json",
+        r"\\server\share\primitive_ir.json",
+        "folder/primitive_ir.json",
+        r"folder\primitive_ir.json",
+        ".primitive_ir.json",
+        "Primitive_IR.json",
+    ],
+)
+def test_task5_primitive_ir_ref_filename_is_literal_compatibility_only(
+    file_name: str,
+) -> None:
+    sf = _sf()
+    primitive_projection = _task5_project_primitive(
+        _task5_primitive_artifact([_task5_primitive("prim-a")])
+    )
+    semantic = _task5_semantic_artifact(
+        primitive_ids=["prim-a"],
+        primitive_count=1,
+        file_name=file_name,
+    )
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+@pytest.mark.parametrize("bad_count", [True, -1, 1.5])
+def test_task5_primitive_count_rejects_bool_negative_and_nonintegral(
+    bad_count: object,
+) -> None:
+    sf = _sf()
+    primitive_projection = _task5_project_primitive(
+        _task5_primitive_artifact([_task5_primitive("prim-a")])
+    )
+    semantic = _task5_semantic_artifact(
+        primitive_ids=["prim-a"],
+        primitive_count=1,
+    )
+    semantic["primitive_ir_ref"]["primitive_count"] = bad_count
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+def test_task5_semantic_identity_ignores_artifact_sha_and_matching_checkpoint_rewrite() -> None:
+    first_primitives = _task5_project_primitive(
+        _task5_primitive_artifact([_task5_primitive("prim-old")]),
+        artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+        bindings=_task5_source_bindings(PRIMITIVE_ARTIFACT_SHA256),
+    )
+    second_primitives = _task5_project_primitive(
+        _task5_primitive_artifact(
+            [_task5_primitive("prim-regenerated", handle=None, extracted_at=None)]
+        ),
+        artifact_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256,
+        bindings=_task5_source_bindings(TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256),
+    )
+    first_semantic = _task5_semantic_artifact(
+        primitive_ids=["prim-old"],
+        primitive_count=1,
+        primitive_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )
+    second_semantic = _task5_semantic_artifact(
+        primitive_ids=["prim-regenerated"],
+        primitive_count=1,
+        primitive_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256,
+        part_id="part-regenerated",
+    )
+    first = _task5_project_semantic(
+        first_semantic,
+        first_primitives,
+        semantic_artifact_sha256=TASK5_SEMANTIC_ARTIFACT_SHA256,
+        primitive_checkpoint_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )
+    second = _task5_project_semantic(
+        second_semantic,
+        second_primitives,
+        semantic_artifact_sha256=TASK5_OTHER_SEMANTIC_ARTIFACT_SHA256,
+        primitive_checkpoint_sha256=TASK5_OTHER_PRIMITIVE_ARTIFACT_SHA256,
+    )
+    assert _task5_semantic_signature(first) == _task5_semantic_signature(second)
+
+
+@pytest.mark.parametrize(
+    "target,bad",
+    [
+        ("primitive_confidence", True),
+        ("primitive_confidence", float("nan")),
+        ("primitive_geometry", True),
+        ("primitive_geometry", float("inf")),
+        ("primitive_geometry", object()),
+        ("semantic_part_confidence", True),
+        ("semantic_part_confidence", float("-inf")),
+        ("semantic_geometry", True),
+        ("semantic_geometry", object()),
+        ("semantic_constraint_confidence", True),
+        ("semantic_constraint_confidence", float("nan")),
+        ("semantic_tolerance", True),
+        ("semantic_tolerance", float("inf")),
+        ("semantic_measured", True),
+        ("semantic_measured", object()),
+    ],
+)
+def test_task5_numeric_rejection_covers_primitive_and_semantic_fields(
+    target: str,
+    bad: object,
+) -> None:
+    sf = _sf()
+    if target.startswith("primitive_"):
+        artifact = _task5_primitive_artifact([_task5_primitive("prim-a")])
+        if target == "primitive_confidence":
+            artifact["primitives"][0]["confidence"] = bad
+        else:
+            artifact["primitives"][0]["geometry"]["end"]["x"] = bad
+        with pytest.raises(sf.SourceFusionError):
+            _task5_project_primitive(artifact)
+        return
+
+    primitive_projection = _task5_project_primitive(
+        _task5_primitive_artifact(
+            [_task5_primitive("prim-a"), _task5_primitive("prim-b", end_x=20)]
+        )
+    )
+    semantic = _task5_semantic_artifact(
+        primitive_ids=["prim-a", "prim-b"],
+        primitive_count=2,
+    )
+    if target == "semantic_part_confidence":
+        semantic["parts"][0]["confidence"] = bad
+    elif target == "semantic_geometry":
+        semantic["parts"][0]["geometry_summary"]["length_mm"] = bad
+    elif target == "semantic_constraint_confidence":
+        semantic["constraints"][0]["confidence"] = bad
+    elif target == "semantic_tolerance":
+        semantic["constraints"][0]["tolerance"]["angle_deg"] = bad
+    else:
+        semantic["constraints"][0]["measured"]["angle_diff_deg"] = bad
+    with pytest.raises(sf.SourceFusionError):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+@pytest.mark.parametrize(
+    "projection_api",
+    ["project_primitive_observations", "project_semantic_observations"],
+)
+def test_task5_projection_callgraphs_reach_existing_numeric_and_hash_owners(
+    projection_api: str,
+) -> None:
+    tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
+    imported = {
+        (node.module, alias.name)
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module
+        for alias in node.names
+    }
+    assert ("cad_agent.source_integrity", "canonicalize_r1c_quantity") in imported
+    assert ("cad_agent.drawing_contracts", "canonical_json_sha256") in imported
+    reachable = _task5_reachable_calls(projection_api)
+    assert "canonicalize_r1c_quantity" in reachable
+    assert "canonical_json_sha256" in reachable
+
+
+def test_task5_calibration_reference_note_add_change_remove_is_volatile() -> None:
+    variants = [
+        _task5_primitive_artifact(reference_note=None),
+        _task5_primitive_artifact(reference_note="calibration note A"),
+        _task5_primitive_artifact(reference_note="calibration note B"),
+    ]
+    signatures = {
+        tuple(_task5_primitive_signature(_task5_project_primitive(variant)))
+        for variant in variants
+    }
+    assert len(signatures) == 1
+
+
+def _task5_replay_semantic(
+    ids: list[str],
+    *,
+    reverse: bool,
+) -> dict[str, object]:
+    semantic = _task5_semantic_artifact(
+        primitive_ids=ids[:2],
+        primitive_count=3,
+        part_id=f"part-{ids[0]}",
+        constraint_id=f"constraint-{ids[0]}",
+        reverse_membership=reverse,
+    )
+    second_part = copy.deepcopy(semantic["parts"][0])
+    second_part["id"] = f"part-{ids[2]}"
+    second_part["primitive_ids"] = [ids[2]]
+    second_part["confidence"] = 0.7
+    second_part["geometry_summary"] = {
+        "length_mm": 30.0,
+        "orientation_deg": 0.0,
+    }
+    second_constraint = copy.deepcopy(semantic["constraints"][0])
+    second_constraint["id"] = f"constraint-{ids[2]}"
+    second_constraint["primitive_ids"] = [ids[1], ids[2]]
+    second_constraint["confidence"] = 0.7
+    semantic["parts"].append(second_part)
+    semantic["constraints"].append(second_constraint)
+    if reverse:
+        semantic["parts"] = list(reversed(semantic["parts"]))
+        semantic["constraints"] = list(reversed(semantic["constraints"]))
+        for part in semantic["parts"]:
+            part["primitive_ids"] = list(reversed(part["primitive_ids"]))
+        for constraint in semantic["constraints"]:
+            constraint["primitive_ids"] = list(reversed(constraint["primitive_ids"]))
+    return semantic
+
+
+def test_task5_focused_projection_replay_permutation_is_stable_for_five_executions() -> None:
+    baseline_primitive = None
+    baseline_semantic = None
+    for iteration in range(5):
+        ids = [f"regen-{iteration}-{index}" for index in range(3)]
+        primitives = [
+            _task5_primitive(
+                ids[0],
+                start_x=-0.0 if iteration % 2 == 0 else 0,
+                end_x=10,
+                handle=None if iteration % 2 else f"H-{iteration}-0",
+                extracted_at=None if iteration % 2 else f"2026-08-0{iteration + 1}T00:00:00Z",
+            ),
+            _task5_primitive(
+                ids[1],
+                end_x=20.0,
+                handle=f"H-{iteration}-1" if iteration % 2 else None,
+                extracted_at="2099-01-01T00:00:00Z" if iteration % 2 else None,
+            ),
+            _task5_primitive(
+                ids[2],
+                end_x=30,
+                handle=None,
+                extracted_at=None,
+            ),
+        ]
+        if iteration % 2:
+            primitives = list(reversed(primitives))
+        artifact = _task5_primitive_artifact(
+            primitives,
+            unit="cm" if iteration % 2 else "mm",
+            pixel_to_unit_scale=0.1 if iteration % 2 else 1,
+            origin_x=0 if iteration % 2 else -0.0,
+            reference_note=None if iteration % 2 else f"volatile-{iteration}",
+        )
+        bindings = _task5_source_bindings()
+        bindings = [copy.deepcopy(bindings[0]), copy.deepcopy(bindings[0])]
+        if iteration % 2:
+            bindings.reverse()
+        primitive_projection = _task5_project_primitive(artifact, bindings=bindings)
+        semantic = _task5_replay_semantic(ids, reverse=bool(iteration % 2))
+        semantic_projection = _task5_project_semantic(
+            semantic,
+            primitive_projection,
+            semantic_artifact_sha256=(hex(iteration + 10)[2:] * 64)[:64],
+        )
+        primitive_signature = _task5_primitive_signature(primitive_projection)
+        semantic_signature = _task5_semantic_signature(semantic_projection)
+        if baseline_primitive is None:
+            baseline_primitive = primitive_signature
+            baseline_semantic = semantic_signature
+        else:
+            assert primitive_signature == baseline_primitive
+            assert semantic_signature == baseline_semantic
+
+
+def test_task5_primitive_projection_preserves_full_task4_custody_binding_semantics() -> None:
+    binding = _task5_source_bindings()[0]
+    projection = _task5_project_primitive(
+        _task5_primitive_artifact([_task5_primitive("prim-a")]),
+        bindings=[binding],
+    )
+    assert isinstance(projection, list) and projection
+    for record in projection:
+        assert isinstance(record, dict)
+        assert _task5_mapping_contains_authoritative_binding(record, binding)
+
+
+def _task5_stable_task4_lineage_material(binding: dict[str, object]) -> dict[str, object]:
+    return {
+        key: copy.deepcopy(value)
+        for key, value in binding.items()
+        if key not in {"render_provenance_sha256", "primitive_artifact_sha256"}
+    }
+
+
+def test_task5_primitive_identity_changes_across_distinct_authoritative_task4_lineage() -> None:
+    artifact = _task5_primitive_artifact([_task5_primitive("prim-a")])
+    first_binding = _task5_source_bindings()[0]
+    alternate_binding = _task5_alternate_valid_source_binding()[0]
+
+    assert first_binding["source_id"] == alternate_binding["source_id"]
+    assert first_binding["observed_source_sha256"] == alternate_binding["observed_source_sha256"]
+    assert first_binding["raster_sha256"] == alternate_binding["raster_sha256"]
+    assert first_binding["source_custody_sha256"] != alternate_binding["source_custody_sha256"]
+    assert (
+        _task5_stable_task4_lineage_material(first_binding)
+        != _task5_stable_task4_lineage_material(alternate_binding)
+    )
+
+    first = _task5_project_primitive(artifact, bindings=[first_binding])
+    alternate = _task5_project_primitive(artifact, bindings=[alternate_binding])
+    assert _task5_primitive_signature(first) != _task5_primitive_signature(alternate)
+
+
+def test_task5_primitive_identity_lineage_mutation_is_not_binding_order_authority() -> None:
+    artifact = _task5_primitive_artifact([_task5_primitive("prim-a")])
+    for binding in (
+        _task5_source_bindings()[0],
+        _task5_alternate_valid_source_binding()[0],
+    ):
+        duplicated = [copy.deepcopy(binding), copy.deepcopy(binding)]
+        forward = _task5_project_primitive(artifact, bindings=duplicated)
+        reverse = _task5_project_primitive(artifact, bindings=list(reversed(duplicated)))
+        single = _task5_project_primitive(artifact, bindings=[binding])
+        assert _task5_primitive_signature(forward) == _task5_primitive_signature(reverse)
+        assert _task5_primitive_signature(forward) == _task5_primitive_signature(single)
+
+
+@pytest.mark.parametrize(
+    "constraint_ids",
+    [
+        ["dup-a"],
+        ["dup-a", "dup-b"],
+    ],
+    ids=["constraint-selects-1-of-3", "constraint-selects-2-of-3"],
+)
+def test_task5_each_semantic_object_rejects_its_own_duplicate_class_proper_subset(
+    constraint_ids: list[str],
+) -> None:
+    sf = _sf()
+    primitive_projection = _task5_three_duplicate_projection()
+    semantic = _task5_semantic_artifact(
+        primitive_ids=["dup-a", "dup-b", "dup-c"],
+        primitive_count=3,
+    )
+    assert semantic["parts"][0]["primitive_ids"] == ["dup-a", "dup-b", "dup-c"]
+    semantic["constraints"][0]["primitive_ids"] = list(constraint_ids)
+
+    with pytest.raises(
+        sf.SourceFusionError,
+        match=r"^DUPLICATE_OBSERVATION_AMBIGUITY$",
+    ):
+        _task5_project_semantic(semantic, primitive_projection)
+
+
+def test_task5_each_semantic_object_complete_duplicate_class_is_permutation_stable() -> None:
+    primitive_projection = _task5_three_duplicate_projection()
+    forward = _task5_semantic_artifact(
+        primitive_ids=["dup-a", "dup-b", "dup-c"],
+        primitive_count=3,
+    )
+    forward["constraints"][0]["primitive_ids"] = ["dup-a", "dup-b", "dup-c"]
+    reverse = _task5_semantic_artifact(
+        primitive_ids=["dup-c", "dup-b", "dup-a"],
+        primitive_count=3,
+        part_id="part-regenerated",
+        constraint_id="constraint-regenerated",
+    )
+    reverse["constraints"][0]["primitive_ids"] = ["dup-c", "dup-b", "dup-a"]
+
+    assert _task5_semantic_signature(
+        _task5_project_semantic(forward, primitive_projection)
+    ) == _task5_semantic_signature(
+        _task5_project_semantic(reverse, primitive_projection)
+    )
