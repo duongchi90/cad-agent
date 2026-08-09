@@ -182,6 +182,7 @@ def test_public_surface_uses_the_accepted_parameter_modes() -> None:
     assert list(inspect.signature(module.build_component_view_registry).parameters) == [
         "upstream_context",
         "components",
+        "views",
     ]
     assert list(inspect.signature(module.validate_component_view_registry).parameters) == [
         "payload",
@@ -191,12 +192,25 @@ def test_public_surface_uses_the_accepted_parameter_modes() -> None:
         "payload",
         "upstream_context",
     ]
+    assert list(inspect.signature(module.project_linked_view_impacts).parameters) == [
+        "registry",
+        "component_ids",
+        "view_ids",
+        "upstream_context",
+    ]
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in inspect.signature(
             module.build_component_view_registry
         ).parameters.values()
     )
+    impact_parameters = inspect.signature(module.project_linked_view_impacts).parameters
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in impact_parameters.values()
+    )
+    assert impact_parameters["component_ids"].default == ()
+    assert impact_parameters["view_ids"].default == ()
     for function in (
         module.validate_component_view_registry,
         module.component_view_registry_sha256,
@@ -626,3 +640,456 @@ def test_static_boundary_has_no_parser_transport_store_or_second_owner() -> None
         "Path(",
     ):
         assert forbidden not in source
+
+
+def _task2_layout(
+    layout_id: str,
+    *,
+    display_name: str,
+    legacy_uuid: str,
+    relative_path: str,
+    captured_at_utc: str,
+) -> dict[str, str]:
+    return {
+        "layout_id": layout_id,
+        "display_name": display_name,
+        "legacy_uuid": legacy_uuid,
+        "relative_path": relative_path,
+        "captured_at_utc": captured_at_utc,
+    }
+
+
+def _task2_view_inputs(module, context: dict[str, object]) -> list[dict[str, object]]:
+    components = _component_inputs(context)
+    task1 = module.build_component_view_registry(
+        upstream_context=context, components=components
+    )
+    reused = next(
+        item for item in task1["components"] if item["origin_class"] == "REUSED_UNCHANGED"
+    )
+    reconstructed = next(
+        item for item in task1["components"] if item["origin_class"] == "RECONSTRUCTED_NEW"
+    )
+    semantic_ref = context["source_fusion"]["semantic_observations"][0][
+        "observation_key"
+    ]
+    return [
+        {
+            "view_role": "PRIMARY",
+            "component_ids": [reused["component_id"]],
+            "source_projection_refs": list(reused["source_projection_refs"]),
+            "semantic_projection_refs": [semantic_ref],
+            "candidate_entity_bindings": deepcopy(reused["candidate_entity_bindings"]),
+            "layout_bindings": [
+                _task2_layout(
+                    "layout-main",
+                    display_name="Main Layout",
+                    legacy_uuid="layout-uuid-a",
+                    relative_path="layouts/main.dwg",
+                    captured_at_utc="2026-08-10T00:00:00Z",
+                )
+            ],
+        },
+        {
+            "view_role": "DETAIL",
+            "component_ids": [reused["component_id"], reconstructed["component_id"]],
+            "source_projection_refs": list(reconstructed["source_projection_refs"]),
+            "semantic_projection_refs": [semantic_ref],
+            "candidate_entity_bindings": deepcopy(reused["candidate_entity_bindings"]),
+            "layout_bindings": [
+                _task2_layout(
+                    "layout-detail",
+                    display_name="Detail Layout",
+                    legacy_uuid="layout-uuid-b",
+                    relative_path="layouts/detail.dwg",
+                    captured_at_utc="2026-08-10T00:00:01Z",
+                )
+            ],
+        },
+    ]
+
+
+def _task2_registry(module, context: dict[str, object]) -> dict[str, object]:
+    components = _component_inputs(context)
+    views = _task2_view_inputs(module, context)
+    return module.build_component_view_registry(
+        upstream_context=context,
+        components=components,
+        views=views,
+    )
+
+
+def _reseal_registry(registry: dict[str, object]) -> dict[str, object]:
+    changed = deepcopy(registry)
+    material = deepcopy(changed)
+    material.pop("registry_snapshot_sha256", None)
+    changed["registry_snapshot_sha256"] = canonical_json_sha256(material)
+    return changed
+
+
+def _view_by_role(registry: dict[str, object], role: str) -> dict[str, object]:
+    return next(view for view in registry["views"] if view["view_role"] == role)
+
+
+def test_task2_builds_closed_views_and_derives_all_closed_link_classes() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    assert registry["schema_version"] == SCHEMA_VERSION
+    assert len(registry["views"]) == 2
+    for view in registry["views"]:
+        assert set(view) == {
+            "view_id",
+            "view_role",
+            "component_ids",
+            "source_projection_refs",
+            "semantic_projection_refs",
+            "candidate_entity_bindings",
+            "layout_bindings",
+        }
+    assert {link["relation_type"] for link in registry["links"]} == {
+        "COMPONENT_HAS_VIEW",
+        "VIEWS_SHARE_COMPONENT",
+        "VIEWS_SHARE_PARAMETER_EVIDENCE",
+        "VIEW_PRESENTED_ON_LAYOUT",
+    }
+    for link in registry["links"]:
+        assert set(link) == {
+            "link_id",
+            "relation_type",
+            "source_id",
+            "target_id",
+            "evidence_refs",
+        }
+
+
+def test_task2_view_identity_ignores_handle_layout_display_uuid_time_path_and_order() -> None:
+    module = _registry_module()
+    first_context = _upstream_context()
+    second_context = _remapped_candidate_context(
+        first_context, candidate_handle="D4E5"
+    )
+    first = _task2_registry(module, first_context)
+    second_views = _task2_view_inputs(module, second_context)
+    for view in second_views:
+        view["component_ids"] = list(reversed(view["component_ids"]))
+        view["source_projection_refs"] = list(reversed(view["source_projection_refs"]))
+        view["semantic_projection_refs"] = list(
+            reversed(view["semantic_projection_refs"])
+        )
+        for layout in view["layout_bindings"]:
+            layout["display_name"] = "Renamed volatile display"
+            layout["legacy_uuid"] = "new-random-layout-uuid"
+            layout["relative_path"] = "renamed/volatile-layout.dwg"
+            layout["captured_at_utc"] = "2099-01-01T00:00:00Z"
+    second = module.build_component_view_registry(
+        upstream_context=second_context,
+        components=list(reversed(_component_inputs(second_context))),
+        views=list(reversed(second_views)),
+    )
+    assert {
+        view["view_role"]: view["view_id"] for view in first["views"]
+    } == {
+        view["view_role"]: view["view_id"] for view in second["views"]
+    }
+    assert first["registry_snapshot_sha256"] != second["registry_snapshot_sha256"]
+
+
+@pytest.mark.parametrize("mutation", ["role", "component", "projection"])
+def test_task2_stable_membership_or_projection_mutation_changes_view_id(mutation: str) -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    components = _component_inputs(context)
+    views = _task2_view_inputs(module, context)
+    baseline = module.build_component_view_registry(
+        upstream_context=context, components=components, views=views
+    )
+    baseline_primary = _view_by_role(baseline, "PRIMARY")
+    changed_views = deepcopy(views)
+    primary = next(view for view in changed_views if view["view_role"] == "PRIMARY")
+    if mutation == "role":
+        primary["view_role"] = "AUXILIARY"
+    elif mutation == "component":
+        task1 = module.build_component_view_registry(
+            upstream_context=context, components=components
+        )
+        extra_component = next(
+            item
+            for item in task1["components"]
+            if item["component_id"] not in primary["component_ids"]
+        )
+        primary["component_ids"].append(extra_component["component_id"])
+    else:
+        accepted = [
+            item["observation_key"]
+            for item in context["source_fusion"]["primitive_observations"]
+        ]
+        primary["source_projection_refs"] = [
+            ref for ref in accepted if ref not in primary["source_projection_refs"]
+        ][:1]
+    changed = module.build_component_view_registry(
+        upstream_context=context, components=components, views=changed_views
+    )
+    changed_primary = next(
+        view
+        for view in changed["views"]
+        if view["view_role"] == primary["view_role"]
+    )
+    assert changed_primary["view_id"] != baseline_primary["view_id"]
+
+
+def test_task2_component_ids_are_preserved_when_views_are_added() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    task1 = module.build_component_view_registry(
+        upstream_context=context, components=_component_inputs(context)
+    )
+    task2 = _task2_registry(module, context)
+    assert sorted(component["component_id"] for component in task1["components"]) == sorted(
+        component["component_id"] for component in task2["components"]
+    )
+    explicit_empty = module.build_component_view_registry(
+        upstream_context=context,
+        components=_component_inputs(context),
+        views=[],
+    )
+    assert explicit_empty == task1
+
+
+def test_task2_component_view_membership_and_component_has_view_links_are_exact() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    expected_pairs = {
+        (component_id, view["view_id"])
+        for view in registry["views"]
+        for component_id in view["component_ids"]
+    }
+    actual_pairs = {
+        (link["source_id"], link["target_id"])
+        for link in registry["links"]
+        if link["relation_type"] == "COMPONENT_HAS_VIEW"
+    }
+    assert actual_pairs == expected_pairs
+    for component in registry["components"]:
+        expected_view_ids = sorted(
+            view["view_id"]
+            for view in registry["views"]
+            if component["component_id"] in view["component_ids"]
+        )
+        assert component["view_ids"] == expected_view_ids
+
+
+def test_task2_permutations_are_byte_equivalent_and_hash_equal() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    components = _component_inputs(context)
+    views = _task2_view_inputs(module, context)
+    first = module.build_component_view_registry(
+        upstream_context=context, components=components, views=views
+    )
+    permuted = deepcopy(views)
+    for view in permuted:
+        view["component_ids"].reverse()
+        view["source_projection_refs"].reverse()
+        view["semantic_projection_refs"].reverse()
+        view["candidate_entity_bindings"].reverse()
+        view["layout_bindings"].reverse()
+    second = module.build_component_view_registry(
+        upstream_context=context,
+        components=list(reversed(deepcopy(components))),
+        views=list(reversed(permuted)),
+    )
+    assert first == second
+    assert first["registry_snapshot_sha256"] == second["registry_snapshot_sha256"]
+
+
+def test_task2_view_candidate_binding_must_belong_to_the_current_candidate_graph() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    views = _task2_view_inputs(module, context)
+    views[0]["candidate_entity_bindings"][0]["candidate_id"] = "foreign-candidate"
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+
+
+@pytest.mark.parametrize("attack", ["unknown_relation", "dangling", "duplicate", "self_link"])
+def test_task2_link_attacks_fail_closed_even_after_caller_reseals(attack: str) -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    attacked = deepcopy(registry)
+    if attack == "unknown_relation":
+        attacked["links"][0]["relation_type"] = "CALLER_DEFINED_RELATION"
+    elif attack == "dangling":
+        attacked["links"][0]["target_id"] = "f" * 64
+    elif attack == "duplicate":
+        attacked["links"].append(deepcopy(attacked["links"][0]))
+    else:
+        shared = next(
+            link
+            for link in attacked["links"]
+            if link["relation_type"] == "VIEWS_SHARE_COMPONENT"
+        )
+        shared["target_id"] = shared["source_id"]
+    attacked = _reseal_registry(attacked)
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.validate_component_view_registry(attacked, upstream_context=context)
+
+
+def test_task2_duplicate_or_foreign_view_membership_fails_closed() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    views = _task2_view_inputs(module, context)
+    views[0]["component_ids"].append(views[0]["component_ids"][0])
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+    views = _task2_view_inputs(module, context)
+    views[0]["component_ids"] = ["f" * 64]
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+
+
+def test_task2_internal_completeness_rejects_omitted_view_with_valid_self_hash() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    attacked = deepcopy(registry)
+    attacked["views"] = attacked["views"][:-1]
+    attacked = _reseal_registry(attacked)
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.validate_component_view_registry(attacked, upstream_context=context)
+
+
+def test_task2_internal_completeness_rejects_unpaired_foreign_layout_binding() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    attacked = deepcopy(registry)
+    attacked["views"][0]["layout_bindings"].append(
+        _task2_layout(
+            "layout-forged",
+            display_name="Forged",
+            legacy_uuid="forged-layout-uuid",
+            relative_path="forged/layout.dwg",
+            captured_at_utc="2099-01-01T00:00:00Z",
+        )
+    )
+    attacked = _reseal_registry(attacked)
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.validate_component_view_registry(attacked, upstream_context=context)
+
+
+def test_task2_impact_closure_is_complete_deterministic_and_explanatory() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    seed = next(
+        component["component_id"]
+        for component in registry["components"]
+        if component["origin_class"] == "REUSED_UNCHANGED"
+    )
+    before = deepcopy(registry)
+    impact = module.project_linked_view_impacts(
+        registry=registry,
+        component_ids=[seed],
+        upstream_context=context,
+    )
+    assert registry == before
+    assert set(impact) == {
+        "component_ids",
+        "view_ids",
+        "layout_bindings",
+        "link_ids",
+    }
+    assert impact["component_ids"] == sorted(
+        component["component_id"] for component in registry["components"]
+    )
+    assert impact["view_ids"] == sorted(view["view_id"] for view in registry["views"])
+    assert impact["layout_bindings"] == sorted(
+        [
+            deepcopy(layout)
+            for view in registry["views"]
+            for layout in view["layout_bindings"]
+        ],
+        key=lambda layout: layout["layout_id"],
+    )
+    assert impact["link_ids"] == sorted(link["link_id"] for link in registry["links"])
+    replay = module.project_linked_view_impacts(
+        registry=deepcopy(registry),
+        component_ids=[seed],
+        upstream_context=context,
+    )
+    assert replay == impact
+
+
+def test_task2_impact_from_view_reaches_linked_components_and_views() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    primary = _view_by_role(registry, "PRIMARY")
+    impact = module.project_linked_view_impacts(
+        registry=registry,
+        view_ids=[primary["view_id"]],
+        upstream_context=context,
+    )
+    assert primary["view_id"] in impact["view_ids"]
+    assert set(primary["component_ids"]).issubset(impact["component_ids"])
+    assert impact["link_ids"]
+
+
+@pytest.mark.parametrize(
+    ("component_ids", "view_ids"),
+    [(["f" * 64], []), ([], ["e" * 64]), ([], [])],
+)
+def test_task2_unknown_or_empty_impact_seeds_fail_closed(
+    component_ids: list[str], view_ids: list[str]
+) -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.project_linked_view_impacts(
+            registry=registry,
+            component_ids=component_ids,
+            view_ids=view_ids,
+            upstream_context=context,
+        )
+
+
+def test_task2_impact_output_never_becomes_visual_or_mutation_authority() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    registry = _task2_registry(module, context)
+    seed = registry["components"][0]["component_id"]
+    impact = module.project_linked_view_impacts(
+        registry=registry,
+        component_ids=[seed],
+        upstream_context=context,
+    )
+    rendered = repr(impact).casefold()
+    for forbidden in (
+        "region",
+        "critical",
+        "sheet_id",
+        "acceptance_scope",
+        "approval",
+        "verdict",
+        "revision",
+        "repair",
+        "publication",
+        "publish",
+    ):
+        assert forbidden not in rendered
