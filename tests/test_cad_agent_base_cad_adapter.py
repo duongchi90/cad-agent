@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import importlib
+import json
 from pathlib import Path
 
 import pytest
@@ -157,3 +158,99 @@ def test_hash_uses_existing_canonical_owner_and_no_second_hash_or_live_owner() -
         "socket", "open(",
     ):
         assert forbidden not in source
+
+
+def _inspection() -> dict[str, object]:
+    fixture = Path(__file__).parents[1] / "mcp_integration_lib" / "tests" / "fixtures" / "exact-base-xref-inspection.json"
+    return json.loads(fixture.read_text(encoding="utf-8"))["inspection"]
+
+
+def _selections() -> list[dict[str, object]]:
+    return [
+        {
+            "logical_component_id": "chassis-main",
+            "transform": {
+                "rotation_degrees": 0.0,
+                "translation": {"x": 10.0, "y": 20.0, "z": 0.0},
+                "uniform_scale": 1.0,
+            },
+        },
+        {
+            "logical_component_id": "cabin-main",
+            "transform": {
+                "rotation_degrees": 2.5,
+                "translation": {"x": 0.0, "y": 0.0, "z": 5.0},
+                "uniform_scale": 1.0,
+            },
+        },
+    ]
+
+
+def test_build_proposed_extraction_delegates_to_s3a_and_never_approves() -> None:
+    module = _module()
+    inspection = _inspection()
+    proposed = module.build_proposed_base_cad_extraction(
+        plan_id="extraction-plan-173-001",
+        inspection=inspection,
+        selections=_selections(),
+        impacted_views=[{"identity": "model-space", "name": "Model"}],
+    )
+    assert proposed["schema_version"] == "exact-base-xref-extraction-plan-1.0"
+    assert proposed["approval"] == {"status": "PROPOSED", "reference": None}
+    assert proposed["base_source"] == inspection["base_source"]
+    assert [item["logical_component_id"] for item in proposed["components"]] == [
+        "chassis-main", "cabin-main"
+    ]
+
+
+def test_proposal_rejects_ineligible_inspection_without_live_fallback() -> None:
+    module = _module()
+    inspection = _inspection()
+    inspection["eligible"] = False
+    with pytest.raises(module.BaseCadAdapterError):
+        module.build_proposed_base_cad_extraction(
+            plan_id="extraction-plan-173-002",
+            inspection=inspection,
+            selections=_selections(),
+        )
+
+
+def test_approved_match_requires_same_proposal_identity_and_explicit_approval() -> None:
+    module = _module()
+    proposed = module.build_proposed_base_cad_extraction(
+        plan_id="extraction-plan-173-003",
+        inspection=_inspection(),
+        selections=_selections(),
+    )
+    approved = deepcopy(proposed)
+    approved["approval"] = {"status": "APPROVED", "reference": "approval-173-001"}
+    matched = module.require_approved_base_cad_extraction_match(
+        approved_plan=approved,
+        proposed_plan=proposed,
+        inspection=_inspection(),
+    )
+    assert matched["approval"] == approved["approval"]
+    assert matched["components"] == proposed["components"]
+
+
+@pytest.mark.parametrize("mutation", [
+    {"target_drawing_sha256": "f" * 64},
+    {"source_revision": "rev-drifted"},
+    {"approval": {"status": "PROPOSED", "reference": None}},
+])
+def test_approved_match_rejects_stale_or_unapproved_plan(mutation: dict[str, object]) -> None:
+    module = _module()
+    proposed = module.build_proposed_base_cad_extraction(
+        plan_id="extraction-plan-173-004",
+        inspection=_inspection(),
+        selections=_selections(),
+    )
+    approved = deepcopy(proposed)
+    approved["approval"] = {"status": "APPROVED", "reference": "approval-173-002"}
+    approved.update(mutation)
+    with pytest.raises(module.BaseCadAdapterError):
+        module.require_approved_base_cad_extraction_match(
+            approved_plan=approved,
+            proposed_plan=proposed,
+            inspection=_inspection(),
+        )
