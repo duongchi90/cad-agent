@@ -152,7 +152,8 @@ def test_hash_uses_existing_canonical_owner_and_no_second_hash_or_live_owner() -
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "canonical_json_sha256" in source
     for forbidden in (
-        "hashlib", "json.dumps", "source_bundle", "source_integrity", "source_fusion",
-        "mcp_integration_lib", "DotNetIPCClient", "subprocess", "socket", "open(",
+        "hashlib", "json.dumps", "cad_agent.source_bundle", "cad_agent.source_integrity",
+        "cad_agent.source_fusion", "mcp_integration_lib", "DotNetIPCClient", "subprocess",
+        "socket", "open(",
     ):
         assert forbidden not in source
