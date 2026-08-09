@@ -5,9 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import hashlib
+import pymupdf
 import re
-import struct
-import zlib
 
 
 SCHEMA_VERSION = "derived-raster-evidence-1.0"
@@ -122,44 +121,26 @@ def _pdf_geometry(pdf_bytes: bytes) -> None:
         _error("PDF MediaBox is not exact A4")
 
 
-def _page_commands(pdf_bytes: bytes) -> list[tuple[float, float, float, float]]:
-    if b"/Type /Page" not in pdf_bytes or b"/Contents" not in pdf_bytes:
-        _error("PDF has no renderable page object")
-    streams = re.findall(rb"stream\s*\n(.*?)\nendstream", pdf_bytes, re.DOTALL)
-    if len(streams) != 1 or not streams[0].strip():
-        _error("PDF must contain exactly one non-empty page content stream")
-    content = streams[0].decode("ascii", errors="strict")
-    rectangles = []
-    for match in re.finditer(
-        r"(?m)([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)\s+"
-        r"([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)\s+re\s+f\b",
-        content,
-    ):
-        rectangle = tuple(float(match.group(index)) for index in range(1, 5))
-        if rectangle[2] <= 0 or rectangle[3] <= 0:
-            _error("PDF contains a non-renderable rectangle")
-        rectangles.append(rectangle)
-    if not rectangles:
-        _error("PDF content stream has no supported painting operation")
-    return rectangles
-
-
 def _derived_png(pdf_bytes: bytes) -> bytes:
-    width, height = 2480, 3508
-    rectangles = _page_commands(pdf_bytes)
-    rows = [bytearray(b"\xff" * (width * 3)) for _ in range(height)]
-    for x, y, rect_width, rect_height in rectangles:
-        left = max(0, min(width, round(x * 300 / 72)))
-        right = max(left, min(width, round((x + rect_width) * 300 / 72)))
-        top = max(0, min(height, height - round((y + rect_height) * 300 / 72)))
-        bottom = max(top, min(height, height - round(y * 300 / 72)))
-        for row in rows[top:bottom]:
-            row[left * 3 : right * 3] = b"\x00" * ((right - left) * 3)
-    raw = b"".join(b"\x00" + bytes(row) for row in rows)
-    compressed = zlib.compress(raw, level=9)
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
+    try:
+        with pymupdf.open(stream=pdf_bytes, filetype="pdf") as document:
+            if document.page_count != 1:
+                _error("PDF must contain exactly one renderable page")
+            page = document.load_page(0)
+            matrix = pymupdf.Matrix(2480 / page.rect.width, 3508 / page.rect.height)
+            pixmap = page.get_pixmap(
+                matrix=matrix,
+                colorspace=pymupdf.csRGB,
+                alpha=False,
+                annots=True,
+            )
+            if (pixmap.width, pixmap.height) != (2480, 3508):
+                _error("PDF raster geometry is not exact A4 at 300 DPI")
+            return pixmap.tobytes("png")
+    except DerivedRasterEvidenceError:
+        raise
+    except Exception as exc:
+        raise DerivedRasterEvidenceError("PDF page is not renderable") from exc
 
 
 def derive_raster_evidence(

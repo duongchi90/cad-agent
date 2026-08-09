@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import inspect
 
+import pymupdf
 import pytest
 
 
@@ -40,18 +41,64 @@ def _pdf(
     user_unit: str = "1.0",
     encrypted: bool = False,
     alpha: bool = False,
+    content_stream: bytes = b"0 0 0 rg\n100 100 100 100 re f\n",
 ) -> bytes:
-    encryption = b"/Encrypt 7 0 R\n" if encrypted else b""
-    transparency = b"/SMask 9 0 R\n" if alpha else b""
-    content = b"0 0 0 rg\n100 100 200 200 re\nf\n"
-    return (
-        b"%PDF-1.7\n"
-        + encryption
-        + f"1 0 obj << /Type /Page /MediaBox [{media_box}] /CropBox [{crop_box}] /UserUnit {user_unit} /Contents 2 0 R >> endobj\n2 0 obj << /Length {len(content)} >> stream\n".encode()
-        + transparency
-        + content
-        + b"endstream\nendobj\n%%EOF\n"
+    page_extra = b" /SMask 9 0 R" if alpha else b""
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [{media_box}] "
+            f"/CropBox [{crop_box}] /UserUnit {user_unit} "
+        ).encode()
+        + b"/Resources << >> /Contents 4 0 R"
+        + page_extra
+        + b" >>",
+        b"<< /Length %d >>\nstream\n" % len(content_stream)
+        + content_stream
+        + b"endstream",
+    ]
+    if encrypted:
+        objects.append(b"<< /Filter /Standard /V 1 /R 2 /O <00> /U <00> /P -4 >>")
+
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(output))
+        output += f"{index} 0 obj\n".encode() + obj + b"\nendobj\n"
+
+    xref_offset = len(output)
+    output += f"xref\n0 {len(objects) + 1}\n".encode()
+    output += b"0000000000 65535 f \n"
+    for offset in offsets[1:]:
+        output += f"{offset:010d} 00000 n \n".encode()
+
+    trailer = f"<< /Size {len(objects) + 1} /Root 1 0 R".encode()
+    if encrypted:
+        trailer += b" /Encrypt 5 0 R"
+    trailer += b" >>"
+    output += (
+        b"trailer\n"
+        + trailer
+        + b"\nstartxref\n"
+        + str(xref_offset).encode()
+        + b"\n%%EOF\n"
     )
+    return bytes(output)
+
+
+def _rendered_png_sha256(pdf_bytes: bytes) -> str:
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as document:
+        page = document.load_page(0)
+        matrix = pymupdf.Matrix(2480 / page.rect.width, 3508 / page.rect.height)
+        pixmap = page.get_pixmap(
+            matrix=matrix,
+            colorspace=pymupdf.csRGB,
+            alpha=False,
+            annots=True,
+        )
+        assert (pixmap.width, pixmap.height) == (2480, 3508)
+        return _sha256(pixmap.tobytes("png"))
 
 
 def _derive(pdf_bytes: bytes | None = None, **overrides: object) -> dict[str, object]:
@@ -85,8 +132,7 @@ def test_pdf_bytes_are_the_only_raster_authority_and_native_binding_is_closed() 
     evidence = _derive()
     assert evidence["source"] == "NATIVE_PDF_BINDING"
     assert evidence["pdf_sha256"] == _sha256(_pdf())
-    assert len(evidence["png_sha256"]) == 64
-    assert evidence["png_sha256"] != _sha256(b"caller-supplied-png")
+    assert evidence["png_sha256"] == _rendered_png_sha256(_pdf())
     assert evidence["drawing_sha256"] == _binding()["drawing_sha256"]
     assert evidence["latest_mutation_sha256"] == _binding()["latest_mutation_sha256"]
     assert evidence["visual_run_manifest_sha256"] == _binding()["visual_run_manifest_sha256"]
@@ -95,6 +141,20 @@ def test_pdf_bytes_are_the_only_raster_authority_and_native_binding_is_closed() 
     assert evidence["dbmod_before"] == evidence["dbmod_after"] == 7
     assert "pdf_bytes" not in evidence
     assert "png_bytes" not in evidence
+
+
+def test_non_renderable_pdf_like_bytes_fail_closed() -> None:
+    contract = _contract()
+    pdf_like = (
+        b"%PDF-1.7\n"
+        b"/MediaBox [0 0 595.2756 841.8898]\n"
+        b"/CropBox [0 0 595.2756 841.8898]\n"
+        b"/UserUnit 1.0\n"
+        b"%%EOF\n"
+    )
+
+    with pytest.raises(contract.DerivedRasterEvidenceError):
+        _derive(pdf_like)
 
 
 def test_pdf_artifact_sha_mismatch_fails_closed() -> None:
@@ -170,11 +230,15 @@ def test_at_least_five_replays_have_one_deterministic_identity() -> None:
     assert all(result == results[0] for result in results)
 
 
-def test_pdf_content_changes_derived_raster_identity() -> None:
-    first = _derive(_pdf())
-    second = _derive(_pdf().replace(b"100 100 200 200", b"200 100 200 200"))
+def test_visual_page_content_changes_derived_raster_identity() -> None:
+    first_pdf = _pdf(content_stream=b"0 0 0 rg\n100 100 100 100 re f\n")
+    second_pdf = _pdf(content_stream=b"0 0 0 rg\n300 300 100 100 re f\n")
+    first = _derive(first_pdf)
+    second = _derive(second_pdf)
 
     assert first["pdf_sha256"] != second["pdf_sha256"]
+    assert first["png_sha256"] == _rendered_png_sha256(first_pdf)
+    assert second["png_sha256"] == _rendered_png_sha256(second_pdf)
     assert first["png_sha256"] != second["png_sha256"]
 
 
