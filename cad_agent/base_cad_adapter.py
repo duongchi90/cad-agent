@@ -7,6 +7,7 @@ from copy import deepcopy
 import re
 
 from cad_agent.drawing_contracts import canonical_json_sha256
+from mcp_integration_lib import exact_base_xref
 
 
 BASE_CAD_BINDING_SCHEMA_VERSION = "base-cad-binding-1.0"
@@ -118,9 +119,67 @@ def base_cad_binding_sha256(payload: object) -> str:
     return canonical_json_sha256(_validate_binding(payload))
 
 
+def build_proposed_base_cad_extraction(
+    *,
+    plan_id: str,
+    inspection: object,
+    selections: object,
+    impacted_views: object | None = None,
+) -> dict[str, object]:
+    """Build an S3A-owned proposed extraction plan without approving or executing it."""
+    try:
+        validated_inspection = exact_base_xref.validate_xref_inspection(inspection)
+        return deepcopy(
+            exact_base_xref.build_extraction_plan(
+                plan_id=plan_id,
+                inspection=validated_inspection,
+                selections=selections,
+                impacted_views=impacted_views,
+                approval_status="PROPOSED",
+                approval_reference=None,
+            )
+        )
+    except BaseCadAdapterError:
+        raise
+    except Exception as exc:
+        raise BaseCadAdapterError("proposed extraction plan is invalid") from exc
+
+
+def require_approved_base_cad_extraction_match(
+    *,
+    approved_plan: object,
+    proposed_plan: object,
+    inspection: object,
+) -> dict[str, object]:
+    """Require an explicit S3A-approved plan matching the prior proposal exactly."""
+    try:
+        validated_inspection = exact_base_xref.validate_xref_inspection(inspection)
+        proposed = exact_base_xref.validate_extraction_plan(
+            proposed_plan, inspection=validated_inspection
+        )
+        approved = exact_base_xref.validate_extraction_plan(
+            approved_plan, inspection=validated_inspection
+        )
+    except Exception as exc:
+        raise BaseCadAdapterError("approved extraction plan is invalid") from exc
+
+    if approved["approval"]["status"] != "APPROVED":
+        raise BaseCadAdapterError("approved extraction plan lacks explicit approval")
+    if approved["approval"]["reference"] is None:
+        raise BaseCadAdapterError("approved extraction plan lacks approval reference")
+
+    proposed_identity = {key: value for key, value in proposed.items() if key != "approval"}
+    approved_identity = {key: value for key, value in approved.items() if key != "approval"}
+    if approved_identity != proposed_identity:
+        raise BaseCadAdapterError("approved extraction plan does not match proposal")
+    return deepcopy(approved)
+
+
 __all__ = [
     "BASE_CAD_BINDING_SCHEMA_VERSION",
     "BaseCadAdapterError",
     "base_cad_binding_sha256",
+    "build_proposed_base_cad_extraction",
+    "require_approved_base_cad_extraction_match",
     "validate_base_cad_binding",
 ]
