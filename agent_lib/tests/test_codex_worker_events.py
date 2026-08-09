@@ -951,3 +951,68 @@ def test_46_timeout_cancel_provider_failure_all_cleanup_without_promotion(
     assert result.promotion_safe is False
     assert result.cleanup_result == _clean_cleanup()
     assert PRIVATE_SENTINEL not in repr(result)
+
+
+# Cell-4 second hardened RED: start must be as closed as every other lifecycle
+# operation, including structural/sequence validation and privacy-safe rejection.
+@pytest.mark.parametrize(
+    "events",
+    [
+        [],
+        [
+            _event("thread.ready", sequence=1),
+            _event("thread.ready", sequence=2, payload=PRIVATE_SENTINEL),
+        ],
+        [
+            _event("thread.ready", sequence=1),
+            _event("turn.started", sequence=2, payload=PRIVATE_SENTINEL),
+        ],
+        [
+            {"type": 7, "payload": PRIVATE_SENTINEL},
+        ],
+        [
+            {"type": "foreign.event", "payload": PRIVATE_SENTINEL},
+        ],
+        [
+            {"type": "thread.ready", "sequence": "not-an-int", "payload": PRIVATE_SENTINEL},
+        ],
+    ],
+)
+def test_47_start_rejects_missing_duplicate_late_malformed_unknown_or_bad_sequence(
+    events: list[dict[str, object]],
+) -> None:
+    with pytest.raises(CodexWorkerError) as caught:
+        _normalize(_response(operation="start", events=events), operation="start")
+    assert caught.value.code == "WORKER_PROVIDER_RESPONSE_INVALID"
+    assert str(caught.value) == "WORKER_PROVIDER_RESPONSE_INVALID"
+    assert PRIVATE_SENTINEL not in str(caught.value)
+
+
+# Task 6 may extend only the existing Task-3 process/control owner. Deadline
+# mechanics must not smuggle in a second supervisor, Job, transport or cleanup
+# authority in the second production file.
+def test_48_process_owner_retains_single_supervisor_transport_and_cleanup_authority() -> None:
+    process_source = Path(worker_process.__file__).read_text(encoding="utf-8")
+    forbidden = (
+        "concurrent.futures",
+        "ThreadPoolExecutor",
+        "ProcessPoolExecutor",
+        "threading.Thread",
+        "multiprocessing",
+        "socket.",
+        "socketserver",
+        "subprocess.Popen",
+        "subprocess.run",
+        "subprocess.call",
+        "CreateThread(",
+        "watchdog",
+        "app_server",
+        "mcp_transport",
+    )
+    for marker in forbidden:
+        assert marker not in process_source
+
+    assert process_source.count("CreateJobObjectW(") == 1
+    assert process_source.count("def create_job(") == 1
+    assert process_source.count("def exchange_worker_control(") == 1
+    assert process_source.count("def cleanup_worker_process(") == 1
