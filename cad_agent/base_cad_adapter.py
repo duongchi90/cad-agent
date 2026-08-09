@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import importlib
+import math
 import re
 
 from cad_agent.drawing_contracts import canonical_json_sha256
@@ -144,20 +145,34 @@ def base_cad_binding_sha256(payload: object) -> str:
 
 
 def _handoff_number(value: object, context: str) -> int | float:
-    if type(value) not in {int, float}:
-        _fail(f"{context} must be numeric")
+    if type(value) not in {int, float} or not math.isfinite(float(value)):
+        _fail(f"{context} must be a finite JSON number")
+    if type(value) is float and value == 0.0:
+        return 0.0
+    return value
+
+
+def _handoff_text(value: object, context: str) -> str:
+    if type(value) is not str or not value or len(value) > 512:
+        _fail(f"{context} must be a bounded non-empty string")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        _fail(f"{context} contains a control character")
     return value
 
 
 def _validate_handoff_transform(value: object, context: str) -> dict[str, object]:
     result = _closed(value, _HANDOFF_TRANSFORM_FIELDS, context)
-    _handoff_number(result["rotation_degrees"], f"{context}.rotation_degrees")
-    point = _closed(result["translation"], _HANDOFF_POINT_FIELDS, f"{context}.translation")
+    result["rotation_degrees"] = _handoff_number(
+        result["rotation_degrees"], f"{context}.rotation_degrees"
+    )
+    point = _closed(
+        result["translation"], _HANDOFF_POINT_FIELDS, f"{context}.translation"
+    )
     for axis in ("x", "y", "z"):
-        _handoff_number(point[axis], f"{context}.translation.{axis}")
-    scale = _handoff_number(result["uniform_scale"], f"{context}.uniform_scale")
-    if scale <= 0:
-        _fail(f"{context}.uniform_scale must be positive")
+        point[axis] = _handoff_number(point[axis], f"{context}.translation.{axis}")
+    result["uniform_scale"] = _handoff_number(
+        result["uniform_scale"], f"{context}.uniform_scale"
+    )
     result["translation"] = point
     return result
 
@@ -184,42 +199,81 @@ def _validate_reuse_handoff(payload: object) -> dict[str, object]:
         _fail("reuse handoff.components must be a non-empty list")
     normalized_components = []
     seen_ids: set[str] = set()
-    seen_source_handles: set[str] = set()
+    components_by_source: dict[str, dict[str, object]] = {}
+    candidates_by_handle: set[str] = set()
+    layer_block_pairs: set[tuple[str, str]] = set()
     for index, item in enumerate(components):
         context = f"reuse handoff.components[{index}]"
         component = _closed(item, _HANDOFF_COMPONENT_FIELDS, context)
         logical_id = _identifier(component["logical_component_id"], f"{context}.logical_component_id")
         source_handle = _identifier(component["source_handle"], f"{context}.source_handle")
-        if logical_id in seen_ids or source_handle in seen_source_handles:
+        logical_key = logical_id.casefold()
+        source_key = source_handle.casefold()
+        if logical_key in seen_ids or source_key in components_by_source:
             _fail("reuse handoff components must have unique logical IDs and source handles")
-        seen_ids.add(logical_id)
-        seen_source_handles.add(source_handle)
-        for field in ("source_layer", "source_block", "candidate_handle"):
-            _identifier(component[field], f"{context}.{field}")
+        seen_ids.add(logical_key)
+        component["source_layer"] = _handoff_text(
+            component["source_layer"], f"{context}.source_layer"
+        )
+        component["source_block"] = _handoff_text(
+            component["source_block"], f"{context}.source_block"
+        )
+        layer_block_key = (
+            component["source_layer"].casefold(), component["source_block"].casefold()
+        )
+        if layer_block_key in layer_block_pairs:
+            _fail("reuse handoff components must have unique source layer/block pairs")
+        layer_block_pairs.add(layer_block_key)
+        candidate_handle = _identifier(component["candidate_handle"], f"{context}.candidate_handle")
+        candidate_key = candidate_handle.casefold()
+        if candidate_key in candidates_by_handle:
+            _fail("reuse handoff components must have unique candidate handles")
+        candidates_by_handle.add(candidate_key)
         _sha256(component["source_sha256"], f"{context}.source_sha256")
         _identifier(component["source_revision"], f"{context}.source_revision")
+        if component["source_sha256"] != source["sha256"]:
+            _fail(f"{context}.source_sha256 does not match reuse handoff.base_source")
+        if component["source_revision"] != source["revision"]:
+            _fail(f"{context}.source_revision does not match reuse handoff.base_source")
         if component["provenance"] != "REUSED_FROM_BASE_CAD":
             _fail(f"{context}.provenance is unsupported")
         component["transform"] = _validate_handoff_transform(component["transform"], f"{context}.transform")
+        components_by_source[source_key] = component
         normalized_components.append(component)
     normalized_components.sort(key=lambda item: item["logical_component_id"])
 
     mappings = result["source_handle_to_candidate_handle"]
     if type(mappings) is not list or len(mappings) != len(normalized_components):
         _fail("reuse handoff handle mapping must cover every component")
-    normalized_mappings = []
-    mapped_sources: set[str] = set()
+    normalized_mappings_by_source: dict[str, dict[str, str]] = {}
+    mapped_candidates: set[str] = set()
     for index, item in enumerate(mappings):
         mapping = _closed(item, _HANDOFF_MAP_FIELDS, f"reuse handoff mapping[{index}]")
-        _identifier(mapping["source_handle"], f"reuse handoff mapping[{index}].source_handle")
-        _identifier(mapping["candidate_handle"], f"reuse handoff mapping[{index}].candidate_handle")
-        if mapping["source_handle"] in mapped_sources:
-            _fail("reuse handoff handle mappings must be unique")
-        mapped_sources.add(mapping["source_handle"])
-        normalized_mappings.append(mapping)
-    if mapped_sources != seen_source_handles:
+        mapping_source = _identifier(
+            mapping["source_handle"], f"reuse handoff mapping[{index}].source_handle"
+        )
+        mapping_candidate = _identifier(
+            mapping["candidate_handle"], f"reuse handoff mapping[{index}].candidate_handle"
+        )
+        source_key = mapping_source.casefold()
+        candidate_key = mapping_candidate.casefold()
+        component = components_by_source.get(source_key)
+        if component is None or source_key in normalized_mappings_by_source:
+            _fail("reuse handoff handle mappings must be unique and cover components")
+        if component["candidate_handle"].casefold() != candidate_key:
+            _fail("reuse handoff mapping does not match component candidate handle")
+        if candidate_key in mapped_candidates:
+            _fail("reuse handoff candidate mappings must be one-to-one")
+        mapped_candidates.add(candidate_key)
+        normalized_mappings_by_source[source_key] = {
+            "source_handle": component["source_handle"],
+            "candidate_handle": component["candidate_handle"],
+        }
+    if set(normalized_mappings_by_source) != set(components_by_source):
         _fail("reuse handoff handle mapping does not match components")
-    normalized_mappings.sort(key=lambda item: item["source_handle"])
+    normalized_mappings = sorted(
+        normalized_mappings_by_source.values(), key=lambda item: item["source_handle"].casefold()
+    )
     result["base_source"] = source
     result["components"] = normalized_components
     result["source_handle_to_candidate_handle"] = normalized_mappings
@@ -237,17 +291,42 @@ def base_cad_reuse_handoff_sha256(payload: object) -> str:
 
 
 def evaluate_frozen_base_cad_reuse(
-    *, handoff: object, current_base_source: object
+    *, handoff: object, current_live_inspection: object
 ) -> dict[str, object]:
-    """Classify exact source identity without changing or promoting any revision."""
+    """Classify frozen reuse against validated S3A inspection evidence."""
     normalized = _validate_reuse_handoff(handoff)
-    current = _closed(current_base_source, _HANDOFF_SOURCE_FIELDS, "current_base_source")
-    _identifier(current["source_id"], "current_base_source.source_id")
-    _sha256(current["sha256"], "current_base_source.sha256")
-    _identifier(current["revision"], "current_base_source.revision")
+    try:
+        current_inspection = _s3a_contract().validate_xref_inspection(current_live_inspection)
+    except Exception as exc:
+        raise BaseCadAdapterError("current live S3A inspection is invalid") from exc
+
+    current = current_inspection["base_source"]
+    current_components = {
+        item["source_handle"].casefold(): item for item in current_inspection["components"]
+    }
+    for component in normalized["components"]:
+        live_component = current_components.get(component["source_handle"].casefold())
+        if live_component is None:
+            _fail("reuse handoff component is absent from current live S3A inspection")
+        if (
+            live_component["source_layer"] != component["source_layer"]
+            or live_component["source_block"] != component["source_block"]
+        ):
+            _fail("reuse handoff component layer/block does not match current S3A inspection")
+
     previous = normalized["base_source"]
-    state = "CURRENT" if current == previous else "STALE_REEXTRACTION_REQUIRED"
-    affected = [] if state == "CURRENT" else [item["logical_component_id"] for item in normalized["components"]]
+    reason_codes = []
+    if current["source_id"] != previous["source_id"]:
+        reason_codes.append("SOURCE_ID_CHANGED")
+    if current["sha256"] != previous["sha256"]:
+        reason_codes.append("SOURCE_SHA256_CHANGED")
+    if current["revision"] != previous["revision"]:
+        reason_codes.append("SOURCE_REVISION_CHANGED")
+    reason_codes.sort()
+    state = "CURRENT" if not reason_codes else "STALE_REEXTRACTION_REQUIRED"
+    affected = [] if state == "CURRENT" else sorted(
+        item["logical_component_id"] for item in normalized["components"]
+    )
     return {
         "state": state,
         "prior_handoff_sha256": base_cad_reuse_handoff_sha256(normalized),
