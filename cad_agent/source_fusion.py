@@ -2022,6 +2022,52 @@ def _task6_render_map(
     return result
 
 
+def _task6_render_provenance(
+    value: object,
+    *,
+    page_locators: list[dict[str, object]],
+    custody: dict[str, object],
+    primitive_artifact_sha256: str | None = None,
+) -> list[dict[str, object]]:
+    """Revalidate raw or already-normalized Task 4 render evidence."""
+    if not isinstance(value, list) or not value:
+        _fail("FUSION_RENDER_PROVENANCE_INVALID")
+    raw: list[dict[str, object]] = []
+    artifact = primitive_artifact_sha256
+    for item in value:
+        if not isinstance(item, _Mapping):
+            _fail("FUSION_RENDER_PROVENANCE_INVALID")
+        record = _copy.deepcopy(dict(item))
+        document = record.get("primitive_source_document")
+        if isinstance(document, _Mapping):
+            document_fields = set(document)
+            if document_fields == _TASK5_DIRECT_BINDING_DOCUMENT_FIELDS:
+                page_index = 0
+            elif document_fields == _TASK5_PDF_BINDING_DOCUMENT_FIELDS:
+                page_index = document["primitive_source_page_index"]
+            else:
+                page_index = document.get("page_index")
+            if "file_name" not in document or "page_index" not in document:
+                record["primitive_source_document"] = {
+                    "file_name": "task6-source-document",
+                    "page_index": page_index,
+                    "image_width_px": document.get("image_width_px"),
+                    "image_height_px": document.get("image_height_px"),
+                    "sha256": document.get("sha256"),
+                }
+        if artifact is None:
+            artifact = record.get("primitive_artifact_sha256")
+        raw.append(record)
+    if artifact is None:
+        _fail("FUSION_RENDER_PROVENANCE_INVALID")
+    return validate_render_provenance(
+        raw,
+        page_locators=page_locators,
+        custody=custody,
+        primitive_artifact_sha256=artifact,
+    )
+
+
 def _task6_validate_primitive_observations(
     value: object,
     *,
@@ -2033,7 +2079,6 @@ def _task6_validate_primitive_observations(
         _fail(code)
     normalized: list[dict[str, object]] = []
     seen_keys: set[str] = set()
-    seen_legacy_ids: set[str] = set()
     for item in value:
         record = _closed(item, _TASK6_PRIMITIVE_FIELDS, code)
         observation_key = _sha256(record["observation_key"], code)
@@ -2054,10 +2099,9 @@ def _task6_validate_primitive_observations(
         normalized_ids: list[str] = []
         for raw_id in legacy_ids:
             legacy_id = _identifier(raw_id, code)
-            if legacy_id in seen_legacy_ids or legacy_id in normalized_ids:
+            if legacy_id in normalized_ids:
                 _fail(code)
             normalized_ids.append(legacy_id)
-        seen_legacy_ids.update(normalized_ids)
 
         binding = record["source_binding"]
         if not isinstance(binding, _Mapping):
@@ -2309,7 +2353,7 @@ def build_source_fusion_packet(
         custody=normalized_custody,
     )
     checkpoint_sha256 = _task6_render_checkpoint(render_provenance)
-    renders = validate_render_provenance(
+    renders = _task6_render_provenance(
         render_provenance,
         page_locators=pages,
         custody=normalized_custody,
