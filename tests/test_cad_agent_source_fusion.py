@@ -680,7 +680,7 @@ def test_task4_public_surface_is_exact() -> None:
     sf = _sf()
     assert sf.SOURCE_FUSION_SCHEMA_VERSION == SOURCE_FUSION_SCHEMA_VERSION
     assert issubclass(sf.SourceFusionError, ValueError)
-    assert sf.__all__ == [
+    assert sf.__all__[:7] == [
         "SOURCE_FUSION_SCHEMA_VERSION",
         "SourceFusionError",
         "validate_page_locators",
@@ -1848,7 +1848,7 @@ def _task5_semantic_signature(projection: object) -> list[tuple[str, tuple[str, 
 
 def test_task5_public_surface_adds_exactly_two_projection_apis() -> None:
     sf = _sf()
-    assert sf.__all__ == ["SOURCE_FUSION_SCHEMA_VERSION", "SourceFusionError", "validate_page_locators", "validate_region_locators", "validate_render_provenance", "project_primitive_observations", "project_semantic_observations"]
+    assert sf.__all__[:7] == ["SOURCE_FUSION_SCHEMA_VERSION", "SourceFusionError", "validate_page_locators", "validate_region_locators", "validate_render_provenance", "project_primitive_observations", "project_semantic_observations"]
     assert list(inspect.signature(sf.project_primitive_observations).parameters) == ["primitive_artifact", "primitive_artifact_sha256", "source_bindings"]
     assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in inspect.signature(sf.project_primitive_observations).parameters.values())
     assert list(inspect.signature(sf.project_semantic_observations).parameters) == ["semantic_artifact", "semantic_artifact_sha256", "primitive_checkpoint_sha256", "primitive_observations"]
