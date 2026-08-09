@@ -247,7 +247,6 @@ def _autolisp_string_literal(value: str) -> str:
         raise ValueError("IPC_ROOT_INVALID")
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-
 class FileIPCLiveMCPClient:
     """Minimal File IPC client for a loaded AutoLISP MCP dispatcher."""
     def __init__(self, ipc_dir: str, trigger: Optional[Callable[[], None]] = None,
@@ -300,7 +299,12 @@ class FileIPCLiveMCPClient:
             except OSError as exc:
                 raise MCPToolError("IPC_REQUEST_INVALID") from exc
             raise MCPToolError("IPC_REQUEST_INVALID")
-        if list(self._dir.glob(f"{_FILE_IPC_RESULT_PREFIX}*.json")):
+        if list(self._dir.glob(f"{_FILE_IPC_REQUEST_PREFIX}*.json.part")):
+            raise MCPToolError("IPC_REQUEST_INVALID")
+        if (
+            list(self._dir.glob(f"{_FILE_IPC_RESULT_PREFIX}*.json"))
+            or list(self._dir.glob(f"{_FILE_IPC_RESULT_PREFIX}*.json.part"))
+        ):
             raise MCPToolError("IPC_RESULT_CONFLICT")
 
         request_id = uuid.uuid4().hex[:12]
@@ -318,10 +322,13 @@ class FileIPCLiveMCPClient:
         root_safe_for_cleanup = True
         try:
             self._assert_root_unchanged()
-            with cmd_part.open("xb") as handle:
-                handle.write(raw)
-                handle.flush()
-                os.fsync(handle.fileno())
+            try:
+                with cmd_part.open("xb") as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except OSError as exc:
+                raise MCPToolError("IPC_REQUEST_INVALID") from exc
             self._assert_root_unchanged()
             os.replace(cmd_part, cmd)
             self._assert_root_unchanged()
