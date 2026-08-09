@@ -61,17 +61,21 @@ def _upstream_context() -> dict[str, object]:
         semantic_observations=semantic_observations,
     )
     fusion = source_fusion.build_source_fusion_packet(**fusion_inputs)
+    validated_fusion = source_fusion.validate_source_fusion_packet(fusion)
+    source_fusion_sha256 = source_fusion.source_fusion_sha256(validated_fusion)
 
     r2_tests = _existing_test_module("test_cad_agent_base_cad_adapter.py")
     base_adapter = importlib.import_module("cad_agent.base_cad_adapter")
-    handoff = r2_tests._handoff()
+    handoff = deepcopy(r2_tests._handoff())
+    handoff["source_fusion_sha256"] = source_fusion_sha256
+    handoff = base_adapter.validate_base_cad_reuse_handoff(handoff)
     current_live_inspection = r2_tests._live_inspection()
     evaluation = base_adapter.evaluate_frozen_base_cad_reuse(
         handoff=handoff, current_live_inspection=current_live_inspection
     )
     return {
         "source_fusion": fusion,
-        "source_fusion_sha256": source_fusion.source_fusion_sha256(fusion),
+        "source_fusion_sha256": source_fusion_sha256,
         "reuse_handoff": handoff,
         "reuse_handoff_sha256": base_adapter.base_cad_reuse_handoff_sha256(handoff),
         "reuse_evaluation": evaluation,
@@ -135,7 +139,7 @@ def _single_component(context: dict[str, object]) -> list[dict[str, object]]:
     return [_component_inputs(context)[0]]
 
 
-def test_public_surface_is_exact_and_keyword_only() -> None:
+def test_public_surface_uses_the_accepted_parameter_modes() -> None:
     module = _registry_module()
     assert module.COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION == SCHEMA_VERSION
     assert issubclass(module.ComponentViewRegistryError, ValueError)
@@ -153,16 +157,20 @@ def test_public_surface_is_exact_and_keyword_only() -> None:
     ]
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
-        for function in (
-            module.build_component_view_registry,
-            module.validate_component_view_registry,
-            module.component_view_registry_sha256,
-        )
-        for parameter in inspect.signature(function).parameters.values()
+        for parameter in inspect.signature(
+            module.build_component_view_registry
+        ).parameters.values()
     )
+    for function in (
+        module.validate_component_view_registry,
+        module.component_view_registry_sha256,
+    ):
+        parameters = inspect.signature(function).parameters
+        assert parameters["payload"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        assert parameters["upstream_context"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
-def test_builds_closed_task_one_registry_without_views_or_links() -> None:
+def test_builds_closed_task_one_registry_with_empty_views_and_links() -> None:
     module = _registry_module()
     context = _upstream_context()
     registry = module.build_component_view_registry(
@@ -217,7 +225,10 @@ def test_stable_projection_membership_type_origin_and_base_identity_change_id() 
     for field, value in (
         ("component_type", "MOUNTING"),
         ("origin_class", "RECONSTRUCTED_CHANGED"),
-        ("source_projection_refs", ["f" * 64]),
+        (
+            "source_projection_refs",
+            [_component_inputs(context)[1]["source_projection_refs"][0]],
+        ),
     ):
         changed = deepcopy(base)
         changed[0][field] = value
@@ -265,6 +276,17 @@ def test_reused_component_requires_fresh_current_r2_evidence() -> None:
     with pytest.raises(module.ComponentViewRegistryError):
         module.build_component_view_registry(
             upstream_context=context, components=_single_component(context)
+        )
+
+
+def test_foreign_projection_reference_fails_closed() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    component = _single_component(context)[0]
+    component["source_projection_refs"] = ["f" * 64]
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context, components=[component]
         )
 
 
