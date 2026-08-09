@@ -291,6 +291,7 @@ def test_23_post_return_elapsed_check_is_not_the_hard_timeout_owner() -> None:
         "socketserver",
         "CreateThread(",
         "watchdog",
+        "subprocess.",
         "subprocess.Popen",
         "subprocess.run",
         "subprocess.call",
