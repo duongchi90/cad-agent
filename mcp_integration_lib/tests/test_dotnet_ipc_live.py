@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import ezdxf
 import pytest
@@ -35,9 +36,27 @@ from mcp_integration_lib.mcp_client import (
 )
 
 
+def _normalized_live_ipc_root(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        normalized = normalize_windows_absolute_path(value)
+    except ValueError:
+        return None
+    if normalized.startswith("\\\\"):
+        return None
+    if value.replace("/", "\\") != normalized:
+        return None
+    return normalized.casefold()
+
+
 def _live_prerequisites_available() -> bool:
+    file_ipc_root = _normalized_live_ipc_root(os.getenv("CAD_AGENT_FILE_IPC_DIR"))
+    dotnet_ipc_root = _normalized_live_ipc_root(os.getenv("CAD_AGENT_DOTNET_IPC_DIR"))
     return (
         os.getenv("CAD_AGENT_FILE_IPC") == "1"
+        and file_ipc_root is not None
+        and file_ipc_root == dotnet_ipc_root
         and bool(os.getenv("CAD_AGENT_AUTOCAD_HWND"))
         and bool(os.getenv("CAD_AGENT_AUTOCAD_LISP_PATH"))
     )
@@ -83,6 +102,54 @@ def _s3b_live_prerequisites_available() -> bool:
             "CAD_AGENT_S3B_EXACT_BASE_SOURCE_REVISION",
         )
     )
+
+
+class LiveIPCRootPrerequisiteTests(unittest.TestCase):
+    def _available(
+        self,
+        *,
+        enable: str = "1",
+        file_ipc_dir: str | None = r"C:\cad-agent\session\ipc",
+        dotnet_ipc_dir: str | None = r"C:\cad-agent\session\ipc",
+    ) -> bool:
+        environment = {
+            "CAD_AGENT_FILE_IPC": enable,
+            "CAD_AGENT_AUTOCAD_HWND": "1001",
+            "CAD_AGENT_AUTOCAD_LISP_PATH": r"C:\cad-agent\mcp_dispatch.lsp",
+        }
+        if file_ipc_dir is not None:
+            environment["CAD_AGENT_FILE_IPC_DIR"] = file_ipc_dir
+        if dotnet_ipc_dir is not None:
+            environment["CAD_AGENT_DOTNET_IPC_DIR"] = dotnet_ipc_dir
+        with patch.dict(os.environ, environment, clear=True):
+            return _live_prerequisites_available()
+
+    def test_file_ipc_enable_flag_remains_boolean_and_requires_explicit_dir(self) -> None:
+        self.assertTrue(self._available())
+        self.assertFalse(self._available(file_ipc_dir=None))
+        self.assertFalse(self._available(enable=r"C:\cad-agent\session\ipc"))
+
+    def test_file_and_dotnet_ipc_roots_must_match_after_normalization(self) -> None:
+        self.assertTrue(
+            self._available(
+                file_ipc_dir=r"C:/cad-agent/session/ipc",
+                dotnet_ipc_dir=r"C:\cad-agent\session\ipc",
+            )
+        )
+        self.assertFalse(
+            self._available(dotnet_ipc_dir=r"C:\cad-agent\other-session\ipc")
+        )
+
+    def test_ambiguous_nonlocal_or_alias_file_ipc_roots_fail_prerequisites(self) -> None:
+        for invalid in (
+            "",
+            r"relative\ipc",
+            r"C:drive-relative\ipc",
+            r"\\server\share\ipc",
+            r"C:\cad-agent\session\..\escape",
+        ):
+            with self.subTest(root=invalid):
+                self.assertFalse(self._available(file_ipc_dir=invalid))
 
 
 def _add_mechanical_bom_fixture(drawing_document) -> None:
@@ -425,7 +492,8 @@ class PersonalSetupLiveTests(unittest.TestCase):
 
 @unittest.skipUnless(
     _live_prerequisites_available(),
-    "requires CAD_AGENT_FILE_IPC=1, CAD_AGENT_AUTOCAD_HWND, and CAD_AGENT_AUTOCAD_LISP_PATH",
+    "requires CAD_AGENT_FILE_IPC=1, CAD_AGENT_FILE_IPC_DIR, CAD_AGENT_DOTNET_IPC_DIR, "
+    "CAD_AGENT_AUTOCAD_HWND, and CAD_AGENT_AUTOCAD_LISP_PATH",
 )
 @pytest.mark.autocad_mechanical
 class DotNetIPCLiveSmokeTests(unittest.TestCase):
@@ -443,12 +511,13 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
             expected_full_path = normalize_windows_absolute_path(str(drawing_path))
             hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
             legacy_client = FileIPCLiveMCPClient(
+                ipc_dir=os.environ["CAD_AGENT_FILE_IPC_DIR"],
                 trigger=make_windows_dispatch_trigger(hwnd),
                 raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
                 bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
             )
             dotnet_client = DotNetIPCClient(
-                ipc_dir=r"C:\temp",
+                ipc_dir=os.environ["CAD_AGENT_DOTNET_IPC_DIR"],
                 trigger=make_windows_dotnet_dispatch_trigger(hwnd),
                 timeout_s=20.0,
             )
@@ -552,8 +621,8 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
 
 @unittest.skipUnless(
     _s2c_live_prerequisites_available(),
-    "requires CAD_AGENT_S2C_LIVE=1, CAD_AGENT_FILE_IPC=1, AutoCAD HWND, "
-    "LISP path, CAD_AGENT_DOTNET_IPC_DIR, and CAD_AGENT_LEAN_DISPOSABLE_DWG",
+    "requires CAD_AGENT_S2C_LIVE=1, CAD_AGENT_FILE_IPC=1, CAD_AGENT_FILE_IPC_DIR, "
+    "AutoCAD HWND, LISP path, CAD_AGENT_DOTNET_IPC_DIR, and CAD_AGENT_LEAN_DISPOSABLE_DWG",
 )
 @pytest.mark.autocad_mechanical
 class NativeRenderS2CLiveTests(unittest.TestCase):
@@ -571,6 +640,7 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
         expected_full_path = normalize_windows_absolute_path(str(drawing))
         hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
         legacy_client = FileIPCLiveMCPClient(
+            ipc_dir=os.environ["CAD_AGENT_FILE_IPC_DIR"],
             trigger=make_windows_dispatch_trigger(hwnd),
             raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
             bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
@@ -664,6 +734,7 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
         expected_full_path = normalize_windows_absolute_path(str(drawing))
         hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
         legacy_client = FileIPCLiveMCPClient(
+            ipc_dir=os.environ["CAD_AGENT_FILE_IPC_DIR"],
             trigger=make_windows_dispatch_trigger(hwnd),
             raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
             bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
@@ -877,8 +948,8 @@ class NativeRenderS2CLiveTests(unittest.TestCase):
 
 @unittest.skipUnless(
     _s3b_live_prerequisites_available(),
-    "requires AutoCAD File IPC, CAD_AGENT_DOTNET_IPC_DIR, an approved S3B fixture, "
-    "a disposable candidate DWG, and server-owned S3B path/hash/revision configuration",
+    "requires AutoCAD File IPC, CAD_AGENT_FILE_IPC_DIR, CAD_AGENT_DOTNET_IPC_DIR, "
+    "an approved S3B fixture, a disposable candidate DWG, and server-owned S3B configuration",
 )
 @pytest.mark.autocad_mechanical
 class ExactBaseXrefS3BLiveTests(unittest.TestCase):
@@ -949,6 +1020,7 @@ class ExactBaseXrefS3BLiveTests(unittest.TestCase):
 
         hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
         legacy_client = FileIPCLiveMCPClient(
+            ipc_dir=os.environ["CAD_AGENT_FILE_IPC_DIR"],
             trigger=make_windows_dispatch_trigger(hwnd),
             raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
             bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
