@@ -10,6 +10,8 @@
 
 **Planning branch:** `planning/issue-144-s2c-derived-raster-evidence`
 
+**Remediation:** PR #145 docs remediation for encrypted-PDF fail-closed behavior and A4 physical-page geometry. This revision supersedes any earlier wording that treated CropBox alone as proof of A4 physical sheet size or allowed encrypted input to reach page rasterization.
+
 ## 1. Objective
 
 Plan the smallest safe owner for:
@@ -21,19 +23,19 @@ validated AutoCAD-native PDF request/evidence
   -> exact PNG bytes + closed derived-raster evidence
 ```
 
-The new owner begins **after** native `DWG -> PDF` rendering has completed and been validated. It does not own AutoCAD plotting, source custody, OCR, Primitive/Semantic IR, calibration, visual verdicts, persistence, repair, approval or publication.
+The new owner begins only after native `DWG -> PDF` rendering has completed and the accepted native render request/evidence pair has validated. It owns no AutoCAD plotting, File IPC, source custody, OCR, Primitive/Semantic IR, calibration, visual verdict, persistence, repair, approval or publication authority.
 
 ## 2. Accepted ownership audit
 
-### 2.1 `mcp_integration_lib.autocad_render_evidence` — `REUSE_AS_IS`
+### 2.1 Native render evidence — `REUSE_AS_IS`
 
-Accepted current-main owner:
+Current accepted owner:
 
 ```text
 mcp_integration_lib/autocad_render_evidence.py
 ```
 
-Stable surface:
+Reuse unchanged:
 
 ```python
 REQUEST_SCHEMA_VERSION = "autocad-native-render-request-1.0"
@@ -44,87 +46,56 @@ validate_render_request(payload)
 validate_render_evidence(payload, request=None)
 ```
 
-It already binds native render identity to request/run, drawing SHA, latest mutation SHA, Visual Run Manifest SHA, layout, render options, `PNG | PDF`, `AUTOCAD_NATIVE`, artifact hash, PDF page count/PNG dimensions, read-only `changed=false`, equal DBMOD and warnings.
+It remains authoritative for native request/run identity, drawing SHA, latest mutation SHA, Visual Run Manifest SHA, layout, render options, `PNG | PDF`, `AUTOCAD_NATIVE`, artifact SHA, PDF page count/PNG dimensions, `changed=false`, DBMOD stability and native artifact path validation.
 
-It also rejects unsafe artifact paths and approval/verdict/repair/publication fields.
+S2C consumes this owner unchanged and does not widen `autocad-native-render-evidence-1.0`.
 
-**Decision:** consume unchanged. Do not widen `autocad-native-render-evidence-1.0` for derived evidence.
+### 2.2 AutoCAD/.NET native renderer — `REUSE_AS_IS`
 
-### 2.2 AutoCAD/.NET native rendering — `REUSE_AS_IS`
-
-The existing AutoCAD/.NET path remains the only owner that may claim:
+Only the existing AutoCAD/.NET path may claim:
 
 ```text
 DWG/layout -> native PDF
 ```
 
-S2C gets no HWND, AutoCAD document, File IPC directory, PC3/PMP/profile authority, save authority or mutation permission.
+S2C receives no HWND, AutoCAD document, File IPC directory, PC3/PMP/profile authority, save authority or mutation permission.
 
-Boundary:
+### 2.3 Source fusion — `REJECT_DUPLICATE_OWNER`
 
-```text
-native owner ends: validated native PDF evidence + exact artifact bytes
-S2C begins: exact validated PDF bytes -> derived PNG
-```
+`cad_agent/source_fusion.py` owns input-source PDF page/render provenance bound to SourceBundle/source custody. Generated native PDF/PNG artifacts do not become source-custody items.
 
-### 2.3 `cad_agent.source_fusion` — `REJECT_DUPLICATE_OWNER`
+### 2.4 Visual evidence — `REUSE_DOWNSTREAM_ONLY`
 
-`cad_agent/source_fusion.py` owns **input-source** PDF page/render provenance tied to SourceBundle/source custody.
+`cad_agent/visual_evidence.py` remains downstream packaging/freshness authority. It does not rasterize PDFs.
 
-Generated candidate/native render artifacts are not SourceBundle input sources. S2C must not mint source IDs, custody hashes or source-fusion records for them.
+### 2.5 Primitive PDF runner — `PORT_BOUNDED_LOGIC`
 
-The module is only a design precedent for explicit page-box/rotation/UserUnit/DPI/matrix binding.
+`primitive_ir_lib/run_pdf.py` demonstrates the lower-level PyMuPDF raster mechanic but also owns Primitive IR/OCR/calibration/view-candidate orchestration.
 
-### 2.4 `cad_agent.visual_evidence` — `REUSE_DOWNSTREAM_ONLY`
+First slice must not import or call `primitive_ir_lib.run_pdf()`.
 
-`cad_agent/visual_evidence.py` packages/freshness-checks downstream visual evidence. It is not a renderer.
+### 2.6 Dependencies — `REUSE_AS_IS`
 
-S2C may later hand PNG bytes/evidence to that downstream flow, but it does not move rendering into `cad_agent.visual_evidence`.
-
-### 2.5 `primitive_ir_lib.run_pdf()` — `PORT_BOUNDED_LOGIC`
-
-`primitive_ir_lib/run_pdf.py` currently uses PyMuPDF:
-
-```text
-fitz.open(...)
-page.get_pixmap(..., alpha=False)
-```
-
-but the same callable immediately performs Primitive IR, OCR ROI, calibration, scale-label/view-candidate processing and child-IR materialization.
-
-**Decision:** do not call `run_pdf()` from S2C. Reuse only the narrow PyMuPDF raster mechanic under a new narrower contract. No Primitive/OCR/calibration import is allowed.
-
-### 2.6 PyMuPDF dependency — `REUSE_AS_IS`
-
-The repository already depends on PyMuPDF. The accepted Windows Python 3.11 lock pins:
-
-```text
-pymupdf==1.28.0
-```
-
-No dependency or lock change belongs in the first runtime slice.
+The accepted Windows Python 3.11 lock already pins PyMuPDF 1.28.0 and Pillow. First slice adds no dependency/lock change.
 
 ## 3. Missing capability result
 
-No existing owner can truthfully bind all of:
+A new narrow owner is still genuinely missing for:
 
 ```text
 exact validated native PDF bytes
-native request identity
-native evidence identity
-page index/page count
-selected page box
-rotation
-UserUnit
-render DPI
-exact render matrix
-renderer identity/version
-opaque-white/no-alpha policy
-PNG SHA
-PNG width/height
++ native request/evidence identity
++ encryption refusal
++ PDF page index/page count
++ physical MediaBox geometry
++ selected CropBox geometry
++ rotation
++ UserUnit
++ render DPI/matrix
++ renderer identity/version
++ opaque-white/no-alpha policy
+-> exact derived PNG bytes + closed evidence
 ```
-
-without also importing unrelated authority.
 
 Classification:
 
@@ -132,23 +103,11 @@ Classification:
 NEW_MISSING_CAPABILITY
 ```
 
-A clean owner exists, so this planning lane does **not** return the scope-gap verdict.
+A clean owner exists, so no scope-gap verdict is required at planning time.
 
-## 4. Alternatives
+## 4. Selected architecture
 
-### A. Reuse `primitive_ir_lib.run_pdf()` wholesale
-
-Rejected because it moves Primitive/OCR/calibration/view-candidate authority into S2C and writes unrelated artifacts.
-
-### B. Add derived fields to `autocad_render_evidence.py`
-
-Rejected for the first slice because it blurs native and derived renderer authority and silently widens an accepted schema.
-
-### C. New narrow pure derived-raster module
-
-Selected.
-
-Preferred future paths:
+Preferred future runtime paths:
 
 ```text
 CREATE mcp_integration_lib/derived_raster_evidence.py
@@ -156,6 +115,16 @@ CREATE mcp_integration_lib/tests/test_derived_raster_evidence.py
 ```
 
 No third path.
+
+The module is pure at its boundary:
+
+```text
+validated native request/evidence + immutable pdf_bytes
+    -> one-page bounded rasterization
+    -> png_bytes + derived evidence
+```
+
+No filesystem pathname is accepted for source or output.
 
 ## 5. Authority map
 
@@ -179,26 +148,9 @@ approval/verdict/repair/publication
   existing/future dedicated owners, never S2C
 ```
 
-No second renderer/store/custody/verdict authority is created.
+No second native renderer, source-custody owner, manifest/store, approval owner or visual verdict owner is created.
 
-## 6. Selected module responsibility
-
-Proposed module:
-
-```text
-mcp_integration_lib/derived_raster_evidence.py
-```
-
-It owns exactly:
-
-1. validation/binding of an already accepted native PDF request/evidence pair;
-2. verification that supplied PDF bytes match the native artifact SHA;
-3. bounded rasterization of exactly one page;
-4. validation of exact PNG bytes and closed derived evidence.
-
-It does not own artifact discovery, transport, persistence, current pointers, caches, visual interpretation or live AutoCAD operations.
-
-## 7. Proposed public surface
+## 6. Proposed public surface
 
 ```python
 DERIVED_RASTER_EVIDENCE_SCHEMA_VERSION = "derived-raster-evidence-1.0"
@@ -234,49 +186,91 @@ def derived_raster_evidence_sha256(
 ) -> str: ...
 ```
 
-These are planning names. A future runtime Issue may make naming-only changes while preserving the exact semantics and authority boundary.
+Planning names may receive naming-only adjustment at fresh runtime issuance, but not semantic or authority widening.
 
-### Why bytes, not pathname
+## 7. Immutable byte boundary
 
-The first slice takes immutable `pdf_bytes` and returns `png_bytes` in memory.
+The first slice accepts `pdf_bytes` only.
 
-This deliberately avoids:
-
-- a second path/root/reparse policy;
-- pathname TOCTOU;
-- arbitrary caller file reads;
-- duplicating File IPC artifact ownership.
-
-Existing native evidence still validates its own safe relative artifact path. A later separately issued handoff may supply verified bytes from the existing artifact owner.
-
-## 8. Native binding sequence
-
-The sequence is fixed:
+Forbidden:
 
 ```text
-validate_render_request(native_request)
-require artifact_kind == PDF
-validate_render_evidence(native_evidence, request=validated_request)
-require artifact_kind == PDF
-require AUTOCAD_NATIVE through existing validator
-require sha256(pdf_bytes) == native_evidence.artifact.sha256
-open exact verified bytes with PyMuPDF
-require parsed page_count == native_evidence.artifact.page_count
+arbitrary pathname open
+Path.read_bytes()
+root/reparse policy duplication
+File IPC discovery
+ambient artifact-directory lookup
+output/temp artifact persistence
 ```
 
-S2C computes canonical digests of the validated native request/evidence with the existing:
+This keeps source/path custody outside S2C.
+
+## 8. Native binding and encrypted-PDF fail-closed sequence
+
+Required order:
+
+```text
+validate input type and MAX_PDF_BYTES
+validate_render_request(native_request)
+require request artifact_kind == PDF
+validate_render_evidence(native_evidence, request=validated_request)
+require evidence artifact_kind == PDF
+require AUTOCAD_NATIVE through accepted validator
+require sha256(pdf_bytes) == native_evidence.artifact.sha256
+open exact bytes with fitz.open(stream=pdf_bytes, filetype="pdf")
+check encryption before page_count/page load/rasterization
+only then inspect page_count and geometry
+```
+
+### 8.1 Encryption rule
+
+**Any PDF encryption is out of scope and fails closed.** S2C never authenticates or decrypts.
+
+Immediately after successful `fitz.open(...)`, and before `page_count`, `load_page()`, `get_pixmap()` or other content access, reject with:
+
+```text
+PDF_ENCRYPTED
+```
+
+when any of these indicate encryption:
+
+```text
+document.needs_pass is True
+document.is_encrypted is True
+PDF trailer contains /Encrypt
+document metadata reports a non-null encryption method
+```
+
+The trailer check is normative because `/Encrypt` is the PDF-level declaration of encryption. `needs_pass` / `is_encrypted` are additional fail-closed signals, not permission to continue when false.
+
+Forbidden:
+
+```text
+document.authenticate(...)
+password parameter
+password lookup/store
+owner/user password handling
+decryption attempt
+permission-based fallback rendering
+```
+
+If trailer inspection itself cannot be completed safely, fail closed as `PDF_MALFORMED`; do not rasterize.
+
+No partial PNG/evidence may escape an encrypted-input failure.
+
+## 9. Canonical native identity
+
+Canonical hashes of normalized accepted native request/evidence use only:
 
 ```python
-cad_agent.drawing_contracts.canonical_json_sha256()
+cad_agent.drawing_contracts.canonical_json_sha256(...)
 ```
 
-No second canonical JSON serializer/hash owner is introduced.
+Raw PDF/PNG SHA-256 is ordinary byte integrity, not a second canonical JSON authority.
 
-Raw PDF/PNG SHA-256 remains ordinary content integrity, not canonical-record ownership.
+## 10. Closed derived evidence
 
-## 9. Closed derived evidence
-
-Root concepts:
+The derived record is closed and includes:
 
 ```text
 schema_version
@@ -291,7 +285,9 @@ layout_identity
 native_pdf_sha256
 native_pdf_page_count
 page_index
+media_box
 selected_page_box
+physical_page_size_mm
 rotation_degrees
 user_unit
 render_dpi
@@ -304,24 +300,34 @@ alpha_policy
 background_policy
 ```
 
-Forbidden evidence material includes:
+`media_box` and `physical_page_size_mm` are required by this remediation so A4 physical-sheet identity is evidence-bound rather than inferred from PNG dimensions or native `paper_size` text.
+
+Reject unknown or authority-bearing fields such as approval, verdict, repair, publication, accepted/current state, source-custody identity, absolute path, customer filename, HWND/process/session ID, ambient timestamp or random UUID.
+
+## 11. Physical page geometry policy
+
+### 11.1 MediaBox is physical sheet geometry
+
+For PDF, the physical page is derived from the observed `MediaBox` plus effective `/UserUnit` exactly once.
+
+Normalized evidence:
 
 ```text
-absolute path
-customer/source filename
-HWND/process/session ID
-ambient timestamp/random UUID
-approval/verdict/pass
-repair/publication
-accepted/current/release state
-source-custody identity
+media_box = {
+  coordinates_pt: [x0, y0, x1, y1]
+}
+
+physical_page_size_mm = {
+  width:  <canonical decimal mm>,
+  height: <canonical decimal mm>
+}
 ```
 
-## 10. Page geometry policy
+Do not use `CropBox`, `Page.rect`, PNG dimensions or the native request label as the sole proof of physical paper size.
 
-### 10.1 Selected page box
+### 11.2 Selected raster extent is CropBox
 
-First slice uses the effective visible crop box:
+First slice still rasterizes the effective visible CropBox:
 
 ```text
 selected_page_box = {
@@ -330,105 +336,139 @@ selected_page_box = {
 }
 ```
 
-It is observed from verified PDF bytes, never supplied as caller authority.
+CropBox is observed from exact verified PDF bytes and never caller-authoritative.
 
-If crop box is canonically equal to media box, that equality is accepted. Invalid/empty/non-finite geometry fails closed.
+### 11.3 A4 physical classification
 
-### 10.2 Rotation
+Canonical ISO A4 physical dimensions are:
 
-Observed page rotation is normalized to exactly:
+```text
+210.00 mm x 297.00 mm
+```
+
+Orientation-neutral classification accepts either ordering before applying page rotation.
+
+To accommodate ordinary PDF point quantization while remaining fail-closed, planning locks:
+
+```text
+A4_PHYSICAL_TOLERANCE_MM = 0.10
+```
+
+Each unrotated physical MediaBox dimension after UserUnit conversion must be within inclusive ±0.10 mm of the corresponding canonical A4 dimension.
+
+Examples under UserUnit=1:
+
+```text
+595 pt x 842 pt -> acceptable A4 physical approximation
+612 pt x 792 pt -> not A4
+```
+
+Tolerance is for physical-size classification only. It is not permission to crop, stretch or resize arbitrary content.
+
+### 11.4 A4 selected-box rule
+
+For a native request claiming `paper_size == "A4"`:
+
+1. physical MediaBox must classify as A4;
+2. effective CropBox must represent the full physical sheet: its four physical edges must coincide with MediaBox within the same ±0.10 mm tolerance after UserUnit conversion;
+3. otherwise fail `PAGE_GEOMETRY_MISMATCH` before rasterization.
+
+This prevents a smaller visible crop inside an A4 MediaBox from being falsely treated as a full-sheet A4 raster.
+
+For non-A4 synthetic/custom requests, valid bounded CropBox rasterization remains allowed; the A4 exact-dimension postcondition simply does not apply.
+
+### 11.5 Rotation
+
+Observed rotation is normalized to exactly:
 
 ```text
 0 | 90 | 180 | 270
 ```
 
-Unsupported rotation representation fails closed.
+PyMuPDF returns page box coordinates in unrotated page space while `Page.rect` reflects rotation. S2C therefore records unrotated MediaBox/CropBox and applies the explicit rotation policy exactly once.
 
-### 10.3 UserUnit
+Unsupported/ambiguous rotation fails closed.
 
-The record contains a finite positive canonical UserUnit.
+### 11.6 UserUnit
 
 Rules:
 
-- absent `/UserUnit` => `1`;
-- zero/negative/non-finite/excessive values fail;
-- UserUnit is observed, not inferred from pixels;
-- implementation must use PyMuPDF's page geometry consistently so UserUnit is not applied twice.
-
-Runtime RED must include a non-1 UserUnit fixture.
-
-## 11. Deterministic pixel-dimension policy
-
-Implicit renderer integer rounding is not authority.
-
-Given effective physical page dimensions in points after accepted UserUnit semantics:
-
 ```text
-ideal_width_px  = width_pt  * render_dpi / 72
-ideal_height_px = height_pt * render_dpi / 72
+absent /UserUnit -> 1
+finite positive value -> may be accepted
+zero/negative/non-finite/excessive -> reject
 ```
 
-S2C uses one explicitly locked nearest-integer rule with deterministic decimal/rational arithmetic for each dimension.
+UserUnit must not be applied twice. RED must include a non-1 fixture whose physical MediaBox still resolves to A4.
 
-The exact raster matrix maps the selected box to those target integer dimensions. Any sub-pixel scale difference caused solely by integer pixel sampling is raster evidence behavior, not CAD geometry deformation.
+## 12. A4 / 300-DPI raster policy
 
-No post-render resize is allowed.
-
-### A4 at 300 DPI
-
-Accepted exact postconditions:
+For an accepted A4 physical page whose selected CropBox is full-sheet A4, target dimensions are derived from canonical A4 physical millimetres, not from a rounded PDF point encoding:
 
 ```text
-portrait  = 2480 x 3508
-landscape = 3508 x 2480
+ideal_width_px  = physical_width_mm  / 25.4 * render_dpi
+ideal_height_px = physical_height_mm / 25.4 * render_dpi
 ```
 
-Orientation is determined from effective page geometry plus page rotation.
+At 300 DPI with deterministic nearest-integer half-up:
 
-If native request says `paper_size = A4` but observed PDF geometry is not A4 under the selected box/UserUnit policy, fail categorically. Do not force non-A4 content into A4 pixels.
+```text
+portrait  -> 2480 x 3508
+landscape -> 3508 x 2480
+```
 
-## 12. Render matrix
+Rotation 90/270 swaps orientation deterministically.
 
-Evidence stores the exact six coefficients:
+The direct render matrix maps the accepted full-sheet A4 selected box to those canonical target pixels in one rasterization operation.
+
+Forbidden:
+
+```text
+render then resize
+render then crop to force dimensions
+content-dependent fit
+arbitrary shear
+caller-supplied transform
+```
+
+If exact A4 dimensions cannot be produced directly without destructive post-processing, return the scope-gap verdict.
+
+## 13. Non-A4 deterministic pixel policy
+
+For non-A4/custom pages, target pixels are derived from observed physical selected-box dimensions using deterministic decimal/rational arithmetic and nearest-integer half-up:
+
+```text
+ideal_px = physical_size_mm / 25.4 * DPI
+```
+
+No implicit renderer rounding is authoritative.
+
+## 14. Render matrix
+
+Evidence records exact six coefficients:
 
 ```text
 [a, b, c, d, e, f]
 ```
 
-The matrix is derived only from:
+The matrix is recomputed solely from observed selected box, physical geometry/UserUnit, right-angle rotation, DPI and deterministic target dimensions.
 
-- observed selected box;
-- observed right-angle rotation;
-- accepted UserUnit/page geometry semantics;
-- requested DPI;
-- deterministic integer-dimension policy.
+Validation reparses exact `pdf_bytes` and recomputes the expected geometry/matrix before accepting evidence.
 
-Forbidden:
+## 15. Alpha/background policy
 
-- caller-provided matrix;
-- arbitrary shear/reflection;
-- content-dependent crop;
-- fit-to-content;
-- post-render resize.
-
-Validation reparses the exact `pdf_bytes` and recomputes the expected geometry/matrix before accepting evidence.
-
-## 13. Alpha/background policy
-
-First slice is fixed:
+Fixed first-slice policy:
 
 ```text
 alpha_policy      = OPAQUE_NO_ALPHA
 background_policy = WHITE
 ```
 
-Rendering uses a no-alpha PyMuPDF pixmap. Returned `png_bytes` must be inspected sufficiently to prove the encoded image has no alpha channel and its dimensions equal evidence.
+Rendering uses no alpha. Returned PNG bytes must independently prove PNG format, exact dimensions and absence of alpha/transparency.
 
-Transparent output, arbitrary compositing and caller-selected background are out of scope.
+## 16. Renderer identity/version
 
-## 14. Renderer identity/version
-
-Closed renderer identity:
+Evidence records runtime-observed:
 
 ```text
 renderer = {
@@ -438,351 +478,233 @@ renderer = {
 }
 ```
 
-These values are observed from the loaded renderer. Caller values never authorize them.
+Caller cannot authorize these values.
 
-The first runtime slice uses the already locked PyMuPDF 1.28.0 dependency; no dependency change.
+Renderer-version drift creates a new evidence generation and is not exact replay-equivalent.
 
-### Version drift
-
-Exact-byte replay equivalence requires the same:
-
-```text
-native request hash
-native evidence hash
-native PDF hash
-page index/count
-box/rotation/UserUnit
-DPI/matrix
-alpha/background policy
-PyMuPDF binding version
-MuPDF engine version
-```
-
-A renderer-version change creates a new evidence generation. It may not be silently treated as byte-replay equivalent even if visual output looks similar.
-
-## 15. Replay/duplicate semantics
+## 17. Replay semantics
 
 With identical immutable inputs and identical renderer identity/version:
 
 ```text
 PNG bytes identical
 PNG SHA identical
-normalized derived evidence identical
-derived evidence SHA identical
+normalized evidence identical
+derived evidence canonical SHA identical
 ```
 
-No random ID, ambient clock, cache key, manifest append or current pointer exists.
+The runtime suite repeats the exact derivation at least five times.
 
-Repeated calls on the same evidence do not mint new logical identity.
+No random ID, ambient clock, cache key, manifest append or current pointer participates.
 
-Two different native request/evidence records that happen to contain the same PDF bytes remain distinguishable through `native_render_request_sha256` and `native_render_evidence_sha256`.
+## 18. Resource policy
 
-## 16. Resource policy
-
-Proposed first-slice bounds:
+First-slice bounds remain:
 
 ```text
-MAX_PDF_BYTES         = 64 MiB
+MAX_PDF_BYTES         = 64 * 1024 * 1024
 MAX_PDF_PAGE_COUNT    = 256
-MAX_PAGE_EDGE_PX      = 16,384
-MAX_PAGE_PIXELS       = 32,000,000
-MAX_DERIVED_PNG_BYTES = 64 MiB
+MAX_PAGE_EDGE_PX      = 16_384
+MAX_PAGE_PIXELS       = 32_000_000
+MAX_DERIVED_PNG_BYTES = 64 * 1024 * 1024
 MIN_RENDER_DPI        = 72
 MAX_RENDER_DPI        = 600
 ```
 
-A4/300 DPI is ~8.7M pixels and remains well below the pixel ceiling.
-
-Rules:
-
-1. reject oversized PDF bytes before parse;
-2. verify native PDF hash before parse;
-3. parse page count before page selection;
-4. render only one page per call;
-5. compute/check edge and pixel limits before pixmap materialization;
-6. bound encoded PNG size before return;
-7. never silently lower DPI or switch page box after a resource failure.
-
-Categorical errors include:
+Required fail-fast order:
 
 ```text
+input type / PDF byte length
+native request/evidence
+native PDF SHA
+open bounded exact bytes
+encryption/trailer gate
+page count
+page index
+MediaBox/CropBox/UserUnit/rotation
+A4 physical classification when claimed
+DPI
+target dimensions
+edge/pixel limits
+one-page pixmap
+PNG encoding
+PNG byte limit
+full self-validation
+return
+```
+
+Never silently lower DPI or switch box/renderer after resource failure.
+
+## 19. Privacy-safe categorical failures
+
+At minimum:
+
+```text
+PDF_BYTES_INVALID
+NATIVE_RENDER_EVIDENCE_INVALID
+NATIVE_ARTIFACT_NOT_PDF
+NATIVE_PDF_HASH_MISMATCH
+PDF_ENCRYPTED
+PDF_MALFORMED
 PDF_TOO_LARGE
 PDF_PAGE_COUNT_LIMIT
+PAGE_COUNT_MISMATCH
 PAGE_INDEX_OUT_OF_RANGE
+PAGE_GEOMETRY_MISMATCH
 PAGE_DIMENSION_LIMIT
 RENDER_DPI_OUT_OF_RANGE
 PNG_SIZE_LIMIT
-PDF_MALFORMED
+PNG_INVALID
 RENDER_RESOURCE_FAILURE
 ```
 
-If acceptable containment later requires a worker-process supervisor, STOP/rebaseline. The first slice must not create one.
+Public failures never echo PDF content, caller paths, customer identifiers or upstream exception text.
 
-## 17. Validation behavior
+## 20. No-partial-output rule
 
-`validate_derived_raster_evidence()` receives both exact PDF and PNG bytes so it can independently verify evidence rather than merely shape-check it.
+The adapter is byte-only and persistence-free.
 
-It must fail when any of these diverges:
-
-- existing native request/evidence contract;
-- native artifact kind;
-- native PDF byte SHA;
-- parsed/native page count;
-- page index;
-- observed crop box;
-- rotation;
-- UserUnit;
-- DPI;
-- recomputed matrix;
-- renderer identity/version shape;
-- PNG byte SHA;
-- PNG width/height;
-- alpha/background policy;
-- A4 request vs observed geometry;
-- any unknown/forbidden field.
-
-`derive_native_pdf_page()` builds evidence and then validates the returned evidence against the exact PDF and PNG bytes before returning.
-
-## 18. Malformed/decompression behavior
-
-The adapter opens only already hash-verified bounded bytes.
-
-It must catch PyMuPDF parse/render exceptions, `MemoryError` and equivalent resource failures and expose privacy-safe categorical errors.
-
-No error string may echo PDF content or caller filesystem paths.
-
-No retry path may silently change DPI, renderer, box, alpha or page.
-
-## 19. Relationship to native evidence
-
-Correct provenance:
+On any failure, including encrypted input or A4 geometry mismatch:
 
 ```text
-AUTOCAD_NATIVE PDF evidence
-  -> PYMUPDF derived-raster evidence
+no PNG bytes returned
+no evidence returned
+no file written
+no manifest/store/cache/current pointer mutated
 ```
 
-Incorrect provenance:
+The builder returns only after the generated PNG/evidence pair has self-validated against exact PDF and PNG bytes.
 
-```text
-AUTOCAD_NATIVE PNG evidence
-```
+## 21. Mandatory RED-first matrix
 
-for a PNG actually created from the PDF by PyMuPDF.
+### Native/encryption binding
 
-The derived record references canonical native request/evidence hashes and required scope fields; the native schema remains unchanged.
+- valid native PDF evidence + matching bytes;
+- native request/evidence mismatch;
+- wrong native PDF SHA;
+- native-vs-parsed page-count mismatch;
+- password-protected PDF -> `PDF_ENCRYPTED` before page access;
+- encrypted PDF with `/Encrypt` trailer even when no password prompt is needed -> `PDF_ENCRYPTED`;
+- prove `authenticate()` is never called;
+- prove `load_page()` / `get_pixmap()` are not reached on encrypted input.
 
-## 20. Relationship to source fusion
+### Page/physical geometry
 
-Generated native PDF/PNG artifacts never become SourceBundle/source-custody items.
-
-S2C may copy the **concept** of explicit page geometry and render provenance but not source-custody fields or authority.
-
-## 21. Relationship to visual evidence
-
-S2C returns PNG bytes + derived evidence only.
-
-It does not compare images, issue PASS/FAIL, build repair instructions, authorize publication or persist a visual evidence package.
-
-## 22. Relationship to `run_pdf()`
-
-First runtime slice does not modify or call `primitive_ir_lib/run_pdf.py`.
-
-A later separately issued compatibility refactor may extract a lower-level helper only if it is renderer-mechanical, preserves Primitive behavior and is proven necessary. It is not a first-slice dependency.
-
-## 23. Preferred first runtime write-set
-
-```text
-CREATE ONLY:
-  mcp_integration_lib/derived_raster_evidence.py
-  mcp_integration_lib/tests/test_derived_raster_evidence.py
-```
-
-Explicitly do not modify:
-
-```text
-mcp_integration_lib/autocad_render_evidence.py
-mcp_integration_lib/dotnet_ipc.py
-primitive_ir_lib/run_pdf.py
-primitive_ir_lib/run_image.py
-cad_agent/source_fusion.py
-cad_agent/visual_evidence.py
-cad_agent/manifest.py
-contracts/**
-autocad_plugin/**
-requirements/**
-.github/workflows/**
-```
-
-A need for a third path is a STOP/rebaseline condition.
-
-## 24. Mandatory RED-first matrix
-
-### Native binding
-
-- valid PDF request/evidence + matching bytes;
-- request/evidence kind PNG -> reject;
-- request/evidence scope mismatch -> existing validator reject;
-- stale/substituted evidence -> reject;
-- wrong native PDF SHA -> reject;
-- native vs parsed page-count mismatch -> reject;
-- unsafe native artifact relative path -> existing validator reject.
-
-### Page/geometry
-
-- negative/bool/non-int/out-of-range page index -> reject;
-- malformed PDF -> categorical reject;
-- invalid/huge page box -> reject;
-- deterministic crop/media equivalence behavior;
-- rotations 0/90/180/270;
-- unsupported rotation -> reject;
+- MediaBox is recorded separately from CropBox;
+- `physical_page_size_mm` recomputes from MediaBox + UserUnit;
+- A4 210x297 mm portrait;
+- A4 297x210 mm landscape;
+- common 595x842-point A4 encoding accepted within ±0.10 mm;
+- Letter MediaBox rejected when request says A4;
+- A4 MediaBox + smaller CropBox rejected for A4 full-sheet path;
+- CropBox/MediaBox edge mismatch >0.10 mm rejected;
+- rotation 0/90/180/270;
 - absent UserUnit -> 1;
-- non-1 UserUnit -> deterministic geometry;
-- invalid UserUnit -> reject.
+- non-1 UserUnit applied exactly once;
+- invalid/huge/non-finite geometry rejected.
 
 ### A4/300 DPI
 
 - portrait -> exactly `2480 x 3508`;
 - landscape -> exactly `3508 x 2480`;
-- A4 request with non-A4 observed geometry -> reject;
-- forged DPI/matrix -> reject;
-- one-pixel evidence mismatch -> reject.
+- rotations 90/270 swap exact dimensions;
+- forged matrix/dimensions fail;
+- one-pixel evidence mismatch fails;
+- no post-render resize/crop.
 
-### PNG policy
+### PNG/replay/resource/security
 
-- output has no alpha;
-- white background policy recorded;
-- forged alpha/background -> reject;
-- PNG SHA mismatch -> reject;
-- PNG decoded dimensions mismatch -> reject.
+Preserve all existing planned gates for opaque white/no alpha, renderer fingerprint/version drift, 5x byte-identical replay, PDF/page/pixel/PNG limits, malformed/truncated/resource refusal, privacy-safe errors, no pathname reopen, and forbidden authority imports.
 
-### Replay/version
-
-- same immutable inputs repeated at least 5x -> byte-identical PNG/evidence;
-- mapping key/input order changes -> same normalized evidence;
-- PyMuPDF binding version drift -> not replay-equivalent;
-- MuPDF engine version drift -> not replay-equivalent;
-- same PDF bytes with different native request/evidence identity -> different derived evidence.
-
-### Resource/security
-
-- PDF byte limit;
-- page-count limit;
-- DPI range;
-- edge/pixel limit before render;
-- PNG byte limit;
-- parser/decompression/resource failure privacy;
-- no arbitrary pathname open;
-- static no network/subprocess/ctypes/AutoCAD/File IPC import;
-- static no Primitive/OCR/calibration/model/provider import;
-- static no manifest/store/approval/verdict/repair/publisher import.
-
-## 25. Verification requirements
+## 22. Verification requirements
 
 Future runtime acceptance requires:
 
 ```text
 focused S2C pytest: PASS
 5x replay/determinism: PASS
+encrypted-PDF no-raster gate: PASS
+A4 physical-geometry matrix: PASS
 existing autocad_render_evidence tests: PASS
 relevant Primitive PDF regressions: PASS
 Ruff exact paths: PASS
 architecture checker: PASS
 git diff --check: PASS
-exact write-set audit: PASS
+exact two-path audit: PASS
 canonical verifier: PASS
 hosted tests: PASS
 reuse-declaration: PASS
 ```
 
-AutoCAD live and private/customer data are not required for first-slice offline acceptance.
+AutoCAD live and private/customer data remain outside first-slice offline acceptance.
 
-## 26. Future live acceptance — not authorized here
+## 23. Future live acceptance — separate authorization only
 
-A later separately authorized live gate should:
+A later live gate must reuse existing AutoCAD session/open/close/cleanup owners and separately prove native PDF/drawing/DBMOD/PC3/PMP stability. Offline PASS never implies AutoCAD/File IPC/live cleanup PASS.
 
-1. use only the existing accepted isolated AutoCAD profile/media configuration owner;
-2. use a disposable synthetic drawing/layout;
-3. create native PDF through the existing AutoCAD/.NET owner;
-4. validate native PDF request/evidence;
-5. obtain exact PDF bytes through the existing approved artifact handoff;
-6. derive page 0 at 300 DPI;
-7. require exact A4 portrait/landscape dimensions from observed geometry;
-8. repeat derivation and require byte-identical PNG/evidence;
-9. prove native PDF bytes, drawing hash and DBMOD remain unchanged;
-10. hand PNG downstream read-only;
-11. use existing cleanup owner.
-
-Status semantics:
+For live A4 acceptance it must prove both:
 
 ```text
-native PDF/profile/media prerequisite unavailable -> NOT RUN
-synthetic live derivation executed and all exact gates pass -> PASS
-private/customer CAD -> not required
+physical MediaBox/UserUnit = A4 under this policy
+full-sheet CropBox equivalent to MediaBox
 ```
 
-An unavailable-state SKIP never becomes live PASS.
+before requiring exact 300-DPI PNG dimensions.
 
-## 27. Compatibility / rollback
+## 24. Compatibility and rollback
 
-First runtime slice is additive:
+First runtime slice remains additive:
 
-- no existing schema change;
-- no manifest migration;
-- no dependency/lock change;
-- no AutoCAD/plugin change;
-- no Primitive pipeline change;
-- no stored-data migration.
+```text
+no accepted schema change
+no manifest migration
+no dependency/lock change
+no AutoCAD/plugin change
+no Primitive change
+no workflow change
+no stored-data migration
+```
 
-Rollback is removal of the two new runtime paths. Existing owners remain unchanged.
+Rollback is removal/revert of exactly the two new runtime paths.
 
-## 28. Overlap matrix
+## 25. STOP conditions
 
-| Owner/lane | Overlap | Rule |
-|---|---:|---|
-| native render contract | import/read only | reuse unchanged |
-| AutoCAD/.NET native renderer | none | no live owner move |
-| local PC3/PMP/profile lane | none | future live prerequisite only |
-| source fusion | none | generated artifacts stay outside source custody |
-| Primitive `run_pdf` | none first slice | bounded mechanic reference only |
-| visual evidence | none | downstream only |
-| manifest/checkpoint | none | no persistence |
-| R1/R2/R3/R4 | none | disjoint paths and authority |
-| deps/contracts/workflows | none | locked |
+Stop and report Master PO instead of widening if:
 
-## 29. STOP conditions
-
-Stop and report to Master PO instead of widening if:
-
-- native PDF bytes cannot be obtained through an existing approved handoff without a new File IPC/path owner;
-- native evidence cannot safely bind the exact bytes;
-- derived raster requires modifying native render schema;
-- only viable reuse is calling `primitive_ir_lib.run_pdf()` wholesale;
-- Primitive/OCR/calibration/Semantic behavior becomes required;
-- generated artifacts must be forced into SourceBundle/source custody;
-- visual evidence would need to become the renderer;
-- a new store/cache/manifest/current pointer is required;
-- first slice requires dependency/lock/workflow/contract changes;
-- a process supervisor is required before bounded offline tests can pass;
-- deterministic page-box/UserUnit/matrix policy cannot achieve the required A4/300-DPI dimensions without content-destructive post-processing;
+- native PDF bytes require a new File IPC/path authority;
+- accepted native render schema must change;
+- exact bytes cannot be bound to native evidence;
+- encrypted input can only be handled by password/authentication/decryption;
+- physical A4 identity cannot be established from MediaBox/UserUnit without inventing another page-geometry owner;
+- A4 exact pixels require post-render destructive resize/crop;
+- only viable reuse calls `primitive_ir_lib.run_pdf()` wholesale;
+- Primitive/OCR/calibration/Semantic/source-fusion/visual-evidence authority must move;
+- a new manifest/store/cache/current pointer is required;
+- dependency/lock/workflow/contract change is required;
+- a process supervisor is required before bounded offline acceptance;
 - renderer version cannot be observed/bound deterministically;
 - private/customer CAD is required;
 - a third runtime path is required;
 - another active writer owns either proposed runtime path.
 
-If clean ownership is no longer possible, return:
+Architectural failure result:
 
 ```text
 S2C DERIVED-RASTER SCOPE GAP — MASTER PO DECISION REQUIRED
 ```
 
-## 30. Conclusion
+## 26. Conclusion
 
-A clean ownership seam exists.
+The clean seam remains:
 
-S2C is one narrow pure adapter from **validated native PDF evidence + exact PDF bytes** to **derived PNG bytes + closed derived-raster evidence**. It reuses the existing native contract, canonical hash owner and already pinned PyMuPDF dependency without moving Primitive/OCR/calibration/source-custody/visual-verdict authority.
+```text
+validated native PDF evidence + exact immutable unencrypted PDF bytes
+  -> explicit physical MediaBox/CropBox/UserUnit/rotation policy
+  -> deterministic direct raster
+  -> exact PNG bytes + closed derived evidence
+```
 
-Preferred first runtime files:
+Encrypted PDFs fail closed before page access. A4 is established from physical PDF page geometry, not from a request label or output pixel dimensions. The future first runtime write-set remains exactly:
 
 ```text
 mcp_integration_lib/derived_raster_evidence.py
