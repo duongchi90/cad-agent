@@ -29,7 +29,6 @@ from agent_lib.codex_worker_process import (
     WorkerCleanupResult,
     WorkerEnvironmentAttestation,
     WorkerProcessError,
-    WorkerProcessHandle,
     cleanup_worker_process,
     exchange_worker_control,
     launch_worker_process,
@@ -1602,24 +1601,10 @@ def _task5_exchange_child_control(
             cancelled=False,
         )
     payload = _request_to_wire(outbound)
-    legacy_exchange = exchange_worker_control
     try:
-        try:
-            response = exchange_worker_control(  # type: ignore[arg-type]
-                handle, payload, deadline=deadline
-            )
-        except TypeError:
-            # Native Task-3 handles must never downgrade to a deadline-less
-            # control exchange. Legacy two-argument compatibility is limited
-            # to non-native predecessor doubles; native substitution fails
-            # closed instead of selecting a weaker timeout path.
-            if isinstance(handle, WorkerProcessHandle):
-                _fail(
-                    "WORKER_SDK_ATTESTATION_GAP"
-                    if attestation
-                    else "WORKER_PROVIDER_FAILED"
-                )
-            response = legacy_exchange(handle, payload)
+        response = exchange_worker_control(  # type: ignore[arg-type]
+            handle, payload, deadline=deadline
+        )
     except WorkerProcessError as exc:
         if exc.code == "WORKER_TIMEOUT":
             _fail("WORKER_TIMEOUT")
