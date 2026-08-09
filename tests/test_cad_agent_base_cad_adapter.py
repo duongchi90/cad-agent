@@ -394,6 +394,20 @@ def test_frozen_reuse_evaluation_requires_reextraction_on_identity_drift(
     assert result["current_source"] == current
 
 
+def test_two_component_stale_reuse_reports_sorted_affected_component_ids() -> None:
+    module = _module()
+    handoff = _handoff_with_two_components()
+    inspection = _live_inspection()
+    inspection["base_source"] = _source(sha256="c" * 64)
+    result = module.evaluate_frozen_base_cad_reuse(
+        handoff=handoff, current_live_inspection=inspection
+    )
+    assert result["state"] == "STALE_REEXTRACTION_REQUIRED"
+    assert result["affected_component_ids"] == ["component-A", "component-B"]
+    assert result["affected_component_ids"] == sorted(result["affected_component_ids"])
+    assert result["reason_codes"] == ["SOURCE_SHA256_CHANGED"]
+
+
 def test_reuse_evaluation_has_no_live_execution_or_current_pointer_fields() -> None:
     module = _module()
     assert list(inspect.signature(module.evaluate_frozen_base_cad_reuse).parameters) == [
@@ -468,12 +482,28 @@ def test_reversed_source_candidate_mapping_fails_closed() -> None:
         module.validate_base_cad_reuse_handoff(payload)
 
 
+def test_duplicate_candidate_handles_fail_closed_with_valid_source_mapping() -> None:
+    module = _module()
+    payload = _handoff_with_two_components()
+    payload["components"][0]["candidate_handle"] = payload["components"][1]["candidate_handle"]
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
+
+
+def _casefold_duplicate_source_handle_with_valid_mapping(payload: dict[str, object]) -> None:
+    payload["components"][0]["source_handle"] = "a1b2"
+    payload["source_handle_to_candidate_handle"] = [
+        {"source_handle": "a1b2", "candidate_handle": "E5F6"},
+        {"source_handle": "A1B2", "candidate_handle": "C3D4"},
+    ]
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
         lambda payload: payload["components"].append(deepcopy(payload["components"][0])),
         lambda payload: payload["components"][1].__setitem__("logical_component_id", "component-A"),
-        lambda payload: payload["components"][1].__setitem__("source_handle", "a1b2"),
+        _casefold_duplicate_source_handle_with_valid_mapping,
         lambda payload: payload["source_handle_to_candidate_handle"].pop(),
         lambda payload: payload["source_handle_to_candidate_handle"].__setitem__(
             0, {"source_handle": "orphan", "candidate_handle": "E5F6"}
@@ -517,6 +547,41 @@ def test_root_component_provenance_and_handle_mutations_fail_or_change_identity(
     else:
         with pytest.raises(module.BaseCadAdapterError):
             module.validate_base_cad_reuse_handoff(payload)
+
+
+@pytest.mark.parametrize("field", ["approval", "verdict", "repair", "publication", "approval_issuer"])
+def test_root_authority_fields_are_rejected(field: str) -> None:
+    module = _module()
+    payload = _handoff()
+    payload[field] = {"status": "APPROVED"}
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
+
+
+def test_s3a_compatible_layer_and_block_pairs_are_accepted() -> None:
+    module = _module()
+    inspection_components = {
+        item["source_handle"]: item for item in _live_inspection()["components"]
+    }
+    payload = _handoff_with_two_components()
+    for component in payload["components"]:
+        source = inspection_components[component["source_handle"]]
+        component["source_layer"] = source["source_layer"]
+        component["source_block"] = source["source_block"]
+    normalized = module.validate_base_cad_reuse_handoff(payload)
+    assert {
+        (item["source_layer"], item["source_block"]) for item in normalized["components"]
+    } == {("BODY", "CABIN_MAIN"), ("BODY", "CHASSIS_MAIN")}
+
+
+def test_s3a_incompatible_layer_and_block_pair_fails_closed() -> None:
+    module = _module()
+    payload = _handoff_with_two_components()
+    next(item for item in payload["components"] if item["source_handle"] == "A1B2")[
+        "source_block"
+    ] = "CABIN_MAIN"
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
 
 
 @pytest.mark.parametrize(
