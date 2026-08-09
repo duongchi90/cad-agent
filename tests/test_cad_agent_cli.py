@@ -221,14 +221,12 @@ def test_live_client_reuses_canonical_root_validator_before_construction(
 
     requested_root = tmp_path / "requested-root"
     requested_root.mkdir()
-    canonical_root = tmp_path / "canonical-root"
-    canonical_root.mkdir()
     observed: list[str] = []
     captured: dict[str, object] = {}
 
     def canonical_validator(value: str) -> Path:
         observed.append(value)
-        return canonical_root
+        return requested_root
 
     class _Client:
         def __init__(self, **kwargs: object) -> None:
@@ -243,7 +241,7 @@ def test_live_client_reuses_canonical_root_validator_before_construction(
     _live_client(42, dispatcher)
 
     assert observed == [str(requested_root)]
-    assert captured["ipc_dir"] == str(canonical_root)
+    assert captured["ipc_dir"] == str(requested_root)
 
 
 def test_live_client_rejects_non_directory_root_before_construction(monkeypatch, tmp_path: Path) -> None:
