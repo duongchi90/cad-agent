@@ -2123,6 +2123,15 @@ def _task6_validate_primitive_observations(
             _fail("FUSION_PRIMITIVE_BINDING_MISMATCH")
         if not isinstance(record["content"], _Mapping):
             _fail(code)
+        identity_material = {
+            "identity_kind": "r1c-task5-projection-fixture-v1",
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "task4_lineage": _task5_task4_lineage_material(binding),
+            "source_id": binding.get("source_id"),
+            "content": dict(record["content"]),
+        }
+        if _canonical_json_sha256(identity_material) != observation_key:
+            _fail("FUSION_PRIMITIVE_IDENTITY_MISMATCH")
         normalized.append(
             {
                 "observation_key": observation_key,
@@ -2192,6 +2201,13 @@ def _task6_validate_semantic_observations(
             normalized_nested = sorted(_sha256(key, code) for key in nested_keys)
             if normalized_nested != sorted(primitive_keys):
                 _fail("FUSION_SEMANTIC_REFERENCE_MISMATCH")
+        identity_material = {
+            "identity_kind": "r1c-semantic-observation-v1",
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "content": content_copy,
+        }
+        if _canonical_json_sha256(identity_material) != observation_key:
+            _fail("FUSION_SEMANTIC_IDENTITY_MISMATCH")
         normalized.append(
             {
                 "observation_key": observation_key,
@@ -2212,13 +2228,9 @@ def _task6_validate_semantic_observations(
 
 
 def _task6_subject_material(record: _Mapping[str, object]) -> dict[str, object]:
-    binding = record["source_binding"]
     content = record["content"]
     return {
-        "source_id": binding["source_id"],
-        "source_custody_sha256": binding["source_custody_sha256"],
-        "observed_source_sha256": binding["observed_source_sha256"],
-        "raster_sha256": binding["raster_sha256"],
+        "logical_subject_ids": sorted(str(value) for value in record["legacy_ids"]),
         "kind": content.get("kind"),
     }
 
@@ -2411,7 +2423,11 @@ def build_source_fusion_packet(
         "conflicts": conflicts,
         "fusion_input_sha256": fusion_input_sha256,
     }
-    return validate_source_fusion_packet(packet)
+    return _task6_validate_source_fusion_packet(
+        packet,
+        source_bundle=bundle,
+        custody=normalized_custody,
+    )
 
 
 def _task6_validate_conflicts(
@@ -2483,7 +2499,133 @@ def _task6_validate_conflicts(
     return normalized
 
 
-def validate_source_fusion_packet(payload: object) -> dict[str, object]:
+def _task6_revalidate_identity_collection(
+    value: object,
+    *,
+    identity_field: str,
+    identity_function: object,
+    code: str,
+) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        _fail(code)
+    records: list[dict[str, object]] = []
+    identities: set[str] = set()
+    for item in value:
+        if not isinstance(item, _Mapping):
+            _fail(code)
+        record = dict(item)
+        supplied = _sha256(record.get(identity_field), code)
+        try:
+            expected = identity_function(record)
+        except SourceFusionError:
+            raise
+        except Exception:
+            _fail(code)
+        if expected != supplied:
+            _fail("DETERMINISTIC_ID_MISMATCH")
+        if supplied in identities:
+            _fail(code)
+        identities.add(supplied)
+        records.append(_copy.deepcopy(record))
+    records.sort(key=lambda record: str(record[identity_field]))
+    return records
+
+
+def _task6_packet_evidence(
+    packet: dict[str, object],
+    *,
+    source_bundle: object | None = None,
+    custody: object | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    pages = _task6_revalidate_identity_collection(
+        packet["page_locators"],
+        identity_field="page_locator_sha256",
+        identity_function=_page_identity,
+        code="PAGE_LOCATOR_INVALID",
+    )
+    regions = _task6_revalidate_identity_collection(
+        packet["region_locators"],
+        identity_field="region_locator_sha256",
+        identity_function=_region_identity,
+        code="REGION_LOCATOR_INVALID",
+    )
+    renders = _task6_revalidate_identity_collection(
+        packet["render_provenance"],
+        identity_field="render_provenance_sha256",
+        identity_function=_render_identity,
+        code="RENDER_PROVENANCE_INVALID",
+    )
+
+    if (source_bundle is None) != (custody is None):
+        _fail("SOURCE_FUSION_PACKET_INVALID")
+    if source_bundle is not None and custody is not None:
+        try:
+            bundle = _validate_source_bundle(source_bundle)
+            normalized_custody = _validated_custody(custody)
+            bundle_sha256 = _source_bundle_sha256(bundle)
+            custody_sha256 = _custody_digest(normalized_custody)
+        except Exception:
+            _fail("SOURCE_BUNDLE_INVALID")
+        if (
+            bundle_sha256 != packet["source_bundle_sha256"]
+            or custody_sha256 != packet["source_custody_sha256"]
+            or normalized_custody["bundle_id"] != bundle["bundle_id"]
+            or normalized_custody["run_id"] != bundle["run_id"]
+            or normalized_custody["source_bundle_sha256"] != bundle_sha256
+        ):
+            _fail("CUSTODY_CONTEXT_MISMATCH")
+        pages = validate_page_locators(
+            packet["page_locators"],
+            source_bundle=bundle,
+            custody=normalized_custody,
+        )
+        regions = validate_region_locators(
+            packet["region_locators"],
+            page_locators=pages,
+            custody=normalized_custody,
+        )
+        checkpoint_sha256 = _task6_render_checkpoint(packet["render_provenance"])
+        renders = _task6_render_provenance(
+            packet["render_provenance"],
+            page_locators=pages,
+            custody=normalized_custody,
+            primitive_artifact_sha256=checkpoint_sha256,
+        )
+    checkpoint_sha256 = _task6_render_checkpoint(renders)
+    primitive_observations = _task6_validate_primitive_observations(
+        packet["primitive_observations"],
+        primitive_checkpoint_sha256=checkpoint_sha256,
+        renders=_task6_render_map(renders),
+    )
+    semantic_observations = _task6_validate_semantic_observations(
+        packet["semantic_observations"],
+        primitive_checkpoint_sha256=checkpoint_sha256,
+        primitive_observations=primitive_observations,
+    )
+    return {
+        "page_locators": _task6_identity_order(pages, "page_locator_sha256"),
+        "region_locators": _task6_identity_order(regions, "region_locator_sha256"),
+        "render_provenance": _task6_identity_order(
+            renders,
+            "render_provenance_sha256",
+        ),
+        "primitive_observations": _task6_identity_order(
+            primitive_observations,
+            "observation_key",
+        ),
+        "semantic_observations": _task6_identity_order(
+            semantic_observations,
+            "observation_key",
+        ),
+    }
+
+
+def _task6_validate_source_fusion_packet(
+    payload: object,
+    *,
+    source_bundle: object | None = None,
+    custody: object | None = None,
+) -> dict[str, object]:
     code = "SOURCE_FUSION_PACKET_INVALID"
     packet = _closed(payload, _TASK6_PACKET_FIELDS, code)
     if packet["schema_version"] != SOURCE_FUSION_SCHEMA_VERSION:
@@ -2497,38 +2639,11 @@ def validate_source_fusion_packet(payload: object) -> dict[str, object]:
         _fail(code)
     policy = _task6_tolerance_policy(packet["tolerance_policy"])
 
-    collections: dict[str, tuple[object, str]] = {
-        "page_locators": (packet["page_locators"], "page_locator_sha256"),
-        "region_locators": (packet["region_locators"], "region_locator_sha256"),
-        "render_provenance": (
-            packet["render_provenance"],
-            "render_provenance_sha256",
-        ),
-        "primitive_observations": (
-            packet["primitive_observations"],
-            "observation_key",
-        ),
-        "semantic_observations": (
-            packet["semantic_observations"],
-            "observation_key",
-        ),
-    }
-    normalized_collections: dict[str, list[dict[str, object]]] = {}
-    for name, (raw, identity_field) in collections.items():
-        if not isinstance(raw, list):
-            _fail(code)
-        records: list[dict[str, object]] = []
-        identities: set[str] = set()
-        for item in raw:
-            if not isinstance(item, _Mapping):
-                _fail(code)
-            identity = _sha256(item.get(identity_field), code)
-            if identity in identities:
-                _fail(code)
-            identities.add(identity)
-            records.append(_copy.deepcopy(dict(item)))
-        records.sort(key=lambda record: str(record[identity_field]))
-        normalized_collections[name] = records
+    normalized_collections = _task6_packet_evidence(
+        packet,
+        source_bundle=source_bundle,
+        custody=custody,
+    )
 
     primitive_keys = {
         str(record["observation_key"])
@@ -2541,6 +2656,14 @@ def validate_source_fusion_packet(payload: object) -> dict[str, object]:
         tolerance_policy=policy,
         primitive_observation_keys=primitive_keys,
     )
+    expected_conflicts = _task6_conflicts(
+        normalized_collections["primitive_observations"],
+        source_bundle_sha256=bundle_sha256,
+        source_custody_sha256=custody_sha256,
+        tolerance_policy=policy,
+    )
+    if conflicts != expected_conflicts:
+        _fail("SOURCE_FUSION_CONFLICT_MISMATCH")
     expected_status = "BLOCKED_UNRESOLVED" if conflicts else "READY"
     if status != expected_status:
         _fail(code)
@@ -2577,6 +2700,10 @@ def validate_source_fusion_packet(payload: object) -> dict[str, object]:
     }
 
 
+def validate_source_fusion_packet(payload: object) -> dict[str, object]:
+    return _task6_validate_source_fusion_packet(payload)
+
+
 def source_fusion_sha256(payload: object) -> str:
     return _canonical_json_sha256(validate_source_fusion_packet(payload))
 
@@ -2600,7 +2727,11 @@ def require_source_fusion_match(
         or normalized_custody["source_bundle_sha256"] != bundle_sha256
     ):
         _fail("CUSTODY_CONTEXT_MISMATCH")
-    packet = validate_source_fusion_packet(fusion)
+    packet = _task6_validate_source_fusion_packet(
+        fusion,
+        source_bundle=bundle,
+        custody=normalized_custody,
+    )
     if (
         packet["source_bundle_sha256"] != bundle_sha256
         or packet["source_custody_sha256"] != custody_sha256
