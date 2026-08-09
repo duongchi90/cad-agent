@@ -138,9 +138,9 @@ def test_provenance_layout_render_options_and_dbmod_must_match_binding() -> None
     contract = _contract()
 
     for field, value in (
-        ("drawing_sha256", "e" * 64),
-        ("latest_mutation_sha256", "f" * 64),
-        ("visual_run_manifest_sha256", "1" * 64),
+        ("drawing_sha256", "not-a-hash"),
+        ("latest_mutation_sha256", "not-a-hash"),
+        ("visual_run_manifest_sha256", "not-a-hash"),
         ("dbmod_after", 8),
     ):
         binding = _binding()
