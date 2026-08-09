@@ -21,6 +21,8 @@ from cad_agent.source_integrity import (
     SOURCE_CUSTODY_SCHEMA_VERSION,
     canonicalize_r1c_quantity,
     source_custody_sha256,
+    source_fusion_evaluation_sha256,
+    validate_source_fusion_evaluation,
     validate_source_custody,
 )
 
@@ -3138,3 +3140,183 @@ def test_task6_rejects_deferred_material_or_decision_evidence_instead_of_minting
     }
     with pytest.raises(sf.SourceFusionError):
         sf.build_source_fusion_packet(**inputs)
+
+
+# -------------------------------------------------------- Task 7 RED ---
+
+
+def _task7_fusion() -> dict[str, object]:
+    sf = _sf()
+    return sf.build_source_fusion_packet(**_task6_ready_inputs())
+
+
+def _task7_reference(
+    *,
+    reference_sha256: str = "7" * 64,
+    issued_at_utc: str = "2026-08-09T16:00:00.000000Z",
+    expires_at_utc: str = "2026-08-09T17:00:00.000000Z",
+) -> dict[str, str]:
+    return {
+        "reference_sha256": reference_sha256,
+        "issued_at_utc": issued_at_utc,
+        "expires_at_utc": expires_at_utc,
+    }
+
+
+def _task7_build_evaluation(
+    *,
+    fusion: dict[str, object],
+    evaluation_time_utc: str = "2026-08-09T16:30:00.000000Z",
+    evaluation_time_source: str = "SERVER-CLOCK-EVIDENCE-1",
+    evaluation_time_evidence_sha256: str = "8" * 64,
+    expiry_policy_version: str = "r1c-expiry-v1",
+    evaluated_references: object | None = None,
+) -> dict[str, object]:
+    sf = _sf()
+    builder = getattr(sf, "build_source_fusion_evaluation", None)
+    assert callable(builder), "Task7 evaluation builder is missing"
+    if evaluated_references is None:
+        evaluated_references = [_task7_reference()]
+    return builder(
+        fusion=fusion,
+        evaluation_time_utc=evaluation_time_utc,
+        evaluation_time_source=evaluation_time_source,
+        evaluation_time_evidence_sha256=evaluation_time_evidence_sha256,
+        expiry_policy_version=expiry_policy_version,
+        evaluated_references=evaluated_references,
+    )
+
+
+def test_task7_public_surface_adds_only_the_two_evaluation_apis() -> None:
+    sf = _sf()
+    assert callable(getattr(sf, "build_source_fusion_evaluation", None))
+    assert callable(getattr(sf, "require_source_fusion_evaluation_match", None))
+    assert sf.__all__[-2:] == [
+        "build_source_fusion_evaluation",
+        "require_source_fusion_evaluation_match",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("evaluation_time_utc", "expected_status"),
+    [
+        ("2026-08-09T15:59:59.000000Z", "STALE"),
+        ("2026-08-09T16:00:00.000000Z", "REUSABLE"),
+        ("2026-08-09T16:59:59.999999Z", "REUSABLE"),
+        ("2026-08-09T17:00:00.000000Z", "BLOCKED_EXPIRED"),
+        ("2026-08-09T17:00:00.000001Z", "BLOCKED_EXPIRED"),
+    ],
+)
+def test_task7_evaluation_classifies_injected_expiry_window(
+    evaluation_time_utc: str,
+    expected_status: str,
+) -> None:
+    evaluation = _task7_build_evaluation(
+        fusion=_task7_fusion(),
+        evaluation_time_utc=evaluation_time_utc,
+    )
+    assert evaluation["status"] == expected_status
+    assert validate_source_fusion_evaluation(evaluation)["status"] == expected_status
+
+
+@pytest.mark.parametrize(
+    "evaluation_time_utc",
+    [
+        "2026-08-09T16:30:00Z",
+        "2026-08-09T16:30:00.000000+00:00",
+        "2026-08-09T16:30:00.000Z",
+        "2026-08-09T16:30:00.0000000Z",
+        "2026-08-09 16:30:00.000000Z",
+        "2026-08-09T16:60:00.000000Z",
+    ],
+)
+def test_task7_evaluation_rejects_noncanonical_injected_utc(
+    evaluation_time_utc: str,
+) -> None:
+    sf = _sf()
+    with pytest.raises(sf.SourceFusionError):
+        _task7_build_evaluation(
+            fusion=_task7_fusion(),
+            evaluation_time_utc=evaluation_time_utc,
+        )
+
+
+def test_task7_evaluation_replay_and_permutation_are_deterministic() -> None:
+    fusion = _task7_fusion()
+    references = [
+        _task7_reference(reference_sha256="7" * 64),
+        _task7_reference(
+            reference_sha256="9" * 64,
+            issued_at_utc="2026-08-09T16:10:00.000000Z",
+            expires_at_utc="2026-08-09T18:00:00.000000Z",
+        ),
+    ]
+    baseline = None
+    baseline_hash = None
+    for iteration in range(5):
+        evaluation = _task7_build_evaluation(
+            fusion=fusion,
+            evaluated_references=(
+                list(reversed(references)) if iteration % 2 else references
+            ),
+        )
+        digest = source_fusion_evaluation_sha256(evaluation)
+        if baseline is None:
+            baseline = evaluation
+            baseline_hash = digest
+        else:
+            assert evaluation == baseline
+            assert digest == baseline_hash
+    assert fusion == _task7_fusion()
+
+
+def test_task7_evaluation_changes_with_injected_evidence_and_reference_set() -> None:
+    fusion = _task7_fusion()
+    first = _task7_build_evaluation(fusion=fusion)
+    changed_evidence = _task7_build_evaluation(
+        fusion=fusion,
+        evaluation_time_evidence_sha256="a" * 64,
+    )
+    changed_reference = _task7_build_evaluation(
+        fusion=fusion,
+        evaluated_references=[_task7_reference(reference_sha256="b" * 64)],
+    )
+    assert source_fusion_evaluation_sha256(first) != source_fusion_evaluation_sha256(
+        changed_evidence
+    )
+    assert source_fusion_evaluation_sha256(first) != source_fusion_evaluation_sha256(
+        changed_reference
+    )
+
+
+def test_task7_evaluation_match_rejects_stale_fusion_and_preserves_immutable_packet() -> None:
+    sf = _sf()
+    fusion = _task7_fusion()
+    original_fusion = copy.deepcopy(fusion)
+    evaluation = _task7_build_evaluation(fusion=fusion)
+    matcher = getattr(sf, "require_source_fusion_evaluation_match", None)
+    assert callable(matcher), "Task7 evaluation matcher is missing"
+    matcher(fusion=fusion, evaluation=evaluation)
+    assert fusion == original_fusion
+
+    stale_fusion = copy.deepcopy(fusion)
+    stale_fusion["fusion_input_sha256"] = "c" * 64
+    with pytest.raises(sf.SourceFusionError):
+        matcher(fusion=stale_fusion, evaluation=evaluation)
+
+
+def test_task7_static_boundary_has_no_ambient_clock_or_new_hash_owner() -> None:
+    tree = ast.parse(SOURCE_FUSION_FILE.read_text(encoding="utf-8"))
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {"now", "utcnow", "time", "getmtime", "fromtimestamp"}.isdisjoint(
+        called_names
+    )
+    assert "canonical_json_sha256" not in {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id == "hashlib"
+    }

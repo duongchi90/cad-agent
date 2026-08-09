@@ -602,6 +602,17 @@ def test_evaluation_hash_changes_with_injected_evidence_not_ambient_time() -> No
     )
 
 
+def test_task7_reuses_existing_evaluation_owner_for_expired_status() -> None:
+    payload = _valid_evaluation_payload()
+    payload["status"] = "BLOCKED_EXPIRED"
+    payload["blocking_codes"] = ["EXPIRED_REFERENCE"]
+    normalized = validate_source_fusion_evaluation(payload)
+    assert normalized["status"] == "BLOCKED_EXPIRED"
+    assert source_fusion_evaluation_sha256(normalized) == (
+        source_fusion_evaluation_sha256(payload)
+    )
+
+
 def test_task1_module_has_no_filesystem_parser_model_or_clock_authority() -> None:
     tree = ast.parse(SOURCE_MODULE.read_text(encoding="utf-8"))
     source_module = importlib.import_module("cad_agent.source_integrity")
