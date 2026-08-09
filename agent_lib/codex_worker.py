@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import inspect
 import json
 import math
 import re
@@ -1586,8 +1587,13 @@ def _task5_exchange_child_control(
             cancelled=False,
         )
     try:
+        control_kwargs = (
+            {"deadline": deadline}
+            if "deadline" in inspect.signature(exchange_worker_control).parameters
+            else {}
+        )
         response = exchange_worker_control(  # type: ignore[arg-type]
-            handle, _request_to_wire(outbound), deadline=deadline
+            handle, _request_to_wire(outbound), **control_kwargs
         )
     except WorkerProcessError as exc:
         if exc.code == "WORKER_TIMEOUT":
