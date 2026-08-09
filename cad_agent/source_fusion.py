@@ -947,3 +947,964 @@ def validate_render_provenance(
         )
     )
     return _copy.deepcopy(normalized)
+
+
+canonicalize_r1c_quantity = _canonicalize_r1c_quantity
+canonical_json_sha256 = _canonical_json_sha256
+
+_TASK5_PRIMITIVE_REQUIRED_FIELDS = {
+    "id",
+    "type",
+    "source",
+    "confidence",
+    "layer",
+    "handle",
+    "trace",
+    "validation",
+}
+_TASK5_PRIMITIVE_OPTIONAL_FIELDS = {"geometry", "text_data"}
+_TASK5_PRIMITIVE_ARTIFACT_FIELDS = {
+    "schema_version",
+    "source_document",
+    "calibration",
+    "primitives",
+    "cross_validations",
+}
+_TASK5_CALIBRATION_REQUIRED_FIELDS = {
+    "unit",
+    "pixel_to_unit_scale",
+    "origin_px",
+    "method",
+    "status",
+}
+_TASK5_CALIBRATION_OPTIONAL_FIELDS = {"reference_note", "source_sha256"}
+_TASK5_TRACE_REQUIRED_FIELDS = {"bbox_px"}
+_TASK5_TRACE_OPTIONAL_FIELDS = {"extraction_tool", "extracted_at"}
+_TASK5_VALIDATION_REQUIRED_FIELDS = {"status"}
+_TASK5_VALIDATION_OPTIONAL_FIELDS = {"notes"}
+_TASK5_POINT_FIELDS = {"x", "y"}
+_TASK5_LINE_FIELDS = {"start", "end"}
+_TASK5_CIRCLE_FIELDS = {"center", "radius"}
+_TASK5_ARC_FIELDS = {"center", "radius", "start_angle_deg", "end_angle_deg"}
+_TASK5_TEXT_FIELDS = {
+    "content",
+    "position",
+    "rotation_deg",
+    "height",
+    "parsed_value",
+    "semantic_role",
+}
+_TASK5_CROSS_VALIDATION_REQUIRED_FIELDS = {
+    "id",
+    "text_primitive_id",
+    "geometry_primitive_id",
+    "status",
+    "match_threshold_percent",
+}
+_TASK5_CROSS_VALIDATION_OPTIONAL_FIELDS = {
+    "text_value",
+    "geometry_measured_length",
+    "delta_percent",
+}
+_TASK5_SEMANTIC_ARTIFACT_FIELDS = {
+    "schema_version",
+    "primitive_ir_ref",
+    "parts",
+    "constraints",
+}
+_TASK5_PRIMITIVE_REF_REQUIRED_FIELDS = {"file_name", "primitive_count"}
+_TASK5_PRIMITIVE_REF_OPTIONAL_FIELDS = {"sha256"}
+_TASK5_PART_REQUIRED_FIELDS = {
+    "id",
+    "part_type",
+    "primitive_ids",
+    "confidence",
+    "source",
+    "validation",
+}
+_TASK5_PART_OPTIONAL_FIELDS = {"geometry_summary"}
+_TASK5_GEOMETRY_SUMMARY_FIELDS = {"length_mm", "orientation_deg", "radius_mm"}
+_TASK5_CONSTRAINT_REQUIRED_FIELDS = {
+    "id",
+    "type",
+    "primitive_ids",
+    "confidence",
+    "tolerance",
+}
+_TASK5_CONSTRAINT_OPTIONAL_FIELDS = {"measured"}
+_TASK5_DIRECT_BINDING_DOCUMENT_FIELDS = {
+    "sha256",
+    "image_width_px",
+    "image_height_px",
+}
+_TASK5_PDF_BINDING_DOCUMENT_FIELDS = {
+    "sha256",
+    "image_width_px",
+    "image_height_px",
+    "primitive_source_page_index",
+}
+_TASK5_PRIMITIVE_REF_BASENAME = "primitive_ir.json"
+_TASK5_TOLERANCE_QUANTITIES = {
+    "angle_deg": ("angle", "degree"),
+    "length_percent": ("scale", "ratio"),
+    "distance_mm": ("physical_length", "mm"),
+}
+_TASK5_MEASURED_QUANTITIES = {
+    "angle_diff_deg": ("angle", "degree"),
+    "length_diff_percent": ("scale", "ratio"),
+    "endpoint_distance_mm": ("physical_length", "mm"),
+    "tangent_gap_mm": ("physical_length", "mm"),
+    "center_distance_mm": ("physical_length", "mm"),
+}
+
+
+def _task5_closed_with_optional(
+    value: object,
+    *,
+    required: set[str],
+    optional: set[str],
+    code: str,
+):
+    if not isinstance(value, _Mapping):
+        _fail(code)
+    keys = set(value)
+    if any(not isinstance(key, str) for key in keys):
+        _fail(code)
+    if not required.issubset(keys) or not keys.issubset(required | optional):
+        _fail(code)
+    return value
+
+
+def _task5_canonical_quantity(
+    value: object,
+    *,
+    quantity: str,
+    unit: str,
+    code: str,
+) -> str:
+    try:
+        return canonicalize_r1c_quantity(
+            value,
+            quantity=quantity,
+            unit=unit,
+        )["value"]
+    except Exception:
+        _fail(code)
+
+
+def _task5_decimal(value: object, code: str):
+    canonical = _task5_canonical_quantity(
+        value,
+        quantity="scale",
+        unit="ratio",
+        code=code,
+    )
+    return _decimal.Decimal(canonical)
+
+
+def _task5_physical_coordinate(
+    value: object,
+    *,
+    calibration_unit: str,
+    scale: _decimal.Decimal,
+    code: str,
+) -> str:
+    raw = _task5_decimal(value, code)
+    return _task5_canonical_quantity(
+        raw * scale,
+        quantity="physical_length",
+        unit=calibration_unit,
+        code=code,
+    )
+
+
+def _task5_point_mm(
+    value: object,
+    *,
+    calibration_unit: str,
+    scale: _decimal.Decimal,
+    code: str,
+) -> list[str]:
+    point = _closed(value, _TASK5_POINT_FIELDS, code)
+    return [
+        _task5_physical_coordinate(
+            point[axis],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+        for axis in ("x", "y")
+    ]
+
+
+def _task5_validate_trace(value: object, code: str) -> None:
+    trace = _task5_closed_with_optional(
+        value,
+        required=_TASK5_TRACE_REQUIRED_FIELDS,
+        optional=_TASK5_TRACE_OPTIONAL_FIELDS,
+        code=code,
+    )
+    bbox = trace["bbox_px"]
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        _fail(code)
+    for coordinate in bbox:
+        _task5_decimal(coordinate, code)
+    extraction_tool = trace.get("extraction_tool")
+    if extraction_tool is not None and not isinstance(extraction_tool, str):
+        _fail(code)
+    extracted_at = trace.get("extracted_at")
+    if extracted_at is not None and not isinstance(extracted_at, str):
+        _fail(code)
+
+
+def _task5_validate_validation(value: object, code: str) -> None:
+    validation = _task5_closed_with_optional(
+        value,
+        required=_TASK5_VALIDATION_REQUIRED_FIELDS,
+        optional=_TASK5_VALIDATION_OPTIONAL_FIELDS,
+        code=code,
+    )
+    if not isinstance(validation["status"], str):
+        _fail(code)
+    if validation.get("notes") is not None and not isinstance(
+        validation["notes"],
+        str,
+    ):
+        _fail(code)
+
+
+def _task5_normalize_binding(
+    value: object,
+    *,
+    primitive_artifact_sha256: str,
+    source_document: _Mapping[str, object],
+) -> dict[str, object]:
+    code = "PRIMITIVE_BINDING_MISMATCH"
+    if not isinstance(value, _Mapping):
+        _fail(code)
+    kind = value.get("provenance_kind")
+    if kind == "DIRECT_IMAGE":
+        record = _closed(value, _DIRECT_RENDER_FIELDS, code)
+        document_fields = _TASK5_DIRECT_BINDING_DOCUMENT_FIELDS
+    elif kind == "PDF_RENDER":
+        record = _closed(value, _PDF_RENDER_FIELDS, code)
+        document_fields = _TASK5_PDF_BINDING_DOCUMENT_FIELDS
+    else:
+        _fail(code)
+    normalized = _copy.deepcopy(dict(record))
+    _sha256(normalized["render_provenance_sha256"], code)
+    _sha256(normalized["source_custody_sha256"], code)
+    _identifier(normalized["source_id"], code)
+    _sha256(normalized["observed_source_sha256"], code)
+    _sha256(normalized["raster_sha256"], code)
+    _strict_positive_int(normalized["raster_width_px"], code)
+    _strict_positive_int(normalized["raster_height_px"], code)
+    if normalized["numeric_policy_version"] != _R1C_NUMERIC_POLICY_VERSION:
+        _fail(code)
+    if (
+        _sha256(normalized["primitive_artifact_sha256"], code)
+        != primitive_artifact_sha256
+    ):
+        _fail(code)
+    document = _closed(
+        normalized["primitive_source_document"],
+        document_fields,
+        code,
+    )
+    _sha256(document["sha256"], code)
+    _strict_positive_int(document["image_width_px"], code)
+    _strict_positive_int(document["image_height_px"], code)
+    if kind == "PDF_RENDER":
+        _strict_nonnegative_int(document["primitive_source_page_index"], code)
+        _sha256(normalized["page_locator_sha256"], code)
+        _strict_nonnegative_int(normalized["pdf_page_index"], code)
+        if normalized["box_kind"] not in _BOX_KINDS:
+            _fail(code)
+        _canonical_box(normalized["selected_box"], code)
+        rotation = normalized["rotation"]
+        if isinstance(rotation, bool) or not isinstance(rotation, int):
+            _fail(code)
+        _canonical_ratio(normalized["user_unit"], code)
+        _canonical_dpi(normalized["render_dpi"], code)
+        _canonical_matrix(normalized["render_matrix"], code)
+    if _render_identity(normalized) != normalized["render_provenance_sha256"]:
+        _fail(code)
+    if (
+        document["sha256"] != source_document["sha256"]
+        or document["image_width_px"] != source_document["image_width_px"]
+        or document["image_height_px"] != source_document["image_height_px"]
+    ):
+        _fail(code)
+    source_page_index = _strict_nonnegative_int(source_document["page_index"], code)
+    if kind == "DIRECT_IMAGE":
+        if source_page_index != 0:
+            _fail(code)
+    elif source_page_index != document["primitive_source_page_index"]:
+        _fail(code)
+    return normalized
+
+
+def _task5_select_source_binding(
+    source_bindings: object,
+    *,
+    primitive_artifact_sha256: str,
+    source_document: _Mapping[str, object],
+) -> dict[str, object]:
+    if not isinstance(source_bindings, list) or not source_bindings:
+        _fail("PRIMITIVE_BINDING_MISMATCH")
+    unique: dict[str, dict[str, object]] = {}
+    for value in source_bindings:
+        normalized = _task5_normalize_binding(
+            value,
+            primitive_artifact_sha256=primitive_artifact_sha256,
+            source_document=source_document,
+        )
+        digest = canonical_json_sha256(normalized)
+        unique.setdefault(digest, normalized)
+    if len(unique) != 1:
+        _fail("PRIMITIVE_BINDING_AMBIGUITY")
+    return _copy.deepcopy(next(iter(unique.values())))
+
+
+def _task5_calibration(
+    value: object,
+    source_sha256: str,
+) -> tuple[str, _decimal.Decimal]:
+    code = "PRIMITIVE_ARTIFACT_INVALID"
+    calibration = _task5_closed_with_optional(
+        value,
+        required=_TASK5_CALIBRATION_REQUIRED_FIELDS,
+        optional=_TASK5_CALIBRATION_OPTIONAL_FIELDS,
+        code=code,
+    )
+    unit = calibration["unit"]
+    if unit not in {"mm", "cm", "m"}:
+        _fail(code)
+    scale_text = _task5_canonical_quantity(
+        calibration["pixel_to_unit_scale"],
+        quantity="scale",
+        unit="ratio",
+        code=code,
+    )
+    scale = _decimal.Decimal(scale_text)
+    if scale <= 0:
+        _fail(code)
+    origin = calibration["origin_px"]
+    if not isinstance(origin, list) or len(origin) != 2:
+        _fail(code)
+    for coordinate in origin:
+        _task5_decimal(coordinate, code)
+    if not isinstance(calibration["method"], str):
+        _fail(code)
+    if not isinstance(calibration["status"], str):
+        _fail(code)
+    calibration_source = calibration.get("source_sha256")
+    if calibration_source is not None:
+        if _sha256(calibration_source, code) != source_sha256:
+            _fail(code)
+    reference_note = calibration.get("reference_note")
+    if reference_note is not None and not isinstance(reference_note, str):
+        _fail(code)
+    return str(unit), scale
+
+
+def _task5_validate_cross_validations(value: object) -> None:
+    code = "PRIMITIVE_ARTIFACT_INVALID"
+    if not isinstance(value, list):
+        _fail(code)
+    for item in value:
+        record = _task5_closed_with_optional(
+            item,
+            required=_TASK5_CROSS_VALIDATION_REQUIRED_FIELDS,
+            optional=_TASK5_CROSS_VALIDATION_OPTIONAL_FIELDS,
+            code=code,
+        )
+        _identifier(record["id"], code)
+        _identifier(record["text_primitive_id"], code)
+        _identifier(record["geometry_primitive_id"], code)
+        if not isinstance(record["status"], str):
+            _fail(code)
+        _task5_canonical_quantity(
+            record["match_threshold_percent"],
+            quantity="scale",
+            unit="ratio",
+            code=code,
+        )
+        if "text_value" in record:
+            _task5_canonical_quantity(
+                record["text_value"],
+                quantity="measurement",
+                unit="mm",
+                code=code,
+            )
+        if "geometry_measured_length" in record:
+            _task5_canonical_quantity(
+                record["geometry_measured_length"],
+                quantity="physical_length",
+                unit="mm",
+                code=code,
+            )
+        if "delta_percent" in record:
+            _task5_canonical_quantity(
+                record["delta_percent"],
+                quantity="scale",
+                unit="ratio",
+                code=code,
+            )
+
+
+def _task5_primitive_content(
+    value: object,
+    *,
+    calibration_unit: str,
+    scale: _decimal.Decimal,
+) -> tuple[str, dict[str, object]]:
+    code = "PRIMITIVE_ARTIFACT_INVALID"
+    primitive = _task5_closed_with_optional(
+        value,
+        required=_TASK5_PRIMITIVE_REQUIRED_FIELDS,
+        optional=_TASK5_PRIMITIVE_OPTIONAL_FIELDS,
+        code=code,
+    )
+    legacy_id = _identifier(primitive["id"], code)
+    kind = primitive["type"]
+    if kind not in {"line", "circle", "arc", "text"}:
+        _fail(code)
+    if not isinstance(primitive["source"], str):
+        _fail(code)
+    if not isinstance(primitive["layer"], str):
+        _fail(code)
+    if primitive["handle"] is not None and not isinstance(
+        primitive["handle"],
+        str,
+    ):
+        _fail(code)
+    _task5_validate_trace(primitive["trace"], code)
+    _task5_validate_validation(primitive["validation"], code)
+    confidence = _task5_canonical_quantity(
+        primitive["confidence"],
+        quantity="confidence",
+        unit="unitless",
+        code=code,
+    )
+    content: dict[str, object] = {"kind": kind, "confidence": confidence}
+    if kind == "line":
+        geometry = _closed(primitive.get("geometry"), _TASK5_LINE_FIELDS, code)
+        if primitive.get("text_data") is not None:
+            _fail(code)
+        content["start_mm"] = _task5_point_mm(
+            geometry["start"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+        content["end_mm"] = _task5_point_mm(
+            geometry["end"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+    elif kind == "circle":
+        geometry = _closed(primitive.get("geometry"), _TASK5_CIRCLE_FIELDS, code)
+        if primitive.get("text_data") is not None:
+            _fail(code)
+        content["center_mm"] = _task5_point_mm(
+            geometry["center"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+        content["radius_mm"] = _task5_physical_coordinate(
+            geometry["radius"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+    elif kind == "arc":
+        geometry = _closed(primitive.get("geometry"), _TASK5_ARC_FIELDS, code)
+        if primitive.get("text_data") is not None:
+            _fail(code)
+        content["center_mm"] = _task5_point_mm(
+            geometry["center"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+        content["radius_mm"] = _task5_physical_coordinate(
+            geometry["radius"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+        content["start_angle_deg"] = _task5_canonical_quantity(
+            geometry["start_angle_deg"],
+            quantity="angle",
+            unit="degree",
+            code=code,
+        )
+        content["end_angle_deg"] = _task5_canonical_quantity(
+            geometry["end_angle_deg"],
+            quantity="angle",
+            unit="degree",
+            code=code,
+        )
+    else:
+        if primitive.get("geometry") is not None:
+            _fail(code)
+        text = _closed(primitive.get("text_data"), _TASK5_TEXT_FIELDS, code)
+        if not isinstance(text["content"], str):
+            _fail(code)
+        if not isinstance(text["semantic_role"], str):
+            _fail(code)
+        content["text"] = text["content"]
+        content["position_mm"] = _task5_point_mm(
+            text["position"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+        content["rotation_deg"] = _task5_canonical_quantity(
+            text["rotation_deg"],
+            quantity="angle",
+            unit="degree",
+            code=code,
+        )
+        content["height_mm"] = _task5_physical_coordinate(
+            text["height"],
+            calibration_unit=calibration_unit,
+            scale=scale,
+            code=code,
+        )
+        content["semantic_role"] = text["semantic_role"]
+        if text["parsed_value"] is not None:
+            content["parsed_value_mm"] = _task5_canonical_quantity(
+                text["parsed_value"],
+                quantity="measurement",
+                unit=calibration_unit,
+                code=code,
+            )
+    return legacy_id, content
+
+
+def project_primitive_observations(
+    *,
+    primitive_artifact: object,
+    primitive_artifact_sha256: object,
+    source_bindings: object,
+) -> list[dict[str, object]]:
+    code = "PRIMITIVE_ARTIFACT_INVALID"
+    artifact_sha256 = _sha256(primitive_artifact_sha256, code)
+    artifact = _closed(
+        primitive_artifact,
+        _TASK5_PRIMITIVE_ARTIFACT_FIELDS,
+        code,
+    )
+    if artifact["schema_version"] != "1.0.0":
+        _fail(code)
+    source_document = _primitive_source_document(artifact["source_document"], code)
+    binding = _task5_select_source_binding(
+        source_bindings,
+        primitive_artifact_sha256=artifact_sha256,
+        source_document=source_document,
+    )
+    calibration_unit, scale = _task5_calibration(
+        artifact["calibration"],
+        str(source_document["sha256"]),
+    )
+    if not isinstance(artifact["primitives"], list):
+        _fail(code)
+    _task5_validate_cross_validations(artifact["cross_validations"])
+
+    seen_ids: set[str] = set()
+    classes: dict[str, dict[str, object]] = {}
+    source_id = str(binding["source_id"])
+    for primitive in artifact["primitives"]:
+        legacy_id, content = _task5_primitive_content(
+            primitive,
+            calibration_unit=calibration_unit,
+            scale=scale,
+        )
+        if legacy_id in seen_ids:
+            _fail("DUPLICATE_PRIMITIVE_LEGACY_ID")
+        seen_ids.add(legacy_id)
+        material = {
+            "identity_kind": "r1c-task5-projection-fixture-v1",
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "source_id": source_id,
+            "content": content,
+        }
+        observation_key = canonical_json_sha256(material)
+        record = classes.get(observation_key)
+        if record is None:
+            classes[observation_key] = {
+                "observation_key": observation_key,
+                "occurrence_count": 1,
+                "legacy_ids": [legacy_id],
+                "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+                "primitive_artifact_sha256": artifact_sha256,
+                "source_binding": _copy.deepcopy(binding),
+                "content": content,
+            }
+        else:
+            record["occurrence_count"] = int(record["occurrence_count"]) + 1
+            record["legacy_ids"].append(legacy_id)
+    normalized = list(classes.values())
+    for record in normalized:
+        record["legacy_ids"] = sorted(record["legacy_ids"])
+    normalized.sort(key=lambda record: str(record["observation_key"]))
+    return _copy.deepcopy(normalized)
+
+
+def _task5_validate_primitive_observations(
+    primitive_observations: object,
+    *,
+    primitive_checkpoint_sha256: str,
+) -> tuple[list[dict[str, object]], dict[str, dict[str, object]], int]:
+    code = "PRIMITIVE_OBSERVATIONS_INVALID"
+    if not isinstance(primitive_observations, list):
+        _fail(code)
+    normalized: list[dict[str, object]] = []
+    by_legacy_id: dict[str, dict[str, object]] = {}
+    seen_observation_keys: set[str] = set()
+    total = 0
+    for value in primitive_observations:
+        if not isinstance(value, _Mapping):
+            _fail(code)
+        required = {
+            "observation_key",
+            "occurrence_count",
+            "legacy_ids",
+            "numeric_policy_version",
+            "primitive_artifact_sha256",
+            "source_binding",
+            "content",
+        }
+        record = _closed(value, required, code)
+        observation_key = _sha256(record["observation_key"], code)
+        if observation_key in seen_observation_keys:
+            _fail(code)
+        seen_observation_keys.add(observation_key)
+        occurrence_count = _strict_positive_int(record["occurrence_count"], code)
+        if record["numeric_policy_version"] != _R1C_NUMERIC_POLICY_VERSION:
+            _fail(code)
+        if (
+            _sha256(record["primitive_artifact_sha256"], code)
+            != primitive_checkpoint_sha256
+        ):
+            _fail("PRIMITIVE_CHECKPOINT_MISMATCH")
+        legacy_ids = record["legacy_ids"]
+        if not isinstance(legacy_ids, list) or len(legacy_ids) != occurrence_count:
+            _fail(code)
+        normalized_ids: list[str] = []
+        for legacy_id in legacy_ids:
+            normalized_id = _identifier(legacy_id, code)
+            if normalized_id in normalized_ids or normalized_id in by_legacy_id:
+                _fail(code)
+            normalized_ids.append(normalized_id)
+        cloned = _copy.deepcopy(dict(record))
+        cloned["observation_key"] = observation_key
+        cloned["legacy_ids"] = sorted(normalized_ids)
+        for legacy_id in normalized_ids:
+            by_legacy_id[legacy_id] = cloned
+        normalized.append(cloned)
+        total += occurrence_count
+    normalized.sort(key=lambda record: str(record["observation_key"]))
+    return normalized, by_legacy_id, total
+
+
+def _task5_resolve_membership(
+    primitive_ids: object,
+    *,
+    by_legacy_id: dict[str, dict[str, object]],
+    allow_anchored_subset: bool,
+    anchored_duplicate_keys: set[str],
+) -> list[str]:
+    code = "SEMANTIC_REFERENCE_INVALID"
+    if not isinstance(primitive_ids, list) or not primitive_ids:
+        _fail(code)
+    selected_by_key: dict[str, list[str]] = {}
+    for value in primitive_ids:
+        legacy_id = _identifier(value, code)
+        record = by_legacy_id.get(legacy_id)
+        if record is None:
+            _fail(code)
+        selected_by_key.setdefault(
+            str(record["observation_key"]),
+            [],
+        ).append(legacy_id)
+    keys: list[str] = []
+    for observation_key, ids in selected_by_key.items():
+        record = by_legacy_id[ids[0]]
+        expected_ids = set(record["legacy_ids"])
+        if len(ids) != len(set(ids)):
+            if int(record["occurrence_count"]) > 1:
+                _fail("DUPLICATE_OBSERVATION_AMBIGUITY")
+            _fail(code)
+        if int(record["occurrence_count"]) > 1 and set(ids) != expected_ids:
+            if not (
+                allow_anchored_subset
+                and observation_key in anchored_duplicate_keys
+            ):
+                _fail("DUPLICATE_OBSERVATION_AMBIGUITY")
+        keys.extend([observation_key] * len(ids))
+    keys.sort()
+    return keys
+
+
+def _task5_semantic_numeric_mapping(
+    value: object,
+    *,
+    quantities: dict[str, tuple[str, str]],
+    code: str,
+) -> dict[str, str]:
+    if not isinstance(value, _Mapping) or not value:
+        _fail(code)
+    if any(not isinstance(key, str) or key not in quantities for key in value):
+        _fail(code)
+    result: dict[str, str] = {}
+    for key in sorted(value):
+        quantity, unit = quantities[key]
+        result[key] = _task5_canonical_quantity(
+            value[key],
+            quantity=quantity,
+            unit=unit,
+            code=code,
+        )
+    return result
+
+
+def _task5_part_content(
+    value: object,
+    *,
+    by_legacy_id: dict[str, dict[str, object]],
+) -> tuple[dict[str, object], list[str]]:
+    code = "SEMANTIC_ARTIFACT_INVALID"
+    part = _task5_closed_with_optional(
+        value,
+        required=_TASK5_PART_REQUIRED_FIELDS,
+        optional=_TASK5_PART_OPTIONAL_FIELDS,
+        code=code,
+    )
+    _identifier(part["id"], code)
+    if not isinstance(part["part_type"], str):
+        _fail(code)
+    if not isinstance(part["source"], str):
+        _fail(code)
+    _task5_validate_validation(part["validation"], code)
+    confidence = _task5_canonical_quantity(
+        part["confidence"],
+        quantity="confidence",
+        unit="unitless",
+        code=code,
+    )
+    primitive_keys = _task5_resolve_membership(
+        part["primitive_ids"],
+        by_legacy_id=by_legacy_id,
+        allow_anchored_subset=False,
+        anchored_duplicate_keys=set(),
+    )
+    content: dict[str, object] = {
+        "kind": "part",
+        "part_type": part["part_type"],
+        "source": part["source"],
+        "confidence": confidence,
+        "primitive_observation_keys": primitive_keys,
+    }
+    if "geometry_summary" in part:
+        summary = part["geometry_summary"]
+        if not isinstance(summary, _Mapping):
+            _fail(code)
+        if any(
+            not isinstance(key, str)
+            or key not in _TASK5_GEOMETRY_SUMMARY_FIELDS
+            for key in summary
+        ):
+            _fail(code)
+        geometry: dict[str, str] = {}
+        for key in sorted(summary):
+            if key == "orientation_deg":
+                geometry[key] = _task5_canonical_quantity(
+                    summary[key],
+                    quantity="angle",
+                    unit="degree",
+                    code=code,
+                )
+            else:
+                geometry[key] = _task5_canonical_quantity(
+                    summary[key],
+                    quantity="physical_length",
+                    unit="mm",
+                    code=code,
+                )
+        content["geometry_summary"] = geometry
+    return content, primitive_keys
+
+
+def _task5_constraint_content(
+    value: object,
+    *,
+    by_legacy_id: dict[str, dict[str, object]],
+    anchored_duplicate_keys: set[str],
+) -> tuple[dict[str, object], list[str]]:
+    code = "SEMANTIC_ARTIFACT_INVALID"
+    constraint = _task5_closed_with_optional(
+        value,
+        required=_TASK5_CONSTRAINT_REQUIRED_FIELDS,
+        optional=_TASK5_CONSTRAINT_OPTIONAL_FIELDS,
+        code=code,
+    )
+    _identifier(constraint["id"], code)
+    if not isinstance(constraint["type"], str):
+        _fail(code)
+    confidence = _task5_canonical_quantity(
+        constraint["confidence"],
+        quantity="confidence",
+        unit="unitless",
+        code=code,
+    )
+    primitive_keys = _task5_resolve_membership(
+        constraint["primitive_ids"],
+        by_legacy_id=by_legacy_id,
+        allow_anchored_subset=True,
+        anchored_duplicate_keys=anchored_duplicate_keys,
+    )
+    content: dict[str, object] = {
+        "kind": "constraint",
+        "constraint_type": constraint["type"],
+        "confidence": confidence,
+        "primitive_observation_keys": primitive_keys,
+        "tolerance": _task5_semantic_numeric_mapping(
+            constraint["tolerance"],
+            quantities=_TASK5_TOLERANCE_QUANTITIES,
+            code=code,
+        ),
+    }
+    if "measured" in constraint:
+        content["measured"] = _task5_semantic_numeric_mapping(
+            constraint["measured"],
+            quantities=_TASK5_MEASURED_QUANTITIES,
+            code=code,
+        )
+    return content, primitive_keys
+
+
+def project_semantic_observations(
+    *,
+    semantic_artifact: object,
+    semantic_artifact_sha256: object,
+    primitive_checkpoint_sha256: object,
+    primitive_observations: object,
+) -> list[dict[str, object]]:
+    code = "SEMANTIC_ARTIFACT_INVALID"
+    semantic_sha256 = _sha256(semantic_artifact_sha256, code)
+    checkpoint_sha256 = _sha256(primitive_checkpoint_sha256, code)
+    artifact = _closed(
+        semantic_artifact,
+        _TASK5_SEMANTIC_ARTIFACT_FIELDS,
+        code,
+    )
+    if artifact["schema_version"] != "1.0.0":
+        _fail(code)
+    primitive_records, by_legacy_id, total_multiplicity = (
+        _task5_validate_primitive_observations(
+            primitive_observations,
+            primitive_checkpoint_sha256=checkpoint_sha256,
+        )
+    )
+    ref = _task5_closed_with_optional(
+        artifact["primitive_ir_ref"],
+        required=_TASK5_PRIMITIVE_REF_REQUIRED_FIELDS,
+        optional=_TASK5_PRIMITIVE_REF_OPTIONAL_FIELDS,
+        code=code,
+    )
+    if ref["file_name"] != _TASK5_PRIMITIVE_REF_BASENAME:
+        _fail("PRIMITIVE_IR_REF_MISMATCH")
+    primitive_count = _strict_nonnegative_int(ref["primitive_count"], code)
+    if primitive_count != total_multiplicity:
+        _fail("PRIMITIVE_IR_REF_MISMATCH")
+    if "sha256" in ref:
+        if _sha256(ref["sha256"], code) != checkpoint_sha256:
+            _fail("PRIMITIVE_CHECKPOINT_MISMATCH")
+    if not isinstance(artifact["parts"], list):
+        _fail(code)
+    if not isinstance(artifact["constraints"], list):
+        _fail(code)
+
+    part_payloads: list[tuple[dict[str, object], list[str]]] = []
+    anchored_duplicate_keys: set[str] = set()
+    by_observation_key = {
+        str(record["observation_key"]): record for record in primitive_records
+    }
+    for value in artifact["parts"]:
+        content, primitive_keys = _task5_part_content(
+            value,
+            by_legacy_id=by_legacy_id,
+        )
+        part_payloads.append((content, primitive_keys))
+        counts: dict[str, int] = {}
+        for key in primitive_keys:
+            counts[key] = counts.get(key, 0) + 1
+        for key, count in counts.items():
+            source_record = by_observation_key[key]
+            if (
+                int(source_record["occurrence_count"]) > 1
+                and count == int(source_record["occurrence_count"])
+            ):
+                anchored_duplicate_keys.add(key)
+
+    output: list[dict[str, object]] = []
+    for content, primitive_keys in part_payloads:
+        material = {
+            "identity_kind": "r1c-semantic-observation-v1",
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "content": content,
+        }
+        output.append(
+            {
+                "observation_key": canonical_json_sha256(material),
+                "primitive_observation_keys": list(primitive_keys),
+                "semantic_artifact_sha256": semantic_sha256,
+                "primitive_checkpoint_sha256": checkpoint_sha256,
+                "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+                "content": content,
+            }
+        )
+    for value in artifact["constraints"]:
+        content, primitive_keys = _task5_constraint_content(
+            value,
+            by_legacy_id=by_legacy_id,
+            anchored_duplicate_keys=anchored_duplicate_keys,
+        )
+        material = {
+            "identity_kind": "r1c-semantic-observation-v1",
+            "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "content": content,
+        }
+        output.append(
+            {
+                "observation_key": canonical_json_sha256(material),
+                "primitive_observation_keys": list(primitive_keys),
+                "semantic_artifact_sha256": semantic_sha256,
+                "primitive_checkpoint_sha256": checkpoint_sha256,
+                "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+                "content": content,
+            }
+        )
+    output.sort(
+        key=lambda record: (
+            str(record["observation_key"]),
+            tuple(record["primitive_observation_keys"]),
+        )
+    )
+    return _copy.deepcopy(output)
+
+
+__all__ = [
+    "SOURCE_FUSION_SCHEMA_VERSION",
+    "SourceFusionError",
+    "validate_page_locators",
+    "validate_region_locators",
+    "validate_render_provenance",
+    "project_primitive_observations",
+    "project_semantic_observations",
+]
