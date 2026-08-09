@@ -427,13 +427,13 @@ def test_regenerated_primitive_legacy_ids_do_not_change_r3_component_id() -> Non
     ]
 
 
-def test_regenerated_semantic_legacy_id_does_not_change_r3_component_id() -> None:
+def test_r1_elides_semantic_legacy_id_and_r3_component_id_stays_stable() -> None:
     module = _registry_module()
     first_context = _upstream_context(semantic_part_id="part-a")
     regenerated_context = _upstream_context(semantic_part_id="part-regenerated")
     first_components = _single_component(first_context)
     regenerated_components = _single_component(regenerated_context)
-    assert first_components[0]["semantic_projection_refs"] != regenerated_components[0][
+    assert first_components[0]["semantic_projection_refs"] == regenerated_components[0][
         "semantic_projection_refs"
     ]
     first = module.build_component_view_registry(
