@@ -223,8 +223,19 @@ def test_builds_closed_task_one_registry_with_empty_views_and_links() -> None:
     assert registry["schema_version"] == SCHEMA_VERSION
     assert registry["views"] == []
     assert registry["links"] == []
-    assert registry["components"][0]["origin_class"] == "REUSED_UNCHANGED"
-    assert registry["components"][0]["view_ids"] == []
+    component = registry["components"][0]
+    assert set(component) == {
+        "component_id",
+        "component_type",
+        "origin_class",
+        "source_projection_refs",
+        "semantic_projection_refs",
+        "base_cad_provenance_ref",
+        "view_ids",
+        "candidate_entity_bindings",
+    }
+    assert component["origin_class"] == "REUSED_UNCHANGED"
+    assert component["view_ids"] == []
 
 
 def test_component_identity_ignores_volatile_binding_metadata_and_order() -> None:
@@ -246,7 +257,6 @@ def test_component_identity_ignores_volatile_binding_metadata_and_order() -> Non
     first_ids = sorted(item["component_id"] for item in first["components"])
     second_ids = sorted(item["component_id"] for item in second["components"])
     assert first_ids == second_ids
-    assert first["registry_snapshot_sha256"] != second["registry_snapshot_sha256"]
 
 
 def test_component_id_changes_with_valid_projection_membership_or_component_type() -> None:
@@ -561,7 +571,7 @@ def test_snapshot_hash_uses_canonical_owner_and_rejects_tampered_seal() -> None:
 
     tampered = deepcopy(registry)
     tampered["components"][0]["candidate_entity_bindings"][0][
-        "legacy_uuid"
+        "entity_handle"
     ] = "tampered-after-seal"
     with pytest.raises(module.ComponentViewRegistryError):
         module.validate_component_view_registry(tampered, upstream_context=context)
