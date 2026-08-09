@@ -281,10 +281,37 @@ def test_23_post_return_elapsed_check_is_not_the_hard_timeout_owner() -> None:
     "forbidden",
     [
         "concurrent.futures",
+        "Future(",
         "ThreadPoolExecutor",
         "ProcessPoolExecutor",
+        "threading.Thread",
+        "threading.Timer",
+        "multiprocessing",
         "socket.",
-        "subprocess.",
+        "socketserver",
+        "CreateThread(",
+        "watchdog",
+        "subprocess.Popen",
+        "subprocess.run",
+        "subprocess.call",
+        "signal.alarm",
+        "setitimer",
+        "asyncio.wait_for",
+        "asyncio.timeout",
+        "sched.scheduler",
+        "CreateJobObjectW(",
+        "TerminateJobObject",
+        "TerminateProcess(",
+        "os.kill(",
+        ".kill(",
+        ".terminate(",
+        "CreateNamedPipe",
+        "CreatePipe(",
+        "os.pipe(",
+        "http.server",
+        "HTTPConnection",
+        "urllib.",
+        "requests.",
         "app_server",
         "mcp_transport",
     ],
@@ -1018,3 +1045,35 @@ def test_48_process_owner_retains_single_supervisor_transport_and_cleanup_author
     assert concrete_api_source.count("CreateJobObjectW(") == 1
     assert process_source.count("def exchange_worker_control(") == 1
     assert process_source.count("def cleanup_worker_process(") == 1
+
+
+# Final Cell-4 RED hardening: the lifecycle module itself must remain only a
+# coordinator of the accepted Task-3 process/control/cleanup owner and Task-5
+# provider authority. It may not grow a parallel supervisor or transport.
+def test_49_worker_owner_retains_single_process_control_cleanup_authority() -> None:
+    canonical_start = inspect.getsource(worker.Task3ProcessBoundary.start)
+    task3_exchange = inspect.getsource(worker.Task3ProcessBoundary._exchange)
+    task3_cleanup = inspect.getsource(worker.Task3ProcessBoundary.cleanup)
+    task5_exchange = inspect.getsource(worker._task5_exchange_child_control)
+    task5_cleanup = inspect.getsource(worker._task5_round2_cleanup_evidence)
+
+    assert worker._TASK3_CANONICAL_START is worker.Task3ProcessBoundary.start
+    assert worker._invoke_child is worker._task5_secure_invoke_child
+    assert worker._attest_provider_boundary is worker._task5_round2_secure_attest_provider_boundary
+    assert worker._cleanup_evidence is worker._task5_round2_cleanup_evidence
+    assert worker._open_codex_worker is worker._task5_round2_open_codex_worker
+
+    assert WORKER_SOURCE.count("class Task3ProcessBoundary") == 1
+    assert canonical_start.count("launch_worker_process(") == 1
+    assert WORKER_SOURCE.count("launch_worker_process(") == 1
+
+    assert task3_exchange.count("exchange_worker_control(") == 1
+    assert task5_exchange.count("exchange_worker_control(") == 1
+    assert WORKER_SOURCE.count("exchange_worker_control(") == 2
+    assert "def exchange_worker_control(" not in WORKER_SOURCE
+
+    assert task3_cleanup.count("cleanup_worker_process(handle)") == 1
+    assert task5_cleanup.count("cleanup_worker_process(handle)") == 1
+    assert WORKER_SOURCE.count("cleanup_worker_process(handle)") == 2
+    assert "def cleanup_worker_process(" not in WORKER_SOURCE
+    assert "def snapshot_process_tree(" not in WORKER_SOURCE
