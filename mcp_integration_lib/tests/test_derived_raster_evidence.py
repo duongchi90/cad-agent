@@ -43,12 +43,14 @@ def _pdf(
 ) -> bytes:
     encryption = b"/Encrypt 7 0 R\n" if encrypted else b""
     transparency = b"/SMask 9 0 R\n" if alpha else b""
+    content = b"0 0 0 rg\n100 100 200 200 re\nf\n"
     return (
         b"%PDF-1.7\n"
         + encryption
-        + f"/MediaBox [{media_box}]\n/CropBox [{crop_box}]\n/UserUnit {user_unit}\n".encode()
+        + f"1 0 obj << /Type /Page /MediaBox [{media_box}] /CropBox [{crop_box}] /UserUnit {user_unit} /Contents 2 0 R >> endobj\n2 0 obj << /Length {len(content)} >> stream\n".encode()
         + transparency
-        + b"1 0 obj\n<<>>\nendobj\n%%EOF\n"
+        + content
+        + b"endstream\nendobj\n%%EOF\n"
     )
 
 
@@ -170,7 +172,20 @@ def test_at_least_five_replays_have_one_deterministic_identity() -> None:
 
 def test_pdf_content_changes_derived_raster_identity() -> None:
     first = _derive(_pdf())
-    second = _derive(_pdf() + b"\n")
+    second = _derive(_pdf().replace(b"100 100 200 200", b"200 100 200 200"))
 
     assert first["pdf_sha256"] != second["pdf_sha256"]
     assert first["png_sha256"] != second["png_sha256"]
+
+
+def test_geometry_tokens_without_a_renderable_page_fail_closed() -> None:
+    contract = _contract()
+    fake = (
+        b"%PDF-1.7\n/MediaBox [0 0 595.2756 841.8898]\n"
+        b"/CropBox [0 0 595.2756 841.8898]\n/UserUnit 1.0\n%%EOF\n"
+    )
+    binding = _binding()
+    binding["pdf_artifact_sha256"] = _sha256(fake)
+
+    with pytest.raises(contract.DerivedRasterEvidenceError):
+        contract.derive_raster_evidence(pdf_bytes=fake, native_binding=binding, page_number=1)
