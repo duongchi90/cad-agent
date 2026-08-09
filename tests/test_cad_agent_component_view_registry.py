@@ -14,12 +14,6 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 
 MODULE_NAME = "cad_agent.component_view_registry"
 SCHEMA_VERSION = "component-view-registry-1.0"
-ORIGIN_CLASSES = {
-    "REUSED_UNCHANGED",
-    "RECONSTRUCTED_CHANGED",
-    "RECONSTRUCTED_NEW",
-    "MIXED_UNRESOLVED",
-}
 
 
 def _registry_module():
@@ -38,20 +32,26 @@ def _existing_test_module(filename: str):
     return module
 
 
-def _upstream_context() -> dict[str, object]:
+def _upstream_context(
+    *,
+    primitive_ids: tuple[str, str] = ("prim-a", "prim-b"),
+    semantic_part_id: str = "part-a",
+) -> dict[str, object]:
     source_fusion_tests = _existing_test_module("test_cad_agent_source_fusion.py")
     source_fusion = importlib.import_module("cad_agent.source_fusion")
     primitive_artifact = source_fusion_tests._task5_primitive_artifact(
         [
-            source_fusion_tests._task5_primitive("prim-a"),
-            source_fusion_tests._task5_primitive("prim-b", end_x=20.0),
+            source_fusion_tests._task5_primitive(primitive_ids[0]),
+            source_fusion_tests._task5_primitive(primitive_ids[1], end_x=20.0),
         ]
     )
     primitive_observations = source_fusion_tests._task5_project_primitive(
         primitive_artifact
     )
     semantic_artifact = source_fusion_tests._task5_semantic_artifact(
-        primitive_ids=["prim-a", "prim-b"], primitive_count=2
+        primitive_ids=list(primitive_ids),
+        primitive_count=2,
+        part_id=semantic_part_id,
     )
     semantic_observations = source_fusion_tests._task5_project_semantic(
         semantic_artifact, primitive_observations
@@ -67,6 +67,8 @@ def _upstream_context() -> dict[str, object]:
     r2_tests = _existing_test_module("test_cad_agent_base_cad_adapter.py")
     base_adapter = importlib.import_module("cad_agent.base_cad_adapter")
     handoff = deepcopy(r2_tests._handoff())
+    handoff["source_bundle_sha256"] = validated_fusion["source_bundle_sha256"]
+    handoff["source_custody_sha256"] = validated_fusion["source_custody_sha256"]
     handoff["source_fusion_sha256"] = source_fusion_sha256
     handoff = base_adapter.validate_base_cad_reuse_handoff(handoff)
     current_live_inspection = r2_tests._live_inspection()
@@ -74,7 +76,7 @@ def _upstream_context() -> dict[str, object]:
         handoff=handoff, current_live_inspection=current_live_inspection
     )
     return {
-        "source_fusion": fusion,
+        "source_fusion": validated_fusion,
         "source_fusion_sha256": source_fusion_sha256,
         "reuse_handoff": handoff,
         "reuse_handoff_sha256": base_adapter.base_cad_reuse_handoff_sha256(handoff),
@@ -82,9 +84,53 @@ def _upstream_context() -> dict[str, object]:
         "current_live_inspection": current_live_inspection,
         "candidate": {
             "candidate_id": "candidate-001",
-            "candidate_drawing_sha256": "9" * 64,
+            "candidate_drawing_sha256": handoff["candidate_output_sha256"],
         },
     }
+
+
+def _replace_handoff(
+    context: dict[str, object], handoff: dict[str, object]
+) -> dict[str, object]:
+    changed = deepcopy(context)
+    base_adapter = importlib.import_module("cad_agent.base_cad_adapter")
+    normalized = base_adapter.validate_base_cad_reuse_handoff(handoff)
+    changed["reuse_handoff"] = normalized
+    changed["reuse_handoff_sha256"] = base_adapter.base_cad_reuse_handoff_sha256(
+        normalized
+    )
+    changed["reuse_evaluation"] = base_adapter.evaluate_frozen_base_cad_reuse(
+        handoff=normalized,
+        current_live_inspection=changed["current_live_inspection"],
+    )
+    return changed
+
+
+def _remapped_candidate_context(
+    context: dict[str, object], *, candidate_handle: str
+) -> dict[str, object]:
+    handoff = deepcopy(context["reuse_handoff"])
+    handoff["components"][0]["candidate_handle"] = candidate_handle
+    handoff["source_handle_to_candidate_handle"][0]["candidate_handle"] = (
+        candidate_handle
+    )
+    return _replace_handoff(context, handoff)
+
+
+def _renamed_r2_locator_context(
+    context: dict[str, object], *, logical_component_id: str
+) -> dict[str, object]:
+    handoff = deepcopy(context["reuse_handoff"])
+    handoff["components"][0]["logical_component_id"] = logical_component_id
+    return _replace_handoff(context, handoff)
+
+
+def _disconnected_r2_lineage_context(
+    context: dict[str, object], *, field: str
+) -> dict[str, object]:
+    handoff = deepcopy(context["reuse_handoff"])
+    handoff[field] = "f" * 64
+    return _replace_handoff(context, handoff)
 
 
 def _component_inputs(context: dict[str, object]) -> list[dict[str, object]]:
@@ -107,8 +153,8 @@ def _component_inputs(context: dict[str, object]) -> list[dict[str, object]]:
                 {
                     "target_namespace": "CANDIDATE",
                     "candidate_id": "candidate-001",
-                    "entity_handle": "C3D4",
-                    "block_name": "CHASSIS_MAIN",
+                    "entity_handle": handoff_component["candidate_handle"],
+                    "block_name": handoff_component["source_block"],
                     "legacy_uuid": "uuid-a",
                     "relative_path": "candidate/revision-a.dwg",
                     "captured_at_utc": "2026-08-10T00:00:00Z",
@@ -120,17 +166,7 @@ def _component_inputs(context: dict[str, object]) -> list[dict[str, object]]:
             "origin_class": "RECONSTRUCTED_NEW",
             "source_projection_refs": [primitive_keys[1]],
             "semantic_projection_refs": [semantic_keys[0]],
-            "candidate_entity_bindings": [
-                {
-                    "target_namespace": "CANDIDATE",
-                    "candidate_id": "candidate-001",
-                    "entity_handle": "E5F6",
-                    "block_name": "CABIN_MAIN",
-                    "legacy_uuid": "uuid-b",
-                    "relative_path": "candidate/revision-b.dwg",
-                    "captured_at_utc": "2026-08-10T00:00:00Z",
-                }
-            ],
+            "candidate_entity_bindings": [],
         },
     ]
 
@@ -191,21 +227,19 @@ def test_builds_closed_task_one_registry_with_empty_views_and_links() -> None:
     assert registry["components"][0]["view_ids"] == []
 
 
-def test_component_identity_ignores_volatile_bindings_and_order() -> None:
+def test_component_identity_ignores_volatile_binding_metadata_and_order() -> None:
     module = _registry_module()
     context = _upstream_context()
     first_components = _component_inputs(context)
     first = module.build_component_view_registry(
         upstream_context=context, components=first_components
     )
-    second_components = deepcopy(first_components)
-    second_components.reverse()
+    second_components = list(reversed(deepcopy(first_components)))
     for component in second_components:
-        binding = component["candidate_entity_bindings"][0]
-        binding["entity_handle"] = "VOLATILE-CHANGED"
-        binding["legacy_uuid"] = "new-random-uuid"
-        binding["relative_path"] = "renamed/volatile.dwg"
-        binding["captured_at_utc"] = "2099-01-01T00:00:00Z"
+        for binding in component["candidate_entity_bindings"]:
+            binding["legacy_uuid"] = "new-random-uuid"
+            binding["relative_path"] = "renamed/volatile.dwg"
+            binding["captured_at_utc"] = "2099-01-01T00:00:00Z"
     second = module.build_component_view_registry(
         upstream_context=context, components=second_components
     )
@@ -215,7 +249,7 @@ def test_component_identity_ignores_volatile_bindings_and_order() -> None:
     assert first["registry_snapshot_sha256"] != second["registry_snapshot_sha256"]
 
 
-def test_stable_projection_membership_type_origin_and_base_identity_change_id() -> None:
+def test_component_id_changes_with_valid_projection_membership_or_component_type() -> None:
     module = _registry_module()
     context = _upstream_context()
     base = _single_component(context)
@@ -224,7 +258,6 @@ def test_stable_projection_membership_type_origin_and_base_identity_change_id() 
     )
     for field, value in (
         ("component_type", "MOUNTING"),
-        ("origin_class", "RECONSTRUCTED_CHANGED"),
         (
             "source_projection_refs",
             [_component_inputs(context)[1]["source_projection_refs"][0]],
@@ -235,22 +268,39 @@ def test_stable_projection_membership_type_origin_and_base_identity_change_id() 
         result = module.build_component_view_registry(
             upstream_context=context, components=changed
         )
-        assert result["components"][0]["component_id"] != first["components"][0]["component_id"]
+        assert (
+            result["components"][0]["component_id"]
+            != first["components"][0]["component_id"]
+        )
 
 
-def test_candidate_binding_change_preserves_logical_id_but_changes_snapshot() -> None:
+def test_reused_candidate_handle_rebind_requires_valid_r2_mapping() -> None:
+    module = _registry_module()
+    first_context = _upstream_context()
+    second_context = _remapped_candidate_context(
+        first_context, candidate_handle="D4E5"
+    )
+    first = module.build_component_view_registry(
+        upstream_context=first_context, components=_single_component(first_context)
+    )
+    second = module.build_component_view_registry(
+        upstream_context=second_context, components=_single_component(second_context)
+    )
+    assert first["components"][0]["component_id"] == second["components"][0][
+        "component_id"
+    ]
+    assert first["registry_snapshot_sha256"] != second["registry_snapshot_sha256"]
+
+
+def test_reused_candidate_handle_mismatch_fails_closed() -> None:
     module = _registry_module()
     context = _upstream_context()
-    first = module.build_component_view_registry(
-        upstream_context=context, components=_single_component(context)
-    )
-    changed = _single_component(context)
-    changed[0]["candidate_entity_bindings"][0]["entity_handle"] = "CHANGED"
-    second = module.build_component_view_registry(
-        upstream_context=context, components=changed
-    )
-    assert first["components"][0]["component_id"] == second["components"][0]["component_id"]
-    assert first["registry_snapshot_sha256"] != second["registry_snapshot_sha256"]
+    component = _single_component(context)[0]
+    component["candidate_entity_bindings"][0]["entity_handle"] = "D4E5"
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context, components=[component]
+        )
 
 
 def test_build_is_deterministic_for_replay_and_component_permutation() -> None:
@@ -290,6 +340,21 @@ def test_foreign_projection_reference_fails_closed() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["source_bundle_sha256", "source_custody_sha256", "source_fusion_sha256"],
+)
+def test_r1_r2_lineage_hashes_must_cross_bind(field: str) -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    disconnected = _disconnected_r2_lineage_context(context, field=field)
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=disconnected,
+            components=_single_component(disconnected),
+        )
+
+
 def test_caller_minted_r2_hash_or_fusion_hash_is_not_authority() -> None:
     module = _registry_module()
     context = _upstream_context()
@@ -307,14 +372,95 @@ def test_caller_minted_r2_hash_or_fusion_hash_is_not_authority() -> None:
         )
 
 
+def test_candidate_output_sha_mismatch_is_a_foreign_snapshot() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    context["candidate"]["candidate_drawing_sha256"] = "e" * 64
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context, components=_single_component(context)
+        )
+
+
+def test_r2_logical_component_locator_never_becomes_r3_component_id() -> None:
+    module = _registry_module()
+    first_context = _upstream_context()
+    renamed_context = _renamed_r2_locator_context(
+        first_context, logical_component_id="component-renamed"
+    )
+    first = module.build_component_view_registry(
+        upstream_context=first_context, components=_single_component(first_context)
+    )
+    renamed = module.build_component_view_registry(
+        upstream_context=renamed_context, components=_single_component(renamed_context)
+    )
+    first_id = first["components"][0]["component_id"]
+    renamed_id = renamed["components"][0]["component_id"]
+    assert first_id == renamed_id
+    assert first_id != first_context["reuse_handoff"]["components"][0][
+        "logical_component_id"
+    ]
+    assert renamed_id != renamed_context["reuse_handoff"]["components"][0][
+        "logical_component_id"
+    ]
+
+
+def test_regenerated_primitive_legacy_ids_do_not_change_r3_component_id() -> None:
+    module = _registry_module()
+    first_context = _upstream_context(primitive_ids=("prim-a", "prim-b"))
+    regenerated_context = _upstream_context(
+        primitive_ids=("primitive-regenerated-a", "primitive-regenerated-b")
+    )
+    first_components = _single_component(first_context)
+    regenerated_components = _single_component(regenerated_context)
+    assert first_components[0]["source_projection_refs"] != regenerated_components[0][
+        "source_projection_refs"
+    ]
+    first = module.build_component_view_registry(
+        upstream_context=first_context, components=first_components
+    )
+    regenerated = module.build_component_view_registry(
+        upstream_context=regenerated_context, components=regenerated_components
+    )
+    assert first["components"][0]["component_id"] == regenerated["components"][0][
+        "component_id"
+    ]
+
+
+def test_regenerated_semantic_legacy_id_does_not_change_r3_component_id() -> None:
+    module = _registry_module()
+    first_context = _upstream_context(semantic_part_id="part-a")
+    regenerated_context = _upstream_context(semantic_part_id="part-regenerated")
+    first_components = _single_component(first_context)
+    regenerated_components = _single_component(regenerated_context)
+    assert first_components[0]["semantic_projection_refs"] != regenerated_components[0][
+        "semantic_projection_refs"
+    ]
+    first = module.build_component_view_registry(
+        upstream_context=first_context, components=first_components
+    )
+    regenerated = module.build_component_view_registry(
+        upstream_context=regenerated_context, components=regenerated_components
+    )
+    assert first["components"][0]["component_id"] == regenerated["components"][0][
+        "component_id"
+    ]
+
+
 @pytest.mark.parametrize(
     "field_mutation",
     [
         ("missing_provenance", lambda component: component.pop("base_cad_provenance_ref")),
-        ("reused_without_provenance", lambda component: component.update(
-            {"origin_class": "REUSED_UNCHANGED", "base_cad_provenance_ref": None}
-        )),
-        ("unknown_origin", lambda component: component.__setitem__("origin_class", "UNKNOWN")),
+        (
+            "reused_without_provenance",
+            lambda component: component.update(
+                {"origin_class": "REUSED_UNCHANGED", "base_cad_provenance_ref": None}
+            ),
+        ),
+        (
+            "unknown_origin",
+            lambda component: component.__setitem__("origin_class", "UNKNOWN"),
+        ),
     ],
 )
 def test_origin_class_invariants_fail_closed(field_mutation) -> None:
@@ -400,7 +546,7 @@ def test_validation_is_closed_detached_and_rejects_views_or_links_in_task_one() 
         module.validate_component_view_registry(invalid, upstream_context=context)
 
 
-def test_canonical_hash_delegation_and_snapshot_mutation_sensitivity() -> None:
+def test_snapshot_hash_uses_canonical_owner_and_rejects_tampered_seal() -> None:
     module = _registry_module()
     context = _upstream_context()
     registry = module.build_component_view_registry(
@@ -412,22 +558,38 @@ def test_canonical_hash_delegation_and_snapshot_mutation_sensitivity() -> None:
     assert module.component_view_registry_sha256(
         registry, upstream_context=context
     ) == expected
-    registry["components"][0]["candidate_entity_bindings"][0]["entity_handle"] = "MUTATED"
-    assert module.component_view_registry_sha256(
-        registry, upstream_context=context
-    ) != expected
+
+    tampered = deepcopy(registry)
+    tampered["components"][0]["candidate_entity_bindings"][0][
+        "legacy_uuid"
+    ] = "tampered-after-seal"
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.validate_component_view_registry(tampered, upstream_context=context)
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.component_view_registry_sha256(tampered, upstream_context=context)
+
+    changed_context = _remapped_candidate_context(context, candidate_handle="D4E5")
+    changed_registry = module.build_component_view_registry(
+        upstream_context=changed_context,
+        components=_single_component(changed_context),
+    )
+    assert changed_registry["components"][0]["component_id"] == registry[
+        "components"
+    ][0]["component_id"]
+    assert changed_registry["registry_snapshot_sha256"] != expected
 
 
 def test_errors_are_categorical_and_privacy_safe() -> None:
     module = _registry_module()
     context = _upstream_context()
     component = _single_component(context)[0]
-    component["candidate_entity_bindings"][0]["relative_path"] = r"C:\customer\secret.dwg"
+    sentinel = r"C:\customer\secret.dwg"
+    component["private_path"] = sentinel
     with pytest.raises(module.ComponentViewRegistryError) as caught:
         module.build_component_view_registry(
             upstream_context=context, components=[component]
         )
-    assert "C:\\customer" not in str(caught.value)
+    assert sentinel not in str(caught.value)
     assert "secret.dwg" not in str(caught.value)
 
 
@@ -442,6 +604,7 @@ def test_static_boundary_has_no_parser_transport_store_or_second_owner() -> None
         "ocr",
         "socket",
         "subprocess",
+        "mcp_integration_lib",
         "DotNetIPCClient",
         "FileIPC",
         "manifest",
