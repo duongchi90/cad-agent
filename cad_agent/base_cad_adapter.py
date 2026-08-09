@@ -32,6 +32,26 @@ _BASE_SOURCE_FIELDS = frozenset({"source_id", "sha256", "revision"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _TRANSFORM_POLICY = "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY"
+BASE_CAD_REUSE_HANDOFF_SCHEMA_VERSION = "base-cad-reuse-handoff-1.0"
+_HANDOFF_FIELDS = frozenset(
+    {
+        "schema_version", "run_id", "source_bundle_sha256", "source_custody_sha256",
+        "source_fusion_sha256", "base_cad_binding_sha256", "inspection_sha256",
+        "extraction_plan_sha256", "base_source", "candidate_input_sha256",
+        "candidate_output_sha256", "live_preflight_evidence_sha256", "components",
+        "source_handle_to_candidate_handle",
+    }
+)
+_HANDOFF_SOURCE_FIELDS = frozenset({"source_id", "sha256", "revision"})
+_HANDOFF_COMPONENT_FIELDS = frozenset(
+    {
+        "logical_component_id", "source_handle", "source_layer", "source_block",
+        "source_sha256", "source_revision", "candidate_handle", "transform", "provenance",
+    }
+)
+_HANDOFF_TRANSFORM_FIELDS = frozenset({"rotation_degrees", "translation", "uniform_scale"})
+_HANDOFF_POINT_FIELDS = frozenset({"x", "y", "z"})
+_HANDOFF_MAP_FIELDS = frozenset({"source_handle", "candidate_handle"})
 
 
 def _s3a_contract():
@@ -123,6 +143,120 @@ def base_cad_binding_sha256(payload: object) -> str:
     return canonical_json_sha256(_validate_binding(payload))
 
 
+def _handoff_number(value: object, context: str) -> int | float:
+    if type(value) not in {int, float}:
+        _fail(f"{context} must be numeric")
+    return value
+
+
+def _validate_handoff_transform(value: object, context: str) -> dict[str, object]:
+    result = _closed(value, _HANDOFF_TRANSFORM_FIELDS, context)
+    _handoff_number(result["rotation_degrees"], f"{context}.rotation_degrees")
+    point = _closed(result["translation"], _HANDOFF_POINT_FIELDS, f"{context}.translation")
+    for axis in ("x", "y", "z"):
+        _handoff_number(point[axis], f"{context}.translation.{axis}")
+    scale = _handoff_number(result["uniform_scale"], f"{context}.uniform_scale")
+    if scale <= 0:
+        _fail(f"{context}.uniform_scale must be positive")
+    result["translation"] = point
+    return result
+
+
+def _validate_reuse_handoff(payload: object) -> dict[str, object]:
+    result = _closed(payload, _HANDOFF_FIELDS, "reuse handoff")
+    if result["schema_version"] != BASE_CAD_REUSE_HANDOFF_SCHEMA_VERSION:
+        _fail("reuse handoff.schema_version is unsupported")
+    _identifier(result["run_id"], "reuse handoff.run_id")
+    for field in (
+        "source_bundle_sha256", "source_custody_sha256", "source_fusion_sha256",
+        "base_cad_binding_sha256", "inspection_sha256", "extraction_plan_sha256",
+        "candidate_input_sha256", "candidate_output_sha256", "live_preflight_evidence_sha256",
+    ):
+        _sha256(result[field], f"reuse handoff.{field}")
+
+    source = _closed(result["base_source"], _HANDOFF_SOURCE_FIELDS, "reuse handoff.base_source")
+    _identifier(source["source_id"], "reuse handoff.base_source.source_id")
+    _sha256(source["sha256"], "reuse handoff.base_source.sha256")
+    _identifier(source["revision"], "reuse handoff.base_source.revision")
+
+    components = result["components"]
+    if type(components) is not list or not components:
+        _fail("reuse handoff.components must be a non-empty list")
+    normalized_components = []
+    seen_ids: set[str] = set()
+    seen_source_handles: set[str] = set()
+    for index, item in enumerate(components):
+        context = f"reuse handoff.components[{index}]"
+        component = _closed(item, _HANDOFF_COMPONENT_FIELDS, context)
+        logical_id = _identifier(component["logical_component_id"], f"{context}.logical_component_id")
+        source_handle = _identifier(component["source_handle"], f"{context}.source_handle")
+        if logical_id in seen_ids or source_handle in seen_source_handles:
+            _fail("reuse handoff components must have unique logical IDs and source handles")
+        seen_ids.add(logical_id)
+        seen_source_handles.add(source_handle)
+        for field in ("source_layer", "source_block", "candidate_handle"):
+            _identifier(component[field], f"{context}.{field}")
+        _sha256(component["source_sha256"], f"{context}.source_sha256")
+        _identifier(component["source_revision"], f"{context}.source_revision")
+        if component["provenance"] != "REUSED_FROM_BASE_CAD":
+            _fail(f"{context}.provenance is unsupported")
+        component["transform"] = _validate_handoff_transform(component["transform"], f"{context}.transform")
+        normalized_components.append(component)
+    normalized_components.sort(key=lambda item: item["logical_component_id"])
+
+    mappings = result["source_handle_to_candidate_handle"]
+    if type(mappings) is not list or len(mappings) != len(normalized_components):
+        _fail("reuse handoff handle mapping must cover every component")
+    normalized_mappings = []
+    mapped_sources: set[str] = set()
+    for index, item in enumerate(mappings):
+        mapping = _closed(item, _HANDOFF_MAP_FIELDS, f"reuse handoff mapping[{index}]")
+        _identifier(mapping["source_handle"], f"reuse handoff mapping[{index}].source_handle")
+        _identifier(mapping["candidate_handle"], f"reuse handoff mapping[{index}].candidate_handle")
+        if mapping["source_handle"] in mapped_sources:
+            _fail("reuse handoff handle mappings must be unique")
+        mapped_sources.add(mapping["source_handle"])
+        normalized_mappings.append(mapping)
+    if mapped_sources != seen_source_handles:
+        _fail("reuse handoff handle mapping does not match components")
+    normalized_mappings.sort(key=lambda item: item["source_handle"])
+    result["base_source"] = source
+    result["components"] = normalized_components
+    result["source_handle_to_candidate_handle"] = normalized_mappings
+    return deepcopy(result)
+
+
+def validate_base_cad_reuse_handoff(payload: object) -> dict[str, object]:
+    """Validate and return a detached deterministic frozen reuse handoff."""
+    return _validate_reuse_handoff(payload)
+
+
+def base_cad_reuse_handoff_sha256(payload: object) -> str:
+    """Hash only a validated handoff through the canonical JSON owner."""
+    return canonical_json_sha256(_validate_reuse_handoff(payload))
+
+
+def evaluate_frozen_base_cad_reuse(
+    *, handoff: object, current_base_source: object
+) -> dict[str, object]:
+    """Classify exact source identity without changing or promoting any revision."""
+    normalized = _validate_reuse_handoff(handoff)
+    current = _closed(current_base_source, _HANDOFF_SOURCE_FIELDS, "current_base_source")
+    _identifier(current["source_id"], "current_base_source.source_id")
+    _sha256(current["sha256"], "current_base_source.sha256")
+    _identifier(current["revision"], "current_base_source.revision")
+    previous = normalized["base_source"]
+    state = "CURRENT" if current == previous else "STALE_REEXTRACTION_REQUIRED"
+    affected = [] if state == "CURRENT" else [item["logical_component_id"] for item in normalized["components"]]
+    return {
+        "state": state,
+        "prior_handoff_sha256": base_cad_reuse_handoff_sha256(normalized),
+        "affected_component_ids": affected,
+        "previous_source": deepcopy(previous),
+        "current_source": deepcopy(current),
+    }
+
+
 def build_proposed_base_cad_extraction(
     *,
     plan_id: str,
@@ -183,9 +317,13 @@ def require_approved_base_cad_extraction_match(
 
 __all__ = [
     "BASE_CAD_BINDING_SCHEMA_VERSION",
+    "BASE_CAD_REUSE_HANDOFF_SCHEMA_VERSION",
     "BaseCadAdapterError",
     "base_cad_binding_sha256",
+    "base_cad_reuse_handoff_sha256",
     "build_proposed_base_cad_extraction",
+    "evaluate_frozen_base_cad_reuse",
     "require_approved_base_cad_extraction_match",
+    "validate_base_cad_reuse_handoff",
     "validate_base_cad_binding",
 ]

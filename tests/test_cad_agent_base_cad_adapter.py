@@ -323,7 +323,7 @@ def test_reuse_handoff_hash_uses_existing_canonical_owner() -> None:
     [
         {"schema_version": "base-cad-reuse-handoff-2.0"},
         {"base_source": {"source_id": "base-cad-001", "sha256": "A" * 64, "revision": "rev-A"}},
-        {"candidate_handle": "forbidden"},
+        {"candidate_handle": "bad handle"},
         {"source_handle_to_candidate_handle": []},
     ],
 )
