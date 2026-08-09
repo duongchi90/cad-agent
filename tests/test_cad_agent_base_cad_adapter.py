@@ -302,7 +302,12 @@ def _source(
     revision: str = "rev-2026-08-05-01",
     sha256: str = "a" * 64,
 ) -> dict[str, str]:
-    return {"source_id": source_id, "sha256": sha256, "revision": revision}
+    return {
+        "relative_path": "approved/base-vehicle.dwg",
+        "source_id": source_id,
+        "sha256": sha256,
+        "revision": revision,
+    }
 
 
 def _live_inspection() -> dict[str, object]:
@@ -547,9 +552,7 @@ def test_malformed_current_s3a_inspection_fails_closed_without_live_fallback() -
         lambda inspection: inspection.__setitem__("eligible", False),
         lambda inspection: inspection.__setitem__("schema_version", "foreign-inspection-1.0"),
         lambda inspection: inspection["base_source"].__setitem__("sha256", "C" * 64),
-        lambda inspection: inspection["components"].__getitem__(0).__setitem__(
-            "source_handle", "not-a-live-handle"
-        ),
+        lambda inspection: inspection["components"].__getitem__(0).pop("source_block"),
     ],
 )
 def test_foreign_or_ineligible_current_inspection_fails_closed(mutation) -> None:
