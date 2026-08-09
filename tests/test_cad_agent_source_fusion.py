@@ -17,6 +17,7 @@ from cad_agent.source_bundle import (
 )
 from cad_agent.source_integrity import (
     R1C_NUMERIC_POLICY_VERSION,
+    R1C_TOLERANCE_POLICY_VERSION,
     SOURCE_CUSTODY_SCHEMA_VERSION,
     canonicalize_r1c_quantity,
     source_custody_sha256,
@@ -2602,3 +2603,153 @@ def test_task5_each_semantic_object_complete_duplicate_class_is_permutation_stab
     ) == _task5_semantic_signature(
         _task5_project_semantic(reverse, primitive_projection)
     )
+
+
+# -------------------------------------------------------- Task 6 RED ---
+
+
+def _task6_tolerance_policy() -> dict[str, object]:
+    return {
+        "tolerance_policy_version": R1C_TOLERANCE_POLICY_VERSION,
+        "quantity": "physical_length",
+        "unit": "mm",
+        "value": "0.001",
+    }
+
+
+def _task6_ready_inputs(
+    *,
+    primitive_observations: object | None = None,
+    semantic_observations: object | None = None,
+    custody: dict[str, object] | None = None,
+) -> dict[str, object]:
+    sf = _sf()
+    bundle = _source_bundle()
+    if custody is None:
+        custody = _custody(bundle)
+    pages = sf.validate_page_locators(
+        _page_payload(custody),
+        source_bundle=bundle,
+        custody=custody,
+    )
+    regions = sf.validate_region_locators(
+        _region_payload(custody, pages),
+        page_locators=pages,
+        custody=custody,
+    )
+    renders = sf.validate_render_provenance(
+        [_direct_image_render_record(custody)],
+        page_locators=pages,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )
+    if primitive_observations is None:
+        primitive_observations = _task5_project_primitive(
+            _task5_primitive_artifact([_task5_primitive("prim-a")])
+        )
+    if semantic_observations is None:
+        semantic_observations = _task5_project_semantic(
+            _task5_semantic_artifact(primitive_ids=["prim-a"], primitive_count=1),
+            primitive_observations,
+        )
+    return {
+        "source_bundle": bundle,
+        "custody": custody,
+        "page_locators": pages,
+        "region_locators": regions,
+        "render_provenance": renders,
+        "primitive_observations": primitive_observations,
+        "semantic_observations": semantic_observations,
+        "tolerance_policy": _task6_tolerance_policy(),
+    }
+
+
+def test_task6_public_surface_adds_only_the_four_planned_packet_apis() -> None:
+    sf = _sf()
+    expected = [
+        "SOURCE_FUSION_SCHEMA_VERSION",
+        "SourceFusionError",
+        "validate_page_locators",
+        "validate_region_locators",
+        "validate_render_provenance",
+        "project_primitive_observations",
+        "project_semantic_observations",
+        "build_source_fusion_packet",
+        "validate_source_fusion_packet",
+        "source_fusion_sha256",
+        "require_source_fusion_match",
+    ]
+    assert sf.__all__ == expected
+    assert list(inspect.signature(sf.build_source_fusion_packet).parameters) == [
+        "source_bundle",
+        "custody",
+        "page_locators",
+        "region_locators",
+        "render_provenance",
+        "primitive_observations",
+        "semantic_observations",
+        "tolerance_policy",
+    ]
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in inspect.signature(sf.build_source_fusion_packet).parameters.values()
+    )
+
+
+def test_task6_ready_packet_is_deterministic_over_existing_task4_task5_evidence() -> None:
+    sf = _sf()
+    inputs = _task6_ready_inputs()
+    first = sf.build_source_fusion_packet(**inputs)
+    replay = sf.build_source_fusion_packet(
+        **{
+            **inputs,
+            "page_locators": list(reversed(inputs["page_locators"])),
+            "region_locators": list(reversed(inputs["region_locators"])),
+            "render_provenance": list(reversed(inputs["render_provenance"])),
+            "primitive_observations": list(reversed(inputs["primitive_observations"])),
+            "semantic_observations": list(reversed(inputs["semantic_observations"])),
+        }
+    )
+    assert sf.validate_source_fusion_packet(first)["status"] == "READY"
+    assert sf.source_fusion_sha256(first) == sf.source_fusion_sha256(replay)
+    assert first == replay
+
+
+def test_task6_competing_geometry_evidence_is_preserved_as_unresolved_blocker() -> None:
+    sf = _sf()
+    first_primitive = _task5_project_primitive(
+        _task5_primitive_artifact([_task5_primitive("prim-a", end_x=10)])
+    )
+    second_primitive = _task5_project_primitive(
+        _task5_primitive_artifact([_task5_primitive("prim-a", end_x=11)])
+    )
+    first_semantic = _task5_project_semantic(
+        _task5_semantic_artifact(primitive_ids=["prim-a"], primitive_count=1),
+        first_primitive,
+    )
+    second_semantic = _task5_project_semantic(
+        _task5_semantic_artifact(
+            primitive_ids=["prim-a"],
+            primitive_count=1,
+            part_id="part-regenerated",
+            constraint_id="constraint-regenerated",
+        ),
+        second_primitive,
+    )
+    packet = sf.build_source_fusion_packet(
+        **_task6_ready_inputs(
+            primitive_observations=first_primitive + second_primitive,
+            semantic_observations=first_semantic + second_semantic,
+        )
+    )
+    assert packet["status"] == "BLOCKED_UNRESOLVED"
+    assert packet["conflicts"]
+    assert all(conflict["state"] == "UNRESOLVED" for conflict in packet["conflicts"])
+    assert len(packet["primitive_observations"]) == 2
+    assert len(packet["semantic_observations"]) == 2
+
+
+def test_task6_non_ready_custody_produces_no_fusion_packet() -> None:
+    sf = _sf()
+    with pytest.raises(sf.SourceFusionError, match=r"^CUSTODY_NOT_READY$"):
+        sf.build_source_fusion_packet(**_task6_ready_inputs(custody=_blocked_custody()))
