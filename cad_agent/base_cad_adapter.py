@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import importlib
 import re
 
 from cad_agent.drawing_contracts import canonical_json_sha256
-from mcp_integration_lib import exact_base_xref
 
 
 BASE_CAD_BINDING_SCHEMA_VERSION = "base-cad-binding-1.0"
@@ -32,6 +32,10 @@ _BASE_SOURCE_FIELDS = frozenset({"source_id", "sha256", "revision"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _TRANSFORM_POLICY = "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY"
+
+
+def _s3a_contract():
+    return importlib.import_module("mcp_integration_lib.exact_base_xref")
 
 
 class BaseCadAdapterError(ValueError):
@@ -128,6 +132,7 @@ def build_proposed_base_cad_extraction(
 ) -> dict[str, object]:
     """Build an S3A-owned proposed extraction plan without approving or executing it."""
     try:
+        exact_base_xref = _s3a_contract()
         validated_inspection = exact_base_xref.validate_xref_inspection(inspection)
         return deepcopy(
             exact_base_xref.build_extraction_plan(
@@ -153,6 +158,7 @@ def require_approved_base_cad_extraction_match(
 ) -> dict[str, object]:
     """Require an explicit S3A-approved plan matching the prior proposal exactly."""
     try:
+        exact_base_xref = _s3a_contract()
         validated_inspection = exact_base_xref.validate_xref_inspection(inspection)
         proposed = exact_base_xref.validate_extraction_plan(
             proposed_plan, inspection=validated_inspection
