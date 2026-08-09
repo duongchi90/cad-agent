@@ -10,6 +10,7 @@ import pytest
 
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
+    MCPTimeoutError,
     MCPToolError,
 )
 
@@ -18,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DISPATCHER = REPO_ROOT / "mcp_integration_lib" / "mcp_dispatch.lsp"
 MCP_CLIENT = REPO_ROOT / "mcp_integration_lib" / "mcp_client.py"
 LIVE_HARNESS = REPO_ROOT / "mcp_integration_lib" / "tests" / "test_dotnet_ipc_live.py"
+MAX_FILE_IPC_JSON_BYTES = 1024 * 1024
 
 EXPECTED_FILE_IPC_COMMANDS = {
     "ping",
@@ -123,6 +125,29 @@ def _constructor_keyword_values(class_name: str, keyword: str) -> list[ast.AST |
     return values
 
 
+def _request_id_from_root(root: Path) -> str:
+    request_path = next(root.glob("autocad_mcp_cmd_*.json"))
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    filename_id = request_path.stem.removeprefix("autocad_mcp_cmd_")
+    assert request["request_id"] == filename_id
+    return filename_id
+
+
+def _write_success_result(root: Path, request_id: str, payload: object | None = None) -> Path:
+    result_path = root / f"autocad_mcp_result_{request_id}.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "request_id": request_id,
+                "ok": True,
+                "payload": {} if payload is None else payload,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return result_path
+
+
 def test_exactly_one_canonical_dispatcher_source_exists() -> None:
     _dispatcher_bytes()
     candidates = sorted(REPO_ROOT.rglob("mcp_dispatch.lsp"))
@@ -168,6 +193,19 @@ def test_file_ipc_constructor_requires_an_explicit_root() -> None:
 def test_file_ipc_constructor_rejects_ambiguous_or_nonlocal_roots(unsafe_root: str) -> None:
     with pytest.raises(ValueError):
         FileIPCLiveMCPClient(ipc_dir=unsafe_root)
+
+
+def test_file_ipc_constructor_rejects_physical_symlink_root_when_supported(tmp_path: Path) -> None:
+    physical_root = tmp_path / "physical-root"
+    physical_root.mkdir()
+    alias_root = tmp_path / "alias-root"
+    try:
+        alias_root.symlink_to(physical_root, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("directory symlink creation is unavailable on this runner")
+
+    with pytest.raises(ValueError, match="IPC_ROOT"):
+        FileIPCLiveMCPClient(ipc_dir=str(alias_root))
 
 
 def test_file_ipc_dispatch_binds_request_filename_payload_and_result_identity(tmp_path: Path) -> None:
@@ -232,6 +270,308 @@ def test_file_ipc_dispatch_rejects_result_request_id_mismatch_categorically(tmp_
         client._dispatch("ping", {})
     assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
     assert not list(tmp_path.glob("autocad_mcp_result_*.json"))
+
+
+@pytest.mark.parametrize(
+    "stale_content",
+    [
+        json.dumps({"request_id": "stale", "command": "ping", "params": {}}),
+        '{"request_id":"partial"',
+        json.dumps(
+            {
+                "request_id": "oversized",
+                "command": "ping",
+                "params": {"blob": "x" * (MAX_FILE_IPC_JSON_BYTES + 1)},
+            }
+        ),
+    ],
+    ids=("stale", "partial-truncated", "oversized"),
+)
+def test_file_ipc_dispatch_rejects_preexisting_request_artifact_before_trigger(
+    tmp_path: Path,
+    stale_content: str,
+) -> None:
+    stale = tmp_path / "autocad_mcp_cmd_stale.json"
+    stale.write_text(stale_content, encoding="utf-8")
+    trigger_called = False
+
+    def trigger() -> None:
+        nonlocal trigger_called
+        trigger_called = True
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_REQUEST_"):
+        client._dispatch("ping", {})
+    assert trigger_called is False
+    assert stale.exists()
+
+
+def test_file_ipc_dispatch_rejects_multiple_preexisting_request_candidates_before_trigger(
+    tmp_path: Path,
+) -> None:
+    for request_id in ("stale-a", "stale-b"):
+        (tmp_path / f"autocad_mcp_cmd_{request_id}.json").write_text(
+            json.dumps({"request_id": request_id, "command": "ping", "params": {}}),
+            encoding="utf-8",
+        )
+    trigger_called = False
+
+    def trigger() -> None:
+        nonlocal trigger_called
+        trigger_called = True
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_REQUEST_AMBIGUOUS"):
+        client._dispatch("ping", {})
+    assert trigger_called is False
+
+
+def test_file_ipc_dispatch_rejects_preexisting_result_conflict_before_trigger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_request_id = "a1b2c3d4e5f6"
+
+    class FixedUUID:
+        hex = fixed_request_id
+
+    monkeypatch.setattr("mcp_integration_lib.mcp_client.uuid.uuid4", lambda: FixedUUID())
+    _write_success_result(tmp_path, fixed_request_id, {"stale": True})
+    trigger_called = False
+
+    def trigger() -> None:
+        nonlocal trigger_called
+        trigger_called = True
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_RESULT_CONFLICT"):
+        client._dispatch("ping", {})
+    assert trigger_called is False
+
+
+@pytest.mark.parametrize(
+    "invalid_result",
+    [
+        "{",
+        '{"request_id":',
+    ],
+    ids=("malformed", "truncated"),
+)
+def test_file_ipc_dispatch_rejects_malformed_or_truncated_result_and_cleans_owned_files(
+    tmp_path: Path,
+    invalid_result: str,
+) -> None:
+    def trigger() -> None:
+        request_id = _request_id_from_root(tmp_path)
+        (tmp_path / f"autocad_mcp_result_{request_id}.json").write_text(
+            invalid_result,
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_RESULT_INVALID"):
+        client._dispatch("ping", {})
+    assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
+    assert not list(tmp_path.glob("autocad_mcp_result_*.json"))
+
+
+def test_file_ipc_dispatch_rejects_oversized_result_and_cleans_owned_files(tmp_path: Path) -> None:
+    def trigger() -> None:
+        request_id = _request_id_from_root(tmp_path)
+        _write_success_result(
+            tmp_path,
+            request_id,
+            {"blob": "x" * (MAX_FILE_IPC_JSON_BYTES + 1)},
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_RESULT_OVERSIZED"):
+        client._dispatch("ping", {})
+    assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
+    assert not list(tmp_path.glob("autocad_mcp_result_*.json"))
+
+
+@pytest.mark.parametrize(
+    "result_factory",
+    [
+        lambda request_id: {"request_id": request_id, "ok": "true", "payload": {}},
+        lambda request_id: {"request_id": request_id, "ok": True},
+        lambda request_id: {
+            "request_id": request_id,
+            "ok": True,
+            "payload": {},
+            "error": "IPC_COMMAND_FAILED",
+        },
+        lambda request_id: {
+            "request_id": request_id,
+            "ok": False,
+            "payload": {},
+            "error": "IPC_COMMAND_FAILED",
+        },
+    ],
+    ids=("non-boolean-ok", "missing-payload", "success-with-error", "failure-with-payload"),
+)
+def test_file_ipc_dispatch_rejects_invalid_result_envelopes(
+    tmp_path: Path,
+    result_factory,
+) -> None:
+    def trigger() -> None:
+        request_id = _request_id_from_root(tmp_path)
+        result_path = tmp_path / f"autocad_mcp_result_{request_id}.json"
+        result_path.write_text(json.dumps(result_factory(request_id)), encoding="utf-8")
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_RESULT_INVALID"):
+        client._dispatch("ping", {})
+    assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
+    assert not list(tmp_path.glob("autocad_mcp_result_*.json"))
+
+
+def test_file_ipc_dispatch_rejects_conflicting_result_filename_without_deleting_foreign_result(
+    tmp_path: Path,
+) -> None:
+    foreign_result: Path | None = None
+
+    def trigger() -> None:
+        nonlocal foreign_result
+        request_id = _request_id_from_root(tmp_path)
+        foreign_result = tmp_path / "autocad_mcp_result_foreign.json"
+        foreign_result.write_text(
+            json.dumps({"request_id": request_id, "ok": True, "payload": {}}),
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_RESULT_CONFLICT"):
+        client._dispatch("ping", {})
+    assert foreign_result is not None and foreign_result.exists()
+    assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
+
+
+def test_file_ipc_dispatch_does_not_consume_matching_result_outside_bound_root(tmp_path: Path) -> None:
+    root = tmp_path / "bound-root"
+    outside = tmp_path / "outside-root"
+    root.mkdir()
+    outside.mkdir()
+    outside_result: Path | None = None
+
+    def trigger() -> None:
+        nonlocal outside_result
+        request_id = _request_id_from_root(root)
+        outside_result = _write_success_result(outside, request_id, {"forged": True})
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(root),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPTimeoutError):
+        client._dispatch("ping", {})
+    assert outside_result is not None and outside_result.exists()
+    assert not list(root.glob("autocad_mcp_cmd_*.json"))
+    assert not list(root.glob("autocad_mcp_result_*.json"))
+
+
+def test_file_ipc_dispatch_fails_closed_on_physical_root_replacement_race(tmp_path: Path) -> None:
+    root = tmp_path / "ipc-root"
+    displaced = tmp_path / "ipc-root-original"
+    root.mkdir()
+    replacement_blocked = False
+
+    def trigger() -> None:
+        nonlocal replacement_blocked
+        request_id = _request_id_from_root(root)
+        try:
+            root.rename(displaced)
+        except OSError:
+            replacement_blocked = True
+            return
+        root.mkdir()
+        _write_success_result(root, request_id, {"forged": True})
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(root),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    try:
+        payload = client._dispatch("ping", {})
+    except MCPToolError as exc:
+        assert "IPC_ROOT_CHANGED" in str(exc)
+    except MCPTimeoutError:
+        assert replacement_blocked is True
+    else:
+        pytest.fail(f"accepted result after physical root replacement: {payload!r}")
+
+
+@pytest.mark.parametrize(
+    "attack_command",
+    [
+        "eval",
+        "read",
+        "load",
+        "command",
+        "vl-cmdf",
+        '(eval (read "(vl-load-com)"))',
+    ],
+)
+def test_file_ipc_dispatch_rejects_non_allowlisted_command_before_trigger(
+    tmp_path: Path,
+    attack_command: str,
+) -> None:
+    assert attack_command not in EXPECTED_FILE_IPC_COMMANDS
+    trigger_called = False
+
+    def trigger() -> None:
+        nonlocal trigger_called
+        trigger_called = True
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_COMMAND_UNSUPPORTED"):
+        client._dispatch(attack_command, {"payload": "data-only"})
+    assert trigger_called is False
 
 
 def test_live_harness_binds_file_ipc_and_dotnet_clients_to_explicit_root_envs() -> None:
@@ -311,6 +651,11 @@ def test_dispatcher_never_converts_json_into_executable_autolisp() -> None:
         r"\(\s*vl-symbol-function\b",
     ):
         assert re.search(forbidden_form, source) is None
+    for dynamic_command_form in (
+        r"\(\s*command(?:-s)?\s+(?!\")",
+        r"\(\s*vl-cmdf\s+(?!\")",
+    ):
+        assert re.search(dynamic_command_form, source) is None
 
 
 def test_ping_and_result_envelope_preserve_request_identity_without_granting_authority() -> None:
