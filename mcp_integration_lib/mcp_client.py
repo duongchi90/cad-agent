@@ -6,6 +6,7 @@ import json
 import ctypes
 from ctypes import wintypes
 import ntpath
+import os
 import re
 import time
 import uuid
@@ -134,16 +135,131 @@ class FakeMCPClient:
         self._entities[handle].geom.update(overrides)
 
 
+_FILE_IPC_MAX_JSON_BYTES = 1024 * 1024
+_FILE_IPC_REQUEST_PREFIX = "autocad_mcp_cmd_"
+_FILE_IPC_RESULT_PREFIX = "autocad_mcp_result_"
+_FILE_IPC_ALLOWED_COMMANDS = frozenset({
+    "ping",
+    "entity-list",
+    "drawing-open",
+    "drawing-save",
+    "drawing-close",
+    "drawing-list-open-paths",
+    "drawing-save-as-dxf",
+    "drawing-get-variables",
+    "block-get-attributes",
+    "block-update-attribute",
+    "entity-get",
+    "entity-erase",
+    "create-line",
+    "create-circle",
+    "create-arc",
+    "create-text",
+})
+
+
+def _file_ipc_path_has_reparse_point(path: Path) -> bool:
+    chain = [path, *path.parents]
+    if os.name == "nt":
+        get_attrs = ctypes.windll.kernel32.GetFileAttributesW
+        get_attrs.argtypes = [ctypes.c_wchar_p]
+        get_attrs.restype = ctypes.c_uint32
+        for component in chain:
+            attrs = get_attrs(str(component))
+            if attrs != 0xFFFFFFFF and attrs & 0x400:
+                return True
+        return False
+    return any(component.is_symlink() for component in chain)
+
+
+def _validate_file_ipc_root(value: str) -> Path:
+    if not isinstance(value, str) or not value or any(ord(ch) < 32 for ch in value):
+        raise ValueError("IPC_ROOT_INVALID")
+    win_value = value.replace("/", "\\")
+    drive, tail = ntpath.splitdrive(win_value)
+    windows_looking = (
+        os.name == "nt"
+        or bool(drive)
+        or value.startswith("\\\\")
+        or value.startswith("//")
+    )
+    if windows_looking:
+        if win_value.startswith("\\\\") or not drive or not tail.startswith("\\"):
+            raise ValueError("IPC_ROOT_INVALID")
+        normalized = ntpath.normpath(win_value)
+        if normalized != win_value:
+            raise ValueError("IPC_ROOT_INVALID")
+        root = Path(normalized)
+        if os.name != "nt":
+            raise ValueError("IPC_ROOT_INVALID")
+    else:
+        root = Path(value)
+        if not root.is_absolute() or os.path.normpath(value) != value:
+            raise ValueError("IPC_ROOT_INVALID")
+    if not root.exists() or not root.is_dir() or _file_ipc_path_has_reparse_point(root):
+        raise ValueError("IPC_ROOT_INVALID")
+    return root
+
+
+def _file_ipc_root_identity(path: Path) -> tuple[int, int]:
+    stat_result = os.stat(path, follow_symlinks=False)
+    return (stat_result.st_dev, stat_result.st_ino)
+
+
+def _strict_file_ipc_json_object(raw: bytes, *, error_code: str) -> dict[str, Any]:
+    try:
+        text = raw.decode("utf-8")
+
+        def pairs_hook(pairs):
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate key")
+                value[key] = item
+            return value
+
+        data = json.loads(text, object_pairs_hook=pairs_hook)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise MCPToolError(error_code) from exc
+    if not isinstance(data, dict):
+        raise MCPToolError(error_code)
+    return data
+
+
+def _validate_file_ipc_result(data: dict[str, Any], request_id: str) -> dict[str, Any]:
+    if data.get("request_id") != request_id or type(data.get("ok")) is not bool:
+        raise MCPToolError("IPC_RESULT_INVALID")
+    if data["ok"] is True:
+        if set(data) != {"request_id", "ok", "payload"} or not isinstance(data["payload"], dict):
+            raise MCPToolError("IPC_RESULT_INVALID")
+        return data["payload"]
+    if (
+        set(data) != {"request_id", "ok", "error"}
+        or not isinstance(data["error"], str)
+        or not data["error"]
+    ):
+        raise MCPToolError("IPC_RESULT_INVALID")
+    raise MCPToolError(data["error"])
+
+
+def _autolisp_string_literal(value: str) -> str:
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValueError("IPC_ROOT_INVALID")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 class FileIPCLiveMCPClient:
     """Minimal File IPC client for a loaded AutoLISP MCP dispatcher."""
-    def __init__(self, ipc_dir: str = "C:/temp", trigger: Optional[Callable[[], None]] = None,
+    def __init__(self, ipc_dir: str, trigger: Optional[Callable[[], None]] = None,
                  timeout_s: float = 10.0, poll_interval_s: float = 0.1,
                  raw_lisp_trigger: Optional[Callable[[str], None]] = None,
                  bootstrap_lisp_path: Optional[str] = None,
                  document_settle_s: float = 2.0,
                  command_trigger: Optional[Callable[[str], None]] = None,
                  start_tab_no_document_probe: Optional[Callable[[], bool]] = None) -> None:
-        self._dir, self._trigger = Path(ipc_dir), trigger
+        self._dir = _validate_file_ipc_root(ipc_dir)
+        self._root_identity = _file_ipc_root_identity(self._dir)
+        self._trigger = trigger
         self._timeout, self._poll = timeout_s, poll_interval_s
         self._raw_lisp_trigger = raw_lisp_trigger
         self._bootstrap_lisp_path = bootstrap_lisp_path
@@ -152,29 +268,100 @@ class FileIPCLiveMCPClient:
         self._start_tab_no_document_probe = start_tab_no_document_probe
         self._active_drawing_path: Optional[str] = None
 
-    def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        request_id = uuid.uuid4().hex[:12]
-        cmd = self._dir / f"autocad_mcp_cmd_{request_id}.json"
-        result = self._dir / f"autocad_mcp_result_{request_id}.json"
-        self._dir.mkdir(parents=True, exist_ok=True)
+    def _assert_root_unchanged(self) -> None:
         try:
-            cmd.write_text(json.dumps({"request_id": request_id, "command": command, "params": params}), encoding="utf-8")
+            if (
+                not self._dir.is_dir()
+                or _file_ipc_path_has_reparse_point(self._dir)
+                or _file_ipc_root_identity(self._dir) != self._root_identity
+            ):
+                raise MCPToolError("IPC_ROOT_CHANGED")
+        except (OSError, ValueError) as exc:
+            raise MCPToolError("IPC_ROOT_CHANGED") from exc
+
+    def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        if command not in _FILE_IPC_ALLOWED_COMMANDS:
+            raise MCPToolError("IPC_COMMAND_UNSUPPORTED")
+        self._assert_root_unchanged()
+        request_candidates = sorted(self._dir.glob(f"{_FILE_IPC_REQUEST_PREFIX}*.json"))
+        if len(request_candidates) > 1:
+            raise MCPToolError("IPC_REQUEST_AMBIGUOUS")
+        if request_candidates:
+            candidate = request_candidates[0]
+            try:
+                if candidate.stat().st_size > _FILE_IPC_MAX_JSON_BYTES:
+                    raise MCPToolError("IPC_REQUEST_OVERSIZED")
+                _strict_file_ipc_json_object(
+                    candidate.read_bytes(),
+                    error_code="IPC_REQUEST_INVALID",
+                )
+            except MCPToolError:
+                raise
+            except OSError as exc:
+                raise MCPToolError("IPC_REQUEST_INVALID") from exc
+            raise MCPToolError("IPC_REQUEST_INVALID")
+        if list(self._dir.glob(f"{_FILE_IPC_RESULT_PREFIX}*.json")):
+            raise MCPToolError("IPC_RESULT_CONFLICT")
+
+        request_id = uuid.uuid4().hex[:12]
+        cmd = self._dir / f"{_FILE_IPC_REQUEST_PREFIX}{request_id}.json"
+        result = self._dir / f"{_FILE_IPC_RESULT_PREFIX}{request_id}.json"
+        cmd_part = self._dir / f"{_FILE_IPC_REQUEST_PREFIX}{request_id}.json.part"
+        result_part = self._dir / f"{_FILE_IPC_RESULT_PREFIX}{request_id}.json.part"
+        raw = json.dumps(
+            {"request_id": request_id, "command": command, "params": params},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(raw) > _FILE_IPC_MAX_JSON_BYTES:
+            raise MCPToolError("IPC_REQUEST_OVERSIZED")
+        owned_paths = (cmd_part, cmd, result_part, result)
+        root_safe_for_cleanup = True
+        try:
+            self._assert_root_unchanged()
+            with cmd_part.open("xb") as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._assert_root_unchanged()
+            os.replace(cmd_part, cmd)
+            self._assert_root_unchanged()
             if self._trigger is None:
                 raise MCPToolError("File IPC requires an AutoCAD dispatcher trigger")
             self._trigger()
+            self._assert_root_unchanged()
             deadline = time.time() + self._timeout
             while time.time() < deadline:
-                if result.exists():
-                    data = json.loads(result.read_text(encoding="utf-8"))
-                    if data.get("request_id") == request_id:
-                        if not data.get("ok", False):
-                            raise MCPToolError(str(data.get("error", "unknown MCP tool error")))
-                        return data.get("payload", {})
+                self._assert_root_unchanged()
+                candidates = sorted(self._dir.glob(f"{_FILE_IPC_RESULT_PREFIX}*.json"))
+                if any(candidate != result for candidate in candidates):
+                    raise MCPToolError("IPC_RESULT_CONFLICT")
+                if result in candidates:
+                    self._assert_root_unchanged()
+                    try:
+                        with result.open("rb") as handle:
+                            raw_result = handle.read(_FILE_IPC_MAX_JSON_BYTES + 1)
+                    except OSError as exc:
+                        raise MCPToolError("IPC_RESULT_INVALID") from exc
+                    if len(raw_result) > _FILE_IPC_MAX_JSON_BYTES:
+                        raise MCPToolError("IPC_RESULT_OVERSIZED")
+                    data = _strict_file_ipc_json_object(
+                        raw_result,
+                        error_code="IPC_RESULT_INVALID",
+                    )
+                    return _validate_file_ipc_result(data, request_id)
                 time.sleep(self._poll)
             raise MCPTimeoutError(f"Timeout waiting for result (request_id={request_id})")
         finally:
-            cmd.unlink(missing_ok=True)
-            result.unlink(missing_ok=True)
+            try:
+                self._assert_root_unchanged()
+            except MCPToolError:
+                root_safe_for_cleanup = False
+            if root_safe_for_cleanup:
+                for owned_path in owned_paths:
+                    try:
+                        owned_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     def entity_list(self, layer: Optional[str] = None) -> List[Dict[str, Any]]:
         return self._dispatch("entity-list", {k: v for k, v in {"layer": layer}.items() if v is not None}).get("entities", [])
@@ -182,7 +369,6 @@ class FileIPCLiveMCPClient:
     def drawing_open(self, path: str) -> Dict[str, Any]:
         if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
             normalized_path = path.replace("\\", "/").replace('"', '\\"')
-            normalized_loader = self._bootstrap_lisp_path.replace("\\", "/").replace('"', '\\"')
             expected_path = _normalized_autocad_path(path)
             active_path = ""
             for attempt in range(2):
@@ -212,7 +398,18 @@ class FileIPCLiveMCPClient:
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
                 time.sleep(self._document_settle_s)
                 self._active_drawing_path = expected_path
-                self._raw_lisp_trigger('(load "' + normalized_loader + '")')
+                self._assert_root_unchanged()
+                root_literal = _autolisp_string_literal(str(self._dir).replace("\\", "/"))
+                loader_literal = _autolisp_string_literal(
+                    self._bootstrap_lisp_path.replace("\\", "/")
+                )
+                self._raw_lisp_trigger(
+                    "(progn (setq *cad-agent-file-ipc-root* "
+                    + root_literal
+                    + ") (load "
+                    + loader_literal
+                    + "))"
+                )
                 time.sleep(self._document_settle_s)
                 self._wait_for_dispatcher()
                 variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
@@ -271,23 +468,13 @@ class FileIPCLiveMCPClient:
                     ":vlax-true))"
                 )
             else:
-                # Queue a real AutoCAD command at the command boundary. Calling
-                # command-s or vla-close from inside the dispatcher expression
-                # runs while the drawing is busy and leaves the document open.
                 if self._command_trigger is not None:
                     self._command_trigger("_.CLOSE\r_N")
                 else:
-                    # Backward-compatible fallback for callers that only provide
-                    # a LISP trigger; live Windows callers should provide the
-                    # command-level trigger above.
                     self._raw_lisp_trigger('(command-s "_.CLOSE" "_N")')
             time.sleep(self._document_settle_s)
             expected_path = self._active_drawing_path
             if self._command_trigger is not None and expected_path is not None:
-                # CLOSE is queued at AutoCAD's command boundary. Wait for the
-                # document itself to disappear before a caller opens the next
-                # DXF; a fixed sleep alone can leave a stale in-memory drawing
-                # active after SAVEAS.
                 deadline = time.time() + max(5.0, self._document_settle_s * 3.0)
                 while time.time() < deadline:
                     try:
