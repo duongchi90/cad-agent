@@ -12,8 +12,14 @@ from mcp_integration_lib.mcp_client import (
 
 
 class DrawingOpenFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self._ipc_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._ipc_tmp.cleanup)
+        self._ipc_dir = self._ipc_tmp.name
+
     def _client(self, raw_commands, command_sequences):
         return FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_commands.append,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
@@ -60,6 +66,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         raw_commands = []
         command_sequences = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_commands.append,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
@@ -96,12 +103,14 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 if active_document["full_name"].casefold() != target_path.casefold():
                     com_open_attempts.append(target_path)
                     active_document["full_name"] = target_path
-            elif command.startswith('(load "'):
-                return
+            elif command.startswith("(progn (setq *cad-agent-file-ipc-root* "):
+                self.assertIn('(load "C:/tools/mcp_dispatch.lsp")', command)
+                self.assertIn(str(Path(self._ipc_dir)).replace("\\", "/"), command)
             else:
                 self.fail(f"unexpected raw LISP command: {command}")
 
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
@@ -134,6 +143,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 raise MCPToolError("COM activation failed")
 
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
@@ -164,6 +174,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 raise MCPToolError("COM activation failed")
 
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
@@ -187,6 +198,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 raise MCPToolError("RPC_E_CALL_REJECTED: Select File modal")
 
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
@@ -227,6 +239,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ipc_dir = root / "ipc"
+            ipc_dir.mkdir()
             target = root / "disposable-target.dxf"
             original_bytes = b"disposable CAD fixture bytes\x00\x01\x02"
             target.write_bytes(original_bytes)

@@ -74,6 +74,11 @@ class Phase4Tests(unittest.TestCase):
 
 
 class FileIPCClientTests(unittest.TestCase):
+    def setUp(self):
+        self._ipc_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._ipc_tmp.cleanup)
+        self._ipc_dir = self._ipc_tmp.name
+
     def test_maps_drawing_open(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
@@ -191,6 +196,7 @@ class FileIPCClientTests(unittest.TestCase):
     def test_uses_raw_lisp_bootstrap_to_open_a_new_document(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             trigger=lambda: None,
             raw_lisp_trigger=raw_commands.append,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
@@ -204,11 +210,14 @@ class FileIPCClientTests(unittest.TestCase):
         self.assertEqual(2, len(raw_commands))
         self.assertIn('vla-open', raw_commands[0])
         self.assertIn('C:/work/a.dxf', raw_commands[0])
-        self.assertEqual('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
+        self.assertIn('*cad-agent-file-ipc-root*', raw_commands[1])
+        self.assertIn(str(Path(self._ipc_dir)).replace("\\", "/"), raw_commands[1])
+        self.assertIn('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
 
     def test_raw_lisp_close_queues_no_save_command_without_com_close(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_commands.append,
             document_settle_s=0,
         )
@@ -221,6 +230,7 @@ class FileIPCClientTests(unittest.TestCase):
         raw_commands = []
         command_sequences = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_commands.append,
             command_trigger=command_sequences.append,
             document_settle_s=0,
@@ -241,6 +251,7 @@ class FileIPCClientTests(unittest.TestCase):
                 raise MCPToolError("COM activation failed")
 
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             trigger=lambda: None,
             raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
@@ -266,6 +277,7 @@ class FileIPCClientTests(unittest.TestCase):
     def test_raw_lisp_close_with_save_keeps_com_save_path(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_commands.append,
             document_settle_s=0,
         )
@@ -284,6 +296,7 @@ class FileIPCClientTests(unittest.TestCase):
     def test_bootstrap_waits_for_dispatcher_ping(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             trigger=lambda: None,
             raw_lisp_trigger=raw_commands.append,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
@@ -309,6 +322,7 @@ class FileIPCClientTests(unittest.TestCase):
     def test_bootstrap_retries_when_requested_document_is_not_active(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             trigger=lambda: None,
             raw_lisp_trigger=raw_commands.append,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
@@ -336,6 +350,7 @@ class FileIPCClientTests(unittest.TestCase):
     def test_bootstrap_retries_same_named_document_in_different_directory(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             trigger=lambda: None,
             raw_lisp_trigger=raw_commands.append,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
@@ -362,6 +377,7 @@ class FileIPCClientTests(unittest.TestCase):
 
     def test_bootstrap_refuses_same_named_document_in_different_directory(self):
         client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
             trigger=lambda: None,
             raw_lisp_trigger=lambda command: None,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
@@ -398,7 +414,7 @@ class FileIPCClientTests(unittest.TestCase):
             )
 
     def test_block_attribute_read_retries_one_timeout(self):
-        client = FileIPCLiveMCPClient(trigger=lambda: None)
+        client = FileIPCLiveMCPClient(ipc_dir=self._ipc_dir, trigger=lambda: None)
         calls = []
 
         def dispatch(command, params):
