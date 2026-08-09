@@ -1989,8 +1989,33 @@ def test_task5_projection_errors_are_privacy_safe() -> None:
 
 
 def test_task5_cross_platform_canonical_digest_fixture_uses_existing_hash_owner() -> None:
-    expected_material = {"identity_kind": "r1c-task5-projection-fixture-v1", "numeric_policy_version": R1C_NUMERIC_POLICY_VERSION, "source_id": _IMAGE_SOURCE_ID, "content": {"kind": "line", "confidence": "0.875", "start_mm": ["0", "0"], "end_mm": ["10", "0"]}}
-    assert canonical_json_sha256(expected_material) == "13d2345542af34cf371e0cf99b4d89dcf45ed2b3e3f2f6facef4cbcb3dba2ac2"
+    expected_material = {
+        "identity_kind": "r1c-task5-projection-fixture-v1",
+        "numeric_policy_version": R1C_NUMERIC_POLICY_VERSION,
+        "task4_lineage": {
+            "numeric_policy_version": R1C_NUMERIC_POLICY_VERSION,
+            "observed_source_sha256": IMAGE_SHA256,
+            "primitive_source_document": {
+                "image_height_px": 480,
+                "image_width_px": 640,
+                "sha256": IMAGE_SHA256,
+            },
+            "provenance_kind": "DIRECT_IMAGE",
+            "raster_height_px": 480,
+            "raster_sha256": IMAGE_SHA256,
+            "raster_width_px": 640,
+            "source_custody_sha256": "ca0fc7efafdd73b0b7c77e1ca78cfd7e0ca38b6da80030a4b25d960cf4f3d4d9",
+            "source_id": _IMAGE_SOURCE_ID,
+        },
+        "source_id": _IMAGE_SOURCE_ID,
+        "content": {
+            "kind": "line",
+            "confidence": "0.875",
+            "start_mm": ["0", "0"],
+            "end_mm": ["10", "0"],
+        },
+    }
+    assert canonical_json_sha256(expected_material) == "edba06cc715888c38f5471ec1c482a17f4618d5a531c0d814fda1ec5f64be58a"
     projection = _task5_project_primitive(_task5_primitive_artifact([_task5_primitive("prim-a")]))
     assert _task5_primitive_signature(projection)[0][0] == canonical_json_sha256(expected_material)
 
@@ -2129,11 +2154,13 @@ def test_task5_duplicate_class_multiplicity_three_requires_complete_selection() 
         primitive_ids=["dup-a", "dup-b", "dup-c"],
         primitive_count=3,
     )
+    complete["constraints"][0]["primitive_ids"] = ["dup-a", "dup-b", "dup-c"]
     reverse = _task5_semantic_artifact(
         primitive_ids=["dup-c", "dup-b", "dup-a"],
         primitive_count=3,
         part_id="part-regenerated",
     )
+    reverse["constraints"][0]["primitive_ids"] = ["dup-c", "dup-b", "dup-a"]
     assert _task5_semantic_signature(
         _task5_project_semantic(complete, primitive_projection)
     ) == _task5_semantic_signature(

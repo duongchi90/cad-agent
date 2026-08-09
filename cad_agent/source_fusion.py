@@ -1266,6 +1266,17 @@ def _task5_select_source_binding(
     return _copy.deepcopy(next(iter(unique.values())))
 
 
+def _task5_task4_lineage_material(
+    binding: _Mapping[str, object],
+) -> dict[str, object]:
+    """Return stable Task-4 evidence that belongs in primitive identity."""
+    return {
+        key: _copy.deepcopy(value)
+        for key, value in binding.items()
+        if key not in {"render_provenance_sha256", "primitive_artifact_sha256"}
+    }
+
+
 def _task5_calibration(
     value: object,
     source_sha256: str,
@@ -1530,6 +1541,7 @@ def project_primitive_observations(
         material = {
             "identity_kind": "r1c-task5-projection-fixture-v1",
             "numeric_policy_version": _R1C_NUMERIC_POLICY_VERSION,
+            "task4_lineage": _task5_task4_lineage_material(binding),
             "source_id": source_id,
             "content": content,
         }
@@ -1616,8 +1628,6 @@ def _task5_resolve_membership(
     primitive_ids: object,
     *,
     by_legacy_id: dict[str, dict[str, object]],
-    allow_anchored_subset: bool,
-    anchored_duplicate_keys: set[str],
 ) -> list[str]:
     code = "SEMANTIC_REFERENCE_INVALID"
     if not isinstance(primitive_ids, list) or not primitive_ids:
@@ -1641,11 +1651,7 @@ def _task5_resolve_membership(
                 _fail("DUPLICATE_OBSERVATION_AMBIGUITY")
             _fail(code)
         if int(record["occurrence_count"]) > 1 and set(ids) != expected_ids:
-            if not (
-                allow_anchored_subset
-                and observation_key in anchored_duplicate_keys
-            ):
-                _fail("DUPLICATE_OBSERVATION_AMBIGUITY")
+            _fail("DUPLICATE_OBSERVATION_AMBIGUITY")
         keys.extend([observation_key] * len(ids))
     keys.sort()
     return keys
@@ -1700,8 +1706,6 @@ def _task5_part_content(
     primitive_keys = _task5_resolve_membership(
         part["primitive_ids"],
         by_legacy_id=by_legacy_id,
-        allow_anchored_subset=False,
-        anchored_duplicate_keys=set(),
     )
     content: dict[str, object] = {
         "kind": "part",
@@ -1744,7 +1748,6 @@ def _task5_constraint_content(
     value: object,
     *,
     by_legacy_id: dict[str, dict[str, object]],
-    anchored_duplicate_keys: set[str],
 ) -> tuple[dict[str, object], list[str]]:
     code = "SEMANTIC_ARTIFACT_INVALID"
     constraint = _task5_closed_with_optional(
@@ -1765,8 +1768,6 @@ def _task5_constraint_content(
     primitive_keys = _task5_resolve_membership(
         constraint["primitive_ids"],
         by_legacy_id=by_legacy_id,
-        allow_anchored_subset=True,
-        anchored_duplicate_keys=anchored_duplicate_keys,
     )
     content: dict[str, object] = {
         "kind": "constraint",
@@ -1831,26 +1832,12 @@ def project_semantic_observations(
         _fail(code)
 
     part_payloads: list[tuple[dict[str, object], list[str]]] = []
-    anchored_duplicate_keys: set[str] = set()
-    by_observation_key = {
-        str(record["observation_key"]): record for record in primitive_records
-    }
     for value in artifact["parts"]:
         content, primitive_keys = _task5_part_content(
             value,
             by_legacy_id=by_legacy_id,
         )
         part_payloads.append((content, primitive_keys))
-        counts: dict[str, int] = {}
-        for key in primitive_keys:
-            counts[key] = counts.get(key, 0) + 1
-        for key, count in counts.items():
-            source_record = by_observation_key[key]
-            if (
-                int(source_record["occurrence_count"]) > 1
-                and count == int(source_record["occurrence_count"])
-            ):
-                anchored_duplicate_keys.add(key)
 
     output: list[dict[str, object]] = []
     for content, primitive_keys in part_payloads:
@@ -1873,7 +1860,6 @@ def project_semantic_observations(
         content, primitive_keys = _task5_constraint_content(
             value,
             by_legacy_id=by_legacy_id,
-            anchored_duplicate_keys=anchored_duplicate_keys,
         )
         material = {
             "identity_kind": "r1c-semantic-observation-v1",
