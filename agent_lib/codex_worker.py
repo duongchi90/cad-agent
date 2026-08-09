@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import json
 import math
 import re
 import sys
@@ -23,6 +24,7 @@ from typing import Protocol
 
 from agent_lib.codex_sdk_compat import require_compatible_codex_sdk
 from agent_lib.codex_worker_process import (
+    MAX_CONTROL_FRAME_BYTES,
     ProcessTreeIdentity,
     WorkerCleanupResult,
     WorkerEnvironmentAttestation,
@@ -45,6 +47,7 @@ from cad_agent.vision_handoff import (
 )
 
 MAX_OPERATION_TIMEOUT_SECONDS = 30.0
+MAX_WORKER_EVENTS = 256
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ALLOWED_EVENTS = frozenset(
     {
@@ -168,6 +171,19 @@ def _validate_timeout(value: float) -> float:
     ):
         _fail("WORKER_LIMIT_INVALID")
     return float(value)
+
+
+def _check_deadline(deadline: float | None) -> None:
+    if deadline is None:
+        return
+    if (
+        isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or not math.isfinite(float(deadline))
+    ):
+        _fail("WORKER_LIMIT_INVALID")
+    if time.monotonic() >= float(deadline):
+        _fail("WORKER_TIMEOUT")
 
 
 @dataclass(frozen=True, repr=False)
@@ -349,7 +365,7 @@ def _request_from_wire(value: Mapping[str, object]) -> AdapterRequest:
 
 
 class Task3ProcessBoundary:
-    """Concrete Task-3 child-control client for Task-4/5 lifecycle requests."""
+    """Concrete Task-3 child-control client for Task-4/5 lifecycle operations."""
 
     def __init__(
         self,
@@ -397,11 +413,19 @@ class Task3ProcessBoundary:
         )
         return attestation, handle
 
-    def _exchange(self, handle: object, request: AdapterRequest) -> object:
+    def _exchange(
+        self,
+        handle: object,
+        request: AdapterRequest,
+        *,
+        deadline: float | None = None,
+    ) -> object:
         try:
-            response = exchange_worker_control(handle, _request_to_wire(request))  # type: ignore[arg-type]
-        except WorkerProcessError:
-            _fail("WORKER_PROVIDER_FAILED")
+            response = exchange_worker_control(  # type: ignore[arg-type]
+                handle, _request_to_wire(request), deadline=deadline
+            )
+        except WorkerProcessError as exc:
+            _fail("WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_PROVIDER_FAILED")
         worker_error = response.get("_worker_error")
         if worker_error is not None:
             if not isinstance(worker_error, str) or worker_error not in _CHILD_ERROR_CODES:
@@ -409,10 +433,22 @@ class Task3ProcessBoundary:
             _fail(worker_error)
         return response
 
-    def invoke(self, handle: object, request: AdapterRequest) -> object:
-        return self._exchange(handle, request)
+    def invoke(
+        self,
+        handle: object,
+        request: AdapterRequest,
+        *,
+        deadline: float | None = None,
+    ) -> object:
+        return self._exchange(handle, request, deadline=deadline)
 
-    def attest(self, handle: object, request: AdapterRequest) -> object:
+    def attest(
+        self,
+        handle: object,
+        request: AdapterRequest,
+        *,
+        deadline: float | None = None,
+    ) -> object:
         if request.operation not in _ATTESTED_OPERATIONS:
             _fail("WORKER_PROVIDER_RESPONSE_INVALID")
         attestation_request = replace(
@@ -421,7 +457,7 @@ class Task3ProcessBoundary:
             input_payload=None,
             cancelled=False,
         )
-        return self._exchange(handle, attestation_request)
+        return self._exchange(handle, attestation_request, deadline=deadline)
 
     def cleanup(self, handle: object) -> object:
         return cleanup_worker_process(handle)  # type: ignore[arg-type]
@@ -668,18 +704,63 @@ def _validate_process_evidence(
         _fail("WORKER_PROCESS_EVIDENCE_INVALID")
 
 
-def _normalize_events(value: object) -> tuple[CodexWorkerEvent, ...]:
+def _bounded_raw_event(raw: Mapping[str, object]) -> None:
+    try:
+        frozen = _freeze_json_like(raw)
+        thawed = _thaw_json_like(frozen)
+        encoded = json.dumps(
+            thawed,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except CodexWorkerError:
+        raise
+    except (TypeError, ValueError, UnicodeError):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    if len(encoded) > MAX_CONTROL_FRAME_BYTES:
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+
+
+def _normalize_events(
+    value: object,
+    *,
+    deadline: float | None = None,
+) -> tuple[CodexWorkerEvent, ...]:
     if value is None:
         return ()
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    try:
+        if len(value) > MAX_WORKER_EVENTS:
+            _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    except CodexWorkerError:
+        raise
+    except Exception:
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
     events: list[CodexWorkerEvent] = []
+    previous_sequence: int | None = None
+    sequence_started = False
     try:
         for raw in value:
+            _check_deadline(deadline)
             if not isinstance(raw, Mapping):
                 _fail("WORKER_PROVIDER_RESPONSE_INVALID")
             kind = raw.get("type")
+            _check_deadline(deadline)
             if not isinstance(kind, str) or kind not in _ALLOWED_EVENTS:
+                _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+            _bounded_raw_event(raw)
+            _check_deadline(deadline)
+            sequence = raw.get("sequence")
+            if sequence is not None:
+                if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
+                    _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+                if sequence_started and previous_sequence is not None and sequence != previous_sequence + 1:
+                    _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+                sequence_started = True
+                previous_sequence = sequence
+            elif sequence_started:
                 _fail("WORKER_PROVIDER_RESPONSE_INVALID")
             events.append(CodexWorkerEvent(kind=kind))
     except CodexWorkerError:
@@ -689,20 +770,67 @@ def _normalize_events(value: object) -> tuple[CodexWorkerEvent, ...]:
     return tuple(events)
 
 
+def _event_grammar_valid(operation: str, status: str, kinds: tuple[str, ...]) -> bool:
+    if operation in {"start", "resume", "fork"}:
+        return status == "ready" and kinds == ("thread.ready",)
+    if operation == "interrupt":
+        return status == "interrupted" and kinds == ("turn.interrupted",)
+    if operation == "close":
+        if status == "closed":
+            return kinds == ("thread.closed",)
+        if status == "failed":
+            return kinds == ("provider.failed",)
+        return False
+    if operation == "turn":
+        if status == "completed":
+            return kinds in {
+                ("turn.completed",),
+                ("turn.started", "turn.completed"),
+            }
+        if status == "failed":
+            return kinds in {
+                ("provider.failed",),
+                ("turn.started", "provider.failed"),
+            }
+        return False
+    if operation == "steer":
+        if status == "completed":
+            return kinds in {
+                ("turn.completed",),
+                ("turn.started", "turn.completed"),
+                ("turn.steered", "turn.completed"),
+                ("turn.started", "turn.steered", "turn.completed"),
+            }
+        if status == "failed":
+            return kinds in {
+                ("provider.failed",),
+                ("turn.started", "provider.failed"),
+                ("turn.steered", "provider.failed"),
+                ("turn.started", "turn.steered", "provider.failed"),
+            }
+        return False
+    return False
+
+
 def _normalize_response(
     value: object,
-    *, operation: str, expected_thread_id: str
+    *,
+    operation: str,
+    expected_thread_id: str,
+    deadline: float | None = None,
 ) -> tuple[str, str | None, tuple[CodexWorkerEvent, ...], object | None]:
+    _check_deadline(deadline)
     if not isinstance(value, Mapping):
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
     try:
         status = value.get("status")
         thread_id = value.get("thread_id")
-        events = _normalize_events(value.get("events", ()))
+        events = _normalize_events(value.get("events", ()), deadline=deadline)
     except CodexWorkerError:
         raise
     except Exception:
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    _check_deadline(deadline)
     if thread_id != expected_thread_id:
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
     allowed_status = {
@@ -716,14 +844,21 @@ def _normalize_response(
     }.get(operation)
     if allowed_status is None or status not in allowed_status:
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    normalized_status = str(status)
+    kinds = tuple(event.kind for event in events)
+    if not _event_grammar_valid(operation, normalized_status, kinds):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
     turn_id: str | None = None
     candidate: object | None = None
-    if operation in {"turn", "steer"} and status == "completed":
+    if operation in {"turn", "steer"} and normalized_status == "completed":
+        _check_deadline(deadline)
         turn_id = _identifier(value.get("turn_id"))
         if "candidate_output" not in value:
             _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+        _check_deadline(deadline)
         candidate = _freeze_json_like(value.get("candidate_output"))
-    return str(status), turn_id, events, candidate
+        _check_deadline(deadline)
+    return normalized_status, turn_id, events, candidate
 
 
 def _cleanup_evidence(
@@ -759,10 +894,20 @@ def _raise_open_failure(
 
 
 def _invoke_child(
-    process_boundary: WorkerProcessBoundary, handle: object, request: AdapterRequest
+    process_boundary: WorkerProcessBoundary,
+    handle: object,
+    request: AdapterRequest,
+    *,
+    deadline: float | None = None,
 ) -> object:
     try:
-        return process_boundary.invoke(handle, request)
+        invoke = getattr(process_boundary, "invoke")
+        if deadline is None:
+            return invoke(handle, request)
+        try:
+            return invoke(handle, request, deadline=deadline)
+        except TypeError:
+            return invoke(handle, request)
     except TimeoutError:
         raise CodexWorkerError("WORKER_TIMEOUT") from None
     except CodexWorkerError:
@@ -779,6 +924,7 @@ def _attest_provider_boundary(
     binding: BoundWorkerThread,
     authority_context: ServerOwnedAuthorityContext,
     worker_context: ServerOwnedWorkerBindingContext,
+    deadline: float | None = None,
 ) -> None:
     attest = getattr(process_boundary, "attest", None)
     if not callable(attest):
@@ -786,7 +932,13 @@ def _attest_provider_boundary(
             _fail("WORKER_SDK_ATTESTATION_GAP")
         return
     try:
-        observed = attest(handle, request)
+        if deadline is None:
+            observed = attest(handle, request)
+        else:
+            try:
+                observed = attest(handle, request, deadline=deadline)
+            except TypeError:
+                observed = attest(handle, request)
     except CodexWorkerError:
         raise
     except Exception:
@@ -950,14 +1102,18 @@ class CodexWorkerSession:
         if self._terminal_result is not None:
             return self._terminal_result
         try:
+            timeout = _validate_timeout(timeout_seconds)
+            deadline = time.monotonic() + timeout
             request = self._request_with_now(
                 operation,
                 input_payload=payload,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=timeout,
                 now=now,
             )
-        except CodexWorkerError:
-            return self._cleanup_failure(operation, "WORKER_AUTHORITY_MISMATCH")
+            _check_deadline(deadline)
+        except CodexWorkerError as exc:
+            code = "WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_AUTHORITY_MISMATCH"
+            return self._cleanup_failure(operation, code)
         try:
             _attest_provider_boundary(
                 self._process_boundary,
@@ -966,30 +1122,40 @@ class CodexWorkerSession:
                 binding=self._binding,
                 authority_context=self._authority_context,
                 worker_context=self._worker_context,
+                deadline=deadline,
             )
         except CodexWorkerError as exc:
             code = (
                 exc.code
-                if exc.code in {"WORKER_AUTHORITY_MISMATCH", "WORKER_SDK_ATTESTATION_GAP"}
+                if exc.code in {
+                    "WORKER_AUTHORITY_MISMATCH",
+                    "WORKER_SDK_ATTESTATION_GAP",
+                    "WORKER_TIMEOUT",
+                }
                 else "WORKER_PROVIDER_FAILED"
             )
             return self._cleanup_failure(operation, code)
-        started = time.monotonic()
         try:
-            response = _invoke_child(self._process_boundary, self._process_handle, request)
+            _check_deadline(deadline)
+            response = _invoke_child(
+                self._process_boundary,
+                self._process_handle,
+                request,
+                deadline=deadline,
+            )
         except CodexWorkerError as exc:
             code = "WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_PROVIDER_FAILED"
             return self._cleanup_failure(operation, code)
-        if time.monotonic() - started > request.timeout_seconds:
-            return self._cleanup_failure(operation, "WORKER_TIMEOUT")
         try:
             status, turn_id, events, candidate = _normalize_response(
                 response,
                 operation=operation,
                 expected_thread_id=self._binding.thread_id,
+                deadline=deadline,
             )
-        except CodexWorkerError:
-            return self._cleanup_failure(operation, "WORKER_PROVIDER_RESPONSE_INVALID")
+        except CodexWorkerError as exc:
+            code = "WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_PROVIDER_RESPONSE_INVALID"
+            return self._cleanup_failure(operation, code)
         if status == "failed":
             return self._cleanup_failure(operation, "WORKER_PROVIDER_FAILED")
         self._pending_candidate = candidate
@@ -1019,20 +1185,32 @@ class CodexWorkerSession:
         if self._terminal_result is not None:
             return self._terminal_result
         try:
+            timeout = _validate_timeout(timeout_seconds)
+            deadline = time.monotonic() + timeout
             request = self._request_with_now(
                 "interrupt",
                 input_payload=None,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=timeout,
                 now=now,
             )
-            response = _invoke_child(self._process_boundary, self._process_handle, request)
+            _check_deadline(deadline)
+            response = _invoke_child(
+                self._process_boundary,
+                self._process_handle,
+                request,
+                deadline=deadline,
+            )
             _normalize_response(
                 response,
                 operation="interrupt",
                 expected_thread_id=self._binding.thread_id,
+                deadline=deadline,
             )
+        except CodexWorkerError:
+            return self._cleanup_failure("interrupt", "WORKER_INTERRUPT_FAILED")
         except Exception:
             return self._cleanup_failure("interrupt", "WORKER_INTERRUPT_FAILED")
+        self._pending_candidate = None
         self._status = "INTERRUPTED"
         return self._cleanup_failure("interrupt", "WORKER_INTERRUPTED")
 
@@ -1041,18 +1219,46 @@ class CodexWorkerSession:
     ) -> CodexWorkerResult:
         if self._terminal_result is not None:
             return self._terminal_result
+        try:
+            timeout = _validate_timeout(timeout_seconds)
+            deadline = time.monotonic() + timeout
+        except CodexWorkerError:
+            return self._cleanup_failure("cancel", "WORKER_INTERRUPT_FAILED")
         self._status = "CANCELLED"
+        self._pending_candidate = None
         try:
             request = self._request_with_now(
                 "interrupt",
                 input_payload=None,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=timeout,
                 now=now,
                 cancelled=True,
             )
-            _invoke_child(self._process_boundary, self._process_handle, request)
+            _check_deadline(deadline)
+            response = _invoke_child(
+                self._process_boundary,
+                self._process_handle,
+                request,
+                deadline=deadline,
+            )
+        except CodexWorkerError:
+            return self._cleanup_failure("cancel", "WORKER_INTERRUPT_FAILED")
         except Exception:
             return self._cleanup_failure("cancel", "WORKER_INTERRUPT_FAILED")
+        try:
+            _normalize_response(
+                response,
+                operation="interrupt",
+                expected_thread_id=self._binding.thread_id,
+                deadline=deadline,
+            )
+        except CodexWorkerError as exc:
+            code = (
+                "WORKER_PROVIDER_RESPONSE_INVALID"
+                if exc.code == "WORKER_PROVIDER_RESPONSE_INVALID"
+                else "WORKER_INTERRUPT_FAILED"
+            )
+            return self._cleanup_failure("cancel", code)
         return self._cleanup_failure("cancel", "WORKER_CANCELLED")
 
     def close(
@@ -1063,24 +1269,33 @@ class CodexWorkerSession:
         provider_code: str | None = None
         events: tuple[CodexWorkerEvent, ...] = ()
         try:
+            timeout = _validate_timeout(timeout_seconds)
+            deadline = time.monotonic() + timeout
             request = self._request_with_now(
                 "close",
                 input_payload=None,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=timeout,
                 now=now,
             )
-            response = _invoke_child(self._process_boundary, self._process_handle, request)
+            _check_deadline(deadline)
+            response = _invoke_child(
+                self._process_boundary,
+                self._process_handle,
+                request,
+                deadline=deadline,
+            )
             status, _turn_id, events, _candidate = _normalize_response(
                 response,
                 operation="close",
                 expected_thread_id=self._binding.thread_id,
+                deadline=deadline,
             )
             if status == "failed":
                 provider_code = "WORKER_PROVIDER_FAILED"
         except CodexWorkerError as exc:
             provider_code = (
-                "WORKER_AUTHORITY_MISMATCH"
-                if exc.code == "WORKER_AUTHORITY_MISMATCH"
+                exc.code
+                if exc.code in {"WORKER_AUTHORITY_MISMATCH", "WORKER_TIMEOUT"}
                 else "WORKER_PROVIDER_FAILED"
             )
         except Exception:
@@ -1130,6 +1345,7 @@ def _open_codex_worker(
 ) -> CodexWorkerSession:
     del adapter
     timeout = _validate_timeout(timeout_seconds)
+    deadline = time.monotonic() + timeout
     root, cwd, roots = _revalidate_binding(
         handoff=handoff,
         binding=binding,
@@ -1137,6 +1353,7 @@ def _open_codex_worker(
         worker_context=worker_context,
         now=now,
     )
+    _check_deadline(deadline)
     try:
         if type(process_boundary) is Task3ProcessBoundary:
             attestation, handle = _TASK3_CANONICAL_START(
@@ -1151,6 +1368,7 @@ def _open_codex_worker(
     except Exception:
         _fail("WORKER_PROCESS_START_FAILED")
     try:
+        _check_deadline(deadline)
         _validate_process_evidence(
             attestation=attestation,
             handle=handle,
@@ -1179,6 +1397,7 @@ def _open_codex_worker(
         timeout_seconds=timeout,
     )
     try:
+        _check_deadline(deadline)
         _attest_provider_boundary(
             process_boundary,
             handle,
@@ -1186,30 +1405,40 @@ def _open_codex_worker(
             binding=binding,
             authority_context=authority_context,
             worker_context=worker_context,
+            deadline=deadline,
         )
     except CodexWorkerError as exc:
         primary = (
             exc.code
-            if exc.code in {"WORKER_AUTHORITY_MISMATCH", "WORKER_SDK_ATTESTATION_GAP"}
+            if exc.code in {
+                "WORKER_AUTHORITY_MISMATCH",
+                "WORKER_SDK_ATTESTATION_GAP",
+                "WORKER_TIMEOUT",
+            }
             else "WORKER_PROVIDER_FAILED"
         )
         _raise_open_failure(process_boundary, handle, primary)
-    started = time.monotonic()
     try:
-        response = _invoke_child(process_boundary, handle, request)
+        _check_deadline(deadline)
+        response = _invoke_child(
+            process_boundary,
+            handle,
+            request,
+            deadline=deadline,
+        )
     except CodexWorkerError as exc:
         primary = exc.code if exc.code in _CHILD_ERROR_CODES else "WORKER_PROVIDER_FAILED"
         _raise_open_failure(process_boundary, handle, primary)
-    if time.monotonic() - started > timeout:
-        _raise_open_failure(process_boundary, handle, "WORKER_TIMEOUT")
     try:
         status, _turn_id, _events, _candidate = _normalize_response(
             response,
             operation=operation,
             expected_thread_id=binding.thread_id,
+            deadline=deadline,
         )
-    except CodexWorkerError:
-        _raise_open_failure(process_boundary, handle, "WORKER_PROVIDER_RESPONSE_INVALID")
+    except CodexWorkerError as exc:
+        primary = "WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_PROVIDER_RESPONSE_INVALID"
+        _raise_open_failure(process_boundary, handle, primary)
     if status != "ready":
         _raise_open_failure(process_boundary, handle, "WORKER_PROVIDER_RESPONSE_INVALID")
     return CodexWorkerSession(
@@ -1344,6 +1573,7 @@ def _task5_exchange_child_control(
     request: AdapterRequest,
     *,
     attestation: bool,
+    deadline: float | None = None,
 ) -> object:
     outbound = request
     if attestation:
@@ -1356,8 +1586,12 @@ def _task5_exchange_child_control(
             cancelled=False,
         )
     try:
-        response = exchange_worker_control(handle, _request_to_wire(outbound))  # type: ignore[arg-type]
-    except WorkerProcessError:
+        response = exchange_worker_control(  # type: ignore[arg-type]
+            handle, _request_to_wire(outbound), deadline=deadline
+        )
+    except WorkerProcessError as exc:
+        if exc.code == "WORKER_TIMEOUT":
+            _fail("WORKER_TIMEOUT")
         _fail("WORKER_SDK_ATTESTATION_GAP" if attestation else "WORKER_PROVIDER_FAILED")
     if not isinstance(response, Mapping):
         _fail("WORKER_SDK_ATTESTATION_GAP" if attestation else "WORKER_PROVIDER_RESPONSE_INVALID")
@@ -1373,9 +1607,16 @@ def _task5_secure_invoke_child(
     process_boundary: WorkerProcessBoundary,
     handle: object,
     request: AdapterRequest,
+    *,
+    deadline: float | None = None,
 ) -> object:
     del process_boundary
-    return _task5_exchange_child_control(handle, request, attestation=False)
+    return _task5_exchange_child_control(
+        handle,
+        request,
+        attestation=False,
+        deadline=deadline,
+    )
 
 
 def _task5_secure_attest_provider_boundary(
@@ -1386,9 +1627,15 @@ def _task5_secure_attest_provider_boundary(
     binding: BoundWorkerThread,
     authority_context: ServerOwnedAuthorityContext,
     worker_context: ServerOwnedWorkerBindingContext,
+    deadline: float | None = None,
 ) -> None:
     del process_boundary
-    observed = _task5_exchange_child_control(handle, request, attestation=True)
+    observed = _task5_exchange_child_control(
+        handle,
+        request,
+        attestation=True,
+        deadline=deadline,
+    )
     if not isinstance(observed, Mapping):
         _fail("WORKER_SDK_ATTESTATION_GAP")
     try:
@@ -1495,6 +1742,7 @@ def _task5_round2_secure_attest_provider_boundary(
     binding: BoundWorkerThread,
     authority_context: ServerOwnedAuthorityContext,
     worker_context: ServerOwnedWorkerBindingContext,
+    deadline: float | None = None,
 ) -> None:
     if not _task5_round2_is_canonical_boundary(process_boundary):
         _fail("WORKER_SDK_ATTESTATION_GAP")
@@ -1505,6 +1753,7 @@ def _task5_round2_secure_attest_provider_boundary(
         binding=binding,
         authority_context=authority_context,
         worker_context=worker_context,
+        deadline=deadline,
     )
 
 
