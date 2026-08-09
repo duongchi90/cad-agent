@@ -6,6 +6,7 @@ import copy
 import decimal
 import importlib
 import inspect
+import io
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -29,6 +30,7 @@ from cad_agent.source_integrity import (
 
 
 SOURCE_MODULE = Path(__file__).parents[1] / "cad_agent" / "source_integrity.py"
+SOURCE_FUSION_MODULE_FILE = Path(__file__).parents[1] / "cad_agent" / "source_fusion.py"
 
 
 @pytest.mark.parametrize(
@@ -1775,3 +1777,150 @@ def test_task3_source_contains_no_ezdxf_ocr_model_provider_or_autocad_authority(
         "mcp_integration_lib",
     ):
         assert forbidden not in source
+
+
+# ---------------------------------------------------------- Task 9 hardening ---
+
+
+@pytest.mark.parametrize(
+    ("value", "quantity", "unit", "expected_unit", "expected_value"),
+    [
+        ("25.4005", "physical_length", "mm", "mm", "25.4"),
+        ("1.0005", "physical_length", "in", "mm", "25.413"),
+        ("0.5", "pdf_coordinate", "in", "pt", "36"),
+        ("2.54", "pdf_coordinate", "cm", "pt", "72"),
+        ("2147483647", "pixel_dimension", "px", "px", "2147483647"),
+        ("359.9999995", "angle", "degree", "degree", "360"),
+        ("0.1234565", "confidence", "unitless", "unitless", "0.123456"),
+        ("300.0005", "dpi", "dpi", "dpi", "300"),
+        ("0.0000000005", "render_matrix", "unitless", "unitless", "0"),
+        ("1.2345678905", "scale", "ratio", "ratio", "1.23456789"),
+    ],
+)
+def test_task9_numeric_golden_vectors_are_fixed_and_replayable(
+    value: object,
+    quantity: str,
+    unit: str,
+    expected_unit: str,
+    expected_value: str,
+) -> None:
+    expected = {
+        "policy_version": R1C_NUMERIC_POLICY_VERSION,
+        "quantity": quantity,
+        "unit": expected_unit,
+        "value": expected_value,
+    }
+    first = canonicalize_r1c_quantity(value, quantity=quantity, unit=unit)
+    second = canonicalize_r1c_quantity(str(value), quantity=quantity, unit=unit)
+    assert first == expected
+    assert second == expected
+    assert canonical_json_sha256(first) == canonical_json_sha256(second)
+
+
+def test_task9_resource_corpus_rejects_all_supported_media_boundaries() -> None:
+    from pypdf import PdfWriter
+
+    encrypted = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.encrypt("task9")
+    writer.write(encrypted)
+    oversized_json = (
+        b'{"payload":"'
+        + b"x" * (_TASK3_MEDIA_LIMITS["max_json_string_chars"] + 1)
+        + b'"}'
+    )
+    corpus = [
+        ("IMAGE", "image/jpeg", b"\xff\xd8\xff\xe0\x00\x10"),
+        ("PDF", "application/pdf", encrypted.getvalue()),
+        ("EXACT_BASE_CAD", "application/acad", b"AC10"),
+        ("EXACT_BASE_CAD", "application/dxf", b"0\nSECTION\n2\nENTITIES\n"),
+        ("ENGINEER_RECORD", "application/json", b'{"a":1,"a":2}'),
+        ("ENGINEER_RECORD", "application/json", b'{"bad":"\xff"}'),
+        ("ENGINEER_RECORD", "application/json", oversized_json),
+    ]
+    for kind, media_type, payload in corpus:
+        with pytest.raises(SourceIntegrityError, match="MALFORMED|UNSUPPORTED|JSON_|PDF_|RESOURCE_LIMIT"):
+            _task3_observe(kind, media_type, payload)
+
+
+def test_task9_media_replay_is_byte_and_metadata_deterministic() -> None:
+    payloads = [
+        ("IMAGE", "image/png", _PNG_1X1),
+        ("EXACT_BASE_CAD", "application/dxf", b"0\nSECTION\n2\nHEADER\n"),
+        ("ENGINEER_RECORD", "application/json", b'{"alpha":1,"nested":{"ok":true}}'),
+    ]
+    for kind, media_type, payload in payloads:
+        assert _task3_observe(kind, media_type, payload) == _task3_observe(
+            kind, media_type, bytes(payload)
+        )
+
+
+def test_task9_integrity_and_fusion_modules_reject_forbidden_authority_owners() -> None:
+    forbidden_import_roots = {
+        "requests",
+        "urllib",
+        "httpx",
+        "subprocess",
+        "pytesseract",
+        "openai",
+        "anthropic",
+        "ezdxf",
+        "autocad_plugin",
+        "mcp_integration_lib",
+        "agent_lib",
+        "primitive_ir_lib",
+        "semantic_ir_lib",
+        "dxf_builder_lib",
+    }
+    forbidden_calls = {
+        "write",
+        "write_bytes",
+        "write_text",
+        "save",
+        "unlink",
+        "remove",
+        "os.replace",
+        "subprocess.run",
+        "subprocess.Popen",
+    }
+    forbidden_functions = {
+        "write_manifest",
+        "read_manifest",
+        "new_manifest",
+        "write_checkpoint",
+        "read_checkpoint",
+    }
+    for path in (SOURCE_MODULE, SOURCE_FUSION_MODULE_FILE):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert node.module.split(".")[0] not in forbidden_import_roots
+            if isinstance(node, ast.Import):
+                assert all(alias.name.split(".")[0] not in forbidden_import_roots for alias in node.names)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.name not in forbidden_functions
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    call = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    call = node.func.attr
+                else:
+                    call = ""
+                assert call not in forbidden_calls
+        called = {
+            ".".join(part for part in (getattr(node.func, "value", None), getattr(node.func, "attr", None)) if isinstance(part, str))
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert "datetime.now" not in called
+        assert "datetime.utcnow" not in called
+        assert "time.time" not in called
+        for forbidden in (
+            "approval_resolution",
+            "selected_resolution",
+            "resolved_by_approval",
+            "publication_authority",
+        ):
+            assert forbidden not in source
