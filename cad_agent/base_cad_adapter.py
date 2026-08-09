@@ -333,6 +333,7 @@ def evaluate_frozen_base_cad_reuse(
         "affected_component_ids": affected,
         "previous_source": deepcopy(previous),
         "current_source": deepcopy(current),
+        "reason_codes": reason_codes,
     }
 
 
