@@ -3144,6 +3144,80 @@ def test_task6_rejects_deferred_material_or_decision_evidence_instead_of_minting
         sf.build_source_fusion_packet(**inputs)
 
 
+# ---------------------------------------------------------- Task 9 hardening ---
+
+
+def test_task9_primitive_identity_binds_canonical_legacy_lineage() -> None:
+    sf = _sf()
+    inputs = _task6_ready_inputs()
+    tampered = copy.deepcopy(inputs)
+    tampered["primitive_observations"][0]["legacy_ids"] = ["TASK9-LINEAGE-TAMPER"]
+    with pytest.raises(sf.SourceFusionError, match="IDENTITY|MISMATCH"):
+        sf.build_source_fusion_packet(**tampered)
+
+
+def test_task9_fusion_replay_is_permutation_stable() -> None:
+    sf = _sf()
+    inputs = _task6_duplicate_and_independent_inputs()
+    forward = sf.build_source_fusion_packet(**copy.deepcopy(inputs))
+    permuted = copy.deepcopy(inputs)
+    permuted["primitive_observations"] = list(reversed(permuted["primitive_observations"]))
+    permuted["semantic_observations"] = list(reversed(permuted["semantic_observations"]))
+    reverse = sf.build_source_fusion_packet(**permuted)
+    assert sf.source_fusion_sha256(forward) == sf.source_fusion_sha256(reverse)
+    assert forward["conflicts"] == reverse["conflicts"]
+
+
+def test_task9_fusion_outputs_do_not_persist_paths_or_authority_fields() -> None:
+    sf = _sf()
+    packet = sf.build_source_fusion_packet(**_task6_ready_inputs())
+    serialized = repr(packet).lower()
+    for forbidden in (
+        "relative_path",
+        "private_path",
+        "file_object_identity_token",
+        "approval",
+        "verdict",
+        "resolution",
+        "publication",
+    ):
+        assert forbidden not in serialized
+
+
+def test_task9_fusion_module_has_no_ambient_clock_or_external_authority_imports() -> None:
+    source = SOURCE_FUSION_FILE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    forbidden_roots = {
+        "socket",
+        "requests",
+        "urllib",
+        "subprocess",
+        "pytesseract",
+        "openai",
+        "anthropic",
+        "autocad_plugin",
+        "mcp_integration_lib",
+    }
+    imports = {
+        node.module.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    imports.update(
+        alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    )
+    assert not forbidden_roots.intersection(imports)
+    calls = {
+        ast.unparse(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    assert not {"datetime.now", "datetime.utcnow", "time.time"}.intersection(calls)
+
+
 # -------------------------------------------------------- Task 7 RED ---
 
 
