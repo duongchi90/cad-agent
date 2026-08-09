@@ -254,3 +254,114 @@ def test_approved_match_rejects_stale_or_unapproved_plan(mutation: dict[str, obj
             proposed_plan=proposed,
             inspection=_inspection(),
         )
+
+
+def _handoff() -> dict[str, object]:
+    return {
+        "schema_version": "base-cad-reuse-handoff-1.0",
+        "run_id": "run-R2-175-001",
+        "source_bundle_sha256": "1" * 64,
+        "source_custody_sha256": "2" * 64,
+        "source_fusion_sha256": "3" * 64,
+        "base_cad_binding_sha256": "4" * 64,
+        "inspection_sha256": "5" * 64,
+        "extraction_plan_sha256": "6" * 64,
+        "base_source": {
+            "source_id": "base-cad-001",
+            "sha256": "7" * 64,
+            "revision": "rev-A",
+        },
+        "candidate_input_sha256": "8" * 64,
+        "candidate_output_sha256": "9" * 64,
+        "live_preflight_evidence_sha256": "a" * 64,
+        "components": [
+            {
+                "logical_component_id": "component-A",
+                "source_handle": "A1B2",
+                "source_layer": "BODY",
+                "source_block": "CHASSIS_MAIN",
+                "source_sha256": "b" * 64,
+                "source_revision": "rev-A",
+                "candidate_handle": "C3D4",
+                "transform": {
+                    "rotation_degrees": 0.0,
+                    "translation": {"x": 1.0, "y": 2.0, "z": 0.0},
+                    "uniform_scale": 1.0,
+                },
+                "provenance": "REUSED_FROM_BASE_CAD",
+            },
+        ],
+        "source_handle_to_candidate_handle": [{"source_handle": "A1B2", "candidate_handle": "C3D4"}],
+    }
+
+
+def _source(*, revision: str = "rev-A", sha256: str = "7" * 64) -> dict[str, str]:
+    return {"source_id": "base-cad-001", "sha256": sha256, "revision": revision}
+
+
+def test_reuse_handoff_is_closed_detached_and_canonical_hashable() -> None:
+    module = _module()
+    payload = _handoff()
+    normalized = module.validate_base_cad_reuse_handoff(payload)
+    assert normalized is not payload
+    assert normalized["components"] is not payload["components"]
+    assert normalized["schema_version"] == "base-cad-reuse-handoff-1.0"
+    payload["base_source"]["revision"] = "mutated"
+    assert normalized["base_source"]["revision"] == "rev-A"
+    assert module.base_cad_reuse_handoff_sha256(payload) == module.base_cad_reuse_handoff_sha256(normalized)
+
+
+def test_reuse_handoff_hash_uses_existing_canonical_owner() -> None:
+    module = _module()
+    assert module.base_cad_reuse_handoff_sha256(_handoff()) == canonical_json_sha256(
+        module.validate_base_cad_reuse_handoff(_handoff())
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"schema_version": "base-cad-reuse-handoff-2.0"},
+        {"base_source": {"source_id": "base-cad-001", "sha256": "A" * 64, "revision": "rev-A"}},
+        {"candidate_handle": "forbidden"},
+        {"source_handle_to_candidate_handle": []},
+    ],
+)
+def test_reuse_handoff_malformed_or_forbidden_shape_fails_closed(mutation: dict[str, object]) -> None:
+    module = _module()
+    payload = _handoff()
+    if "candidate_handle" in mutation:
+        payload["components"][0]["candidate_handle"] = mutation["candidate_handle"]
+    else:
+        payload.update(mutation)
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
+
+
+def test_frozen_reuse_evaluation_is_current_for_exact_source_identity() -> None:
+    module = _module()
+    result = module.evaluate_frozen_base_cad_reuse(
+        handoff=_handoff(), current_base_source=_source()
+    )
+    assert result["state"] == "CURRENT"
+    assert result["affected_component_ids"] == []
+
+
+@pytest.mark.parametrize("current", [_source(revision="rev-B"), _source(sha256="c" * 64), _source(revision="rev-B", sha256="c" * 64)])
+def test_frozen_reuse_evaluation_requires_reextraction_on_identity_drift(current: dict[str, str]) -> None:
+    module = _module()
+    result = module.evaluate_frozen_base_cad_reuse(
+        handoff=_handoff(), current_base_source=current
+    )
+    assert result["state"] == "STALE_REEXTRACTION_REQUIRED"
+    assert result["affected_component_ids"] == ["component-A"]
+    assert result["previous_source"] == _handoff()["base_source"]
+    assert result["current_source"] == current
+
+
+def test_reuse_evaluation_has_no_live_execution_or_current_pointer_fields() -> None:
+    module = _module()
+    result = module.evaluate_frozen_base_cad_reuse(
+        handoff=_handoff(), current_base_source=_source()
+    )
+    assert set(result) == {"state", "prior_handoff_sha256", "affected_component_ids", "previous_source", "current_source"}
