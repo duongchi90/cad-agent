@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import inspect
 import json
 from pathlib import Path
 
@@ -307,3 +308,352 @@ def test_manifest_owner_keeps_one_writer_and_pdf_adds_no_cli_commands() -> None:
         and node.func.attr in {"add_parser", "set_defaults"}
         for node in ast.walk(pdf_tree)
     )
+
+
+# -------------------------------------------------------- Task 8 RED ---
+
+
+def _task8_manifest_module() -> object:
+    import cad_agent.manifest as manifest
+
+    return manifest
+
+
+def _task8_hash(seed: str) -> str:
+    return seed * 64
+
+
+def _task8_custody_reference() -> dict[str, object]:
+    return {
+        "schema_version": "source-custody-reference-1.0",
+        "bundle_id": "BUNDLE-001",
+        "run_id": "RUN-001",
+        "approved_root_id": "ROOT-001",
+        "approved_root_revision": "ROOT-REV-001",
+        "approved_root_configuration_sha256": _task8_hash("a"),
+        "identity_scheme": "HMAC-SHA-256",
+        "identity_scheme_version": "r1c-file-identity-v1",
+        "identity_key_revision": "KEY-REV-001",
+        "numeric_policy_version": "r1c-numeric-v1",
+        "source_bundle_sha256": _task8_hash("b"),
+        "source_custody_sha256": _task8_hash("c"),
+        "status": "READY",
+        "item_count": 2,
+        "eligible_count": 2,
+        "blocking_count": 0,
+    }
+
+
+def _task8_fusion_reference() -> dict[str, object]:
+    return {
+        "schema_version": "source-fusion-reference-1.0",
+        "source_bundle_sha256": _task8_hash("b"),
+        "source_custody_sha256": _task8_hash("c"),
+        "approved_root_id": "ROOT-001",
+        "approved_root_revision": "ROOT-REV-001",
+        "approved_root_configuration_sha256": _task8_hash("a"),
+        "numeric_policy_version": "r1c-numeric-v1",
+        "tolerance_policy_version": "r1c-tolerance-v1",
+        "fusion_input_sha256": _task8_hash("d"),
+        "source_fusion_sha256": _task8_hash("e"),
+        "status": "READY",
+        "conflict_count": 0,
+        "unresolved_count": 0,
+    }
+
+
+def _task8_evaluation_reference() -> dict[str, object]:
+    return {
+        "schema_version": "source-fusion-evaluation-reference-1.0",
+        "source_fusion_sha256": _task8_hash("e"),
+        "fusion_input_sha256": _task8_hash("d"),
+        "evaluation_time_source": "SERVER-CLOCK-EVIDENCE-1",
+        "evaluation_time_evidence_sha256": _task8_hash("f"),
+        "expiry_policy_version": "r1c-expiry-v1",
+        "status": "REUSABLE",
+        "blocking_count": 0,
+    }
+
+
+def _task8_public(name: str) -> object:
+    value = getattr(_task8_manifest_module(), name, None)
+    assert callable(value), f"Task8 public API is missing: {name}"
+    return value
+
+
+def test_task8_freezes_constants_and_existing_owner_api_pattern() -> None:
+    manifest = _task8_manifest_module()
+    assert manifest.SOURCE_CUSTODY_REFERENCE_SCHEMA_VERSION == (
+        "source-custody-reference-1.0"
+    )
+    assert manifest.SOURCE_FUSION_REFERENCE_SCHEMA_VERSION == (
+        "source-fusion-reference-1.0"
+    )
+    assert manifest.SOURCE_FUSION_EVALUATION_REFERENCE_SCHEMA_VERSION == (
+        "source-fusion-evaluation-reference-1.0"
+    )
+    expected = {
+        "validate_source_custody_reference",
+        "bind_source_custody",
+        "require_source_custody_match",
+        "validate_source_fusion_reference",
+        "bind_source_fusion",
+        "require_source_fusion_match",
+        "validate_source_fusion_evaluation_reference",
+        "bind_source_fusion_evaluation",
+        "require_source_fusion_evaluation_match",
+    }
+    expected_parameters = {
+        "validate_source_custody_reference": ["value"],
+        "validate_source_fusion_reference": ["value"],
+        "validate_source_fusion_evaluation_reference": ["value"],
+        "bind_source_custody": ["manifest", "custody"],
+        "require_source_custody_match": ["manifest", "custody"],
+        "bind_source_fusion": ["manifest", "fusion"],
+        "require_source_fusion_match": ["manifest", "fusion"],
+        "bind_source_fusion_evaluation": ["manifest", "evaluation"],
+        "require_source_fusion_evaluation_match": [
+            "manifest",
+            "evaluation",
+        ],
+    }
+    for name in expected:
+        function = _task8_public(name)
+        assert list(inspect.signature(function).parameters) == expected_parameters[name]
+
+
+@pytest.mark.parametrize(
+    ("validator_name", "reference_factory"),
+    [
+        ("validate_source_custody_reference", _task8_custody_reference),
+        ("validate_source_fusion_reference", _task8_fusion_reference),
+        (
+            "validate_source_fusion_evaluation_reference",
+            _task8_evaluation_reference,
+        ),
+    ],
+)
+def test_task8_closed_references_validate_and_deep_copy(
+    validator_name: str,
+    reference_factory: object,
+) -> None:
+    reference = reference_factory()
+    original = copy.deepcopy(reference)
+    normalized = _task8_public(validator_name)(reference)
+    assert normalized == reference
+    assert normalized is not reference
+    assert reference == original
+
+
+@pytest.mark.parametrize(
+    ("validator_name", "reference_factory", "field", "value"),
+    [
+        (
+            "validate_source_custody_reference",
+            _task8_custody_reference,
+            "schema_version",
+            "source-custody-reference-2.0",
+        ),
+        (
+            "validate_source_custody_reference",
+            _task8_custody_reference,
+            "source_custody_sha256",
+            "A" * 64,
+        ),
+        (
+            "validate_source_custody_reference",
+            _task8_custody_reference,
+            "eligible_count",
+            True,
+        ),
+        (
+            "validate_source_fusion_reference",
+            _task8_fusion_reference,
+            "status",
+            "BLOCKED_UNRESOLVED",
+        ),
+        (
+            "validate_source_fusion_reference",
+            _task8_fusion_reference,
+            "conflict_count",
+            -1,
+        ),
+        (
+            "validate_source_fusion_evaluation_reference",
+            _task8_evaluation_reference,
+            "evaluation_time_evidence_sha256",
+            "Z" * 64,
+        ),
+        (
+            "validate_source_fusion_evaluation_reference",
+            _task8_evaluation_reference,
+            "blocking_count",
+            1,
+        ),
+    ],
+)
+def test_task8_references_reject_malformed_version_hash_status_or_count(
+    validator_name: str,
+    reference_factory: object,
+    field: str,
+    value: object,
+) -> None:
+    reference = reference_factory()
+    reference[field] = value
+    with pytest.raises(ManifestError):
+        _task8_public(validator_name)(reference)
+
+
+@pytest.mark.parametrize(
+    ("validator_name", "reference_factory", "extra"),
+    [
+        (
+            "validate_source_custody_reference",
+            _task8_custody_reference,
+            "items",
+        ),
+        (
+            "validate_source_fusion_reference",
+            _task8_fusion_reference,
+            "resolution_references",
+        ),
+        (
+            "validate_source_fusion_evaluation_reference",
+            _task8_evaluation_reference,
+            "evaluation_time_utc",
+        ),
+    ],
+)
+def test_task8_references_reject_full_evidence_or_authority_fields(
+    validator_name: str,
+    reference_factory: object,
+    extra: str,
+) -> None:
+    reference = reference_factory()
+    reference[extra] = []
+    with pytest.raises(ManifestError):
+        _task8_public(validator_name)(reference)
+
+
+@pytest.mark.parametrize(
+    ("bind_name", "match_name", "reference_factory", "key"),
+    [
+        (
+            "bind_source_custody",
+            "require_source_custody_match",
+            _task8_custody_reference,
+            "source_custody",
+        ),
+        (
+            "bind_source_fusion",
+            "require_source_fusion_match",
+            _task8_fusion_reference,
+            "source_fusion",
+        ),
+        (
+            "bind_source_fusion_evaluation",
+            "require_source_fusion_evaluation_match",
+            _task8_evaluation_reference,
+            "source_fusion_evaluation",
+        ),
+    ],
+)
+def test_task8_equal_bind_is_idempotent_unequal_rebind_fails_and_match_is_exact(
+    bind_name: str,
+    match_name: str,
+    reference_factory: object,
+    key: str,
+) -> None:
+    manifest = _legacy_manifest()
+    reference = reference_factory()
+    original = copy.deepcopy(manifest)
+    bind = _task8_public(bind_name)
+    match = _task8_public(match_name)
+    bound = bind(manifest, reference)
+    assert manifest == original
+    assert bound is not manifest
+    assert bound[key] == reference
+    assert bind(bound, copy.deepcopy(reference)) == bound
+    match(bound, reference)
+
+    changed = copy.deepcopy(reference)
+    hash_field = next(field for field in changed if field.endswith("sha256"))
+    changed[hash_field] = _task8_hash("9")
+    with pytest.raises(ManifestError):
+        bind(bound, changed)
+    with pytest.raises(ManifestError):
+        match(bound, changed)
+
+
+@pytest.mark.parametrize("key", ["source_custody", "source_fusion", "source_fusion_evaluation"])
+def test_task8_legacy_manifest_and_pdf_readers_preserve_absent_optional_reference(
+    tmp_path: Path,
+    key: str,
+) -> None:
+    image_path = tmp_path / f"{key}-run-manifest.json"
+    write_manifest(image_path, _legacy_manifest())
+    loaded_image = read_manifest(image_path)
+    assert key not in loaded_image
+
+    pdf_path = tmp_path / f"{key}-pdf-run-manifest.json"
+    write_manifest(pdf_path, _legacy_pdf_manifest())
+    loaded_pdf = read_pdf_manifest(pdf_path)
+    assert key not in loaded_pdf
+
+
+@pytest.mark.parametrize(
+    ("key", "reference_factory"),
+    [
+        ("source_custody", _task8_custody_reference),
+        ("source_fusion", _task8_fusion_reference),
+        ("source_fusion_evaluation", _task8_evaluation_reference),
+    ],
+)
+def test_task8_pdf_reader_validates_each_present_optional_reference(
+    tmp_path: Path,
+    key: str,
+    reference_factory: object,
+) -> None:
+    manifest = _legacy_pdf_manifest()
+    manifest[key] = reference_factory()
+    path = tmp_path / f"{key}-pdf-run-manifest.json"
+    write_manifest(path, manifest)
+    loaded = read_pdf_manifest(path)
+    assert loaded[key] == manifest[key]
+
+    manifest[key]["unexpected"] = True
+    write_manifest(path, manifest)
+    with pytest.raises(ManifestError):
+        read_pdf_manifest(path)
+
+
+def test_task8_manifest_and_pdf_keep_one_writer_and_no_evidence_persistence() -> None:
+    manifest_tree = ast.parse(MANIFEST_MODULE.read_text(encoding="utf-8"))
+    pdf_tree = ast.parse(PDF_MODULE.read_text(encoding="utf-8"))
+    assert sum(
+        isinstance(node, ast.FunctionDef) and node.name == "write_manifest"
+        for node in manifest_tree.body
+    ) == 1
+    assert not any(
+        isinstance(node, ast.FunctionDef) and node.name == "write_manifest"
+        for node in pdf_tree.body
+    )
+    forbidden = {
+        "items",
+        "alias_groups",
+        "page_locators",
+        "region_locators",
+        "render_provenance",
+        "primitive_observations",
+        "semantic_observations",
+        "evaluation_time_utc",
+        "blocking_codes",
+        "path",
+        "file_object_identity_token",
+    }
+    for factory in (
+        _task8_custody_reference,
+        _task8_fusion_reference,
+        _task8_evaluation_reference,
+    ):
+        assert not forbidden.intersection(factory())

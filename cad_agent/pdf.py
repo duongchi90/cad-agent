@@ -11,6 +11,9 @@ from .manifest import (
     classify_draft_reference,
     completed_artifact,
     sha256_file,
+    validate_source_custody_reference,
+    validate_source_fusion_evaluation_reference,
+    validate_source_fusion_reference,
     validate_source_bundle_reference,
     verify_source,
     write_manifest,
@@ -67,6 +70,13 @@ def read_pdf_manifest(path: Path) -> dict[str, Any]:
         raise ManifestError("PDF run manifest is missing render or page checkpoints.")
     if "source_bundle" in manifest:
         manifest["source_bundle"] = validate_source_bundle_reference(manifest["source_bundle"])
+    for key, validator in {
+        "source_custody": validate_source_custody_reference,
+        "source_fusion": validate_source_fusion_reference,
+        "source_fusion_evaluation": validate_source_fusion_evaluation_reference,
+    }.items():
+        if key in manifest:
+            manifest[key] = validator(manifest[key])
     return classify_draft_reference(manifest)
 
 
