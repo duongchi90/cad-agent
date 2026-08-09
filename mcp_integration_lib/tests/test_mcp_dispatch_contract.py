@@ -714,3 +714,79 @@ def test_dispatcher_contains_no_second_transport_or_forbidden_system_authority()
     )
     found = [marker for marker in forbidden if marker in source]
     assert not found, f"dispatcher crossed forbidden authority boundaries: {found}"
+
+
+def test_file_ipc_dispatch_rejects_preexisting_request_part_before_trigger_without_deleting_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_request_id = "a1b2c3d4e5f6"
+
+    class FixedUUID:
+        hex = fixed_request_id
+
+    monkeypatch.setattr("mcp_integration_lib.mcp_client.uuid.uuid4", lambda: FixedUUID())
+    stale_part = tmp_path / f"autocad_mcp_cmd_{fixed_request_id}.json.part"
+    stale_part.write_text("partial", encoding="utf-8")
+    trigger_called = False
+
+    def trigger() -> None:
+        nonlocal trigger_called
+        trigger_called = True
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_REQUEST_INVALID"):
+        client._dispatch("ping", {})
+    assert trigger_called is False
+    assert stale_part.exists()
+
+
+def test_file_ipc_dispatch_rejects_preexisting_result_part_before_trigger_without_deleting_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_request_id = "a1b2c3d4e5f6"
+
+    class FixedUUID:
+        hex = fixed_request_id
+
+    monkeypatch.setattr("mcp_integration_lib.mcp_client.uuid.uuid4", lambda: FixedUUID())
+    stale_part = tmp_path / f"autocad_mcp_result_{fixed_request_id}.json.part"
+    stale_part.write_text("partial", encoding="utf-8")
+    trigger_called = False
+
+    def trigger() -> None:
+        nonlocal trigger_called
+        trigger_called = True
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_RESULT_CONFLICT"):
+        client._dispatch("ping", {})
+    assert trigger_called is False
+    assert stale_part.exists()
+
+
+def test_dispatcher_rejects_exact_result_part_before_command_execution() -> None:
+    source = _dispatcher_source()
+    match = re.search(
+        r"\(defun\s+mcp-dispatch-core\b(?P<body>.*?)(?=\n\(defun\s+c:mcp-dispatch\b)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body").casefold()
+    part_marker = '".json.part"'
+    dispatch_marker = "(mcp-dispatch-command command params)"
+    assert part_marker in body
+    assert dispatch_marker in body
+    assert body.index(part_marker) < body.index(dispatch_marker)
