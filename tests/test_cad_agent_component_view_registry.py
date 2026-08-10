@@ -1405,3 +1405,49 @@ def test_task2_nested_layout_privacy_injection_is_rejected_without_echo() -> Non
         )
     assert sentinel not in str(caught.value)
     assert "secret-layout.dwg" not in str(caught.value)
+
+
+def test_task2_view_source_projection_rejects_accepted_semantic_key() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    semantic_key = context["source_fusion"]["semantic_observations"][0][
+        "observation_key"
+    ]
+    primitive_keys = {
+        item["observation_key"]
+        for item in context["source_fusion"]["primitive_observations"]
+    }
+    assert semantic_key not in primitive_keys
+    views = _task2_view_inputs(module, context)
+    views[0]["source_projection_refs"] = [semantic_key]
+    with pytest.raises(
+        module.ComponentViewRegistryError, match="FOREIGN_SOURCE_PROJECTION"
+    ):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+
+
+def test_task2_view_semantic_projection_rejects_accepted_primitive_key() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    primitive_key = context["source_fusion"]["primitive_observations"][0][
+        "observation_key"
+    ]
+    semantic_keys = {
+        item["observation_key"]
+        for item in context["source_fusion"]["semantic_observations"]
+    }
+    assert primitive_key not in semantic_keys
+    views = _task2_view_inputs(module, context)
+    views[0]["semantic_projection_refs"] = [primitive_key]
+    with pytest.raises(
+        module.ComponentViewRegistryError, match="FOREIGN_SEMANTIC_PROJECTION"
+    ):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
