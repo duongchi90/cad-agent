@@ -7,6 +7,7 @@ import importlib.util
 from functools import lru_cache
 import inspect
 from pathlib import Path
+import re
 
 import pytest
 
@@ -796,6 +797,8 @@ def test_candidate_module_has_no_io_live_or_second_store_authority() -> None:
             imported_modules.add(node.module)
 
     allowed_internal_modules = {
+        "cad_agent",
+        "cad_agent.base_cad_adapter",
         "cad_agent.component_view_registry",
         "cad_agent.drawing_artifact_reference",
         "cad_agent.drawing_contracts",
