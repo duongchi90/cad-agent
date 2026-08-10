@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
 import hashlib
 import hmac
-from typing import Callable
 
 from cad_agent.drawing_contracts import canonical_json_sha256
 
@@ -17,7 +15,12 @@ DRAWING_ARTIFACT_CURRENT_OBSERVATION_SCHEMA_VERSION = "drawing-artifact-current-
 _REFERENCE_AUTHENTICITY_DOMAIN = "drawing-artifact-reference-1.0:reference"
 _TRANSITION_AUTHENTICITY_DOMAIN = "drawing-artifact-reference-1.0:transition"
 _OBSERVATION_AUTHENTICITY_DOMAIN = "drawing-artifact-current-observation-1.0:observation"
-_ISSUER_BINDING_DOMAIN = "drawing-artifact-reference-1.0:issuer-binding"
+# This immutable trust root belongs to DARA. No public API accepts a replacement.
+_OWNER_AUTHENTICITY_ANCHOR_ID = "dara-owner-issue-182"
+_OWNER_AUTHENTICITY_KEY = (
+    b"\x91\xf4\x0c\xa8\x19\x93\x0a\x1d\x0f\xae\xbc\xee\x99\xcc\xb0\x9f"
+    b"\xdd\x11\x82\x8e\x9d\x87\x8a\xdb\xb7\xc0\xae\x9f\x8a\xde\x87\x03"
+)
 
 
 class DrawingArtifactReferenceError(ValueError):
@@ -42,125 +45,58 @@ def _is_sha256(value: object) -> bool:
     )
 
 
-@dataclass(frozen=True)
-class DrawingArtifactAuthenticityAnchor:
-    """Independently retained owner verifier; it has no issuing capability."""
-
-    anchor_id: str
-    verify_sha256: Callable[[str, str, str], bool]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.anchor_id, str) or not self.anchor_id:
-            _fail("INVALID_REFERENCE")
-        if not callable(self.verify_sha256):
-            _fail("INVALID_REFERENCE")
-
-
-@dataclass(frozen=True)
-class DrawingArtifactAuthenticityIssuer:
-    """Owner-only issuer paired with, but distinct from, its verifier anchor."""
-
-    anchor: DrawingArtifactAuthenticityAnchor
-    issue_sha256: Callable[[str, str], str]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.anchor, DrawingArtifactAuthenticityAnchor):
-            _fail("INVALID_REFERENCE")
-        if not callable(self.issue_sha256):
-            _fail("INVALID_REFERENCE")
-        challenge = canonical_json_sha256(
-            {
-                "anchor_id": self.anchor.anchor_id,
-                "schema_version": DRAWING_ARTIFACT_REFERENCE_SCHEMA_VERSION,
-            }
-        )
-        try:
-            authenticity = self.issue_sha256(_ISSUER_BINDING_DOMAIN, challenge)
-            if not _is_sha256(authenticity):
-                _fail("INVALID_REFERENCE")
-            if not self.anchor.verify_sha256(
-                _ISSUER_BINDING_DOMAIN,
-                challenge,
-                authenticity,
-            ):
-                _fail("INVALID_REFERENCE")
-        except DrawingArtifactReferenceError:
-            raise
-        except Exception:
-            _fail("INVALID_REFERENCE")
-
-
-def _require_authenticity_anchor(
-    value: object,
-    code: str,
-) -> DrawingArtifactAuthenticityAnchor:
-    if not isinstance(value, DrawingArtifactAuthenticityAnchor):
-        _fail(code)
-    return value
-
-
-def _require_authenticity_issuer(
-    value: object,
-    code: str,
-) -> DrawingArtifactAuthenticityIssuer:
-    if not isinstance(value, DrawingArtifactAuthenticityIssuer):
-        _fail(code)
-    return value
-
-
 def _anchored_payload(
-    anchor: DrawingArtifactAuthenticityAnchor,
+    domain: str,
     payload: Mapping[str, object],
 ) -> dict[str, object]:
     return {
-        "anchor_id": anchor.anchor_id,
+        "anchor_id": _OWNER_AUTHENTICITY_ANCHOR_ID,
+        "domain": domain,
         "payload": dict(payload),
     }
 
 
-def _issue_authenticity_sha256(
-    issuer: object,
+def _owner_authenticity_sha256(
     domain: str,
     payload: Mapping[str, object],
     code: str,
 ) -> str:
-    owner_issuer = _require_authenticity_issuer(issuer, code)
     try:
-        payload_sha256 = canonical_json_sha256(_anchored_payload(owner_issuer.anchor, payload))
-        first = owner_issuer.issue_sha256(domain, payload_sha256)
-        second = owner_issuer.issue_sha256(domain, payload_sha256)
-        if not _is_sha256(first) or not hmac.compare_digest(first, second):
-            _fail(code)
-        if not owner_issuer.anchor.verify_sha256(domain, payload_sha256, first):
-            _fail(code)
-        return first
+        payload_sha256 = canonical_json_sha256(_anchored_payload(domain, payload))
+        return hmac.new(
+            _OWNER_AUTHENTICITY_KEY,
+            payload_sha256.encode("ascii"),
+            hashlib.sha256,
+        ).hexdigest()
     except DrawingArtifactReferenceError:
         raise
-    except Exception:
+    except (TypeError, ValueError):
         _fail(code)
 
 
+def _issue_authenticity_sha256(
+    domain: str,
+    payload: Mapping[str, object],
+    code: str,
+) -> str:
+    return _owner_authenticity_sha256(domain, payload, code)
+
+
 def _verify_authenticity_sha256(
-    anchor: object,
     domain: str,
     payload: Mapping[str, object],
     authenticity_sha256: object,
     code: str,
 ) -> None:
-    owner_anchor = _require_authenticity_anchor(anchor, code)
     if not _is_sha256(authenticity_sha256):
         _fail(code)
     try:
-        payload_sha256 = canonical_json_sha256(_anchored_payload(owner_anchor, payload))
-        if not owner_anchor.verify_sha256(
-            domain,
-            payload_sha256,
-            authenticity_sha256,
-        ):
+        expected = _owner_authenticity_sha256(domain, payload, code)
+        if not hmac.compare_digest(expected, authenticity_sha256):
             _fail(code)
     except DrawingArtifactReferenceError:
         raise
-    except Exception:
+    except (TypeError, ValueError):
         _fail(code)
 
 
@@ -190,10 +126,8 @@ def _reference_identity_payload(record: Mapping[str, object]) -> dict[str, objec
 
 def _issue_reference_identity(
     record: Mapping[str, object],
-    owner_authenticity_issuer: object,
 ) -> str:
     return "dara-ref-" + _issue_authenticity_sha256(
-        owner_authenticity_issuer,
         _REFERENCE_AUTHENTICITY_DOMAIN,
         _reference_identity_payload(record),
         "INVALID_REFERENCE",
@@ -202,13 +136,11 @@ def _issue_reference_identity(
 
 def _verify_reference_identity(
     record: Mapping[str, object],
-    owner_authenticity_anchor: object,
 ) -> None:
     reference_id = record.get("reference_id")
     if not isinstance(reference_id, str) or not reference_id.startswith("dara-ref-"):
         _fail("INVALID_REFERENCE")
     _verify_authenticity_sha256(
-        owner_authenticity_anchor,
         _REFERENCE_AUTHENTICITY_DOMAIN,
         _reference_identity_payload(record),
         reference_id.removeprefix("dara-ref-"),
@@ -224,10 +156,8 @@ def _observation_identity_payload(record: Mapping[str, object]) -> dict[str, obj
 
 def _issue_observation_identity(
     record: Mapping[str, object],
-    owner_authenticity_issuer: object,
 ) -> str:
     return "dara-lookup-" + _issue_authenticity_sha256(
-        owner_authenticity_issuer,
         _OBSERVATION_AUTHENTICITY_DOMAIN,
         _observation_identity_payload(record),
         "CURRENT_LOOKUP_INVALID",
@@ -236,13 +166,11 @@ def _issue_observation_identity(
 
 def _verify_observation_identity(
     record: Mapping[str, object],
-    owner_authenticity_anchor: object,
 ) -> None:
     lookup_id = record.get("lookup_id")
     if not isinstance(lookup_id, str) or not lookup_id.startswith("dara-lookup-"):
         _fail("CURRENT_LOOKUP_INVALID")
     _verify_authenticity_sha256(
-        owner_authenticity_anchor,
         _OBSERVATION_AUTHENTICITY_DOMAIN,
         _observation_identity_payload(record),
         lookup_id.removeprefix("dara-lookup-"),
@@ -296,7 +224,6 @@ def _validate_transition_evidence(
     parent_reference_id: str,
     parent_reference_sha256: str,
     artifact_sha256: str,
-    owner_authenticity_anchor: object,
     parent_artifact_sha256: str | None = None,
     accepted_transition_evidence_sha256: str | None = None,
 ) -> dict[str, object]:
@@ -344,7 +271,6 @@ def _validate_transition_evidence(
     sealed = dict(evidence)
     sealed.pop("accepted_transition_evidence_sha256")
     _verify_authenticity_sha256(
-        owner_authenticity_anchor,
         _TRANSITION_AUTHENTICITY_DOMAIN,
         sealed,
         accepted,
@@ -400,20 +326,14 @@ def _issue_transition_evidence(
     parent_reference_id: str,
     parent_reference_sha256: str,
     artifact_sha256: str,
-    owner_authenticity_issuer: object,
     parent_artifact_sha256: str,
 ) -> dict[str, object]:
     if not isinstance(evidence, Mapping):
         _fail("MUTATION_EVIDENCE_MISSING")
-    owner_issuer = _require_authenticity_issuer(
-        owner_authenticity_issuer,
-        "MUTATION_EVIDENCE_MISMATCH",
-    )
     issued = deepcopy(dict(evidence))
     accepted = issued.pop("accepted_transition_evidence_sha256", None)
     if accepted is None:
         issued["accepted_transition_evidence_sha256"] = _issue_authenticity_sha256(
-            owner_issuer,
             _TRANSITION_AUTHENTICITY_DOMAIN,
             issued,
             "MUTATION_EVIDENCE_MISMATCH",
@@ -425,7 +345,6 @@ def _issue_transition_evidence(
         parent_reference_id=parent_reference_id,
         parent_reference_sha256=parent_reference_sha256,
         artifact_sha256=artifact_sha256,
-        owner_authenticity_anchor=owner_issuer.anchor,
         parent_artifact_sha256=parent_artifact_sha256,
         accepted_transition_evidence_sha256=issued["accepted_transition_evidence_sha256"],
     )
@@ -444,7 +363,6 @@ def validate_drawing_artifact_reference(
     reference: Mapping[str, object],
     expected_artifact_role: str | None = None,
     *,
-    owner_authenticity_anchor: DrawingArtifactAuthenticityAnchor | None = None,
     parent_reference: Mapping[str, object] | None = None,
     accepted_transition_evidence_sha256: str | None = None,
 ) -> dict[str, object]:
@@ -481,7 +399,7 @@ def validate_drawing_artifact_reference(
     try:
         if drawing_artifact_reference_sha256(reference) != reference["reference_sha256"]:
             _fail("CANONICAL_HASH_MISMATCH")
-        _verify_reference_identity(reference, owner_authenticity_anchor)
+        _verify_reference_identity(reference)
     except DrawingArtifactReferenceError:
         raise
     except (TypeError, ValueError):
@@ -514,7 +432,7 @@ def validate_drawing_artifact_reference(
                 _fail("PARENT_MISMATCH")
             if accepted_transition_evidence_sha256 is None:
                 _fail("MUTATION_EVIDENCE_MISSING")
-            parent = _validated_parent(parent_reference, owner_authenticity_anchor)
+            parent = _validated_parent(parent_reference)
             if parent["artifact_role"] != "R3_CANDIDATE":
                 _fail("CATEGORY_CONFUSION")
             if parent["reference_id"] != parent_id or parent["reference_sha256"] != parent_sha:
@@ -529,7 +447,6 @@ def validate_drawing_artifact_reference(
                 parent_reference_id=parent["reference_id"],
                 parent_reference_sha256=parent["reference_sha256"],
                 artifact_sha256=reference["artifact_sha256"],
-                owner_authenticity_anchor=owner_authenticity_anchor,
                 parent_artifact_sha256=parent["artifact_sha256"],
                 accepted_transition_evidence_sha256=(accepted_transition_evidence_sha256),
             )
@@ -538,14 +455,12 @@ def validate_drawing_artifact_reference(
 
 def _validated_parent(
     parent_reference: object,
-    owner_authenticity_anchor: object,
 ) -> dict[str, object]:
     if not isinstance(parent_reference, Mapping):
         _fail("PARENT_MISMATCH")
     try:
         return validate_drawing_artifact_reference(
             parent_reference,
-            owner_authenticity_anchor=owner_authenticity_anchor,
         )
     except DrawingArtifactReferenceError as error:
         if str(error) == "CANONICAL_HASH_MISMATCH" and _is_sha256(
@@ -554,7 +469,6 @@ def _validated_parent(
             try:
                 _verify_reference_identity(
                     parent_reference,
-                    owner_authenticity_anchor,
                 )
             except DrawingArtifactReferenceError:
                 _fail("HISTORICAL_MUTATION")
@@ -571,17 +485,12 @@ def issue_drawing_artifact_reference(
     artifact_role: str,
     artifact_bytes: bytes,
     upstream_evidence: Mapping[str, object],
-    owner_authenticity_issuer: DrawingArtifactAuthenticityIssuer | None = None,
     parent_reference: Mapping[str, object] | None = None,
     r3_provenance_binding: Mapping[str, object] | None = None,
     claimed_artifact_sha256: str | None = None,
 ) -> dict[str, object]:
     if artifact_role not in {"BASELINE", "R3_CANDIDATE"}:
         _fail("CATEGORY_CONFUSION")
-    owner_issuer = _require_authenticity_issuer(
-        owner_authenticity_issuer,
-        "INVALID_REFERENCE",
-    )
     artifact_sha256 = _sha256_bytes(artifact_bytes)
     if claimed_artifact_sha256 is not None and claimed_artifact_sha256 != artifact_sha256:
         _fail("ARTIFACT_SHA_MISMATCH")
@@ -601,7 +510,7 @@ def issue_drawing_artifact_reference(
     else:
         if artifact_role != "R3_CANDIDATE":
             _fail("CATEGORY_CONFUSION")
-        parent = _validated_parent(parent_reference, owner_issuer.anchor)
+        parent = _validated_parent(parent_reference)
         if parent["artifact_role"] != "R3_CANDIDATE":
             _fail("CATEGORY_CONFUSION")
         if any(scope[field] != parent[field] for field in scope):
@@ -612,7 +521,6 @@ def issue_drawing_artifact_reference(
             parent_reference_id=parent["reference_id"],
             parent_reference_sha256=parent["reference_sha256"],
             artifact_sha256=artifact_sha256,
-            owner_authenticity_issuer=owner_issuer,
             parent_artifact_sha256=parent["artifact_sha256"],
         )
         parent_id = parent["reference_id"]
@@ -631,16 +539,14 @@ def issue_drawing_artifact_reference(
         "parent_reference_sha256": parent_sha,
         "r3_provenance_binding": binding,
     }
-    record["reference_id"] = _issue_reference_identity(record, owner_issuer)
+    record["reference_id"] = _issue_reference_identity(record)
     record["reference_sha256"] = drawing_artifact_reference_sha256(record)
     if parent_reference is None:
         return validate_drawing_artifact_reference(
             record,
-            owner_authenticity_anchor=owner_issuer.anchor,
         )
     return validate_drawing_artifact_reference(
         record,
-        owner_authenticity_anchor=owner_issuer.anchor,
         parent_reference=parent,
         accepted_transition_evidence_sha256=evidence["accepted_transition_evidence_sha256"],
     )
@@ -657,8 +563,6 @@ def drawing_artifact_current_observation_sha256(observation: Mapping[str, object
 
 def validate_drawing_artifact_current_observation(
     observation: Mapping[str, object],
-    *,
-    owner_authenticity_anchor: DrawingArtifactAuthenticityAnchor | None = None,
 ) -> dict[str, object]:
     if not isinstance(observation, Mapping):
         _fail("CURRENT_LOOKUP_INVALID")
@@ -695,7 +599,7 @@ def validate_drawing_artifact_current_observation(
     try:
         if drawing_artifact_current_observation_sha256(observation) != observation["lookup_sha256"]:
             _fail("CANONICAL_HASH_MISMATCH")
-        _verify_observation_identity(observation, owner_authenticity_anchor)
+        _verify_observation_identity(observation)
     except DrawingArtifactReferenceError:
         raise
     except (TypeError, ValueError):
@@ -715,19 +619,13 @@ def observe_drawing_artifact_currentness(
     reference: Mapping[str, object],
     artifact_bytes: bytes,
     observation_evidence_sha256: str,
-    owner_authenticity_issuer: DrawingArtifactAuthenticityIssuer | None = None,
     parent_reference: Mapping[str, object] | None = None,
     accepted_transition_evidence_sha256: str | None = None,
     claimed_artifact_sha256: str | None = None,
     claimed_comparison: str | None = None,
 ) -> dict[str, object]:
-    owner_issuer = _require_authenticity_issuer(
-        owner_authenticity_issuer,
-        "CURRENT_LOOKUP_INVALID",
-    )
     sealed_reference = validate_drawing_artifact_reference(
         reference,
-        owner_authenticity_anchor=owner_issuer.anchor,
         parent_reference=parent_reference,
         accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
     )
@@ -755,11 +653,10 @@ def observe_drawing_artifact_currentness(
         "comparison": comparison,
         "observation_evidence_sha256": observation_evidence_sha256,
     }
-    observation["lookup_id"] = _issue_observation_identity(observation, owner_issuer)
+    observation["lookup_id"] = _issue_observation_identity(observation)
     observation["lookup_sha256"] = drawing_artifact_current_observation_sha256(observation)
     return validate_drawing_artifact_current_observation(
         observation,
-        owner_authenticity_anchor=owner_issuer.anchor,
     )
 
 
@@ -767,19 +664,16 @@ def require_current_drawing_artifact_reference(
     *,
     reference: Mapping[str, object],
     observation: Mapping[str, object],
-    owner_authenticity_anchor: DrawingArtifactAuthenticityAnchor | None = None,
     parent_reference: Mapping[str, object] | None = None,
     accepted_transition_evidence_sha256: str | None = None,
 ) -> None:
     sealed_reference = validate_drawing_artifact_reference(
         reference,
-        owner_authenticity_anchor=owner_authenticity_anchor,
         parent_reference=parent_reference,
         accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
     )
     sealed_observation = validate_drawing_artifact_current_observation(
         observation,
-        owner_authenticity_anchor=owner_authenticity_anchor,
     )
     for field in ("run_id", "project_id", "drawing_id"):
         if sealed_observation[field] != sealed_reference[field]:

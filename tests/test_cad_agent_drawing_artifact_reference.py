@@ -41,7 +41,6 @@ CURRENT_OBSERVATION_FIELDS = {
     "comparison",
     "observation_evidence_sha256",
 }
-OWNER_AUTHENTICATION_KEY = b"dara-owner-authentication-key-2026-issue-182"
 ATTACKER_AUTHENTICATION_KEY = b"caller-controlled-key-must-not-authenticate"
 
 
@@ -91,7 +90,7 @@ def _mutation_evidence(
         "rollback_failed": False,
         "cleanup_state": "VERIFIED",
     }
-    return _seal_mutation_evidence(evidence)
+    return evidence
 
 
 def _authentication_sha256(
@@ -106,85 +105,31 @@ def _authentication_sha256(
     ).hexdigest()
 
 
-def _authenticity_capabilities(
-    owner_authentication_key: bytes,
-    *,
-    anchor_id: str,
-):
-    module = _module()
-
-    def _issue_sha256(domain: str, payload_sha256: str) -> str:
-        return _authentication_sha256(
-            {
-                "anchor_id": anchor_id,
-                "domain": domain,
-                "payload_sha256": payload_sha256,
-            },
-            owner_authentication_key,
-        )
-
-    def _verify_sha256(domain: str, payload_sha256: str, authenticity_sha256: str) -> bool:
-        return hmac.compare_digest(
-            _issue_sha256(domain, payload_sha256),
-            authenticity_sha256,
-        )
-
-    anchor = module.DrawingArtifactAuthenticityAnchor(
-        anchor_id=anchor_id,
-        verify_sha256=_verify_sha256,
-    )
-    issuer = module.DrawingArtifactAuthenticityIssuer(
-        anchor=anchor,
-        issue_sha256=_issue_sha256,
-    )
-    return issuer, anchor
-
-
-def _owner_authenticity_capabilities():
-    return _authenticity_capabilities(
-        OWNER_AUTHENTICATION_KEY,
-        anchor_id="dara-owner-issue-182",
-    )
-
-
-def _attacker_authenticity_capabilities():
-    return _authenticity_capabilities(
-        ATTACKER_AUTHENTICATION_KEY,
-        anchor_id="caller-selected-anchor",
-    )
-
-
-def _authenticity_capabilities_for_key(owner_authentication_key: bytes):
-    if owner_authentication_key == OWNER_AUTHENTICATION_KEY:
-        return _owner_authenticity_capabilities()
-    if owner_authentication_key == ATTACKER_AUTHENTICATION_KEY:
-        return _attacker_authenticity_capabilities()
-    raise AssertionError("unknown test authenticity key")
-
-
 def _issue_test_authenticity_sha256(
     payload: dict[str, object],
     *,
     domain: str,
     owner_authentication_key: bytes,
 ) -> str:
-    issuer, anchor = _authenticity_capabilities_for_key(owner_authentication_key)
-    payload_sha256 = canonical_json_sha256(
+    return _authentication_sha256(
         {
-            "anchor_id": anchor.anchor_id,
+            "anchor_id": "dara-owner-issue-182",
+            "domain": domain,
             "payload": payload,
-        }
+        },
+        owner_authentication_key,
     )
-    return issuer.issue_sha256(domain, payload_sha256)
 
 
 def _seal_mutation_evidence(
     evidence: dict[str, object],
     *,
-    owner_authentication_key: bytes = OWNER_AUTHENTICATION_KEY,
+    owner_authentication_key: bytes | None = None,
 ) -> dict[str, object]:
-    """Rebind the accepted transition digest after one targeted test mutation."""
+    """Prepare owner input or simulate a caller re-seal with an untrusted key."""
     evidence.pop("accepted_transition_evidence_sha256", None)
+    if owner_authentication_key is None:
+        return evidence
     evidence["accepted_transition_evidence_sha256"] = _issue_test_authenticity_sha256(
         evidence,
         domain="drawing-artifact-reference-1.0:transition",
@@ -196,7 +141,7 @@ def _seal_mutation_evidence(
 def _reseal_reference(
     reference: dict[str, object],
     *,
-    owner_authentication_key: bytes = OWNER_AUTHENTICATION_KEY,
+    owner_authentication_key: bytes = ATTACKER_AUTHENTICATION_KEY,
 ) -> dict[str, object]:
     """Rebind public reference hashes after one targeted test mutation."""
     identity_payload = dict(reference)
@@ -216,7 +161,7 @@ def _reseal_reference(
 def _reseal_current_observation(
     observation: dict[str, object],
     *,
-    owner_authentication_key: bytes = OWNER_AUTHENTICATION_KEY,
+    owner_authentication_key: bytes = ATTACKER_AUTHENTICATION_KEY,
 ) -> dict[str, object]:
     """Rebind public observation hashes after one targeted test mutation."""
     identity_payload = dict(observation)
@@ -257,7 +202,6 @@ def _issue_baseline():
         artifact_role="BASELINE",
         artifact_bytes=_artifact_bytes(),
         upstream_evidence=_baseline_evidence(),
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
     )
 
 
@@ -270,12 +214,12 @@ def _issue_r3_candidate():
         artifact_role="R3_CANDIDATE",
         artifact_bytes=_artifact_bytes("r3-candidate"),
         upstream_evidence=_r3_candidate_evidence(),
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         r3_provenance_binding=_r3_binding(),
     )
 
 
 def _post_repair_material():
+    module = _module()
     parent = _issue_r3_candidate()
     child_bytes = _artifact_bytes("repaired")
     mutation = _mutation_evidence(
@@ -283,14 +227,23 @@ def _post_repair_material():
         pre_sha256=parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
-    return parent, child_bytes, mutation
+    issued = module.issue_drawing_artifact_reference(
+        run_id=parent["run_id"],
+        project_id=parent["project_id"],
+        drawing_id=parent["drawing_id"],
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=child_bytes,
+        upstream_evidence=mutation,
+        parent_reference=parent,
+        r3_provenance_binding=_r3_binding(),
+    )
+    return parent, child_bytes, deepcopy(issued["upstream_evidence"])
 
 
 def _issue_candidate():
     module = _module()
     parent, child_bytes, mutation = _post_repair_material()
     child = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         run_id=parent["run_id"],
         project_id=parent["project_id"],
         drawing_id=parent["drawing_id"],
@@ -353,6 +306,47 @@ def test_dara_public_surface_is_closed_and_versioned() -> None:
         assert callable(getattr(module, name))
 
 
+def test_authenticity_is_internal_and_public_api_has_no_caller_trust_hooks() -> None:
+    module = _module()
+    forbidden = {"owner_authenticity_issuer", "owner_authenticity_anchor"}
+
+    for name in (
+        "issue_drawing_artifact_reference",
+        "validate_drawing_artifact_reference",
+        "observe_drawing_artifact_currentness",
+        "validate_drawing_artifact_current_observation",
+        "require_current_drawing_artifact_reference",
+    ):
+        assert forbidden.isdisjoint(inspect.signature(getattr(module, name)).parameters)
+
+    assert not hasattr(module, "DrawingArtifactAuthenticityIssuer")
+    assert not hasattr(module, "DrawingArtifactAuthenticityAnchor")
+
+
+def test_module_owned_authenticity_issues_and_validates_without_caller_capabilities() -> None:
+    module = _module()
+    reference = module.issue_drawing_artifact_reference(
+        run_id="run-182-001",
+        project_id="project-001",
+        drawing_id="drawing-001",
+        artifact_role="BASELINE",
+        artifact_bytes=_artifact_bytes(),
+        upstream_evidence=_baseline_evidence(),
+    )
+    observation = module.observe_drawing_artifact_currentness(
+        reference=reference,
+        artifact_bytes=_artifact_bytes(),
+        observation_evidence_sha256="d" * 64,
+    )
+
+    assert module.validate_drawing_artifact_reference(reference) == reference
+    assert module.validate_drawing_artifact_current_observation(observation) == observation
+    module.require_current_drawing_artifact_reference(
+        reference=reference,
+        observation=observation,
+    )
+
+
 def test_baseline_reference_is_deterministic_closed_and_owner_observed() -> None:
     module = _module()
     first = _issue_baseline()
@@ -368,7 +362,6 @@ def test_baseline_reference_is_deterministic_closed_and_owner_observed() -> None
     assert (
         module.validate_drawing_artifact_reference(
             first,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
         )
         == first
     )
@@ -379,7 +372,6 @@ def test_reference_identity_changes_when_authoritative_artifact_bytes_change() -
     module = _module()
     first = _issue_baseline()
     changed = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         run_id=first["run_id"],
         project_id=first["project_id"],
         drawing_id=first["drawing_id"],
@@ -392,18 +384,12 @@ def test_reference_identity_changes_when_authoritative_artifact_bytes_change() -
     assert changed["reference_id"] != first["reference_id"]
 
 
-@pytest.mark.parametrize(
-    "invalid_key",
-    [None, b"too-short", "not-bytes"],
-)
-def test_reference_issuance_requires_a_valid_owner_authenticity_issuer(
-    invalid_key: object,
-) -> None:
+def test_legacy_caller_authentication_hooks_are_rejected_by_public_api() -> None:
     module = _module()
 
-    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+    with pytest.raises(TypeError):
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=invalid_key,
+            owner_authenticity_issuer=lambda domain, payload_sha256: payload_sha256,
             run_id="run-182-001",
             project_id="project-001",
             drawing_id="drawing-001",
@@ -411,114 +397,54 @@ def test_reference_issuance_requires_a_valid_owner_authenticity_issuer(
             artifact_bytes=_artifact_bytes(),
             upstream_evidence=_baseline_evidence(),
         )
-
-    assert str(exc.value) == "INVALID_REFERENCE"
-
-
-def test_caller_selected_issuer_cannot_mint_reference_or_currentness_for_owner_anchor() -> None:
-    module = _module()
-    owner_issuer, owner_anchor = _owner_authenticity_capabilities()
-    attacker_issuer, _ = _attacker_authenticity_capabilities()
-
-    owner_reference = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=owner_issuer,
-        run_id="run-182-001",
-        project_id="project-001",
-        drawing_id="drawing-001",
-        artifact_role="BASELINE",
-        artifact_bytes=_artifact_bytes(),
-        upstream_evidence=_baseline_evidence(),
-    )
-    assert (
+    reference = _issue_baseline()
+    with pytest.raises(TypeError):
         module.validate_drawing_artifact_reference(
-            owner_reference,
-            owner_authenticity_anchor=owner_anchor,
+            reference,
+            owner_authenticity_anchor=lambda domain, payload_sha256, signature: True,
         )
-        == owner_reference
-    )
 
-    caller_reference = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=attacker_issuer,
-        run_id="run-182-001",
-        project_id="project-001",
-        drawing_id="drawing-001",
-        artifact_role="BASELINE",
-        artifact_bytes=_artifact_bytes(),
-        upstream_evidence=_baseline_evidence(),
-    )
-    caller_observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=attacker_issuer,
-        reference=caller_reference,
+
+def test_caller_key_cannot_mint_reference_or_current_observation() -> None:
+    module = _module()
+    reference = _issue_baseline()
+    forged_reference = deepcopy(reference)
+    forged_reference["upstream_evidence"]["evidence_id"] = "caller-minted-custody"
+    _reseal_reference(forged_reference)
+
+    observation = module.observe_drawing_artifact_currentness(
+        reference=reference,
         artifact_bytes=_artifact_bytes(),
         observation_evidence_sha256="d" * 64,
     )
+    forged_observation = deepcopy(observation)
+    forged_observation["observation_evidence_sha256"] = "e" * 64
+    _reseal_current_observation(forged_observation)
 
     with pytest.raises(module.DrawingArtifactReferenceError):
-        module.validate_drawing_artifact_reference(
-            caller_reference,
-            owner_authenticity_anchor=owner_anchor,
-        )
+        module.validate_drawing_artifact_reference(forged_reference)
     with pytest.raises(module.DrawingArtifactReferenceError):
-        module.validate_drawing_artifact_current_observation(
-            caller_observation,
-            owner_authenticity_anchor=owner_anchor,
-        )
+        module.validate_drawing_artifact_current_observation(forged_observation)
 
 
-def test_caller_selected_issuer_cannot_mint_parent_chain_or_transition_for_owner_anchor() -> None:
-    module = _module()
-    attacker_issuer, _ = _attacker_authenticity_capabilities()
-    _, owner_anchor = _owner_authenticity_capabilities()
-    parent_bytes = _artifact_bytes("attacker-parent")
-    parent = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=attacker_issuer,
-        run_id="run-182-001",
-        project_id="project-001",
-        drawing_id="drawing-001",
-        artifact_role="R3_CANDIDATE",
-        artifact_bytes=parent_bytes,
-        upstream_evidence=_r3_candidate_evidence(),
-        r3_provenance_binding=_r3_binding(),
-    )
-    child_bytes = _artifact_bytes("attacker-child")
-    transition = _mutation_evidence(
-        candidate_reference=parent,
-        pre_sha256=hashlib.sha256(parent_bytes).hexdigest(),
-        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
-    )
-    transition.pop("accepted_transition_evidence_sha256")
-    child = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=attacker_issuer,
-        run_id=parent["run_id"],
-        project_id=parent["project_id"],
-        drawing_id=parent["drawing_id"],
-        artifact_role="R3_CANDIDATE",
-        artifact_bytes=child_bytes,
-        upstream_evidence=transition,
-        parent_reference=parent,
-        r3_provenance_binding=_r3_binding(),
-    )
-
-    with pytest.raises(module.DrawingArtifactReferenceError):
-        module.validate_drawing_artifact_reference(
-            child,
-            owner_authenticity_anchor=owner_anchor,
-            parent_reference=parent,
-            accepted_transition_evidence_sha256=child["upstream_evidence"][
-                "accepted_transition_evidence_sha256"
-            ],
-        )
-
-
-def test_attacker_key_cannot_validate_an_owner_issued_reference() -> None:
+def test_authenticity_domains_cannot_be_replayed_between_reference_and_currentness() -> None:
     module = _module()
     reference = _issue_baseline()
+    observation = module.observe_drawing_artifact_currentness(
+        reference=reference,
+        artifact_bytes=_artifact_bytes(),
+        observation_evidence_sha256="d" * 64,
+    )
+    forged_reference = deepcopy(reference)
+    forged_reference["reference_id"] = "dara-ref-" + observation["lookup_id"].removeprefix(
+        "dara-lookup-"
+    )
+    forged_reference["reference_sha256"] = canonical_json_sha256(
+        {key: value for key, value in forged_reference.items() if key != "reference_sha256"}
+    )
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
-        module.validate_drawing_artifact_reference(
-            reference,
-            owner_authenticity_anchor=_attacker_authenticity_capabilities()[1],
-        )
+        module.validate_drawing_artifact_reference(forged_reference)
 
     assert str(exc.value) == "CANONICAL_HASH_MISMATCH"
 
@@ -526,9 +452,7 @@ def test_attacker_key_cannot_validate_an_owner_issued_reference() -> None:
 def test_reference_validation_returns_a_detached_copy() -> None:
     module = _module()
     payload = _issue_baseline()
-    normalized = module.validate_drawing_artifact_reference(
-        payload, owner_authenticity_anchor=_owner_authenticity_capabilities()[1]
-    )
+    normalized = module.validate_drawing_artifact_reference(payload)
     assert normalized is not payload
     assert normalized["upstream_evidence"] is not payload["upstream_evidence"]
     payload["upstream_evidence"]["evidence_id"] = "mutated-after-validation"
@@ -562,9 +486,7 @@ def test_malformed_forged_or_category_confused_reference_fails_closed(
     payload = deepcopy(_issue_baseline())
     mutation(payload)
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
-        module.validate_drawing_artifact_reference(
-            payload, owner_authenticity_anchor=_owner_authenticity_capabilities()[1]
-        )
+        module.validate_drawing_artifact_reference(payload)
     assert str(exc.value) == expected_code
 
 
@@ -583,7 +505,6 @@ def test_valid_post_repair_child_preserves_immutable_parent_history() -> None:
     assert (
         module.validate_drawing_artifact_reference(
             child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=parent,
             accepted_transition_evidence_sha256=child["upstream_evidence"][
                 "accepted_transition_evidence_sha256"
@@ -599,16 +520,16 @@ def test_valid_post_repair_child_preserves_immutable_parent_history() -> None:
         (
             "r3_candidate_reference_id",
             "dara-ref-foreign-candidate",
-            "WRONG_CANDIDATE",
+            "CANONICAL_HASH_MISMATCH",
         ),
-        ("r3_candidate_reference_sha256", "c" * 64, "WRONG_CANDIDATE"),
-        ("pre_artifact_sha256", "not-a-sha256", "MUTATION_EVIDENCE_MISSING"),
-        ("post_artifact_sha256", "d" * 64, "POST_ARTIFACT_MISMATCH"),
-        ("mutation_terminal", "FAILED", "MUTATION_NOT_SUCCESSFUL"),
-        ("partial_mutation", True, "MUTATION_NOT_SUCCESSFUL"),
-        ("timed_out", True, "MUTATION_NOT_SUCCESSFUL"),
-        ("rollback_failed", True, "MUTATION_NOT_SUCCESSFUL"),
-        ("cleanup_state", "UNCERTAIN", "CLEANUP_UNCERTAIN"),
+        ("r3_candidate_reference_sha256", "c" * 64, "CANONICAL_HASH_MISMATCH"),
+        ("pre_artifact_sha256", "not-a-sha256", "CANONICAL_HASH_MISMATCH"),
+        ("post_artifact_sha256", "d" * 64, "CANONICAL_HASH_MISMATCH"),
+        ("mutation_terminal", "FAILED", "CANONICAL_HASH_MISMATCH"),
+        ("partial_mutation", True, "CANONICAL_HASH_MISMATCH"),
+        ("timed_out", True, "CANONICAL_HASH_MISMATCH"),
+        ("rollback_failed", True, "CANONICAL_HASH_MISMATCH"),
+        ("cleanup_state", "UNCERTAIN", "CANONICAL_HASH_MISMATCH"),
     ],
 )
 def test_public_validation_rejects_resealed_parented_child_transition_defects(
@@ -620,13 +541,15 @@ def test_public_validation_rejects_resealed_parented_child_transition_defects(
     parent, child, _ = _issue_candidate()
     resealed_child = deepcopy(child)
     resealed_child["upstream_evidence"][field] = replacement
-    _seal_mutation_evidence(resealed_child["upstream_evidence"])
+    _seal_mutation_evidence(
+        resealed_child["upstream_evidence"],
+        owner_authentication_key=ATTACKER_AUTHENTICATION_KEY,
+    )
     _reseal_reference(resealed_child)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.validate_drawing_artifact_reference(
             resealed_child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=parent,
             accepted_transition_evidence_sha256=resealed_child["upstream_evidence"][
                 "accepted_transition_evidence_sha256"
@@ -640,7 +563,6 @@ def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> No
     module = _module()
     parent, child, child_bytes = _issue_candidate()
     observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=child,
         parent_reference=parent,
         accepted_transition_evidence_sha256=child["upstream_evidence"][
@@ -651,12 +573,14 @@ def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> No
     )
     resealed_child = deepcopy(child)
     resealed_child["upstream_evidence"]["cleanup_state"] = "UNCERTAIN"
-    _seal_mutation_evidence(resealed_child["upstream_evidence"])
+    _seal_mutation_evidence(
+        resealed_child["upstream_evidence"],
+        owner_authentication_key=ATTACKER_AUTHENTICATION_KEY,
+    )
     _reseal_reference(resealed_child)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             reference=resealed_child,
             parent_reference=parent,
             accepted_transition_evidence_sha256=resealed_child["upstream_evidence"][
@@ -665,7 +589,7 @@ def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> No
             observation=observation,
         )
 
-    assert str(exc.value) == "CLEANUP_UNCERTAIN"
+    assert str(exc.value) == "CANONICAL_HASH_MISMATCH"
 
 
 def test_parented_reference_consumption_requires_independent_sealed_anchors() -> None:
@@ -676,7 +600,6 @@ def test_parented_reference_consumption_requires_independent_sealed_anchors() ->
     assert (
         module.validate_drawing_artifact_reference(
             child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=parent,
             accepted_transition_evidence_sha256=accepted_transition_sha256,
         )
@@ -686,7 +609,6 @@ def test_parented_reference_consumption_requires_independent_sealed_anchors() ->
     with pytest.raises(module.DrawingArtifactReferenceError) as parent_exc:
         module.validate_drawing_artifact_reference(
             child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             accepted_transition_evidence_sha256=accepted_transition_sha256,
         )
     assert str(parent_exc.value) == "PARENT_MISMATCH"
@@ -694,7 +616,6 @@ def test_parented_reference_consumption_requires_independent_sealed_anchors() ->
     with pytest.raises(module.DrawingArtifactReferenceError) as transition_exc:
         module.validate_drawing_artifact_reference(
             child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=parent,
         )
     assert str(transition_exc.value) == "MUTATION_EVIDENCE_MISSING"
@@ -707,7 +628,6 @@ def test_caller_cannot_mint_a_fully_resealed_parent_transition_anchor() -> None:
     with pytest.raises(module.DrawingArtifactReferenceError):
         module.validate_drawing_artifact_reference(
             forged_child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=forged_parent,
             accepted_transition_evidence_sha256=forged_child["upstream_evidence"][
                 "accepted_transition_evidence_sha256"
@@ -720,7 +640,6 @@ def test_caller_cannot_mint_currentness_for_a_fully_resealed_transition() -> Non
     forged_parent, forged_child, child_bytes = _caller_resealed_parent_child_chain()
     with pytest.raises(module.DrawingArtifactReferenceError):
         module.observe_drawing_artifact_currentness(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             reference=forged_child,
             parent_reference=forged_parent,
             accepted_transition_evidence_sha256=forged_child["upstream_evidence"][
@@ -735,7 +654,6 @@ def test_caller_cannot_mint_an_owner_current_observation() -> None:
     module = _module()
     reference = _issue_baseline()
     observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=reference,
         artifact_bytes=_artifact_bytes(),
         observation_evidence_sha256="d" * 64,
@@ -749,7 +667,6 @@ def test_caller_cannot_mint_an_owner_current_observation() -> None:
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             reference=reference,
             observation=forged_observation,
         )
@@ -787,7 +704,6 @@ def test_caller_cannot_mint_accepted_transition_custody_success(
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -815,7 +731,7 @@ def test_caller_cannot_mint_accepted_transition_custody_success(
         "custody_success",
     ],
 )
-def test_owner_key_rejects_each_fully_resealed_parent_transition(
+def test_module_owner_rejects_each_fully_resealed_parent_transition(
     mutation: str,
 ) -> None:
     module = _module()
@@ -876,14 +792,12 @@ def test_owner_key_rejects_each_fully_resealed_parent_transition(
     with pytest.raises(module.DrawingArtifactReferenceError):
         module.validate_drawing_artifact_reference(
             forged_child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=bound_parent,
             accepted_transition_evidence_sha256=evidence["accepted_transition_evidence_sha256"],
         )
 
     with pytest.raises(module.DrawingArtifactReferenceError):
         module.observe_drawing_artifact_currentness(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             reference=forged_child,
             parent_reference=bound_parent,
             accepted_transition_evidence_sha256=evidence["accepted_transition_evidence_sha256"],
@@ -895,15 +809,15 @@ def test_owner_key_rejects_each_fully_resealed_parent_transition(
 @pytest.mark.parametrize(
     ("mutation", "expected_code"),
     [
-        ("candidate_id", "PARENT_MISMATCH"),
-        ("candidate_sha256", "PARENT_MISMATCH"),
-        ("pre_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
-        ("post_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
-        ("partial_mutation", "MUTATION_EVIDENCE_MISMATCH"),
-        ("timed_out", "MUTATION_EVIDENCE_MISMATCH"),
-        ("rollback_failed", "MUTATION_EVIDENCE_MISMATCH"),
-        ("cleanup_state", "MUTATION_EVIDENCE_MISMATCH"),
-        ("custody_success", "MUTATION_EVIDENCE_MISMATCH"),
+        ("candidate_id", "CANONICAL_HASH_MISMATCH"),
+        ("candidate_sha256", "CANONICAL_HASH_MISMATCH"),
+        ("pre_artifact_sha256", "CANONICAL_HASH_MISMATCH"),
+        ("post_artifact_sha256", "CANONICAL_HASH_MISMATCH"),
+        ("partial_mutation", "CANONICAL_HASH_MISMATCH"),
+        ("timed_out", "CANONICAL_HASH_MISMATCH"),
+        ("rollback_failed", "CANONICAL_HASH_MISMATCH"),
+        ("cleanup_state", "CANONICAL_HASH_MISMATCH"),
+        ("custody_success", "CANONICAL_HASH_MISMATCH"),
     ],
 )
 def test_public_validation_rejects_fully_resealed_parent_transition(
@@ -938,13 +852,15 @@ def test_public_validation_rejects_fully_resealed_parent_transition(
     else:
         evidence["executor_result_sha256"] = "e" * 64
 
-    _seal_mutation_evidence(evidence)
+    _seal_mutation_evidence(
+        evidence,
+        owner_authentication_key=ATTACKER_AUTHENTICATION_KEY,
+    )
     _reseal_reference(forged)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.validate_drawing_artifact_reference(
             forged,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=parent,
             accepted_transition_evidence_sha256=accepted_transition_sha256,
         )
@@ -955,13 +871,13 @@ def test_public_validation_rejects_fully_resealed_parent_transition(
 @pytest.mark.parametrize(
     ("mutation", "expected_code"),
     [
-        ("candidate_id", "PARENT_MISMATCH"),
-        ("pre_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
-        ("post_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
-        ("partial_mutation", "MUTATION_EVIDENCE_MISMATCH"),
-        ("timed_out", "MUTATION_EVIDENCE_MISMATCH"),
-        ("rollback_failed", "MUTATION_EVIDENCE_MISMATCH"),
-        ("cleanup_state", "MUTATION_EVIDENCE_MISMATCH"),
+        ("candidate_id", "CANONICAL_HASH_MISMATCH"),
+        ("pre_artifact_sha256", "CANONICAL_HASH_MISMATCH"),
+        ("post_artifact_sha256", "CANONICAL_HASH_MISMATCH"),
+        ("partial_mutation", "CANONICAL_HASH_MISMATCH"),
+        ("timed_out", "CANONICAL_HASH_MISMATCH"),
+        ("rollback_failed", "CANONICAL_HASH_MISMATCH"),
+        ("cleanup_state", "CANONICAL_HASH_MISMATCH"),
     ],
 )
 def test_currentness_rejects_fully_resealed_child_and_current_observation(
@@ -972,7 +888,6 @@ def test_currentness_rejects_fully_resealed_child_and_current_observation(
     parent, child, child_bytes = _issue_candidate()
     accepted_transition_sha256 = child["upstream_evidence"]["accepted_transition_evidence_sha256"]
     observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=child,
         parent_reference=parent,
         accepted_transition_evidence_sha256=accepted_transition_sha256,
@@ -999,7 +914,10 @@ def test_currentness_rejects_fully_resealed_child_and_current_observation(
     else:
         evidence["cleanup_state"] = "UNCERTAIN"
 
-    _seal_mutation_evidence(evidence)
+    _seal_mutation_evidence(
+        evidence,
+        owner_authentication_key=ATTACKER_AUTHENTICATION_KEY,
+    )
     _reseal_reference(forged_reference)
     forged_observation = deepcopy(observation)
     forged_observation["reference_id"] = forged_reference["reference_id"]
@@ -1011,7 +929,6 @@ def test_currentness_rejects_fully_resealed_child_and_current_observation(
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             reference=forged_reference,
             parent_reference=parent,
             accepted_transition_evidence_sha256=accepted_transition_sha256,
@@ -1031,7 +948,6 @@ def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence()
         artifact_role="R3_CANDIDATE",
         artifact_bytes=child_bytes,
         upstream_evidence=mutation,
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         parent_reference=parent,
         r3_provenance_binding=_r3_binding(),
     )
@@ -1053,7 +969,6 @@ def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence()
     _seal_mutation_evidence(mutation)
 
     child = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         run_id=parent["run_id"],
         project_id=parent["project_id"],
         drawing_id=parent["drawing_id"],
@@ -1075,7 +990,6 @@ def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence()
     assert (
         module.validate_drawing_artifact_reference(
             child,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             parent_reference=parent,
             accepted_transition_evidence_sha256=child["upstream_evidence"][
                 "accepted_transition_evidence_sha256"
@@ -1103,7 +1017,6 @@ def test_parent_history_is_immutable_before_child_issuance_and_resealing_is_refu
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1132,7 +1045,6 @@ def test_post_repair_transition_rejects_baseline_as_r3_candidate_parent() -> Non
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1153,7 +1065,6 @@ def test_baseline_consumption_rejects_an_r3_candidate_reference() -> None:
         module.validate_drawing_artifact_reference(
             candidate,
             expected_artifact_role="BASELINE",
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
         )
     assert str(exc.value) == "CATEGORY_CONFUSION"
 
@@ -1166,7 +1077,6 @@ def test_post_repair_transition_rejects_wrong_r3_candidate_identity() -> None:
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1200,7 +1110,6 @@ def test_post_repair_child_rejects_each_foreign_parent_scope_after_binding_its_e
     }
     foreign_scope[scope_field] = foreign_value
     substituted_parent = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         **foreign_scope,
         artifact_role="R3_CANDIDATE",
         artifact_bytes=_artifact_bytes("r3-candidate-foreign"),
@@ -1217,7 +1126,6 @@ def test_post_repair_child_rejects_each_foreign_parent_scope_after_binding_its_e
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1234,7 +1142,6 @@ def test_post_repair_child_rejects_substituted_parent_with_tampered_hash_custody
     module = _module()
     parent, child_bytes, _ = _post_repair_material()
     substituted_parent = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         run_id=parent["run_id"],
         project_id=parent["project_id"],
         drawing_id=parent["drawing_id"],
@@ -1254,7 +1161,6 @@ def test_post_repair_child_rejects_substituted_parent_with_tampered_hash_custody
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1278,7 +1184,6 @@ def test_post_repair_child_rejects_forged_post_sha_even_when_r6_result_sha_exist
     assert mutation["r6_result_sha256"] == "5" * 64
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1321,7 +1226,6 @@ def test_post_repair_child_rejects_each_missing_required_evidence_binding(
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1381,7 +1285,6 @@ def test_post_repair_child_rejects_each_unsealed_opaque_evidence_mutation(
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1434,7 +1337,6 @@ def test_post_repair_child_rejects_each_malformed_opaque_evidence_binding(
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1455,7 +1357,6 @@ def test_post_repair_child_rejects_transition_evidence_category_confusion() -> N
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1494,7 +1395,6 @@ def test_post_repair_child_rejects_incomplete_or_uncertain_mutation_evidence(
     _seal_mutation_evidence(mutation)
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1512,7 +1412,6 @@ def test_candidate_requires_exact_r3_provenance_binding_but_dara_does_not_infer_
     parent, child_bytes, mutation = _post_repair_material()
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1529,13 +1428,11 @@ def test_current_observation_is_owner_observed_and_deterministic() -> None:
     module = _module()
     reference = _issue_baseline()
     first = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=reference,
         artifact_bytes=_artifact_bytes(),
         observation_evidence_sha256="b" * 64,
     )
     second = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=reference,
         artifact_bytes=_artifact_bytes(),
         observation_evidence_sha256="b" * 64,
@@ -1545,14 +1442,8 @@ def test_current_observation_is_owner_observed_and_deterministic() -> None:
     assert first["comparison"] == "CURRENT"
     assert first["observed_artifact_sha256"] == reference["artifact_sha256"]
     assert module.drawing_artifact_current_observation_sha256(first) == first["lookup_sha256"]
-    assert (
-        module.validate_drawing_artifact_current_observation(
-            first, owner_authenticity_anchor=_owner_authenticity_capabilities()[1]
-        )
-        == first
-    )
+    assert module.validate_drawing_artifact_current_observation(first) == first
     module.require_current_drawing_artifact_reference(
-        owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
         reference=reference,
         observation=first,
     )
@@ -1562,7 +1453,6 @@ def test_current_observation_marks_changed_bytes_stale_and_current_requirement_r
     module = _module()
     reference = _issue_baseline()
     observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=reference,
         artifact_bytes=_artifact_bytes("changed"),
         observation_evidence_sha256="b" * 64,
@@ -1570,7 +1460,6 @@ def test_current_observation_marks_changed_bytes_stale_and_current_requirement_r
     assert observation["comparison"] == "STALE"
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             reference=reference,
             observation=observation,
         )
@@ -1581,7 +1470,6 @@ def test_caller_cannot_flip_stale_observation_to_current() -> None:
     module = _module()
     reference = _issue_baseline()
     observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=reference,
         artifact_bytes=_artifact_bytes("changed"),
         observation_evidence_sha256="b" * 64,
@@ -1589,9 +1477,7 @@ def test_caller_cannot_flip_stale_observation_to_current() -> None:
     forged = deepcopy(observation)
     forged["comparison"] = "CURRENT"
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
-        module.validate_drawing_artifact_current_observation(
-            forged, owner_authenticity_anchor=_owner_authenticity_capabilities()[1]
-        )
+        module.validate_drawing_artifact_current_observation(forged)
     assert str(exc.value) in {"CURRENTNESS_FORGED", "CANONICAL_HASH_MISMATCH"}
 
 
@@ -1612,7 +1498,6 @@ def test_cross_scope_or_foreign_observation_replay_is_refused(
     module = _module()
     reference = _issue_baseline()
     observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=reference,
         artifact_bytes=_artifact_bytes(),
         observation_evidence_sha256="b" * 64,
@@ -1621,7 +1506,6 @@ def test_cross_scope_or_foreign_observation_replay_is_refused(
     replay[field] = value
     with pytest.raises(module.DrawingArtifactReferenceError):
         module.require_current_drawing_artifact_reference(
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             reference=reference,
             observation=replay,
         )
@@ -1648,14 +1532,12 @@ def test_valid_cross_scope_replay_is_refused_when_logical_evidence_is_reused(
     }
     foreign_scope[scope_field] = foreign_value
     foreign_reference = module.issue_drawing_artifact_reference(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         **foreign_scope,
         artifact_role="BASELINE",
         artifact_bytes=_artifact_bytes(),
         upstream_evidence=_baseline_evidence(),
     )
     foreign_observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=foreign_reference,
         artifact_bytes=_artifact_bytes(),
         observation_evidence_sha256="b" * 64,
@@ -1666,13 +1548,11 @@ def test_valid_cross_scope_replay_is_refused_when_logical_evidence_is_reused(
     assert (
         module.validate_drawing_artifact_current_observation(
             foreign_observation,
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
         )
         == foreign_observation
     )
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             reference=reference,
             observation=foreign_observation,
         )
@@ -1703,7 +1583,6 @@ def test_r6_result_sha_is_evidence_only_and_cannot_mint_dara_currentness() -> No
     }
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
-            owner_authenticity_anchor=_owner_authenticity_capabilities()[1],
             reference=child,
             parent_reference=parent,
             accepted_transition_evidence_sha256=mutation["accepted_transition_evidence_sha256"],
@@ -1727,7 +1606,6 @@ def test_r6_result_sha_alone_cannot_mint_post_repair_dara_custody() -> None:
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=parent["run_id"],
             project_id=parent["project_id"],
             drawing_id=parent["drawing_id"],
@@ -1748,7 +1626,6 @@ def test_caller_claimed_sha_and_currentness_cannot_override_owner_observed_bytes
 
     with pytest.raises(module.DrawingArtifactReferenceError) as custody_exc:
         module.issue_drawing_artifact_reference(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             run_id=reference["run_id"],
             project_id=reference["project_id"],
             drawing_id=reference["drawing_id"],
@@ -1761,7 +1638,6 @@ def test_caller_claimed_sha_and_currentness_cannot_override_owner_observed_bytes
 
     with pytest.raises(module.DrawingArtifactReferenceError) as currentness_exc:
         module.observe_drawing_artifact_currentness(
-            owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
             reference=reference,
             artifact_bytes=owner_observed_bytes,
             observation_evidence_sha256="b" * 64,
@@ -1810,9 +1686,7 @@ def test_reference_rejects_downstream_or_ambient_authority_fields(
     payload = deepcopy(_issue_baseline())
     payload[forbidden] = True
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
-        module.validate_drawing_artifact_reference(
-            payload, owner_authenticity_anchor=_owner_authenticity_capabilities()[1]
-        )
+        module.validate_drawing_artifact_reference(payload)
     assert str(exc.value) == "INVALID_REFERENCE"
 
 
@@ -1836,16 +1710,13 @@ def test_current_observation_rejects_downstream_authority_fields_and_second_stor
     module = _module()
     reference = _issue_baseline()
     observation = module.observe_drawing_artifact_currentness(
-        owner_authenticity_issuer=_owner_authenticity_capabilities()[0],
         reference=reference,
         artifact_bytes=_artifact_bytes(),
         observation_evidence_sha256="b" * 64,
     )
     observation[forbidden] = "forbidden-authority"
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
-        module.validate_drawing_artifact_current_observation(
-            observation, owner_authenticity_anchor=_owner_authenticity_capabilities()[1]
-        )
+        module.validate_drawing_artifact_current_observation(observation)
     assert str(exc.value) == "CURRENT_LOOKUP_INVALID"
 
 
@@ -1937,11 +1808,7 @@ def test_static_authority_boundary_is_stateless_and_allows_no_seam_imports() -> 
             assert not isinstance(value, mutable_nodes)
             assert not isinstance(value, ast.Call)
         if isinstance(statement, ast.ClassDef):
-            assert statement.name in {
-                "DrawingArtifactAuthenticityAnchor",
-                "DrawingArtifactAuthenticityIssuer",
-                "DrawingArtifactReferenceError",
-            }
+            assert statement.name == "DrawingArtifactReferenceError"
 
     for function in (
         node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -2048,8 +1915,6 @@ def test_errors_are_categorical_and_do_not_echo_private_values() -> None:
     private_value = "C:/private/customer/secret.dwg"
     payload["unexpected_private_path"] = private_value
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
-        module.validate_drawing_artifact_reference(
-            payload, owner_authenticity_anchor=_owner_authenticity_capabilities()[1]
-        )
+        module.validate_drawing_artifact_reference(payload)
     assert str(exc.value) == "INVALID_REFERENCE"
     assert private_value not in str(exc.value)
