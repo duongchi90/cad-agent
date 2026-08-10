@@ -59,11 +59,14 @@ def _baseline_evidence() -> dict[str, object]:
 
 def _mutation_evidence(
     *,
+    candidate_reference: dict[str, object],
     pre_sha256: str,
     post_sha256: str,
 ) -> dict[str, object]:
-    return {
+    evidence = {
         "evidence_kind": "POST_REPAIR_TRANSITION",
+        "r3_candidate_reference_id": candidate_reference["reference_id"],
+        "r3_candidate_reference_sha256": candidate_reference["reference_sha256"],
         "r5_failure_id": "r5-fail-001",
         "r5_failure_sha256": "2" * 64,
         "r4_transition_id": "r4-transition-001",
@@ -84,12 +87,22 @@ def _mutation_evidence(
         "rollback_failed": False,
         "cleanup_state": "VERIFIED",
     }
+    evidence["accepted_transition_evidence_sha256"] = canonical_json_sha256(evidence)
+    return evidence
 
 
 def _r3_binding() -> dict[str, object]:
     return {
         "registry_snapshot_sha256": "9" * 64,
         "provenance_sha256": "a" * 64,
+    }
+
+
+def _r3_candidate_evidence() -> dict[str, object]:
+    return {
+        "evidence_kind": "R3_CANDIDATE_CUSTODY",
+        "evidence_id": "r3-candidate-evidence-001",
+        "evidence_sha256": "b" * 64,
     }
 
 
@@ -105,14 +118,33 @@ def _issue_baseline():
     )
 
 
-def _issue_candidate():
+def _issue_r3_candidate():
     module = _module()
-    parent = _issue_baseline()
+    return module.issue_drawing_artifact_reference(
+        run_id="run-182-001",
+        project_id="project-001",
+        drawing_id="drawing-001",
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=_artifact_bytes("r3-candidate"),
+        upstream_evidence=_r3_candidate_evidence(),
+        r3_provenance_binding=_r3_binding(),
+    )
+
+
+def _post_repair_material():
+    parent = _issue_r3_candidate()
     child_bytes = _artifact_bytes("repaired")
     mutation = _mutation_evidence(
+        candidate_reference=parent,
         pre_sha256=parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    return parent, child_bytes, mutation
+
+
+def _issue_candidate():
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
     child = module.issue_drawing_artifact_reference(
         run_id=parent["run_id"],
         project_id=parent["project_id"],
@@ -235,21 +267,71 @@ def test_valid_post_repair_child_preserves_immutable_parent_history() -> None:
     assert module.validate_drawing_artifact_reference(child) == child
 
 
-def test_post_repair_child_requires_exact_parent_scope_and_hash() -> None:
+def test_post_repair_transition_rejects_baseline_as_r3_candidate_parent() -> None:
     module = _module()
     parent = _issue_baseline()
+    child_bytes = _artifact_bytes("repaired")
+    mutation = _mutation_evidence(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "CATEGORY_CONFUSION"
+
+
+def test_baseline_consumption_rejects_an_r3_candidate_reference() -> None:
+    module = _module()
+    candidate = _issue_r3_candidate()
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.validate_drawing_artifact_reference(
+            candidate, expected_artifact_role="BASELINE"
+        )
+    assert str(exc.value) == "CATEGORY_CONFUSION"
+
+
+def test_post_repair_transition_rejects_wrong_r3_candidate_identity() -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
+    mutation["r3_candidate_reference_id"] = "r3-candidate-foreign"
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "WRONG_CANDIDATE"
+
+
+def test_post_repair_child_requires_exact_parent_scope_and_hash() -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
     wrong_parent = module.issue_drawing_artifact_reference(
         run_id=parent["run_id"],
         project_id="project-foreign",
         drawing_id=parent["drawing_id"],
-        artifact_role="BASELINE",
-        artifact_bytes=_artifact_bytes(),
-        upstream_evidence=_baseline_evidence(),
-    )
-    child_bytes = _artifact_bytes("repaired")
-    mutation = _mutation_evidence(
-        pre_sha256=parent["artifact_sha256"],
-        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=_artifact_bytes("r3-candidate-foreign"),
+        upstream_evidence=_r3_candidate_evidence(),
+        r3_provenance_binding=_r3_binding(),
     )
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -262,14 +344,14 @@ def test_post_repair_child_requires_exact_parent_scope_and_hash() -> None:
             parent_reference=wrong_parent,
             r3_provenance_binding=_r3_binding(),
         )
-    assert str(exc.value) in {"SCOPE_MISMATCH", "PARENT_MISMATCH"}
+    assert str(exc.value) in {"SCOPE_MISMATCH", "PARENT_MISMATCH", "WRONG_CANDIDATE"}
 
 
 def test_post_repair_child_rejects_forged_post_sha_even_when_r6_result_sha_exists() -> None:
     module = _module()
-    parent = _issue_baseline()
-    child_bytes = _artifact_bytes("repaired")
+    parent, child_bytes, mutation = _post_repair_material()
     mutation = _mutation_evidence(
+        candidate_reference=parent,
         pre_sha256=parent["artifact_sha256"],
         post_sha256="d" * 64,
     )
@@ -286,6 +368,78 @@ def test_post_repair_child_rejects_forged_post_sha_even_when_r6_result_sha_exist
             r3_provenance_binding=_r3_binding(),
         )
     assert str(exc.value) == "POST_ARTIFACT_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "r5_failure_id",
+        "r4_transition_id",
+        "r6_mutation_request_id",
+        "r6_result_id",
+        "executor_result_id",
+        "pre_artifact_sha256",
+        "post_artifact_sha256",
+        "protected_constraints_sha256",
+        "workspace_evidence_sha256",
+    ],
+)
+def test_post_repair_child_rejects_each_missing_required_evidence_binding(
+    field: str,
+) -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
+    mutation.pop(field)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "MUTATION_EVIDENCE_MISSING"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected_code"),
+    [
+        ("r5_failure_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("r4_transition_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("r6_mutation_request_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("r6_result_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("executor_result_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("pre_artifact_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("post_artifact_sha256", "f" * 64, "POST_ARTIFACT_MISMATCH"),
+        ("protected_constraints_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("workspace_evidence_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+    ],
+)
+def test_post_repair_child_rejects_each_mismatched_evidence_binding(
+    field: str,
+    replacement: str,
+    expected_code: str,
+) -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
+    mutation[field] = replacement
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == expected_code
 
 
 @pytest.mark.parametrize(
@@ -306,12 +460,7 @@ def test_post_repair_child_rejects_incomplete_or_uncertain_mutation_evidence(
     expected_code: str,
 ) -> None:
     module = _module()
-    parent = _issue_baseline()
-    child_bytes = _artifact_bytes("repaired")
-    mutation = _mutation_evidence(
-        pre_sha256=parent["artifact_sha256"],
-        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
-    )
+    parent, child_bytes, mutation = _post_repair_material()
     if value is None:
         mutation.pop(field)
     else:
@@ -332,12 +481,7 @@ def test_post_repair_child_rejects_incomplete_or_uncertain_mutation_evidence(
 
 def test_candidate_requires_exact_r3_provenance_binding_but_dara_does_not_infer_it() -> None:
     module = _module()
-    parent = _issue_baseline()
-    child_bytes = _artifact_bytes("repaired")
-    mutation = _mutation_evidence(
-        pre_sha256=parent["artifact_sha256"],
-        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
-    )
+    parent, child_bytes, mutation = _post_repair_material()
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
             run_id=parent["run_id"],
@@ -469,6 +613,28 @@ def test_r6_result_sha_is_evidence_only_and_cannot_mint_dara_currentness() -> No
     assert parent["reference_id"] == child["parent_reference_id"]
 
 
+def test_r6_result_sha_alone_cannot_mint_post_repair_dara_custody() -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
+    r6_result_only = {
+        "evidence_kind": "POST_REPAIR_TRANSITION",
+        "r6_result_sha256": mutation["r6_result_sha256"],
+    }
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=r6_result_only,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "MUTATION_EVIDENCE_MISSING"
+
+
 @pytest.mark.parametrize(
     "forbidden",
     [
@@ -527,8 +693,33 @@ def test_hashing_reuses_canonical_json_owner_and_static_boundary_has_no_second_s
         "subprocess",
         "socket",
         "requests",
+        "currentness_authority",
+        "candidate_store",
+        "current_store",
     ):
         assert forbidden not in source
+
+
+def test_public_surface_has_no_second_currentness_authority_or_in_memory_store() -> None:
+    module = _module()
+    public_names = {name for name in vars(module) if not name.startswith("_")}
+    lowered_names = {name.lower() for name in public_names}
+
+    assert not {
+        "currentness_authority",
+        "drawing_artifact_current_store",
+        "drawing_artifact_candidate_store",
+        "candidate_store",
+        "current_store",
+        "register_current_reference",
+        "set_current_reference",
+    } & lowered_names
+    assert not {
+        name
+        for name in lowered_names
+        if ("candidate" in name or "current" in name)
+        and ("store" in name or "cache" in name or "registry" in name)
+    }
 
 
 def test_public_api_has_no_r4_r5_r6_decision_or_live_execution_parameters() -> None:
