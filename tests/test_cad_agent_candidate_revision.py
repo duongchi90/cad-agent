@@ -156,6 +156,9 @@ def _accepted_r3_material(
         upstream_context=context,
         components=r3_tests._component_inputs(context),
     )
+    assert r3.validate_component_view_registry(
+        registry, upstream_context=context
+    ) == registry
     component_ids = [
         component["component_id"] for component in registry["components"]
     ]
@@ -436,23 +439,35 @@ def test_foreign_baseline_scope_cannot_be_rebound() -> None:
 
 
 @pytest.mark.parametrize(
-    "mutation",
+    ("target_name", "mutation"),
     [
-        lambda registry: registry.__setitem__("registry_snapshot_sha256", "f" * 64),
-        lambda impact: impact.__setitem__("registry_snapshot_sha256", "e" * 64),
-        lambda impact: impact["correspondence"].__setitem__(
-            "child_reference_sha256", "d" * 64
+        (
+            "registry",
+            lambda registry: registry.__setitem__(
+                "registry_snapshot_sha256", "f" * 64
+            ),
         ),
-        lambda impact: impact["impact"]["component_ids"].clear(),
+        (
+            "change_impact",
+            lambda impact: impact.__setitem__("registry_snapshot_sha256", "e" * 64),
+        ),
+        (
+            "change_impact",
+            lambda impact: impact["correspondence"].__setitem__(
+                "child_reference_sha256", "d" * 64
+            ),
+        ),
+        (
+            "change_impact",
+            lambda impact: impact["impact"]["component_ids"].clear(),
+        ),
     ],
 )
-def test_r3_registry_impact_correspondence_and_provenance_are_bound(mutation) -> None:
+def test_r3_registry_impact_correspondence_and_provenance_are_bound(
+    target_name, mutation
+) -> None:
     args = _valid_args()
-    target = args["registry"] if mutation.__name__ == "<lambda>" else args["change_impact"]
-    try:
-        mutation(args["registry"])
-    except (KeyError, TypeError):
-        mutation(args["change_impact"])
+    mutation(args[target_name])
     with pytest.raises(CandidateRevisionError):
         build_candidate_revision(**args)
 
