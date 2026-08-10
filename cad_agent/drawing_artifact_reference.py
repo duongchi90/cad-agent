@@ -608,6 +608,7 @@ def require_current_drawing_artifact_reference(
     *,
     reference: Mapping[str, object],
     observation: Mapping[str, object],
+    artifact_bytes: bytes,
     parent_reference: Mapping[str, object] | None = None,
     accepted_transition_evidence_sha256: str | None = None,
 ) -> None:
@@ -629,5 +630,9 @@ def require_current_drawing_artifact_reference(
         _fail("FOREIGN_REFERENCE")
     if sealed_observation["expected_artifact_sha256"] != sealed_reference["artifact_sha256"]:
         _fail("REPLAY_MISMATCH")
-    if sealed_observation["comparison"] != "CURRENT":
+    freshly_observed_artifact_sha256 = _sha256_bytes(artifact_bytes)
+    if (
+        sealed_observation["comparison"] != "CURRENT"
+        or freshly_observed_artifact_sha256 != sealed_reference["artifact_sha256"]
+    ):
         _fail("STALE_REFERENCE")

@@ -339,6 +339,7 @@ def test_module_issues_and_validates_integrity_records_without_caller_capabiliti
     module.require_current_drawing_artifact_reference(
         reference=reference,
         observation=observation,
+        artifact_bytes=_artifact_bytes(),
     )
 
 
@@ -588,6 +589,7 @@ def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> No
                 "accepted_transition_evidence_sha256"
             ],
             observation=observation,
+            artifact_bytes=child_bytes,
         )
 
     assert str(exc.value) == "CLEANUP_UNCERTAIN"
@@ -669,6 +671,7 @@ def test_resealed_observation_remains_integrity_material_only() -> None:
     module.require_current_drawing_artifact_reference(
         reference=reference,
         observation=forged_observation,
+        artifact_bytes=_artifact_bytes(),
     )
 
 
@@ -1220,7 +1223,36 @@ def test_current_observation_is_owner_observed_and_deterministic() -> None:
     module.require_current_drawing_artifact_reference(
         reference=reference,
         observation=first,
+        artifact_bytes=_artifact_bytes(),
     )
+
+
+def test_current_requirement_recomputes_from_fresh_owner_observed_bytes() -> None:
+    module = _module()
+    reference = _issue_baseline()
+    observation = module.observe_drawing_artifact_currentness(
+        reference=reference,
+        artifact_bytes=_artifact_bytes(),
+        observation_evidence_sha256="b" * 64,
+    )
+    require_current = module.require_current_drawing_artifact_reference
+
+    if "artifact_bytes" not in inspect.signature(require_current).parameters:
+        require_current(reference=reference, observation=observation)
+        pytest.fail("currentness gate accepted caller observation without fresh owner bytes")
+
+    require_current(
+        reference=reference,
+        observation=observation,
+        artifact_bytes=_artifact_bytes(),
+    )
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        require_current(
+            reference=reference,
+            observation=observation,
+            artifact_bytes=_artifact_bytes("changed-after-observation"),
+        )
+    assert str(exc.value) == "STALE_REFERENCE"
 
 
 def test_current_observation_marks_changed_bytes_stale_and_current_requirement_refuses() -> None:
@@ -1236,6 +1268,7 @@ def test_current_observation_marks_changed_bytes_stale_and_current_requirement_r
         module.require_current_drawing_artifact_reference(
             reference=reference,
             observation=observation,
+            artifact_bytes=_artifact_bytes("changed"),
         )
     assert str(exc.value) == "STALE_REFERENCE"
 
@@ -1282,6 +1315,7 @@ def test_cross_scope_or_foreign_observation_replay_is_refused(
         module.require_current_drawing_artifact_reference(
             reference=reference,
             observation=replay,
+            artifact_bytes=_artifact_bytes(),
         )
 
 
@@ -1329,6 +1363,7 @@ def test_valid_cross_scope_replay_is_refused_when_logical_evidence_is_reused(
         module.require_current_drawing_artifact_reference(
             reference=reference,
             observation=foreign_observation,
+            artifact_bytes=_artifact_bytes(),
         )
     assert str(exc.value) in {
         "SCOPE_MISMATCH",
@@ -1339,7 +1374,7 @@ def test_valid_cross_scope_replay_is_refused_when_logical_evidence_is_reused(
 
 def test_r6_result_sha_is_evidence_only_and_cannot_mint_dara_currentness() -> None:
     module = _module()
-    parent, child, _ = _issue_candidate()
+    parent, child, child_bytes = _issue_candidate()
     mutation = child["upstream_evidence"]
     forged = {
         "schema_version": "drawing-artifact-current-observation-1.0",
@@ -1361,6 +1396,7 @@ def test_r6_result_sha_is_evidence_only_and_cannot_mint_dara_currentness() -> No
             parent_reference=parent,
             accepted_transition_evidence_sha256=mutation["accepted_transition_evidence_sha256"],
             observation=forged,
+            artifact_bytes=child_bytes,
         )
     assert str(exc.value) in {
         "CURRENT_LOOKUP_INVALID",
