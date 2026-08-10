@@ -1624,6 +1624,12 @@ def test_task3_public_surface_preserves_task2_and_adds_r3_correspondence_gate() 
         "upstream_context",
     ]
     assert callable(getattr(module, "finalize_component_view_correspondence", None))
+    wildcard_namespace: dict[str, object] = {}
+    exec("from cad_agent.component_view_registry import *", wildcard_namespace)
+    assert (
+        wildcard_namespace["finalize_component_view_correspondence"]
+        is module.finalize_component_view_correspondence
+    )
 
 
 def test_task3_finalizes_deterministic_correspondence_against_immutable_parent() -> None:

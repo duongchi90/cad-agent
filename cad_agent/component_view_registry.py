@@ -1546,5 +1546,6 @@ __all__ = [
     "build_component_view_registry",
     "validate_component_view_registry",
     "component_view_registry_sha256",
+    "finalize_component_view_correspondence",
     "project_linked_view_impacts",
 ]
