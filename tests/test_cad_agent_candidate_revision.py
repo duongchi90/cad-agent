@@ -959,6 +959,12 @@ def test_candidate_module_has_no_owner_authority_or_replacement_mutators() -> No
 # behind fixture setup.
 TASK2_STATE_SCHEMA_VERSION = "candidate-revision-state-1.0"
 TASK2_TRANSITION_SCHEMA_VERSION = "candidate-revision-state-transition-1.0"
+TASK2_STATE_FIELDS = (
+    "schema_version",
+    "candidate_revisions",
+    "current_candidate_revision_sha256",
+    "state_sha256",
+)
 
 
 def _task2_api():
@@ -967,7 +973,9 @@ def _task2_api():
         "transition_candidate_revision_state",
         "validate_candidate_revision_state",
     )
-    missing = [name for name in names if not callable(getattr(candidate_module, name, None))]
+    missing = [
+        name for name in names if not callable(getattr(candidate_module, name, None))
+    ]
     assert not missing, f"R4 Task2 production seam missing: {', '.join(missing)}"
     return tuple(getattr(candidate_module, name) for name in names)
 
@@ -979,7 +987,7 @@ def _task2_state(
 ) -> dict[str, object]:
     build_state, _transition, _validate = _task2_api()
     return build_state(
-        candidate_revisions=deepcopy(candidates),
+        candidate_revisions=candidates,
         current_candidate_revision_sha256=current,
     )
 
@@ -1005,10 +1013,50 @@ def _task2_apply(
 ) -> dict[str, object]:
     _build_state, apply_transition, _validate_state = _task2_api()
     return apply_transition(
-        state=deepcopy(state),
-        candidate_revision=deepcopy(candidate),
-        transition=deepcopy(transition),
+        state=state,
+        candidate_revision=candidate,
+        transition=transition,
     )
+
+
+def _task2_state_sha256(state: dict[str, object]) -> str:
+    return canonical_json_sha256(
+        {
+            key: value
+            for key, value in state.items()
+            if key != "state_sha256"
+        }
+    )
+
+
+def _task2_mutable_module_bindings() -> dict[str, object]:
+    mutable_types = (dict, list, set, bytearray)
+    return {
+        name: deepcopy(value)
+        for name, value in vars(candidate_module).items()
+        if not name.startswith("__") and isinstance(value, mutable_types)
+    }
+
+
+def _task2_selected_and_superseded() -> tuple[
+    dict[str, object], dict[str, object], dict[str, object], dict[str, object]
+]:
+    _root_args, root, left, right = _task2_graph()
+    selected = _task2_apply(
+        _task2_state([root, left, right]),
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    superseded = _task2_apply(
+        selected,
+        left,
+        _task2_transition(
+            "SUPERSEDE",
+            left,
+            expected_current=root["candidate_revision_sha256"],
+        ),
+    )
+    return root, left, right, superseded
 
 
 def _task2_graph() -> tuple[
@@ -1033,6 +1081,79 @@ def test_task2_state_replay_and_candidate_permutation_are_deterministic() -> Non
     assert _task2_apply(first, root, select_root) == _task2_apply(
         replay, root, select_root
     )
+
+
+def test_task2_validator_accepts_and_returns_a_valid_canonical_state() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    state = _task2_state([root])
+    _build_state, _transition, validate_state = _task2_api()
+
+    assert validate_state(state) == state
+
+
+def test_task2_state_schema_checksum_and_current_membership_are_explicit() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    candidates = [root, left]
+    candidates_before = deepcopy(candidates)
+    state = _task2_state(candidates)
+
+    assert set(state) == set(TASK2_STATE_FIELDS)
+    assert state["schema_version"] == TASK2_STATE_SCHEMA_VERSION
+    assert isinstance(state["candidate_revisions"], list)
+    assert state["current_candidate_revision_sha256"] is None
+    assert "state_sha256" in state
+    assert state["state_sha256"] == _task2_state_sha256(state)
+    assert candidates == candidates_before
+
+    with pytest.raises(CandidateRevisionError, match="CURRENT|CANDIDATE|MEMBER"):
+        _task2_state([root], current=left["candidate_revision_sha256"])
+
+
+def test_task2_operations_preserve_original_caller_owned_inputs() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    candidates = [root, left]
+    candidates_before = deepcopy(candidates)
+    state = _task2_state(candidates)
+    state_before = deepcopy(state)
+    transition = _task2_transition("SELECT", root, expected_current=None)
+    transition_before = deepcopy(transition)
+    root_before = deepcopy(root)
+
+    result = _task2_apply(state, root, transition)
+
+    assert candidates == candidates_before
+    assert state == state_before
+    assert root == root_before
+    assert transition == transition_before
+    assert result is not state
+
+
+def test_task2_outputs_are_independent_and_module_has_no_mutable_owner() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    _source, tree = _candidate_module_source_and_tree()
+    mutable_module_bindings_before = _task2_mutable_module_bindings()
+    top_level_assignments = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            top_level_assignments.extend(
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            )
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            top_level_assignments.append(node.target.id)
+    assert not any(
+        any(fragment in name.lower() for fragment in ("current", "store", "owner", "authority"))
+        for name in top_level_assignments
+    )
+
+    first = _task2_state([root])
+    second = _task2_state([root])
+    assert first == second
+    assert first is not second
+
+    first["candidate_revisions"].clear()
+    assert second["candidate_revisions"]
+    assert _task2_state([root]) == second
+    assert _task2_mutable_module_bindings() == mutable_module_bindings_before
 
 
 def test_task2_selecting_the_same_candidate_twice_is_rejected_as_replay() -> None:
@@ -1069,6 +1190,51 @@ def test_task2_superseding_a_non_current_candidate_fails_closed() -> None:
                 right,
                 expected_current=left["candidate_revision_sha256"],
             ),
+        )
+
+
+def test_task2_supersede_rejects_tampered_candidate_identity() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    selected = _task2_apply(
+        _task2_state([root, left]),
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    tampered_left = deepcopy(left)
+    tampered_left["state"] = "FORGED_CANDIDATE"
+
+    with pytest.raises(CandidateRevisionError, match="CANDIDATE|BINDING|CHECKSUM"):
+        _task2_apply(
+            selected,
+            tampered_left,
+            _task2_transition(
+                "SUPERSEDE",
+                left,
+                expected_current=root["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_supersede_replay_and_expected_current_conflict_fail_closed() -> None:
+    root, left, _right, superseded = _task2_selected_and_superseded()
+    replay = _task2_transition(
+        "SUPERSEDE",
+        left,
+        expected_current=root["candidate_revision_sha256"],
+    )
+
+    with pytest.raises(CandidateRevisionError, match="REPLAY|CURRENT|EXPECTED"):
+        _task2_apply(superseded, left, replay)
+
+    with pytest.raises(CandidateRevisionError, match="CURRENT|EXPECTED|STALE"):
+        _task2_apply(
+            _task2_apply(
+                _task2_state([root, left]),
+                root,
+                _task2_transition("SELECT", root, expected_current=None),
+            ),
+            left,
+            _task2_transition("SUPERSEDE", left, expected_current="f" * 64),
         )
 
 
@@ -1205,6 +1371,47 @@ def test_task2_logical_rollback_selects_historical_identity_without_rewriting_li
     )["parent_candidate_revision_sha256"] == root["candidate_revision_sha256"]
 
 
+def test_task2_rollback_rejects_tampered_candidate_identity() -> None:
+    root, left, _right, superseded = _task2_selected_and_superseded()
+    tampered_root = deepcopy(root)
+    tampered_root["state"] = "FORGED_CANDIDATE"
+
+    with pytest.raises(CandidateRevisionError, match="CANDIDATE|BINDING|CHECKSUM"):
+        _task2_apply(
+            superseded,
+            tampered_root,
+            _task2_transition(
+                "ROLLBACK",
+                root,
+                expected_current=left["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_rollback_replay_and_expected_current_conflict_fail_closed() -> None:
+    root, left, _right, superseded = _task2_selected_and_superseded()
+    rollback = _task2_transition(
+        "ROLLBACK",
+        root,
+        expected_current=left["candidate_revision_sha256"],
+    )
+    rolled_back = _task2_apply(superseded, root, rollback)
+
+    with pytest.raises(CandidateRevisionError, match="REPLAY|CURRENT|EXPECTED"):
+        _task2_apply(rolled_back, root, rollback)
+
+    with pytest.raises(CandidateRevisionError, match="CURRENT|EXPECTED|STALE"):
+        _task2_apply(
+            superseded,
+            root,
+            _task2_transition(
+                "ROLLBACK",
+                root,
+                expected_current=root["candidate_revision_sha256"],
+            ),
+        )
+
+
 def test_task2_conflicting_expected_current_identity_fails_closed() -> None:
     _root_args, root, left, _right = _task2_graph()
     state = _task2_apply(
@@ -1273,9 +1480,12 @@ def test_task2_malformed_or_unknown_transition_fields_fail_closed(
 def test_task2_state_checksum_mutation_and_unknown_fields_fail_closed() -> None:
     _root_args, root, _left, _right = _task2_graph()
     state = _task2_state([root])
+    assert "state_sha256" in state
+    assert state["state_sha256"] == _task2_state_sha256(state)
     mutated_checksum = deepcopy(state)
     mutated_checksum["state_sha256"] = "f" * 64
-    with pytest.raises(CandidateRevisionError, match="CHECKSUM|STATE"):
+    assert mutated_checksum["state_sha256"] != _task2_state_sha256(mutated_checksum)
+    with pytest.raises(CandidateRevisionError, match="CHECKSUM"):
         _task2_apply(
             mutated_checksum,
             root,
