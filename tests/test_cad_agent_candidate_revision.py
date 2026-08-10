@@ -155,6 +155,9 @@ def _accepted_r3_material(
     handoff = deepcopy(context["reuse_handoff"])
     handoff["candidate_output_sha256"] = _sha256_bytes(candidate_bytes)
     context = r3_tests._replace_handoff(context, handoff)
+    context["candidate"]["candidate_drawing_sha256"] = handoff[
+        "candidate_output_sha256"
+    ]
     registry = r3.build_component_view_registry(
         upstream_context=context,
         components=r3_tests._component_inputs(context),
@@ -257,6 +260,16 @@ def _mutation_evidence(material: dict[str, object], tag: str) -> dict[str, objec
     return evidence
 
 
+def _rebind_mutation_evidence_checksum(evidence: dict[str, object]) -> None:
+    evidence["evidence_sha256"] = canonical_json_sha256(
+        {
+            key: value
+            for key, value in evidence.items()
+            if key != "evidence_sha256"
+        }
+    )
+
+
 def _valid_args(
     *,
     material: dict[str, object] | None = None,
@@ -328,6 +341,51 @@ def _child_args(
     return args
 
 
+def _valid_lineage_chain() -> tuple[
+    dict[str, object], dict[str, object], dict[str, object], dict[str, object]
+]:
+    root_args = _valid_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    child_args = _child_args(root_args, root, tag="child")
+    child = build_candidate_revision(**deepcopy(child_args))
+    grandchild_args = _child_args(root_args, child, tag="grandchild")
+    assert root["parent_candidate_revision_sha256"] is None
+    assert child["parent_candidate_revision_sha256"] == root[
+        "candidate_revision_sha256"
+    ]
+    assert grandchild_args["parent_candidate"]["candidate_revision_sha256"] == child[
+        "candidate_revision_sha256"
+    ]
+    return root_args, root, child, grandchild_args
+
+
+def _candidate_module_source_and_tree() -> tuple[str, ast.Module]:
+    path = Path(candidate_module.__file__)
+    source = path.read_text(encoding="utf-8")
+    return source, ast.parse(source, filename=str(path))
+
+
+def _candidate_module_symbol_names(tree: ast.Module) -> set[str]:
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+
+
+def _candidate_module_call_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if isinstance(function, ast.Name):
+            names.add(function.id)
+        elif isinstance(function, ast.Attribute):
+            names.add(function.attr)
+    return names
+
+
 def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
     assert CANDIDATE_REVISION_SCHEMA_VERSION == CANDIDATE_SCHEMA_VERSION
     assert issubclass(CandidateRevisionError, ValueError)
@@ -346,6 +404,12 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in build_parameters.values()
     )
+    assert build_parameters["lineage_context"].default == ()
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for name, parameter in build_parameters.items()
+        if name != "lineage_context"
+    )
 
     validate_parameters = inspect.signature(validate_candidate_revision).parameters
     assert list(validate_parameters) == ["payload", *keyword_only_names]
@@ -353,11 +417,25 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         validate_parameters["payload"].kind
         is inspect.Parameter.POSITIONAL_OR_KEYWORD
     )
+    assert validate_parameters["payload"].default is inspect.Parameter.empty
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for name, parameter in validate_parameters.items()
         if name != "payload"
     )
+    assert validate_parameters["lineage_context"].default == ()
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for name, parameter in validate_parameters.items()
+        if name not in {"payload", "lineage_context"}
+    )
+
+
+def test_public_surface_rejects_omitted_required_arguments() -> None:
+    with pytest.raises(TypeError, match="required|missing"):
+        build_candidate_revision()
+    with pytest.raises(TypeError, match="required|missing"):
+        validate_candidate_revision({})
 
 
 def test_root_revision_is_sealed_closed_and_deterministic() -> None:
@@ -447,12 +525,19 @@ def test_dara_r3_candidate_reference_cannot_be_used_as_baseline() -> None:
 
 
 def test_foreign_baseline_scope_cannot_be_rebound() -> None:
+    root_args = _valid_args()
+    root = build_candidate_revision(**deepcopy(root_args))
     foreign = _baseline_context(
         "foreign",
         scope={**SCOPE, "project_id": "foreign-project"},
     )
+    foreign_args = _valid_args(
+        baseline_context=foreign,
+        parent_candidate=root,
+        tag="foreign-baseline",
+    )
     with pytest.raises(CandidateRevisionError):
-        build_candidate_revision(**_valid_args(baseline_context=foreign))
+        build_candidate_revision(**foreign_args)
 
 
 @pytest.mark.parametrize(
@@ -522,27 +607,13 @@ def test_root_depth_two_and_depth_three_use_closed_lineage_context() -> None:
 
 
 def test_missing_lineage_context_for_indirect_parent_fails_closed() -> None:
-    root_args = _valid_args()
-    root = build_candidate_revision(**deepcopy(root_args))
-    child = build_candidate_revision(**_child_args(root_args, root, tag="child"))
-    grandchild_args = _child_args(root_args, child, tag="grandchild")
+    root_args, _root, _child, grandchild_args = _valid_lineage_chain()
     with pytest.raises(CandidateRevisionError, match="LINEAGE"):
         build_candidate_revision(**grandchild_args)
 
 
-def test_lineage_rejects_missing_conflicting_repeated_cycle_and_foreign_ancestors() -> None:
-    root_args = _valid_args()
-    root = build_candidate_revision(**deepcopy(root_args))
-    child = build_candidate_revision(**_child_args(root_args, root, tag="child"))
-    grandchild_args = _child_args(root_args, child, tag="grandchild")
-
-    missing = deepcopy(grandchild_args)
-    missing["lineage_context"] = _lineage_context(
-        root_args["baseline_context"], []
-    )
-    with pytest.raises(CandidateRevisionError):
-        build_candidate_revision(**missing)
-
+def test_lineage_conflicting_ancestor_is_refused_independently() -> None:
+    root_args, root, _child, grandchild_args = _valid_lineage_chain()
     conflicting = deepcopy(grandchild_args)
     conflicting["lineage_context"] = _lineage_context(
         root_args["baseline_context"], [root, {**root, "run_id": "conflict"}]
@@ -550,6 +621,9 @@ def test_lineage_rejects_missing_conflicting_repeated_cycle_and_foreign_ancestor
     with pytest.raises(CandidateRevisionError):
         build_candidate_revision(**conflicting)
 
+
+def test_lineage_repeated_ancestor_is_refused_independently() -> None:
+    root_args, root, _child, grandchild_args = _valid_lineage_chain()
     repeated = deepcopy(grandchild_args)
     repeated["lineage_context"] = _lineage_context(
         root_args["baseline_context"], [root, root]
@@ -557,8 +631,14 @@ def test_lineage_rejects_missing_conflicting_repeated_cycle_and_foreign_ancestor
     with pytest.raises(CandidateRevisionError):
         build_candidate_revision(**repeated)
 
+
+def test_lineage_cycle_mutation_is_refused_independently() -> None:
+    root_args, root, child, grandchild_args = _valid_lineage_chain()
     cycle = deepcopy(root)
     cycle["parent_candidate_revision_sha256"] = child[
+        "candidate_revision_sha256"
+    ]
+    assert cycle["parent_candidate_revision_sha256"] == child[
         "candidate_revision_sha256"
     ]
     cyclic = deepcopy(grandchild_args)
@@ -568,8 +648,12 @@ def test_lineage_rejects_missing_conflicting_repeated_cycle_and_foreign_ancestor
     with pytest.raises(CandidateRevisionError):
         build_candidate_revision(**cyclic)
 
+
+def test_lineage_foreign_ancestor_is_refused_independently() -> None:
+    root_args, root, _child, grandchild_args = _valid_lineage_chain()
     foreign = deepcopy(root)
     foreign["baseline_revision"] = "foreign-baseline"
+    assert foreign["baseline_revision"] != root["baseline_revision"]
     foreign_context = deepcopy(grandchild_args)
     foreign_context["lineage_context"] = _lineage_context(
         root_args["baseline_context"], [foreign]
@@ -668,6 +752,27 @@ def test_candidate_state_is_not_selection_acceptance_or_publication() -> None:
         assert not hasattr(candidate_module, forbidden)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "rebind_checksum"),
+    [
+        ("evidence_kind", "R4_FORGED_MUTATION", True),
+        ("mutation_terminal", "SUCCESS", True),
+        ("evidence_sha256", "f" * 64, False),
+    ],
+)
+def test_forged_r4_mutation_evidence_is_refused(
+    field: str, value: object, rebind_checksum: bool
+) -> None:
+    args = _valid_args()
+    args["mutation_evidence"][field] = value
+    if rebind_checksum:
+        _rebind_mutation_evidence_checksum(args["mutation_evidence"])
+    else:
+        assert args["mutation_evidence"][field] == value
+    with pytest.raises(CandidateRevisionError):
+        build_candidate_revision(**args)
+
+
 def test_unknown_fields_and_caller_minted_checksum_fail_closed() -> None:
     args = _valid_args()
     args["mutation_evidence"]["caller_checksum"] = "f" * 64
@@ -681,30 +786,59 @@ def test_unknown_fields_and_caller_minted_checksum_fail_closed() -> None:
 
 
 def test_candidate_module_has_no_io_live_or_second_store_authority() -> None:
-    source = Path(candidate_module.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    imported = {
-        alias.name.split(".")[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
+    source, tree = _candidate_module_source_and_tree()
+    imported_modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module is not None
+            imported_modules.add(node.module)
+
+    allowed_internal_modules = {
+        "cad_agent.component_view_registry",
+        "cad_agent.drawing_artifact_reference",
+        "cad_agent.drawing_contracts",
     }
-    imported.update(
-        alias.name.split(".")[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    )
-    assert imported.isdisjoint(
-        {
-            "sqlite3",
-            "shelve",
-            "socket",
-            "requests",
-            "httpx",
-            "subprocess",
-        }
-    )
+    internal_modules = {
+        module
+        for module in imported_modules
+        if module == "cad_agent" or module.startswith("cad_agent.")
+    }
+    assert internal_modules <= allowed_internal_modules
+
+    forbidden_import_roots = {
+        "anthropic",
+        "autocad",
+        "azure",
+        "boto3",
+        "calendar",
+        "datetime",
+        "google",
+        "httpx",
+        "io",
+        "mcp_integration_lib",
+        "openai",
+        "os",
+        "pathlib",
+        "pyautocad",
+        "pythoncom",
+        "random",
+        "requests",
+        "secrets",
+        "shelve",
+        "shutil",
+        "socket",
+        "sqlite3",
+        "subprocess",
+        "tempfile",
+        "time",
+        "win32com",
+        "zoneinfo",
+    }
+    imported_roots = {module.split(".", 1)[0].lower() for module in imported_modules}
+    assert imported_roots.isdisjoint(forbidden_import_roots)
+
     forbidden_tokens = (
         "sqlite3",
         "shelve.open",
@@ -719,7 +853,80 @@ def test_candidate_module_has_no_io_live_or_second_store_authority() -> None:
         "revision_store",
         "current_store",
         "registry_store",
+        "current_pointer",
+        "selection_authority",
+        "owner_authority",
+        "replacement_authority",
+        "set_current",
+        "select_candidate",
+        "accept_candidate",
+        "publish_candidate",
+        "promote_candidate",
+        "approve_candidate",
         "AutoCAD",
         "File IPC",
     )
     assert not any(token in source for token in forbidden_tokens)
+
+
+def test_candidate_module_has_no_duplicate_store_or_database_symbols() -> None:
+    _source, tree = _candidate_module_source_and_tree()
+    symbols = _candidate_module_symbol_names(tree)
+    store_symbols = {
+        symbol
+        for symbol in symbols
+        if re.search(r"(?:store|repository|database)", symbol, re.IGNORECASE)
+    }
+    assert store_symbols == set()
+
+
+def test_candidate_module_has_no_current_pointer_or_selection_symbols() -> None:
+    _source, tree = _candidate_module_source_and_tree()
+    symbols = _candidate_module_symbol_names(tree)
+    pointer_symbols = {
+        symbol
+        for symbol in symbols
+        if re.search(
+            r"(?:^|_)(?:current|selected|accepted|published|promoted|pointer)(?:_|$)",
+            symbol,
+            re.IGNORECASE,
+        )
+    }
+    assert pointer_symbols == set()
+
+
+def test_candidate_module_has_no_owner_authority_or_replacement_mutators() -> None:
+    source, tree = _candidate_module_source_and_tree()
+    symbols = _candidate_module_symbol_names(tree)
+    calls = _candidate_module_call_names(tree)
+    mutator_prefixes = (
+        "set_",
+        "assign_",
+        "grant_",
+        "issue_",
+        "mint_",
+        "promote_",
+        "publish_",
+        "approve_",
+    )
+    authority_mutators = {
+        name
+        for name in symbols | calls
+        if any(name.lower().startswith(prefix) for prefix in mutator_prefixes)
+        and any(
+            fragment in name.lower()
+            for fragment in ("owner", "authority", "approval", "verdict", "publication")
+        )
+    }
+    assert authority_mutators == set()
+    assert not any(
+        token in source.lower()
+        for token in (
+            "owner_authority",
+            "replacement_authority",
+            "selection_authority",
+            "current_authority",
+            "approval_authority",
+            "publication_authority",
+        )
+    )
