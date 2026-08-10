@@ -5,24 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import hashlib
-import hmac
 
 from cad_agent.drawing_contracts import canonical_json_sha256
 
 
 DRAWING_ARTIFACT_REFERENCE_SCHEMA_VERSION = "drawing-artifact-reference-1.0"
 DRAWING_ARTIFACT_CURRENT_OBSERVATION_SCHEMA_VERSION = "drawing-artifact-current-observation-1.0"
-_REFERENCE_AUTHENTICITY_DOMAIN = "drawing-artifact-reference-1.0:reference"
-_TRANSITION_AUTHENTICITY_DOMAIN = "drawing-artifact-reference-1.0:transition"
-_OBSERVATION_AUTHENTICITY_DOMAIN = "drawing-artifact-current-observation-1.0:observation"
-# This immutable trust root belongs to DARA. No public API accepts a replacement.
-_OWNER_AUTHENTICITY_ANCHOR_ID = "dara-owner-issue-182"
-_OWNER_AUTHENTICITY_KEY = (
-    b"\x91\xf4\x0c\xa8\x19\x93\x0a\x1d\x0f\xae\xbc\xee\x99\xcc\xb0\x9f"
-    b"\xdd\x11\x82\x8e\x9d\x87\x8a\xdb\xb7\xc0\xae\x9f\x8a\xde\x87\x03"
-)
-
-
 class DrawingArtifactReferenceError(ValueError):
     """A categorical refusal from the drawing-artifact reference boundary."""
 
@@ -45,58 +33,27 @@ def _is_sha256(value: object) -> bool:
     )
 
 
-def _anchored_payload(
-    domain: str,
-    payload: Mapping[str, object],
-) -> dict[str, object]:
-    return {
-        "anchor_id": _OWNER_AUTHENTICITY_ANCHOR_ID,
-        "domain": domain,
-        "payload": dict(payload),
-    }
-
-
-def _owner_authenticity_sha256(
-    domain: str,
+def _canonical_integrity_sha256(
     payload: Mapping[str, object],
     code: str,
 ) -> str:
     try:
-        payload_sha256 = canonical_json_sha256(_anchored_payload(domain, payload))
-        return hmac.new(
-            _OWNER_AUTHENTICITY_KEY,
-            payload_sha256.encode("ascii"),
-            hashlib.sha256,
-        ).hexdigest()
+        return canonical_json_sha256(payload)
     except DrawingArtifactReferenceError:
         raise
     except (TypeError, ValueError):
         _fail(code)
 
 
-def _issue_authenticity_sha256(
-    domain: str,
+def _verify_canonical_integrity_sha256(
     payload: Mapping[str, object],
-    code: str,
-) -> str:
-    return _owner_authenticity_sha256(domain, payload, code)
-
-
-def _verify_authenticity_sha256(
-    domain: str,
-    payload: Mapping[str, object],
-    authenticity_sha256: object,
+    integrity_sha256: object,
     code: str,
 ) -> None:
-    if not _is_sha256(authenticity_sha256):
+    if not _is_sha256(integrity_sha256):
         _fail(code)
-    try:
-        expected = _owner_authenticity_sha256(domain, payload, code)
-        if not hmac.compare_digest(expected, authenticity_sha256):
-            _fail(code)
-    except DrawingArtifactReferenceError:
-        raise
-    except (TypeError, ValueError):
+    expected = _canonical_integrity_sha256(payload, code)
+    if expected != integrity_sha256:
         _fail(code)
 
 
@@ -127,10 +84,8 @@ def _reference_identity_payload(record: Mapping[str, object]) -> dict[str, objec
 def _issue_reference_identity(
     record: Mapping[str, object],
 ) -> str:
-    return "dara-ref-" + _issue_authenticity_sha256(
-        _REFERENCE_AUTHENTICITY_DOMAIN,
-        _reference_identity_payload(record),
-        "INVALID_REFERENCE",
+    return "dara-ref-" + _canonical_integrity_sha256(
+        _reference_identity_payload(record), "INVALID_REFERENCE"
     )
 
 
@@ -140,8 +95,7 @@ def _verify_reference_identity(
     reference_id = record.get("reference_id")
     if not isinstance(reference_id, str) or not reference_id.startswith("dara-ref-"):
         _fail("INVALID_REFERENCE")
-    _verify_authenticity_sha256(
-        _REFERENCE_AUTHENTICITY_DOMAIN,
+    _verify_canonical_integrity_sha256(
         _reference_identity_payload(record),
         reference_id.removeprefix("dara-ref-"),
         "CANONICAL_HASH_MISMATCH",
@@ -157,10 +111,8 @@ def _observation_identity_payload(record: Mapping[str, object]) -> dict[str, obj
 def _issue_observation_identity(
     record: Mapping[str, object],
 ) -> str:
-    return "dara-lookup-" + _issue_authenticity_sha256(
-        _OBSERVATION_AUTHENTICITY_DOMAIN,
-        _observation_identity_payload(record),
-        "CURRENT_LOOKUP_INVALID",
+    return "dara-lookup-" + _canonical_integrity_sha256(
+        _observation_identity_payload(record), "CURRENT_LOOKUP_INVALID"
     )
 
 
@@ -170,8 +122,7 @@ def _verify_observation_identity(
     lookup_id = record.get("lookup_id")
     if not isinstance(lookup_id, str) or not lookup_id.startswith("dara-lookup-"):
         _fail("CURRENT_LOOKUP_INVALID")
-    _verify_authenticity_sha256(
-        _OBSERVATION_AUTHENTICITY_DOMAIN,
+    _verify_canonical_integrity_sha256(
         _observation_identity_payload(record),
         lookup_id.removeprefix("dara-lookup-"),
         "CURRENTNESS_FORGED",
@@ -266,16 +217,11 @@ def _validate_transition_evidence(
     if accepted_transition_evidence_sha256 is not None:
         if not _is_sha256(accepted_transition_evidence_sha256):
             _fail("MUTATION_EVIDENCE_MISSING")
-        if not hmac.compare_digest(accepted, accepted_transition_evidence_sha256):
+        if accepted != accepted_transition_evidence_sha256:
             _fail("MUTATION_EVIDENCE_MISMATCH")
     sealed = dict(evidence)
     sealed.pop("accepted_transition_evidence_sha256")
-    _verify_authenticity_sha256(
-        _TRANSITION_AUTHENTICITY_DOMAIN,
-        sealed,
-        accepted,
-        "MUTATION_EVIDENCE_MISMATCH",
-    )
+    _verify_canonical_integrity_sha256(sealed, accepted, "MUTATION_EVIDENCE_MISMATCH")
     if evidence.get("r3_candidate_reference_id") != parent_reference_id:
         _fail("WRONG_CANDIDATE")
     if evidence.get("r3_candidate_reference_sha256") != parent_reference_sha256:
@@ -333,10 +279,8 @@ def _issue_transition_evidence(
     issued = deepcopy(dict(evidence))
     accepted = issued.pop("accepted_transition_evidence_sha256", None)
     if accepted is None:
-        issued["accepted_transition_evidence_sha256"] = _issue_authenticity_sha256(
-            _TRANSITION_AUTHENTICITY_DOMAIN,
-            issued,
-            "MUTATION_EVIDENCE_MISMATCH",
+        issued["accepted_transition_evidence_sha256"] = _canonical_integrity_sha256(
+            issued, "MUTATION_EVIDENCE_MISMATCH"
         )
     else:
         issued["accepted_transition_evidence_sha256"] = accepted
