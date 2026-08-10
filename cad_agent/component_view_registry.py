@@ -7,6 +7,7 @@ from copy import deepcopy
 import re
 
 from cad_agent import base_cad_adapter as _base_cad
+from cad_agent import drawing_artifact_reference as _dara
 from cad_agent import source_fusion as _source_fusion
 from cad_agent.drawing_contracts import canonical_json_sha256
 
@@ -1292,6 +1293,135 @@ def component_view_registry_sha256(
         payload, upstream_context=upstream_context
     )
     return str(normalized["registry_snapshot_sha256"])
+
+
+def _task3_dara_error(error: _dara.DrawingArtifactReferenceError) -> None:
+    code = str(error)
+    if code == "FOREIGN_REFERENCE":
+        code = "REPLAY_MISMATCH"
+    _fail(code)
+
+
+def _task3_record_bindings(
+    registry: dict[str, object],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    component_bindings = [
+        {
+            "component_id": str(component["component_id"]),
+            "record_sha256": canonical_json_sha256(component),
+        }
+        for component in registry["components"]
+    ]
+    view_bindings = [
+        {
+            "view_id": str(view["view_id"]),
+            "record_sha256": canonical_json_sha256(view),
+        }
+        for view in registry["views"]
+    ]
+    return component_bindings, view_bindings
+
+
+def _task3_provenance_material(
+    registry: dict[str, object],
+) -> dict[str, object]:
+    component_bindings, view_bindings = _task3_record_bindings(registry)
+    return {
+        "identity_kind": "r3-component-view-registry-provenance-v1",
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+        "component_bindings": component_bindings,
+        "view_bindings": view_bindings,
+    }
+
+
+def finalize_component_view_correspondence(
+    *,
+    registry: object,
+    upstream_context: object,
+    parent_reference: object,
+    parent_observation: object,
+    parent_artifact_bytes: object,
+    child_reference: object,
+    child_observation: object,
+    child_artifact_bytes: object,
+    accepted_transition_evidence_sha256: object,
+) -> dict[str, object]:
+    """Finalize R3 correspondence against an immutable, current parent/child pair."""
+    if parent_reference is None:
+        _fail("MISSING_PARENT")
+    if child_reference is None:
+        _fail("MISSING_CHILD")
+
+    try:
+        normalized_registry = validate_component_view_registry(
+            registry,
+            upstream_context=upstream_context,
+        )
+    except ComponentViewRegistryError:
+        _fail("CORRESPONDENCE_MISMATCH")
+
+    try:
+        normalized_parent = _dara.validate_drawing_artifact_reference(
+            parent_reference,
+            expected_artifact_role="R3_CANDIDATE",
+        )
+        normalized_child = _dara.validate_drawing_artifact_reference(
+            child_reference,
+            expected_artifact_role="R3_CANDIDATE",
+            parent_reference=parent_reference,
+            accepted_transition_evidence_sha256=(
+                accepted_transition_evidence_sha256
+            ),
+        )
+    except _dara.DrawingArtifactReferenceError as error:
+        _task3_dara_error(error)
+        raise AssertionError("unreachable")
+
+    provenance_material = _task3_provenance_material(normalized_registry)
+    component_bindings = provenance_material["component_bindings"]
+    view_bindings = provenance_material["view_bindings"]
+    provenance_sha256 = canonical_json_sha256(provenance_material)
+    expected_binding = {
+        "registry_snapshot_sha256": normalized_registry[
+            "registry_snapshot_sha256"
+        ],
+        "provenance_sha256": provenance_sha256,
+    }
+    for reference in (normalized_parent, normalized_child):
+        if reference["r3_provenance_binding"] != expected_binding:
+            _fail("PROVENANCE_MISMATCH")
+
+    try:
+        _dara.require_current_drawing_artifact_reference(
+            reference=parent_reference,
+            observation=parent_observation,
+            artifact_bytes=parent_artifact_bytes,
+        )
+        _dara.require_current_drawing_artifact_reference(
+            reference=child_reference,
+            observation=child_observation,
+            artifact_bytes=child_artifact_bytes,
+            parent_reference=parent_reference,
+            accepted_transition_evidence_sha256=(
+                accepted_transition_evidence_sha256
+            ),
+        )
+    except _dara.DrawingArtifactReferenceError as error:
+        _task3_dara_error(error)
+        raise AssertionError("unreachable")
+
+    return {
+        "parent_reference_id": normalized_parent["reference_id"],
+        "parent_reference_sha256": normalized_parent["reference_sha256"],
+        "child_reference_id": normalized_child["reference_id"],
+        "child_reference_sha256": normalized_child["reference_sha256"],
+        "registry_snapshot_sha256": normalized_registry[
+            "registry_snapshot_sha256"
+        ],
+        "provenance_sha256": provenance_sha256,
+        "component_bindings": deepcopy(component_bindings),
+        "view_bindings": deepcopy(view_bindings),
+    }
 
 
 def _seed_ids(

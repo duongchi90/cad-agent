@@ -1849,8 +1849,13 @@ def test_task3_transition_sha_bindings_must_match_parent_and_child(
     dara_tests = _existing_test_module("test_cad_agent_drawing_artifact_reference.py")
     dara_tests._seal_mutation_evidence(transition)
     dara_tests._reseal_reference(forged_child)
+    overrides = {"child_reference": forged_child}
+    if field == "post_artifact_sha256":
+        overrides["accepted_transition_evidence_sha256"] = transition[
+            "accepted_transition_evidence_sha256"
+        ]
     with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
-        _task3_finalize(material, child_reference=forged_child)
+        _task3_finalize(material, **overrides)
     assert str(caught.value) in {expected, "CORRESPONDENCE_MISMATCH"}
 
 
