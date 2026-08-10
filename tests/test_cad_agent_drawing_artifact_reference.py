@@ -415,15 +415,24 @@ def test_post_repair_child_rejects_forged_post_sha_even_when_r6_result_sha_exist
 @pytest.mark.parametrize(
     "field",
     [
-        "r5_failure_id",
-        "r4_transition_id",
-        "r6_mutation_request_id",
-        "r6_result_id",
-        "executor_result_id",
-        "pre_artifact_sha256",
-        "post_artifact_sha256",
-        "protected_constraints_sha256",
-        "workspace_evidence_sha256",
+        pytest.param("r5_failure_id", id="r5-failure-id"),
+        pytest.param("r5_failure_sha256", id="r5-failure-sha256"),
+        pytest.param("r4_transition_id", id="r4-transition-id"),
+        pytest.param("r4_transition_sha256", id="r4-transition-sha256"),
+        pytest.param("r6_mutation_request_id", id="r6-mutation-request-id"),
+        pytest.param(
+            "r6_mutation_request_sha256", id="r6-mutation-request-sha256"
+        ),
+        pytest.param("r6_result_id", id="r6-result-id"),
+        pytest.param("r6_result_sha256", id="r6-result-sha256"),
+        pytest.param("executor_result_id", id="executor-result-id"),
+        pytest.param("executor_result_sha256", id="executor-result-sha256"),
+        pytest.param("pre_artifact_sha256", id="pre-artifact-sha256"),
+        pytest.param("post_artifact_sha256", id="post-artifact-sha256"),
+        pytest.param(
+            "protected_constraints_sha256", id="protected-constraints-sha256"
+        ),
+        pytest.param("workspace_evidence_sha256", id="workspace-evidence-sha256"),
     ],
 )
 def test_post_repair_child_rejects_each_missing_required_evidence_binding(
@@ -433,6 +442,7 @@ def test_post_repair_child_rejects_each_missing_required_evidence_binding(
     parent, child_bytes, mutation = _post_repair_material()
     mutation.pop(field)
     _seal_mutation_evidence(mutation)
+    r3_provenance_binding = _r3_binding()
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -443,7 +453,7 @@ def test_post_repair_child_rejects_each_missing_required_evidence_binding(
             artifact_bytes=child_bytes,
             upstream_evidence=mutation,
             parent_reference=parent,
-            r3_provenance_binding=_r3_binding(),
+            r3_provenance_binding=r3_provenance_binding,
         )
     assert str(exc.value) == "MUTATION_EVIDENCE_MISSING"
 
