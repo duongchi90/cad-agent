@@ -188,22 +188,6 @@ def _validate_transition_evidence(
         _fail("MUTATION_EVIDENCE_MISMATCH")
     if evidence["post_artifact_sha256"] != artifact_sha256:
         _fail("POST_ARTIFACT_MISMATCH")
-    for field, expected in (
-        ("r5_failure_id", "r5-fail-001"),
-        ("r5_failure_sha256", "2" * 64),
-        ("r4_transition_id", "r4-transition-001"),
-        ("r4_transition_sha256", "3" * 64),
-        ("r6_mutation_request_id", "r6-request-001"),
-        ("r6_mutation_request_sha256", "4" * 64),
-        ("r6_result_id", "r6-result-001"),
-        ("r6_result_sha256", "5" * 64),
-        ("executor_result_id", "executor-result-001"),
-        ("executor_result_sha256", "6" * 64),
-        ("protected_constraints_sha256", "7" * 64),
-        ("workspace_evidence_sha256", "8" * 64),
-    ):
-        if evidence[field] != expected:
-            _fail("MUTATION_EVIDENCE_MISMATCH")
     if evidence.get("mutation_terminal") != "SUCCESS":
         _fail("MUTATION_NOT_SUCCESSFUL")
     if any(evidence.get(field) is not False for field in ("partial_mutation", "timed_out", "rollback_failed")):

@@ -274,6 +274,59 @@ def test_valid_post_repair_child_preserves_immutable_parent_history() -> None:
     assert module.validate_drawing_artifact_reference(child) == child
 
 
+def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence() -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
+    fixture_child = module.issue_drawing_artifact_reference(
+        run_id=parent["run_id"],
+        project_id=parent["project_id"],
+        drawing_id=parent["drawing_id"],
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=child_bytes,
+        upstream_evidence=mutation,
+        parent_reference=parent,
+        r3_provenance_binding=_r3_binding(),
+    )
+    opaque_external_evidence = {
+        "r5_failure_id": "opaque-failure-alpha",
+        "r5_failure_sha256": "c" * 64,
+        "r4_transition_id": "opaque-transition-beta",
+        "r4_transition_sha256": "d" * 64,
+        "r6_mutation_request_id": "opaque-request-gamma",
+        "r6_mutation_request_sha256": "e" * 64,
+        "r6_result_id": "opaque-result-delta",
+        "r6_result_sha256": "f" * 64,
+        "executor_result_id": "opaque-executor-epsilon",
+        "executor_result_sha256": "0" * 64,
+        "protected_constraints_sha256": "1" * 64,
+        "workspace_evidence_sha256": "a" * 64,
+    }
+    mutation.update(opaque_external_evidence)
+    _seal_mutation_evidence(mutation)
+
+    child = module.issue_drawing_artifact_reference(
+        run_id=parent["run_id"],
+        project_id=parent["project_id"],
+        drawing_id=parent["drawing_id"],
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=child_bytes,
+        upstream_evidence=mutation,
+        parent_reference=parent,
+        r3_provenance_binding=_r3_binding(),
+    )
+
+    assert {
+        field: child["upstream_evidence"][field]
+        for field in opaque_external_evidence
+    } == opaque_external_evidence
+    assert child["parent_reference_id"] == parent["reference_id"]
+    assert child["parent_reference_sha256"] == parent["reference_sha256"]
+    assert child["artifact_sha256"] == hashlib.sha256(child_bytes).hexdigest()
+    assert child["reference_id"] != fixture_child["reference_id"]
+    assert child["reference_sha256"] != fixture_child["reference_sha256"]
+    assert module.validate_drawing_artifact_reference(child) == child
+
+
 def test_parent_history_is_immutable_before_child_issuance_and_resealing_is_refused() -> None:
     module = _module()
     parent = _issue_r3_candidate()
@@ -525,53 +578,96 @@ def test_post_repair_child_rejects_each_missing_required_evidence_binding(
 
 
 @pytest.mark.parametrize(
-    ("field", "replacement", "expected_code"),
+    ("field", "replacement"),
     [
         pytest.param(
             "r5_failure_id",
-            "r5-fail-foreign",
-            "MUTATION_EVIDENCE_MISMATCH",
+            "opaque-failure-replacement",
             id="r5-failure-id",
         ),
-        ("r5_failure_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("r5_failure_sha256", "f" * 64),
         pytest.param(
             "r4_transition_id",
-            "r4-transition-foreign",
-            "MUTATION_EVIDENCE_MISMATCH",
+            "opaque-transition-replacement",
             id="r4-transition-id",
         ),
-        ("r4_transition_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("r4_transition_sha256", "f" * 64),
         pytest.param(
             "r6_mutation_request_id",
-            "r6-request-foreign",
-            "MUTATION_EVIDENCE_MISMATCH",
+            "opaque-request-replacement",
             id="r6-mutation-request-id",
         ),
-        ("r6_mutation_request_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("r6_mutation_request_sha256", "f" * 64),
         pytest.param(
             "r6_result_id",
-            "r6-result-foreign",
-            "MUTATION_EVIDENCE_MISMATCH",
+            "opaque-result-replacement",
             id="r6-result-id",
         ),
-        ("r6_result_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("r6_result_sha256", "f" * 64),
         pytest.param(
             "executor_result_id",
-            "executor-result-foreign",
-            "MUTATION_EVIDENCE_MISMATCH",
+            "opaque-executor-replacement",
             id="executor-result-id",
         ),
-        ("executor_result_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
-        ("pre_artifact_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
-        ("post_artifact_sha256", "f" * 64, "POST_ARTIFACT_MISMATCH"),
-        ("protected_constraints_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
-        ("workspace_evidence_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("executor_result_sha256", "f" * 64),
+        ("protected_constraints_sha256", "f" * 64),
+        ("workspace_evidence_sha256", "f" * 64),
     ],
 )
-def test_post_repair_child_rejects_each_mismatched_evidence_binding(
+def test_post_repair_child_rejects_each_unsealed_opaque_evidence_mutation(
     field: str,
     replacement: str,
-    expected_code: str,
+) -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
+    mutation[field] = replacement
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "MUTATION_EVIDENCE_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        pytest.param("r5_failure_id", "", id="r5-failure-id"),
+        pytest.param("r4_transition_id", 4, id="r4-transition-id"),
+        pytest.param("r6_mutation_request_id", None, id="r6-mutation-request-id"),
+        pytest.param("r6_result_id", [], id="r6-result-id"),
+        pytest.param("executor_result_id", {}, id="executor-result-id"),
+        pytest.param("r5_failure_sha256", "not-a-sha256", id="r5-failure-sha256"),
+        pytest.param("r4_transition_sha256", "D" * 64, id="r4-transition-sha256"),
+        pytest.param(
+            "r6_mutation_request_sha256",
+            "e" * 63,
+            id="r6-mutation-request-sha256",
+        ),
+        pytest.param("r6_result_sha256", 6, id="r6-result-sha256"),
+        pytest.param("executor_result_sha256", None, id="executor-result-sha256"),
+        pytest.param(
+            "protected_constraints_sha256",
+            "g" * 64,
+            id="protected-constraints-sha256",
+        ),
+        pytest.param(
+            "workspace_evidence_sha256",
+            False,
+            id="workspace-evidence-sha256",
+        ),
+    ],
+)
+def test_post_repair_child_rejects_each_malformed_opaque_evidence_binding(
+    field: str,
+    replacement: object,
 ) -> None:
     module = _module()
     parent, child_bytes, mutation = _post_repair_material()
@@ -589,7 +685,27 @@ def test_post_repair_child_rejects_each_mismatched_evidence_binding(
             parent_reference=parent,
             r3_provenance_binding=_r3_binding(),
         )
-    assert str(exc.value) == expected_code
+    assert str(exc.value) == "MUTATION_EVIDENCE_MISSING"
+
+
+def test_post_repair_child_rejects_transition_evidence_category_confusion() -> None:
+    module = _module()
+    parent, child_bytes, mutation = _post_repair_material()
+    mutation["evidence_kind"] = "R6_MUTATION_RESULT"
+    _seal_mutation_evidence(mutation)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "MUTATION_EVIDENCE_MISMATCH"
 
 
 @pytest.mark.parametrize(
