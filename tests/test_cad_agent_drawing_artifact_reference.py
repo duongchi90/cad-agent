@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import hashlib
 import importlib
@@ -348,6 +349,7 @@ def test_post_repair_transition_rejects_wrong_r3_candidate_identity() -> None:
     module = _module()
     parent, child_bytes, mutation = _post_repair_material()
     mutation["r3_candidate_reference_id"] = "r3-candidate-foreign"
+    _seal_mutation_evidence(mutation)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -363,18 +365,44 @@ def test_post_repair_transition_rejects_wrong_r3_candidate_identity() -> None:
     assert str(exc.value) == "WRONG_CANDIDATE"
 
 
-def test_post_repair_child_requires_exact_parent_scope_and_hash() -> None:
+@pytest.mark.parametrize(
+    ("scope_field", "foreign_value"),
+    [
+        pytest.param("run_id", "run-foreign", id="run-scope"),
+        pytest.param("project_id", "project-foreign", id="project-scope"),
+        pytest.param("drawing_id", "drawing-foreign", id="drawing-scope"),
+    ],
+)
+def test_post_repair_child_rejects_each_foreign_parent_scope_after_binding_its_evidence(
+    scope_field: str,
+    foreign_value: str,
+) -> None:
     module = _module()
-    parent, child_bytes, mutation = _post_repair_material()
-    wrong_parent = module.issue_drawing_artifact_reference(
-        run_id=parent["run_id"],
-        project_id="project-foreign",
-        drawing_id=parent["drawing_id"],
+    parent, child_bytes, _ = _post_repair_material()
+    foreign_scope = {
+        "run_id": parent["run_id"],
+        "project_id": parent["project_id"],
+        "drawing_id": parent["drawing_id"],
+    }
+    foreign_scope[scope_field] = foreign_value
+    substituted_parent = module.issue_drawing_artifact_reference(
+        **foreign_scope,
         artifact_role="R3_CANDIDATE",
         artifact_bytes=_artifact_bytes("r3-candidate-foreign"),
         upstream_evidence=_r3_candidate_evidence(),
         r3_provenance_binding=_r3_binding(),
     )
+    mutation = _mutation_evidence(
+        candidate_reference=substituted_parent,
+        pre_sha256=substituted_parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+    assert mutation["r3_candidate_reference_id"] == substituted_parent["reference_id"]
+    assert (
+        mutation["r3_candidate_reference_sha256"]
+        == substituted_parent["reference_sha256"]
+    )
+
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
             run_id=parent["run_id"],
@@ -383,10 +411,48 @@ def test_post_repair_child_requires_exact_parent_scope_and_hash() -> None:
             artifact_role="R3_CANDIDATE",
             artifact_bytes=child_bytes,
             upstream_evidence=mutation,
-            parent_reference=wrong_parent,
+            parent_reference=substituted_parent,
             r3_provenance_binding=_r3_binding(),
         )
-    assert str(exc.value) in {"SCOPE_MISMATCH", "PARENT_MISMATCH", "WRONG_CANDIDATE"}
+    assert str(exc.value) == "SCOPE_MISMATCH"
+
+
+def test_post_repair_child_rejects_substituted_parent_with_tampered_hash_custody() -> None:
+    module = _module()
+    parent, child_bytes, _ = _post_repair_material()
+    substituted_parent = module.issue_drawing_artifact_reference(
+        run_id=parent["run_id"],
+        project_id=parent["project_id"],
+        drawing_id=parent["drawing_id"],
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=_artifact_bytes("r3-candidate-hash-substitution"),
+        upstream_evidence=_r3_candidate_evidence(),
+        r3_provenance_binding=_r3_binding(),
+    )
+    substituted_parent["reference_sha256"] = "f" * 64
+    mutation = _mutation_evidence(
+        candidate_reference=substituted_parent,
+        pre_sha256=substituted_parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+    assert mutation["r3_candidate_reference_id"] == substituted_parent["reference_id"]
+    assert (
+        mutation["r3_candidate_reference_sha256"]
+        == substituted_parent["reference_sha256"]
+    )
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=substituted_parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "CANONICAL_HASH_MISMATCH"
 
 
 def test_post_repair_child_rejects_forged_post_sha_even_when_r6_result_sha_exists() -> None:
@@ -461,10 +527,40 @@ def test_post_repair_child_rejects_each_missing_required_evidence_binding(
 @pytest.mark.parametrize(
     ("field", "replacement", "expected_code"),
     [
+        pytest.param(
+            "r5_failure_id",
+            "r5-fail-foreign",
+            "MUTATION_EVIDENCE_MISMATCH",
+            id="r5-failure-id",
+        ),
         ("r5_failure_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        pytest.param(
+            "r4_transition_id",
+            "r4-transition-foreign",
+            "MUTATION_EVIDENCE_MISMATCH",
+            id="r4-transition-id",
+        ),
         ("r4_transition_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        pytest.param(
+            "r6_mutation_request_id",
+            "r6-request-foreign",
+            "MUTATION_EVIDENCE_MISMATCH",
+            id="r6-mutation-request-id",
+        ),
         ("r6_mutation_request_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        pytest.param(
+            "r6_result_id",
+            "r6-result-foreign",
+            "MUTATION_EVIDENCE_MISMATCH",
+            id="r6-result-id",
+        ),
         ("r6_result_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        pytest.param(
+            "executor_result_id",
+            "executor-result-foreign",
+            "MUTATION_EVIDENCE_MISMATCH",
+            id="executor-result-id",
+        ),
         ("executor_result_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
         ("pre_artifact_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
         ("post_artifact_sha256", "f" * 64, "POST_ARTIFACT_MISMATCH"),
@@ -876,6 +972,77 @@ def test_hashing_reuses_canonical_json_owner_and_static_boundary_has_no_second_s
         "current_store",
     ):
         assert forbidden not in source
+
+
+def test_static_authority_boundary_is_stateless_and_allows_no_seam_imports() -> None:
+    module = _module()
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    allowed_stdlib_modules = {
+        "__future__",
+        "collections",
+        "copy",
+        "dataclasses",
+        "hashlib",
+        "typing",
+    }
+    canonical_imports: list[ast.ImportFrom] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(
+                alias.name.split(".", 1)[0] in allowed_stdlib_modules
+                for alias in node.names
+            )
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0
+            if node.module == "cad_agent.drawing_contracts":
+                canonical_imports.append(node)
+                assert [(alias.name, alias.asname) for alias in node.names] == [
+                    ("canonical_json_sha256", None)
+                ]
+            else:
+                assert node.module is not None
+                assert node.module.split(".", 1)[0] in allowed_stdlib_modules
+
+    assert len(canonical_imports) == 1
+    assert module.canonical_json_sha256 is canonical_json_sha256
+
+    mutable_nodes = (
+        ast.Dict,
+        ast.DictComp,
+        ast.List,
+        ast.ListComp,
+        ast.Set,
+        ast.SetComp,
+    )
+    for statement in tree.body:
+        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            value = statement.value
+            assert value is not None
+            assert not isinstance(value, mutable_nodes)
+            assert not isinstance(value, ast.Call)
+        if isinstance(statement, ast.ClassDef):
+            assert statement.name == "DrawingArtifactReferenceError"
+
+    for function in (
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ):
+        assert not any(
+            isinstance(default, mutable_nodes)
+            for default in (*function.args.defaults, *function.args.kw_defaults)
+            if default is not None
+        )
+
+    assert not any(isinstance(node, (ast.Global, ast.Nonlocal)) for node in ast.walk(tree))
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"__import__", "compile", "eval", "exec", "open"}
+        for node in ast.walk(tree)
+    )
 
 
 def test_public_surface_has_no_second_currentness_authority_or_in_memory_store() -> None:
