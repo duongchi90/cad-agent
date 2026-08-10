@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from functools import lru_cache
+import hashlib
 import importlib
 import importlib.util
 import inspect
@@ -1451,3 +1452,578 @@ def test_task2_view_semantic_projection_rejects_accepted_primitive_key() -> None
             components=_component_inputs(context),
             views=views,
         )
+
+
+# R3 Task3 Gate0: the registry remains the R3 correspondence/provenance owner.
+# These fixtures intentionally use synthetic bytes and the accepted local DARA
+# contract; no provider, workspace, AutoCAD, or publication surface is involved.
+TASK3_RESULT_FIELDS = frozenset(
+    {
+        "parent_reference_id",
+        "parent_reference_sha256",
+        "child_reference_id",
+        "child_reference_sha256",
+        "registry_snapshot_sha256",
+        "provenance_sha256",
+        "component_bindings",
+        "view_bindings",
+    }
+)
+TASK3_COMPONENT_BINDING_FIELDS = frozenset({"component_id", "record_sha256"})
+TASK3_VIEW_BINDING_FIELDS = frozenset({"view_id", "record_sha256"})
+
+
+def _task3_record_bindings(
+    registry: dict[str, object],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    component_bindings = [
+        {
+            "component_id": str(component["component_id"]),
+            "record_sha256": canonical_json_sha256(component),
+        }
+        for component in registry["components"]
+    ]
+    view_bindings = [
+        {
+            "view_id": str(view["view_id"]),
+            "record_sha256": canonical_json_sha256(view),
+        }
+        for view in registry["views"]
+    ]
+    return component_bindings, view_bindings
+
+
+def _task3_provenance_material(
+    registry: dict[str, object],
+) -> dict[str, object]:
+    component_bindings, view_bindings = _task3_record_bindings(registry)
+    return {
+        "identity_kind": "r3-component-view-registry-provenance-v1",
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+        "component_bindings": component_bindings,
+        "view_bindings": view_bindings,
+    }
+
+
+def _task3_binding(registry: dict[str, object]) -> dict[str, object]:
+    snapshot_sha256 = registry["registry_snapshot_sha256"]
+    return {
+        "registry_snapshot_sha256": snapshot_sha256,
+        "provenance_sha256": canonical_json_sha256(
+            _task3_provenance_material(registry)
+        ),
+    }
+
+
+def _task3_material() -> dict[str, object]:
+    registry_module = _registry_module()
+    context = _upstream_context()
+    registry = registry_module.build_component_view_registry(
+        upstream_context=context,
+        components=_component_inputs(context),
+        views=_task2_view_inputs(registry_module, context),
+    )
+
+    dara = importlib.import_module("cad_agent.drawing_artifact_reference")
+    dara_tests = _existing_test_module("test_cad_agent_drawing_artifact_reference.py")
+    binding = _task3_binding(registry)
+    parent_artifact_bytes = b"synthetic-r3-parent-artifact"
+    child_artifact_bytes = b"synthetic-r3-repaired-child-artifact"
+    parent = dara.issue_drawing_artifact_reference(
+        run_id="run-180-001",
+        project_id="project-180-001",
+        drawing_id="drawing-180-001",
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=parent_artifact_bytes,
+        upstream_evidence=dara_tests._r3_candidate_evidence(),
+        r3_provenance_binding=binding,
+    )
+    transition = dara_tests._mutation_evidence(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_artifact_bytes).hexdigest(),
+    )
+    dara_tests._seal_mutation_evidence(transition)
+    child = dara.issue_drawing_artifact_reference(
+        run_id=parent["run_id"],
+        project_id=parent["project_id"],
+        drawing_id=parent["drawing_id"],
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=child_artifact_bytes,
+        upstream_evidence=transition,
+        parent_reference=parent,
+        r3_provenance_binding=binding,
+    )
+    parent_observation = dara.observe_drawing_artifact_currentness(
+        reference=parent,
+        artifact_bytes=parent_artifact_bytes,
+        observation_evidence_sha256="1" * 64,
+    )
+    child_observation = dara.observe_drawing_artifact_currentness(
+        reference=child,
+        artifact_bytes=child_artifact_bytes,
+        observation_evidence_sha256="2" * 64,
+        parent_reference=parent,
+        accepted_transition_evidence_sha256=transition[
+            "accepted_transition_evidence_sha256"
+        ],
+    )
+    component_bindings, view_bindings = _task3_record_bindings(registry)
+    return {
+        "context": context,
+        "registry": registry,
+        "parent": parent,
+        "child": child,
+        "parent_artifact_bytes": parent_artifact_bytes,
+        "child_artifact_bytes": child_artifact_bytes,
+        "parent_observation": parent_observation,
+        "child_observation": child_observation,
+        "transition": transition,
+        "binding": binding,
+        "component_bindings": component_bindings,
+        "view_bindings": view_bindings,
+        "provenance_material": _task3_provenance_material(registry),
+    }
+
+
+def _task3_finalize(
+    material: dict[str, object],
+    **overrides: object,
+) -> dict[str, object]:
+    module = _registry_module()
+    finalizer = getattr(module, "finalize_component_view_correspondence", None)
+    assert callable(
+        finalizer
+    ), "R3 Task3 finalizer is omitted from component_view_registry.py"
+    values = {
+        "registry": material["registry"],
+        "upstream_context": material["context"],
+        "parent_reference": material["parent"],
+        "parent_observation": material["parent_observation"],
+        "parent_artifact_bytes": material["parent_artifact_bytes"],
+        "child_reference": material["child"],
+        "child_observation": material["child_observation"],
+        "child_artifact_bytes": material["child_artifact_bytes"],
+        "accepted_transition_evidence_sha256": material["transition"][
+            "accepted_transition_evidence_sha256"
+        ],
+    }
+    values.update(overrides)
+    return finalizer(**values)
+
+
+def test_task3_public_surface_preserves_task2_and_adds_r3_correspondence_gate() -> None:
+    module = _registry_module()
+    assert list(inspect.signature(module.build_component_view_registry).parameters) == [
+        "upstream_context",
+        "components",
+        "views",
+    ]
+    assert list(inspect.signature(module.validate_component_view_registry).parameters) == [
+        "payload",
+        "upstream_context",
+    ]
+    assert callable(getattr(module, "finalize_component_view_correspondence", None))
+    wildcard_namespace: dict[str, object] = {}
+    exec("from cad_agent.component_view_registry import *", wildcard_namespace)
+    assert (
+        wildcard_namespace["finalize_component_view_correspondence"]
+        is module.finalize_component_view_correspondence
+    )
+
+
+def test_task3_finalizes_deterministic_correspondence_against_immutable_parent() -> None:
+    material = _task3_material()
+    parent_before = deepcopy(material["parent"])
+    first = _task3_finalize(material)
+    second = _task3_finalize(material)
+
+    assert first == second
+    assert first["parent_reference_id"] == material["parent"]["reference_id"]
+    assert first["parent_reference_sha256"] == material["parent"]["reference_sha256"]
+    assert first["child_reference_id"] == material["child"]["reference_id"]
+    assert first["child_reference_sha256"] == material["child"]["reference_sha256"]
+    assert first["registry_snapshot_sha256"] == material["registry"][
+        "registry_snapshot_sha256"
+    ]
+    assert material["parent"] == parent_before
+
+
+def test_task3_result_is_closed_and_binds_every_component_and_view_record() -> None:
+    material = _task3_material()
+    result = _task3_finalize(material)
+
+    assert set(result) == TASK3_RESULT_FIELDS
+    assert result["component_bindings"] == material["component_bindings"]
+    assert result["view_bindings"] == material["view_bindings"]
+    assert result["component_bindings"]
+    assert result["view_bindings"]
+    assert all(
+        set(binding) == TASK3_COMPONENT_BINDING_FIELDS
+        for binding in result["component_bindings"]
+    )
+    assert all(
+        set(binding) == TASK3_VIEW_BINDING_FIELDS
+        for binding in result["view_bindings"]
+    )
+    assert result["provenance_sha256"] == canonical_json_sha256(
+        material["provenance_material"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["omit_component", "omit_view", "duplicate_component"]
+)
+def test_task3_omitted_or_ambiguous_registry_records_fail_closed(
+    mutation: str,
+) -> None:
+    material = _task3_material()
+    forged_registry = deepcopy(material["registry"])
+    if mutation == "omit_component":
+        forged_registry["components"] = forged_registry["components"][1:]
+    elif mutation == "omit_view":
+        forged_registry["views"] = forged_registry["views"][1:]
+    else:
+        forged_registry["components"].append(
+            deepcopy(forged_registry["components"][0])
+        )
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, registry=forged_registry)
+    assert str(caught.value) in {
+        "REGISTRY_SNAPSHOT_MISMATCH",
+        "DUPLICATE_COMPONENT",
+        "COMPONENT_VIEW_IDS_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+def test_task3_provenance_seal_uses_the_canonical_json_sha256_owner(monkeypatch) -> None:
+    material = _task3_material()
+    module = _registry_module()
+    calls: list[object] = []
+    owner = module.canonical_json_sha256
+
+    def record(payload: object) -> str:
+        calls.append(payload)
+        return owner(payload)
+
+    monkeypatch.setattr(module, "canonical_json_sha256", record)
+    _task3_finalize(material)
+    assert calls
+
+
+def test_task3_finalizer_delegates_reference_and_currentness_authority_to_dara(
+    monkeypatch,
+) -> None:
+    material = _task3_material()
+    dara = importlib.import_module("cad_agent.drawing_artifact_reference")
+    calls: list[str] = []
+    validate_reference = dara.validate_drawing_artifact_reference
+    require_current = dara.require_current_drawing_artifact_reference
+
+    def record_reference(*args, **kwargs):
+        calls.append("validate_drawing_artifact_reference")
+        return validate_reference(*args, **kwargs)
+
+    def record_current(*args, **kwargs):
+        calls.append("require_current_drawing_artifact_reference")
+        return require_current(*args, **kwargs)
+
+    monkeypatch.setattr(
+        dara, "validate_drawing_artifact_reference", record_reference
+    )
+    monkeypatch.setattr(
+        dara, "require_current_drawing_artifact_reference", record_current
+    )
+    _task3_finalize(material)
+    assert calls.count("validate_drawing_artifact_reference") >= 2
+    assert calls.count("require_current_drawing_artifact_reference") >= 2
+
+
+def test_task3_provenance_sha256_is_recomputed_and_caller_claims_are_rejected() -> None:
+    material = _task3_material()
+    forged_child = deepcopy(material["child"])
+    forged_child["r3_provenance_binding"]["provenance_sha256"] = "f" * 64
+    _existing_test_module("test_cad_agent_drawing_artifact_reference.py")._reseal_reference(
+        forged_child
+    )
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, child_reference=forged_child)
+    assert str(caught.value) in {
+        "PROVENANCE_MISMATCH",
+        "CANONICAL_HASH_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("run_id", "run-foreign"),
+        ("project_id", "project-foreign"),
+        ("drawing_id", "drawing-foreign"),
+    ],
+)
+def test_task3_foreign_scope_is_categorical_and_privacy_safe(
+    field: str, replacement: str
+) -> None:
+    material = _task3_material()
+    foreign_child = deepcopy(material["child"])
+    foreign_child[field] = replacement
+    _existing_test_module("test_cad_agent_drawing_artifact_reference.py")._reseal_reference(
+        foreign_child
+    )
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, child_reference=foreign_child)
+    assert str(caught.value) in {"SCOPE_MISMATCH", "FOREIGN_REFERENCE", "CORRESPONDENCE_MISMATCH"}
+    assert replacement not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("artifact_role", "BASELINE"),
+        ("parent_reference_id", "dara-ref-foreign-parent"),
+        ("parent_reference_sha256", "f" * 64),
+    ],
+)
+def test_task3_wrong_role_or_parent_binding_fails_closed(
+    field: str, replacement: object
+) -> None:
+    material = _task3_material()
+    forged_child = deepcopy(material["child"])
+    forged_child[field] = replacement
+    dara_tests = _existing_test_module("test_cad_agent_drawing_artifact_reference.py")
+    dara_tests._reseal_reference(forged_child)
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, child_reference=forged_child)
+    assert str(caught.value) in {
+        "CATEGORY_CONFUSION",
+        "PARENT_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+@pytest.mark.parametrize("target", ["parent", "child"])
+def test_task3_baseline_role_cannot_enter_the_r3_parent_child_correspondence(
+    target: str,
+) -> None:
+    material = _task3_material()
+    forged = deepcopy(material[target])
+    forged["artifact_role"] = "BASELINE"
+    _existing_test_module("test_cad_agent_drawing_artifact_reference.py")._reseal_reference(
+        forged
+    )
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, **{f"{target}_reference": forged})
+    assert str(caught.value) in {
+        "CATEGORY_CONFUSION",
+        "PARENT_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+def test_task3_stale_parent_binding_cannot_be_reused_for_repaired_child() -> None:
+    material = _task3_material()
+    forged_child = deepcopy(material["child"])
+    forged_child["r3_provenance_binding"] = {
+        "registry_snapshot_sha256": "f" * 64,
+        "provenance_sha256": "e" * 64,
+    }
+    _existing_test_module("test_cad_agent_drawing_artifact_reference.py")._reseal_reference(
+        forged_child
+    )
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, child_reference=forged_child)
+    assert str(caught.value) in {"STALE_PARENT_BINDING", "PROVENANCE_MISMATCH", "CORRESPONDENCE_MISMATCH"}
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected"),
+    [
+        ("pre_artifact_sha256", "f" * 64, "MUTATION_EVIDENCE_MISMATCH"),
+        ("post_artifact_sha256", "e" * 64, "POST_ARTIFACT_MISMATCH"),
+    ],
+)
+def test_task3_transition_sha_bindings_must_match_parent_and_child(
+    field: str, replacement: str, expected: str
+) -> None:
+    material = _task3_material()
+    forged_child = deepcopy(material["child"])
+    transition = forged_child["upstream_evidence"]
+    transition[field] = replacement
+    dara_tests = _existing_test_module("test_cad_agent_drawing_artifact_reference.py")
+    dara_tests._seal_mutation_evidence(transition)
+    dara_tests._reseal_reference(forged_child)
+    overrides = {"child_reference": forged_child}
+    if field == "post_artifact_sha256":
+        overrides["accepted_transition_evidence_sha256"] = transition[
+            "accepted_transition_evidence_sha256"
+        ]
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, **overrides)
+    assert str(caught.value) in {expected, "CORRESPONDENCE_MISMATCH"}
+
+
+def test_task3_wrong_accepted_transition_digest_is_not_authority() -> None:
+    material = _task3_material()
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, accepted_transition_evidence_sha256="f" * 64)
+    assert str(caught.value) in {"MUTATION_EVIDENCE_MISMATCH", "CORRESPONDENCE_MISMATCH"}
+
+
+def test_task3_missing_parent_is_not_treated_as_a_fresh_correspondence() -> None:
+    material = _task3_material()
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, parent_reference=None)
+    assert str(caught.value) in {
+        "PARENT_MISMATCH",
+        "MISSING_PARENT",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+def test_task3_parent_child_reference_swap_is_rejected() -> None:
+    material = _task3_material()
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(
+            material,
+            parent_reference=material["child"],
+            child_reference=material["parent"],
+        )
+    assert str(caught.value) in {
+        "CATEGORY_CONFUSION",
+        "PARENT_MISMATCH",
+        "REPLAY_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+def test_task3_unsealed_transition_mutation_is_rejected_by_dara() -> None:
+    material = _task3_material()
+    forged_child = deepcopy(material["child"])
+    forged_child["upstream_evidence"]["executor_result_sha256"] = "f" * 64
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, child_reference=forged_child)
+    assert str(caught.value) in {
+        "MUTATION_EVIDENCE_MISMATCH",
+        "CANONICAL_HASH_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+@pytest.mark.parametrize(
+    "observation_field",
+    ["parent_observation", "child_observation"],
+)
+def test_task3_stale_or_replayed_current_observation_is_refused(
+    observation_field: str,
+) -> None:
+    material = _task3_material()
+    replayed = material["parent_observation"]
+    if observation_field == "parent_observation":
+        overrides = {"parent_observation": material["child_observation"]}
+    else:
+        overrides = {"child_observation": replayed}
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, **overrides)
+    assert str(caught.value) in {
+        "STALE_REFERENCE",
+        "REPLAY_MISMATCH",
+        "SCOPE_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+def test_task3_owner_observed_bytes_are_recomputed_and_alteration_is_stale() -> None:
+    material = _task3_material()
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(
+            material,
+            child_artifact_bytes=b"synthetic-r3-repaired-child-artifact-altered",
+        )
+    assert str(caught.value) in {"STALE_REFERENCE", "ARTIFACT_SHA_MISMATCH", "CORRESPONDENCE_MISMATCH"}
+
+
+def test_task3_caller_resealed_current_observation_cannot_override_owner_bytes() -> None:
+    material = _task3_material()
+    forged_observation = deepcopy(material["child_observation"])
+    forged_observation["expected_artifact_sha256"] = "f" * 64
+    forged_observation["observed_artifact_sha256"] = "f" * 64
+    forged_observation["comparison"] = "CURRENT"
+    _existing_test_module("test_cad_agent_drawing_artifact_reference.py")._reseal_current_observation(
+        forged_observation
+    )
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(
+            material,
+            child_observation=forged_observation,
+            child_artifact_bytes=b"caller-resealed-but-not-owner-observed",
+        )
+    assert str(caught.value) in {
+        "STALE_REFERENCE",
+        "CURRENTNESS_FORGED",
+        "REPLAY_MISMATCH",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+def test_task3_replayed_observation_after_transition_evidence_changes_is_rejected() -> None:
+    material = _task3_material()
+    dara_tests = _existing_test_module("test_cad_agent_drawing_artifact_reference.py")
+    replayed_child = deepcopy(material["child"])
+    changed_transition = deepcopy(replayed_child["upstream_evidence"])
+    changed_transition["executor_result_sha256"] = "f" * 64
+    dara_tests._seal_mutation_evidence(changed_transition)
+    replayed_child["upstream_evidence"] = changed_transition
+    dara_tests._reseal_reference(replayed_child)
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(
+            material,
+            child_reference=replayed_child,
+            accepted_transition_evidence_sha256=changed_transition[
+                "accepted_transition_evidence_sha256"
+            ],
+        )
+    assert str(caught.value) in {
+        "REPLAY_MISMATCH",
+        "SCOPE_MISMATCH",
+        "CURRENTNESS_FORGED",
+        "CORRESPONDENCE_MISMATCH",
+    }
+
+
+def test_task3_cross_registry_binding_replay_is_rejected() -> None:
+    material = _task3_material()
+    other_context = _upstream_context(primitive_ids=("foreign-a", "foreign-b"))
+    other_registry = _registry_module().build_component_view_registry(
+        upstream_context=other_context,
+        components=_component_inputs(other_context),
+        views=_task2_view_inputs(_registry_module(), other_context),
+    )
+    replayed_child = deepcopy(material["child"])
+    replayed_child["r3_provenance_binding"]["registry_snapshot_sha256"] = other_registry[
+        "registry_snapshot_sha256"
+    ]
+    _existing_test_module("test_cad_agent_drawing_artifact_reference.py")._reseal_reference(
+        replayed_child
+    )
+    with pytest.raises(_registry_module().ComponentViewRegistryError) as caught:
+        _task3_finalize(material, child_reference=replayed_child)
+    assert str(caught.value) in {"PROVENANCE_MISMATCH", "CROSS_REGISTRY_REPLAY", "CORRESPONDENCE_MISMATCH"}
+
+
+def test_task3_dara_currentness_cannot_mint_r3_registry_current_or_r4_selection() -> None:
+    material = _task3_material()
+    result = _task3_finalize(material)
+    forbidden_authority_fields = {
+        "registry_current",
+        "current_authority",
+        "r4_selected",
+        "r4_current",
+        "selection_authority",
+    }
+    assert forbidden_authority_fields.isdisjoint(result)
+    source = Path(_registry_module().__file__).read_text(encoding="utf-8")
+    for forbidden in ("r4_selected", "selection_authority", "current_authority"):
+        assert forbidden not in source
