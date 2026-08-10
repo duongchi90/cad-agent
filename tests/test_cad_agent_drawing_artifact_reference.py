@@ -193,6 +193,7 @@ def _post_repair_material():
         pre_sha256=parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    _seal_mutation_evidence(mutation)
     issued = module.issue_drawing_artifact_reference(
         run_id=parent["run_id"],
         project_id=parent["project_id"],
@@ -595,6 +596,30 @@ def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> No
     assert str(exc.value) == "CLEANUP_UNCERTAIN"
 
 
+def test_post_repair_child_requires_supplied_transition_evidence_digest() -> None:
+    module = _module()
+    parent = _issue_r3_candidate()
+    child_bytes = _artifact_bytes("repaired-without-seal")
+    mutation = _mutation_evidence(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=mutation,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "MUTATION_EVIDENCE_MISSING"
+
+
 def test_parented_reference_consumption_requires_independent_sealed_anchors() -> None:
     module = _module()
     parent, child, _ = _issue_candidate()
@@ -791,6 +816,7 @@ def test_parent_history_is_immutable_before_child_issuance_and_resealing_is_refu
         pre_sha256=attempted_historical_mutation["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    _seal_mutation_evidence(resealed_transition)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -819,6 +845,7 @@ def test_post_repair_transition_rejects_baseline_as_r3_candidate_parent() -> Non
         pre_sha256=parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    _seal_mutation_evidence(mutation)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -898,6 +925,7 @@ def test_post_repair_child_rejects_each_foreign_parent_scope_after_binding_its_e
         pre_sha256=substituted_parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    _seal_mutation_evidence(mutation)
     assert mutation["r3_candidate_reference_id"] == substituted_parent["reference_id"]
     assert mutation["r3_candidate_reference_sha256"] == substituted_parent["reference_sha256"]
 
@@ -933,6 +961,7 @@ def test_post_repair_child_rejects_substituted_parent_with_tampered_hash_custody
         pre_sha256=substituted_parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    _seal_mutation_evidence(mutation)
     assert mutation["r3_candidate_reference_id"] == substituted_parent["reference_id"]
     assert mutation["r3_candidate_reference_sha256"] == substituted_parent["reference_sha256"]
 
@@ -958,6 +987,7 @@ def test_post_repair_child_rejects_forged_post_sha_even_when_r6_result_sha_exist
         pre_sha256=parent["artifact_sha256"],
         post_sha256="d" * 64,
     )
+    _seal_mutation_evidence(mutation)
     assert mutation["r6_result_sha256"] == "5" * 64
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -1271,6 +1301,46 @@ def test_current_observation_marks_changed_bytes_stale_and_current_requirement_r
             artifact_bytes=_artifact_bytes("changed"),
         )
     assert str(exc.value) == "STALE_REFERENCE"
+
+
+def test_unhashable_artifact_role_is_a_categorical_reference_refusal() -> None:
+    module = _module()
+    reference = _issue_baseline()
+    reference["artifact_role"] = []
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.validate_drawing_artifact_reference(reference)
+    assert str(exc.value) == "CATEGORY_CONFUSION"
+
+
+def test_unhashable_artifact_role_is_a_categorical_issue_refusal() -> None:
+    module = _module()
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id="run-182-001",
+            project_id="project-001",
+            drawing_id="drawing-001",
+            artifact_role=[],
+            artifact_bytes=_artifact_bytes(),
+            upstream_evidence=_baseline_evidence(),
+        )
+    assert str(exc.value) == "CATEGORY_CONFUSION"
+
+
+def test_unhashable_observation_comparison_is_a_categorical_currentness_refusal() -> None:
+    module = _module()
+    observation = module.observe_drawing_artifact_currentness(
+        reference=_issue_baseline(),
+        artifact_bytes=_artifact_bytes(),
+        observation_evidence_sha256="b" * 64,
+    )
+    observation["comparison"] = []
+    _reseal_current_observation(observation)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.validate_drawing_artifact_current_observation(observation)
+    assert str(exc.value) == "CURRENTNESS_FORGED"
 
 
 def test_caller_cannot_flip_stale_observation_to_current() -> None:

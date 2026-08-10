@@ -279,11 +279,8 @@ def _issue_transition_evidence(
     issued = deepcopy(dict(evidence))
     accepted = issued.pop("accepted_transition_evidence_sha256", None)
     if accepted is None:
-        issued["accepted_transition_evidence_sha256"] = _canonical_integrity_sha256(
-            issued, "MUTATION_EVIDENCE_MISMATCH"
-        )
-    else:
-        issued["accepted_transition_evidence_sha256"] = accepted
+        _fail("MUTATION_EVIDENCE_MISSING")
+    issued["accepted_transition_evidence_sha256"] = accepted
     return _validate_transition_evidence(
         issued,
         parent_reference_id=parent_reference_id,
@@ -331,7 +328,10 @@ def validate_drawing_artifact_reference(
         _fail("INVALID_REFERENCE")
     _require_scope(reference)
     artifact_role = reference.get("artifact_role")
-    if artifact_role not in {"BASELINE", "R3_CANDIDATE"}:
+    if not isinstance(artifact_role, str) or artifact_role not in {
+        "BASELINE",
+        "R3_CANDIDATE",
+    }:
         _fail("CATEGORY_CONFUSION")
     if expected_artifact_role is not None and artifact_role != expected_artifact_role:
         _fail("CATEGORY_CONFUSION")
@@ -433,7 +433,10 @@ def issue_drawing_artifact_reference(
     r3_provenance_binding: Mapping[str, object] | None = None,
     claimed_artifact_sha256: str | None = None,
 ) -> dict[str, object]:
-    if artifact_role not in {"BASELINE", "R3_CANDIDATE"}:
+    if not isinstance(artifact_role, str) or artifact_role not in {
+        "BASELINE",
+        "R3_CANDIDATE",
+    }:
         _fail("CATEGORY_CONFUSION")
     artifact_sha256 = _sha256_bytes(artifact_bytes)
     if claimed_artifact_sha256 is not None and claimed_artifact_sha256 != artifact_sha256:
@@ -549,7 +552,7 @@ def validate_drawing_artifact_current_observation(
     except (TypeError, ValueError):
         _fail("CURRENT_LOOKUP_INVALID")
     comparison = observation.get("comparison")
-    if comparison not in {"CURRENT", "STALE"}:
+    if not isinstance(comparison, str) or comparison not in {"CURRENT", "STALE"}:
         _fail("CURRENTNESS_FORGED")
     expected = observation["expected_artifact_sha256"]
     observed = observation["observed_artifact_sha256"]
