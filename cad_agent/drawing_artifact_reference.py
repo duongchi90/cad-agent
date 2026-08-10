@@ -112,7 +112,12 @@ def _validate_initial_evidence(evidence: object, artifact_role: str) -> dict[str
 
 
 def _validate_transition_evidence(
-    evidence: object, parent: Mapping[str, object], artifact_sha256: str
+    evidence: object,
+    *,
+    parent_reference_id: str,
+    parent_reference_sha256: str,
+    artifact_sha256: str,
+    parent_artifact_sha256: str | None = None,
 ) -> dict[str, object]:
     if not isinstance(evidence, Mapping):
         _fail("MUTATION_EVIDENCE_MISSING")
@@ -159,9 +164,9 @@ def _validate_transition_evidence(
         raise
     except (TypeError, ValueError):
         _fail("MUTATION_EVIDENCE_MISMATCH")
-    if evidence.get("r3_candidate_reference_id") != parent["reference_id"]:
+    if evidence.get("r3_candidate_reference_id") != parent_reference_id:
         _fail("WRONG_CANDIDATE")
-    if evidence.get("r3_candidate_reference_sha256") != parent["reference_sha256"]:
+    if evidence.get("r3_candidate_reference_sha256") != parent_reference_sha256:
         _fail("WRONG_CANDIDATE")
     for field in (
         "r5_failure_id",
@@ -184,7 +189,10 @@ def _validate_transition_evidence(
         "workspace_evidence_sha256",
     ):
         _require_sha_field(evidence, field, "MUTATION_EVIDENCE_MISSING")
-    if evidence["pre_artifact_sha256"] != parent["artifact_sha256"]:
+    if (
+        parent_artifact_sha256 is not None
+        and evidence["pre_artifact_sha256"] != parent_artifact_sha256
+    ):
         _fail("MUTATION_EVIDENCE_MISMATCH")
     if evidence["post_artifact_sha256"] != artifact_sha256:
         _fail("POST_ARTIFACT_MISMATCH")
@@ -263,6 +271,13 @@ def validate_drawing_artifact_reference(
         _validate_binding(reference.get("r3_provenance_binding"))
         if parent_id is None:
             _validate_initial_evidence(reference["upstream_evidence"], artifact_role)
+        else:
+            _validate_transition_evidence(
+                reference["upstream_evidence"],
+                parent_reference_id=parent_id,
+                parent_reference_sha256=parent_sha,
+                artifact_sha256=reference["artifact_sha256"],
+            )
     return deepcopy(dict(reference))
 
 
@@ -325,7 +340,13 @@ def issue_drawing_artifact_reference(
         if any(scope[field] != parent[field] for field in scope):
             _fail("SCOPE_MISMATCH")
         binding = _validate_binding(r3_provenance_binding)
-        evidence = _validate_transition_evidence(upstream_evidence, parent, artifact_sha256)
+        evidence = _validate_transition_evidence(
+            upstream_evidence,
+            parent_reference_id=parent["reference_id"],
+            parent_reference_sha256=parent["reference_sha256"],
+            artifact_sha256=artifact_sha256,
+            parent_artifact_sha256=parent["artifact_sha256"],
+        )
         parent_id = parent["reference_id"]
         parent_sha = parent["reference_sha256"]
     record: dict[str, object] = {

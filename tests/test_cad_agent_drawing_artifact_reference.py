@@ -98,6 +98,18 @@ def _seal_mutation_evidence(evidence: dict[str, object]) -> dict[str, object]:
     return evidence
 
 
+def _reseal_reference(reference: dict[str, object]) -> dict[str, object]:
+    """Rebind public reference hashes after one targeted test mutation."""
+    identity_payload = dict(reference)
+    identity_payload.pop("reference_id")
+    identity_payload.pop("reference_sha256")
+    reference["reference_id"] = "dara-ref-" + canonical_json_sha256(identity_payload)
+    hash_payload = dict(reference)
+    hash_payload.pop("reference_sha256")
+    reference["reference_sha256"] = canonical_json_sha256(hash_payload)
+    return reference
+
+
 def _r3_binding() -> dict[str, object]:
     return {
         "registry_snapshot_sha256": "9" * 64,
@@ -272,6 +284,64 @@ def test_valid_post_repair_child_preserves_immutable_parent_history() -> None:
     assert child["reference_id"] != parent["reference_id"]
     assert parent == parent_before
     assert module.validate_drawing_artifact_reference(child) == child
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected_code"),
+    [
+        (
+            "r3_candidate_reference_id",
+            "dara-ref-foreign-candidate",
+            "WRONG_CANDIDATE",
+        ),
+        ("r3_candidate_reference_sha256", "c" * 64, "WRONG_CANDIDATE"),
+        ("pre_artifact_sha256", "not-a-sha256", "MUTATION_EVIDENCE_MISSING"),
+        ("post_artifact_sha256", "d" * 64, "POST_ARTIFACT_MISMATCH"),
+        ("mutation_terminal", "FAILED", "MUTATION_NOT_SUCCESSFUL"),
+        ("partial_mutation", True, "MUTATION_NOT_SUCCESSFUL"),
+        ("timed_out", True, "MUTATION_NOT_SUCCESSFUL"),
+        ("rollback_failed", True, "MUTATION_NOT_SUCCESSFUL"),
+        ("cleanup_state", "UNCERTAIN", "CLEANUP_UNCERTAIN"),
+    ],
+)
+def test_public_validation_rejects_resealed_parented_child_transition_defects(
+    field: str,
+    replacement: object,
+    expected_code: str,
+) -> None:
+    module = _module()
+    _, child, _ = _issue_candidate()
+    resealed_child = deepcopy(child)
+    resealed_child["upstream_evidence"][field] = replacement
+    _seal_mutation_evidence(resealed_child["upstream_evidence"])
+    _reseal_reference(resealed_child)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.validate_drawing_artifact_reference(resealed_child)
+
+    assert str(exc.value) == expected_code
+
+
+def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> None:
+    module = _module()
+    _, child, child_bytes = _issue_candidate()
+    observation = module.observe_drawing_artifact_currentness(
+        reference=child,
+        artifact_bytes=child_bytes,
+        observation_evidence_sha256="b" * 64,
+    )
+    resealed_child = deepcopy(child)
+    resealed_child["upstream_evidence"]["cleanup_state"] = "UNCERTAIN"
+    _seal_mutation_evidence(resealed_child["upstream_evidence"])
+    _reseal_reference(resealed_child)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.require_current_drawing_artifact_reference(
+            reference=resealed_child,
+            observation=observation,
+        )
+
+    assert str(exc.value) == "CLEANUP_UNCERTAIN"
 
 
 def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence() -> None:
