@@ -267,6 +267,42 @@ def test_valid_post_repair_child_preserves_immutable_parent_history() -> None:
     assert module.validate_drawing_artifact_reference(child) == child
 
 
+def test_parent_history_is_immutable_before_child_issuance_and_resealing_is_refused() -> None:
+    module = _module()
+    parent = _issue_r3_candidate()
+    parent_before_child_issuance = deepcopy(parent)
+    attempted_historical_mutation = deepcopy(parent)
+    attempted_historical_mutation["upstream_evidence"]["evidence_id"] = (
+        "mutated-historical-parent"
+    )
+    attempted_historical_mutation["reference_sha256"] = canonical_json_sha256(
+        attempted_historical_mutation
+    )
+    child_bytes = _artifact_bytes("resealed-parent-child")
+    resealed_transition = _mutation_evidence(
+        candidate_reference=attempted_historical_mutation,
+        pre_sha256=attempted_historical_mutation["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=resealed_transition,
+            parent_reference=attempted_historical_mutation,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "HISTORICAL_MUTATION"
+    assert parent == parent_before_child_issuance
+
+    _issue_candidate()
+    assert parent == parent_before_child_issuance
+
+
 def test_post_repair_transition_rejects_baseline_as_r3_candidate_parent() -> None:
     module = _module()
     parent = _issue_baseline()
@@ -583,6 +619,54 @@ def test_cross_scope_or_foreign_observation_replay_is_refused(
         )
 
 
+@pytest.mark.parametrize(
+    ("scope_field", "foreign_value"),
+    [
+        ("run_id", "run-foreign"),
+        ("project_id", "project-foreign"),
+        ("drawing_id", "drawing-foreign"),
+    ],
+)
+def test_valid_cross_scope_replay_is_refused_when_logical_evidence_is_reused(
+    scope_field: str,
+    foreign_value: str,
+) -> None:
+    module = _module()
+    reference = _issue_baseline()
+    foreign_scope = {
+        "run_id": reference["run_id"],
+        "project_id": reference["project_id"],
+        "drawing_id": reference["drawing_id"],
+    }
+    foreign_scope[scope_field] = foreign_value
+    foreign_reference = module.issue_drawing_artifact_reference(
+        **foreign_scope,
+        artifact_role="BASELINE",
+        artifact_bytes=_artifact_bytes(),
+        upstream_evidence=_baseline_evidence(),
+    )
+    foreign_observation = module.observe_drawing_artifact_currentness(
+        reference=foreign_reference,
+        artifact_bytes=_artifact_bytes(),
+        observation_evidence_sha256="b" * 64,
+    )
+
+    assert foreign_reference["upstream_evidence"] == reference["upstream_evidence"]
+    assert foreign_reference["artifact_sha256"] == reference["artifact_sha256"]
+    assert module.validate_drawing_artifact_current_observation(
+        foreign_observation
+    ) == foreign_observation
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.require_current_drawing_artifact_reference(
+            reference=reference, observation=foreign_observation
+        )
+    assert str(exc.value) in {
+        "SCOPE_MISMATCH",
+        "FOREIGN_REFERENCE",
+        "REPLAY_MISMATCH",
+    }
+
+
 def test_r6_result_sha_is_evidence_only_and_cannot_mint_dara_currentness() -> None:
     module = _module()
     parent, child, _ = _issue_candidate()
@@ -635,6 +719,35 @@ def test_r6_result_sha_alone_cannot_mint_post_repair_dara_custody() -> None:
     assert str(exc.value) == "MUTATION_EVIDENCE_MISSING"
 
 
+def test_caller_claimed_sha_and_currentness_cannot_override_owner_observed_bytes() -> None:
+    module = _module()
+    reference = _issue_baseline()
+    caller_claimed_sha256 = reference["artifact_sha256"]
+    owner_observed_bytes = _artifact_bytes("owner-observed-mismatch")
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as custody_exc:
+        module.issue_drawing_artifact_reference(
+            run_id=reference["run_id"],
+            project_id=reference["project_id"],
+            drawing_id=reference["drawing_id"],
+            artifact_role="BASELINE",
+            artifact_bytes=owner_observed_bytes,
+            upstream_evidence=_baseline_evidence(),
+            claimed_artifact_sha256=caller_claimed_sha256,
+        )
+    assert str(custody_exc.value) == "ARTIFACT_SHA_MISMATCH"
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as currentness_exc:
+        module.observe_drawing_artifact_currentness(
+            reference=reference,
+            artifact_bytes=owner_observed_bytes,
+            observation_evidence_sha256="b" * 64,
+            claimed_artifact_sha256=caller_claimed_sha256,
+            claimed_comparison="CURRENT",
+        )
+    assert str(currentness_exc.value) == "ARTIFACT_SHA_MISMATCH"
+
+
 @pytest.mark.parametrize(
     "forbidden",
     [
@@ -649,6 +762,22 @@ def test_r6_result_sha_alone_cannot_mint_post_repair_dara_custody() -> None:
         "workspace_path",
         "backup_path",
         "provider_output",
+        "r4_candidate_revision_id",
+        "r4_selection_state",
+        "r4_publication_state",
+        "r5_verdict_id",
+        "r5_verdict_state",
+        "r6_mutation_request_id",
+        "r6_execution_state",
+        "approval_id",
+        "approval_state",
+        "workspace_id",
+        "workspace_lease_id",
+        "publication_id",
+        "publication_target",
+        "current_reference_store_id",
+        "revision_store_id",
+        "manifest_checkpoint_id",
     ],
 )
 def test_reference_rejects_downstream_or_ambient_authority_fields(
@@ -660,6 +789,36 @@ def test_reference_rejects_downstream_or_ambient_authority_fields(
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.validate_drawing_artifact_reference(payload)
     assert str(exc.value) == "INVALID_REFERENCE"
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        "r4_candidate_revision_id",
+        "r5_verdict_id",
+        "r6_execution_state",
+        "approval_id",
+        "workspace_id",
+        "publication_id",
+        "current_reference_store_id",
+        "revision_store_id",
+        "manifest_checkpoint_id",
+    ],
+)
+def test_current_observation_rejects_downstream_authority_fields_and_second_store_claims(
+    forbidden: str,
+) -> None:
+    module = _module()
+    reference = _issue_baseline()
+    observation = module.observe_drawing_artifact_currentness(
+        reference=reference,
+        artifact_bytes=_artifact_bytes(),
+        observation_evidence_sha256="b" * 64,
+    )
+    observation[forbidden] = "forbidden-authority"
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.validate_drawing_artifact_current_observation(observation)
+    assert str(exc.value) == "CURRENT_LOOKUP_INVALID"
 
 
 def test_hashing_reuses_canonical_json_owner_and_static_boundary_has_no_second_store(
@@ -713,7 +872,32 @@ def test_public_surface_has_no_second_currentness_authority_or_in_memory_store()
         "current_store",
         "register_current_reference",
         "set_current_reference",
+        "r4_revision_store",
+        "r4_currentness_authority",
+        "r5_verdict_authority",
+        "r6_workspace_authority",
+        "approval_authority",
+        "workspace_authority",
+        "publication_authority",
+        "manifest_authority",
+        "checkpoint_authority",
     } & lowered_names
+    assert not {
+        name
+        for name in lowered_names
+        if name.startswith(
+            (
+                "r4_",
+                "r5_",
+                "r6_",
+                "approval_",
+                "workspace_",
+                "publication_",
+                "manifest_",
+                "checkpoint_",
+            )
+        )
+    }
     assert not {
         name
         for name in lowered_names
@@ -734,6 +918,11 @@ def test_public_api_has_no_r4_r5_r6_decision_or_live_execution_parameters() -> N
         "autocad",
         "provider",
         "file_ipc",
+        "r4_",
+        "r5_",
+        "r6_",
+        "manifest",
+        "checkpoint",
     }
     for name in (
         "issue_drawing_artifact_reference",
