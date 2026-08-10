@@ -51,10 +51,13 @@ def _artifact_bytes(tag: str) -> bytes:
     return f"synthetic-r4-candidate-artifact::{tag}".encode("utf-8")
 
 
-def _baseline_context(tag: str = "baseline") -> dict[str, object]:
+def _baseline_context(
+    tag: str = "baseline", *, scope: dict[str, str] | None = None
+) -> dict[str, object]:
     artifact_bytes = _artifact_bytes(tag)
+    baseline_scope = dict(scope or SCOPE)
     reference = dara.issue_drawing_artifact_reference(
-        **SCOPE,
+        **baseline_scope,
         artifact_role="BASELINE",
         artifact_bytes=artifact_bytes,
         upstream_evidence={
@@ -325,10 +328,10 @@ def _child_args(
     return args
 
 
-def test_public_surface_is_frozen_and_keyword_only() -> None:
+def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
     assert CANDIDATE_REVISION_SCHEMA_VERSION == CANDIDATE_SCHEMA_VERSION
     assert issubclass(CandidateRevisionError, ValueError)
-    expected = [
+    keyword_only_names = [
         "registry",
         "base_cad_handoff",
         "baseline_context",
@@ -337,13 +340,24 @@ def test_public_surface_is_frozen_and_keyword_only() -> None:
         "mutation_evidence",
         "lineage_context",
     ]
-    for function in (build_candidate_revision, validate_candidate_revision):
-        parameters = inspect.signature(function).parameters
-        assert list(parameters) == expected
-        assert all(
-            parameter.kind is inspect.Parameter.KEYWORD_ONLY
-            for parameter in parameters.values()
-        )
+    build_parameters = inspect.signature(build_candidate_revision).parameters
+    assert list(build_parameters) == keyword_only_names
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in build_parameters.values()
+    )
+
+    validate_parameters = inspect.signature(validate_candidate_revision).parameters
+    assert list(validate_parameters) == ["payload", *keyword_only_names]
+    assert (
+        validate_parameters["payload"].kind
+        is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for name, parameter in validate_parameters.items()
+        if name != "payload"
+    )
 
 
 def test_root_revision_is_sealed_closed_and_deterministic() -> None:
@@ -387,12 +401,13 @@ def test_replay_is_permutation_invariant() -> None:
 
 def test_build_and_validate_return_deep_detached_copies() -> None:
     args = _valid_args()
-    revision = build_candidate_revision(**deepcopy(args))
+    passed_args = deepcopy(args)
+    revision = build_candidate_revision(**passed_args)
     frozen = deepcopy(revision)
-    args["registry"]["components"][0]["component_type"] = "MUTATED"
-    args["baseline_context"]["artifact_bytes"] = b"changed-after-build"
+    passed_args["registry"]["components"][0]["component_type"] = "MUTATED"
+    passed_args["baseline_context"]["artifact_bytes"] = b"changed-after-build"
     assert revision == frozen
-    normalized = validate_candidate_revision(revision, **deepcopy(_valid_args()))
+    normalized = validate_candidate_revision(revision, **deepcopy(args))
     assert normalized == revision
     assert normalized is not revision
 
@@ -432,8 +447,10 @@ def test_dara_r3_candidate_reference_cannot_be_used_as_baseline() -> None:
 
 
 def test_foreign_baseline_scope_cannot_be_rebound() -> None:
-    foreign = _baseline_context("foreign")
-    foreign["reference"]["project_id"] = "foreign-project"
+    foreign = _baseline_context(
+        "foreign",
+        scope={**SCOPE, "project_id": "foreign-project"},
+    )
     with pytest.raises(CandidateRevisionError):
         build_candidate_revision(**_valid_args(baseline_context=foreign))
 
