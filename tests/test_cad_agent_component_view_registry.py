@@ -1093,3 +1093,315 @@ def test_task2_impact_output_never_becomes_visual_or_mutation_authority() -> Non
         "publish",
     ):
         assert forbidden not in rendered
+
+
+@pytest.mark.parametrize(
+    ("field", "foreign_ref"),
+    [
+        ("source_projection_refs", "f" * 64),
+        ("semantic_projection_refs", "e" * 64),
+    ],
+)
+def test_task2_view_projection_membership_rejects_foreign_refs(
+    field: str, foreign_ref: str
+) -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    accepted = {
+        item["observation_key"]
+        for collection in ("primitive_observations", "semantic_observations")
+        for item in context["source_fusion"][collection]
+    }
+    assert foreign_ref not in accepted
+    views = _task2_view_inputs(module, context)
+    views[0][field] = [foreign_ref]
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+
+
+@pytest.mark.parametrize("field", ["source_projection_refs", "semantic_projection_refs"])
+def test_task2_view_projection_membership_rejects_duplicate_refs(field: str) -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    views = _task2_view_inputs(module, context)
+    views[0][field].append(views[0][field][0])
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+
+
+def _task2_discriminating_context() -> dict[str, object]:
+    context = _upstream_context()
+    source_fusion_tests = _existing_test_module("test_cad_agent_source_fusion.py")
+    source_fusion = importlib.import_module("cad_agent.source_fusion")
+    primitive_ids = ("prim-a", "prim-b")
+    primitive_artifact = source_fusion_tests._task5_primitive_artifact(
+        [
+            source_fusion_tests._task5_primitive(primitive_ids[0]),
+            source_fusion_tests._task5_primitive(primitive_ids[1], end_x=20.0),
+        ]
+    )
+    primitive_observations = source_fusion_tests._task5_project_primitive(
+        primitive_artifact
+    )
+    semantic_artifact = source_fusion_tests._task5_semantic_artifact(
+        primitive_ids=[primitive_ids[0]],
+        primitive_count=2,
+        part_id="part-a",
+        constraint_id="cst-a",
+    )
+    second_part = deepcopy(semantic_artifact["parts"][0])
+    second_part["id"] = "part-b"
+    second_part["primitive_ids"] = [primitive_ids[1]]
+    semantic_artifact["parts"].append(second_part)
+    semantic_observations = source_fusion_tests._task5_project_semantic(
+        semantic_artifact, primitive_observations
+    )
+    assert len(semantic_observations) == 2
+    fusion_inputs = source_fusion_tests._task6_ready_inputs(
+        primitive_observations=primitive_observations,
+        semantic_observations=semantic_observations,
+    )
+    fusion = source_fusion.build_source_fusion_packet(**fusion_inputs)
+    validated_fusion = source_fusion.validate_source_fusion_packet(fusion)
+    fusion_sha256 = source_fusion.source_fusion_sha256(validated_fusion)
+    context["source_fusion"] = validated_fusion
+    context["source_fusion_sha256"] = fusion_sha256
+    handoff = deepcopy(context["reuse_handoff"])
+    handoff["source_bundle_sha256"] = validated_fusion["source_bundle_sha256"]
+    handoff["source_custody_sha256"] = validated_fusion["source_custody_sha256"]
+    handoff["source_fusion_sha256"] = fusion_sha256
+    return _replace_handoff(context, handoff)
+
+
+def _task2_discriminating_views(
+    module, context: dict[str, object]
+) -> list[dict[str, object]]:
+    components = _component_inputs(context)
+    task1 = module.build_component_view_registry(
+        upstream_context=context, components=components
+    )
+    reused = next(
+        item for item in task1["components"] if item["origin_class"] == "REUSED_UNCHANGED"
+    )
+    reconstructed = next(
+        item for item in task1["components"] if item["origin_class"] == "RECONSTRUCTED_NEW"
+    )
+    semantic_refs = [
+        item["observation_key"]
+        for item in context["source_fusion"]["semantic_observations"]
+    ]
+    assert len(semantic_refs) == 2
+    return [
+        {
+            "view_role": "PRIMARY",
+            "component_ids": [reused["component_id"]],
+            "source_projection_refs": list(reused["source_projection_refs"]),
+            "semantic_projection_refs": [semantic_refs[0]],
+            "candidate_entity_bindings": deepcopy(reused["candidate_entity_bindings"]),
+            "layout_bindings": [
+                _task2_layout(
+                    "layout-main",
+                    display_name="Main Layout",
+                    legacy_uuid="layout-uuid-a",
+                    relative_path="layouts/main.dwg",
+                    captured_at_utc="2026-08-10T00:00:00Z",
+                )
+            ],
+        },
+        {
+            "view_role": "DETAIL",
+            "component_ids": [reused["component_id"], reconstructed["component_id"]],
+            "source_projection_refs": list(reconstructed["source_projection_refs"]),
+            "semantic_projection_refs": [semantic_refs[0]],
+            "candidate_entity_bindings": deepcopy(reused["candidate_entity_bindings"]),
+            "layout_bindings": [
+                _task2_layout(
+                    "layout-detail",
+                    display_name="Detail Layout",
+                    legacy_uuid="layout-uuid-b",
+                    relative_path="layouts/detail.dwg",
+                    captured_at_utc="2026-08-10T00:00:01Z",
+                )
+            ],
+        },
+        {
+            "view_role": "ISOLATED",
+            "component_ids": [reconstructed["component_id"]],
+            "source_projection_refs": list(reconstructed["source_projection_refs"]),
+            "semantic_projection_refs": [semantic_refs[1]],
+            "candidate_entity_bindings": [],
+            "layout_bindings": [
+                _task2_layout(
+                    "layout-isolated",
+                    display_name="Isolated Layout",
+                    legacy_uuid="layout-uuid-c",
+                    relative_path="layouts/isolated.dwg",
+                    captured_at_utc="2026-08-10T00:00:02Z",
+                )
+            ],
+        },
+    ]
+
+
+def test_task2_derived_links_exist_iff_the_relationship_exists() -> None:
+    module = _registry_module()
+    context = _task2_discriminating_context()
+    components = _component_inputs(context)
+    registry = module.build_component_view_registry(
+        upstream_context=context,
+        components=components,
+        views=_task2_discriminating_views(module, context),
+    )
+    by_role = {view["view_role"]: view for view in registry["views"]}
+    primary = by_role["PRIMARY"]
+    detail = by_role["DETAIL"]
+    isolated = by_role["ISOLATED"]
+
+    expected_component_edges = {
+        (component_id, view["view_id"])
+        for view in registry["views"]
+        for component_id in view["component_ids"]
+    }
+    actual_component_edges = {
+        (link["source_id"], link["target_id"])
+        for link in registry["links"]
+        if link["relation_type"] == "COMPONENT_HAS_VIEW"
+    }
+    assert actual_component_edges == expected_component_edges
+
+    expected_shared_component_pairs = {
+        frozenset((primary["view_id"], detail["view_id"])),
+        frozenset((detail["view_id"], isolated["view_id"])),
+    }
+    actual_shared_component_pairs = {
+        frozenset((link["source_id"], link["target_id"]))
+        for link in registry["links"]
+        if link["relation_type"] == "VIEWS_SHARE_COMPONENT"
+    }
+    assert actual_shared_component_pairs == expected_shared_component_pairs
+    assert frozenset((primary["view_id"], isolated["view_id"])) not in (
+        actual_shared_component_pairs
+    )
+
+    expected_shared_evidence_pairs = {
+        frozenset((primary["view_id"], detail["view_id"]))
+    }
+    parameter_links = [
+        link
+        for link in registry["links"]
+        if link["relation_type"] == "VIEWS_SHARE_PARAMETER_EVIDENCE"
+    ]
+    actual_shared_evidence_pairs = {
+        frozenset((link["source_id"], link["target_id"]))
+        for link in parameter_links
+    }
+    assert actual_shared_evidence_pairs == expected_shared_evidence_pairs
+    assert frozenset((primary["view_id"], isolated["view_id"])) not in (
+        actual_shared_evidence_pairs
+    )
+    assert frozenset((detail["view_id"], isolated["view_id"])) not in (
+        actual_shared_evidence_pairs
+    )
+    views_by_id = {view["view_id"]: view for view in registry["views"]}
+    for link in parameter_links:
+        left = views_by_id[link["source_id"]]
+        right = views_by_id[link["target_id"]]
+        expected_evidence = sorted(
+            set(left["semantic_projection_refs"])
+            & set(right["semantic_projection_refs"])
+        )
+        assert expected_evidence
+        assert link["evidence_refs"] == expected_evidence
+
+    expected_layout_edges = {
+        (view["view_id"], layout["layout_id"])
+        for view in registry["views"]
+        for layout in view["layout_bindings"]
+    }
+    actual_layout_edges = {
+        (link["source_id"], link["target_id"])
+        for link in registry["links"]
+        if link["relation_type"] == "VIEW_PRESENTED_ON_LAYOUT"
+    }
+    assert actual_layout_edges == expected_layout_edges
+
+
+def test_task2_overlinked_closed_relation_is_rejected_after_reseal() -> None:
+    module = _registry_module()
+    context = _task2_discriminating_context()
+    registry = module.build_component_view_registry(
+        upstream_context=context,
+        components=_component_inputs(context),
+        views=_task2_discriminating_views(module, context),
+    )
+    primary = _view_by_role(registry, "PRIMARY")
+    isolated = _view_by_role(registry, "ISOLATED")
+    assert set(primary["component_ids"]).isdisjoint(isolated["component_ids"])
+    attacked = deepcopy(registry)
+    attacked["links"].append(
+        {
+            "link_id": "f" * 64,
+            "relation_type": "VIEWS_SHARE_COMPONENT",
+            "source_id": primary["view_id"],
+            "target_id": isolated["view_id"],
+            "evidence_refs": [],
+        }
+    )
+    attacked = _reseal_registry(attacked)
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.validate_component_view_registry(attacked, upstream_context=context)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sheet_id", "sheet-forged"),
+        ("region_id", "region-forged"),
+        ("criticality", "CRITICAL"),
+        ("visual_review_scope", ["region-forged"]),
+        ("acceptance_scope", ["view-forged"]),
+        ("verdict", "PASS"),
+        ("approval", "APPROVED"),
+        ("unknown_authority", {"owner": "caller"}),
+    ],
+)
+def test_task2_nested_layout_authority_injection_fails_closed(
+    field: str, value: object
+) -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    views = _task2_view_inputs(module, context)
+    views[0]["layout_bindings"][0][field] = value
+    with pytest.raises(module.ComponentViewRegistryError):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+
+
+def test_task2_nested_layout_privacy_injection_is_rejected_without_echo() -> None:
+    module = _registry_module()
+    context = _upstream_context()
+    views = _task2_view_inputs(module, context)
+    sentinel = r"C:\customer\private\secret-layout.dwg"
+    views[0]["layout_bindings"][0]["acceptance_scope"] = {
+        "region_id": "region-forged",
+        "private_path": sentinel,
+    }
+    with pytest.raises(module.ComponentViewRegistryError) as caught:
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_component_inputs(context),
+            views=views,
+        )
+    assert sentinel not in str(caught.value)
+    assert "secret-layout.dwg" not in str(caught.value)
