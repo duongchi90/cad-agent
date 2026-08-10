@@ -239,7 +239,12 @@ def _accepted_r3_material(
         "candidate_bytes": candidate_bytes,
         "child_bytes": child_bytes,
         "parent_reference": parent,
+        "parent_observation": parent_observation,
         "child_reference": child,
+        "child_observation": child_observation,
+        "accepted_transition_evidence_sha256": child["upstream_evidence"][
+            "accepted_transition_evidence_sha256"
+        ],
     }
 
 
@@ -291,6 +296,18 @@ def _valid_args(
             ],
             "impact": deepcopy(material["impact"]),
             "correspondence": deepcopy(material["correspondence"]),
+            "upstream_context": deepcopy(material["context"]),
+            "correspondence_context": {
+                "parent_reference": deepcopy(material["parent_reference"]),
+                "parent_observation": deepcopy(material["parent_observation"]),
+                "parent_artifact_bytes": material["candidate_bytes"],
+                "child_reference": deepcopy(material["child_reference"]),
+                "child_observation": deepcopy(material["child_observation"]),
+                "child_artifact_bytes": material["child_bytes"],
+                "accepted_transition_evidence_sha256": material[
+                    "accepted_transition_evidence_sha256"
+                ],
+            },
         },
         "mutation_evidence": _mutation_evidence(material, tag),
         "lineage_context": deepcopy(lineage_context),
