@@ -87,6 +87,12 @@ def _mutation_evidence(
         "rollback_failed": False,
         "cleanup_state": "VERIFIED",
     }
+    return _seal_mutation_evidence(evidence)
+
+
+def _seal_mutation_evidence(evidence: dict[str, object]) -> dict[str, object]:
+    """Rebind the accepted transition digest after one targeted test mutation."""
+    evidence.pop("accepted_transition_evidence_sha256", None)
     evidence["accepted_transition_evidence_sha256"] = canonical_json_sha256(evidence)
     return evidence
 
@@ -426,6 +432,7 @@ def test_post_repair_child_rejects_each_missing_required_evidence_binding(
     module = _module()
     parent, child_bytes, mutation = _post_repair_material()
     mutation.pop(field)
+    _seal_mutation_evidence(mutation)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -463,6 +470,7 @@ def test_post_repair_child_rejects_each_mismatched_evidence_binding(
     module = _module()
     parent, child_bytes, mutation = _post_repair_material()
     mutation[field] = replacement
+    _seal_mutation_evidence(mutation)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
@@ -501,6 +509,7 @@ def test_post_repair_child_rejects_incomplete_or_uncertain_mutation_evidence(
         mutation.pop(field)
     else:
         mutation[field] = value
+    _seal_mutation_evidence(mutation)
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
             run_id=parent["run_id"],
