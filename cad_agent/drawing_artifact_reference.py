@@ -118,6 +118,7 @@ def _validate_transition_evidence(
     parent_reference_sha256: str,
     artifact_sha256: str,
     parent_artifact_sha256: str | None = None,
+    accepted_transition_evidence_sha256: str | None = None,
 ) -> dict[str, object]:
     if not isinstance(evidence, Mapping):
         _fail("MUTATION_EVIDENCE_MISSING")
@@ -155,6 +156,11 @@ def _validate_transition_evidence(
     accepted = evidence.get("accepted_transition_evidence_sha256")
     if not _is_sha256(accepted):
         _fail("MUTATION_EVIDENCE_MISSING")
+    if accepted_transition_evidence_sha256 is not None:
+        if not _is_sha256(accepted_transition_evidence_sha256):
+            _fail("MUTATION_EVIDENCE_MISSING")
+        if accepted != accepted_transition_evidence_sha256:
+            _fail("MUTATION_EVIDENCE_MISMATCH")
     sealed = dict(evidence)
     sealed.pop("accepted_transition_evidence_sha256")
     try:
@@ -215,7 +221,11 @@ def drawing_artifact_reference_sha256(reference: Mapping[str, object]) -> str:
 
 
 def validate_drawing_artifact_reference(
-    reference: Mapping[str, object], expected_artifact_role: str | None = None
+    reference: Mapping[str, object],
+    expected_artifact_role: str | None = None,
+    *,
+    parent_reference: Mapping[str, object] | None = None,
+    accepted_transition_evidence_sha256: str | None = None,
 ) -> dict[str, object]:
     if not isinstance(reference, Mapping):
         _fail("INVALID_REFERENCE")
@@ -264,19 +274,50 @@ def validate_drawing_artifact_reference(
         if artifact_role != "R3_CANDIDATE" or not isinstance(parent_id, str) or not _is_sha256(parent_sha):
             _fail("PARENT_MISMATCH")
     if artifact_role == "BASELINE":
+        if (
+            parent_reference is not None
+            or accepted_transition_evidence_sha256 is not None
+        ):
+            _fail("PARENT_MISMATCH")
         if reference.get("r3_provenance_binding") is not None:
             _fail("CATEGORY_CONFUSION")
         _validate_initial_evidence(reference["upstream_evidence"], artifact_role)
     else:
         _validate_binding(reference.get("r3_provenance_binding"))
         if parent_id is None:
+            if (
+                parent_reference is not None
+                or accepted_transition_evidence_sha256 is not None
+            ):
+                _fail("PARENT_MISMATCH")
             _validate_initial_evidence(reference["upstream_evidence"], artifact_role)
         else:
+            if parent_reference is None:
+                _fail("PARENT_MISMATCH")
+            if accepted_transition_evidence_sha256 is None:
+                _fail("MUTATION_EVIDENCE_MISSING")
+            parent = _validated_parent(parent_reference)
+            if parent["artifact_role"] != "R3_CANDIDATE":
+                _fail("CATEGORY_CONFUSION")
+            if (
+                parent["reference_id"] != parent_id
+                or parent["reference_sha256"] != parent_sha
+            ):
+                _fail("PARENT_MISMATCH")
+            if any(
+                reference[field] != parent[field]
+                for field in ("run_id", "project_id", "drawing_id")
+            ):
+                _fail("SCOPE_MISMATCH")
             _validate_transition_evidence(
                 reference["upstream_evidence"],
-                parent_reference_id=parent_id,
-                parent_reference_sha256=parent_sha,
+                parent_reference_id=parent["reference_id"],
+                parent_reference_sha256=parent["reference_sha256"],
                 artifact_sha256=reference["artifact_sha256"],
+                parent_artifact_sha256=parent["artifact_sha256"],
+                accepted_transition_evidence_sha256=(
+                    accepted_transition_evidence_sha256
+                ),
             )
     return deepcopy(dict(reference))
 
@@ -365,7 +406,15 @@ def issue_drawing_artifact_reference(
     }
     record["reference_id"] = _reference_identity(record)
     record["reference_sha256"] = drawing_artifact_reference_sha256(record)
-    return validate_drawing_artifact_reference(record)
+    if parent_reference is None:
+        return validate_drawing_artifact_reference(record)
+    return validate_drawing_artifact_reference(
+        record,
+        parent_reference=parent,
+        accepted_transition_evidence_sha256=evidence[
+            "accepted_transition_evidence_sha256"
+        ],
+    )
 
 
 def drawing_artifact_current_observation_sha256(observation: Mapping[str, object]) -> str:
@@ -436,10 +485,16 @@ def observe_drawing_artifact_currentness(
     reference: Mapping[str, object],
     artifact_bytes: bytes,
     observation_evidence_sha256: str,
+    parent_reference: Mapping[str, object] | None = None,
+    accepted_transition_evidence_sha256: str | None = None,
     claimed_artifact_sha256: str | None = None,
     claimed_comparison: str | None = None,
 ) -> dict[str, object]:
-    sealed_reference = validate_drawing_artifact_reference(reference)
+    sealed_reference = validate_drawing_artifact_reference(
+        reference,
+        parent_reference=parent_reference,
+        accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
+    )
     observed_artifact_sha256 = _sha256_bytes(artifact_bytes)
     if claimed_artifact_sha256 is not None and claimed_artifact_sha256 != observed_artifact_sha256:
         _fail("ARTIFACT_SHA_MISMATCH")
@@ -472,9 +527,17 @@ def observe_drawing_artifact_currentness(
 
 
 def require_current_drawing_artifact_reference(
-    *, reference: Mapping[str, object], observation: Mapping[str, object]
+    *,
+    reference: Mapping[str, object],
+    observation: Mapping[str, object],
+    parent_reference: Mapping[str, object] | None = None,
+    accepted_transition_evidence_sha256: str | None = None,
 ) -> None:
-    sealed_reference = validate_drawing_artifact_reference(reference)
+    sealed_reference = validate_drawing_artifact_reference(
+        reference,
+        parent_reference=parent_reference,
+        accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
+    )
     sealed_observation = validate_drawing_artifact_current_observation(observation)
     for field in ("run_id", "project_id", "drawing_id"):
         if sealed_observation[field] != sealed_reference[field]:

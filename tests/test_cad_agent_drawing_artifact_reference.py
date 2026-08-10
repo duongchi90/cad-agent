@@ -110,6 +110,20 @@ def _reseal_reference(reference: dict[str, object]) -> dict[str, object]:
     return reference
 
 
+def _reseal_current_observation(observation: dict[str, object]) -> dict[str, object]:
+    """Rebind public observation hashes after one targeted test mutation."""
+    identity_payload = dict(observation)
+    identity_payload.pop("lookup_id")
+    identity_payload.pop("lookup_sha256")
+    observation["lookup_id"] = "dara-lookup-" + canonical_json_sha256(
+        identity_payload
+    )
+    hash_payload = dict(observation)
+    hash_payload.pop("lookup_sha256")
+    observation["lookup_sha256"] = canonical_json_sha256(hash_payload)
+    return observation
+
+
 def _r3_binding() -> dict[str, object]:
     return {
         "registry_snapshot_sha256": "9" * 64,
@@ -283,7 +297,13 @@ def test_valid_post_repair_child_preserves_immutable_parent_history() -> None:
     assert child["r3_provenance_binding"] == _r3_binding()
     assert child["reference_id"] != parent["reference_id"]
     assert parent == parent_before
-    assert module.validate_drawing_artifact_reference(child) == child
+    assert module.validate_drawing_artifact_reference(
+        child,
+        parent_reference=parent,
+        accepted_transition_evidence_sha256=child["upstream_evidence"][
+            "accepted_transition_evidence_sha256"
+        ],
+    ) == child
 
 
 @pytest.mark.parametrize(
@@ -310,23 +330,33 @@ def test_public_validation_rejects_resealed_parented_child_transition_defects(
     expected_code: str,
 ) -> None:
     module = _module()
-    _, child, _ = _issue_candidate()
+    parent, child, _ = _issue_candidate()
     resealed_child = deepcopy(child)
     resealed_child["upstream_evidence"][field] = replacement
     _seal_mutation_evidence(resealed_child["upstream_evidence"])
     _reseal_reference(resealed_child)
 
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
-        module.validate_drawing_artifact_reference(resealed_child)
+        module.validate_drawing_artifact_reference(
+            resealed_child,
+            parent_reference=parent,
+            accepted_transition_evidence_sha256=resealed_child[
+                "upstream_evidence"
+            ]["accepted_transition_evidence_sha256"],
+        )
 
     assert str(exc.value) == expected_code
 
 
 def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> None:
     module = _module()
-    _, child, child_bytes = _issue_candidate()
+    parent, child, child_bytes = _issue_candidate()
     observation = module.observe_drawing_artifact_currentness(
         reference=child,
+        parent_reference=parent,
+        accepted_transition_evidence_sha256=child["upstream_evidence"][
+            "accepted_transition_evidence_sha256"
+        ],
         artifact_bytes=child_bytes,
         observation_evidence_sha256="b" * 64,
     )
@@ -338,10 +368,178 @@ def test_currentness_refuses_resealed_parented_child_with_failed_cleanup() -> No
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
             reference=resealed_child,
+            parent_reference=parent,
+            accepted_transition_evidence_sha256=resealed_child[
+                "upstream_evidence"
+            ]["accepted_transition_evidence_sha256"],
             observation=observation,
         )
 
     assert str(exc.value) == "CLEANUP_UNCERTAIN"
+
+
+def test_parented_reference_consumption_requires_independent_sealed_anchors() -> None:
+    module = _module()
+    parent, child, _ = _issue_candidate()
+    accepted_transition_sha256 = child["upstream_evidence"][
+        "accepted_transition_evidence_sha256"
+    ]
+
+    assert module.validate_drawing_artifact_reference(
+        child,
+        parent_reference=parent,
+        accepted_transition_evidence_sha256=accepted_transition_sha256,
+    ) == child
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as parent_exc:
+        module.validate_drawing_artifact_reference(
+            child,
+            accepted_transition_evidence_sha256=accepted_transition_sha256,
+        )
+    assert str(parent_exc.value) == "PARENT_MISMATCH"
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as transition_exc:
+        module.validate_drawing_artifact_reference(
+            child,
+            parent_reference=parent,
+        )
+    assert str(transition_exc.value) == "MUTATION_EVIDENCE_MISSING"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("candidate_id", "PARENT_MISMATCH"),
+        ("candidate_sha256", "PARENT_MISMATCH"),
+        ("pre_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
+        ("post_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
+        ("partial_mutation", "MUTATION_EVIDENCE_MISMATCH"),
+        ("timed_out", "MUTATION_EVIDENCE_MISMATCH"),
+        ("rollback_failed", "MUTATION_EVIDENCE_MISMATCH"),
+        ("cleanup_state", "MUTATION_EVIDENCE_MISMATCH"),
+        ("custody_success", "MUTATION_EVIDENCE_MISMATCH"),
+    ],
+)
+def test_public_validation_rejects_fully_resealed_parent_transition(
+    mutation: str,
+    expected_code: str,
+) -> None:
+    module = _module()
+    parent, child, _ = _issue_candidate()
+    accepted_transition_sha256 = child["upstream_evidence"][
+        "accepted_transition_evidence_sha256"
+    ]
+    forged = deepcopy(child)
+    evidence = forged["upstream_evidence"]
+
+    if mutation == "candidate_id":
+        forged["parent_reference_id"] = "dara-ref-forged-parent"
+        evidence["r3_candidate_reference_id"] = forged["parent_reference_id"]
+    elif mutation == "candidate_sha256":
+        forged["parent_reference_sha256"] = "c" * 64
+        evidence["r3_candidate_reference_sha256"] = "c" * 64
+    elif mutation == "pre_artifact_sha256":
+        evidence["pre_artifact_sha256"] = "c" * 64
+    elif mutation == "post_artifact_sha256":
+        forged["artifact_sha256"] = "d" * 64
+        evidence["post_artifact_sha256"] = "d" * 64
+    elif mutation == "partial_mutation":
+        evidence["partial_mutation"] = True
+    elif mutation == "timed_out":
+        evidence["timed_out"] = True
+    elif mutation == "rollback_failed":
+        evidence["rollback_failed"] = True
+    elif mutation == "cleanup_state":
+        evidence["cleanup_state"] = "UNCERTAIN"
+    else:
+        evidence["executor_result_sha256"] = "e" * 64
+
+    _seal_mutation_evidence(evidence)
+    _reseal_reference(forged)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.validate_drawing_artifact_reference(
+            forged,
+            parent_reference=parent,
+            accepted_transition_evidence_sha256=accepted_transition_sha256,
+        )
+
+    assert str(exc.value) == expected_code
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("candidate_id", "PARENT_MISMATCH"),
+        ("pre_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
+        ("post_artifact_sha256", "MUTATION_EVIDENCE_MISMATCH"),
+        ("partial_mutation", "MUTATION_EVIDENCE_MISMATCH"),
+        ("timed_out", "MUTATION_EVIDENCE_MISMATCH"),
+        ("rollback_failed", "MUTATION_EVIDENCE_MISMATCH"),
+        ("cleanup_state", "MUTATION_EVIDENCE_MISMATCH"),
+    ],
+)
+def test_currentness_rejects_fully_resealed_child_and_current_observation(
+    mutation: str,
+    expected_code: str,
+) -> None:
+    module = _module()
+    parent, child, child_bytes = _issue_candidate()
+    accepted_transition_sha256 = child["upstream_evidence"][
+        "accepted_transition_evidence_sha256"
+    ]
+    observation = module.observe_drawing_artifact_currentness(
+        reference=child,
+        parent_reference=parent,
+        accepted_transition_evidence_sha256=accepted_transition_sha256,
+        artifact_bytes=child_bytes,
+        observation_evidence_sha256="b" * 64,
+    )
+    forged_reference = deepcopy(child)
+    evidence = forged_reference["upstream_evidence"]
+
+    if mutation == "candidate_id":
+        forged_reference["parent_reference_id"] = "dara-ref-forged-parent"
+        evidence["r3_candidate_reference_id"] = forged_reference[
+            "parent_reference_id"
+        ]
+    elif mutation == "pre_artifact_sha256":
+        evidence["pre_artifact_sha256"] = "c" * 64
+    elif mutation == "post_artifact_sha256":
+        forged_reference["artifact_sha256"] = "d" * 64
+        evidence["post_artifact_sha256"] = "d" * 64
+    elif mutation == "partial_mutation":
+        evidence["partial_mutation"] = True
+    elif mutation == "timed_out":
+        evidence["timed_out"] = True
+    elif mutation == "rollback_failed":
+        evidence["rollback_failed"] = True
+    else:
+        evidence["cleanup_state"] = "UNCERTAIN"
+
+    _seal_mutation_evidence(evidence)
+    _reseal_reference(forged_reference)
+    forged_observation = deepcopy(observation)
+    forged_observation["reference_id"] = forged_reference["reference_id"]
+    forged_observation["reference_sha256"] = forged_reference["reference_sha256"]
+    forged_observation["expected_artifact_sha256"] = forged_reference[
+        "artifact_sha256"
+    ]
+    forged_observation["observed_artifact_sha256"] = forged_reference[
+        "artifact_sha256"
+    ]
+    forged_observation["comparison"] = "CURRENT"
+    _reseal_current_observation(forged_observation)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.require_current_drawing_artifact_reference(
+            reference=forged_reference,
+            parent_reference=parent,
+            accepted_transition_evidence_sha256=accepted_transition_sha256,
+            observation=forged_observation,
+        )
+
+    assert str(exc.value) == expected_code
 
 
 def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence() -> None:
@@ -394,7 +592,13 @@ def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence()
     assert child["artifact_sha256"] == hashlib.sha256(child_bytes).hexdigest()
     assert child["reference_id"] != fixture_child["reference_id"]
     assert child["reference_sha256"] != fixture_child["reference_sha256"]
-    assert module.validate_drawing_artifact_reference(child) == child
+    assert module.validate_drawing_artifact_reference(
+        child,
+        parent_reference=parent,
+        accepted_transition_evidence_sha256=child["upstream_evidence"][
+            "accepted_transition_evidence_sha256"
+        ],
+    ) == child
 
 
 def test_parent_history_is_immutable_before_child_issuance_and_resealing_is_refused() -> None:
@@ -988,7 +1192,12 @@ def test_r6_result_sha_is_evidence_only_and_cannot_mint_dara_currentness() -> No
     }
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.require_current_drawing_artifact_reference(
-            reference=child, observation=forged
+            reference=child,
+            parent_reference=parent,
+            accepted_transition_evidence_sha256=mutation[
+                "accepted_transition_evidence_sha256"
+            ],
+            observation=forged,
         )
     assert str(exc.value) in {
         "CURRENT_LOOKUP_INVALID",
