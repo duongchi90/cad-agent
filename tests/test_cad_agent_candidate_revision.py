@@ -1477,6 +1477,18 @@ def test_task2_malformed_or_unknown_transition_fields_fail_closed(
         _task2_apply(_task2_state([root]), root, malformed)
 
 
+@pytest.mark.parametrize("transition_kind", [[], {}])
+def test_task2_unhashable_transition_kind_fails_closed(
+    transition_kind: object,
+) -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    transition = _task2_transition("SELECT", root, expected_current=None)
+    transition["transition_kind"] = transition_kind
+
+    with pytest.raises(CandidateRevisionError, match="TRANSITION|KIND|FIELD|UNKNOWN"):
+        _task2_apply(_task2_state([root]), root, transition)
+
+
 def test_task2_state_checksum_mutation_and_unknown_fields_fail_closed() -> None:
     _root_args, root, _left, _right = _task2_graph()
     state = _task2_state([root])

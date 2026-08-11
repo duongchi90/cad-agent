@@ -635,7 +635,9 @@ def _transition_record(value: object) -> dict[str, object]:
     )
     if transition["schema_version"] != CANDIDATE_REVISION_STATE_TRANSITION_SCHEMA_VERSION:
         _fail("TRANSITION_SCHEMA_INVALID")
-    if transition["transition_kind"] not in {"SELECT", "SUPERSEDE", "ROLLBACK"}:
+    if not isinstance(transition["transition_kind"], str) or transition[
+        "transition_kind"
+    ] not in {"SELECT", "SUPERSEDE", "ROLLBACK"}:
         _fail("TRANSITION_KIND_UNKNOWN")
     _sha(transition["candidate_revision_sha256"], "TRANSITION_CANDIDATE_INVALID")
     expected = transition["expected_current_candidate_revision_sha256"]
