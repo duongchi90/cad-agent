@@ -8,10 +8,12 @@ import json
 import ntpath
 import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from ctypes import wintypes
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,7 @@ from cad_agent.visual_evidence import (
 SCHEMA_VERSION = "1.0"
 DEFAULT_IPC_DIR = Path(r"C:\temp")
 IPC_DIR_ENV_VAR = "CAD_AGENT_DOTNET_IPC_DIR"
+DEFAULT_DISPOSABLE_WORKSPACE_DIR = "disposable-workspaces"
 MAX_REQUEST_ID_LENGTH = 128
 DEFAULT_MAX_READ_BYTES = 1024 * 1024
 
@@ -507,6 +510,80 @@ class DotNetIPCResultError(DotNetIPCError):
         self.result = dict(result) if result is not None else None
 
 
+class DisposableWorkspaceError(DotNetIPCError):
+    """Base error for the server-owned disposable workspace seam."""
+
+
+@dataclass(slots=True)
+class _DisposableWorkspaceLifecycle:
+    value: str = "active"
+
+
+@dataclass(frozen=True, slots=True)
+class DisposableWorkspaceLease:
+    """Immutable server-issued identity for one disposable workspace."""
+
+    lease_id: str
+    workspace_path: Path
+    candidate_identity: str
+    source_identity: str
+    source_fingerprint: str
+    purpose: str
+    disposable: bool
+    save_changes: bool
+    created_at: float
+    expires_at: float
+    _lifecycle: _DisposableWorkspaceLifecycle = field(repr=False, compare=False)
+
+    @property
+    def lifecycle_state(self) -> str:
+        """Return the owner-controlled lifecycle state without exposing mutation."""
+
+        return self._lifecycle.value
+
+
+@dataclass(frozen=True, slots=True)
+class DisposableWorkspaceClosure:
+    """Immutable evidence emitted after one close/cleanup attempt."""
+
+    lease_id: str
+    workspace_path: Path
+    candidate_identity: str
+    source_identity: str
+    source_fingerprint: str
+    close_outcome: str
+    cleanup_outcome: str
+    save_changes: bool
+    lifecycle_state: str
+
+
+class DisposableWorkspaceClosureError(DisposableWorkspaceError):
+    """Fail-closed close/cleanup evidence; the lease remains open for retry."""
+
+    def __init__(self, closure: DisposableWorkspaceClosure) -> None:
+        self.closure = closure
+        super().__init__(
+            "disposable workspace close did not reach a terminal zero-survivor state"
+        )
+
+
+@dataclass(slots=True)
+class _DisposableWorkspaceState:
+    """Private canonical lifecycle and binding snapshot for one lease."""
+
+    lease_id: str
+    workspace_path: Path
+    candidate_identity: str
+    source_identity: str
+    source_fingerprint: str
+    purpose: str
+    expires_at: float
+    lifecycle_state: str = "active"
+    closure: DisposableWorkspaceClosure | None = field(default=None, repr=False)
+    failure: DisposableWorkspaceClosure | None = field(default=None, repr=False)
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+
+
 class DotNetIPCClient:
     """Write, trigger, and bounded-poll one request at a time.
 
@@ -524,6 +601,7 @@ class DotNetIPCClient:
         poll_interval_s: float = 0.1,
         max_read_bytes: int = DEFAULT_MAX_READ_BYTES,
         request_id_factory: Callable[[], str] | None = None,
+        disposable_root: str | Path | None = None,
     ) -> None:
         if timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
@@ -538,6 +616,10 @@ class DotNetIPCClient:
         self.poll_interval_s = poll_interval_s
         self.max_read_bytes = max_read_bytes
         self.request_id_factory = request_id_factory or (lambda: uuid.uuid4().hex)
+        self._disposable_root = self._resolve_disposable_root(disposable_root)
+        self._disposable_leases: dict[str, DisposableWorkspaceLease] = {}
+        self._disposable_closures: dict[str, DisposableWorkspaceClosure] = {}
+        self._disposable_states: dict[str, _DisposableWorkspaceState] = {}
 
     def request(
         self,
@@ -659,6 +741,292 @@ class DotNetIPCClient:
             drawing_full_path,
             parameters={"disposable": True, "save_changes": False},
             request_id=request_id,
+        )
+
+    def issue_disposable_workspace(
+        self,
+        *,
+        candidate_identity: str,
+        source_identity: str,
+        source_fingerprint: str,
+        purpose: str,
+        workspace_root: str | Path | None = None,
+        ttl_seconds: float = 60 * 60,
+    ) -> DisposableWorkspaceLease:
+        """Issue one owner-selected, disposable workspace lease.
+
+        The caller may narrow the configured root for a bounded purpose, but
+        cannot choose the lease identity or a path outside the owner's root.
+        No AutoCAD operation is performed during issuance.
+        """
+
+        self._validate_disposable_binding(
+            candidate_identity,
+            source_identity,
+            source_fingerprint,
+            purpose,
+        )
+        if type(ttl_seconds) not in (int, float) or isinstance(ttl_seconds, bool):
+            raise ValueError("disposable workspace ttl_seconds must be a finite positive number")
+        if not float(ttl_seconds) > 0 or not float(ttl_seconds) < 7 * 24 * 60 * 60:
+            raise ValueError("disposable workspace ttl_seconds must be a finite positive number")
+        requested_root = self._resolve_requested_disposable_root(workspace_root)
+        try:
+            requested_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError("disposable workspace root is unavailable") from exc
+        if _path_contains_windows_reparse_point(requested_root):
+            raise ValueError("disposable workspace root is unsafe")
+
+        for _ in range(4):
+            lease_id = uuid.uuid4().hex
+            workspace_path = requested_root / f"lease-{lease_id}"
+            try:
+                workspace_path.mkdir()
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise ValueError("disposable workspace could not be created") from exc
+            if _path_contains_windows_reparse_point(workspace_path):
+                try:
+                    workspace_path.rmdir()
+                except OSError:
+                    pass
+                raise ValueError("disposable workspace is unsafe")
+            created_at = time.time()
+            lifecycle = _DisposableWorkspaceLifecycle()
+            lease = DisposableWorkspaceLease(
+                lease_id=lease_id,
+                workspace_path=workspace_path.resolve(),
+                candidate_identity=candidate_identity,
+                source_identity=source_identity,
+                source_fingerprint=source_fingerprint,
+                purpose=purpose,
+                disposable=True,
+                save_changes=False,
+                created_at=created_at,
+                expires_at=created_at + float(ttl_seconds),
+                _lifecycle=lifecycle,
+            )
+            self._disposable_leases[lease_id] = lease
+            self._disposable_states[lease_id] = _DisposableWorkspaceState(
+                lease_id=lease_id,
+                workspace_path=workspace_path.resolve(),
+                candidate_identity=candidate_identity,
+                source_identity=source_identity,
+                source_fingerprint=source_fingerprint,
+                purpose=purpose,
+                expires_at=created_at + float(ttl_seconds),
+            )
+            return lease
+        raise ValueError("disposable workspace identity collision")
+
+    def close_disposable_workspace(
+        self,
+        lease: DisposableWorkspaceLease,
+        *,
+        candidate_identity: str,
+        source_identity: str,
+        source_fingerprint: str,
+    ) -> DisposableWorkspaceClosure:
+        """Close and remove one issued workspace, returning immutable evidence."""
+
+        self._validate_disposable_lease(lease)
+        state = self._disposable_states.get(lease.lease_id)
+        if state is None:
+            raise DotNetIPCProtocolError("disposable workspace lease provenance invalid")
+
+        with state.lock:
+            # Terminal evidence is replayable only for the exact owner binding.
+            # Validate the caller tuple before exposing cached closure/failure
+            # records so mismatched or hostile replays fail closed without
+            # touching the terminal lifecycle state.
+            self._validate_disposable_binding(
+                candidate_identity,
+                source_identity,
+                source_fingerprint,
+                state.purpose,
+            )
+            if (
+                candidate_identity != state.candidate_identity
+                or source_identity != state.source_identity
+                or source_fingerprint != state.source_fingerprint
+            ):
+                raise DotNetIPCProtocolError("disposable workspace binding mismatch")
+
+            existing = state.closure or self._disposable_closures.get(lease.lease_id)
+            if existing is not None:
+                return existing
+            if state.failure is not None:
+                raise DisposableWorkspaceClosureError(state.failure) from None
+
+            if state.lifecycle_state != "active":
+                raise DotNetIPCProtocolError("disposable workspace lease is not active")
+            if time.time() >= state.expires_at:
+                raise DotNetIPCProtocolError("disposable workspace lease is expired")
+            if not self._workspace_path_is_owned(state.workspace_path):
+                closure = self._failed_disposable_closure(
+                    lease,
+                    state=state,
+                    close_outcome="not_attempted",
+                    cleanup_outcome="failed",
+                    lifecycle_state="cleanup_failed",
+                )
+                state.failure = closure
+                raise DisposableWorkspaceClosureError(closure)
+
+            state.lifecycle_state = "closing"
+            try:
+                self.close_disposable(
+                    str(state.workspace_path),
+                    disposable=True,
+                    save_changes=False,
+                    request_id=f"close-{state.lease_id}",
+                )
+            except (DotNetIPCError, OSError, ValueError):
+                state.lifecycle_state = "active"
+                closure = self._failed_disposable_closure(
+                    lease,
+                    state=state,
+                    close_outcome="failed",
+                    cleanup_outcome="not_attempted",
+                    lifecycle_state="close_failed",
+                )
+                state.failure = closure
+                raise DisposableWorkspaceClosureError(closure) from None
+
+            try:
+                _remove_tree_without_reparse(state.workspace_path)
+                if state.workspace_path.exists():
+                    raise OSError("disposable workspace survivors remain")
+            except (OSError, ValueError):
+                state.lifecycle_state = "active"
+                closure = self._failed_disposable_closure(
+                    lease,
+                    state=state,
+                    close_outcome="closed",
+                    cleanup_outcome="failed",
+                    lifecycle_state="cleanup_failed",
+                )
+                state.failure = closure
+                raise DisposableWorkspaceClosureError(closure) from None
+
+            closure = DisposableWorkspaceClosure(
+                lease_id=state.lease_id,
+                workspace_path=state.workspace_path,
+                candidate_identity=state.candidate_identity,
+                source_identity=state.source_identity,
+                source_fingerprint=state.source_fingerprint,
+                close_outcome="closed",
+                cleanup_outcome="zero_survivors",
+                save_changes=False,
+                lifecycle_state="closed",
+            )
+            state.lifecycle_state = "closed"
+            state.closure = closure
+            lease._lifecycle.value = "closed"
+            self._disposable_closures[state.lease_id] = closure
+            return closure
+
+    @staticmethod
+    def _validate_disposable_binding(
+        candidate_identity: str,
+        source_identity: str,
+        source_fingerprint: str,
+        purpose: str,
+    ) -> None:
+        for value, label in (
+            (candidate_identity, "candidate_identity"),
+            (source_identity, "source_identity"),
+            (purpose, "purpose"),
+        ):
+            if type(value) is not str or not value or len(value) > 256 or "\x00" in value:
+                raise ValueError(f"disposable workspace {label} is invalid")
+        if not _VS_T3_IDENTIFIER_PATTERN.fullmatch(purpose):
+            raise ValueError("disposable workspace purpose is invalid")
+        if type(source_fingerprint) is not str or not _SHA256_PATTERN.fullmatch(
+            source_fingerprint
+        ):
+            raise ValueError("disposable workspace source_fingerprint is invalid")
+
+    @staticmethod
+    def _path_value(value: str | Path, label: str) -> Path:
+        path_type = type(Path("."))
+        if type(value) is not str and type(value) is not path_type:
+            raise ValueError(f"disposable workspace {label} is invalid")
+        if type(value) is str and (not value or "\x00" in value):
+            raise ValueError(f"disposable workspace {label} is invalid")
+        return Path(value)
+
+    def _resolve_disposable_root(self, value: str | Path | None) -> Path:
+        if value is None:
+            candidate = self.ipc_dir / DEFAULT_DISPOSABLE_WORKSPACE_DIR
+        else:
+            candidate = self._path_value(value, "root")
+            if not candidate.is_absolute():
+                raise ValueError("disposable workspace root must be absolute")
+        candidate = candidate.resolve(strict=False)
+        if _path_contains_windows_reparse_point(candidate):
+            raise ValueError("disposable workspace root is unsafe")
+        try:
+            candidate.relative_to(self.ipc_dir)
+        except ValueError as exc:
+            raise ValueError("disposable workspace root is outside the IPC root") from exc
+        return candidate
+
+    def _resolve_requested_disposable_root(self, value: str | Path | None) -> Path:
+        if value is None:
+            return self._disposable_root
+        candidate = self._path_value(value, "root")
+        if not candidate.is_absolute():
+            raise ValueError("disposable workspace root must be absolute")
+        if _path_contains_windows_reparse_point(candidate):
+            raise ValueError("disposable workspace root is unsafe")
+        candidate = candidate.resolve(strict=False)
+        try:
+            candidate.relative_to(self._disposable_root)
+        except ValueError as exc:
+            raise ValueError("disposable workspace root is outside the owner root") from exc
+        return candidate
+
+    def _workspace_path_is_owned(self, path: Path) -> bool:
+        if _path_contains_windows_reparse_point(path) or not path.is_dir():
+            return False
+        resolved = path.resolve(strict=False)
+        try:
+            resolved.relative_to(self._disposable_root)
+        except ValueError:
+            return False
+        return True
+
+    def _validate_disposable_lease(self, lease: DisposableWorkspaceLease) -> None:
+        if type(lease) is not DisposableWorkspaceLease:
+            raise DotNetIPCProtocolError("disposable workspace lease provenance invalid")
+        if type(lease.lease_id) is not str or self._disposable_leases.get(lease.lease_id) is not lease:
+            raise DotNetIPCProtocolError("disposable workspace lease provenance invalid")
+        if lease.disposable is not True or lease.save_changes is not False:
+            raise DotNetIPCProtocolError("disposable workspace lease policy invalid")
+
+    @staticmethod
+    def _failed_disposable_closure(
+        lease: DisposableWorkspaceLease,
+        *,
+        state: _DisposableWorkspaceState | None = None,
+        close_outcome: str,
+        cleanup_outcome: str,
+        lifecycle_state: str,
+    ) -> DisposableWorkspaceClosure:
+        source = state if state is not None else lease
+        return DisposableWorkspaceClosure(
+            lease_id=source.lease_id,
+            workspace_path=source.workspace_path,
+            candidate_identity=source.candidate_identity,
+            source_identity=source.source_identity,
+            source_fingerprint=source.source_fingerprint,
+            close_outcome=close_outcome,
+            cleanup_outcome=cleanup_outcome,
+            save_changes=False,
+            lifecycle_state=lifecycle_state,
         )
 
     def mechanical_bom(
