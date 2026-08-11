@@ -48,11 +48,20 @@ def _sha(value: object, *, label: str) -> str:
     return value
 
 
-def _closed(value: Mapping[str, object], required: set[str], *, label: str) -> None:
+def _closed(
+    value: Mapping[str, object],
+    required: set[str],
+    *,
+    label: str,
+    optional: set[str] | frozenset[str] = frozenset(),
+) -> None:
     keys = set(value)
     missing = required - keys
     if missing:
         _fail(f"{label} is missing required field(s): {', '.join(sorted(missing))}")
+    unknown = keys - required - set(optional)
+    if unknown:
+        _fail(f"{label} contains unknown field(s): {', '.join(sorted(unknown))}")
 
 
 def _scope(scope: object, *, label: str) -> dict[str, object]:
@@ -136,7 +145,20 @@ def _state(value: object, *, label: str, full: bool = True) -> Mapping[str, obje
                 "consumed_attempt_ids",
             }
         )
-    _closed(state, required, label=label)
+    _closed(
+        state,
+        required,
+        label=label,
+        optional={
+            "current_candidate_revision_sha256",
+            "task6_attempt_id",
+            "task6_terminal_status",
+            "consumed_attempt_ids",
+            "pre_repair_r5_verdict",
+            "r6_mutation_sha256",
+            "r6_review_verdict",
+        },
+    )
     if "run_id" in state:
         _identifier(state["run_id"], label=f"{label}.run_id")
     for field in (
@@ -156,12 +178,12 @@ def _state(value: object, *, label: str, full: bool = True) -> Mapping[str, obje
         )
     if full and state["current_candidate_revision_sha256"] != state["candidate_revision_sha256"]:
         _fail(f"{label} current candidate selection is stale")
-    if full:
+    if "task6_attempt_id" in state:
         _identifier(state["task6_attempt_id"], label=f"{label}.task6_attempt_id")
-        if state["task6_terminal_status"] != "COMPLETED":
-            _fail(f"{label} Task6 terminal status is not completed")
+    if "task6_terminal_status" in state and state["task6_terminal_status"] != "COMPLETED":
+        _fail(f"{label} Task6 terminal status is not completed")
     _scope(state["server_scope"], label=f"{label}.server_scope")
-    if full:
+    if "consumed_attempt_ids" in state:
         consumed = state["consumed_attempt_ids"]
         if not isinstance(consumed, Sequence) or isinstance(consumed, (str, bytes, bytearray)):
             _fail(f"{label}.consumed_attempt_ids must be a list")
@@ -184,7 +206,11 @@ def _provider(value: object) -> tuple[Mapping[str, object], list[dict[str, objec
     if provider["terminal_status"] != "COMPLETED":
         _fail("Task6 terminal status is timeout/cancel/late or otherwise non-success")
     _sha(provider["candidate_revision_sha256"], label="provider_result.candidate_revision_sha256")
-    if provider["provider_verdict"] not in {"PASS", "FAIL", "NEEDS_HUMAN"}:
+    if not isinstance(provider["provider_verdict"], str) or provider["provider_verdict"] not in {
+        "PASS",
+        "FAIL",
+        "NEEDS_HUMAN",
+    }:
         _fail("provider verdict is unknown")
     raw_regions = provider["regions"]
     if not isinstance(raw_regions, Sequence) or isinstance(raw_regions, (str, bytes, bytearray)):
@@ -250,6 +276,21 @@ def _assert_scope_matches(
         _fail("provider regions do not match the server-owned scope")
 
 
+def _assert_scope_binding(state: Mapping[str, object], *, label: str) -> None:
+    scope = _scope(state["server_scope"], label=f"{label}.server_scope")
+    bindings = (
+        ("run_id", "run_id"),
+        ("registry_snapshot_sha256", "registry_snapshot_sha256"),
+        ("candidate_revision_sha256", "candidate_revision_sha256"),
+        ("candidate_state_sha256", "candidate_state_sha256"),
+    )
+    for scope_field, state_field in bindings:
+        if state_field not in state:
+            continue
+        if scope[scope_field] != state[state_field]:
+            _fail(f"{label} server-owned scope binding is stale or foreign")
+
+
 def _assert_fresh_tuple(
     authoritative: Mapping[str, object], post_provider: Mapping[str, object]
 ) -> None:
@@ -293,6 +334,8 @@ def finalize_visual_verdict(
     provider, regions = _provider(provider_result)
     authoritative = _state(authoritative_state, label="authoritative_state")
     post_provider = _state(post_provider_state, label="post_provider_state", full=False)
+    _assert_scope_binding(authoritative, label="authoritative_state")
+    _assert_scope_binding(post_provider, label="post_provider_state")
     _assert_fresh_tuple(authoritative, post_provider)
     _assert_r5_not_stale(authoritative)
 
