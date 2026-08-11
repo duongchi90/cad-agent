@@ -25,6 +25,23 @@ SHA_CHANGED = "2" * 64
 _RUN_IDS = count(1)
 
 
+class _HostileStr(str):
+    def __new__(cls, value: str) -> "_HostileStr":
+        return str.__new__(cls, value)
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    def __hash__(self) -> int:
+        return hash("PASS")
+
+    def __str__(self) -> str:
+        return "FORGED"
+
+
 def _scope(*, run_id: str = "run-1") -> dict[str, object]:
     return {
         "schema_version": "visual-review-scope-1.0",
@@ -291,6 +308,26 @@ def test_task6_tuple_mismatch_does_not_burn_result() -> None:
     inputs["server_scope"]["run_id"] = issued_run
     # The first mismatch must not consume the result; restoring the issued
     # server tuple allows the exact result to finalize once.
+    assert _finalize(inputs)["verdict"] == "PASS"
+
+
+@pytest.mark.parametrize("field", ["region_id", "status", "criticality"])
+def test_hostile_provider_region_strings_fail_closed_without_burn(field: str) -> None:
+    inputs = _valid_inputs()
+    original = inputs["provider_result"]["regions"][0][field]
+    inputs["provider_result"]["regions"][0][field] = _HostileStr(str(original))
+    with pytest.raises(Exception, match="string|invalid|provider|region"):
+        _finalize(inputs)
+    inputs["provider_result"]["regions"][0][field] = original
+    assert _finalize(inputs)["verdict"] == "PASS"
+
+
+def test_hostile_provider_verdict_fails_closed_without_burn() -> None:
+    inputs = _valid_inputs()
+    inputs["provider_result"]["provider_verdict"] = _HostileStr("PASS")
+    with pytest.raises(Exception, match="string|invalid|provider|verdict"):
+        _finalize(inputs)
+    inputs["provider_result"]["provider_verdict"] = "PASS"
     assert _finalize(inputs)["verdict"] == "PASS"
 
 

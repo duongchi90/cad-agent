@@ -39,19 +39,27 @@ def _fail(message: str) -> None:
 def _mapping(value: object, *, label: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         _fail(f"{label} must be an object mapping")
-    if any(not isinstance(key, str) for key in value):
+    if any(type(key) is not str for key in value):
         _fail(f"{label} properties must use string keys")
     return value
 
 
+def _plain_string(value: object, *, label: str) -> str:
+    if type(value) is not str:
+        _fail(f"{label} must be an exact built-in string")
+    return value
+
+
 def _identifier(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
+    value = _plain_string(value, label=label)
+    if _IDENTIFIER.fullmatch(value) is None:
         _fail(f"{label} is invalid")
     return value
 
 
 def _sha(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+    value = _plain_string(value, label=label)
+    if _SHA256.fullmatch(value) is None:
         _fail(f"{label} must be a lowercase SHA-256")
     return value
 
@@ -163,8 +171,10 @@ def _provider(
         provider["candidate_revision_sha256"],
         label="provider_result.candidate_revision_sha256",
     )
-    verdict = provider["provider_verdict"]
-    if not isinstance(verdict, str) or verdict not in {"PASS", "FAIL", "NEEDS_HUMAN"}:
+    verdict = _plain_string(
+        provider["provider_verdict"], label="provider_result.provider_verdict"
+    )
+    if verdict not in {"PASS", "FAIL", "NEEDS_HUMAN"}:
         _fail("provider verdict is unknown")
     raw_regions = provider["regions"]
     if not isinstance(raw_regions, Sequence) or isinstance(raw_regions, (str, bytes, bytearray)):
@@ -186,12 +196,17 @@ def _provider(
             record[field] = _identifier(
                 item[field], label=f"provider_result.regions[{index}].{field}"
             )
-        criticality = item["criticality"]
-        if not isinstance(criticality, str) or criticality not in _CRITICALITIES:
+        criticality = _plain_string(
+            item["criticality"],
+            label=f"provider_result.regions[{index}].criticality",
+        )
+        if criticality not in _CRITICALITIES:
             _fail(f"provider_result.regions[{index}].criticality is invalid")
         record["criticality"] = criticality
-        status = item["status"]
-        if not isinstance(status, str) or status not in _REGION_STATUSES:
+        status = _plain_string(
+            item["status"], label=f"provider_result.regions[{index}].status"
+        )
+        if status not in _REGION_STATUSES:
             _fail(f"provider_result.regions[{index}].status is unknown")
         record["status"] = status
         normalized.append(record)
