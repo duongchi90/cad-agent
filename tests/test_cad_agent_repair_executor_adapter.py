@@ -5,7 +5,10 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from copy import deepcopy
 from importlib import import_module
+import importlib.util
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -14,6 +17,8 @@ from cad_agent.repair_authorization import (
     consume_repair_authorization,
     issue_repair_authorization,
 )
+from cad_agent.candidate_revision import build_candidate_revision_state
+from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.repair_operation_contract import (
     REPAIR_OPERATION_SCHEMA_VERSION,
     normalize_repair_operation,
@@ -33,21 +38,6 @@ SHA_STATE = "b" * 64
 SHA_FAILURE = "c" * 64
 SHA_PLAN = "d" * 64
 SHA_OPERATION = "e" * 64
-
-_AUTHORIZATION_FIELDS = {
-    "run_id": "run-r6-204",
-    "work_item_id": "work-r6-204",
-    "candidate_revision_id": "candidate-r6-204",
-    "candidate_revision_sha256": SHA_CANDIDATE,
-    "r5_failure_id": "r5-failure-r6-204",
-    "r5_failure_sha256": SHA_FAILURE,
-    "repair_plan_id": "repair-plan-r6-204",
-    "repair_plan_sha256": SHA_PLAN,
-    "repair_plan_version": "repair-plan-1.0",
-    "repair_operation_contract_version": REPAIR_OPERATION_SCHEMA_VERSION,
-    "repair_operation_contract_fingerprint": SHA_OPERATION,
-}
-
 
 def _module():
     if repair_executor_adapter is None:
@@ -75,6 +65,49 @@ def _line_payload() -> dict[str, object]:
 
 def _operation():
     return normalize_repair_operation(_line_payload())
+
+
+@lru_cache(maxsize=1)
+def _accepted_candidate_binding() -> tuple[dict[str, object], dict[str, object]]:
+    """Reuse the accepted R4 fixture builder instead of minting a state here."""
+    path = Path(__file__).with_name("test_cad_agent_candidate_revision.py")
+    spec = importlib.util.spec_from_file_location("r4_candidate_fixtures", path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("accepted R4 fixture loader unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _root_args, root, _child, _grandchild_args = module._valid_lineage_chain()
+    state = build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    return state, root
+
+
+def _candidate_binding() -> tuple[dict[str, object], dict[str, object]]:
+    state, root = _accepted_candidate_binding()
+    return deepcopy(state), deepcopy(root)
+
+
+def _operation_fingerprint() -> str:
+    return canonical_json_sha256(_operation().as_executor_payload())
+
+
+def _authorization_fields() -> dict[str, object]:
+    state, candidate = _candidate_binding()
+    return {
+        "run_id": "run-r6-204",
+        "work_item_id": "work-r6-204",
+        "candidate_revision_id": candidate["revision_id"],
+        "candidate_revision_sha256": candidate["candidate_revision_sha256"],
+        "r5_failure_id": "r5-failure-r6-204",
+        "r5_failure_sha256": SHA_FAILURE,
+        "repair_plan_id": "repair-plan-r6-204",
+        "repair_plan_sha256": SHA_PLAN,
+        "repair_plan_version": "repair-plan-1.0",
+        "repair_operation_contract_version": REPAIR_OPERATION_SCHEMA_VERSION,
+        "repair_operation_contract_fingerprint": _operation_fingerprint(),
+    }
 
 
 @dataclass
@@ -162,40 +195,36 @@ class _ExecutorClient:
 
 
 def _candidate_state() -> dict[str, object]:
-    # The adapter must delegate validation to the existing R4 owner.  This
-    # closed shape is intentionally owner-shaped; RED does not add an R4 store.
-    return {
-        "schema_version": "candidate-revision-state-1.0",
-        "candidate_revisions": [],
-        "current_candidate_revision_sha256": SHA_CANDIDATE,
-        "state_sha256": SHA_STATE,
-    }
+    state, _candidate = _candidate_binding()
+    return state
 
 
 def _repair_context() -> dict[str, object]:
+    state, candidate = _candidate_binding()
     return {
         "run_id": "run-r6-204",
         "work_item_id": "work-r6-204",
-        "candidate_revision_id": "candidate-r6-204",
-        "candidate_revision_sha256": SHA_CANDIDATE,
-        "candidate_state_sha256": SHA_STATE,
+        "candidate_revision_id": candidate["revision_id"],
+        "candidate_revision_sha256": candidate["candidate_revision_sha256"],
+        "candidate_state_sha256": state["state_sha256"],
         "repair_plan_id": "repair-plan-r6-204",
         "repair_plan_sha256": SHA_PLAN,
         "repair_plan_version": "repair-plan-1.0",
         "repair_operation_contract_version": REPAIR_OPERATION_SCHEMA_VERSION,
-        "repair_operation_contract_fingerprint": SHA_OPERATION,
+        "repair_operation_contract_fingerprint": _operation_fingerprint(),
         "r3_target_handles": ["H204"],
         "protected_target_handles": ["H204"],
     }
 
 
 def _r5_failure(**overrides: object) -> dict[str, object]:
+    _state, candidate = _candidate_binding()
     result = {
         "verdict": "FAIL",
         "failure_id": "r5-failure-r6-204",
         "failure_sha256": SHA_FAILURE,
-        "candidate_revision_id": "candidate-r6-204",
-        "candidate_revision_sha256": SHA_CANDIDATE,
+        "candidate_revision_id": candidate["revision_id"],
+        "candidate_revision_sha256": candidate["candidate_revision_sha256"],
         "repair_plan_id": "repair-plan-r6-204",
         "repair_plan_sha256": SHA_PLAN,
         "repair_plan_version": "repair-plan-1.0",
@@ -205,7 +234,9 @@ def _r5_failure(**overrides: object) -> dict[str, object]:
 
 
 def _valid_inputs(**overrides: object) -> dict[str, object]:
-    token = issue_repair_authorization(**_AUTHORIZATION_FIELDS)
+    fields = _authorization_fields()
+    token = issue_repair_authorization(**fields)
+    _state, candidate = _candidate_binding()
     owner = _WorkspaceOwner()
     inputs: dict[str, object] = {
         "authorization": token,
@@ -213,7 +244,11 @@ def _valid_inputs(**overrides: object) -> dict[str, object]:
         "repair_context": _repair_context(),
         "candidate_state": _candidate_state(),
         "r5_failure": _r5_failure(),
-        "workspace_lease": _WorkspaceLease(owner),
+        "workspace_lease": _WorkspaceLease(
+            owner,
+            candidate_identity=candidate["revision_id"],
+            source_fingerprint=SHA_FAILURE,
+        ),
         "executor_client": _ExecutorClient(),
     }
     inputs.update(overrides)
@@ -221,7 +256,7 @@ def _valid_inputs(**overrides: object) -> dict[str, object]:
 
 
 def _consume_exact(token):
-    return consume_repair_authorization(token, **_AUTHORIZATION_FIELDS)
+    return consume_repair_authorization(token, **_authorization_fields())
 
 
 def _execute(inputs: dict[str, object]):
@@ -239,7 +274,8 @@ def test_exact_owner_composition_returns_one_bounded_success() -> None:
     assert isinstance(result, dict)
     assert result["mutation_outcome"] == "SUCCESS"
     assert len(inputs["workspace_lease"].owner.close_calls) == 1
-    assert _consume_exact(inputs["authorization"]) is inputs["authorization"]
+    with pytest.raises(Exception, match="ALREADY_CONSUMED"):
+        _consume_exact(inputs["authorization"])
 
 
 @pytest.mark.parametrize(
@@ -403,7 +439,14 @@ def test_executor_error_is_categorical_and_never_false_success(executor_error: B
 
 def test_uncertain_closure_is_terminal_failure_not_success() -> None:
     owner = _WorkspaceOwner(close_error=RuntimeError("cleanup uncertain"))
-    inputs = _valid_inputs(workspace_lease=_WorkspaceLease(owner))
+    _state, candidate = _candidate_binding()
+    inputs = _valid_inputs(
+        workspace_lease=_WorkspaceLease(
+            owner,
+            candidate_identity=candidate["revision_id"],
+            source_fingerprint=SHA_FAILURE,
+        )
+    )
     with pytest.raises(Exception, match="CLEANUP|closure|cleanup|failure"):
         _execute(inputs)
     assert owner.close_calls
