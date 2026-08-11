@@ -452,9 +452,14 @@ def _clean_cleanup() -> worker_process.WorkerCleanupResult:
     )
 
 
-def _bare_session(*, candidate: object = CANDIDATE) -> worker.CodexWorkerSession:
+def _bare_session(
+    *, candidate: object = CANDIDATE, run_id: str = "RUN-001"
+) -> worker.CodexWorkerSession:
     class _Binding:
         thread_id = THREAD_ID
+
+        def __init__(self) -> None:
+            self.run_id = run_id
 
     session = object.__new__(worker.CodexWorkerSession)
     session._authority_context = object()
@@ -1140,8 +1145,9 @@ def _canonical_turn_result(
     monkeypatch,
     *,
     response: object | None = None,
+    run_id: str = "RUN-001",
 ) -> worker.CodexWorkerResult:
-    session = _bare_session(candidate=None)
+    session = _bare_session(candidate=None, run_id=run_id)
     _install_request_builder(monkeypatch)
     _install_clean_cleanup(monkeypatch)
     monkeypatch.setattr(worker.time, "monotonic", _MutableClock(700.0))
@@ -1165,6 +1171,20 @@ def _canonical_turn_result(
     if result.success:
         assert result.turn_id == TURN_ID
     return result
+
+
+def _canonical_timeout_result(monkeypatch) -> worker.CodexWorkerResult:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(705.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+
+    def timeout(*_args, **_kwargs):
+        raise CodexWorkerError("WORKER_TIMEOUT")
+
+    monkeypatch.setattr(worker, "_invoke_child", timeout)
+    return session.turn({"prompt": "safe"}, timeout_seconds=1.0)
 
 
 def _canonical_cancel_result(monkeypatch) -> worker.CodexWorkerResult:
@@ -1209,13 +1229,15 @@ def _unsafe_cleanup() -> worker_process.WorkerCleanupResult:
 
 
 def test_50_caller_constructed_completed_result_cannot_be_consumed() -> None:
-    _consume_provenance_red(_provenance_red_result())
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(_provenance_red_result())
 
 
 def test_51_field_for_field_copied_result_cannot_be_consumed() -> None:
     original = _provenance_red_result()
     copied = worker.CodexWorkerResult(**original.__dict__)
-    _consume_provenance_red(copied)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(copied)
 
 
 def test_52_canonical_task6_result_is_consumable_once(monkeypatch) -> None:
@@ -1243,6 +1265,10 @@ def test_54_tuple_mismatches_do_not_burn_legitimate_result(monkeypatch) -> None:
 
 
 def test_55_timeout_cancel_failure_or_nonterminal_cannot_promote(monkeypatch) -> None:
+    timed_out = _canonical_timeout_result(monkeypatch)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(timed_out)
+
     failed = _canonical_turn_result(
         monkeypatch,
         response=_response(
@@ -1252,6 +1278,16 @@ def test_55_timeout_cancel_failure_or_nonterminal_cannot_promote(monkeypatch) ->
     )
     with pytest.raises(CodexWorkerError):
         _consume_provenance_red(failed)
+
+    nonterminal = _canonical_turn_result(
+        monkeypatch,
+        response=_response(
+            status="completed",
+            events=[_event("turn.started", sequence=1)],
+        ),
+    )
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(nonterminal)
 
     cancelled = _canonical_cancel_result(monkeypatch)
     with pytest.raises(CodexWorkerError):
@@ -1267,15 +1303,19 @@ def test_56_unsafe_cleanup_or_promotion_state_cannot_promote(monkeypatch) -> Non
 def test_57_one_attempt_cannot_satisfy_another_even_with_same_public_fields(
     monkeypatch,
 ) -> None:
-    first = _canonical_turn_result(monkeypatch)
-    second = _canonical_turn_result(monkeypatch)
-    _consume_provenance_red(first)
+    first = _canonical_turn_result(monkeypatch, run_id="RUN-A")
+    second = _canonical_turn_result(monkeypatch, run_id="RUN-B")
     with pytest.raises(CodexWorkerError):
-        _consume_provenance_red(second)
+        _consume_provenance_red(first, run_id="RUN-B")
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(second, run_id="RUN-A")
+    _consume_provenance_red(first, run_id="RUN-A")
+    _consume_provenance_red(second, run_id="RUN-B")
 
 
 def test_58_malformed_result_fails_closed() -> None:
-    _consume_provenance_red({"status": "COMPLETED"})  # type: ignore[arg-type]
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red({"status": "COMPLETED"})  # type: ignore[arg-type]
 
 
 def test_59_concurrent_double_consume_allows_at_most_one_success(monkeypatch) -> None:
@@ -1302,7 +1342,14 @@ def test_60_provenance_failures_are_privacy_safe_and_do_not_change_owner_contrac
         monkeypatch,
         response=_response(
             status="failed",
-            events=[_event("provider.failed", sequence=1)],
+            events=[
+                _event(
+                    "provider.failed",
+                    sequence=1,
+                    payload={"private": PRIVATE_SENTINEL},
+                )
+            ],
+            candidate={"private": PRIVATE_SENTINEL},
         ),
     )
     with pytest.raises(CodexWorkerError) as caught:
