@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -1081,7 +1082,7 @@ def test_49_worker_owner_retains_single_process_control_cleanup_authority() -> N
 
 
 # Issue #193 RED: the accepted Task6 owner currently exposes a public result
-# record, but no canonical issuance/consumption seam.  These tests deliberately
+# record, but no canonical issuance/consumption seam. These tests deliberately
 # fail at that missing owner API rather than inventing a caller-side registry.
 def _provenance_red_result(*, status: str = "COMPLETED") -> worker.CodexWorkerResult:
     return worker.CodexWorkerResult(
@@ -1099,13 +1100,112 @@ def _provenance_red_result(*, status: str = "COMPLETED") -> worker.CodexWorkerRe
     )
 
 
-def _consume_provenance_red(result: worker.CodexWorkerResult, *, run_id: str = "RUN-001"):
+def _require_provenance_consumer():
     consume = getattr(worker, "consume_task6_result", None)
     assert callable(consume), (
         "TASK6 RESULT PROVENANCE RED: accepted Task6 owner lacks "
-        "consume_task6_result(result, run_id=...) single-use provenance seam"
+        "consume_task6_result(result, run_id=..., operation=..., "
+        "thread_id=..., turn_id=...) single-use provenance seam"
     )
-    return consume(result, run_id=run_id)
+    parameters = set(inspect.signature(consume).parameters)
+    assert {"run_id", "operation", "thread_id"}.issubset(parameters), (
+        "TASK6 RESULT PROVENANCE RED: consumer must bind run_id, operation, "
+        "and thread_id; run_id-only authority is insufficient"
+    )
+    assert "turn_id" in parameters, (
+        "TASK6 RESULT PROVENANCE RED: consumer must bind turn_id where applicable"
+    )
+    return consume
+
+
+def _consume_provenance_red(
+    result: worker.CodexWorkerResult,
+    *,
+    run_id: str = "RUN-001",
+    operation: str | None = None,
+    thread_id: str | None = None,
+    turn_id: str | None = None,
+):
+    consume = _require_provenance_consumer()
+    return consume(
+        result,
+        run_id=run_id,
+        operation=operation if operation is not None else getattr(result, "operation", None),
+        thread_id=thread_id if thread_id is not None else getattr(result, "thread_id", None),
+        turn_id=turn_id if turn_id is not None else getattr(result, "turn_id", None),
+    )
+
+
+def _canonical_turn_result(
+    monkeypatch,
+    *,
+    response: object | None = None,
+) -> worker.CodexWorkerResult:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(700.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    if response is None:
+        response = _response(
+            events=[
+                _event("turn.started", sequence=1),
+                _event("turn.completed", sequence=2),
+            ]
+        )
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: response,
+    )
+    result = session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+    assert isinstance(result, worker.CodexWorkerResult)
+    assert result.operation == "turn"
+    assert result.thread_id == THREAD_ID
+    if result.success:
+        assert result.turn_id == TURN_ID
+    return result
+
+
+def _canonical_cancel_result(monkeypatch) -> worker.CodexWorkerResult:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(710.0))
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            operation="interrupt", events=[_event("turn.interrupted")]
+        ),
+    )
+    return session.cancel(timeout_seconds=1.0)
+
+
+def _canonical_close_result(monkeypatch, cleanup: worker_process.WorkerCleanupResult):
+    session = _bare_session(candidate=CANDIDATE)
+    _install_request_builder(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(720.0))
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            operation="close", events=[_event("thread.closed")]
+        ),
+    )
+    monkeypatch.setattr(worker, "_cleanup_evidence", lambda *_args: (cleanup, None))
+    return session.close(timeout_seconds=1.0)
+
+
+def _unsafe_cleanup() -> worker_process.WorkerCleanupResult:
+    return worker_process.WorkerCleanupResult(
+        status="CLEANUP_FAILED",
+        success=False,
+        promotion_safe=False,
+        survivor_pids=(12345,),
+        survivor_count=1,
+        error_code="WORKER_SURVIVORS",
+    )
 
 
 def test_50_caller_constructed_completed_result_cannot_be_consumed() -> None:
@@ -1118,45 +1218,94 @@ def test_51_field_for_field_copied_result_cannot_be_consumed() -> None:
     _consume_provenance_red(copied)
 
 
-def test_52_canonical_task6_result_is_consumable_once() -> None:
-    _consume_provenance_red(_provenance_red_result())
+def test_52_canonical_task6_result_is_consumable_once(monkeypatch) -> None:
+    _consume_provenance_red(_canonical_turn_result(monkeypatch))
 
 
-def test_53_replayed_task6_result_fails_closed() -> None:
-    result = _provenance_red_result()
+def test_53_replayed_task6_result_fails_closed(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch)
     _consume_provenance_red(result)
-    _consume_provenance_red(result)
-
-
-def test_54_wrong_run_identity_does_not_burn_legitimate_result() -> None:
-    result = _provenance_red_result()
     with pytest.raises(CodexWorkerError):
-        _consume_provenance_red(result, run_id="WRONG-RUN")
-    _consume_provenance_red(result, run_id="RUN-001")
+        _consume_provenance_red(result)
 
 
-@pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "CLOSED"])
-def test_55_timeout_cancel_failure_or_nonterminal_cannot_promote(status: str) -> None:
-    _consume_provenance_red(_provenance_red_result(status=status))
+def test_54_tuple_mismatches_do_not_burn_legitimate_result(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch)
+    for kwargs in (
+        {"run_id": "WRONG-RUN"},
+        {"operation": "steer"},
+        {"thread_id": "THREAD-FOREIGN"},
+        {"turn_id": "TURN-FOREIGN"},
+    ):
+        with pytest.raises(CodexWorkerError):
+            _consume_provenance_red(result, **kwargs)
+    _consume_provenance_red(result)
 
 
-def test_56_one_attempt_cannot_satisfy_another_even_with_same_public_fields() -> None:
-    first = _provenance_red_result()
-    second = worker.CodexWorkerResult(**first.__dict__)
+def test_55_timeout_cancel_failure_or_nonterminal_cannot_promote(monkeypatch) -> None:
+    failed = _canonical_turn_result(
+        monkeypatch,
+        response=_response(
+            status="failed",
+            events=[_event("turn.started", sequence=1), _event("provider.failed", sequence=2)],
+        ),
+    )
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(failed)
+
+    cancelled = _canonical_cancel_result(monkeypatch)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(cancelled)
+
+
+def test_56_unsafe_cleanup_or_promotion_state_cannot_promote(monkeypatch) -> None:
+    closed = _canonical_close_result(monkeypatch, _unsafe_cleanup())
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(closed, operation="close", turn_id=None)
+
+
+def test_57_one_attempt_cannot_satisfy_another_even_with_same_public_fields(
+    monkeypatch,
+) -> None:
+    first = _canonical_turn_result(monkeypatch)
+    second = _canonical_turn_result(monkeypatch)
     _consume_provenance_red(first)
-    _consume_provenance_red(second)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(second)
 
 
-def test_57_malformed_result_fails_closed() -> None:
+def test_58_malformed_result_fails_closed() -> None:
     _consume_provenance_red({"status": "COMPLETED"})  # type: ignore[arg-type]
 
 
-def test_58_concurrent_double_consume_allows_at_most_one_success() -> None:
-    result = _provenance_red_result()
-    _consume_provenance_red(result)
-    _consume_provenance_red(result)
+def test_59_concurrent_double_consume_allows_at_most_one_success(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch)
+    _require_provenance_consumer()
+
+    def attempt():
+        try:
+            _consume_provenance_red(result)
+        except BaseException as exc:  # noqa: BLE001 - RED oracle records categorical failure.
+            return exc
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _index: attempt(), (1, 2)))
+    assert sum(outcome is None for outcome in outcomes) <= 1
+    assert any(outcome is not None for outcome in outcomes)
 
 
-def test_59_provenance_failures_are_privacy_safe_and_do_not_change_owner_contracts() -> None:
-    _consume_provenance_red(_provenance_red_result(status="FAILED"))
-    assert PRIVATE_SENTINEL not in repr(_provenance_red_result())
+def test_60_provenance_failures_are_privacy_safe_and_do_not_change_owner_contracts(
+    monkeypatch,
+) -> None:
+    failed = _canonical_turn_result(
+        monkeypatch,
+        response=_response(
+            status="failed",
+            events=[_event("provider.failed", sequence=1)],
+        ),
+    )
+    with pytest.raises(CodexWorkerError) as caught:
+        _consume_provenance_red(failed)
+    assert PRIVATE_SENTINEL not in repr(caught.value)
+    assert PRIVATE_SENTINEL not in repr(failed)
