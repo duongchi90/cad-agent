@@ -1078,3 +1078,85 @@ def test_49_worker_owner_retains_single_process_control_cleanup_authority() -> N
     assert WORKER_SOURCE.count("cleanup_worker_process(handle)") == 2
     assert "def cleanup_worker_process(" not in WORKER_SOURCE
     assert "def snapshot_process_tree(" not in WORKER_SOURCE
+
+
+# Issue #193 RED: the accepted Task6 owner currently exposes a public result
+# record, but no canonical issuance/consumption seam.  These tests deliberately
+# fail at that missing owner API rather than inventing a caller-side registry.
+def _provenance_red_result(*, status: str = "COMPLETED") -> worker.CodexWorkerResult:
+    return worker.CodexWorkerResult(
+        operation="turn",
+        status=status,
+        success=status == "COMPLETED",
+        thread_id=THREAD_ID,
+        turn_id=TURN_ID,
+        events=(worker.CodexWorkerEvent("turn.completed"),),
+        candidate_output=None,
+        candidate_trusted=False,
+        failure_code=None if status == "COMPLETED" else "WORKER_TIMEOUT",
+        cleanup_result=_clean_cleanup(),
+        promotion_safe=False,
+    )
+
+
+def _consume_provenance_red(result: worker.CodexWorkerResult, *, run_id: str = "RUN-001"):
+    consume = getattr(worker, "consume_task6_result", None)
+    assert callable(consume), (
+        "TASK6 RESULT PROVENANCE RED: accepted Task6 owner lacks "
+        "consume_task6_result(result, run_id=...) single-use provenance seam"
+    )
+    return consume(result, run_id=run_id)
+
+
+def test_50_caller_constructed_completed_result_cannot_be_consumed() -> None:
+    _consume_provenance_red(_provenance_red_result())
+
+
+def test_51_field_for_field_copied_result_cannot_be_consumed() -> None:
+    original = _provenance_red_result()
+    copied = worker.CodexWorkerResult(**original.__dict__)
+    _consume_provenance_red(copied)
+
+
+def test_52_canonical_task6_result_is_consumable_once() -> None:
+    _consume_provenance_red(_provenance_red_result())
+
+
+def test_53_replayed_task6_result_fails_closed() -> None:
+    result = _provenance_red_result()
+    _consume_provenance_red(result)
+    _consume_provenance_red(result)
+
+
+def test_54_wrong_run_identity_does_not_burn_legitimate_result() -> None:
+    result = _provenance_red_result()
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id="WRONG-RUN")
+    _consume_provenance_red(result, run_id="RUN-001")
+
+
+@pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "CLOSED"])
+def test_55_timeout_cancel_failure_or_nonterminal_cannot_promote(status: str) -> None:
+    _consume_provenance_red(_provenance_red_result(status=status))
+
+
+def test_56_one_attempt_cannot_satisfy_another_even_with_same_public_fields() -> None:
+    first = _provenance_red_result()
+    second = worker.CodexWorkerResult(**first.__dict__)
+    _consume_provenance_red(first)
+    _consume_provenance_red(second)
+
+
+def test_57_malformed_result_fails_closed() -> None:
+    _consume_provenance_red({"status": "COMPLETED"})  # type: ignore[arg-type]
+
+
+def test_58_concurrent_double_consume_allows_at_most_one_success() -> None:
+    result = _provenance_red_result()
+    _consume_provenance_red(result)
+    _consume_provenance_red(result)
+
+
+def test_59_provenance_failures_are_privacy_safe_and_do_not_change_owner_contracts() -> None:
+    _consume_provenance_red(_provenance_red_result(status="FAILED"))
+    assert PRIVATE_SENTINEL not in repr(_provenance_red_result())
