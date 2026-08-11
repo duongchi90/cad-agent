@@ -257,16 +257,27 @@ class _Task6ConsumptionState:
 
 
 @dataclass(frozen=True)
+class _Task6CleanupIntegrity:
+    status: str
+    success: bool
+    promotion_safe: bool
+    survivor_pids: tuple[int, ...]
+    survivor_count: int
+    error_code: str | None
+
+
+@dataclass(frozen=True)
 class _Task6ResultIntegrity:
     operation: str
     status: str
     success: bool
     thread_id: str
     turn_id: str | None
-    events: tuple[CodexWorkerEvent, ...]
+    event_kinds: tuple[str, ...]
+    candidate_output: object
     candidate_trusted: bool
     failure_code: str | None
-    cleanup_result: WorkerCleanupResult | None
+    cleanup_integrity: _Task6CleanupIntegrity | None
     promotion_safe: bool
 
 
@@ -285,6 +296,7 @@ class _Task6IssuedRecord:
 
 _TASK6_ISSUANCE_LOCK = threading.Lock()
 _TASK6_ISSUED_BY_ID: dict[int, _Task6IssuedRecord] = {}
+MAX_TASK6_ISSUED_TUPLES = 4096
 _TASK6_ISSUED_BY_TUPLE: dict[
     tuple[str, str, str, str | None], _Task6ConsumptionState
 ] = {}
@@ -1436,17 +1448,57 @@ def _task6_run_id(binding: object) -> str:
     return run_id
 
 
+def _task6_cleanup_integrity(
+    cleanup: WorkerCleanupResult | None,
+) -> _Task6CleanupIntegrity | None:
+    if cleanup is None:
+        return None
+    if type(cleanup) is not WorkerCleanupResult:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.status, str):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.success, bool):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.promotion_safe, bool):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.survivor_pids, tuple) or any(
+        not isinstance(pid, int) or isinstance(pid, bool)
+        for pid in cleanup.survivor_pids
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.survivor_count, int) or isinstance(
+        cleanup.survivor_count, bool
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if cleanup.error_code is not None and not isinstance(cleanup.error_code, str):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    return _Task6CleanupIntegrity(
+        status=cleanup.status,
+        success=cleanup.success,
+        promotion_safe=cleanup.promotion_safe,
+        survivor_pids=tuple(cleanup.survivor_pids),
+        survivor_count=cleanup.survivor_count,
+        error_code=cleanup.error_code,
+    )
+
+
 def _task6_result_integrity(result: CodexWorkerResult) -> _Task6ResultIntegrity:
+    if type(result.events) is not tuple or any(
+        type(event) is not CodexWorkerEvent or not isinstance(event.kind, str)
+        for event in result.events
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
     return _Task6ResultIntegrity(
         operation=result.operation,
         status=result.status,
         success=result.success,
         thread_id=result.thread_id,
         turn_id=result.turn_id,
-        events=result.events,
+        event_kinds=tuple(event.kind for event in result.events),
+        candidate_output=_freeze_json_like(result.candidate_output),
         candidate_trusted=result.candidate_trusted,
         failure_code=result.failure_code,
-        cleanup_result=result.cleanup_result,
+        cleanup_integrity=_task6_cleanup_integrity(result.cleanup_result),
         promotion_safe=result.promotion_safe,
     )
 
@@ -1476,6 +1528,8 @@ def _issue_task6_result(
         if result_id in _TASK6_ISSUED_BY_ID:
             return result
         duplicate_tuple = tuple_key in _TASK6_ISSUED_BY_TUPLE
+        if not duplicate_tuple and len(_TASK6_ISSUED_BY_TUPLE) >= MAX_TASK6_ISSUED_TUPLES:
+            _fail("TASK6_RESULT_PROVENANCE_INVALID")
         state = _Task6ConsumptionState(duplicate_tuple=duplicate_tuple)
         if not duplicate_tuple:
             _TASK6_ISSUED_BY_TUPLE[tuple_key] = state

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import inspect
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -1205,8 +1206,13 @@ def _canonical_cancel_result(monkeypatch) -> worker.CodexWorkerResult:
     return session.cancel(timeout_seconds=1.0)
 
 
-def _canonical_close_result(monkeypatch, cleanup: worker_process.WorkerCleanupResult):
-    session = _bare_session(candidate=CANDIDATE)
+def _canonical_close_result(
+    monkeypatch,
+    cleanup: worker_process.WorkerCleanupResult,
+    *,
+    run_id: str | None = None,
+):
+    session = _bare_session(candidate=CANDIDATE, run_id=run_id)
     _install_request_builder(monkeypatch)
     monkeypatch.setattr(worker.time, "monotonic", _MutableClock(720.0))
     monkeypatch.setattr(
@@ -1416,3 +1422,96 @@ def test_63_provenance_failures_are_privacy_safe_and_do_not_change_owner_contrac
         _consume_provenance_red(failed)
     assert PRIVATE_SENTINEL not in repr(caught.value)
     assert PRIVATE_SENTINEL not in repr(failed)
+
+
+def test_64_nested_event_tamper_does_not_burn_canonical_result(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-EVENT-TAMPER")
+    event = result.events[0]
+    original_kind = event.kind
+    event.__dict__["kind"] = "provider.failed"
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id="RUN-EVENT-TAMPER")
+
+    event.__dict__["kind"] = original_kind
+    _consume_provenance_red(result, run_id="RUN-EVENT-TAMPER")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "CLEANUP_FAILED"),
+        ("success", False),
+        ("promotion_safe", False),
+        ("survivor_pids", (12345,)),
+        ("survivor_count", 1),
+        ("error_code", "WORKER_SURVIVORS"),
+    ],
+)
+def test_65_nested_cleanup_tamper_does_not_burn_canonical_result(
+    monkeypatch, field: str, value: object
+) -> None:
+    run_id = f"RUN-CLEANUP-TAMPER-{field}"
+    result = _canonical_close_result(monkeypatch, _clean_cleanup(), run_id=run_id)
+    result.__dict__["cleanup_result"].__dict__[field] = value
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id=run_id, operation="close", turn_id=None)
+
+    cleanup = result.cleanup_result
+    assert cleanup is not None
+    restore = _clean_cleanup()
+    cleanup.__dict__[field] = getattr(restore, field)
+    _consume_provenance_red(result, run_id=run_id, operation="close", turn_id=None)
+
+
+def test_66_candidate_output_replacement_does_not_bypass_integrity(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-CANDIDATE-TAMPER")
+    original_output = result.candidate_output
+    result.__dict__["candidate_output"] = {"forged": True}
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id="RUN-CANDIDATE-TAMPER")
+
+    result.__dict__["candidate_output"] = original_output
+    _consume_provenance_red(result, run_id="RUN-CANDIDATE-TAMPER")
+
+
+def test_67_task6_tuple_ledger_is_bounded_without_eviction(monkeypatch) -> None:
+    assert getattr(worker, "MAX_TASK6_ISSUED_TUPLES", None) == 4096
+    monkeypatch.setattr(worker, "_TASK6_ISSUANCE_LOCK", threading.Lock())
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_ID", {})
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_TUPLE", {})
+    # Exercise the hard-bound policy at a small isolated capacity; the
+    # production constant is asserted above and remains 4096.
+    monkeypatch.setattr(worker, "MAX_TASK6_ISSUED_TUPLES", 8)
+    capacity = worker.MAX_TASK6_ISSUED_TUPLES
+    issued = []
+    for index in range(capacity):
+        result = _provenance_red_result()
+        worker._issue_task6_result(
+            result,
+            run_id=f"RUN-CAP-{index}",
+            operation="turn",
+        )
+        issued.append(result)
+    assert len(worker._TASK6_ISSUED_BY_TUPLE) == capacity
+
+    retained_tuple = ("RUN-CAP-0", "turn", THREAD_ID, TURN_ID)
+    del issued
+    gc.collect()
+    assert len(worker._TASK6_ISSUED_BY_TUPLE) == capacity
+
+    replacement = _provenance_red_result()
+    worker._issue_task6_result(
+        replacement,
+        run_id=retained_tuple[0],
+        operation=retained_tuple[1],
+    )
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(replacement, run_id=retained_tuple[0])
+
+    with pytest.raises(CodexWorkerError):
+        worker._issue_task6_result(
+            _provenance_red_result(),
+            run_id="RUN-CAPACITY-OVERFLOW",
+            operation="turn",
+        )
+    assert len(worker._TASK6_ISSUED_BY_TUPLE) == capacity
