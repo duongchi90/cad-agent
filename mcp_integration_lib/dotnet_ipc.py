@@ -837,12 +837,10 @@ class DotNetIPCClient:
             raise DotNetIPCProtocolError("disposable workspace lease provenance invalid")
 
         with state.lock:
-            existing = state.closure or self._disposable_closures.get(lease.lease_id)
-            if existing is not None:
-                return existing
-            if state.failure is not None:
-                raise DisposableWorkspaceClosureError(state.failure) from None
-
+            # Terminal evidence is replayable only for the exact owner binding.
+            # Validate the caller tuple before exposing cached closure/failure
+            # records so mismatched or hostile replays fail closed without
+            # touching the terminal lifecycle state.
             self._validate_disposable_binding(
                 candidate_identity,
                 source_identity,
@@ -855,6 +853,13 @@ class DotNetIPCClient:
                 or source_fingerprint != state.source_fingerprint
             ):
                 raise DotNetIPCProtocolError("disposable workspace binding mismatch")
+
+            existing = state.closure or self._disposable_closures.get(lease.lease_id)
+            if existing is not None:
+                return existing
+            if state.failure is not None:
+                raise DisposableWorkspaceClosureError(state.failure) from None
+
             if state.lifecycle_state != "active":
                 raise DotNetIPCProtocolError("disposable workspace lease is not active")
             if time.time() >= state.expires_at:

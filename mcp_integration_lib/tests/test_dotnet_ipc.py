@@ -906,6 +906,125 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertEqual(1, len(dispatcher.requests))
             self.assertEqual("closed", lease.lifecycle_state)
 
+    def test_disposable_workspace_terminal_replay_validates_candidate_binding(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            dispatcher = FakeDispatcher(ipc_dir)
+            client = self._disposable_client(ipc_dir, root, dispatcher)
+            lease = self._issue_disposable(client, root)
+            close = getattr(client, "close_disposable_workspace")
+            kwargs = {
+                "candidate_identity": "candidate-001",
+                "source_identity": "source-001",
+                "source_fingerprint": "a" * 64,
+            }
+            close(lease, **kwargs)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                close(lease, **{**kwargs, "candidate_identity": "candidate-forged"})
+            self.assertEqual(1, len(dispatcher.requests))
+
+    def test_disposable_workspace_terminal_replay_validates_source_binding(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            dispatcher = FakeDispatcher(ipc_dir)
+            client = self._disposable_client(ipc_dir, root, dispatcher)
+            lease = self._issue_disposable(client, root)
+            close = getattr(client, "close_disposable_workspace")
+            kwargs = {
+                "candidate_identity": "candidate-001",
+                "source_identity": "source-001",
+                "source_fingerprint": "a" * 64,
+            }
+            close(lease, **kwargs)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                close(lease, **{**kwargs, "source_identity": "source-forged"})
+            self.assertEqual(1, len(dispatcher.requests))
+
+    def test_disposable_workspace_terminal_replay_validates_fingerprint_binding(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            dispatcher = FakeDispatcher(ipc_dir)
+            client = self._disposable_client(ipc_dir, root, dispatcher)
+            lease = self._issue_disposable(client, root)
+            close = getattr(client, "close_disposable_workspace")
+            kwargs = {
+                "candidate_identity": "candidate-001",
+                "source_identity": "source-001",
+                "source_fingerprint": "a" * 64,
+            }
+            close(lease, **kwargs)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                close(lease, **{**kwargs, "source_fingerprint": "b" * 64})
+            self.assertEqual(1, len(dispatcher.requests))
+
+    def test_disposable_workspace_terminal_replay_rejects_hostile_binding_values(self) -> None:
+        class HostileString(str):
+            def __hash__(self):
+                return hash("candidate-001")
+
+            def __eq__(self, other):
+                return True
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            dispatcher = FakeDispatcher(ipc_dir)
+            client = self._disposable_client(ipc_dir, root, dispatcher)
+            lease = self._issue_disposable(client, root)
+            close = getattr(client, "close_disposable_workspace")
+            kwargs = {
+                "candidate_identity": "candidate-001",
+                "source_identity": "source-001",
+                "source_fingerprint": "a" * 64,
+            }
+            close(lease, **kwargs)
+
+            for field, value in (
+                ("candidate_identity", HostileString("candidate-001")),
+                ("source_identity", HostileString("source-001")),
+                ("source_fingerprint", HostileString("a" * 64)),
+            ):
+                with self.subTest(field=field):
+                    with self.assertRaises((ValueError, dotnet_ipc.DotNetIPCProtocolError)):
+                        close(lease, **{**kwargs, field: value})
+            self.assertEqual(1, len(dispatcher.requests))
+
+    def test_disposable_workspace_failed_terminal_replay_validates_binding(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+
+            def failed_dispatcher() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                failed = _result(request)
+                failed["success"] = False
+                failed["errors"] = ["close failed"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), failed)
+
+            client = self._disposable_client(ipc_dir, root, failed_dispatcher)
+            lease = self._issue_disposable(client, root)
+            close = getattr(client, "close_disposable_workspace")
+            kwargs = {
+                "candidate_identity": "candidate-001",
+                "source_identity": "source-001",
+                "source_fingerprint": "a" * 64,
+            }
+            with self.assertRaises(dotnet_ipc.DisposableWorkspaceClosureError):
+                close(lease, **kwargs)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                close(lease, **{**kwargs, "source_identity": "source-forged"})
+
+            with self.assertRaises(dotnet_ipc.DisposableWorkspaceClosureError):
+                close(lease, **kwargs)
+
     def test_disposable_workspace_failed_close_is_fail_closed_without_false_success(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
