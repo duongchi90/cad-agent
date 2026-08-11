@@ -245,13 +245,25 @@ def _valid_visual_review_scope() -> dict[str, object]:
     }
 
 
+def _validate_visual_review_scope(
+    payload: dict[str, object],
+    *,
+    server_scope: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return validate_visual_contract(
+        payload,
+        contract="visual_review_scope",
+        server_scope=server_scope or _valid_visual_review_scope(),
+    )
+
+
 def test_visual_review_scope_validates_and_canonicalizes_region_order() -> None:
     payload = _valid_visual_review_scope()
     reversed_payload = _valid_visual_review_scope()
     reversed_payload["regions"] = list(reversed(reversed_payload["regions"]))
 
-    validated = validate_visual_contract(payload, contract="visual_review_scope")
-    reversed_validated = validate_visual_contract(reversed_payload, contract="visual_review_scope")
+    validated = _validate_visual_review_scope(payload)
+    reversed_validated = _validate_visual_review_scope(reversed_payload)
 
     assert [region["region_id"] for region in validated["regions"]] == [
         "region-critical",
@@ -265,28 +277,28 @@ def test_visual_review_scope_rejects_empty_required_region_set() -> None:
     payload = _valid_visual_review_scope()
     payload["regions"] = []
     with pytest.raises(VisualContractError, match="regions"):
-        validate_visual_contract(payload, contract="visual_review_scope")
+        _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_unknown_region_property() -> None:
     payload = _valid_visual_review_scope()
     payload["regions"][0]["provider_scope"] = "caller-owned"
     with pytest.raises(VisualContractError, match="Unexpected properties"):
-        validate_visual_contract(payload, contract="visual_review_scope")
+        _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_caller_owned_scope_replacement() -> None:
     payload = _valid_visual_review_scope()
     payload["required_region_ids"] = ["region-critical"]
     with pytest.raises(VisualContractError, match="Unexpected properties"):
-        validate_visual_contract(payload, contract="visual_review_scope")
+        _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_duplicate_region_identity() -> None:
     payload = _valid_visual_review_scope()
     payload["regions"][1]["region_id"] = payload["regions"][0]["region_id"]
     with pytest.raises(VisualContractError, match="duplicate region_id"):
-        validate_visual_contract(payload, contract="visual_review_scope")
+        _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_missing_explicit_membership_identity() -> None:
@@ -294,7 +306,7 @@ def test_visual_review_scope_rejects_missing_explicit_membership_identity() -> N
         payload = _valid_visual_review_scope()
         del payload["regions"][0][field]
         with pytest.raises(VisualContractError, match=field):
-            validate_visual_contract(payload, contract="visual_review_scope")
+            _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_invalid_criticality() -> None:
@@ -302,14 +314,14 @@ def test_visual_review_scope_rejects_invalid_criticality() -> None:
         payload = _valid_visual_review_scope()
         payload["regions"][0]["criticality"] = value
         with pytest.raises(VisualContractError, match="criticality"):
-            validate_visual_contract(payload, contract="visual_review_scope")
+            _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_criticality_omission() -> None:
     payload = _valid_visual_review_scope()
     del payload["regions"][0]["criticality"]
     with pytest.raises(VisualContractError, match="criticality"):
-        validate_visual_contract(payload, contract="visual_review_scope")
+        _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_path_or_name_inference() -> None:
@@ -317,7 +329,7 @@ def test_visual_review_scope_rejects_path_or_name_inference() -> None:
         payload = _valid_visual_review_scope()
         payload["regions"][0][field] = value
         with pytest.raises(VisualContractError, match=field):
-            validate_visual_contract(payload, contract="visual_review_scope")
+            _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_cross_scope_identity_substitution() -> None:
@@ -325,11 +337,59 @@ def test_visual_review_scope_rejects_cross_scope_identity_substitution() -> None
         payload = _valid_visual_review_scope()
         payload[field] = "" if field in {"scope_id", "run_id"} else "not-a-sha"
         with pytest.raises(VisualContractError, match=field):
-            validate_visual_contract(payload, contract="visual_review_scope")
+            _validate_visual_review_scope(payload)
 
 
 def test_visual_review_scope_rejects_non_object_or_open_regions_payload() -> None:
     payload = _valid_visual_review_scope()
     payload["regions"] = {"region-critical": payload["regions"][0]}
     with pytest.raises(VisualContractError, match="regions"):
-        validate_visual_contract(payload, contract="visual_review_scope")
+        _validate_visual_review_scope(payload)
+
+
+def test_visual_review_scope_requires_server_owned_scope_context() -> None:
+    with pytest.raises(VisualContractError, match="server_scope"):
+        validate_visual_contract(_valid_visual_review_scope(), contract="visual_review_scope")
+
+
+@pytest.mark.parametrize("field", ("region_id", "view_id", "sheet_id", "layout_id"))
+def test_visual_review_scope_rejects_foreign_server_membership(field: str) -> None:
+    payload = _valid_visual_review_scope()
+    payload["regions"][0][field] = f"foreign-{field}"
+    with pytest.raises(VisualContractError, match="server-owned scope"):
+        _validate_visual_review_scope(payload)
+
+
+def test_visual_review_scope_rejects_missing_or_extra_server_regions() -> None:
+    expected = _valid_visual_review_scope()
+    missing = _valid_visual_review_scope()
+    missing["regions"] = missing["regions"][1:]
+    with pytest.raises(VisualContractError, match="server-owned scope"):
+        _validate_visual_review_scope(missing, server_scope=expected)
+
+    extra = _valid_visual_review_scope()
+    extra["regions"].append(
+        {
+            "region_id": "region-extra",
+            "view_id": "view-extra",
+            "sheet_id": "sheet-extra",
+            "layout_id": "layout-extra",
+            "criticality": "NORMAL",
+        }
+    )
+    with pytest.raises(VisualContractError, match="server-owned scope"):
+        _validate_visual_review_scope(extra, server_scope=expected)
+
+
+def test_visual_review_scope_rejects_criticality_masking() -> None:
+    payload = _valid_visual_review_scope()
+    payload["regions"][0]["criticality"] = "NORMAL"
+    with pytest.raises(VisualContractError, match="server-owned scope"):
+        _validate_visual_review_scope(payload)
+
+
+def test_visual_review_scope_rejects_non_string_root_key_fail_closed() -> None:
+    payload = _valid_visual_review_scope()
+    payload[1] = "unexpected"
+    with pytest.raises(VisualContractError, match="properties"):
+        _validate_visual_review_scope(payload)
