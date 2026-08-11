@@ -12,7 +12,7 @@ import copy
 import re
 from collections.abc import Mapping, Sequence
 
-from agent_lib.codex_worker import CodexWorkerResult
+from agent_lib.codex_worker import CodexWorkerResult, consume_task6_result
 from agent_lib.codex_worker_process import WorkerCleanupResult
 from cad_agent.candidate_revision import validate_candidate_revision_state
 from cad_agent.drawing_artifact_reference import (
@@ -336,11 +336,33 @@ def finalize_visual_verdict(
     if selected is None or provider_candidate_sha != selected:
         _fail("provider candidate revision does not match current candidate")
 
+    if auth_scope["candidate_revision_sha256"] != selected:
+        _fail("visual review scope is not bound to the current R4 candidate")
+    if auth_scope["candidate_state_sha256"] != auth_candidate["state_sha256"]:
+        _fail("visual review scope is not bound to the current R4 state")
+    if post_scope["candidate_revision_sha256"] != post_candidate.get(
+        "current_candidate_revision_sha256"
+    ):
+        _fail("post-provider visual scope is stale against R4 current candidate")
+    if post_scope["candidate_state_sha256"] != post_candidate["state_sha256"]:
+        _fail("post-provider visual scope is stale against R4 state")
+
     auth_evidence = auth_validated["evidence"]
     post_evidence = post_validated["evidence"]
     if auth_evidence != post_evidence:
         _fail("visual evidence freshness changed after provider return")
     _assert_r5_not_stale(authoritative, authoritative["visual_run_manifest"])  # type: ignore[arg-type]
+
+    try:
+        consume_task6_result(
+            owner_task6,
+            run_id=auth_scope["run_id"],
+            operation=owner_task6.operation,
+            thread_id=owner_task6.thread_id,
+            turn_id=owner_task6.turn_id,
+        )
+    except Exception:
+        _fail("Task6 accepted result could not be consumed")
 
     statuses = [str(region["status"]) for region in regions]
     if "FAIL" in statuses:

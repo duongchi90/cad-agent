@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import copy
+from itertools import count
 from unittest.mock import Mock, patch
 
 import pytest
 
-from agent_lib.codex_worker import CodexWorkerEvent, CodexWorkerResult
+from agent_lib.codex_worker import (
+    CodexWorkerEvent,
+    CodexWorkerResult,
+    _issue_task6_result,
+)
 from agent_lib.codex_worker_process import WorkerCleanupResult
 
 
@@ -17,13 +22,14 @@ SHA_REGISTRY = "e" * 64
 SHA_MANIFEST = "f" * 64
 SHA_MUTATION = "1" * 64
 SHA_CHANGED = "2" * 64
+_RUN_IDS = count(1)
 
 
-def _scope() -> dict[str, object]:
+def _scope(*, run_id: str = "run-1") -> dict[str, object]:
     return {
         "schema_version": "visual-review-scope-1.0",
         "scope_id": "scope-1",
-        "run_id": "run-1",
+        "run_id": run_id,
         "registry_snapshot_sha256": SHA_REGISTRY,
         "candidate_revision_sha256": SHA_CANDIDATE,
         "candidate_state_sha256": SHA_STATE,
@@ -102,8 +108,9 @@ def _owner_state(scope: dict[str, object], task6: CodexWorkerResult) -> dict[str
 
 
 def _valid_inputs() -> dict[str, object]:
-    scope = _scope()
+    scope = _scope(run_id=f"run-{next(_RUN_IDS)}")
     task6 = _task6_result()
+    _issue_task6_result(task6, run_id=scope["run_id"], operation=task6.operation)
     return {
         "server_scope": scope,
         "provider_result": _provider_result(scope, task6),
@@ -184,6 +191,24 @@ def test_candidate_selection_change_after_provider_return_fails_closed() -> None
         _finalize(inputs)
 
 
+def test_scope_candidate_must_bind_to_current_r4_candidate() -> None:
+    inputs = _valid_inputs()
+    for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
+        state["visual_review_scope"]["candidate_revision_sha256"] = SHA_CHANGED
+    inputs["server_scope"]["candidate_revision_sha256"] = SHA_CHANGED
+    with pytest.raises(Exception, match="scope.*R4|R4.*scope|candidate"):
+        _finalize(inputs)
+
+
+def test_scope_state_must_bind_to_current_r4_state() -> None:
+    inputs = _valid_inputs()
+    for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
+        state["visual_review_scope"]["candidate_state_sha256"] = SHA_CHANGED
+    inputs["server_scope"]["candidate_state_sha256"] = SHA_CHANGED
+    with pytest.raises(Exception, match="scope.*R4|R4.*scope|state"):
+        _finalize(inputs)
+
+
 def test_dara_bytes_change_after_provider_return_fails_closed() -> None:
     inputs = _valid_inputs()
     inputs["post_provider_state"]["drawing_artifact_bytes"] = b"changed drawing"
@@ -248,9 +273,25 @@ def test_task6_result_must_be_the_accepted_public_object() -> None:
 
 def test_task6_supersession_or_replay_cannot_finalize_again() -> None:
     inputs = _valid_inputs()
-    inputs["provider_result"]["task6_result"] = _task6_result()
-    with pytest.raises(Exception, match="identity|replayed|Task6"):
+    _finalize(inputs)
+    with pytest.raises(Exception, match="consume|replay|already|Task6"):
         _finalize(inputs)
+
+
+def test_task6_tuple_mismatch_does_not_burn_result() -> None:
+    inputs = _valid_inputs()
+    issued_run = inputs["server_scope"]["run_id"]
+    for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
+        state["visual_review_scope"]["run_id"] = "wrong-run"
+    inputs["server_scope"]["run_id"] = "wrong-run"
+    with pytest.raises(Exception, match="consume|Task6|provenance|tuple"):
+        _finalize(inputs)
+    for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
+        state["visual_review_scope"]["run_id"] = issued_run
+    inputs["server_scope"]["run_id"] = issued_run
+    # The first mismatch must not consume the result; restoring the issued
+    # server tuple allows the exact result to finalize once.
+    assert _finalize(inputs)["verdict"] == "PASS"
 
 
 @pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "CLOSED"])
