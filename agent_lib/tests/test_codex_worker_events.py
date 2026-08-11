@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -453,7 +454,7 @@ def _clean_cleanup() -> worker_process.WorkerCleanupResult:
 
 
 def _bare_session(
-    *, candidate: object = CANDIDATE, run_id: str = "RUN-001"
+    *, candidate: object = CANDIDATE, run_id: str | None = None
 ) -> worker.CodexWorkerSession:
     class _Binding:
         thread_id = THREAD_ID
@@ -462,6 +463,8 @@ def _bare_session(
             self.run_id = run_id
 
     session = object.__new__(worker.CodexWorkerSession)
+    if run_id is None:
+        run_id = f"RUN-TEST-{id(session)}"
     session._authority_context = object()
     session._binding = _Binding()
     session._cleanup_result = None
@@ -1241,18 +1244,20 @@ def test_51_field_for_field_copied_result_cannot_be_consumed() -> None:
 
 
 def test_52_canonical_task6_result_is_consumable_once(monkeypatch) -> None:
-    _consume_provenance_red(_canonical_turn_result(monkeypatch))
+    _consume_provenance_red(
+        _canonical_turn_result(monkeypatch, run_id="RUN-52"), run_id="RUN-52"
+    )
 
 
 def test_53_replayed_task6_result_fails_closed(monkeypatch) -> None:
-    result = _canonical_turn_result(monkeypatch)
-    _consume_provenance_red(result)
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-53")
+    _consume_provenance_red(result, run_id="RUN-53")
     with pytest.raises(CodexWorkerError):
-        _consume_provenance_red(result)
+        _consume_provenance_red(result, run_id="RUN-53")
 
 
 def test_54_tuple_mismatches_do_not_burn_legitimate_result(monkeypatch) -> None:
-    result = _canonical_turn_result(monkeypatch)
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-54")
     for kwargs in (
         {"run_id": "WRONG-RUN"},
         {"operation": "steer"},
@@ -1261,7 +1266,7 @@ def test_54_tuple_mismatches_do_not_burn_legitimate_result(monkeypatch) -> None:
     ):
         with pytest.raises(CodexWorkerError):
             _consume_provenance_red(result, **kwargs)
-    _consume_provenance_red(result)
+    _consume_provenance_red(result, run_id="RUN-54")
 
 
 def test_55_timeout_cancel_failure_or_nonterminal_cannot_promote(monkeypatch) -> None:
@@ -1335,7 +1340,62 @@ def test_59_concurrent_double_consume_allows_at_most_one_success(monkeypatch) ->
     assert any(outcome is not None for outcome in outcomes)
 
 
-def test_60_provenance_failures_are_privacy_safe_and_do_not_change_owner_contracts(
+def test_60_tuple_tombstone_survives_canonical_result_gc(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-GC")
+    _consume_provenance_red(result, run_id="RUN-GC")
+    del result
+    gc.collect()
+
+    replacement = _canonical_turn_result(monkeypatch, run_id="RUN-GC")
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(replacement, run_id="RUN-GC")
+
+
+def test_61_missing_server_run_id_fails_closed_before_issuance(monkeypatch) -> None:
+    session = _bare_session()
+    delattr(session._binding, "run_id")
+    _install_request_builder(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(730.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)]
+        ),
+    )
+
+    with pytest.raises(CodexWorkerError):
+        session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "FAILED"),
+        ("success", False),
+        ("failure_code", "MUTATED"),
+        ("thread_id", "THREAD-FOREIGN"),
+        ("turn_id", "TURN-FOREIGN"),
+    ],
+)
+def test_62_issued_result_mutation_fails_closed(
+    monkeypatch, field: str, value: object
+) -> None:
+    run_id = f"RUN-MUTATION-{field}"
+    result = _canonical_turn_result(monkeypatch, run_id=run_id)
+    result.__dict__[field] = value
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(
+            result,
+            run_id=run_id,
+            operation="turn",
+            thread_id=THREAD_ID,
+            turn_id=TURN_ID,
+        )
+
+
+def test_63_provenance_failures_are_privacy_safe_and_do_not_change_owner_contracts(
     monkeypatch,
 ) -> None:
     failed = _canonical_turn_result(

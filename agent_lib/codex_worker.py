@@ -257,6 +257,20 @@ class _Task6ConsumptionState:
 
 
 @dataclass(frozen=True)
+class _Task6ResultIntegrity:
+    operation: str
+    status: str
+    success: bool
+    thread_id: str
+    turn_id: str | None
+    events: tuple[CodexWorkerEvent, ...]
+    candidate_trusted: bool
+    failure_code: str | None
+    cleanup_result: WorkerCleanupResult | None
+    promotion_safe: bool
+
+
+@dataclass(frozen=True)
 class _Task6IssuedRecord:
     result_id: int
     result_ref: weakref.ReferenceType[CodexWorkerResult]
@@ -266,13 +280,14 @@ class _Task6IssuedRecord:
     turn_id: str | None
     eligible: bool
     state: _Task6ConsumptionState
+    integrity: _Task6ResultIntegrity
 
 
 _TASK6_ISSUANCE_LOCK = threading.Lock()
 _TASK6_ISSUED_BY_ID: dict[int, _Task6IssuedRecord] = {}
-_TASK6_ISSUED_BY_TUPLE: weakref.WeakValueDictionary[
+_TASK6_ISSUED_BY_TUPLE: dict[
     tuple[str, str, str, str | None], _Task6ConsumptionState
-] = weakref.WeakValueDictionary()
+] = {}
 
 
 class WorkerAdapter(Protocol):
@@ -1125,7 +1140,7 @@ class CodexWorkerSession:
         self._terminal_result = result
         return _issue_task6_result(
             result,
-            run_id=getattr(self._binding, "run_id", "RUN-001"),
+            run_id=_task6_run_id(self._binding),
             operation=operation,
         )
 
@@ -1206,7 +1221,7 @@ class CodexWorkerSession:
         )
         return _issue_task6_result(
             result,
-            run_id=getattr(self._binding, "run_id", "RUN-001"),
+            run_id=_task6_run_id(self._binding),
             operation=operation,
         )
 
@@ -1386,7 +1401,7 @@ class CodexWorkerSession:
         self._terminal_result = result
         return _issue_task6_result(
             result,
-            run_id=getattr(self._binding, "run_id", "RUN-001"),
+            run_id=_task6_run_id(self._binding),
             operation="close",
         )
 
@@ -1412,6 +1427,28 @@ def _task6_result_is_eligible(result: CodexWorkerResult) -> bool:
             and cleanup.survivor_count == 0
         )
     return False
+
+
+def _task6_run_id(binding: object) -> str:
+    run_id = getattr(binding, "run_id", None)
+    if not isinstance(run_id, str) or not run_id:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    return run_id
+
+
+def _task6_result_integrity(result: CodexWorkerResult) -> _Task6ResultIntegrity:
+    return _Task6ResultIntegrity(
+        operation=result.operation,
+        status=result.status,
+        success=result.success,
+        thread_id=result.thread_id,
+        turn_id=result.turn_id,
+        events=result.events,
+        candidate_trusted=result.candidate_trusted,
+        failure_code=result.failure_code,
+        cleanup_result=result.cleanup_result,
+        promotion_safe=result.promotion_safe,
+    )
 
 
 def _issue_task6_result(
@@ -1452,6 +1489,7 @@ def _issue_task6_result(
             turn_id=turn_id,
             eligible=_task6_result_is_eligible(result) and not duplicate_tuple,
             state=state,
+            integrity=_task6_result_integrity(result),
         )
         _TASK6_ISSUED_BY_ID[result_id] = record
     return result
@@ -1490,6 +1528,12 @@ def consume_task6_result(
         _fail("TASK6_RESULT_TUPLE_MISMATCH")
     if not record.eligible or record.state.duplicate_tuple:
         _fail("TASK6_RESULT_INELIGIBLE")
+    try:
+        integrity = _task6_result_integrity(result)
+    except Exception:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if integrity != record.integrity:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
     with record.state.lock:
         if record.state.consumed:
             _fail("TASK6_RESULT_ALREADY_CONSUMED")
