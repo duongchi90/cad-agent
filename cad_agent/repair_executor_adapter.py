@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+from importlib import import_module
 from typing import Any
 
 from cad_agent.candidate_revision import validate_candidate_revision_state
@@ -18,10 +19,17 @@ from cad_agent.repair_operation_contract import (
     REPAIR_OPERATION_SCHEMA_VERSION,
     normalize_repair_operation,
 )
-from mcp_integration_lib.repair2 import execute_supported_repair_capability
 
 
 R6_RESULT_SCHEMA_VERSION = "r6-repair-executor-result-1.0"
+
+
+def _execute_supported_repair_capability(*args: object, **kwargs: object) -> object:
+    """Resolve the already-owned executor without creating a transport edge."""
+    executor = import_module(
+        "mcp_integration_lib.repair2"
+    ).execute_supported_repair_capability
+    return executor(*args, **kwargs)
 
 
 class RepairExecutorAdapterError(ValueError):
@@ -313,7 +321,7 @@ def execute_approved_repair(
         raise RepairExecutorAdapterError("AUTHORIZATION_INVALID") from exc
 
     try:
-        executor_result = execute_supported_repair_capability(
+        executor_result = _execute_supported_repair_capability(
             executor_client,
             capability=operation_payload["capability"],
             target_handle=operation_payload["target_handle"],
