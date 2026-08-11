@@ -14,7 +14,9 @@ import json
 import math
 import re
 import sys
+import threading
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -113,7 +115,7 @@ def _fail(code: str) -> None:
 
 
 def _freeze_json_like(value: object) -> object:
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or type(value) is str or isinstance(value, (bool, int)):
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
@@ -123,7 +125,7 @@ def _freeze_json_like(value: object) -> object:
         frozen: dict[str, object] = {}
         try:
             for key, item in value.items():
-                if not isinstance(key, str):
+                if type(key) is not str:
                     _fail("WORKER_PROVIDER_RESPONSE_INVALID")
                 frozen[key] = _freeze_json_like(item)
         except CodexWorkerError:
@@ -241,6 +243,63 @@ class CodexWorkerResult:
     failure_code: str | None
     cleanup_result: WorkerCleanupResult | None
     promotion_safe: bool
+
+
+class _Task6ConsumptionState:
+    """Private bounded state for one canonical Task6 result issuance."""
+
+    __slots__ = ("consumed", "duplicate_tuple", "lock", "__weakref__")
+
+    def __init__(self, *, duplicate_tuple: bool) -> None:
+        self.consumed = False
+        self.duplicate_tuple = duplicate_tuple
+        self.lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class _Task6CleanupIntegrity:
+    status: str
+    success: bool
+    promotion_safe: bool
+    survivor_pids: tuple[int, ...]
+    survivor_count: int
+    error_code: str | None
+
+
+@dataclass(frozen=True)
+class _Task6ResultIntegrity:
+    operation: str
+    status: str
+    success: bool
+    thread_id: str
+    turn_id: str | None
+    event_kinds: tuple[str, ...]
+    candidate_output: object
+    candidate_trusted: bool
+    failure_code: str | None
+    cleanup_integrity: _Task6CleanupIntegrity | None
+    promotion_safe: bool
+
+
+@dataclass(frozen=True)
+class _Task6IssuedRecord:
+    result_id: int
+    result_ref: weakref.ReferenceType[CodexWorkerResult]
+    run_id: str
+    operation: str
+    thread_id: str
+    turn_id: str | None
+    eligible: bool
+    state: _Task6ConsumptionState
+    integrity: _Task6ResultIntegrity
+
+
+_TASK6_ISSUANCE_LOCK = threading.Lock()
+_TASK6_ISSUED_BY_ID: dict[int, _Task6IssuedRecord] = {}
+MAX_TASK6_ISSUED_TUPLES = 4096
+_TASK6_ISSUED_BY_TUPLE: dict[
+    tuple[str, str, str, str | None], _Task6ConsumptionState
+] = {}
 
 
 class WorkerAdapter(Protocol):
@@ -1091,7 +1150,19 @@ class CodexWorkerSession:
             promotion_safe=False,
         )
         self._terminal_result = result
-        return result
+        try:
+            run_id = _task6_run_id(self._binding)
+            return _issue_task6_result(
+                result,
+                run_id=run_id,
+                operation=operation,
+            )
+        except CodexWorkerError as exc:
+            if exc.code != "TASK6_RESULT_PROVENANCE_INVALID":
+                raise
+            # Capacity refusal is already terminal and cleanup-safe.  Do not
+            # retry issuance or leave the session READY with a candidate.
+            return result
 
     def _invoke(
         self,
@@ -1159,7 +1230,7 @@ class CodexWorkerSession:
         if status == "failed":
             return self._cleanup_failure(operation, "WORKER_PROVIDER_FAILED")
         self._pending_candidate = candidate
-        return self._result(
+        result = self._result(
             operation=operation,
             status="COMPLETED",
             success=True,
@@ -1168,6 +1239,19 @@ class CodexWorkerSession:
             candidate_output=candidate,
             promotion_safe=False,
         )
+        try:
+            run_id = _task6_run_id(self._binding)
+            return _issue_task6_result(
+                result,
+                run_id=run_id,
+                operation=operation,
+            )
+        except CodexWorkerError as exc:
+            if exc.code != "TASK6_RESULT_PROVENANCE_INVALID":
+                raise
+            # A saturated ledger must use the existing lifecycle owner to
+            # clean up the successful provider attempt before refusing it.
+            return self._cleanup_failure(operation, "TASK6_RESULT_PROVENANCE_INVALID")
 
     def turn(
         self, payload: object, *, timeout_seconds: float, now: datetime | None = None
@@ -1343,7 +1427,203 @@ class CodexWorkerSession:
                 promotion_safe=True,
             )
         self._terminal_result = result
+        return _issue_task6_result(
+            result,
+            run_id=_task6_run_id(self._binding),
+            operation="close",
+        )
+
+
+def _task6_result_is_eligible(result: CodexWorkerResult) -> bool:
+    if (
+        type(result) is not CodexWorkerResult
+        or result.success is not True
+        or result.failure_code is not None
+        or result.candidate_trusted is not False
+    ):
+        return False
+    if result.operation in {"turn", "steer"}:
+        return result.status == "COMPLETED" and result.turn_id is not None
+    if result.operation == "close":
+        cleanup = result.cleanup_result
+        return (
+            result.status == "CLOSED"
+            and result.promotion_safe is True
+            and cleanup is not None
+            and cleanup.success is True
+            and cleanup.promotion_safe is True
+            and cleanup.survivor_count == 0
+        )
+    return False
+
+
+def _task6_run_id(binding: object) -> str:
+    run_id = getattr(binding, "run_id", None)
+    if type(run_id) is not str or not run_id:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    return run_id
+
+
+def _task6_cleanup_integrity(
+    cleanup: WorkerCleanupResult | None,
+) -> _Task6CleanupIntegrity | None:
+    if cleanup is None:
+        return None
+    if type(cleanup) is not WorkerCleanupResult:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if type(cleanup.status) is not str:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.success, bool):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.promotion_safe, bool):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.survivor_pids, tuple) or any(
+        not isinstance(pid, int) or isinstance(pid, bool)
+        for pid in cleanup.survivor_pids
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if not isinstance(cleanup.survivor_count, int) or isinstance(
+        cleanup.survivor_count, bool
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if cleanup.error_code is not None and type(cleanup.error_code) is not str:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    return _Task6CleanupIntegrity(
+        status=cleanup.status,
+        success=cleanup.success,
+        promotion_safe=cleanup.promotion_safe,
+        survivor_pids=tuple(cleanup.survivor_pids),
+        survivor_count=cleanup.survivor_count,
+        error_code=cleanup.error_code,
+    )
+
+
+def _task6_result_integrity(result: CodexWorkerResult) -> _Task6ResultIntegrity:
+    if (
+        type(result.operation) is not str
+        or type(result.status) is not str
+        or type(result.thread_id) is not str
+        or (result.turn_id is not None and type(result.turn_id) is not str)
+        or (result.failure_code is not None and type(result.failure_code) is not str)
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if type(result.events) is not tuple or any(
+        type(event) is not CodexWorkerEvent or type(event.kind) is not str
+        for event in result.events
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    return _Task6ResultIntegrity(
+        operation=result.operation,
+        status=result.status,
+        success=result.success,
+        thread_id=result.thread_id,
+        turn_id=result.turn_id,
+        event_kinds=tuple(event.kind for event in result.events),
+        candidate_output=_freeze_json_like(result.candidate_output),
+        candidate_trusted=result.candidate_trusted,
+        failure_code=result.failure_code,
+        cleanup_integrity=_task6_cleanup_integrity(result.cleanup_result),
+        promotion_safe=result.promotion_safe,
+    )
+
+
+def _issue_task6_result(
+    result: CodexWorkerResult,
+    *,
+    run_id: str,
+    operation: str,
+) -> CodexWorkerResult:
+    """Record one result only at the canonical session return boundary."""
+
+    if type(result) is not CodexWorkerResult:
         return result
+    result_id = id(result)
+    thread_id = result.thread_id
+    turn_id = result.turn_id
+    if (
+        type(run_id) is not str
+        or type(operation) is not str
+        or type(thread_id) is not str
+        or (turn_id is not None and type(turn_id) is not str)
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    tuple_key = (run_id, operation, thread_id, turn_id)
+
+    def remove_record(result_ref: weakref.ReferenceType[CodexWorkerResult]) -> None:
+        with _TASK6_ISSUANCE_LOCK:
+            current = _TASK6_ISSUED_BY_ID.get(result_id)
+            if current is not None and current.result_ref is result_ref:
+                _TASK6_ISSUED_BY_ID.pop(result_id, None)
+
+    with _TASK6_ISSUANCE_LOCK:
+        if result_id in _TASK6_ISSUED_BY_ID:
+            return result
+        duplicate_tuple = tuple_key in _TASK6_ISSUED_BY_TUPLE
+        if not duplicate_tuple and len(_TASK6_ISSUED_BY_TUPLE) >= MAX_TASK6_ISSUED_TUPLES:
+            _fail("TASK6_RESULT_PROVENANCE_INVALID")
+        state = _Task6ConsumptionState(duplicate_tuple=duplicate_tuple)
+        if not duplicate_tuple:
+            _TASK6_ISSUED_BY_TUPLE[tuple_key] = state
+        result_ref = weakref.ref(result, remove_record)
+        record = _Task6IssuedRecord(
+            result_id=result_id,
+            result_ref=result_ref,
+            run_id=run_id,
+            operation=operation,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            eligible=_task6_result_is_eligible(result) and not duplicate_tuple,
+            state=state,
+            integrity=_task6_result_integrity(result),
+        )
+        _TASK6_ISSUED_BY_ID[result_id] = record
+    return result
+
+
+def consume_task6_result(
+    result: CodexWorkerResult,
+    *,
+    run_id: str,
+    operation: str,
+    thread_id: str,
+    turn_id: str | None,
+) -> CodexWorkerResult:
+    """Consume one canonical Task6 result under its complete server tuple."""
+
+    if type(result) is not CodexWorkerResult:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if (
+        type(run_id) is not str
+        or type(operation) is not str
+        or type(thread_id) is not str
+        or (turn_id is not None and type(turn_id) is not str)
+    ):
+        _fail("TASK6_RESULT_TUPLE_INVALID")
+    result_id = id(result)
+    with _TASK6_ISSUANCE_LOCK:
+        record = _TASK6_ISSUED_BY_ID.get(result_id)
+    if record is None or record.result_ref() is not result:
+        _fail("TASK6_RESULT_PROVENANCE_MISSING")
+    if (
+        run_id != record.run_id
+        or operation != record.operation
+        or thread_id != record.thread_id
+        or turn_id != record.turn_id
+    ):
+        _fail("TASK6_RESULT_TUPLE_MISMATCH")
+    if not record.eligible or record.state.duplicate_tuple:
+        _fail("TASK6_RESULT_INELIGIBLE")
+    try:
+        integrity = _task6_result_integrity(result)
+    except Exception:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    if integrity != record.integrity:
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
+    with record.state.lock:
+        if record.state.consumed:
+            _fail("TASK6_RESULT_ALREADY_CONSUMED")
+        record.state.consumed = True
+    return result
 
 
 def _open_codex_worker(
@@ -1565,6 +1845,7 @@ __all__ = [
     "CodexWorkerEvent",
     "CodexWorkerResult",
     "CodexWorkerSession",
+    "consume_task6_result",
     "LazyOfficialSdkAdapter",
     "Task3ProcessBoundary",
     "WorkerAdapter",
