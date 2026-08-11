@@ -57,6 +57,9 @@ _FILE_SHARE_READ = 0x00000001
 _FILE_SHARE_WRITE = 0x00000002
 _OPEN_EXISTING = 3
 _FILE_ATTRIBUTE_NORMAL = 0x00000080
+_PIPE_NOWAIT = 0x00000001
+_ERROR_PIPE_BUSY = 231
+_ERROR_NO_DATA = 232
 _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
@@ -709,14 +712,36 @@ def _decode_control_body(body: bytes) -> Mapping[str, object]:
     return value
 
 
-def _api_write_all(api: object, handle: object, data: bytes) -> None:
+def _require_operation_deadline(deadline: float | None) -> None:
+    if deadline is None:
+        return
+    if (
+        isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or not math.isfinite(float(deadline))
+    ):
+        _fail("WORKER_LIMIT_INVALID")
+    if time.monotonic() >= float(deadline):
+        _fail("WORKER_TIMEOUT")
+
+
+def _api_write_all(
+    api: object, handle: object, data: bytes, *, deadline: float | None = None
+) -> None:
     writer = getattr(api, "write_handle", None)
+    deadline_writer = getattr(api, "write_handle_deadline", None)
     if not callable(writer):
         _fail("WORKER_CONTROL_UNAVAILABLE")
     offset = 0
     while offset < len(data):
+        _require_operation_deadline(deadline)
         try:
-            written = writer(handle, data[offset:])
+            if deadline is not None and callable(deadline_writer):
+                written = deadline_writer(handle, data[offset:], deadline=float(deadline))
+            else:
+                written = writer(handle, data[offset:])
+        except WorkerProcessError:
+            raise
         except Exception:
             _fail("WORKER_CONTROL_IO_FAILED")
         if isinstance(written, bool) or not isinstance(written, int) or written <= 0:
@@ -724,15 +749,24 @@ def _api_write_all(api: object, handle: object, data: bytes) -> None:
         offset += written
 
 
-def _api_read_exact(api: object, handle: object, size: int) -> bytes:
+def _api_read_exact(
+    api: object, handle: object, size: int, *, deadline: float | None = None
+) -> bytes:
     reader = getattr(api, "read_handle", None)
+    deadline_reader = getattr(api, "read_handle_deadline", None)
     if not callable(reader):
         _fail("WORKER_CONTROL_UNAVAILABLE")
     chunks: list[bytes] = []
     remaining = size
     while remaining:
+        _require_operation_deadline(deadline)
         try:
-            chunk = reader(handle, remaining)
+            if deadline is not None and callable(deadline_reader):
+                chunk = deadline_reader(handle, remaining, deadline=float(deadline))
+            else:
+                chunk = reader(handle, remaining)
+        except WorkerProcessError:
+            raise
         except Exception:
             _fail("WORKER_CONTROL_IO_FAILED")
         if not isinstance(chunk, bytes) or not chunk:
@@ -743,9 +777,13 @@ def _api_read_exact(api: object, handle: object, size: int) -> bytes:
 
 
 def exchange_worker_control(
-    handle: WorkerProcessHandle, payload: Mapping[str, object]
+    handle: WorkerProcessHandle,
+    payload: Mapping[str, object],
+    *,
+    deadline: float | None = None,
 ) -> Mapping[str, object]:
     handle = _require_issued_handle(handle)
+    _require_operation_deadline(deadline)
     if not isinstance(payload, Mapping):
         _fail("WORKER_CONTROL_FRAME_INVALID")
     if (
@@ -759,12 +797,27 @@ def exchange_worker_control(
     frame = _encode_control_frame(
         {"version": _CONTROL_FRAME_VERSION, "request_id": request_id, "payload": dict(payload)}
     )
-    _api_write_all(handle._api, handle._control_write_handle, frame)
-    header = _api_read_exact(handle._api, handle._control_read_handle, 4)
+    _api_write_all(
+        handle._api,
+        handle._control_write_handle,
+        frame,
+        deadline=deadline,
+    )
+    header = _api_read_exact(
+        handle._api,
+        handle._control_read_handle,
+        4,
+        deadline=deadline,
+    )
     length = struct.unpack(">I", header)[0]
     if length <= 0 or length > MAX_CONTROL_FRAME_BYTES:
         _fail("WORKER_CONTROL_FRAME_INVALID")
-    body = _api_read_exact(handle._api, handle._control_read_handle, length)
+    body = _api_read_exact(
+        handle._api,
+        handle._control_read_handle,
+        length,
+        deadline=deadline,
+    )
     envelope = _decode_control_body(body)
     if (
         envelope.get("version") != _CONTROL_FRAME_VERSION
@@ -1083,6 +1136,22 @@ class _CtypesWindowsProcessApi:
         k32.CreatePipe.restype = wintypes.BOOL
         k32.SetHandleInformation.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD]
         k32.SetHandleInformation.restype = wintypes.BOOL
+        k32.SetNamedPipeHandleState.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        k32.SetNamedPipeHandleState.restype = wintypes.BOOL
+        k32.PeekNamedPipe.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        k32.PeekNamedPipe.restype = wintypes.BOOL
         k32.InitializeProcThreadAttributeList.argtypes = [
             ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.c_size_t)
         ]
@@ -1203,6 +1272,13 @@ class _CtypesWindowsProcessApi:
         if not self._kernel32.SetHandleInformation(handle, _HANDLE_FLAG_INHERIT, 0):
             raise OSError
 
+    def _set_pipe_nowait(self, handle: object) -> None:
+        mode = wintypes.DWORD(_PIPE_NOWAIT)
+        if not self._kernel32.SetNamedPipeHandleState(
+            handle, ctypes.byref(mode), None, None
+        ):
+            raise OSError
+
     def _create_null_writer(self, security: _SECURITY_ATTRIBUTES) -> object:
         handle = self._kernel32.CreateFileW(
             "NUL",
@@ -1231,6 +1307,7 @@ class _CtypesWindowsProcessApi:
             parent_read, child_write = self._create_pipe()
             self._set_not_inheritable(parent_write)
             self._set_not_inheritable(parent_read)
+            self._set_pipe_nowait(parent_write)
             security = _SECURITY_ATTRIBUTES(
                 nLength=ctypes.sizeof(_SECURITY_ATTRIBUTES),
                 lpSecurityDescriptor=None,
@@ -1308,6 +1385,21 @@ class _CtypesWindowsProcessApi:
                 self._kernel32.DeleteProcThreadAttributeList(attribute_list)
             del attribute_buffer
 
+    def _pipe_available(self, handle: object) -> int:
+        available = wintypes.DWORD()
+        if not self._kernel32.PeekNamedPipe(
+            handle, None, 0, None, ctypes.byref(available), None
+        ):
+            raise OSError
+        return int(available.value)
+
+    @staticmethod
+    def _deadline_sleep(deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise WorkerProcessError("WORKER_TIMEOUT")
+        time.sleep(min(0.005, remaining))
+
     def read_handle(self, handle: object, size: int) -> bytes:
         requested = min(size, 64 * 1024)
         buffer = ctypes.create_string_buffer(requested)
@@ -1318,6 +1410,15 @@ class _CtypesWindowsProcessApi:
             raise OSError
         return bytes(buffer.raw[: int(read.value)])
 
+    def read_handle_deadline(self, handle: object, size: int, *, deadline: float) -> bytes:
+        while True:
+            if time.monotonic() >= deadline:
+                raise WorkerProcessError("WORKER_TIMEOUT")
+            available = self._pipe_available(handle)
+            if available > 0:
+                return self.read_handle(handle, min(size, available))
+            self._deadline_sleep(deadline)
+
     def write_handle(self, handle: object, data: bytes) -> int:
         chunk = data[: 64 * 1024]
         buffer = ctypes.create_string_buffer(chunk, len(chunk))
@@ -1327,6 +1428,26 @@ class _CtypesWindowsProcessApi:
         ):
             raise OSError
         return int(written.value)
+
+    def write_handle_deadline(self, handle: object, data: bytes, *, deadline: float) -> int:
+        chunk = data[: 64 * 1024]
+        while True:
+            if time.monotonic() >= deadline:
+                raise WorkerProcessError("WORKER_TIMEOUT")
+            buffer = ctypes.create_string_buffer(chunk, len(chunk))
+            written = wintypes.DWORD()
+            ctypes.set_last_error(0)
+            if self._kernel32.WriteFile(
+                handle, buffer, len(chunk), ctypes.byref(written), None
+            ):
+                count = int(written.value)
+                if count > 0:
+                    return count
+            else:
+                error = ctypes.get_last_error()
+                if error not in {_ERROR_PIPE_BUSY, _ERROR_NO_DATA}:
+                    raise OSError
+            self._deadline_sleep(deadline)
 
     def assign_process(self, job_handle: object, process_handle: object) -> None:
         if not self._kernel32.AssignProcessToJobObject(job_handle, process_handle):

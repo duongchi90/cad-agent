@@ -1222,7 +1222,10 @@ class _ChildOnlyBoundary(_Task3HarnessBoundary):
         return _FakeAdapter().invoke(request)
 
 
-def _task3_harness_exchange(handle: object, payload: Mapping[str, object]) -> object:
+def _task3_harness_exchange(
+    handle: object, payload: Mapping[str, object], *, deadline: float | None = None
+) -> object:
+    del deadline
     if not isinstance(handle, _Task3HarnessHandle):
         raise _HarnessWorkerProcessError("WORKER_HANDLE_INVALID")
     request = _worker_module._request_from_wire(payload)
@@ -1450,9 +1453,11 @@ def _task3_round2_control_invoke(boundary: object, request: AdapterRequest) -> o
     return adapter.invoke(request)
 
 
-def _task3_harness_exchange(handle: object, payload: Mapping[str, object]) -> object:  # noqa: F811
+def _task3_harness_exchange(
+    handle: object, payload: Mapping[str, object], *, deadline: float | None = None
+) -> object:  # noqa: F811
     if not isinstance(handle, _Task3HarnessHandle):
-        return _task3_round2_real_exchange(handle, payload)
+        return _task3_round2_real_exchange(handle, payload, deadline=deadline)
     request = _worker_module._request_from_wire(payload)
     boundary = handle.boundary
     try:
