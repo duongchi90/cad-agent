@@ -115,7 +115,7 @@ def _fail(code: str) -> None:
 
 
 def _freeze_json_like(value: object) -> object:
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or type(value) is str or isinstance(value, (bool, int)):
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
@@ -1150,8 +1150,8 @@ class CodexWorkerSession:
             promotion_safe=False,
         )
         self._terminal_result = result
-        run_id = _task6_run_id(self._binding)
         try:
+            run_id = _task6_run_id(self._binding)
             return _issue_task6_result(
                 result,
                 run_id=run_id,
@@ -1239,8 +1239,8 @@ class CodexWorkerSession:
             candidate_output=candidate,
             promotion_safe=False,
         )
-        run_id = _task6_run_id(self._binding)
         try:
+            run_id = _task6_run_id(self._binding)
             return _issue_task6_result(
                 result,
                 run_id=run_id,
@@ -1471,7 +1471,7 @@ def _task6_cleanup_integrity(
         return None
     if type(cleanup) is not WorkerCleanupResult:
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
-    if not isinstance(cleanup.status, str):
+    if type(cleanup.status) is not str:
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
     if not isinstance(cleanup.success, bool):
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
@@ -1486,7 +1486,7 @@ def _task6_cleanup_integrity(
         cleanup.survivor_count, bool
     ):
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
-    if cleanup.error_code is not None and not isinstance(cleanup.error_code, str):
+    if cleanup.error_code is not None and type(cleanup.error_code) is not str:
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
     return _Task6CleanupIntegrity(
         status=cleanup.status,
@@ -1499,8 +1499,16 @@ def _task6_cleanup_integrity(
 
 
 def _task6_result_integrity(result: CodexWorkerResult) -> _Task6ResultIntegrity:
+    if (
+        type(result.operation) is not str
+        or type(result.status) is not str
+        or type(result.thread_id) is not str
+        or (result.turn_id is not None and type(result.turn_id) is not str)
+        or (result.failure_code is not None and type(result.failure_code) is not str)
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
     if type(result.events) is not tuple or any(
-        type(event) is not CodexWorkerEvent or not isinstance(event.kind, str)
+        type(event) is not CodexWorkerEvent or type(event.kind) is not str
         for event in result.events
     ):
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
