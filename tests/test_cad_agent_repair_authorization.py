@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from importlib import import_module
 
 import pytest
@@ -142,11 +142,34 @@ class _HostileString(str):
         raise AssertionError("hostile hash was invoked")
 
 
+class _HostileTimezone(tzinfo):
+    def utcoffset(self, dt):  # pragma: no cover - should never be called
+        del dt
+        raise RuntimeError("hostile timezone")
+
+    def dst(self, dt):  # pragma: no cover - should never be called
+        del dt
+        raise RuntimeError("hostile timezone")
+
+
 def test_hostile_string_subclass_cannot_satisfy_tuple_comparison() -> None:
     token = _issue()
     with pytest.raises(_owner().RepairAuthorizationError) as exc_info:
         _consume(token, run_id=_HostileString(_FIELDS["run_id"]))
     assert exc_info.value.code == "TUPLE_INVALID"
+    assert _consume(token) is token
+
+
+@pytest.mark.parametrize("slot", ["_created_at", "_expires_at"])
+def test_noncanonical_clock_timezone_fails_closed_without_burning(slot: str) -> None:
+    owner = _owner()
+    token = _issue()
+    original = getattr(token, slot)
+    object.__setattr__(token, slot, original.replace(tzinfo=_HostileTimezone()))
+    with pytest.raises(owner.RepairAuthorizationError) as exc_info:
+        _consume(token)
+    assert exc_info.value.code == "INTEGRITY_INVALID"
+    object.__setattr__(token, slot, original)
     assert _consume(token) is token
 
 

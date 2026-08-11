@@ -329,6 +329,14 @@ def _handle_matches_issuance_snapshot(
         return False
     if type(authorization._expires_at) is not datetime:
         return False
+    if authorization._created_at.tzinfo is not timezone.utc:
+        return False
+    if authorization._expires_at.tzinfo is not timezone.utc:
+        return False
+    if state.created_at.tzinfo is not timezone.utc:
+        return False
+    if state.expires_at.tzinfo is not timezone.utc:
+        return False
     return (
         authorization._created_at == state.created_at
         and authorization._expires_at == state.expires_at
