@@ -8,6 +8,7 @@ import json
 import ntpath
 import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -566,6 +567,23 @@ class DisposableWorkspaceClosureError(DisposableWorkspaceError):
         )
 
 
+@dataclass(slots=True)
+class _DisposableWorkspaceState:
+    """Private canonical lifecycle and binding snapshot for one lease."""
+
+    lease_id: str
+    workspace_path: Path
+    candidate_identity: str
+    source_identity: str
+    source_fingerprint: str
+    purpose: str
+    expires_at: float
+    lifecycle_state: str = "active"
+    closure: DisposableWorkspaceClosure | None = field(default=None, repr=False)
+    failure: DisposableWorkspaceClosure | None = field(default=None, repr=False)
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+
+
 class DotNetIPCClient:
     """Write, trigger, and bounded-poll one request at a time.
 
@@ -601,6 +619,7 @@ class DotNetIPCClient:
         self._disposable_root = self._resolve_disposable_root(disposable_root)
         self._disposable_leases: dict[str, DisposableWorkspaceLease] = {}
         self._disposable_closures: dict[str, DisposableWorkspaceClosure] = {}
+        self._disposable_states: dict[str, _DisposableWorkspaceState] = {}
 
     def request(
         self,
@@ -790,6 +809,15 @@ class DotNetIPCClient:
                 _lifecycle=lifecycle,
             )
             self._disposable_leases[lease_id] = lease
+            self._disposable_states[lease_id] = _DisposableWorkspaceState(
+                lease_id=lease_id,
+                workspace_path=workspace_path.resolve(),
+                candidate_identity=candidate_identity,
+                source_identity=source_identity,
+                source_fingerprint=source_fingerprint,
+                purpose=purpose,
+                expires_at=created_at + float(ttl_seconds),
+            )
             return lease
         raise ValueError("disposable workspace identity collision")
 
@@ -804,77 +832,96 @@ class DotNetIPCClient:
         """Close and remove one issued workspace, returning immutable evidence."""
 
         self._validate_disposable_lease(lease)
-        self._validate_disposable_binding(
-            candidate_identity,
-            source_identity,
-            source_fingerprint,
-            lease.purpose,
-        )
-        if (
-            candidate_identity != lease.candidate_identity
-            or source_identity != lease.source_identity
-            or source_fingerprint != lease.source_fingerprint
-        ):
-            raise DotNetIPCProtocolError("disposable workspace binding mismatch")
-        existing = self._disposable_closures.get(lease.lease_id)
-        if existing is not None:
-            return existing
-        if lease.lifecycle_state != "active":
-            raise DotNetIPCProtocolError("disposable workspace lease is not active")
-        if time.time() >= lease.expires_at:
-            raise DotNetIPCProtocolError("disposable workspace lease is expired")
-        if not self._workspace_path_is_owned(lease.workspace_path):
-            closure = self._failed_disposable_closure(
-                lease,
-                close_outcome="not_attempted",
-                cleanup_outcome="failed",
-                lifecycle_state="cleanup_failed",
-            )
-            raise DisposableWorkspaceClosureError(closure)
+        state = self._disposable_states.get(lease.lease_id)
+        if state is None:
+            raise DotNetIPCProtocolError("disposable workspace lease provenance invalid")
 
-        try:
-            self.close_disposable(
-                str(lease.workspace_path),
-                disposable=True,
-                save_changes=False,
-                request_id=f"close-{lease.lease_id}",
-            )
-        except (DotNetIPCError, OSError, ValueError):
-            closure = self._failed_disposable_closure(
-                lease,
-                close_outcome="failed",
-                cleanup_outcome="not_attempted",
-                lifecycle_state="close_failed",
-            )
-            raise DisposableWorkspaceClosureError(closure) from None
+        with state.lock:
+            existing = state.closure or self._disposable_closures.get(lease.lease_id)
+            if existing is not None:
+                return existing
+            if state.failure is not None:
+                raise DisposableWorkspaceClosureError(state.failure) from None
 
-        try:
-            _remove_tree_without_reparse(lease.workspace_path)
-            if lease.workspace_path.exists():
-                raise OSError("disposable workspace survivors remain")
-        except (OSError, ValueError):
-            closure = self._failed_disposable_closure(
-                lease,
+            self._validate_disposable_binding(
+                candidate_identity,
+                source_identity,
+                source_fingerprint,
+                state.purpose,
+            )
+            if (
+                candidate_identity != state.candidate_identity
+                or source_identity != state.source_identity
+                or source_fingerprint != state.source_fingerprint
+            ):
+                raise DotNetIPCProtocolError("disposable workspace binding mismatch")
+            if state.lifecycle_state != "active":
+                raise DotNetIPCProtocolError("disposable workspace lease is not active")
+            if time.time() >= state.expires_at:
+                raise DotNetIPCProtocolError("disposable workspace lease is expired")
+            if not self._workspace_path_is_owned(state.workspace_path):
+                closure = self._failed_disposable_closure(
+                    lease,
+                    state=state,
+                    close_outcome="not_attempted",
+                    cleanup_outcome="failed",
+                    lifecycle_state="cleanup_failed",
+                )
+                state.failure = closure
+                raise DisposableWorkspaceClosureError(closure)
+
+            state.lifecycle_state = "closing"
+            try:
+                self.close_disposable(
+                    str(state.workspace_path),
+                    disposable=True,
+                    save_changes=False,
+                    request_id=f"close-{state.lease_id}",
+                )
+            except (DotNetIPCError, OSError, ValueError):
+                state.lifecycle_state = "active"
+                closure = self._failed_disposable_closure(
+                    lease,
+                    state=state,
+                    close_outcome="failed",
+                    cleanup_outcome="not_attempted",
+                    lifecycle_state="close_failed",
+                )
+                state.failure = closure
+                raise DisposableWorkspaceClosureError(closure) from None
+
+            try:
+                _remove_tree_without_reparse(state.workspace_path)
+                if state.workspace_path.exists():
+                    raise OSError("disposable workspace survivors remain")
+            except (OSError, ValueError):
+                state.lifecycle_state = "active"
+                closure = self._failed_disposable_closure(
+                    lease,
+                    state=state,
+                    close_outcome="closed",
+                    cleanup_outcome="failed",
+                    lifecycle_state="cleanup_failed",
+                )
+                state.failure = closure
+                raise DisposableWorkspaceClosureError(closure) from None
+
+            closure = DisposableWorkspaceClosure(
+                lease_id=state.lease_id,
+                workspace_path=state.workspace_path,
+                candidate_identity=state.candidate_identity,
+                source_identity=state.source_identity,
+                source_fingerprint=state.source_fingerprint,
                 close_outcome="closed",
-                cleanup_outcome="failed",
-                lifecycle_state="cleanup_failed",
+                cleanup_outcome="zero_survivors",
+                save_changes=False,
+                lifecycle_state="closed",
             )
-            raise DisposableWorkspaceClosureError(closure) from None
-
-        closure = DisposableWorkspaceClosure(
-            lease_id=lease.lease_id,
-            workspace_path=lease.workspace_path,
-            candidate_identity=lease.candidate_identity,
-            source_identity=lease.source_identity,
-            source_fingerprint=lease.source_fingerprint,
-            close_outcome="closed",
-            cleanup_outcome="zero_survivors",
-            save_changes=False,
-            lifecycle_state="closed",
-        )
-        lease._lifecycle.value = "closed"
-        self._disposable_closures[lease.lease_id] = closure
-        return closure
+            state.lifecycle_state = "closed"
+            state.closure = closure
+            lease._lifecycle.value = "closed"
+            self._disposable_closures[state.lease_id] = closure
+            return closure
 
     @staticmethod
     def _validate_disposable_binding(
@@ -959,16 +1006,18 @@ class DotNetIPCClient:
     def _failed_disposable_closure(
         lease: DisposableWorkspaceLease,
         *,
+        state: _DisposableWorkspaceState | None = None,
         close_outcome: str,
         cleanup_outcome: str,
         lifecycle_state: str,
     ) -> DisposableWorkspaceClosure:
+        source = state if state is not None else lease
         return DisposableWorkspaceClosure(
-            lease_id=lease.lease_id,
-            workspace_path=lease.workspace_path,
-            candidate_identity=lease.candidate_identity,
-            source_identity=lease.source_identity,
-            source_fingerprint=lease.source_fingerprint,
+            lease_id=source.lease_id,
+            workspace_path=source.workspace_path,
+            candidate_identity=source.candidate_identity,
+            source_identity=source.source_identity,
+            source_fingerprint=source.source_fingerprint,
             close_outcome=close_outcome,
             cleanup_outcome=cleanup_outcome,
             save_changes=False,

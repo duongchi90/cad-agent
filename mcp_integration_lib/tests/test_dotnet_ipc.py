@@ -4,8 +4,10 @@ import copy
 import importlib
 import json
 import os
+import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -747,6 +749,64 @@ class DotNetIPCClientTests(unittest.TestCase):
                             source_fingerprint="a" * 64,
                         )
             self.assertEqual("active", lease.lifecycle_state)
+
+    def test_disposable_workspace_lifecycle_snapshot_tamper_does_not_strand_owner(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, FakeDispatcher(ipc_dir))
+            lease = self._issue_disposable(client, root)
+            lease._lifecycle.value = "closed"
+
+            closure = client.close_disposable_workspace(
+                lease,
+                candidate_identity="candidate-001",
+                source_identity="source-001",
+                source_fingerprint="a" * 64,
+            )
+
+            self.assertEqual("closed", closure.lifecycle_state)
+            self.assertFalse(lease.workspace_path.exists())
+            self.assertEqual("closed", lease.lifecycle_state)
+
+    def test_disposable_workspace_concurrent_close_issues_one_transport_attempt(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            calls = 0
+            calls_lock = threading.Lock()
+
+            def dispatcher() -> None:
+                nonlocal calls
+                with calls_lock:
+                    calls += 1
+                time.sleep(0.1)
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                atomic_write_json(
+                    result_path(ipc_dir, str(request["request_id"])),
+                    _result(request),
+                )
+
+            client = self._disposable_client(ipc_dir, root, dispatcher)
+            lease = self._issue_disposable(client, root)
+            kwargs = {
+                "candidate_identity": "candidate-001",
+                "source_identity": "source-001",
+                "source_fingerprint": "a" * 64,
+            }
+            start = threading.Barrier(2)
+
+            def close_once():
+                start.wait()
+                return client.close_disposable_workspace(lease, **kwargs)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(pool.map(lambda _: close_once(), range(2)))
+
+            self.assertEqual(1, calls)
+            self.assertIs(outcomes[0], outcomes[1])
+            self.assertEqual("closed", lease.lifecycle_state)
 
     def test_disposable_workspace_rejects_hostile_string_and_path_subclasses(self) -> None:
         class HostileString(str):
