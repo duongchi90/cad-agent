@@ -16,9 +16,11 @@ from types import MappingProxyType
 
 
 REPAIR_OPERATION_SCHEMA_VERSION = "repair-operation-1.0"
-SUPPORTED_OPERATION_KINDS = frozenset({"REPAIR_DXF_PRIMITIVE", "REPAIR_DXF_COMPONENT"})
+SUPPORTED_OPERATION_KINDS = frozenset({"REPAIR_DXF_PRIMITIVE"})
 _PRIMITIVE_TYPES = frozenset({"LINE", "CIRCLE", "ARC", "TEXT"})
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_LAYER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_HANDLE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class RepairOperationContractError(ValueError):
@@ -93,7 +95,7 @@ def _thaw(value: object) -> object:
     return value
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RepairOperation:
     """Immutable normalized operation routed to an existing executor owner."""
 
@@ -114,62 +116,86 @@ class RepairOperation:
             "constraint_refs": list(self.constraint_refs),
         }
 
+    def as_executor_payload(self) -> dict[str, object]:
+        """Return fields that map directly to the accepted A2 executor."""
+        return {
+            "capability": self.parameters["capability"],
+            "target_handle": self.target["target_handle"],
+            "geometry": _thaw(self.parameters["geometry"]),
+            "layer": self.target["layer"],
+        }
 
-def _validate_primitive_parameters(parameters: dict[str, object]) -> dict[str, object]:
-    entity_type = _plain_string(parameters.get("entity_type"), "parameters.entity_type")
-    if entity_type not in _PRIMITIVE_TYPES:
-        _fail("parameters.entity_type", "is unsupported")
-    required: dict[str, set[str]] = {
-        "LINE": {"entity_type", "start", "end"},
-        "CIRCLE": {"entity_type", "center", "radius"},
-        "ARC": {"entity_type", "center", "radius", "start_angle_deg", "end_angle_deg"},
-        "TEXT": {"entity_type", "content", "insert", "height", "rotation_deg"},
+
+def _validate_target(target: object) -> dict[str, object]:
+    target = _keys(target, {"target_handle", "layer"}, "target")
+    handle = target["target_handle"]
+    if handle is not None and (type(handle) is not str or _HANDLE_RE.fullmatch(handle) is None):
+        _fail("target.target_handle", "is invalid")
+    layer = target["layer"]
+    if layer is not None and (type(layer) is not str or _LAYER_RE.fullmatch(layer) is None):
+        _fail("target.layer", "is invalid")
+    return {"target_handle": handle, "layer": layer}
+
+
+def _validate_geometry(capability: object, geometry: object) -> dict[str, object]:
+    capability = _plain_string(capability, "parameters.capability")
+    if capability not in _PRIMITIVE_TYPES:
+        _fail("parameters.capability", "is unsupported")
+    if type(geometry) is not dict:
+        _fail("parameters.geometry", "must be a closed object")
+    expected_fields: dict[str, set[str]] = {
+        "LINE": {"type", "start", "end"},
+        "CIRCLE": {"type", "center", "radius"},
+        "ARC": {"type", "center", "radius", "start_angle_deg", "end_angle_deg"},
+        "TEXT": {"type", "content", "insert", "height", "rotation_deg"},
     }
-    parameters = _keys(parameters, required[entity_type], "parameters")
-    if entity_type == "LINE":
-        parameters["start"] = _point(parameters["start"], "parameters.start")
-        parameters["end"] = _point(parameters["end"], "parameters.end")
-    elif entity_type == "CIRCLE":
-        parameters["center"] = _point(parameters["center"], "parameters.center")
-        parameters["radius"] = _number(parameters["radius"], "parameters.radius", positive=True)
-    elif entity_type == "ARC":
-        parameters["center"] = _point(parameters["center"], "parameters.center")
-        parameters["radius"] = _number(parameters["radius"], "parameters.radius", positive=True)
-        parameters["start_angle_deg"] = _number(parameters["start_angle_deg"], "parameters.start_angle_deg")
-        parameters["end_angle_deg"] = _number(parameters["end_angle_deg"], "parameters.end_angle_deg")
-    else:
-        parameters["content"] = _plain_string(parameters["content"], "parameters.content")
-        parameters["insert"] = _point(parameters["insert"], "parameters.insert")
-        parameters["height"] = _number(parameters["height"], "parameters.height", positive=True)
-        parameters["rotation_deg"] = _number(parameters["rotation_deg"], "parameters.rotation_deg")
-    return parameters
-
-
-def _validate_component_parameters(parameters: dict[str, object]) -> dict[str, object]:
-    parameters = _keys(
-        parameters,
-        {"block_name", "insert", "scale", "rotation_deg", "attributes"},
-        "parameters",
-    )
-    _plain_string(parameters["block_name"], "parameters.block_name", identifier=True)
-    parameters["insert"] = _point(parameters["insert"], "parameters.insert", dimensions=3)
-    scale = _point(parameters["scale"], "parameters.scale", dimensions=3)
-    if any(item <= 0 for item in scale):
-        _fail("parameters.scale", "must contain positive values")
-    parameters["scale"] = scale
-    parameters["rotation_deg"] = _number(parameters["rotation_deg"], "parameters.rotation_deg")
-    attributes = parameters["attributes"]
-    if type(attributes) is not dict or any(type(key) is not str for key in attributes):
-        _fail("parameters.attributes", "must be a closed string-keyed object")
-    for key, value in attributes.items():
-        _plain_string(key, "parameters.attributes key", identifier=True)
-        _plain_string(value, "parameters.attributes value")
-    return parameters
+    geometry = _keys(geometry, expected_fields[capability], "parameters.geometry")
+    expected_type = capability.lower()
+    if type(geometry["type"]) is not str or geometry["type"] != expected_type:
+        _fail("parameters.geometry.type", "does not match capability")
+    if capability == "LINE":
+        return {
+            "type": "line",
+            "start": _point(geometry["start"], "parameters.geometry.start"),
+            "end": _point(geometry["end"], "parameters.geometry.end"),
+        }
+    if capability == "CIRCLE":
+        return {
+            "type": "circle",
+            "center": _point(geometry["center"], "parameters.geometry.center"),
+            "radius": _number(geometry["radius"], "parameters.geometry.radius", positive=True),
+        }
+    if capability == "ARC":
+        return {
+            "type": "arc",
+            "center": _point(geometry["center"], "parameters.geometry.center"),
+            "radius": _number(geometry["radius"], "parameters.geometry.radius", positive=True),
+            "start_angle_deg": _number(
+                geometry["start_angle_deg"], "parameters.geometry.start_angle_deg"
+            ),
+            "end_angle_deg": _number(
+                geometry["end_angle_deg"], "parameters.geometry.end_angle_deg"
+            ),
+        }
+    return {
+        "type": "text",
+        "content": _plain_string(geometry["content"], "parameters.geometry.content"),
+        "insert": _point(geometry["insert"], "parameters.geometry.insert"),
+        "height": _number(geometry["height"], "parameters.geometry.height", positive=True),
+        "rotation_deg": _number(geometry["rotation_deg"], "parameters.geometry.rotation_deg"),
+    }
 
 
 def normalize_repair_operation(payload: object) -> RepairOperation:
-    if isinstance(payload, RepairOperation):
-        return payload
+    if type(payload) is RepairOperation:
+        try:
+            # Reconstruct from the public record and run the same closed
+            # validator; never trust a caller-constructed or mutated instance.
+            payload = payload.as_dict()
+        except Exception:
+            _fail("operation", "is invalid")
+    elif isinstance(payload, RepairOperation):
+        _fail("operation", "is invalid")
     root = _keys(
         payload,
         {"schema_version", "operation", "target", "parameters", "preserve_anchors", "constraint_refs"},
@@ -180,20 +206,14 @@ def normalize_repair_operation(payload: object) -> RepairOperation:
     operation = _plain_string(root["operation"], "operation")
     if operation not in SUPPORTED_OPERATION_KINDS:
         _fail("operation", "is unsupported")
-    target = _keys(root["target"], {"stable_entity_id", "feature"}, "target")
-    target = {
-        "stable_entity_id": _plain_string(target["stable_entity_id"], "target.stable_entity_id", identifier=True),
-        "feature": _plain_string(target["feature"], "target.feature", identifier=True),
+    target = _validate_target(root["target"])
+    parameters_root = _keys(root["parameters"], {"capability", "geometry"}, "parameters")
+    parameters = {
+        "capability": _plain_string(parameters_root["capability"], "parameters.capability"),
+        "geometry": _validate_geometry(
+            parameters_root["capability"], parameters_root["geometry"]
+        ),
     }
-    if type(root["parameters"]) is not dict:
-        _fail("parameters", "must be a closed object")
-    # Validate operation-specific keys on a mutable local copy; the caller's
-    # containers are never retained by the normalized record.
-    parameters = dict(root["parameters"])
-    if operation == "REPAIR_DXF_PRIMITIVE":
-        parameters = _validate_primitive_parameters(parameters)
-    else:
-        parameters = _validate_component_parameters(parameters)
     preserve_anchors = _string_list(root["preserve_anchors"], "preserve_anchors")
     constraint_refs = _string_list(root["constraint_refs"], "constraint_refs")
     frozen_target = _freeze(target, "target")
