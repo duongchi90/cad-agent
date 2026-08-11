@@ -125,7 +125,7 @@ def _freeze_json_like(value: object) -> object:
         frozen: dict[str, object] = {}
         try:
             for key, item in value.items():
-                if not isinstance(key, str):
+                if type(key) is not str:
                     _fail("WORKER_PROVIDER_RESPONSE_INVALID")
                 frozen[key] = _freeze_json_like(item)
         except CodexWorkerError:

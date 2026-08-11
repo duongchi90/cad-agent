@@ -1558,6 +1558,8 @@ def test_68_capacity_refusal_finalizes_successful_turn_through_cleanup(
 
 
 class _HostileEqualStr(str):
+    __hash__ = str.__hash__
+
     def __eq__(self, other: object) -> bool:
         return True
 
@@ -1643,6 +1645,28 @@ def test_73_successful_provider_with_hostile_run_id_finalizes_cleanup(
     assert session._terminal_result is result
     assert session._pending_candidate is None
     assert len(cleanup_calls) == 1
+
+
+def test_74_nested_candidate_mapping_key_tamper_fails_without_burn(
+    monkeypatch,
+) -> None:
+    run_id = "RUN-NESTED-CANDIDATE-KEY"
+    result = _canonical_turn_result(
+        monkeypatch,
+        run_id=run_id,
+        response=_response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)],
+            candidate={"outer": {"foo": "bar"}},
+        ),
+    )
+    original = result.candidate_output
+    result.__dict__["candidate_output"] = {
+        "outer": {_HostileEqualStr("foo"): "bar"}
+    }
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id=run_id)
+    result.__dict__["candidate_output"] = original
+    _consume_provenance_red(result, run_id=run_id)
 
 
 @pytest.mark.parametrize("field", ["operation", "status", "thread_id", "turn_id"])
