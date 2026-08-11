@@ -1515,3 +1515,68 @@ def test_67_task6_tuple_ledger_is_bounded_without_eviction(monkeypatch) -> None:
             operation="turn",
         )
     assert len(worker._TASK6_ISSUED_BY_TUPLE) == capacity
+
+
+def test_68_capacity_refusal_finalizes_successful_turn_through_cleanup(
+    monkeypatch,
+) -> None:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(740.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)]
+        ),
+    )
+    monkeypatch.setattr(worker, "_TASK6_ISSUANCE_LOCK", threading.Lock())
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_ID", {})
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_TUPLE", {})
+    monkeypatch.setattr(worker, "MAX_TASK6_ISSUED_TUPLES", 0)
+
+    result = session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+
+    assert result.status == "FAILED"
+    assert result.success is False
+    assert result.failure_code == "TASK6_RESULT_PROVENANCE_INVALID"
+    assert result.cleanup_result is not None
+    assert result.cleanup_result.survivor_count == 0
+    assert session.status == "FAILED"
+    assert session._terminal_result is result
+    assert session._pending_candidate is None
+    assert session.turn({"prompt": "retry"}, timeout_seconds=1.0) is result
+
+
+class _HostileEqualStr(str):
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+
+@pytest.mark.parametrize("field", ["run_id", "operation", "thread_id", "turn_id"])
+def test_69_hostile_string_subclass_cannot_bypass_tuple_authority(
+    monkeypatch, field: str
+) -> None:
+    run_id = f"RUN-HOSTILE-{field}"
+    result = _canonical_turn_result(monkeypatch, run_id=run_id)
+    hostile = {
+        "run_id": _HostileEqualStr("FOREIGN-RUN"),
+        "operation": _HostileEqualStr("steer"),
+        "thread_id": _HostileEqualStr("FOREIGN-THREAD"),
+        "turn_id": _HostileEqualStr("FOREIGN-TURN"),
+    }
+    kwargs = {
+        "run_id": run_id,
+        "operation": "turn",
+        "thread_id": THREAD_ID,
+        "turn_id": TURN_ID,
+    }
+    kwargs[field] = hostile[field]
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, **kwargs)
+    _consume_provenance_red(result, run_id=run_id)

@@ -1150,11 +1150,19 @@ class CodexWorkerSession:
             promotion_safe=False,
         )
         self._terminal_result = result
-        return _issue_task6_result(
-            result,
-            run_id=_task6_run_id(self._binding),
-            operation=operation,
-        )
+        run_id = _task6_run_id(self._binding)
+        try:
+            return _issue_task6_result(
+                result,
+                run_id=run_id,
+                operation=operation,
+            )
+        except CodexWorkerError as exc:
+            if exc.code != "TASK6_RESULT_PROVENANCE_INVALID":
+                raise
+            # Capacity refusal is already terminal and cleanup-safe.  Do not
+            # retry issuance or leave the session READY with a candidate.
+            return result
 
     def _invoke(
         self,
@@ -1231,11 +1239,19 @@ class CodexWorkerSession:
             candidate_output=candidate,
             promotion_safe=False,
         )
-        return _issue_task6_result(
-            result,
-            run_id=_task6_run_id(self._binding),
-            operation=operation,
-        )
+        run_id = _task6_run_id(self._binding)
+        try:
+            return _issue_task6_result(
+                result,
+                run_id=run_id,
+                operation=operation,
+            )
+        except CodexWorkerError as exc:
+            if exc.code != "TASK6_RESULT_PROVENANCE_INVALID":
+                raise
+            # A saturated ledger must use the existing lifecycle owner to
+            # clean up the successful provider attempt before refusing it.
+            return self._cleanup_failure(operation, "TASK6_RESULT_PROVENANCE_INVALID")
 
     def turn(
         self, payload: object, *, timeout_seconds: float, now: datetime | None = None
@@ -1443,7 +1459,7 @@ def _task6_result_is_eligible(result: CodexWorkerResult) -> bool:
 
 def _task6_run_id(binding: object) -> str:
     run_id = getattr(binding, "run_id", None)
-    if not isinstance(run_id, str) or not run_id:
+    if type(run_id) is not str or not run_id:
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
     return run_id
 
@@ -1516,6 +1532,13 @@ def _issue_task6_result(
     result_id = id(result)
     thread_id = result.thread_id
     turn_id = result.turn_id
+    if (
+        type(run_id) is not str
+        or type(operation) is not str
+        or type(thread_id) is not str
+        or (turn_id is not None and type(turn_id) is not str)
+    ):
+        _fail("TASK6_RESULT_PROVENANCE_INVALID")
     tuple_key = (run_id, operation, thread_id, turn_id)
 
     def remove_record(result_ref: weakref.ReferenceType[CodexWorkerResult]) -> None:
@@ -1562,10 +1585,10 @@ def consume_task6_result(
     if type(result) is not CodexWorkerResult:
         _fail("TASK6_RESULT_PROVENANCE_INVALID")
     if (
-        not isinstance(run_id, str)
-        or not isinstance(operation, str)
-        or not isinstance(thread_id, str)
-        or (turn_id is not None and not isinstance(turn_id, str))
+        type(run_id) is not str
+        or type(operation) is not str
+        or type(thread_id) is not str
+        or (turn_id is not None and type(turn_id) is not str)
     ):
         _fail("TASK6_RESULT_TUPLE_INVALID")
     result_id = id(result)
