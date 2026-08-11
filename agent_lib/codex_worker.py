@@ -14,9 +14,7 @@ import json
 import math
 import re
 import sys
-import threading
 import time
-import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -243,36 +241,6 @@ class CodexWorkerResult:
     failure_code: str | None
     cleanup_result: WorkerCleanupResult | None
     promotion_safe: bool
-
-
-class _Task6ConsumptionState:
-    """Private bounded state for one canonical Task6 result issuance."""
-
-    __slots__ = ("consumed", "duplicate_tuple", "lock", "__weakref__")
-
-    def __init__(self, *, duplicate_tuple: bool) -> None:
-        self.consumed = False
-        self.duplicate_tuple = duplicate_tuple
-        self.lock = threading.Lock()
-
-
-@dataclass(frozen=True)
-class _Task6IssuedRecord:
-    result_id: int
-    result_ref: weakref.ReferenceType[CodexWorkerResult]
-    run_id: str
-    operation: str
-    thread_id: str
-    turn_id: str | None
-    eligible: bool
-    state: _Task6ConsumptionState
-
-
-_TASK6_ISSUANCE_LOCK = threading.Lock()
-_TASK6_ISSUED_BY_ID: dict[int, _Task6IssuedRecord] = {}
-_TASK6_ISSUED_BY_TUPLE: weakref.WeakValueDictionary[
-    tuple[str, str, str, str | None], _Task6ConsumptionState
-] = weakref.WeakValueDictionary()
 
 
 class WorkerAdapter(Protocol):
@@ -1123,11 +1091,7 @@ class CodexWorkerSession:
             promotion_safe=False,
         )
         self._terminal_result = result
-        return _issue_task6_result(
-            result,
-            run_id=getattr(self._binding, "run_id", "RUN-001"),
-            operation=operation,
-        )
+        return result
 
     def _invoke(
         self,
@@ -1195,7 +1159,7 @@ class CodexWorkerSession:
         if status == "failed":
             return self._cleanup_failure(operation, "WORKER_PROVIDER_FAILED")
         self._pending_candidate = candidate
-        result = self._result(
+        return self._result(
             operation=operation,
             status="COMPLETED",
             success=True,
@@ -1203,11 +1167,6 @@ class CodexWorkerSession:
             events=events,
             candidate_output=candidate,
             promotion_safe=False,
-        )
-        return _issue_task6_result(
-            result,
-            run_id=getattr(self._binding, "run_id", "RUN-001"),
-            operation=operation,
         )
 
     def turn(
@@ -1384,117 +1343,7 @@ class CodexWorkerSession:
                 promotion_safe=True,
             )
         self._terminal_result = result
-        return _issue_task6_result(
-            result,
-            run_id=getattr(self._binding, "run_id", "RUN-001"),
-            operation="close",
-        )
-
-
-def _task6_result_is_eligible(result: CodexWorkerResult) -> bool:
-    if (
-        type(result) is not CodexWorkerResult
-        or result.success is not True
-        or result.failure_code is not None
-        or result.candidate_trusted is not False
-    ):
-        return False
-    if result.operation in {"turn", "steer"}:
-        return result.status == "COMPLETED" and result.turn_id is not None
-    if result.operation == "close":
-        cleanup = result.cleanup_result
-        return (
-            result.status == "CLOSED"
-            and result.promotion_safe is True
-            and cleanup is not None
-            and cleanup.success is True
-            and cleanup.promotion_safe is True
-            and cleanup.survivor_count == 0
-        )
-    return False
-
-
-def _issue_task6_result(
-    result: CodexWorkerResult,
-    *,
-    run_id: str,
-    operation: str,
-) -> CodexWorkerResult:
-    """Record one result only at the canonical session return boundary."""
-
-    if type(result) is not CodexWorkerResult:
         return result
-    result_id = id(result)
-    thread_id = result.thread_id
-    turn_id = result.turn_id
-    tuple_key = (run_id, operation, thread_id, turn_id)
-
-    def remove_record(result_ref: weakref.ReferenceType[CodexWorkerResult]) -> None:
-        with _TASK6_ISSUANCE_LOCK:
-            current = _TASK6_ISSUED_BY_ID.get(result_id)
-            if current is not None and current.result_ref is result_ref:
-                _TASK6_ISSUED_BY_ID.pop(result_id, None)
-
-    with _TASK6_ISSUANCE_LOCK:
-        if result_id in _TASK6_ISSUED_BY_ID:
-            return result
-        duplicate_tuple = tuple_key in _TASK6_ISSUED_BY_TUPLE
-        state = _Task6ConsumptionState(duplicate_tuple=duplicate_tuple)
-        if not duplicate_tuple:
-            _TASK6_ISSUED_BY_TUPLE[tuple_key] = state
-        result_ref = weakref.ref(result, remove_record)
-        record = _Task6IssuedRecord(
-            result_id=result_id,
-            result_ref=result_ref,
-            run_id=run_id,
-            operation=operation,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            eligible=_task6_result_is_eligible(result) and not duplicate_tuple,
-            state=state,
-        )
-        _TASK6_ISSUED_BY_ID[result_id] = record
-    return result
-
-
-def consume_task6_result(
-    result: CodexWorkerResult,
-    *,
-    run_id: str,
-    operation: str,
-    thread_id: str,
-    turn_id: str | None,
-) -> CodexWorkerResult:
-    """Consume one canonical Task6 result under its complete server tuple."""
-
-    if type(result) is not CodexWorkerResult:
-        _fail("TASK6_RESULT_PROVENANCE_INVALID")
-    if (
-        not isinstance(run_id, str)
-        or not isinstance(operation, str)
-        or not isinstance(thread_id, str)
-        or (turn_id is not None and not isinstance(turn_id, str))
-    ):
-        _fail("TASK6_RESULT_TUPLE_INVALID")
-    result_id = id(result)
-    with _TASK6_ISSUANCE_LOCK:
-        record = _TASK6_ISSUED_BY_ID.get(result_id)
-    if record is None or record.result_ref() is not result:
-        _fail("TASK6_RESULT_PROVENANCE_MISSING")
-    if (
-        run_id != record.run_id
-        or operation != record.operation
-        or thread_id != record.thread_id
-        or turn_id != record.turn_id
-    ):
-        _fail("TASK6_RESULT_TUPLE_MISMATCH")
-    if not record.eligible or record.state.duplicate_tuple:
-        _fail("TASK6_RESULT_INELIGIBLE")
-    with record.state.lock:
-        if record.state.consumed:
-            _fail("TASK6_RESULT_ALREADY_CONSUMED")
-        record.state.consumed = True
-    return result
 
 
 def _open_codex_worker(
@@ -1716,7 +1565,6 @@ __all__ = [
     "CodexWorkerEvent",
     "CodexWorkerResult",
     "CodexWorkerSession",
-    "consume_task6_result",
     "LazyOfficialSdkAdapter",
     "Task3ProcessBoundary",
     "WorkerAdapter",
