@@ -859,6 +859,63 @@ def require_region_verified(region: Mapping[str, object]) -> None:
         raise VisualContractError("region_verification_register: unresolved critical items remain")
 
 
+def _validate_visual_review_scope(payload: dict[str, Any]) -> None:
+    contract = "visual_review_scope"
+    _keys(
+        payload,
+        contract=contract,
+        required={
+            "schema_version",
+            "scope_id",
+            "run_id",
+            "registry_snapshot_sha256",
+            "candidate_revision_sha256",
+            "candidate_state_sha256",
+            "regions",
+        },
+    )
+    if payload["schema_version"] != "visual-review-scope-1.0":
+        _fail(contract, "schema_version must be 'visual-review-scope-1.0'")
+    for key in ("scope_id", "run_id"):
+        _identifier(payload[key], contract=contract, path=key)
+    for key in (
+        "registry_snapshot_sha256",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+    ):
+        _sha256(payload[key], contract=contract, path=key)
+
+    regions = payload["regions"]
+    if not isinstance(regions, list) or not regions:
+        _fail(contract, "regions must contain at least one item")
+
+    normalized_regions: list[dict[str, object]] = []
+    region_ids: set[str] = set()
+    for index, value in enumerate(regions):
+        path = f"regions[{index}]"
+        region = _object(value, contract=contract, path=path)
+        _keys(
+            region,
+            contract=contract,
+            required={"region_id", "view_id", "sheet_id", "layout_id", "criticality"},
+        )
+        region_id = _identifier(region["region_id"], contract=contract, path=f"{path}.region_id")
+        if region_id in region_ids:
+            _fail(contract, f"duplicate region_id: {region_id}")
+        region_ids.add(region_id)
+        normalized_region: dict[str, object] = {"region_id": region_id}
+        for key in ("view_id", "sheet_id", "layout_id"):
+            normalized_region[key] = _identifier(
+                region[key], contract=contract, path=f"{path}.{key}"
+            )
+        if not isinstance(region["criticality"], str) or region["criticality"] not in _CRITICALITIES:
+            _fail(contract, f"{path}.criticality is invalid")
+        normalized_region["criticality"] = region["criticality"]
+        normalized_regions.append(normalized_region)
+
+    payload["regions"] = sorted(normalized_regions, key=lambda item: item["region_id"])
+
+
 def _normalize_windows_path(value: object, *, contract: str, path: str) -> str:
     text = _string(value, contract=contract, path=path)
     if _WINDOWS_ABSOLUTE_PATH_RE.fullmatch(text) is None:
@@ -1001,6 +1058,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "visual_review": _validate_visual_review,
     "repair_plan": _validate_repair_plan,
     "region_verification_register": _validate_region_verification_register,
+    "visual_review_scope": _validate_visual_review_scope,
     "auto_publish_authorization": _validate_auto_publish_authorization,
 }
 SUPPORTED_VISUAL_CONTRACTS = tuple(sorted(_VALIDATORS))

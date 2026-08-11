@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.visual_contracts import (
     SUPPORTED_VISUAL_CONTRACTS,
     VisualContractError,
@@ -213,4 +214,122 @@ def test_supported_visual_contract_registry_is_exact() -> None:
         "repair_plan",
         "region_verification_register",
         "auto_publish_authorization",
+        "visual_review_scope",
     }
+
+
+def _valid_visual_review_scope() -> dict[str, object]:
+    return {
+        "schema_version": "visual-review-scope-1.0",
+        "scope_id": "scope-r5-001",
+        "run_id": "run-r5-001",
+        "registry_snapshot_sha256": "a" * 64,
+        "candidate_revision_sha256": "b" * 64,
+        "candidate_state_sha256": "c" * 64,
+        "regions": [
+            {
+                "region_id": "region-critical",
+                "view_id": "view-front",
+                "sheet_id": "sheet-a",
+                "layout_id": "layout-a",
+                "criticality": "CRITICAL",
+            },
+            {
+                "region_id": "region-normal",
+                "view_id": "view-side",
+                "sheet_id": "sheet-b",
+                "layout_id": "layout-b",
+                "criticality": "NORMAL",
+            },
+        ],
+    }
+
+
+def test_visual_review_scope_validates_and_canonicalizes_region_order() -> None:
+    payload = _valid_visual_review_scope()
+    reversed_payload = _valid_visual_review_scope()
+    reversed_payload["regions"] = list(reversed(reversed_payload["regions"]))
+
+    validated = validate_visual_contract(payload, contract="visual_review_scope")
+    reversed_validated = validate_visual_contract(reversed_payload, contract="visual_review_scope")
+
+    assert [region["region_id"] for region in validated["regions"]] == [
+        "region-critical",
+        "region-normal",
+    ]
+    assert validated == reversed_validated
+    assert canonical_json_sha256(validated) == canonical_json_sha256(reversed_validated)
+
+
+def test_visual_review_scope_rejects_empty_required_region_set() -> None:
+    payload = _valid_visual_review_scope()
+    payload["regions"] = []
+    with pytest.raises(VisualContractError, match="regions"):
+        validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_unknown_region_property() -> None:
+    payload = _valid_visual_review_scope()
+    payload["regions"][0]["provider_scope"] = "caller-owned"
+    with pytest.raises(VisualContractError, match="Unexpected properties"):
+        validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_caller_owned_scope_replacement() -> None:
+    payload = _valid_visual_review_scope()
+    payload["required_region_ids"] = ["region-critical"]
+    with pytest.raises(VisualContractError, match="Unexpected properties"):
+        validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_duplicate_region_identity() -> None:
+    payload = _valid_visual_review_scope()
+    payload["regions"][1]["region_id"] = payload["regions"][0]["region_id"]
+    with pytest.raises(VisualContractError, match="duplicate region_id"):
+        validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_missing_explicit_membership_identity() -> None:
+    for field in ("view_id", "sheet_id", "layout_id"):
+        payload = _valid_visual_review_scope()
+        del payload["regions"][0][field]
+        with pytest.raises(VisualContractError, match=field):
+            validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_invalid_criticality() -> None:
+    for value in ("OPTIONAL", [], {}):
+        payload = _valid_visual_review_scope()
+        payload["regions"][0]["criticality"] = value
+        with pytest.raises(VisualContractError, match="criticality"):
+            validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_criticality_omission() -> None:
+    payload = _valid_visual_review_scope()
+    del payload["regions"][0]["criticality"]
+    with pytest.raises(VisualContractError, match="criticality"):
+        validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_path_or_name_inference() -> None:
+    for field, value in (("sheet_id", "DISPLAY NAME"), ("layout_id", "C:/layout")):
+        payload = _valid_visual_review_scope()
+        payload["regions"][0][field] = value
+        with pytest.raises(VisualContractError, match=field):
+            validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_cross_scope_identity_substitution() -> None:
+    for field in ("scope_id", "run_id", "candidate_revision_sha256", "candidate_state_sha256"):
+        payload = _valid_visual_review_scope()
+        payload[field] = "" if field in {"scope_id", "run_id"} else "not-a-sha"
+        with pytest.raises(VisualContractError, match=field):
+            validate_visual_contract(payload, contract="visual_review_scope")
+
+
+def test_visual_review_scope_rejects_non_object_or_open_regions_payload() -> None:
+    payload = _valid_visual_review_scope()
+    payload["regions"] = {"region-critical": payload["regions"][0]}
+    with pytest.raises(VisualContractError, match="regions"):
+        validate_visual_contract(payload, contract="visual_review_scope")
