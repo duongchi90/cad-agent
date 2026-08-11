@@ -17,6 +17,10 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 
 
 CANDIDATE_REVISION_SCHEMA_VERSION = "candidate-revision-1.0"
+CANDIDATE_REVISION_STATE_SCHEMA_VERSION = "candidate-revision-state-1.0"
+CANDIDATE_REVISION_STATE_TRANSITION_SCHEMA_VERSION = (
+    "candidate-revision-state-transition-1.0"
+)
 
 
 class CandidateRevisionError(ValueError):
@@ -531,9 +535,196 @@ def validate_candidate_revision(
     return _validate_record(payload, _record_for(normalized))
 
 
+def _state_candidates(value: object) -> list[dict[str, object]]:
+    if type(value) is not list or not value:
+        _fail("STATE_CANDIDATES_INVALID")
+    candidates: list[dict[str, object]] = []
+    by_sha: set[str] = set()
+    scope: tuple[object, object] | None = None
+    upstream: object = None
+    for value_candidate in value:
+        candidate = _lineage_record(value_candidate)
+        candidate_sha = str(candidate["candidate_revision_sha256"])
+        if candidate_sha in by_sha:
+            _fail("STATE_CANDIDATE_DUPLICATE")
+        by_sha.add(candidate_sha)
+        candidate_scope = (candidate["run_id"], candidate["baseline_revision"])
+        if scope is None:
+            scope = candidate_scope
+            upstream = candidate["upstream_bindings"]
+        elif candidate_scope != scope:
+            _fail("STATE_BASELINE_SCOPE_MISMATCH")
+        elif candidate["upstream_bindings"] != upstream:
+            _fail("STATE_UPSTREAM_R3_R2_BINDING_MISMATCH")
+        candidates.append(candidate)
+    candidates.sort(key=lambda candidate: str(candidate["candidate_revision_sha256"]))
+    return candidates
+
+
+def _state_record(
+    candidates: list[dict[str, object]], selected_sha: str | None
+) -> dict[str, object]:
+    if selected_sha is not None:
+        _sha(selected_sha, "STATE_CURRENT_CANDIDATE_INVALID")
+        if not any(
+            candidate["candidate_revision_sha256"] == selected_sha
+            for candidate in candidates
+        ):
+            _fail("STATE_CURRENT_CANDIDATE_NOT_MEMBER")
+    state: dict[str, object] = {
+        "schema_version": CANDIDATE_REVISION_STATE_SCHEMA_VERSION,
+        "candidate_revisions": deepcopy(candidates),
+        "current_candidate_revision_sha256": selected_sha,
+        "state_sha256": "",
+    }
+    state["state_sha256"] = canonical_json_sha256(
+        {key: value for key, value in state.items() if key != "state_sha256"}
+    )
+    return state
+
+
+def build_candidate_revision_state(
+    *,
+    candidate_revisions: object,
+    current_candidate_revision_sha256: str | None = None,
+) -> dict[str, object]:
+    """Build a deterministic, caller-owned snapshot of candidate selection state."""
+
+    return _state_record(
+        _state_candidates(candidate_revisions), current_candidate_revision_sha256
+    )
+
+
+def validate_candidate_revision_state(payload: object) -> dict[str, object]:
+    """Validate and return an independent canonical candidate-state snapshot."""
+
+    state = _closed(
+        payload,
+        (
+            "schema_version",
+            "candidate_revisions",
+            "current_candidate_revision_sha256",
+            "state_sha256",
+        ),
+        "STATE_FIELDS_INVALID",
+    )
+    if state["schema_version"] != CANDIDATE_REVISION_STATE_SCHEMA_VERSION:
+        _fail("STATE_SCHEMA_INVALID")
+    _sha(state["state_sha256"], "STATE_CHECKSUM_INVALID")
+    expected = _state_record(
+        _state_candidates(state["candidate_revisions"]),
+        state["current_candidate_revision_sha256"],
+    )
+    if state["state_sha256"] != expected["state_sha256"]:
+        _fail("STATE_CHECKSUM_INVALID")
+    if state != expected:
+        _fail("STATE_CANONICAL_INVALID")
+    return deepcopy(expected)
+
+
+def _transition_record(value: object) -> dict[str, object]:
+    transition = _closed(
+        value,
+        (
+            "schema_version",
+            "transition_kind",
+            "candidate_revision_sha256",
+            "expected_current_candidate_revision_sha256",
+        ),
+        "TRANSITION_FIELDS_INVALID",
+    )
+    if transition["schema_version"] != CANDIDATE_REVISION_STATE_TRANSITION_SCHEMA_VERSION:
+        _fail("TRANSITION_SCHEMA_INVALID")
+    if not isinstance(transition["transition_kind"], str) or transition[
+        "transition_kind"
+    ] not in {"SELECT", "SUPERSEDE", "ROLLBACK"}:
+        _fail("TRANSITION_KIND_UNKNOWN")
+    _sha(transition["candidate_revision_sha256"], "TRANSITION_CANDIDATE_INVALID")
+    expected = transition["expected_current_candidate_revision_sha256"]
+    if expected is not None:
+        _sha(expected, "TRANSITION_EXPECTED_CURRENT_INVALID")
+    return transition
+
+
+def _is_ancestor(
+    target_sha: str,
+    selected: dict[str, object],
+    candidates: dict[str, dict[str, object]],
+) -> bool:
+    parent_sha = selected["parent_candidate_revision_sha256"]
+    visited: set[str] = set()
+    while parent_sha is not None:
+        if parent_sha in visited:
+            _fail("STATE_LINEAGE_CYCLE")
+        visited.add(parent_sha)
+        if parent_sha == target_sha:
+            return True
+        parent = candidates.get(str(parent_sha))
+        if parent is None:
+            _fail("STATE_LINEAGE_PARENT_MISSING")
+        parent_sha = parent["parent_candidate_revision_sha256"]
+    return False
+
+
+def transition_candidate_revision_state(
+    *,
+    state: object,
+    candidate_revision: object,
+    transition: object,
+) -> dict[str, object]:
+    """Apply a closed logical selection transition without retaining state."""
+
+    normalized_state = validate_candidate_revision_state(state)
+    normalized_transition = _transition_record(transition)
+    try:
+        candidate = _lineage_record(candidate_revision)
+    except CandidateRevisionError as error:
+        raise CandidateRevisionError("CANDIDATE_CHECKSUM_INVALID") from error
+    candidate_sha = str(candidate["candidate_revision_sha256"])
+    if normalized_transition["candidate_revision_sha256"] != candidate_sha:
+        _fail("TRANSITION_CANDIDATE_BINDING_MISMATCH")
+
+    candidates = {
+        str(item["candidate_revision_sha256"]): item
+        for item in normalized_state["candidate_revisions"]
+    }
+    stored = candidates.get(candidate_sha)
+    if stored is None or stored != candidate:
+        _fail("CANDIDATE_BINDING_CHECKSUM_MISMATCH")
+
+    selected_sha = normalized_state["current_candidate_revision_sha256"]
+    expected_sha = normalized_transition[
+        "expected_current_candidate_revision_sha256"
+    ]
+    if expected_sha != selected_sha:
+        _fail("TRANSITION_EXPECTED_CURRENT_STALE")
+    if candidate_sha == selected_sha:
+        _fail("TRANSITION_CURRENT_REPLAY")
+
+    kind = normalized_transition["transition_kind"]
+    if kind == "SELECT":
+        if selected_sha is not None:
+            _fail("SELECT_CURRENT_CONFLICT")
+    elif kind == "SUPERSEDE":
+        if selected_sha is None or candidate["parent_candidate_revision_sha256"] != selected_sha:
+            _fail("SUPERSEDE_PARENT_NOT_CURRENT")
+    else:
+        if selected_sha is None or not _is_ancestor(
+            candidate_sha, candidates[str(selected_sha)], candidates
+        ):
+            _fail("ROLLBACK_CANDIDATE_NOT_ANCESTOR")
+
+    return _state_record(list(candidates.values()), candidate_sha)
+
+
 __all__ = [
     "CANDIDATE_REVISION_SCHEMA_VERSION",
+    "CANDIDATE_REVISION_STATE_SCHEMA_VERSION",
+    "CANDIDATE_REVISION_STATE_TRANSITION_SCHEMA_VERSION",
     "CandidateRevisionError",
     "build_candidate_revision",
+    "build_candidate_revision_state",
+    "transition_candidate_revision_state",
     "validate_candidate_revision",
+    "validate_candidate_revision_state",
 ]

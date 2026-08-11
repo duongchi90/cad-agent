@@ -950,3 +950,564 @@ def test_candidate_module_has_no_owner_authority_or_replacement_mutators() -> No
             "publication_authority",
         )
     )
+
+
+# R4 Task2 RED contract.  These names intentionally use the existing
+# candidate-revision owner without introducing a second store or authority
+# owner.  The production seam is not present on this RED head, so the helper
+# fails at the causal boundary rather than hiding the missing implementation
+# behind fixture setup.
+TASK2_STATE_SCHEMA_VERSION = "candidate-revision-state-1.0"
+TASK2_TRANSITION_SCHEMA_VERSION = "candidate-revision-state-transition-1.0"
+TASK2_STATE_FIELDS = (
+    "schema_version",
+    "candidate_revisions",
+    "current_candidate_revision_sha256",
+    "state_sha256",
+)
+
+
+def _task2_api():
+    names = (
+        "build_candidate_revision_state",
+        "transition_candidate_revision_state",
+        "validate_candidate_revision_state",
+    )
+    missing = [
+        name for name in names if not callable(getattr(candidate_module, name, None))
+    ]
+    assert not missing, f"R4 Task2 production seam missing: {', '.join(missing)}"
+    return tuple(getattr(candidate_module, name) for name in names)
+
+
+def _task2_state(
+    candidates: list[dict[str, object]],
+    *,
+    current: str | None = None,
+) -> dict[str, object]:
+    build_state, _transition, _validate = _task2_api()
+    return build_state(
+        candidate_revisions=candidates,
+        current_candidate_revision_sha256=current,
+    )
+
+
+def _task2_transition(
+    kind: str,
+    candidate: dict[str, object],
+    *,
+    expected_current: str | None,
+) -> dict[str, object]:
+    return {
+        "schema_version": TASK2_TRANSITION_SCHEMA_VERSION,
+        "transition_kind": kind,
+        "candidate_revision_sha256": candidate["candidate_revision_sha256"],
+        "expected_current_candidate_revision_sha256": expected_current,
+    }
+
+
+def _task2_apply(
+    state: dict[str, object],
+    candidate: dict[str, object],
+    transition: dict[str, object],
+) -> dict[str, object]:
+    _build_state, apply_transition, _validate_state = _task2_api()
+    return apply_transition(
+        state=state,
+        candidate_revision=candidate,
+        transition=transition,
+    )
+
+
+def _task2_state_sha256(state: dict[str, object]) -> str:
+    return canonical_json_sha256(
+        {
+            key: value
+            for key, value in state.items()
+            if key != "state_sha256"
+        }
+    )
+
+
+def _task2_mutable_module_bindings() -> dict[str, object]:
+    mutable_types = (dict, list, set, bytearray)
+    return {
+        name: deepcopy(value)
+        for name, value in vars(candidate_module).items()
+        if not name.startswith("__") and isinstance(value, mutable_types)
+    }
+
+
+def _task2_selected_and_superseded() -> tuple[
+    dict[str, object], dict[str, object], dict[str, object], dict[str, object]
+]:
+    _root_args, root, left, right = _task2_graph()
+    selected = _task2_apply(
+        _task2_state([root, left, right]),
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    superseded = _task2_apply(
+        selected,
+        left,
+        _task2_transition(
+            "SUPERSEDE",
+            left,
+            expected_current=root["candidate_revision_sha256"],
+        ),
+    )
+    return root, left, right, superseded
+
+
+def _task2_graph() -> tuple[
+    dict[str, object], dict[str, object], dict[str, object], dict[str, object]
+]:
+    root_args = _valid_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    left = build_candidate_revision(**_child_args(root_args, root, tag="task2-left"))
+    right = build_candidate_revision(**_child_args(root_args, root, tag="task2-right"))
+    return root_args, root, left, right
+
+
+def test_task2_state_replay_and_candidate_permutation_are_deterministic() -> None:
+    _root_args, root, left, right = _task2_graph()
+    first = _task2_state([right, root, left])
+    replay = _task2_state([left, right, root])
+    assert first == replay
+    assert first["schema_version"] == TASK2_STATE_SCHEMA_VERSION
+    assert first["current_candidate_revision_sha256"] is None
+
+    select_root = _task2_transition("SELECT", root, expected_current=None)
+    assert _task2_apply(first, root, select_root) == _task2_apply(
+        replay, root, select_root
+    )
+
+
+def test_task2_validator_accepts_and_returns_a_valid_canonical_state() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    state = _task2_state([root])
+    _build_state, _transition, validate_state = _task2_api()
+
+    assert validate_state(state) == state
+
+
+def test_task2_state_schema_checksum_and_current_membership_are_explicit() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    candidates = [root, left]
+    candidates_before = deepcopy(candidates)
+    state = _task2_state(candidates)
+
+    assert set(state) == set(TASK2_STATE_FIELDS)
+    assert state["schema_version"] == TASK2_STATE_SCHEMA_VERSION
+    assert isinstance(state["candidate_revisions"], list)
+    assert state["current_candidate_revision_sha256"] is None
+    assert "state_sha256" in state
+    assert state["state_sha256"] == _task2_state_sha256(state)
+    assert candidates == candidates_before
+
+    with pytest.raises(CandidateRevisionError, match="CURRENT|CANDIDATE|MEMBER"):
+        _task2_state([root], current=left["candidate_revision_sha256"])
+
+
+def test_task2_operations_preserve_original_caller_owned_inputs() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    candidates = [root, left]
+    candidates_before = deepcopy(candidates)
+    state = _task2_state(candidates)
+    state_before = deepcopy(state)
+    transition = _task2_transition("SELECT", root, expected_current=None)
+    transition_before = deepcopy(transition)
+    root_before = deepcopy(root)
+
+    result = _task2_apply(state, root, transition)
+
+    assert candidates == candidates_before
+    assert state == state_before
+    assert root == root_before
+    assert transition == transition_before
+    assert result is not state
+
+
+def test_task2_outputs_are_independent_and_module_has_no_mutable_owner() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    _source, tree = _candidate_module_source_and_tree()
+    mutable_module_bindings_before = _task2_mutable_module_bindings()
+    top_level_assignments = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            top_level_assignments.extend(
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            )
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            top_level_assignments.append(node.target.id)
+    assert not any(
+        any(fragment in name.lower() for fragment in ("current", "store", "owner", "authority"))
+        for name in top_level_assignments
+    )
+
+    first = _task2_state([root])
+    second = _task2_state([root])
+    assert first == second
+    assert first is not second
+
+    first["candidate_revisions"].clear()
+    assert second["candidate_revisions"]
+    assert _task2_state([root]) == second
+    assert _task2_mutable_module_bindings() == mutable_module_bindings_before
+
+
+def test_task2_selecting_the_same_candidate_twice_is_rejected_as_replay() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    state = _task2_state([root])
+    select_root = _task2_transition("SELECT", root, expected_current=None)
+    selected = _task2_apply(state, root, select_root)
+    with pytest.raises(CandidateRevisionError, match="CURRENT|REPLAY|SELECT"):
+        _task2_apply(selected, root, select_root)
+
+
+def test_task2_superseding_a_non_current_candidate_fails_closed() -> None:
+    _root_args, root, left, right = _task2_graph()
+    state = _task2_apply(
+        _task2_state([root, left, right]),
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    state = _task2_apply(
+        state,
+        left,
+        _task2_transition(
+            "SUPERSEDE",
+            left,
+            expected_current=root["candidate_revision_sha256"],
+        ),
+    )
+    with pytest.raises(CandidateRevisionError, match="CURRENT|PARENT|SUPERSEDE"):
+        _task2_apply(
+            state,
+            right,
+            _task2_transition(
+                "SUPERSEDE",
+                right,
+                expected_current=left["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_supersede_rejects_tampered_candidate_identity() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    selected = _task2_apply(
+        _task2_state([root, left]),
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    tampered_left = deepcopy(left)
+    tampered_left["state"] = "FORGED_CANDIDATE"
+
+    with pytest.raises(CandidateRevisionError, match="CANDIDATE|BINDING|CHECKSUM"):
+        _task2_apply(
+            selected,
+            tampered_left,
+            _task2_transition(
+                "SUPERSEDE",
+                left,
+                expected_current=root["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_supersede_replay_and_expected_current_conflict_fail_closed() -> None:
+    root, left, _right, superseded = _task2_selected_and_superseded()
+    replay = _task2_transition(
+        "SUPERSEDE",
+        left,
+        expected_current=root["candidate_revision_sha256"],
+    )
+
+    with pytest.raises(CandidateRevisionError, match="REPLAY|CURRENT|EXPECTED"):
+        _task2_apply(superseded, left, replay)
+
+    with pytest.raises(CandidateRevisionError, match="CURRENT|EXPECTED|STALE"):
+        _task2_apply(
+            _task2_apply(
+                _task2_state([root, left]),
+                root,
+                _task2_transition("SELECT", root, expected_current=None),
+            ),
+            left,
+            _task2_transition("SUPERSEDE", left, expected_current="f" * 64),
+        )
+
+
+def test_task2_stale_current_selected_token_and_state_are_rejected() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    state = _task2_apply(
+        _task2_state([root, left]),
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    with pytest.raises(CandidateRevisionError, match="CURRENT|STALE"):
+        _task2_apply(
+            state,
+            left,
+            _task2_transition("SUPERSEDE", left, expected_current=None),
+        )
+
+    stale_state = deepcopy(state)
+    stale_state["current_candidate_revision_sha256"] = None
+    with pytest.raises(CandidateRevisionError, match="CHECKSUM|STATE|CURRENT"):
+        _task2_apply(
+            stale_state,
+            left,
+            _task2_transition(
+                "SUPERSEDE",
+                left,
+                expected_current=root["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_cross_scope_candidate_swap_is_rejected() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    foreign_baseline = _baseline_context(
+        "task2-foreign-scope",
+        scope={
+            **SCOPE,
+            "run_id": "foreign-run",
+            "project_id": "foreign-project",
+            "drawing_id": "foreign-drawing",
+        },
+    )
+    foreign = build_candidate_revision(
+        **_valid_args(baseline_context=foreign_baseline, tag="foreign-scope")
+    )
+    state = _task2_state([root])
+    with pytest.raises(CandidateRevisionError, match="SCOPE|BASELINE|CANDIDATE"):
+        _task2_apply(
+            state,
+            foreign,
+            _task2_transition("SELECT", foreign, expected_current=None),
+        )
+    with pytest.raises(CandidateRevisionError, match="SCOPE|BASELINE"):
+        _task2_state([root, foreign])
+
+
+def test_task2_stale_dara_baseline_and_r3_r2_bindings_cannot_enter_state() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    stale_baseline = build_candidate_revision(
+        **_valid_args(baseline_context=_baseline_context("stale-dara"), tag="stale-dara")
+    )
+    foreign_material = _accepted_r3_material(
+        primitive_ids=("task2-foreign-prim-a", "task2-foreign-prim-b")
+    )
+    stale_upstream = build_candidate_revision(
+        **_valid_args(material=foreign_material, tag="stale-r3-r2")
+    )
+    with pytest.raises(CandidateRevisionError, match="BASELINE|DARA|SCOPE"):
+        _task2_state([root, stale_baseline])
+    with pytest.raises(CandidateRevisionError, match="UPSTREAM|R3|R2|BINDING"):
+        _task2_state([root, stale_upstream])
+
+
+def test_task2_parent_child_and_sibling_forks_cannot_be_confused() -> None:
+    _root_args, root, left, right = _task2_graph()
+    state = _task2_state([root, left, right])
+    selected = _task2_apply(
+        state,
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    superseded = _task2_apply(
+        selected,
+        left,
+        _task2_transition("SUPERSEDE", left, expected_current=root["candidate_revision_sha256"]),
+    )
+    with pytest.raises(CandidateRevisionError, match="PARENT|CURRENT|SIBLING"):
+        _task2_apply(
+            superseded,
+            right,
+            _task2_transition(
+                "SUPERSEDE",
+                right,
+                expected_current=left["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_logical_rollback_selects_historical_identity_without_rewriting_lineage() -> None:
+    _root_args, root, left, right = _task2_graph()
+    original_root = deepcopy(root)
+    original_left = deepcopy(left)
+    state = _task2_state([root, left, right])
+    state = _task2_apply(
+        state,
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    state = _task2_apply(
+        state,
+        left,
+        _task2_transition("SUPERSEDE", left, expected_current=root["candidate_revision_sha256"]),
+    )
+    rolled_back = _task2_apply(
+        state,
+        root,
+        _task2_transition(
+            "ROLLBACK",
+            root,
+            expected_current=left["candidate_revision_sha256"],
+        ),
+    )
+    assert rolled_back["current_candidate_revision_sha256"] == root[
+        "candidate_revision_sha256"
+    ]
+    assert rolled_back["candidate_revisions"] == sorted(
+        [original_left, original_root, right],
+        key=lambda candidate: candidate["candidate_revision_sha256"],
+    )
+    assert next(
+        candidate
+        for candidate in rolled_back["candidate_revisions"]
+        if candidate["candidate_revision_sha256"] == left["candidate_revision_sha256"]
+    )["parent_candidate_revision_sha256"] == root["candidate_revision_sha256"]
+
+
+def test_task2_rollback_rejects_tampered_candidate_identity() -> None:
+    root, left, _right, superseded = _task2_selected_and_superseded()
+    tampered_root = deepcopy(root)
+    tampered_root["state"] = "FORGED_CANDIDATE"
+
+    with pytest.raises(CandidateRevisionError, match="CANDIDATE|BINDING|CHECKSUM"):
+        _task2_apply(
+            superseded,
+            tampered_root,
+            _task2_transition(
+                "ROLLBACK",
+                root,
+                expected_current=left["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_rollback_replay_and_expected_current_conflict_fail_closed() -> None:
+    root, left, _right, superseded = _task2_selected_and_superseded()
+    rollback = _task2_transition(
+        "ROLLBACK",
+        root,
+        expected_current=left["candidate_revision_sha256"],
+    )
+    rolled_back = _task2_apply(superseded, root, rollback)
+
+    with pytest.raises(CandidateRevisionError, match="REPLAY|CURRENT|EXPECTED"):
+        _task2_apply(rolled_back, root, rollback)
+
+    with pytest.raises(CandidateRevisionError, match="CURRENT|EXPECTED|STALE"):
+        _task2_apply(
+            superseded,
+            root,
+            _task2_transition(
+                "ROLLBACK",
+                root,
+                expected_current=root["candidate_revision_sha256"],
+            ),
+        )
+
+
+def test_task2_conflicting_expected_current_identity_fails_closed() -> None:
+    _root_args, root, left, _right = _task2_graph()
+    state = _task2_apply(
+        _task2_state([root, left]),
+        root,
+        _task2_transition("SELECT", root, expected_current=None),
+    )
+    with pytest.raises(CandidateRevisionError, match="EXPECTED|CURRENT|STALE"):
+        _task2_apply(
+            state,
+            left,
+            _task2_transition("SUPERSEDE", left, expected_current="f" * 64),
+        )
+
+
+@pytest.mark.parametrize(
+    "authority_field",
+    [
+        "accepted",
+        "approved",
+        "published",
+        "verdict",
+        "current",
+        "timestamps",
+        "uuid",
+        "path",
+        "handle",
+    ],
+)
+def test_task2_caller_cannot_inject_authority_or_server_fields(authority_field: str) -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    state = _task2_state([root])
+    forged = _task2_transition("SELECT", root, expected_current=None)
+    forged[authority_field] = True
+    with pytest.raises(CandidateRevisionError, match="TRANSITION|FIELD|AUTHORITY"):
+        _task2_apply(state, root, forged)
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"transition_kind": "SELECT"},
+        {
+            "schema_version": TASK2_TRANSITION_SCHEMA_VERSION,
+            "transition_kind": "UNKNOWN",
+            "candidate_revision_sha256": "f" * 64,
+            "expected_current_candidate_revision_sha256": None,
+        },
+        {
+            "schema_version": TASK2_TRANSITION_SCHEMA_VERSION,
+            "transition_kind": "SELECT",
+            "candidate_revision_sha256": "f" * 64,
+            "expected_current_candidate_revision_sha256": None,
+            "unknown": True,
+        },
+    ],
+)
+def test_task2_malformed_or_unknown_transition_fields_fail_closed(
+    malformed: dict[str, object],
+) -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    with pytest.raises(CandidateRevisionError, match="TRANSITION|FIELD|UNKNOWN"):
+        _task2_apply(_task2_state([root]), root, malformed)
+
+
+@pytest.mark.parametrize("transition_kind", [[], {}])
+def test_task2_unhashable_transition_kind_fails_closed(
+    transition_kind: object,
+) -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    transition = _task2_transition("SELECT", root, expected_current=None)
+    transition["transition_kind"] = transition_kind
+
+    with pytest.raises(CandidateRevisionError, match="TRANSITION|KIND|FIELD|UNKNOWN"):
+        _task2_apply(_task2_state([root]), root, transition)
+
+
+def test_task2_state_checksum_mutation_and_unknown_fields_fail_closed() -> None:
+    _root_args, root, _left, _right = _task2_graph()
+    state = _task2_state([root])
+    assert "state_sha256" in state
+    assert state["state_sha256"] == _task2_state_sha256(state)
+    mutated_checksum = deepcopy(state)
+    mutated_checksum["state_sha256"] = "f" * 64
+    assert mutated_checksum["state_sha256"] != _task2_state_sha256(mutated_checksum)
+    with pytest.raises(CandidateRevisionError, match="CHECKSUM"):
+        _task2_apply(
+            mutated_checksum,
+            root,
+            _task2_transition("SELECT", root, expected_current=None),
+        )
+    unknown_field = deepcopy(state)
+    unknown_field["caller_path"] = "C:/forbidden"
+    with pytest.raises(CandidateRevisionError, match="STATE|FIELD|UNKNOWN"):
+        _task2_apply(
+            unknown_field,
+            root,
+            _task2_transition("SELECT", root, expected_current=None),
+        )
