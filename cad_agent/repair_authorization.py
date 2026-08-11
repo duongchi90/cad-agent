@@ -111,6 +111,7 @@ class RepairAuthorizationError(ValueError):
             "MALFORMED",
             "TUPLE_INVALID",
             "TUPLE_MISMATCH",
+            "INTEGRITY_INVALID",
             "PROVENANCE_MISSING",
             "EXPIRED",
             "ALREADY_CONSUMED",
@@ -262,6 +263,7 @@ class RepairAuthorization:
 
 @dataclass
 class _AuthorizationState:
+    authorization_id: str
     tuple_values: tuple[str | None, ...]
     created_at: datetime
     expires_at: datetime
@@ -292,6 +294,7 @@ def issue_repair_authorization(**raw_fields: object) -> RepairAuthorization:
         expires_at=expires_at,
     )
     state = _AuthorizationState(
+        authorization_id=authorization_id,
         tuple_values=tuple_values,
         created_at=created_at,
         expires_at=expires_at,
@@ -299,6 +302,37 @@ def issue_repair_authorization(**raw_fields: object) -> RepairAuthorization:
     with _REGISTRY_LOCK:
         _ISSUED[token] = state
     return token
+
+
+def _handle_matches_issuance_snapshot(
+    authorization: RepairAuthorization, state: _AuthorizationState
+) -> bool:
+    """Compare caller-visible handle fields to the private issuance snapshot."""
+
+    if type(authorization._authorization_id) is not str:
+        return False
+    if authorization._authorization_id != state.authorization_id:
+        return False
+    if type(authorization._tuple_values) is not tuple:
+        return False
+    if len(authorization._tuple_values) != len(state.tuple_values):
+        return False
+    for actual, expected in zip(authorization._tuple_values, state.tuple_values):
+        if actual is None or expected is None:
+            if actual is not expected:
+                return False
+        elif type(actual) is not str or type(expected) is not str:
+            return False
+        elif actual != expected:
+            return False
+    if type(authorization._created_at) is not datetime:
+        return False
+    if type(authorization._expires_at) is not datetime:
+        return False
+    return (
+        authorization._created_at == state.created_at
+        and authorization._expires_at == state.expires_at
+    )
 
 
 def consume_repair_authorization(
@@ -318,6 +352,8 @@ def consume_repair_authorization(
     with state.lock:
         if state.consumed:
             _fail("ALREADY_CONSUMED")
+        if not _handle_matches_issuance_snapshot(authorization, state):
+            _fail("INTEGRITY_INVALID")
         if _validate_clock(_utc_now()) >= state.expires_at:
             _fail("EXPIRED")
         if any(

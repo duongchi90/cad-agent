@@ -178,6 +178,37 @@ def test_issued_record_is_immutable_and_consumed_state_is_not_public() -> None:
     assert _consume(token) is token
 
 
+@pytest.mark.parametrize(
+    "slot",
+    [
+        "_authorization_id",
+        "_tuple_values",
+        "_created_at",
+        "_expires_at",
+    ],
+)
+def test_post_issue_handle_slot_tamper_fails_without_burning_canonical_authority(
+    slot: str,
+) -> None:
+    owner = _owner()
+    token = _issue()
+    original = getattr(token, slot)
+    if slot == "_authorization_id":
+        replacement: object = "forged-authorization-id"
+    elif slot == "_tuple_values":
+        replacement = ("foreign-run",) + original[1:]
+    elif slot == "_created_at":
+        replacement = datetime(2026, 8, 12, 0, 1, tzinfo=timezone.utc)
+    else:
+        replacement = datetime(2026, 8, 13, 0, 0, tzinfo=timezone.utc)
+    object.__setattr__(token, slot, replacement)
+    with pytest.raises(owner.RepairAuthorizationError) as exc_info:
+        _consume(token)
+    assert exc_info.value.code == "INTEGRITY_INVALID"
+    object.__setattr__(token, slot, original)
+    assert _consume(token) is token
+
+
 def test_operation_contract_binding_accepts_absent_optional_fingerprint() -> None:
     token = _issue(
         repair_operation_contract_version=None,
