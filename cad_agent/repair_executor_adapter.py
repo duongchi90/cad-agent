@@ -14,7 +14,10 @@ from typing import Any
 from cad_agent.candidate_revision import validate_candidate_revision_state
 from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.repair_authorization import consume_repair_authorization
-from cad_agent.repair_operation_contract import normalize_repair_operation
+from cad_agent.repair_operation_contract import (
+    REPAIR_OPERATION_SCHEMA_VERSION,
+    normalize_repair_operation,
+)
 from mcp_integration_lib.repair2 import execute_supported_repair_capability
 
 
@@ -121,6 +124,8 @@ def _validate_context(value: object) -> dict[str, object]:
     _sha(context["candidate_state_sha256"], "MALFORMED")
     _sha(context["repair_plan_sha256"], "MALFORMED")
     _sha(context["repair_operation_contract_fingerprint"], "MALFORMED")
+    if context["repair_operation_contract_version"] != REPAIR_OPERATION_SCHEMA_VERSION:
+        _fail("BINDING_MISMATCH")
     _string_list(context["r3_target_handles"], "MALFORMED")
     _string_list(context["protected_target_handles"], "MALFORMED")
     return context
@@ -163,6 +168,8 @@ def _validate_candidate(value: object, context: dict[str, object]) -> dict[str, 
     except Exception as exc:  # owner errors are categorical at this boundary
         raise RepairExecutorAdapterError("CANDIDATE_INVALID") from exc
     if (
+        state.get("state_sha256") != context["candidate_state_sha256"]
+        or
         state.get("current_candidate_revision_sha256")
         != context["candidate_revision_sha256"]
     ):
@@ -290,7 +297,12 @@ def execute_approved_repair(
     operation_fingerprint = canonical_json_sha256(operation_payload)
     if context["repair_operation_contract_fingerprint"] != operation_fingerprint:
         _fail("BINDING_MISMATCH")
-    owner = _validate_workspace(workspace_lease, context, failure)
+    try:
+        owner = _validate_workspace(workspace_lease, context, failure)
+    except RepairExecutorAdapterError:
+        raise
+    except Exception as exc:
+        raise RepairExecutorAdapterError("WORKSPACE_INVALID") from exc
 
     try:
         consume_repair_authorization(
@@ -335,8 +347,6 @@ def execute_approved_repair(
         "repair_plan_version": context["repair_plan_version"],
         "repair_operation_contract_version": context["repair_operation_contract_version"],
         "repair_operation_contract_fingerprint": operation_fingerprint,
-        "authorization_reference": getattr(authorization, "authorization_id", "owner-issued"),
-        "workspace_lease_reference": getattr(workspace_lease, "lease_id", "owner-issued"),
         "executor_capability": operation_payload["capability"],
         "executor_result_category": "HANDLE_RETURNED" if executor_result else "NO_HANDLE",
         "mutation_outcome": "SUCCESS",
