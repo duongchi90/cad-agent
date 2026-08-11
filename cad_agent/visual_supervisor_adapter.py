@@ -1,10 +1,9 @@
-"""Pure post-provider visual-verdict finalization adapter.
+"""Pure composition boundary for post-provider visual-verdict finalization.
 
-The adapter is deliberately a small composition seam.  It does not call a
-provider, start a worker, persist a verdict, or mutate a candidate.  The
-caller supplies evidence from the existing server-owned authorities and this
-module only checks that the tuple is still current before aggregating the
-provider's untrusted region observations.
+This module intentionally owns no scope, currentness, worker, revision, or
+evidence authority.  It accepts immutable records from the existing owners,
+revalidates them after the provider returns, and only aggregates untrusted
+region statuses.  Missing owner seams are categorical refusals.
 """
 
 from __future__ import annotations
@@ -12,6 +11,15 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Mapping, Sequence
+
+from agent_lib.codex_worker import CodexWorkerResult
+from agent_lib.codex_worker_process import WorkerCleanupResult
+from cad_agent.candidate_revision import validate_candidate_revision_state
+from cad_agent.drawing_artifact_reference import (
+    require_current_drawing_artifact_reference,
+)
+from cad_agent.visual_contracts import validate_visual_contract
+from cad_agent.visual_evidence import validate_visual_evidence_freshness
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -21,7 +29,7 @@ _REGION_STATUSES = frozenset({"PASS", "FAIL", "SKIP", "NOT_RUN"})
 
 
 class VisualSupervisorAdapterError(ValueError):
-    """Categorical, fail-closed refusal for stale or malformed evidence."""
+    """Categorical, fail-closed refusal for malformed or stale evidence."""
 
 
 def _fail(message: str) -> None:
@@ -64,153 +72,99 @@ def _closed(
         _fail(f"{label} contains unknown field(s): {', '.join(sorted(unknown))}")
 
 
-def _scope(scope: object, *, label: str) -> dict[str, object]:
-    raw = _mapping(scope, label=label)
-    required = {
-        "schema_version",
-        "scope_id",
-        "run_id",
-        "registry_snapshot_sha256",
-        "candidate_revision_sha256",
-        "candidate_state_sha256",
-        "regions",
-    }
-    _closed(raw, required, label=label)
-    if raw["schema_version"] != "visual-review-scope-1.0":
-        _fail(f"{label} schema_version is invalid")
-    normalized: dict[str, object] = {
-        "schema_version": raw["schema_version"],
-        "scope_id": _identifier(raw["scope_id"], label=f"{label}.scope_id"),
-        "run_id": _identifier(raw["run_id"], label=f"{label}.run_id"),
-        "registry_snapshot_sha256": _sha(
-            raw["registry_snapshot_sha256"], label=f"{label}.registry_snapshot_sha256"
-        ),
-        "candidate_revision_sha256": _sha(
-            raw["candidate_revision_sha256"], label=f"{label}.candidate_revision_sha256"
-        ),
-        "candidate_state_sha256": _sha(
-            raw["candidate_state_sha256"], label=f"{label}.candidate_state_sha256"
-        ),
-    }
-    regions = raw["regions"]
-    if not isinstance(regions, Sequence) or isinstance(regions, (str, bytes, bytearray)):
-        _fail(f"{label}.regions must be a non-empty list")
-    normalized_regions: list[dict[str, object]] = []
-    seen: set[str] = set()
-    for index, region in enumerate(regions):
-        item = _mapping(region, label=f"{label}.regions[{index}]")
-        region_required = {"region_id", "view_id", "sheet_id", "layout_id", "criticality"}
-        _closed(item, region_required, label=f"{label}.regions[{index}]")
-        region_id = _identifier(
-            item["region_id"], label=f"{label}.regions[{index}].region_id"
-        )
-        if region_id in seen:
-            _fail(f"{label} contains duplicate region_id {region_id}")
-        seen.add(region_id)
-        normalized_region: dict[str, object] = {"region_id": region_id}
-        for field in ("view_id", "sheet_id", "layout_id"):
-            normalized_region[field] = _identifier(
-                item[field], label=f"{label}.regions[{index}].{field}"
-            )
-        criticality = item["criticality"]
-        if not isinstance(criticality, str) or criticality not in _CRITICALITIES:
-            _fail(f"{label}.regions[{index}].criticality is invalid")
-        normalized_region["criticality"] = criticality
-        normalized_regions.append(normalized_region)
-    if not normalized_regions:
-        _fail(f"{label}.regions must not be empty")
-    normalized["regions"] = sorted(normalized_regions, key=lambda item: str(item["region_id"]))
-    return normalized
+def _task6_result(value: object, *, label: str) -> CodexWorkerResult:
+    """Validate the accepted Task6 public result, never a caller-made mapping."""
 
-
-def _state(value: object, *, label: str, full: bool = True) -> Mapping[str, object]:
-    state = _mapping(value, label=label)
-    required = {
-        "candidate_revision_sha256",
-        "candidate_state_sha256",
-        "dara_reference_sha256",
-        "drawing_sha256",
-        "registry_snapshot_sha256",
-        "visual_run_manifest_sha256",
-        "latest_mutation_sha256",
-        "server_scope",
-    }
-    if full:
-        required.update(
-            {
-                "run_id",
-                "current_candidate_revision_sha256",
-                "task6_attempt_id",
-                "task6_terminal_status",
-                "consumed_attempt_ids",
-            }
+    if not isinstance(value, CodexWorkerResult):
+        _fail("R5_B3_TASK6_PUBLIC_SEAM_MISSING: task6_result must be CodexWorkerResult")
+    if value.operation not in {"turn", "steer"}:
+        _fail(f"{label} operation is not a visual provider turn")
+    if value.status != "COMPLETED" or value.success is not True:
+        _fail(f"{label} terminal result is timeout/cancel/late or failed")
+    if value.failure_code is not None:
+        _fail(f"{label} carries a worker failure code")
+    if value.candidate_trusted is not False or value.promotion_safe is not False:
+        _fail(f"{label} exposes trusted/promotion-safe candidate output")
+    _identifier(value.thread_id, label=f"{label}.thread_id")
+    if value.turn_id is None:
+        _fail(
+            "R5_B3_TASK6_PUBLIC_SEAM_MISSING: completed Task6 result has no turn identity"
         )
-    _closed(
-        state,
-        required,
-        label=label,
-        optional={
-            "current_candidate_revision_sha256",
-            "task6_attempt_id",
-            "task6_terminal_status",
-            "consumed_attempt_ids",
-            "pre_repair_r5_verdict",
-            "r6_mutation_sha256",
-            "r6_review_verdict",
-        },
-    )
-    if "run_id" in state:
-        _identifier(state["run_id"], label=f"{label}.run_id")
-    for field in (
-        "candidate_revision_sha256",
-        "candidate_state_sha256",
-        "dara_reference_sha256",
-        "drawing_sha256",
-        "registry_snapshot_sha256",
-        "visual_run_manifest_sha256",
-        "latest_mutation_sha256",
+    _identifier(value.turn_id, label=f"{label}.turn_id")
+    if not isinstance(value.events, tuple) or not value.events:
+        _fail(f"{label}.events must contain terminal worker events")
+    if value.cleanup_result is not None and not isinstance(
+        value.cleanup_result, WorkerCleanupResult
     ):
-        _sha(state[field], label=f"{label}.{field}")
-    if "current_candidate_revision_sha256" in state:
-        _sha(
-            state["current_candidate_revision_sha256"],
-            label=f"{label}.current_candidate_revision_sha256",
+        _fail(f"{label}.cleanup_result is not accepted worker cleanup evidence")
+    return value
+
+
+def _cleanup_result(value: object, *, label: str) -> WorkerCleanupResult:
+    if not isinstance(value, WorkerCleanupResult):
+        _fail(
+            "R5_B3_TASK6_PUBLIC_SEAM_MISSING: cleanup_result must be "
+            "accepted WorkerCleanupResult"
         )
-    if full and state["current_candidate_revision_sha256"] != state["candidate_revision_sha256"]:
-        _fail(f"{label} current candidate selection is stale")
-    if "task6_attempt_id" in state:
-        _identifier(state["task6_attempt_id"], label=f"{label}.task6_attempt_id")
-    if "task6_terminal_status" in state and state["task6_terminal_status"] != "COMPLETED":
-        _fail(f"{label} Task6 terminal status is not completed")
-    _scope(state["server_scope"], label=f"{label}.server_scope")
-    if "consumed_attempt_ids" in state:
-        consumed = state["consumed_attempt_ids"]
-        if not isinstance(consumed, Sequence) or isinstance(consumed, (str, bytes, bytearray)):
-            _fail(f"{label}.consumed_attempt_ids must be a list")
-        for index, attempt_id in enumerate(consumed):
-            _identifier(attempt_id, label=f"{label}.consumed_attempt_ids[{index}]")
+    if not (
+        value.status == "CLEANUP_SUCCEEDED"
+        and value.success is True
+        and value.promotion_safe is True
+        and value.survivor_pids == ()
+        and value.survivor_count == 0
+        and value.error_code is None
+    ):
+        _fail(f"{label} is not verified cleanup evidence")
+    return value
+
+
+_OWNER_STATE_FIELDS = {
+    "visual_review_scope",
+    "candidate_revision_state",
+    "drawing_reference",
+    "drawing_observation",
+    "drawing_artifact_bytes",
+    "visual_evidence",
+    "visual_run_manifest",
+    "manifest_bytes_sha256",
+    "drawing_sha256_before_dispatch",
+    "task6_result",
+    "cleanup_result",
+}
+
+
+def _owner_state(value: object, *, label: str) -> Mapping[str, object]:
+    state = _mapping(value, label=label)
+    if "task6_result" not in state:
+        _fail(
+            "R5_B3_TASK6_PUBLIC_SEAM_MISSING: owner state has no accepted task6_result"
+        )
+    _closed(state, _OWNER_STATE_FIELDS, label=label, optional={"pre_repair_r5_verdict"})
+    _sha(state["manifest_bytes_sha256"], label=f"{label}.manifest_bytes_sha256")
+    _sha(
+        state["drawing_sha256_before_dispatch"],
+        label=f"{label}.drawing_sha256_before_dispatch",
+    )
+    if not isinstance(state["drawing_artifact_bytes"], bytes):
+        _fail(f"{label}.drawing_artifact_bytes must be bytes from the DARA owner")
+    _task6_result(state["task6_result"], label=f"{label}.task6_result")
+    _cleanup_result(state["cleanup_result"], label=f"{label}.cleanup_result")
     return state
 
 
-def _provider(value: object) -> tuple[Mapping[str, object], list[dict[str, object]]]:
+def _provider(
+    value: object,
+) -> tuple[CodexWorkerResult, str, str, list[dict[str, object]]]:
     provider = _mapping(value, label="provider_result")
-    required = {
-        "attempt_id",
-        "terminal_status",
-        "candidate_revision_sha256",
-        "provider_verdict",
-        "regions",
-    }
+    required = {"task6_result", "provider_verdict", "candidate_revision_sha256", "regions"}
     _closed(provider, required, label="provider_result")
-    attempt_id = _identifier(provider["attempt_id"], label="provider_result.attempt_id")
-    if provider["terminal_status"] != "COMPLETED":
-        _fail("Task6 terminal status is timeout/cancel/late or otherwise non-success")
-    _sha(provider["candidate_revision_sha256"], label="provider_result.candidate_revision_sha256")
-    if not isinstance(provider["provider_verdict"], str) or provider["provider_verdict"] not in {
-        "PASS",
-        "FAIL",
-        "NEEDS_HUMAN",
-    }:
+    task6 = _task6_result(provider["task6_result"], label="provider_result.task6_result")
+    candidate_sha = _sha(
+        provider["candidate_revision_sha256"],
+        label="provider_result.candidate_revision_sha256",
+    )
+    verdict = provider["provider_verdict"]
+    if not isinstance(verdict, str) or verdict not in {"PASS", "FAIL", "NEEDS_HUMAN"}:
         _fail("provider verdict is unknown")
     raw_regions = provider["regions"]
     if not isinstance(raw_regions, Sequence) or isinstance(raw_regions, (str, bytes, bytearray)):
@@ -225,7 +179,6 @@ def _provider(value: object) -> tuple[Mapping[str, object], list[dict[str, objec
             "layout_id",
             "criticality",
             "status",
-            "evidence_sha256",
         }
         _closed(item, required_region, label=f"provider_result.regions[{index}]")
         record: dict[str, object] = {}
@@ -233,93 +186,86 @@ def _provider(value: object) -> tuple[Mapping[str, object], list[dict[str, objec
             record[field] = _identifier(
                 item[field], label=f"provider_result.regions[{index}].{field}"
             )
-        if not isinstance(item["criticality"], str) or item["criticality"] not in _CRITICALITIES:
+        criticality = item["criticality"]
+        if not isinstance(criticality, str) or criticality not in _CRITICALITIES:
             _fail(f"provider_result.regions[{index}].criticality is invalid")
-        record["criticality"] = item["criticality"]
-        if not isinstance(item["status"], str) or item["status"] not in _REGION_STATUSES:
+        record["criticality"] = criticality
+        status = item["status"]
+        if not isinstance(status, str) or status not in _REGION_STATUSES:
             _fail(f"provider_result.regions[{index}].status is unknown")
-        record["status"] = item["status"]
-        record["evidence_sha256"] = _sha(
-            item["evidence_sha256"],
-            label=f"provider_result.regions[{index}].evidence_sha256",
-        )
+        record["status"] = status
         normalized.append(record)
     if not normalized:
         _fail("provider regions must not be empty")
-    return provider, sorted(normalized, key=lambda item: str(item["region_id"]))
+    normalized.sort(key=lambda item: str(item["region_id"]))
+    return task6, candidate_sha, verdict, normalized
 
 
-def _assert_scope_matches(
-    provider_regions: list[dict[str, object]], authoritative_scope: dict[str, object]
-) -> None:
-    expected = {
-        (
-            item["region_id"],
-            item["view_id"],
-            item["sheet_id"],
-            item["layout_id"],
-            item["criticality"],
-        )
-        for item in authoritative_scope["regions"]  # type: ignore[union-attr]
+def _scope_payload_from_regions(
+    regions: Sequence[Mapping[str, object]], template: Mapping[str, object]
+) -> dict[str, object]:
+    if not regions:
+        _fail("provider regions must not be empty")
+    return {
+        "schema_version": template["schema_version"],
+        "scope_id": template["scope_id"],
+        "run_id": template["run_id"],
+        "registry_snapshot_sha256": template["registry_snapshot_sha256"],
+        "candidate_revision_sha256": template["candidate_revision_sha256"],
+        "candidate_state_sha256": template["candidate_state_sha256"],
+        "regions": [
+            {
+                key: region[key]
+                for key in ("region_id", "view_id", "sheet_id", "layout_id", "criticality")
+            }
+            for region in regions
+        ],
     }
-    actual = {
-        (
-            item["region_id"],
-            item["view_id"],
-            item["sheet_id"],
-            item["layout_id"],
-            item["criticality"],
+
+
+def _validate_owner_state(
+    state: Mapping[str, object], *, label: str, server_scope: Mapping[str, object]
+) -> dict[str, object]:
+    try:
+        scope = validate_visual_contract(
+            state["visual_review_scope"],
+            contract="visual_review_scope",
+            server_scope=server_scope,
         )
-        for item in provider_regions
-    }
-    if len(actual) != len(provider_regions) or actual != expected:
-        _fail("provider regions do not match the server-owned scope")
+        candidate = validate_candidate_revision_state(state["candidate_revision_state"])
+        require_current_drawing_artifact_reference(
+            reference=state["drawing_reference"],
+            observation=state["drawing_observation"],
+            artifact_bytes=state["drawing_artifact_bytes"],
+        )
+        evidence = validate_visual_evidence_freshness(
+            state["visual_evidence"],
+            state["manifest_bytes_sha256"],
+            state["visual_run_manifest"],
+            state["drawing_sha256_before_dispatch"],
+        )
+    except Exception as exc:
+        _fail(f"{label} accepted owner validation failed: {exc}")
+    return {"scope": scope, "candidate": candidate, "evidence": evidence}
 
 
-def _assert_scope_binding(state: Mapping[str, object], *, label: str) -> None:
-    scope = _scope(state["server_scope"], label=f"{label}.server_scope")
-    bindings = (
-        ("run_id", "run_id"),
-        ("registry_snapshot_sha256", "registry_snapshot_sha256"),
-        ("candidate_revision_sha256", "candidate_revision_sha256"),
-        ("candidate_state_sha256", "candidate_state_sha256"),
-    )
-    for scope_field, state_field in bindings:
-        if state_field not in state:
-            continue
-        if scope[scope_field] != state[state_field]:
-            _fail(f"{label} server-owned scope binding is stale or foreign")
-
-
-def _assert_fresh_tuple(
-    authoritative: Mapping[str, object], post_provider: Mapping[str, object]
+def _assert_r5_not_stale(
+    authoritative: Mapping[str, object],
+    authoritative_manifest: Mapping[str, object],
 ) -> None:
-    comparisons = (
-        ("candidate_revision_sha256", "candidate revision/current selection is stale"),
-        ("candidate_state_sha256", "candidate state is stale after provider return"),
-        ("dara_reference_sha256", "DARA current drawing reference is stale"),
-        ("drawing_sha256", "DARA drawing currentness changed after provider return"),
-        ("registry_snapshot_sha256", "R3 registry currentness is stale"),
-        ("visual_run_manifest_sha256", "visual evidence freshness is stale"),
-        ("latest_mutation_sha256", "visual evidence freshness is stale against latest mutation"),
-    )
-    for field, message in comparisons:
-        if authoritative[field] != post_provider[field]:
-            _fail(message)
-    if _scope(authoritative["server_scope"], label="authoritative_state.server_scope") != _scope(
-        post_provider["server_scope"], label="post_provider_state.server_scope"
-    ):
-        _fail("server-owned scope changed after provider return")
-
-
-def _assert_r5_not_stale(authoritative: Mapping[str, object]) -> None:
     previous = authoritative.get("pre_repair_r5_verdict")
-    mutation = authoritative.get("r6_mutation_sha256")
-    if previous is None or mutation is None:
+    if previous is None:
         return
     previous_map = _mapping(previous, label="authoritative_state.pre_repair_r5_verdict")
-    previous_mutation = previous_map.get("latest_mutation_sha256")
-    if previous_map.get("verdict") == "PASS" and mutation != previous_mutation:
+    previous_mutation = _sha(
+        previous_map.get("latest_mutation_sha256"),
+        label="pre_repair_r5_verdict.latest_mutation_sha256",
+    )
+    current_mutation = _sha(
+        authoritative_manifest.get("latest_mutation_sha256"),
+        label="authoritative_state.visual_run_manifest.latest_mutation_sha256",
+    )
+    if previous_map.get("verdict") == "PASS" and previous_mutation != current_mutation:
         _fail("pre-repair R5 verdict is stale after R6 mutation/review")
 
 
@@ -328,26 +274,73 @@ def finalize_visual_verdict(
     provider_result: Mapping[str, object],
     authoritative_state: Mapping[str, object],
     post_provider_state: Mapping[str, object],
+    server_scope: Mapping[str, object],
 ) -> dict[str, object]:
-    """Revalidate the authoritative tuple and deterministically aggregate regions."""
+    """Revalidate owner records and aggregate only untrusted provider statuses."""
 
-    provider, regions = _provider(provider_result)
-    authoritative = _state(authoritative_state, label="authoritative_state")
-    post_provider = _state(post_provider_state, label="post_provider_state", full=False)
-    _assert_scope_binding(authoritative, label="authoritative_state")
-    _assert_scope_binding(post_provider, label="post_provider_state")
-    _assert_fresh_tuple(authoritative, post_provider)
-    _assert_r5_not_stale(authoritative)
+    external_scope = _mapping(server_scope, label="server_scope")
+    authoritative = _owner_state(authoritative_state, label="authoritative_state")
+    post_provider = _owner_state(post_provider_state, label="post_provider_state")
+    task6, provider_candidate_sha, _provider_verdict, regions = _provider(provider_result)
+    owner_task6 = _task6_result(
+        authoritative["task6_result"], label="authoritative_state.task6_result"
+    )
+    if task6 is not owner_task6 or post_provider["task6_result"] is not owner_task6:
+        _fail("Task6 result identity changed or was replayed after provider return")
 
-    if provider["attempt_id"] != authoritative["task6_attempt_id"]:
-        _fail("Task6 attempt identity does not match authoritative attempt")
-    if provider["attempt_id"] in authoritative["consumed_attempt_ids"]:
-        _fail("replayed or duplicate provider attempt has already been consumed")
-    if provider["candidate_revision_sha256"] != authoritative["candidate_revision_sha256"]:
+    auth_validated = _validate_owner_state(
+        authoritative, label="authoritative_state", server_scope=external_scope
+    )
+    post_validated = _validate_owner_state(
+        post_provider, label="post_provider_state", server_scope=external_scope
+    )
+    try:
+        auth_scope = validate_visual_contract(
+            authoritative["visual_review_scope"],
+            contract="visual_review_scope",
+            server_scope=external_scope,
+        )
+        post_scope = validate_visual_contract(
+            post_provider["visual_review_scope"],
+            contract="visual_review_scope",
+            server_scope=external_scope,
+        )
+        provider_scope = validate_visual_contract(
+            _scope_payload_from_regions(regions, external_scope),
+            contract="visual_review_scope",
+            server_scope=external_scope,
+        )
+    except Exception as exc:
+        _fail(f"server-owned visual scope validation failed: {exc}")
+    if auth_scope != post_scope or provider_scope != auth_scope:
+        _fail("provider regions do not match the server-owned scope")
+
+    auth_candidate = auth_validated["candidate"]
+    post_candidate = post_validated["candidate"]
+    if auth_candidate != post_candidate:
+        _fail("candidate revision/current selection changed after provider return")
+    for field, message in (
+        ("drawing_reference", "DARA reference changed after provider return"),
+        ("drawing_observation", "DARA observation changed after provider return"),
+        ("drawing_artifact_bytes", "DARA bytes changed after provider return"),
+        ("visual_run_manifest", "visual evidence manifest changed after provider return"),
+        ("manifest_bytes_sha256", "visual evidence manifest bytes changed after provider return"),
+        (
+            "drawing_sha256_before_dispatch",
+            "DARA drawing pre-dispatch identity changed after provider return",
+        ),
+    ):
+        if authoritative[field] != post_provider[field]:
+            _fail(message)
+    selected = auth_candidate.get("current_candidate_revision_sha256")
+    if selected is None or provider_candidate_sha != selected:
         _fail("provider candidate revision does not match current candidate")
 
-    scope = _scope(authoritative["server_scope"], label="authoritative_state.server_scope")
-    _assert_scope_matches(regions, scope)
+    auth_evidence = auth_validated["evidence"]
+    post_evidence = post_validated["evidence"]
+    if auth_evidence != post_evidence:
+        _fail("visual evidence freshness changed after provider return")
+    _assert_r5_not_stale(authoritative, authoritative["visual_run_manifest"])  # type: ignore[arg-type]
 
     statuses = [str(region["status"]) for region in regions]
     if "FAIL" in statuses:
@@ -358,8 +351,9 @@ def finalize_visual_verdict(
         verdict = "PASS"
     return {
         "verdict": verdict,
-        "attempt_id": provider["attempt_id"],
-        "candidate_revision_sha256": provider["candidate_revision_sha256"],
+        "task6_thread_id": owner_task6.thread_id,
+        "task6_turn_id": owner_task6.turn_id,
+        "candidate_revision_sha256": selected,
         "regions": copy.deepcopy(regions),
     }
 

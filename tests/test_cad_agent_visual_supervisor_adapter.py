@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import copy
-import importlib
+from unittest.mock import Mock, patch
 
 import pytest
+
+from agent_lib.codex_worker import CodexWorkerEvent, CodexWorkerResult
+from agent_lib.codex_worker_process import WorkerCleanupResult
 
 
 SHA_CANDIDATE = "a" * 64
@@ -43,99 +46,155 @@ def _scope() -> dict[str, object]:
     }
 
 
-def _provider_result(scope: dict[str, object]) -> dict[str, object]:
+def _task6_result(*, status: str = "COMPLETED") -> CodexWorkerResult:
+    return CodexWorkerResult(
+        operation="turn",
+        status=status,
+        success=status == "COMPLETED",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        events=(CodexWorkerEvent("turn.completed"),),
+        candidate_output=None,
+        candidate_trusted=False,
+        failure_code=None if status == "COMPLETED" else "WORKER_TIMEOUT",
+        cleanup_result=None,
+        promotion_safe=False,
+    )
+
+
+def _cleanup() -> WorkerCleanupResult:
+    return WorkerCleanupResult(
+        status="CLEANUP_SUCCEEDED",
+        success=True,
+        promotion_safe=True,
+        survivor_pids=(),
+        survivor_count=0,
+        error_code=None,
+    )
+
+
+def _provider_result(scope: dict[str, object], task6: CodexWorkerResult) -> dict[str, object]:
     regions = copy.deepcopy(scope["regions"])
     for region in regions:
-        region.update({"status": "PASS", "evidence_sha256": SHA_MANIFEST})
+        region.update({"status": "PASS"})
     return {
-        "attempt_id": "attempt-1",
-        "terminal_status": "COMPLETED",
+        "task6_result": task6,
         "candidate_revision_sha256": SHA_CANDIDATE,
         "provider_verdict": "PASS",
         "regions": regions,
     }
 
 
-def _authoritative_state(scope: dict[str, object]) -> dict[str, object]:
+def _owner_state(scope: dict[str, object], task6: CodexWorkerResult) -> dict[str, object]:
     return {
-        "run_id": "run-1",
-        "candidate_revision_sha256": SHA_CANDIDATE,
-        "candidate_state_sha256": SHA_STATE,
-        "current_candidate_revision_sha256": SHA_CANDIDATE,
-        "dara_reference_sha256": SHA_DARA,
-        "drawing_sha256": SHA_DRAWING,
-        "registry_snapshot_sha256": SHA_REGISTRY,
-        "visual_run_manifest_sha256": SHA_MANIFEST,
-        "latest_mutation_sha256": SHA_MUTATION,
-        "task6_attempt_id": "attempt-1",
-        "task6_terminal_status": "COMPLETED",
-        "server_scope": scope,
-        "consumed_attempt_ids": [],
-    }
-
-
-def _post_provider_state(scope: dict[str, object]) -> dict[str, object]:
-    return {
-        "candidate_revision_sha256": SHA_CANDIDATE,
-        "candidate_state_sha256": SHA_STATE,
-        "dara_reference_sha256": SHA_DARA,
-        "drawing_sha256": SHA_DRAWING,
-        "registry_snapshot_sha256": SHA_REGISTRY,
-        "visual_run_manifest_sha256": SHA_MANIFEST,
-        "latest_mutation_sha256": SHA_MUTATION,
-        "server_scope": copy.deepcopy(scope),
+        "visual_review_scope": copy.deepcopy(scope),
+        "candidate_revision_state": {"current_candidate_revision_sha256": SHA_CANDIDATE},
+        "drawing_reference": {"reference_sha256": SHA_DARA},
+        "drawing_observation": {"reference_sha256": SHA_DARA},
+        "drawing_artifact_bytes": b"current drawing",
+        "visual_evidence": {"payload": "owner-validated"},
+        "visual_run_manifest": {"latest_mutation_sha256": SHA_MUTATION},
+        "manifest_bytes_sha256": SHA_MANIFEST,
+        "drawing_sha256_before_dispatch": SHA_DRAWING,
+        "task6_result": task6,
+        "cleanup_result": _cleanup(),
     }
 
 
 def _valid_inputs() -> dict[str, object]:
     scope = _scope()
+    task6 = _task6_result()
     return {
-        "provider_result": _provider_result(scope),
-        "authoritative_state": _authoritative_state(scope),
-        "post_provider_state": _post_provider_state(scope),
+        "server_scope": scope,
+        "provider_result": _provider_result(scope, task6),
+        "authoritative_state": _owner_state(scope, task6),
+        "post_provider_state": _owner_state(scope, task6),
     }
 
 
+def _owner_patches() -> tuple[Mock, Mock, Mock, Mock]:
+    def normalize_scope(payload: object, *, contract: str, server_scope: object) -> dict[str, object]:
+        normalized = copy.deepcopy(payload)
+        normalized["regions"] = sorted(
+            normalized["regions"], key=lambda region: str(region["region_id"])
+        )
+        return normalized
+
+    scope_validator = Mock(side_effect=normalize_scope)
+    candidate_validator = Mock(
+        side_effect=lambda payload: {
+            "current_candidate_revision_sha256": payload["current_candidate_revision_sha256"],
+            "state_sha256": SHA_STATE,
+        }
+    )
+    dara_validator = Mock()
+    evidence_validator = Mock(side_effect=lambda evidence, *_args: copy.deepcopy(evidence))
+    return scope_validator, candidate_validator, dara_validator, evidence_validator
+
+
 def _finalize(inputs: dict[str, object]) -> object:
-    """Call the future pure finalizer; missing capability is the intentional RED."""
-    try:
-        module = importlib.import_module("cad_agent.visual_supervisor_adapter")
-        finalizer = getattr(module, "finalize_visual_verdict")
-    except (ModuleNotFoundError, AttributeError) as exc:
-        pytest.fail(f"R5-B3 RED: finalizer capability is not available: {exc}")
-    return finalizer(**inputs)
+    import cad_agent.visual_supervisor_adapter as module
+
+    scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    with (
+        patch.object(module, "validate_visual_contract", scope_validator),
+        patch.object(module, "validate_candidate_revision_state", candidate_validator),
+        patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
+        patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+    ):
+        return module.finalize_visual_verdict(**inputs)
 
 
-def test_valid_provider_result_finalizes_deterministically() -> None:
+def test_valid_owner_context_finalizes_deterministically_without_provider_hash_authority() -> None:
     result = _finalize(_valid_inputs())
     assert result["verdict"] == "PASS"
+    assert result["task6_thread_id"] == "thread-1"
+    assert all("evidence_sha256" not in region for region in result["regions"])
+
+
+def test_provider_evidence_hash_is_not_an_adapter_authority_field() -> None:
+    inputs = _valid_inputs()
+    inputs["provider_result"]["regions"][0]["evidence_sha256"] = SHA_MANIFEST
+    with pytest.raises(Exception, match="unknown|field|evidence"):
+        _finalize(inputs)
+
+
+def test_composition_calls_existing_scope_revision_dara_and_visual_evidence_owners() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    inputs = _valid_inputs()
+    scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    with (
+        patch.object(module, "validate_visual_contract", scope_validator),
+        patch.object(module, "validate_candidate_revision_state", candidate_validator),
+        patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
+        patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+    ):
+        module.finalize_visual_verdict(**inputs)
+    assert scope_validator.call_count >= 3
+    assert candidate_validator.call_count == 2
+    assert dara_validator.call_count == 2
+    assert evidence_validator.call_count == 2
 
 
 def test_candidate_selection_change_after_provider_return_fails_closed() -> None:
     inputs = _valid_inputs()
-    inputs["authoritative_state"]["current_candidate_revision_sha256"] = SHA_CHANGED
+    inputs["post_provider_state"]["candidate_revision_state"]["current_candidate_revision_sha256"] = SHA_CHANGED
     with pytest.raises(Exception, match="candidate|current"):
-        _finalize(inputs)
-
-
-def test_candidate_state_or_latest_mutation_mismatch_fails_closed() -> None:
-    inputs = _valid_inputs()
-    inputs["post_provider_state"]["candidate_state_sha256"] = SHA_CHANGED
-    with pytest.raises(Exception, match="candidate|state|mutation"):
         _finalize(inputs)
 
 
 def test_dara_bytes_change_after_provider_return_fails_closed() -> None:
     inputs = _valid_inputs()
-    inputs["post_provider_state"]["drawing_sha256"] = SHA_CHANGED
+    inputs["post_provider_state"]["drawing_artifact_bytes"] = b"changed drawing"
     with pytest.raises(Exception, match="DARA|drawing|current"):
         _finalize(inputs)
 
 
 def test_visual_evidence_stale_after_provider_return_fails_closed() -> None:
     inputs = _valid_inputs()
-    inputs["post_provider_state"]["latest_mutation_sha256"] = SHA_CHANGED
-    with pytest.raises(Exception, match="fresh|stale|mutation|evidence"):
+    inputs["post_provider_state"]["visual_run_manifest"] = {"latest_mutation_sha256": SHA_CHANGED}
+    with pytest.raises(Exception, match="fresh|stale|mutation|evidence|manifest"):
         _finalize(inputs)
 
 
@@ -161,40 +220,44 @@ def test_provider_cannot_mask_or_shrink_critical_scope(change: str) -> None:
     if change == "criticality_mask":
         inputs["provider_result"]["regions"][0]["criticality"] = "NORMAL"
     else:
-        inputs["authoritative_state"]["server_scope"]["regions"].pop(0)
-    with pytest.raises(Exception, match="critical|scope|region"):
+        inputs["server_scope"]["regions"].pop(0)
+        inputs["authoritative_state"]["visual_review_scope"]["regions"].pop(0)
+        inputs["post_provider_state"]["visual_review_scope"]["regions"].pop(0)
+    with pytest.raises(Exception, match="scope|region|critical"):
         _finalize(inputs)
 
 
-@pytest.mark.parametrize(
-    "malformed",
-    [
-        {"unexpected": True},
-        "not-an-object",
-        None,
-    ],
-)
+@pytest.mark.parametrize("malformed", [{"unexpected": True}, "not-an-object", None])
 def test_malformed_or_unknown_provider_observation_fails_closed(malformed: object) -> None:
     inputs = _valid_inputs()
     inputs["provider_result"]["regions"] = [malformed]
-    with pytest.raises(Exception, match="malformed|unknown|object|field|region"):
+    with pytest.raises(Exception, match="object|field|region|mapping"):
         _finalize(inputs)
 
 
-@pytest.mark.parametrize("terminal_status", ["TIMED_OUT", "CANCELLED", "LATE_RESULT"])
-def test_task6_non_success_terminal_result_cannot_be_visual_verdict(
-    terminal_status: str,
-) -> None:
+def test_task6_result_must_be_the_accepted_public_object() -> None:
     inputs = _valid_inputs()
-    inputs["provider_result"]["terminal_status"] = terminal_status
-    with pytest.raises(Exception, match="terminal|timeout|cancel|late|attempt"):
+    inputs["provider_result"]["task6_result"] = {
+        "status": "COMPLETED",
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+    }
+    with pytest.raises(Exception, match="TASK6_PUBLIC_SEAM|CodexWorkerResult|Task6"):
         _finalize(inputs)
 
 
-def test_replayed_provider_attempt_cannot_finalize_again() -> None:
+def test_task6_supersession_or_replay_cannot_finalize_again() -> None:
     inputs = _valid_inputs()
-    inputs["authoritative_state"]["consumed_attempt_ids"] = ["attempt-1"]
-    with pytest.raises(Exception, match="replay|duplicate|attempt|consum"):
+    inputs["provider_result"]["task6_result"] = _task6_result()
+    with pytest.raises(Exception, match="identity|replayed|Task6"):
+        _finalize(inputs)
+
+
+@pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "CLOSED"])
+def test_task6_non_success_terminal_result_cannot_be_visual_verdict(status: str) -> None:
+    inputs = _valid_inputs()
+    inputs["provider_result"]["task6_result"] = _task6_result(status=status)
+    with pytest.raises(Exception, match="terminal|timeout|cancel|late|Task6"):
         _finalize(inputs)
 
 
@@ -219,10 +282,7 @@ def test_critical_region_failure_forces_final_fail() -> None:
 def test_incomplete_or_skipped_evidence_cannot_be_promoted_to_pass(status: str) -> None:
     inputs = _valid_inputs()
     inputs["provider_result"]["regions"][0]["status"] = status
-    try:
-        result = _finalize(inputs)
-    except Exception:
-        return
+    result = _finalize(inputs)
     assert result["verdict"] != "PASS"
 
 
@@ -230,11 +290,19 @@ def test_pre_repair_r5_verdict_is_stale_after_r6_mutation() -> None:
     inputs = _valid_inputs()
     inputs["authoritative_state"]["pre_repair_r5_verdict"] = {
         "verdict": "PASS",
-        "candidate_revision_sha256": SHA_CANDIDATE,
-        "latest_mutation_sha256": SHA_MUTATION,
+        "latest_mutation_sha256": SHA_CHANGED,
     }
-    inputs["authoritative_state"]["r6_mutation_sha256"] = SHA_CHANGED
-    inputs["authoritative_state"]["r6_review_verdict"] = "PASS"
-    inputs["post_provider_state"]["latest_mutation_sha256"] = SHA_CHANGED
-    with pytest.raises(Exception, match="stale|repair|R5|mutation|review"):
+    with pytest.raises(Exception, match="stale|repair|R5|mutation"):
         _finalize(inputs)
+
+
+def test_old_caller_mintable_mapping_is_rejected_with_explicit_seam_blocker() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    with pytest.raises(ValueError, match="R5_B3_TASK6_PUBLIC_SEAM_MISSING"):
+        module.finalize_visual_verdict(
+            provider_result={"terminal_status": "COMPLETED"},
+            authoritative_state={"task6_attempt_id": "attempt-1"},
+            post_provider_state={"task6_attempt_id": "attempt-1"},
+            server_scope=_scope(),
+        )
