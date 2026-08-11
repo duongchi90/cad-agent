@@ -83,7 +83,7 @@ def test_primitive_variants_have_closed_operation_specific_payloads(entity_type:
         }[entity_type],
     }
     result = normalize_repair_operation(payload)
-    assert result.parameters["capability"] == entity_type
+    assert result.parameters.capability == entity_type
     assert result.as_executor_payload()["capability"] == entity_type
 
 
@@ -156,9 +156,9 @@ def test_public_repair_operation_instances_are_revalidated_before_acceptance() -
 
 def test_post_construction_repair_operation_mutation_cannot_bypass_validation() -> None:
     normalized = normalize_repair_operation(_line_payload())
-    object.__setattr__(normalized, "operation", "REPAIR_DXF_COMPONENT")
-    with pytest.raises(RepairOperationContractError):
-        validate_repair_operation(normalized)
+    with pytest.raises(AttributeError):
+        object.__setattr__(normalized, "operation", "REPAIR_DXF_COMPONENT")
+    validate_repair_operation(normalized)
 
 
 def test_normalized_payload_maps_directly_to_accepted_a2_executor_fields() -> None:
@@ -175,13 +175,79 @@ def test_normalized_payload_maps_directly_to_accepted_a2_executor_fields() -> No
     }
 
 
+def test_valid_alternate_target_mutation_cannot_emit_a_forged_executor_payload() -> None:
+    normalized = normalize_repair_operation(_line_payload())
+    with pytest.raises(AttributeError):
+        object.__setattr__(normalized, "target", {"target_handle": "FORGED", "layer": "A-1"})
+    assert normalized.as_executor_payload()["target_handle"] == "H1"
+
+
+def test_valid_alternate_geometry_mutation_cannot_emit_a_forged_executor_payload() -> None:
+    normalized = normalize_repair_operation(_line_payload())
+    with pytest.raises(AttributeError):
+        object.__setattr__(
+            normalized,
+            "parameters",
+            {"capability": "LINE", "geometry": {"type": "line"}},
+        )
+    assert normalized.as_executor_payload()["geometry"]["start"] == [0.0, 0.0]
+
+
+def test_hostile_nested_mapping_is_rejected_without_invoking_mapping_protocols() -> None:
+    class HostileMapping(dict):
+        touched = False
+
+        def items(self):
+            type(self).touched = True
+            raise AssertionError("hostile mapping protocol invoked")
+
+    hostile = HostileMapping(target_handle="FORGED", layer="A-1")
+    forged = RepairOperation(
+        REPAIR_OPERATION_SCHEMA_VERSION,
+        "REPAIR_DXF_PRIMITIVE",
+        hostile,
+        {"capability": "LINE", "geometry": {}},
+        (),
+        (),
+    )
+    with pytest.raises(RepairOperationContractError):
+        normalize_repair_operation(forged)
+    with pytest.raises(RepairOperationContractError):
+        forged.as_executor_payload()
+    assert HostileMapping.touched is False
+
+
+def test_hostile_parameters_mapping_is_rejected_without_invoking_mapping_protocols() -> None:
+    class HostileMapping(dict):
+        touched = False
+
+        def items(self):
+            type(self).touched = True
+            raise AssertionError("hostile mapping protocol invoked")
+
+    valid = normalize_repair_operation(_line_payload())
+    forged = RepairOperation(
+        REPAIR_OPERATION_SCHEMA_VERSION,
+        "REPAIR_DXF_PRIMITIVE",
+        valid.target,
+        HostileMapping(capability="LINE", geometry={}),
+        (),
+        (),
+    )
+    with pytest.raises(RepairOperationContractError):
+        normalize_repair_operation(forged)
+    with pytest.raises(RepairOperationContractError):
+        forged.as_executor_payload()
+    assert HostileMapping.touched is False
+
+
 def test_normalization_is_deterministic_and_immutable_against_caller_mutation() -> None:
     payload = _line_payload()
     original = canonicalize_repair_operation(payload)
     normalized = normalize_repair_operation(payload)
     payload["parameters"]["geometry"]["start"][0] = 999.0
     assert canonicalize_repair_operation(normalized) == original
-    assert normalized.parameters["geometry"]["start"] == (0.0, 0.0)
+    assert normalized.parameters.geometry.values[0] == (0.0, 0.0)
 
 
 def test_copy_and_mutable_nested_containers_do_not_change_normalized_record() -> None:
@@ -189,7 +255,7 @@ def test_copy_and_mutable_nested_containers_do_not_change_normalized_record() ->
     normalized = normalize_repair_operation(payload)
     cloned = copy.deepcopy(payload)
     cloned["parameters"]["geometry"]["start"][0] = 999.0
-    assert normalized.parameters["geometry"]["start"] == (0.0, 0.0)
+    assert normalized.parameters.geometry.values[0] == (0.0, 0.0)
 
 
 def test_canonicalization_is_privacy_safe() -> None:

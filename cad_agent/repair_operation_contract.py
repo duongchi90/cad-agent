@@ -10,9 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
-from types import MappingProxyType
+from typing import NamedTuple
 
 
 REPAIR_OPERATION_SCHEMA_VERSION = "repair-operation-1.0"
@@ -76,57 +74,128 @@ def _string_list(value: object, path: str) -> tuple[str, ...]:
     return tuple(_plain_string(item, f"{path}[{index}]", identifier=True) for index, item in enumerate(value))
 
 
-def _freeze(value: object, path: str) -> object:
-    """Freeze an already validated value without retaining caller containers."""
-    if type(value) is dict:
-        return MappingProxyType({key: _freeze(item, f"{path}.{key}") for key, item in value.items()})
-    if type(value) in (list, tuple):
-        return tuple(_freeze(item, f"{path}[]") for item in value)
-    if type(value) in (str, int, float, bool) or value is None:
-        return value
-    _fail(path, "contains an unsupported value")
+class _Target(NamedTuple):
+    target_handle: str | None
+    layer: str | None
 
 
-def _thaw(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: _thaw(item) for key, item in value.items()}
-    if type(value) is tuple:
-        return [_thaw(item) for item in value]
-    return value
+class _Geometry(NamedTuple):
+    kind: str
+    values: tuple[object, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class RepairOperation:
+class _Parameters(NamedTuple):
+    capability: str
+    geometry: _Geometry
+
+
+class RepairOperation(NamedTuple):
     """Immutable normalized operation routed to an existing executor owner."""
 
     schema_version: str
     operation: str
-    target: Mapping[str, object]
-    parameters: Mapping[str, object]
+    target: _Target
+    parameters: _Parameters
     preserve_anchors: tuple[str, ...]
     constraint_refs: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
+        target = _record_target_dict(self.target)
+        validated_target = _validate_target(target)
+        target = {
+            "target_handle": validated_target.target_handle,
+            "layer": validated_target.layer,
+        }
+        parameters = _record_parameters_dict(self.parameters)
+        parameters_root = _keys(parameters, {"capability", "geometry"}, "parameters")
+        parameters = {
+            "capability": _plain_string(parameters_root["capability"], "parameters.capability"),
+            "geometry": _geometry_dict(
+                _validate_geometry(parameters_root["capability"], parameters_root["geometry"])
+            ),
+        }
+        if type(self.preserve_anchors) is not tuple or any(
+            type(item) is not str for item in self.preserve_anchors
+        ):
+            _fail("preserve_anchors", "is invalid")
+        if type(self.constraint_refs) is not tuple or any(
+            type(item) is not str for item in self.constraint_refs
+        ):
+            _fail("constraint_refs", "is invalid")
         return {
             "schema_version": self.schema_version,
             "operation": self.operation,
-            "target": _thaw(self.target),
-            "parameters": _thaw(self.parameters),
+            "target": target,
+            "parameters": parameters,
             "preserve_anchors": list(self.preserve_anchors),
             "constraint_refs": list(self.constraint_refs),
         }
 
     def as_executor_payload(self) -> dict[str, object]:
         """Return fields that map directly to the accepted A2 executor."""
+        canonical = normalize_repair_operation(self)
         return {
-            "capability": self.parameters["capability"],
-            "target_handle": self.target["target_handle"],
-            "geometry": _thaw(self.parameters["geometry"]),
-            "layer": self.target["layer"],
+            "capability": canonical.parameters.capability,
+            "target_handle": canonical.target.target_handle,
+            "geometry": _geometry_dict(canonical.parameters.geometry),
+            "layer": canonical.target.layer,
         }
 
 
-def _validate_target(target: object) -> dict[str, object]:
+def _geometry_dict(geometry: _Geometry) -> dict[str, object]:
+    if type(geometry) is not _Geometry or type(geometry.values) is not tuple:
+        _fail("parameters.geometry", "is invalid")
+    capability = geometry.kind.upper() if type(geometry.kind) is str else None
+    values = geometry.values
+    if capability == "LINE" and len(values) == 2:
+        start, end = values
+        return {"type": "line", "start": list(start), "end": list(end)} if (
+            type(start) is tuple and type(end) is tuple
+        ) else _fail("parameters.geometry", "is invalid")
+    if capability == "CIRCLE" and len(values) == 2:
+        center, radius = values
+        return {"type": "circle", "center": list(center), "radius": radius} if (
+            type(center) is tuple
+        ) else _fail("parameters.geometry", "is invalid")
+    if capability == "ARC" and len(values) == 4:
+        center, radius, start_angle, end_angle = values
+        return {
+            "type": "arc",
+            "center": list(center),
+            "radius": radius,
+            "start_angle_deg": start_angle,
+            "end_angle_deg": end_angle,
+        } if type(center) is tuple else _fail("parameters.geometry", "is invalid")
+    if capability == "TEXT" and len(values) == 4:
+        content, insert, height, rotation = values
+        return {
+            "type": "text",
+            "content": content,
+            "insert": list(insert),
+            "height": height,
+            "rotation_deg": rotation,
+        } if type(insert) is tuple else _fail("parameters.geometry", "is invalid")
+    _fail("parameters.geometry", "is invalid")
+
+
+def _record_target_dict(target: _Target) -> dict[str, object]:
+    if type(target) is not _Target:
+        _fail("target", "is invalid")
+    handle, layer = target
+    if handle is not None and type(handle) is not str:
+        _fail("target.target_handle", "is invalid")
+    if layer is not None and type(layer) is not str:
+        _fail("target.layer", "is invalid")
+    return {"target_handle": handle, "layer": layer}
+
+
+def _record_parameters_dict(parameters: _Parameters) -> dict[str, object]:
+    if type(parameters) is not _Parameters or type(parameters.capability) is not str:
+        _fail("parameters", "is invalid")
+    return {"capability": parameters.capability, "geometry": _geometry_dict(parameters.geometry)}
+
+
+def _validate_target(target: object) -> _Target:
     target = _keys(target, {"target_handle", "layer"}, "target")
     handle = target["target_handle"]
     if handle is not None and (type(handle) is not str or _HANDLE_RE.fullmatch(handle) is None):
@@ -134,10 +203,10 @@ def _validate_target(target: object) -> dict[str, object]:
     layer = target["layer"]
     if layer is not None and (type(layer) is not str or _LAYER_RE.fullmatch(layer) is None):
         _fail("target.layer", "is invalid")
-    return {"target_handle": handle, "layer": layer}
+    return _Target(handle, layer)
 
 
-def _validate_geometry(capability: object, geometry: object) -> dict[str, object]:
+def _validate_geometry(capability: object, geometry: object) -> _Geometry:
     capability = _plain_string(capability, "parameters.capability")
     if capability not in _PRIMITIVE_TYPES:
         _fail("parameters.capability", "is unsupported")
@@ -154,36 +223,40 @@ def _validate_geometry(capability: object, geometry: object) -> dict[str, object
     if type(geometry["type"]) is not str or geometry["type"] != expected_type:
         _fail("parameters.geometry.type", "does not match capability")
     if capability == "LINE":
-        return {
-            "type": "line",
-            "start": _point(geometry["start"], "parameters.geometry.start"),
-            "end": _point(geometry["end"], "parameters.geometry.end"),
-        }
+        return _Geometry(
+            "LINE",
+            (
+                _point(geometry["start"], "parameters.geometry.start"),
+                _point(geometry["end"], "parameters.geometry.end"),
+            ),
+        )
     if capability == "CIRCLE":
-        return {
-            "type": "circle",
-            "center": _point(geometry["center"], "parameters.geometry.center"),
-            "radius": _number(geometry["radius"], "parameters.geometry.radius", positive=True),
-        }
+        return _Geometry(
+            "CIRCLE",
+            (
+                _point(geometry["center"], "parameters.geometry.center"),
+                _number(geometry["radius"], "parameters.geometry.radius", positive=True),
+            ),
+        )
     if capability == "ARC":
-        return {
-            "type": "arc",
-            "center": _point(geometry["center"], "parameters.geometry.center"),
-            "radius": _number(geometry["radius"], "parameters.geometry.radius", positive=True),
-            "start_angle_deg": _number(
-                geometry["start_angle_deg"], "parameters.geometry.start_angle_deg"
+        return _Geometry(
+            "ARC",
+            (
+                _point(geometry["center"], "parameters.geometry.center"),
+                _number(geometry["radius"], "parameters.geometry.radius", positive=True),
+                _number(geometry["start_angle_deg"], "parameters.geometry.start_angle_deg"),
+                _number(geometry["end_angle_deg"], "parameters.geometry.end_angle_deg"),
             ),
-            "end_angle_deg": _number(
-                geometry["end_angle_deg"], "parameters.geometry.end_angle_deg"
-            ),
-        }
-    return {
-        "type": "text",
-        "content": _plain_string(geometry["content"], "parameters.geometry.content"),
-        "insert": _point(geometry["insert"], "parameters.geometry.insert"),
-        "height": _number(geometry["height"], "parameters.geometry.height", positive=True),
-        "rotation_deg": _number(geometry["rotation_deg"], "parameters.geometry.rotation_deg"),
-    }
+        )
+    return _Geometry(
+        "TEXT",
+        (
+            _plain_string(geometry["content"], "parameters.geometry.content"),
+            _point(geometry["insert"], "parameters.geometry.insert"),
+            _number(geometry["height"], "parameters.geometry.height", positive=True),
+            _number(geometry["rotation_deg"], "parameters.geometry.rotation_deg"),
+        ),
+    )
 
 
 def normalize_repair_operation(payload: object) -> RepairOperation:
@@ -216,13 +289,11 @@ def normalize_repair_operation(payload: object) -> RepairOperation:
     }
     preserve_anchors = _string_list(root["preserve_anchors"], "preserve_anchors")
     constraint_refs = _string_list(root["constraint_refs"], "constraint_refs")
-    frozen_target = _freeze(target, "target")
-    frozen_parameters = _freeze(parameters, "parameters")
     return RepairOperation(
         schema_version=REPAIR_OPERATION_SCHEMA_VERSION,
         operation=operation,
-        target=frozen_target,
-        parameters=frozen_parameters,
+        target=target,
+        parameters=_Parameters(parameters["capability"], parameters["geometry"]),
         preserve_anchors=preserve_anchors,
         constraint_refs=constraint_refs,
     )
