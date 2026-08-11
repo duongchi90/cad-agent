@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import gc
 import inspect
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -451,11 +454,18 @@ def _clean_cleanup() -> worker_process.WorkerCleanupResult:
     )
 
 
-def _bare_session(*, candidate: object = CANDIDATE) -> worker.CodexWorkerSession:
+def _bare_session(
+    *, candidate: object = CANDIDATE, run_id: str | None = None
+) -> worker.CodexWorkerSession:
     class _Binding:
         thread_id = THREAD_ID
 
+        def __init__(self) -> None:
+            self.run_id = run_id
+
     session = object.__new__(worker.CodexWorkerSession)
+    if run_id is None:
+        run_id = f"RUN-TEST-{id(session)}"
     session._authority_context = object()
     session._binding = _Binding()
     session._cleanup_result = None
@@ -1078,3 +1088,630 @@ def test_49_worker_owner_retains_single_process_control_cleanup_authority() -> N
     assert WORKER_SOURCE.count("cleanup_worker_process(handle)") == 2
     assert "def cleanup_worker_process(" not in WORKER_SOURCE
     assert "def snapshot_process_tree(" not in WORKER_SOURCE
+
+
+# Issue #193 RED: the accepted Task6 owner currently exposes a public result
+# record, but no canonical issuance/consumption seam. These tests deliberately
+# fail at that missing owner API rather than inventing a caller-side registry.
+def _provenance_red_result(*, status: str = "COMPLETED") -> worker.CodexWorkerResult:
+    return worker.CodexWorkerResult(
+        operation="turn",
+        status=status,
+        success=status == "COMPLETED",
+        thread_id=THREAD_ID,
+        turn_id=TURN_ID,
+        events=(worker.CodexWorkerEvent("turn.completed"),),
+        candidate_output=None,
+        candidate_trusted=False,
+        failure_code=None if status == "COMPLETED" else "WORKER_TIMEOUT",
+        cleanup_result=_clean_cleanup(),
+        promotion_safe=False,
+    )
+
+
+def _require_provenance_consumer():
+    consume = getattr(worker, "consume_task6_result", None)
+    assert callable(consume), (
+        "TASK6 RESULT PROVENANCE RED: accepted Task6 owner lacks "
+        "consume_task6_result(result, run_id=..., operation=..., "
+        "thread_id=..., turn_id=...) single-use provenance seam"
+    )
+    parameters = set(inspect.signature(consume).parameters)
+    assert {"run_id", "operation", "thread_id"}.issubset(parameters), (
+        "TASK6 RESULT PROVENANCE RED: consumer must bind run_id, operation, "
+        "and thread_id; run_id-only authority is insufficient"
+    )
+    assert "turn_id" in parameters, (
+        "TASK6 RESULT PROVENANCE RED: consumer must bind turn_id where applicable"
+    )
+    return consume
+
+
+def _consume_provenance_red(
+    result: worker.CodexWorkerResult,
+    *,
+    run_id: str = "RUN-001",
+    operation: str | None = None,
+    thread_id: str | None = None,
+    turn_id: str | None = None,
+):
+    consume = _require_provenance_consumer()
+    return consume(
+        result,
+        run_id=run_id,
+        operation=operation if operation is not None else getattr(result, "operation", None),
+        thread_id=thread_id if thread_id is not None else getattr(result, "thread_id", None),
+        turn_id=turn_id if turn_id is not None else getattr(result, "turn_id", None),
+    )
+
+
+def _canonical_turn_result(
+    monkeypatch,
+    *,
+    response: object | None = None,
+    run_id: str = "RUN-001",
+) -> worker.CodexWorkerResult:
+    session = _bare_session(candidate=None, run_id=run_id)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(700.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    if response is None:
+        response = _response(
+            events=[
+                _event("turn.started", sequence=1),
+                _event("turn.completed", sequence=2),
+            ]
+        )
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: response,
+    )
+    result = session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+    assert isinstance(result, worker.CodexWorkerResult)
+    assert result.operation == "turn"
+    assert result.thread_id == THREAD_ID
+    if result.success:
+        assert result.turn_id == TURN_ID
+    return result
+
+
+def _canonical_timeout_result(monkeypatch) -> worker.CodexWorkerResult:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(705.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+
+    def timeout(*_args, **_kwargs):
+        raise CodexWorkerError("WORKER_TIMEOUT")
+
+    monkeypatch.setattr(worker, "_invoke_child", timeout)
+    return session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+
+
+def _canonical_cancel_result(monkeypatch) -> worker.CodexWorkerResult:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(710.0))
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            operation="interrupt", events=[_event("turn.interrupted")]
+        ),
+    )
+    return session.cancel(timeout_seconds=1.0)
+
+
+def _canonical_close_result(
+    monkeypatch,
+    cleanup: worker_process.WorkerCleanupResult,
+    *,
+    run_id: str | None = None,
+):
+    session = _bare_session(candidate=CANDIDATE, run_id=run_id)
+    _install_request_builder(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(720.0))
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            operation="close", events=[_event("thread.closed")]
+        ),
+    )
+    monkeypatch.setattr(worker, "_cleanup_evidence", lambda *_args: (cleanup, None))
+    return session.close(timeout_seconds=1.0)
+
+
+def _unsafe_cleanup() -> worker_process.WorkerCleanupResult:
+    return worker_process.WorkerCleanupResult(
+        status="CLEANUP_FAILED",
+        success=False,
+        promotion_safe=False,
+        survivor_pids=(12345,),
+        survivor_count=1,
+        error_code="WORKER_SURVIVORS",
+    )
+
+
+def test_50_caller_constructed_completed_result_cannot_be_consumed() -> None:
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(_provenance_red_result())
+
+
+def test_51_field_for_field_copied_result_cannot_be_consumed() -> None:
+    original = _provenance_red_result()
+    copied = worker.CodexWorkerResult(**original.__dict__)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(copied)
+
+
+def test_52_canonical_task6_result_is_consumable_once(monkeypatch) -> None:
+    _consume_provenance_red(
+        _canonical_turn_result(monkeypatch, run_id="RUN-52"), run_id="RUN-52"
+    )
+
+
+def test_53_replayed_task6_result_fails_closed(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-53")
+    _consume_provenance_red(result, run_id="RUN-53")
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id="RUN-53")
+
+
+def test_54_tuple_mismatches_do_not_burn_legitimate_result(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-54")
+    for kwargs in (
+        {"run_id": "WRONG-RUN"},
+        {"operation": "steer"},
+        {"thread_id": "THREAD-FOREIGN"},
+        {"turn_id": "TURN-FOREIGN"},
+    ):
+        with pytest.raises(CodexWorkerError):
+            _consume_provenance_red(result, **kwargs)
+    _consume_provenance_red(result, run_id="RUN-54")
+
+
+def test_55_timeout_cancel_failure_or_nonterminal_cannot_promote(monkeypatch) -> None:
+    timed_out = _canonical_timeout_result(monkeypatch)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(timed_out)
+
+    failed = _canonical_turn_result(
+        monkeypatch,
+        response=_response(
+            status="failed",
+            events=[_event("turn.started", sequence=1), _event("provider.failed", sequence=2)],
+        ),
+    )
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(failed)
+
+    nonterminal = _canonical_turn_result(
+        monkeypatch,
+        response=_response(
+            status="completed",
+            events=[_event("turn.started", sequence=1)],
+        ),
+    )
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(nonterminal)
+
+    cancelled = _canonical_cancel_result(monkeypatch)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(cancelled)
+
+
+def test_56_unsafe_cleanup_or_promotion_state_cannot_promote(monkeypatch) -> None:
+    closed = _canonical_close_result(monkeypatch, _unsafe_cleanup())
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(closed, operation="close", turn_id=None)
+
+
+def test_57_one_attempt_cannot_satisfy_another_even_with_same_public_fields(
+    monkeypatch,
+) -> None:
+    first = _canonical_turn_result(monkeypatch, run_id="RUN-A")
+    second = _canonical_turn_result(monkeypatch, run_id="RUN-B")
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(first, run_id="RUN-B")
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(second, run_id="RUN-A")
+    _consume_provenance_red(first, run_id="RUN-A")
+    _consume_provenance_red(second, run_id="RUN-B")
+
+
+def test_58_malformed_result_fails_closed() -> None:
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red({"status": "COMPLETED"})  # type: ignore[arg-type]
+
+
+def test_59_concurrent_double_consume_allows_at_most_one_success(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch)
+    _require_provenance_consumer()
+
+    def attempt():
+        try:
+            _consume_provenance_red(result)
+        except BaseException as exc:  # noqa: BLE001 - RED oracle records categorical failure.
+            return exc
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _index: attempt(), (1, 2)))
+    assert sum(outcome is None for outcome in outcomes) <= 1
+    assert any(outcome is not None for outcome in outcomes)
+
+
+def test_60_tuple_tombstone_survives_canonical_result_gc(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-GC")
+    _consume_provenance_red(result, run_id="RUN-GC")
+    del result
+    gc.collect()
+
+    replacement = _canonical_turn_result(monkeypatch, run_id="RUN-GC")
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(replacement, run_id="RUN-GC")
+
+
+def test_61_missing_server_run_id_fails_closed_before_issuance(monkeypatch) -> None:
+    session = _bare_session()
+    cleanup_calls: list[object] = []
+    delattr(session._binding, "run_id")
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch, cleanup_calls)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(730.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)]
+        ),
+    )
+
+    result = session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+    assert result.status == "FAILED"
+    assert result.failure_code == "TASK6_RESULT_PROVENANCE_INVALID"
+    assert session.status == "FAILED"
+    assert session._terminal_result is result
+    assert session._pending_candidate is None
+    assert len(cleanup_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "FAILED"),
+        ("success", False),
+        ("failure_code", "MUTATED"),
+        ("thread_id", "THREAD-FOREIGN"),
+        ("turn_id", "TURN-FOREIGN"),
+    ],
+)
+def test_62_issued_result_mutation_fails_closed(
+    monkeypatch, field: str, value: object
+) -> None:
+    run_id = f"RUN-MUTATION-{field}"
+    result = _canonical_turn_result(monkeypatch, run_id=run_id)
+    result.__dict__[field] = value
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(
+            result,
+            run_id=run_id,
+            operation="turn",
+            thread_id=THREAD_ID,
+            turn_id=TURN_ID,
+        )
+
+
+def test_63_provenance_failures_are_privacy_safe_and_do_not_change_owner_contracts(
+    monkeypatch,
+) -> None:
+    failed = _canonical_turn_result(
+        monkeypatch,
+        response=_response(
+            status="failed",
+            events=[
+                _event(
+                    "provider.failed",
+                    sequence=1,
+                    payload={"private": PRIVATE_SENTINEL},
+                )
+            ],
+            candidate={"private": PRIVATE_SENTINEL},
+        ),
+    )
+    with pytest.raises(CodexWorkerError) as caught:
+        _consume_provenance_red(failed)
+    assert PRIVATE_SENTINEL not in repr(caught.value)
+    assert PRIVATE_SENTINEL not in repr(failed)
+
+
+def test_64_nested_event_tamper_does_not_burn_canonical_result(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-EVENT-TAMPER")
+    event = result.events[0]
+    original_kind = event.kind
+    event.__dict__["kind"] = "provider.failed"
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id="RUN-EVENT-TAMPER")
+
+    event.__dict__["kind"] = original_kind
+    _consume_provenance_red(result, run_id="RUN-EVENT-TAMPER")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "CLEANUP_FAILED"),
+        ("success", False),
+        ("promotion_safe", False),
+        ("survivor_pids", (12345,)),
+        ("survivor_count", 1),
+        ("error_code", "WORKER_SURVIVORS"),
+    ],
+)
+def test_65_nested_cleanup_tamper_does_not_burn_canonical_result(
+    monkeypatch, field: str, value: object
+) -> None:
+    run_id = f"RUN-CLEANUP-TAMPER-{field}"
+    result = _canonical_close_result(monkeypatch, _clean_cleanup(), run_id=run_id)
+    result.__dict__["cleanup_result"].__dict__[field] = value
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id=run_id, operation="close", turn_id=None)
+
+    cleanup = result.cleanup_result
+    assert cleanup is not None
+    restore = _clean_cleanup()
+    cleanup.__dict__[field] = getattr(restore, field)
+    _consume_provenance_red(result, run_id=run_id, operation="close", turn_id=None)
+
+
+def test_66_candidate_output_replacement_does_not_bypass_integrity(monkeypatch) -> None:
+    result = _canonical_turn_result(monkeypatch, run_id="RUN-CANDIDATE-TAMPER")
+    original_output = result.candidate_output
+    result.__dict__["candidate_output"] = {"forged": True}
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id="RUN-CANDIDATE-TAMPER")
+
+    result.__dict__["candidate_output"] = original_output
+    _consume_provenance_red(result, run_id="RUN-CANDIDATE-TAMPER")
+
+
+def test_67_task6_tuple_ledger_is_bounded_without_eviction(monkeypatch) -> None:
+    assert getattr(worker, "MAX_TASK6_ISSUED_TUPLES", None) == 4096
+    monkeypatch.setattr(worker, "_TASK6_ISSUANCE_LOCK", threading.Lock())
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_ID", {})
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_TUPLE", {})
+    # Exercise the hard-bound policy at a small isolated capacity; the
+    # production constant is asserted above and remains 4096.
+    monkeypatch.setattr(worker, "MAX_TASK6_ISSUED_TUPLES", 8)
+    capacity = worker.MAX_TASK6_ISSUED_TUPLES
+    issued = []
+    for index in range(capacity):
+        result = _provenance_red_result()
+        worker._issue_task6_result(
+            result,
+            run_id=f"RUN-CAP-{index}",
+            operation="turn",
+        )
+        issued.append(result)
+    assert len(worker._TASK6_ISSUED_BY_TUPLE) == capacity
+
+    retained_tuple = ("RUN-CAP-0", "turn", THREAD_ID, TURN_ID)
+    del issued
+    gc.collect()
+    assert len(worker._TASK6_ISSUED_BY_TUPLE) == capacity
+
+    replacement = _provenance_red_result()
+    worker._issue_task6_result(
+        replacement,
+        run_id=retained_tuple[0],
+        operation=retained_tuple[1],
+    )
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(replacement, run_id=retained_tuple[0])
+
+    with pytest.raises(CodexWorkerError):
+        worker._issue_task6_result(
+            _provenance_red_result(),
+            run_id="RUN-CAPACITY-OVERFLOW",
+            operation="turn",
+        )
+    assert len(worker._TASK6_ISSUED_BY_TUPLE) == capacity
+
+
+def test_68_capacity_refusal_finalizes_successful_turn_through_cleanup(
+    monkeypatch,
+) -> None:
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(740.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)]
+        ),
+    )
+    monkeypatch.setattr(worker, "_TASK6_ISSUANCE_LOCK", threading.Lock())
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_ID", {})
+    monkeypatch.setattr(worker, "_TASK6_ISSUED_BY_TUPLE", {})
+    monkeypatch.setattr(worker, "MAX_TASK6_ISSUED_TUPLES", 0)
+
+    result = session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+
+    assert result.status == "FAILED"
+    assert result.success is False
+    assert result.failure_code == "TASK6_RESULT_PROVENANCE_INVALID"
+    assert result.cleanup_result is not None
+    assert result.cleanup_result.survivor_count == 0
+    assert session.status == "FAILED"
+    assert session._terminal_result is result
+    assert session._pending_candidate is None
+    assert session.turn({"prompt": "retry"}, timeout_seconds=1.0) is result
+
+
+class _HostileEqualStr(str):
+    __hash__ = str.__hash__
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+
+@pytest.mark.parametrize("field", ["run_id", "operation", "thread_id", "turn_id"])
+def test_69_hostile_string_subclass_cannot_bypass_tuple_authority(
+    monkeypatch, field: str
+) -> None:
+    run_id = f"RUN-HOSTILE-{field}"
+    result = _canonical_turn_result(monkeypatch, run_id=run_id)
+    hostile = {
+        "run_id": _HostileEqualStr("FOREIGN-RUN"),
+        "operation": _HostileEqualStr("steer"),
+        "thread_id": _HostileEqualStr("FOREIGN-THREAD"),
+        "turn_id": _HostileEqualStr("FOREIGN-TURN"),
+    }
+    kwargs = {
+        "run_id": run_id,
+        "operation": "turn",
+        "thread_id": THREAD_ID,
+        "turn_id": TURN_ID,
+    }
+    kwargs[field] = hostile[field]
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, **kwargs)
+    _consume_provenance_red(result, run_id=run_id)
+
+
+def test_70_successful_provider_with_missing_run_id_finalizes_cleanup(
+    monkeypatch,
+) -> None:
+    cleanup_calls: list[object] = []
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch, cleanup_calls)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(750.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)]
+        ),
+    )
+    delattr(session._binding, "run_id")
+
+    result = session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+
+    assert result.status == "FAILED"
+    assert result.failure_code == "TASK6_RESULT_PROVENANCE_INVALID"
+    assert session.status == "FAILED"
+    assert session._terminal_result is result
+    assert session._pending_candidate is None
+    assert len(cleanup_calls) == 1
+
+
+def test_73_successful_provider_with_hostile_run_id_finalizes_cleanup(
+    monkeypatch,
+) -> None:
+    cleanup_calls: list[object] = []
+    session = _bare_session(candidate=None)
+    _install_request_builder(monkeypatch)
+    _install_clean_cleanup(monkeypatch, cleanup_calls)
+    monkeypatch.setattr(worker.time, "monotonic", _MutableClock(755.0))
+    monkeypatch.setattr(worker, "_attest_provider_boundary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "_invoke_child",
+        lambda *_args, **_kwargs: _response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)]
+        ),
+    )
+    session._binding.run_id = _HostileEqualStr("RUN-HOSTILE-BINDING")
+
+    result = session.turn({"prompt": "safe"}, timeout_seconds=1.0)
+
+    assert result.status == "FAILED"
+    assert result.failure_code == "TASK6_RESULT_PROVENANCE_INVALID"
+    assert session.status == "FAILED"
+    assert session._terminal_result is result
+    assert session._pending_candidate is None
+    assert len(cleanup_calls) == 1
+
+
+def test_74_nested_candidate_mapping_key_tamper_fails_without_burn(
+    monkeypatch,
+) -> None:
+    run_id = "RUN-NESTED-CANDIDATE-KEY"
+    result = _canonical_turn_result(
+        monkeypatch,
+        run_id=run_id,
+        response=_response(
+            events=[_event("turn.started", sequence=1), _event("turn.completed", sequence=2)],
+            candidate={"outer": {"foo": "bar"}},
+        ),
+    )
+    original = result.candidate_output
+    result.__dict__["candidate_output"] = {
+        "outer": {_HostileEqualStr("foo"): "bar"}
+    }
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id=run_id)
+    result.__dict__["candidate_output"] = original
+    _consume_provenance_red(result, run_id=run_id)
+
+
+@pytest.mark.parametrize("field", ["operation", "status", "thread_id", "turn_id"])
+def test_71_hostile_top_level_result_strings_fail_integrity_without_burn(
+    monkeypatch, field: str
+) -> None:
+    run_id = f"RUN-TOPLEVEL-TAMPER-{field}"
+    result = _canonical_turn_result(monkeypatch, run_id=run_id)
+    original = getattr(result, field)
+    forged = {
+        "operation": _HostileEqualStr("turn"),
+        "status": _HostileEqualStr("COMPLETED"),
+        "thread_id": _HostileEqualStr(THREAD_ID),
+        "turn_id": _HostileEqualStr(TURN_ID),
+    }[field]
+    result.__dict__[field] = forged
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id=run_id)
+    result.__dict__[field] = original
+    _consume_provenance_red(result, run_id=run_id)
+
+
+@pytest.mark.parametrize("field", ["event_kind", "cleanup_status", "cleanup_error"])
+def test_72_hostile_nested_result_strings_fail_integrity_without_burn(
+    monkeypatch, field: str
+) -> None:
+    run_id = f"RUN-NESTED-TAMPER-{field}"
+    result = _canonical_close_result(monkeypatch, _clean_cleanup(), run_id=run_id)
+    if field == "event_kind":
+        target = result.events[0]
+        original = target.kind
+        target.__dict__["kind"] = _HostileEqualStr(original)
+    else:
+        cleanup = result.cleanup_result
+        assert cleanup is not None
+        target = cleanup
+        key = "status" if field == "cleanup_status" else "error_code"
+        original = getattr(target, key)
+        target.__dict__[key] = _HostileEqualStr(original or "WORKER")
+
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(result, run_id=run_id, operation="close", turn_id=None)
+
+    if field == "event_kind":
+        target.__dict__["kind"] = original
+    else:
+        target.__dict__[key] = original
+    _consume_provenance_red(result, run_id=run_id, operation="close", turn_id=None)
