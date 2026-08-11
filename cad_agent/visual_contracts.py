@@ -29,6 +29,8 @@ def _keys(
     required: set[str],
     optional: set[str] | None = None,
 ) -> None:
+    if any(not isinstance(key, str) for key in payload):
+        _fail(contract, "properties must use string keys")
     allowed = required | (optional or set())
     missing = sorted(required - set(payload))
     unexpected = sorted(set(payload) - allowed)
@@ -859,6 +861,78 @@ def require_region_verified(region: Mapping[str, object]) -> None:
         raise VisualContractError("region_verification_register: unresolved critical items remain")
 
 
+def _normalize_visual_review_scope(payload: Mapping[str, object], *, contract: str) -> dict[str, object]:
+    _keys(
+        payload,
+        contract=contract,
+        required={
+            "schema_version",
+            "scope_id",
+            "run_id",
+            "registry_snapshot_sha256",
+            "candidate_revision_sha256",
+            "candidate_state_sha256",
+            "regions",
+        },
+    )
+    if payload["schema_version"] != "visual-review-scope-1.0":
+        _fail(contract, "schema_version must be 'visual-review-scope-1.0'")
+    normalized: dict[str, object] = {"schema_version": payload["schema_version"]}
+    for key in ("scope_id", "run_id"):
+        normalized[key] = _identifier(payload[key], contract=contract, path=key)
+    for key in (
+        "registry_snapshot_sha256",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+    ):
+        normalized[key] = _sha256(payload[key], contract=contract, path=key)
+
+    regions = payload["regions"]
+    if not isinstance(regions, list) or not regions:
+        _fail(contract, "regions must contain at least one item")
+
+    normalized_regions: list[dict[str, object]] = []
+    region_ids: set[str] = set()
+    for index, value in enumerate(regions):
+        path = f"regions[{index}]"
+        region = _object(value, contract=contract, path=path)
+        _keys(
+            region,
+            contract=contract,
+            required={"region_id", "view_id", "sheet_id", "layout_id", "criticality"},
+        )
+        region_id = _identifier(region["region_id"], contract=contract, path=f"{path}.region_id")
+        if region_id in region_ids:
+            _fail(contract, f"duplicate region_id: {region_id}")
+        region_ids.add(region_id)
+        normalized_region: dict[str, object] = {"region_id": region_id}
+        for key in ("view_id", "sheet_id", "layout_id"):
+            normalized_region[key] = _identifier(
+                region[key], contract=contract, path=f"{path}.{key}"
+            )
+        if not isinstance(region["criticality"], str) or region["criticality"] not in _CRITICALITIES:
+            _fail(contract, f"{path}.criticality is invalid")
+        normalized_region["criticality"] = region["criticality"]
+        normalized_regions.append(normalized_region)
+
+    normalized["regions"] = sorted(normalized_regions, key=lambda item: item["region_id"])
+    return normalized
+
+
+def _validate_visual_review_scope(
+    payload: dict[str, Any], *, server_scope: Mapping[str, object] | None = None
+) -> None:
+    contract = "visual_review_scope"
+    if server_scope is None:
+        _fail(contract, "server_scope is required for server-owned validation")
+    normalized_payload = _normalize_visual_review_scope(payload, contract=contract)
+    normalized_server_scope = _normalize_visual_review_scope(server_scope, contract=contract)
+    if normalized_payload != normalized_server_scope:
+        _fail(contract, "payload does not match the server-owned scope")
+    payload.clear()
+    payload.update(normalized_payload)
+
+
 def _normalize_windows_path(value: object, *, contract: str, path: str) -> str:
     text = _string(value, contract=contract, path=path)
     if _WINDOWS_ABSOLUTE_PATH_RE.fullmatch(text) is None:
@@ -1001,6 +1075,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "visual_review": _validate_visual_review,
     "repair_plan": _validate_repair_plan,
     "region_verification_register": _validate_region_verification_register,
+    "visual_review_scope": _validate_visual_review_scope,
     "auto_publish_authorization": _validate_auto_publish_authorization,
 }
 SUPPORTED_VISUAL_CONTRACTS = tuple(sorted(_VALIDATORS))
@@ -1020,6 +1095,7 @@ def validate_visual_contract(
     payload: Mapping[str, object],
     *,
     contract: str,
+    server_scope: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     key = contract.replace("-", "_")
     validator = _VALIDATORS.get(key)
@@ -1028,7 +1104,14 @@ def validate_visual_contract(
     if not isinstance(payload, Mapping):
         raise VisualContractError(f"{contract}: root must be an object")
     copied = copy.deepcopy(dict(payload))
-    validator(copied)
+    if key == "visual_review_scope":
+        if server_scope is None or not isinstance(server_scope, Mapping):
+            raise VisualContractError(
+                "visual_review_scope: server_scope is required for server-owned validation"
+            )
+        _validate_visual_review_scope(copied, server_scope=server_scope)
+    else:
+        validator(copied)
     return copied
 
 
