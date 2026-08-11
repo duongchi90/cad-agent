@@ -1209,13 +1209,15 @@ def _unsafe_cleanup() -> worker_process.WorkerCleanupResult:
 
 
 def test_50_caller_constructed_completed_result_cannot_be_consumed() -> None:
-    _consume_provenance_red(_provenance_red_result())
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(_provenance_red_result())
 
 
 def test_51_field_for_field_copied_result_cannot_be_consumed() -> None:
     original = _provenance_red_result()
     copied = worker.CodexWorkerResult(**original.__dict__)
-    _consume_provenance_red(copied)
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red(copied)
 
 
 def test_52_canonical_task6_result_is_consumable_once(monkeypatch) -> None:
@@ -1275,7 +1277,8 @@ def test_57_one_attempt_cannot_satisfy_another_even_with_same_public_fields(
 
 
 def test_58_malformed_result_fails_closed() -> None:
-    _consume_provenance_red({"status": "COMPLETED"})  # type: ignore[arg-type]
+    with pytest.raises(CodexWorkerError):
+        _consume_provenance_red({"status": "COMPLETED"})  # type: ignore[arg-type]
 
 
 def test_59_concurrent_double_consume_allows_at_most_one_success(monkeypatch) -> None:
