@@ -332,6 +332,18 @@ def test_exact_owner_composition_returns_one_bounded_success() -> None:
         _consume_exact(inputs["authorization"])
 
 
+def test_result_binds_exact_owner_authorization_identity_privacy_safely() -> None:
+    inputs = _valid_inputs()
+    authorization = inputs["authorization"]
+    result = _execute(inputs)
+    assert type(result["authorization_id"]) is str
+    assert result["authorization_id"] == authorization.authorization_id
+    semantic_result = {key: value for key, value in result.items() if key != "result_sha256"}
+    assert result["result_sha256"] == canonical_json_sha256(semantic_result)
+    forbidden = {"authorization", "tuple_values", "created_at", "expires_at"}
+    assert forbidden.isdisjoint(result)
+
+
 def test_duck_typed_workspace_owner_is_rejected_before_consume() -> None:
     class FakeOwner:
         def validate_disposable_workspace(self, *args, **kwargs):
