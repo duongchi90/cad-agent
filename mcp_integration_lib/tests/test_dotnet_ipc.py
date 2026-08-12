@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import importlib
 import json
 import os
@@ -699,6 +700,240 @@ class DotNetIPCClientTests(unittest.TestCase):
             purpose="r6-gate-0",
             workspace_root=root,
         )
+
+    @staticmethod
+    def _validate_disposable(
+        client: DotNetIPCClient,
+        lease: dotnet_ipc.DisposableWorkspaceLease,
+        *,
+        candidate_identity: str = "candidate-001",
+        source_identity: str = "source-001",
+        source_fingerprint: str = "a" * 64,
+    ):
+        validate = getattr(client, "validate_disposable_workspace", None)
+        if not callable(validate):
+            raise AssertionError(
+                "DotNetIPCClient must expose public pre-mutation disposable-workspace validation"
+            )
+        return validate(
+            lease,
+            candidate_identity=candidate_identity,
+            source_identity=source_identity,
+            source_fingerprint=source_fingerprint,
+        )
+
+    def test_public_disposable_validation_returns_read_only_evidence_without_transition(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+
+            evidence = self._validate_disposable(client, lease)
+
+            self.assertEqual("active", lease.lifecycle_state)
+            self.assertTrue(lease.workspace_path.is_dir())
+            self.assertNotIn(str(lease.workspace_path), repr(evidence))
+            self.assertFalse(hasattr(evidence, "workspace_path"))
+
+    def test_public_disposable_validation_is_idempotent_and_lease_remains_closable(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, FakeDispatcher(ipc_dir))
+            lease = self._issue_disposable(client, root)
+
+            first = self._validate_disposable(client, lease)
+            second = self._validate_disposable(client, lease)
+            closure = client.close_disposable_workspace(
+                lease,
+                candidate_identity="candidate-001",
+                source_identity="source-001",
+                source_fingerprint="a" * 64,
+            )
+
+            self.assertEqual(first, second)
+            self.assertEqual("closed", closure.lifecycle_state)
+
+    def test_public_disposable_validation_rejects_equal_field_copy(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, copy.copy(lease))
+            self.assertEqual("active", lease.lifecycle_state)
+
+    def test_public_disposable_validation_rejects_foreign_lease(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            first_ipc = ipc_dir / "one"
+            second_ipc = ipc_dir / "two"
+            first = self._disposable_client(first_ipc, first_ipc / "disposable-workspaces", lambda: None)
+            second = self._disposable_client(second_ipc, second_ipc / "disposable-workspaces", lambda: None)
+            lease = self._issue_disposable(first, first_ipc / "disposable-workspaces")
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(second, lease)
+
+    def test_public_disposable_validation_rejects_terminal_lifecycle_states(self) -> None:
+        for lifecycle in ("closing", "closed", "failed"):
+            with self.subTest(lifecycle=lifecycle), TemporaryDirectory() as temporary:
+                ipc_dir = Path(temporary)
+                root = ipc_dir / "disposable-workspaces"
+                client = self._disposable_client(ipc_dir, root, lambda: None)
+                lease = self._issue_disposable(client, root)
+                client._disposable_states[lease.lease_id].lifecycle_state = lifecycle
+
+                with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                    self._validate_disposable(client, lease)
+
+    def test_public_disposable_validation_rejects_expired_lease(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            client._disposable_states[lease.lease_id].expires_at = time.time() - 1
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease)
+
+    def test_public_disposable_validation_rejects_wrong_candidate_without_burn(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease, candidate_identity="candidate-forged")
+            self.assertEqual("active", lease.lifecycle_state)
+            self.assertTrue(lease.workspace_path.exists())
+
+    def test_public_disposable_validation_rejects_wrong_source_without_burn(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease, source_identity="source-forged")
+            self.assertEqual("active", lease.lifecycle_state)
+
+    def test_public_disposable_validation_rejects_wrong_fingerprint_without_burn(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease, source_fingerprint="b" * 64)
+            self.assertEqual("active", lease.lifecycle_state)
+
+    def test_public_disposable_validation_rejects_hostile_string_subclasses(self) -> None:
+        class HostileString(str):
+            def __hash__(self):
+                return hash("candidate-001")
+
+            def __eq__(self, other):
+                return True
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+
+            for field, value in (
+                ("candidate_identity", HostileString("candidate-001")),
+                ("source_identity", HostileString("source-001")),
+                ("source_fingerprint", HostileString("a" * 64)),
+            ):
+                with self.subTest(field=field), self.assertRaises(
+                    (ValueError, dotnet_ipc.DotNetIPCProtocolError)
+                ):
+                    self._validate_disposable(client, lease, **{field: value})
+
+    def test_public_disposable_validation_rejects_hostile_path_lease(self) -> None:
+        class HostilePath(type(Path())):
+            def __fspath__(self):
+                raise AssertionError("hostile path protocol invoked")
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            forged = copy.copy(lease)
+            object.__setattr__(forged, "workspace_path", HostilePath(lease.workspace_path))
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, forged)
+
+    def test_public_disposable_validation_preserves_root_containment_policy(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            client._disposable_states[lease.lease_id].workspace_path = ipc_dir / "outside"
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease)
+            self.assertEqual("active", lease.lifecycle_state)
+
+    def test_public_disposable_validation_result_is_immutable_and_private(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            evidence = self._validate_disposable(client, lease)
+
+            with self.assertRaises((AttributeError, TypeError, dataclasses.FrozenInstanceError)):
+                evidence.status = "forged"
+            self.assertNotIn("_disposable_states", repr(evidence))
+
+    def test_public_disposable_validation_does_not_destroy_lease_on_failure(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease, source_identity="wrong-source")
+            self.assertEqual("active", lease.lifecycle_state)
+            self.assertTrue(lease.workspace_path.is_dir())
+
+    def test_public_disposable_validation_serializes_with_close_lifecycle(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            client._disposable_states[lease.lease_id].lifecycle_state = "closing"
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [
+                    pool.submit(self._validate_disposable, client, lease)
+                    for _ in range(2)
+                ]
+            errors = []
+            for future in futures:
+                try:
+                    future.result()
+                except Exception as exc:  # noqa: BLE001 - categorical oracle
+                    errors.append(exc)
+            self.assertEqual(2, len(errors))
+            self.assertTrue(
+                all(isinstance(error, dotnet_ipc.DotNetIPCProtocolError) for error in errors)
+            )
 
     def test_owner_issues_one_server_owned_disposable_workspace_lease(self) -> None:
         with TemporaryDirectory() as temporary:
