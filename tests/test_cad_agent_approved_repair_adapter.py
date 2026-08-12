@@ -435,6 +435,25 @@ def test_executor_error_is_categorical_and_never_false_success(executor_error: B
     with pytest.raises(Exception, match="TIMEOUT|EXECUTOR|MUTATION|failure|ambiguous"):
         _execute(inputs)
     assert executor.calls == []
+    assert len(inputs["workspace_lease"].owner.close_calls) == 1
+
+
+def test_executor_and_closure_failure_is_categorical_without_retry_or_success() -> None:
+    owner = _WorkspaceOwner(close_error=RuntimeError("cleanup uncertain"))
+    executor = _ExecutorClient(error=RuntimeError("executor ambiguous"))
+    _state, candidate = _candidate_binding()
+    inputs = _valid_inputs(
+        workspace_lease=_WorkspaceLease(
+            owner,
+            candidate_identity=candidate["revision_id"],
+            source_fingerprint=SHA_FAILURE,
+        ),
+        executor_client=executor,
+    )
+    with pytest.raises(Exception, match="CLOSURE|closure|cleanup|failure"):
+        _execute(inputs)
+    assert executor.calls == []
+    assert len(owner.close_calls) == 1
 
 
 def test_uncertain_closure_is_terminal_failure_not_success() -> None:

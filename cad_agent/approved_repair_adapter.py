@@ -320,6 +320,8 @@ def execute_approved_repair(
     except Exception as exc:
         raise RepairExecutorAdapterError("AUTHORIZATION_INVALID") from exc
 
+    executor_result: object = None
+    executor_error: Exception | None = None
     try:
         executor_result = _execute_supported_repair_capability(
             executor_client,
@@ -329,20 +331,26 @@ def execute_approved_repair(
             layer=operation_payload["layer"],
         )
     except Exception as exc:
-        raise RepairExecutorAdapterError("EXECUTOR_FAILED") from exc
+        executor_error = exc
 
+    closure: dict[str, object] | None = None
+    closure_error: Exception | None = None
     try:
-        closure = owner.close_disposable_workspace(
+        closed = owner.close_disposable_workspace(
             workspace_lease,
             candidate_identity=context["candidate_revision_id"],
             source_identity=failure["failure_id"],
             source_fingerprint=failure["failure_sha256"],
         )
-        closure = _closure_fields(closure)
+        closure = _closure_fields(closed)
     except Exception as exc:
-        if isinstance(exc, RepairExecutorAdapterError):
-            raise
-        raise RepairExecutorAdapterError("CLOSURE_FAILED") from exc
+        closure_error = exc
+
+    if closure_error is not None:
+        raise RepairExecutorAdapterError("CLOSURE_FAILED") from closure_error
+    if executor_error is not None:
+        raise RepairExecutorAdapterError("EXECUTOR_FAILED") from executor_error
+    assert closure is not None
 
     result: dict[str, object] = {
         "schema_version": R6_RESULT_SCHEMA_VERSION,
