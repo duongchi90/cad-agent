@@ -766,6 +766,30 @@ class DotNetIPCClientTests(unittest.TestCase):
                 self._validate_disposable(client, copy.copy(lease))
             self.assertEqual("active", lease.lifecycle_state)
 
+    def test_public_disposable_validation_rejects_post_issue_lease_slot_tamper(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            original_candidate = lease.candidate_identity
+            object.__setattr__(lease, "candidate_identity", "candidate-forged")
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease)
+
+            object.__setattr__(lease, "candidate_identity", original_candidate)
+            original_lifecycle = lease._lifecycle
+            object.__setattr__(
+                lease,
+                "_lifecycle",
+                dotnet_ipc._DisposableWorkspaceLifecycle(),
+            )
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease)
+            object.__setattr__(lease, "_lifecycle", original_lifecycle)
+            self.assertEqual("active", lease.lifecycle_state)
+
     def test_public_disposable_validation_rejects_foreign_lease(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
