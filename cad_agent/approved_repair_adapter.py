@@ -308,6 +308,160 @@ def _closure_fields(
     }
 
 
+def _validate_result_closure(value: object) -> None:
+    required = {
+        "lease_id",
+        "candidate_identity",
+        "source_identity",
+        "source_fingerprint",
+        "close_outcome",
+        "cleanup_outcome",
+        "save_changes",
+        "lifecycle_state",
+    }
+    if type(value) is not dict:
+        _fail("CLOSURE_FAILED")
+    if any(type(key) is not str for key in value):
+        _fail("CLOSURE_FAILED")
+    if set(value) != required:
+        _fail("CLOSURE_FAILED")
+    for field in (
+        "lease_id",
+        "candidate_identity",
+        "source_identity",
+        "source_fingerprint",
+        "close_outcome",
+        "cleanup_outcome",
+        "lifecycle_state",
+    ):
+        _text(value[field], "CLOSURE_FAILED")
+    if type(value["save_changes"]) is not bool:
+        _fail("CLOSURE_FAILED")
+    if (
+        value["close_outcome"] != "closed"
+        or value["cleanup_outcome"] != "zero_survivors"
+        or value["save_changes"] is not False
+        or value["lifecycle_state"] != "closed"
+    ):
+        _fail("CLOSURE_FAILED")
+
+
+def validate_approved_repair_result(
+    result: Mapping[str, object],
+    *,
+    expected_candidate_revision_id: str | None = None,
+    expected_candidate_revision_sha256: str | None = None,
+    expected_r5_failure_id: str | None = None,
+    expected_r5_failure_sha256: str | None = None,
+    expected_repair_plan_id: str | None = None,
+    expected_repair_plan_sha256: str | None = None,
+    expected_repair_plan_version: str | None = None,
+    expected_repair_operation_contract_version: str | None = None,
+    expected_repair_operation_contract_fingerprint: str | None = None,
+) -> dict[str, object]:
+    """Validate one already-produced accepted closed R6 repair result."""
+
+    required = {
+        "schema_version",
+        "candidate_revision_id",
+        "candidate_revision_sha256",
+        "r5_failure_id",
+        "r5_failure_sha256",
+        "repair_plan_id",
+        "repair_plan_sha256",
+        "repair_plan_version",
+        "repair_operation_contract_version",
+        "repair_operation_contract_fingerprint",
+        "authorization_id",
+        "executor_capability",
+        "executor_result_category",
+        "mutation_outcome",
+        "closure",
+        "requires_new_r5_cycle",
+        "result_sha256",
+    }
+    if type(result) is not dict:
+        _fail("MALFORMED")
+    if any(type(key) is not str for key in result):
+        _fail("MALFORMED")
+    if set(result) != required:
+        _fail("MALFORMED")
+
+    for field in (
+        "schema_version",
+        "candidate_revision_id",
+        "r5_failure_id",
+        "repair_plan_id",
+        "repair_plan_version",
+        "repair_operation_contract_version",
+        "authorization_id",
+        "executor_capability",
+        "executor_result_category",
+        "mutation_outcome",
+    ):
+        _text(result[field], "MALFORMED")
+    for field in (
+        "candidate_revision_sha256",
+        "r5_failure_sha256",
+        "repair_plan_sha256",
+        "repair_operation_contract_fingerprint",
+        "result_sha256",
+    ):
+        _sha(result[field], "MALFORMED")
+
+    if result["schema_version"] != R6_RESULT_SCHEMA_VERSION:
+        _fail("MALFORMED")
+    if result["repair_operation_contract_version"] != REPAIR_OPERATION_SCHEMA_VERSION:
+        _fail("MALFORMED")
+    if result["executor_result_category"] not in {"HANDLE_RETURNED", "NO_HANDLE"}:
+        _fail("MALFORMED")
+    if result["mutation_outcome"] != "SUCCESS":
+        _fail("MALFORMED")
+    if type(result["requires_new_r5_cycle"]) is not bool or result["requires_new_r5_cycle"] is not True:
+        _fail("MALFORMED")
+    _validate_result_closure(result["closure"])
+
+    semantic_result = dict(result)
+    supplied_sha256 = semantic_result.pop("result_sha256")
+    if canonical_json_sha256(semantic_result) != supplied_sha256:
+        _fail("MALFORMED")
+
+    expected_text_bindings = (
+        (expected_candidate_revision_id, "candidate_revision_id"),
+        (expected_r5_failure_id, "r5_failure_id"),
+        (expected_repair_plan_id, "repair_plan_id"),
+        (expected_repair_plan_version, "repair_plan_version"),
+        (
+            expected_repair_operation_contract_version,
+            "repair_operation_contract_version",
+        ),
+    )
+    for expected, field in expected_text_bindings:
+        if expected is None:
+            continue
+        _text(expected, "MALFORMED")
+        if result[field] != expected:
+            _fail("BINDING_MISMATCH")
+
+    expected_sha_bindings = (
+        (expected_candidate_revision_sha256, "candidate_revision_sha256"),
+        (expected_r5_failure_sha256, "r5_failure_sha256"),
+        (expected_repair_plan_sha256, "repair_plan_sha256"),
+        (
+            expected_repair_operation_contract_fingerprint,
+            "repair_operation_contract_fingerprint",
+        ),
+    )
+    for expected, field in expected_sha_bindings:
+        if expected is None:
+            continue
+        _sha(expected, "MALFORMED")
+        if result[field] != expected:
+            _fail("BINDING_MISMATCH")
+
+    return deepcopy(result)
+
+
 def execute_approved_repair(
     *,
     authorization: object,
@@ -411,4 +565,9 @@ def execute_approved_repair(
     return result
 
 
-__all__ = ["R6_RESULT_SCHEMA_VERSION", "RepairExecutorAdapterError", "execute_approved_repair"]
+__all__ = [
+    "R6_RESULT_SCHEMA_VERSION",
+    "RepairExecutorAdapterError",
+    "execute_approved_repair",
+    "validate_approved_repair_result",
+]
