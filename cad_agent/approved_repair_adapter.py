@@ -13,7 +13,7 @@ from importlib import import_module
 
 from cad_agent.candidate_revision import validate_candidate_revision_state
 from cad_agent.drawing_contracts import canonical_json_sha256
-from cad_agent.repair_authorization import consume_repair_authorization
+from cad_agent.repair_authorization import RepairAuthorization, consume_repair_authorization
 from cad_agent.repair_operation_contract import (
     REPAIR_OPERATION_SCHEMA_VERSION,
     normalize_repair_operation,
@@ -345,12 +345,17 @@ def execute_approved_repair(
         raise RepairExecutorAdapterError("WORKSPACE_INVALID") from exc
 
     try:
-        consume_repair_authorization(
+        consumed_authorization = consume_repair_authorization(
             authorization,
             **_authorization_fields(context, failure, operation_fingerprint),
         )
     except Exception as exc:
         raise RepairExecutorAdapterError("AUTHORIZATION_INVALID") from exc
+    if type(consumed_authorization) is not RepairAuthorization:
+        _fail("AUTHORIZATION_INVALID")
+    authorization_id = consumed_authorization.authorization_id
+    if type(authorization_id) is not str or not authorization_id:
+        _fail("AUTHORIZATION_INVALID")
 
     executor_result: object = None
     executor_error: Exception | None = None
@@ -395,6 +400,7 @@ def execute_approved_repair(
         "repair_plan_version": context["repair_plan_version"],
         "repair_operation_contract_version": context["repair_operation_contract_version"],
         "repair_operation_contract_fingerprint": operation_fingerprint,
+        "authorization_id": authorization_id,
         "executor_capability": operation_payload["capability"],
         "executor_result_category": "HANDLE_RETURNED" if executor_result else "NO_HANDLE",
         "mutation_outcome": "SUCCESS",
