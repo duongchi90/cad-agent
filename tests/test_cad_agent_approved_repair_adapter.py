@@ -604,3 +604,143 @@ def test_privacy_safe_errors_do_not_echo_paths_geometry_or_authorization_secret(
     assert "C:/customer/private.dxf" not in message
     assert secret not in message
     assert "H204" not in message
+
+
+def _result_validator():
+    validator = getattr(_module(), "validate_approved_repair_result", None)
+    assert callable(validator), "R6 accepted-result validator public API is absent"
+    return validator
+
+
+def _valid_r6_result() -> dict[str, object]:
+    return _execute(_valid_inputs())
+
+
+def _reseal_result(result: dict[str, object]) -> dict[str, object]:
+    semantic = deepcopy(result)
+    semantic.pop("result_sha256", None)
+    result["result_sha256"] = canonical_json_sha256(semantic)
+    return result
+
+
+def _expected_result_bindings(result: dict[str, object]) -> dict[str, object]:
+    return {
+        "expected_candidate_revision_id": result["candidate_revision_id"],
+        "expected_candidate_revision_sha256": result["candidate_revision_sha256"],
+        "expected_r5_failure_id": result["r5_failure_id"],
+        "expected_r5_failure_sha256": result["r5_failure_sha256"],
+        "expected_repair_plan_id": result["repair_plan_id"],
+        "expected_repair_plan_sha256": result["repair_plan_sha256"],
+        "expected_repair_plan_version": result["repair_plan_version"],
+        "expected_repair_operation_contract_version": result["repair_operation_contract_version"],
+        "expected_repair_operation_contract_fingerprint": result["repair_operation_contract_fingerprint"],
+    }
+
+
+def test_public_r6_result_validator_is_causal_red_and_deep_copy_isolated() -> None:
+    result = _valid_r6_result()
+    snapshot = deepcopy(result)
+    validated = _result_validator()(result, **_expected_result_bindings(result))
+    assert result == snapshot
+    assert validated == result
+    assert validated is not result
+    assert validated["closure"] is not result["closure"]
+    validated["closure"]["lifecycle_state"] = "tampered"
+    assert result["closure"]["lifecycle_state"] == "closed"
+
+
+def test_public_r6_result_validator_rejects_hash_mismatch() -> None:
+    result = _valid_r6_result()
+    result["result_sha256"] = "f" * 64
+    with pytest.raises(Exception, match="MALFORMED"):
+        _result_validator()(result)
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda result: result.__setitem__("unknown", "value"),
+        lambda result: result.__delitem__("authorization_id"),
+        lambda result: result.__setitem__("schema_version", "foreign-schema"),
+        lambda result: result.__setitem__("mutation_outcome", "FAILED"),
+        lambda result: result.__setitem__("requires_new_r5_cycle", False),
+        lambda result: result.__setitem__("executor_result_category", "FOREIGN"),
+        lambda result: result.__setitem__("authorization_id", ""),
+        lambda result: result.__setitem__("candidate_revision_id", _HostileStr("foreign")),
+        lambda result: result.__setitem__("requires_new_r5_cycle", 1),
+    ],
+)
+def test_public_r6_result_validator_rejects_resealed_structural_type_or_semantic_tamper(mutator) -> None:
+    result = _valid_r6_result()
+    mutator(result)
+    _reseal_result(result)
+    with pytest.raises(Exception, match="MALFORMED"):
+        _result_validator()(result)
+
+
+def test_public_r6_result_validator_rejects_dict_subclass_without_hostile_protocol() -> None:
+    result = _HostileMapping(_valid_r6_result())
+    _HostileMapping.touched = False
+    with pytest.raises(Exception, match="MALFORMED"):
+        _result_validator()(result)
+    assert _HostileMapping.touched is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("save_changes", True),
+        ("lifecycle_state", "active"),
+        ("cleanup_outcome", "survivors"),
+        ("close_outcome", "open"),
+        ("lease_id", ""),
+    ],
+)
+def test_public_r6_result_validator_rejects_resealed_non_closed_closure(field: str, value: object) -> None:
+    result = _valid_r6_result()
+    result["closure"][field] = value
+    _reseal_result(result)
+    with pytest.raises(Exception, match="CLOSURE_FAILED"):
+        _result_validator()(result)
+
+
+def test_public_r6_result_validator_rejects_resealed_closure_dict_subclass() -> None:
+    class PlainDictSubclass(dict):
+        pass
+
+    result = _valid_r6_result()
+    result["closure"] = PlainDictSubclass(result["closure"])
+    _reseal_result(result)
+    with pytest.raises(Exception, match="CLOSURE_FAILED"):
+        _result_validator()(result)
+
+
+@pytest.mark.parametrize(
+    ("argument", "foreign_value"),
+    [
+        ("expected_candidate_revision_id", "foreign-candidate"),
+        ("expected_candidate_revision_sha256", "f" * 64),
+        ("expected_r5_failure_id", "foreign-r5-failure"),
+        ("expected_r5_failure_sha256", "f" * 64),
+        ("expected_repair_plan_id", "foreign-plan"),
+        ("expected_repair_plan_sha256", "f" * 64),
+        ("expected_repair_plan_version", "foreign-plan-version"),
+        ("expected_repair_operation_contract_version", "foreign-operation-version"),
+        ("expected_repair_operation_contract_fingerprint", "f" * 64),
+    ],
+)
+def test_public_r6_result_validator_rejects_foreign_expected_binding(argument: str, foreign_value: str) -> None:
+    result = _valid_r6_result()
+    with pytest.raises(Exception, match="BINDING_MISMATCH"):
+        _result_validator()(result, **{argument: foreign_value})
+
+
+def test_public_r6_result_validator_binding_error_is_privacy_safe_and_non_mutating() -> None:
+    result = _valid_r6_result()
+    snapshot = deepcopy(result)
+    secret = "C:/customer/private-result.dxf"
+    with pytest.raises(Exception) as exc_info:
+        _result_validator()(result, expected_candidate_revision_id=secret)
+    assert "BINDING_MISMATCH" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+    assert result == snapshot
