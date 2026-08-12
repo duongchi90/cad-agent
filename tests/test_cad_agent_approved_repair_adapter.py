@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from importlib import import_module
 import importlib.util
 from functools import lru_cache
 from pathlib import Path
+from tempfile import mkdtemp
 
 import pytest
 
@@ -23,6 +25,11 @@ from cad_agent.repair_operation_contract import (
     REPAIR_OPERATION_SCHEMA_VERSION,
     normalize_repair_operation,
 )
+_DOTNET_IPC = importlib.import_module("mcp_integration_lib.dotnet_ipc")
+DisposableWorkspaceClosure = _DOTNET_IPC.DisposableWorkspaceClosure
+DisposableWorkspaceLease = _DOTNET_IPC.DisposableWorkspaceLease
+DotNetIPCClient = _DOTNET_IPC.DotNetIPCClient
+result_path = _DOTNET_IPC.result_path
 
 
 try:
@@ -110,20 +117,24 @@ def _authorization_fields() -> dict[str, object]:
     }
 
 
-@dataclass
-class _WorkspaceOwner:
-    close_calls: list[dict[str, object]] = field(default_factory=list)
-    close_error: BaseException | None = None
+def _WorkspaceOwner(close_error: BaseException | None = None) -> DotNetIPCClient:
+    """Create the real owner with an offline dispatcher and test call ledger."""
+    ipc_dir = Path(mkdtemp(prefix="cad-agent-r6-204-"))
+    root = ipc_dir / "disposable-workspaces"
+    dispatcher = _OfflineDispatcher(ipc_dir)
+    owner = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher, disposable_root=root)
+    owner._test_root = root
+    owner.close_calls = []
+    canonical_close = owner.close_disposable_workspace
 
-    def close_disposable_workspace(
-        self,
-        lease: "_WorkspaceLease",
+    def close(
+        lease: DisposableWorkspaceLease,
         *,
         candidate_identity: str,
         source_identity: str,
         source_fingerprint: str,
-    ) -> dict[str, object]:
-        self.close_calls.append(
+    ) -> DisposableWorkspaceClosure:
+        owner.close_calls.append(
             {
                 "lease": lease,
                 "candidate_identity": candidate_identity,
@@ -131,31 +142,62 @@ class _WorkspaceOwner:
                 "source_fingerprint": source_fingerprint,
             }
         )
-        if self.close_error is not None:
-            raise self.close_error
-        return {
-            "lease_id": lease.lease_id,
-            "candidate_identity": candidate_identity,
-            "source_identity": source_identity,
-            "source_fingerprint": source_fingerprint,
-            "close_outcome": "closed",
-            "cleanup_outcome": "zero_survivors",
-            "save_changes": False,
-            "lifecycle_state": "closed",
-        }
+        if close_error is not None:
+            raise close_error
+        return canonical_close(
+            lease,
+            candidate_identity=candidate_identity,
+            source_identity=source_identity,
+            source_fingerprint=source_fingerprint,
+        )
+
+    owner.close_disposable_workspace = close
+    return owner
 
 
-@dataclass
-class _WorkspaceLease:
-    owner: _WorkspaceOwner
-    lease_id: str = "lease-r6-204"
-    candidate_identity: str = "candidate-r6-204"
-    source_identity: str = "r5-failure-r6-204"
-    source_fingerprint: str = SHA_FAILURE
-    disposable: bool = True
-    save_changes: bool = False
-    lifecycle_state: str = "active"
-    workspace_path: Path = Path("C:/disposable/r6-204")
+class _OfflineDispatcher:
+    def __init__(self, ipc_dir: Path) -> None:
+        self.ipc_dir = ipc_dir
+        self.requests: list[dict[str, object]] = []
+
+    def __call__(self) -> None:
+        request_files = list(self.ipc_dir.glob("cadagent_dotnet_request_*.json"))
+        assert len(request_files) == 1
+        request = json.loads(request_files[0].read_text(encoding="utf-8"))
+        self.requests.append(request)
+        result_path(self.ipc_dir, str(request["request_id"])).write_text(
+            json.dumps(
+                {
+                    "request_id": request["request_id"],
+                    "operation": request["operation"],
+                    "drawing_full_path": request["drawing_full_path"],
+                    "success": True,
+                    "changed": False,
+                    "entity_handles": [],
+                    "warnings": [],
+                    "errors": [],
+                    "started_at": "2026-08-12T00:00:00Z",
+                    "completed_at": "2026-08-12T00:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
+def _WorkspaceLease(
+    owner: DotNetIPCClient,
+    *,
+    candidate_identity: str = "candidate-r6-204",
+    source_identity: str = "r5-failure-r6-204",
+    source_fingerprint: str = SHA_FAILURE,
+) -> DisposableWorkspaceLease:
+    return owner.issue_disposable_workspace(
+        candidate_identity=candidate_identity,
+        source_identity=source_identity,
+        source_fingerprint=source_fingerprint,
+        purpose="r6-gate-0",
+        workspace_root=owner._test_root,
+    )
 
 
 @dataclass
@@ -244,6 +286,7 @@ def _valid_inputs(**overrides: object) -> dict[str, object]:
         "repair_context": _repair_context(),
         "candidate_state": _candidate_state(),
         "r5_failure": _r5_failure(),
+        "workspace_owner": owner,
         "workspace_lease": _WorkspaceLease(
             owner,
             candidate_identity=candidate["revision_id"],
@@ -273,9 +316,35 @@ def test_exact_owner_composition_returns_one_bounded_success() -> None:
     result = _execute(inputs)
     assert isinstance(result, dict)
     assert result["mutation_outcome"] == "SUCCESS"
-    assert len(inputs["workspace_lease"].owner.close_calls) == 1
+    assert len(inputs["workspace_owner"].close_calls) == 1
+    assert set(result["closure"]) == {
+        "lease_id",
+        "candidate_identity",
+        "source_identity",
+        "source_fingerprint",
+        "close_outcome",
+        "cleanup_outcome",
+        "save_changes",
+        "lifecycle_state",
+    }
+    assert "workspace_path" not in result["closure"]
     with pytest.raises(Exception, match="ALREADY_CONSUMED"):
         _consume_exact(inputs["authorization"])
+
+
+def test_duck_typed_workspace_owner_is_rejected_before_consume() -> None:
+    class FakeOwner:
+        def validate_disposable_workspace(self, *args, **kwargs):
+            return object()
+
+        def close_disposable_workspace(self, *args, **kwargs):
+            return object()
+
+    inputs = _valid_inputs(workspace_owner=FakeOwner())
+    with pytest.raises(Exception, match="workspace|lease"):
+        _execute(inputs)
+    assert inputs["executor_client"].calls == []
+    assert _consume_exact(inputs["authorization"]) is inputs["authorization"]
 
 
 @pytest.mark.parametrize(
@@ -306,9 +375,11 @@ def test_foreign_r4_candidate_is_rejected_before_consume_or_mutation() -> None:
 
 
 def test_forged_workspace_lease_is_rejected_before_consume_or_mutation() -> None:
+    foreign_owner = _WorkspaceOwner()
     inputs = _valid_inputs(
+        workspace_owner=foreign_owner,
         workspace_lease=_WorkspaceLease(
-            _WorkspaceOwner(),
+            foreign_owner,
             candidate_identity="foreign-candidate",
             source_identity="foreign-source",
             source_fingerprint="f" * 64,
@@ -347,7 +418,7 @@ def test_replay_and_concurrent_exact_execution_have_one_consume_and_one_mutation
         list(pool.map(lambda _: attempt(), range(2)))
     successes = [value for value in outcomes if isinstance(value, dict)]
     assert len(successes) <= 1
-    assert len(inputs["workspace_lease"].owner.close_calls) <= 1
+    assert len(inputs["workspace_owner"].close_calls) <= 1
 
 
 @pytest.mark.parametrize("operation", [
@@ -435,7 +506,7 @@ def test_executor_error_is_categorical_and_never_false_success(executor_error: B
     with pytest.raises(Exception, match="TIMEOUT|EXECUTOR|MUTATION|failure|ambiguous"):
         _execute(inputs)
     assert executor.calls == []
-    assert len(inputs["workspace_lease"].owner.close_calls) == 1
+    assert len(inputs["workspace_owner"].close_calls) == 1
 
 
 def test_executor_and_closure_failure_is_categorical_without_retry_or_success() -> None:
@@ -443,6 +514,7 @@ def test_executor_and_closure_failure_is_categorical_without_retry_or_success() 
     executor = _ExecutorClient(error=RuntimeError("executor ambiguous"))
     _state, candidate = _candidate_binding()
     inputs = _valid_inputs(
+        workspace_owner=owner,
         workspace_lease=_WorkspaceLease(
             owner,
             candidate_identity=candidate["revision_id"],
@@ -460,6 +532,7 @@ def test_uncertain_closure_is_terminal_failure_not_success() -> None:
     owner = _WorkspaceOwner(close_error=RuntimeError("cleanup uncertain"))
     _state, candidate = _candidate_binding()
     inputs = _valid_inputs(
+        workspace_owner=owner,
         workspace_lease=_WorkspaceLease(
             owner,
             candidate_identity=candidate["revision_id"],

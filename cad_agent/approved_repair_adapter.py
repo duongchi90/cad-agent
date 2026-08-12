@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from importlib import import_module
-from typing import Any
 
 from cad_agent.candidate_revision import validate_candidate_revision_state
 from cad_agent.drawing_contracts import canonical_json_sha256
@@ -19,6 +18,12 @@ from cad_agent.repair_operation_contract import (
     REPAIR_OPERATION_SCHEMA_VERSION,
     normalize_repair_operation,
 )
+
+_DOTNET_IPC = import_module("mcp_integration_lib.dotnet_ipc")
+DisposableWorkspaceClosure = _DOTNET_IPC.DisposableWorkspaceClosure
+DisposableWorkspaceLease = _DOTNET_IPC.DisposableWorkspaceLease
+DisposableWorkspaceValidation = _DOTNET_IPC.DisposableWorkspaceValidation
+DotNetIPCClient = _DOTNET_IPC.DotNetIPCClient
 
 
 R6_RESULT_SCHEMA_VERSION = "r6-repair-executor-result-1.0"
@@ -204,35 +209,44 @@ def _validate_scope(context: dict[str, object], operation_payload: dict[str, obj
         _fail("BINDING_MISMATCH")
 
 
-def _validate_workspace(value: object, context: dict[str, object], failure: dict[str, object]) -> Any:
-    if type(value) is not _workspace_type(value):
+def _validate_workspace(
+    owner: object,
+    lease: object,
+    context: dict[str, object],
+    failure: dict[str, object],
+) -> DisposableWorkspaceValidation:
+    if type(owner) is not DotNetIPCClient or type(lease) is not DisposableWorkspaceLease:
         _fail("WORKSPACE_INVALID")
-    for field in (
-        "lease_id",
-        "candidate_identity",
-        "source_identity",
-        "source_fingerprint",
-        "lifecycle_state",
-    ):
-        _text(getattr(value, field, None), "WORKSPACE_INVALID")
+    try:
+        validation = owner.validate_disposable_workspace(
+            lease,
+            candidate_identity=context["candidate_revision_id"],
+            source_identity=failure["failure_id"],
+            source_fingerprint=failure["failure_sha256"],
+        )
+    except Exception as exc:
+        raise RepairExecutorAdapterError("WORKSPACE_INVALID") from exc
+    if type(validation) is not DisposableWorkspaceValidation:
+        _fail("WORKSPACE_INVALID")
     if (
-        getattr(value, "candidate_identity") != context["candidate_revision_id"]
-        or getattr(value, "source_identity") != failure["failure_id"]
-        or getattr(value, "source_fingerprint") != failure["failure_sha256"]
-        or getattr(value, "lifecycle_state") != "active"
-        or getattr(value, "disposable", None) is not True
-        or getattr(value, "save_changes", None) is not False
+        type(validation.lease_id) is not str
+        or type(validation.candidate_identity) is not str
+        or type(validation.source_identity) is not str
+        or type(validation.source_fingerprint) is not str
+        or type(validation.purpose) is not str
+        or type(validation.disposable) is not bool
+        or type(validation.save_changes) is not bool
+        or type(validation.lifecycle_state) is not str
+        or validation.lease_id != lease.lease_id
+        or validation.candidate_identity != context["candidate_revision_id"]
+        or validation.source_identity != failure["failure_id"]
+        or validation.source_fingerprint != failure["failure_sha256"]
+        or validation.disposable is not True
+        or validation.save_changes is not False
+        or validation.lifecycle_state != "active"
     ):
         _fail("WORKSPACE_INVALID")
-    owner = getattr(value, "owner", None)
-    if owner is None or not callable(getattr(owner, "close_disposable_workspace", None)):
-        _fail("WORKSPACE_INVALID")
-    return owner
-
-
-def _workspace_type(value: object) -> type:
-    # Keep the public seam owner-shaped while refusing proxy/subclass values.
-    return type(value)
+    return validation
 
 
 def _authorization_fields(
@@ -255,26 +269,43 @@ def _authorization_fields(
     }
 
 
-def _closure_fields(value: object) -> dict[str, object]:
-    if type(value) is not dict:
+def _closure_fields(
+    value: object,
+    lease: DisposableWorkspaceLease,
+    context: dict[str, object],
+    failure: dict[str, object],
+) -> dict[str, object]:
+    if type(value) is not DisposableWorkspaceClosure:
         _fail("CLOSURE_FAILED")
-    required = {
-        "lease_id",
-        "candidate_identity",
-        "source_identity",
-        "source_fingerprint",
-        "close_outcome",
-        "cleanup_outcome",
-        "save_changes",
-        "lifecycle_state",
+    if (
+        type(value.lease_id) is not str
+        or type(value.candidate_identity) is not str
+        or type(value.source_identity) is not str
+        or type(value.source_fingerprint) is not str
+        or type(value.close_outcome) is not str
+        or type(value.cleanup_outcome) is not str
+        or type(value.save_changes) is not bool
+        or type(value.lifecycle_state) is not str
+        or value.lease_id != lease.lease_id
+        or value.candidate_identity != context["candidate_revision_id"]
+        or value.source_identity != failure["failure_id"]
+        or value.source_fingerprint != failure["failure_sha256"]
+        or value.close_outcome != "closed"
+        or value.cleanup_outcome != "zero_survivors"
+        or value.save_changes is not False
+        or value.lifecycle_state != "closed"
+    ):
+        _fail("CLOSURE_FAILED")
+    return {
+        "lease_id": value.lease_id,
+        "candidate_identity": value.candidate_identity,
+        "source_identity": value.source_identity,
+        "source_fingerprint": value.source_fingerprint,
+        "close_outcome": value.close_outcome,
+        "cleanup_outcome": value.cleanup_outcome,
+        "save_changes": value.save_changes,
+        "lifecycle_state": value.lifecycle_state,
     }
-    if set(value) != required or any(type(key) is not str for key in value):
-        _fail("CLOSURE_FAILED")
-    if value["close_outcome"] != "closed" or value["cleanup_outcome"] != "zero_survivors":
-        _fail("CLOSURE_FAILED")
-    if value["save_changes"] is not False or value["lifecycle_state"] != "closed":
-        _fail("CLOSURE_FAILED")
-    return deepcopy(value)
 
 
 def execute_approved_repair(
@@ -284,6 +315,7 @@ def execute_approved_repair(
     repair_context: Mapping[str, object],
     candidate_state: Mapping[str, object],
     r5_failure: Mapping[str, object],
+    workspace_owner: DotNetIPCClient,
     workspace_lease: object,
     executor_client: object,
 ) -> dict[str, object]:
@@ -306,7 +338,7 @@ def execute_approved_repair(
     if context["repair_operation_contract_fingerprint"] != operation_fingerprint:
         _fail("BINDING_MISMATCH")
     try:
-        owner = _validate_workspace(workspace_lease, context, failure)
+        _validate_workspace(workspace_owner, workspace_lease, context, failure)
     except RepairExecutorAdapterError:
         raise
     except Exception as exc:
@@ -336,13 +368,13 @@ def execute_approved_repair(
     closure: dict[str, object] | None = None
     closure_error: Exception | None = None
     try:
-        closed = owner.close_disposable_workspace(
+        closed = workspace_owner.close_disposable_workspace(
             workspace_lease,
             candidate_identity=context["candidate_revision_id"],
             source_identity=failure["failure_id"],
             source_fingerprint=failure["failure_sha256"],
         )
-        closure = _closure_fields(closed)
+        closure = _closure_fields(closed, workspace_lease, context, failure)
     except Exception as exc:
         closure_error = exc
 
