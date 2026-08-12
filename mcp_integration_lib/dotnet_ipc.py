@@ -992,6 +992,8 @@ class DotNetIPCClient:
                 or lease.disposable is not True
                 or lease.save_changes is not False
                 or lease._lifecycle is not state.lifecycle
+                or type(state.lifecycle.value) is not str
+                or state.lifecycle.value != "active"
                 or lease.created_at != state.created_at
                 or lease.expires_at != state.expires_at
                 or state.lifecycle_state != "active"
