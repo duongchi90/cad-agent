@@ -790,6 +790,23 @@ class DotNetIPCClientTests(unittest.TestCase):
             object.__setattr__(lease, "_lifecycle", original_lifecycle)
             self.assertEqual("active", lease.lifecycle_state)
 
+    def test_public_disposable_validation_rejects_shared_lifecycle_value_tamper(self) -> None:
+        for lifecycle in ("closing", "closed", "failed", "stale", "terminal", object()):
+            with self.subTest(lifecycle=lifecycle), TemporaryDirectory() as temporary:
+                ipc_dir = Path(temporary)
+                root = ipc_dir / "disposable-workspaces"
+                client = self._disposable_client(ipc_dir, root, lambda: None)
+                lease = self._issue_disposable(client, root)
+
+                # The owner state still says active, but the shared lifecycle
+                # object was tampered with after issuance. Validation must
+                # fail closed without repairing/resetting the value.
+                lease._lifecycle.value = lifecycle
+                with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                    self._validate_disposable(client, lease)
+                self.assertEqual("active", client._disposable_states[lease.lease_id].lifecycle_state)
+                self.assertEqual(lifecycle, lease._lifecycle.value)
+
     def test_public_disposable_validation_rejects_foreign_lease(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
