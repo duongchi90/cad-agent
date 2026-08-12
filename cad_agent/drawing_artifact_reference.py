@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import hashlib
+import importlib as _importlib
 
 from cad_agent.drawing_contracts import canonical_json_sha256
 
@@ -169,6 +170,59 @@ def _validate_initial_evidence(evidence: object, artifact_role: str) -> dict[str
     return deepcopy(dict(evidence))
 
 
+def _validate_accepted_r6_result_binding(
+    evidence: Mapping[str, object],
+) -> dict[str, object]:
+    r5_failure_id = evidence.get("r5_failure_id")
+    r5_failure_sha256 = evidence.get("r5_failure_sha256")
+    if not isinstance(r5_failure_id, str) or not r5_failure_id:
+        _fail("MUTATION_EVIDENCE_MISSING")
+    if not _is_sha256(r5_failure_sha256):
+        _fail("MUTATION_EVIDENCE_MISSING")
+    try:
+        validator = _importlib.import_module(
+            "cad_agent.approved_repair_adapter"
+        ).validate_approved_repair_result
+        validated = validator(
+            evidence.get("accepted_r6_result"),
+            expected_r5_failure_id=r5_failure_id,
+            expected_r5_failure_sha256=r5_failure_sha256,
+        )
+    except Exception:
+        raise DrawingArtifactReferenceError("R6_RESULT_INVALID") from None
+    result_sha256 = validated.get("result_sha256")
+    if not _is_sha256(result_sha256):
+        _fail("R6_RESULT_INVALID")
+    if (
+        type(evidence.get("r6_result_id")) is not str
+        or evidence.get("r6_result_id") != result_sha256
+        or type(evidence.get("r6_result_sha256")) is not str
+        or evidence.get("r6_result_sha256") != result_sha256
+    ):
+        _fail("R6_RESULT_INVALID")
+    return validated
+
+
+def _normalize_reference_r6_evidence(
+    reference: Mapping[str, object],
+) -> dict[str, object]:
+    normalized = dict(reference)
+    if (
+        normalized.get("artifact_role") != "R3_CANDIDATE"
+        or normalized.get("parent_reference_id") is None
+    ):
+        return normalized
+    evidence = normalized.get("upstream_evidence")
+    if not isinstance(evidence, Mapping) or "accepted_r6_result" not in evidence:
+        return normalized
+    normalized_evidence = dict(evidence)
+    normalized_evidence["accepted_r6_result"] = _validate_accepted_r6_result_binding(
+        normalized_evidence
+    )
+    normalized["upstream_evidence"] = normalized_evidence
+    return normalized
+
+
 def _validate_transition_evidence(
     evidence: object,
     *,
@@ -180,7 +234,7 @@ def _validate_transition_evidence(
 ) -> dict[str, object]:
     if not isinstance(evidence, Mapping):
         _fail("MUTATION_EVIDENCE_MISSING")
-    required_fields = (
+    legacy_required_fields = (
         "evidence_kind",
         "r3_candidate_reference_id",
         "r3_candidate_reference_sha256",
@@ -205,8 +259,11 @@ def _validate_transition_evidence(
         "cleanup_state",
         "accepted_transition_evidence_sha256",
     )
-    if not set(required_fields).issubset(evidence):
+    if not set(legacy_required_fields).issubset(evidence):
         _fail("MUTATION_EVIDENCE_MISSING")
+    if "accepted_r6_result" not in evidence:
+        _fail("R6_RESULT_INVALID")
+    required_fields = (*legacy_required_fields, "accepted_r6_result")
     if set(evidence) != set(required_fields):
         _fail("MUTATION_EVIDENCE_MISMATCH")
     if evidence.get("evidence_kind") != "POST_REPAIR_TRANSITION":
@@ -219,51 +276,52 @@ def _validate_transition_evidence(
             _fail("MUTATION_EVIDENCE_MISSING")
         if accepted != accepted_transition_evidence_sha256:
             _fail("MUTATION_EVIDENCE_MISMATCH")
-    sealed = dict(evidence)
+    validated_r6_result = _validate_accepted_r6_result_binding(evidence)
+    normalized = dict(evidence)
+    normalized["accepted_r6_result"] = validated_r6_result
+    sealed = dict(normalized)
     sealed.pop("accepted_transition_evidence_sha256")
     _verify_canonical_integrity_sha256(sealed, accepted, "MUTATION_EVIDENCE_MISMATCH")
-    if evidence.get("r3_candidate_reference_id") != parent_reference_id:
+    if normalized.get("r3_candidate_reference_id") != parent_reference_id:
         _fail("WRONG_CANDIDATE")
-    if evidence.get("r3_candidate_reference_sha256") != parent_reference_sha256:
+    if normalized.get("r3_candidate_reference_sha256") != parent_reference_sha256:
         _fail("WRONG_CANDIDATE")
     for field in (
         "r5_failure_id",
         "r4_transition_id",
         "r6_mutation_request_id",
-        "r6_result_id",
         "executor_result_id",
     ):
-        if not isinstance(evidence.get(field), str) or not evidence[field]:
+        if not isinstance(normalized.get(field), str) or not normalized[field]:
             _fail("MUTATION_EVIDENCE_MISSING")
     for field in (
         "r5_failure_sha256",
         "r4_transition_sha256",
         "r6_mutation_request_sha256",
-        "r6_result_sha256",
         "executor_result_sha256",
         "pre_artifact_sha256",
         "post_artifact_sha256",
         "protected_constraints_sha256",
         "workspace_evidence_sha256",
     ):
-        _require_sha_field(evidence, field, "MUTATION_EVIDENCE_MISSING")
+        _require_sha_field(normalized, field, "MUTATION_EVIDENCE_MISSING")
     if (
         parent_artifact_sha256 is not None
-        and evidence["pre_artifact_sha256"] != parent_artifact_sha256
+        and normalized["pre_artifact_sha256"] != parent_artifact_sha256
     ):
         _fail("MUTATION_EVIDENCE_MISMATCH")
-    if evidence["post_artifact_sha256"] != artifact_sha256:
+    if normalized["post_artifact_sha256"] != artifact_sha256:
         _fail("POST_ARTIFACT_MISMATCH")
-    if evidence.get("mutation_terminal") != "SUCCESS":
+    if normalized.get("mutation_terminal") != "SUCCESS":
         _fail("MUTATION_NOT_SUCCESSFUL")
     if any(
-        evidence.get(field) is not False
+        normalized.get(field) is not False
         for field in ("partial_mutation", "timed_out", "rollback_failed")
     ):
         _fail("MUTATION_NOT_SUCCESSFUL")
-    if evidence.get("cleanup_state") != "VERIFIED":
+    if normalized.get("cleanup_state") != "VERIFIED":
         _fail("CLEANUP_UNCERTAIN")
-    return deepcopy(dict(evidence))
+    return deepcopy(normalized)
 
 
 def _issue_transition_evidence(
@@ -276,7 +334,7 @@ def _issue_transition_evidence(
 ) -> dict[str, object]:
     if not isinstance(evidence, Mapping):
         _fail("MUTATION_EVIDENCE_MISSING")
-    issued = deepcopy(dict(evidence))
+    issued = dict(evidence)
     accepted = issued.pop("accepted_transition_evidence_sha256", None)
     if accepted is None:
         _fail("MUTATION_EVIDENCE_MISSING")
@@ -340,6 +398,7 @@ def validate_drawing_artifact_reference(
     if not isinstance(reference.get("reference_id"), str) or not reference["reference_id"]:
         _fail("INVALID_REFERENCE")
     _require_sha_field(reference, "reference_sha256", "INVALID_REFERENCE")
+    reference = _normalize_reference_r6_evidence(reference)
     try:
         if drawing_artifact_reference_sha256(reference) != reference["reference_sha256"]:
             _fail("CANONICAL_HASH_MISMATCH")
