@@ -2027,6 +2027,7 @@ def test_hostile_embedded_r6_result_is_refused_before_mapping_protocol_traversal
         pre_sha256=parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    _seal_mutation_evidence(transition)
     transition["accepted_r6_result"] = HostileResult(transition["accepted_r6_result"])
     HostileResult.touched = False
 
