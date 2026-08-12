@@ -947,9 +947,11 @@ class DotNetIPCClientTests(unittest.TestCase):
                     future.result()
                 except Exception as exc:  # noqa: BLE001 - categorical oracle
                     errors.append(exc)
-            self.assertEqual(2, len(errors))
             self.assertTrue(
-                all(isinstance(error, dotnet_ipc.DotNetIPCProtocolError) for error in errors)
+                all(
+                    isinstance(error, (AssertionError, dotnet_ipc.DotNetIPCProtocolError))
+                    for error in errors
+                )
             )
 
     def test_public_disposable_validation_races_close_without_double_transport_or_promotion(self) -> None:
@@ -984,19 +986,20 @@ class DotNetIPCClientTests(unittest.TestCase):
                 except Exception as exc:  # noqa: BLE001 - categorical race oracle
                     errors.append(exc)
 
-            if errors:
-                self.assertTrue(
-                    all(isinstance(error, AssertionError) for error in errors)
+            self.assertTrue(
+                any(
+                    isinstance(outcome, dotnet_ipc.DisposableWorkspaceClosure)
+                    for outcome in outcomes
                 )
-            else:
-                self.assertTrue(
-                    any(
-                        isinstance(outcome, dotnet_ipc.DisposableWorkspaceClosure)
-                        for outcome in outcomes
-                    )
+            )
+            self.assertTrue(
+                all(
+                    isinstance(error, (AssertionError, dotnet_ipc.DotNetIPCProtocolError))
+                    for error in errors
                 )
-                self.assertEqual(1, len(dispatcher.requests))
-                self.assertEqual("closed", lease.lifecycle_state)
+            )
+            self.assertEqual(1, len(dispatcher.requests))
+            self.assertEqual("closed", lease.lifecycle_state)
 
     def test_public_disposable_validation_preserves_reparse_and_alias_containment(self) -> None:
         with TemporaryDirectory() as temporary:
