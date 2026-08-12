@@ -779,7 +779,7 @@ class DotNetIPCClientTests(unittest.TestCase):
                 self._validate_disposable(second, lease)
 
     def test_public_disposable_validation_rejects_terminal_lifecycle_states(self) -> None:
-        for lifecycle in ("closing", "closed", "failed"):
+        for lifecycle in ("closing", "closed", "failed", "stale", "terminal"):
             with self.subTest(lifecycle=lifecycle), TemporaryDirectory() as temporary:
                 ipc_dir = Path(temporary)
                 root = ipc_dir / "disposable-workspaces"
@@ -797,6 +797,17 @@ class DotNetIPCClientTests(unittest.TestCase):
             client = self._disposable_client(ipc_dir, root, lambda: None)
             lease = self._issue_disposable(client, root)
             client._disposable_states[lease.lease_id].expires_at = time.time() - 1
+
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease)
+
+    def test_public_disposable_validation_rejects_failed_state_flag(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            client._disposable_states[lease.lease_id].failure = object()
 
             with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
                 self._validate_disposable(client, lease)
@@ -897,7 +908,13 @@ class DotNetIPCClientTests(unittest.TestCase):
 
             with self.assertRaises((AttributeError, TypeError, dataclasses.FrozenInstanceError)):
                 evidence.status = "forged"
-            self.assertNotIn("_disposable_states", repr(evidence))
+            rendered = repr(evidence)
+            self.assertNotIn("_disposable_states", rendered)
+            self.assertNotIn("close_disposable_workspace", rendered)
+            self.assertNotIn("trigger", rendered)
+            self.assertNotIn(str(lease.workspace_path), rendered)
+            for private_name in ("lease", "client", "workspace_path", "close", "close_workspace"):
+                self.assertFalse(hasattr(evidence, private_name), private_name)
 
     def test_public_disposable_validation_does_not_destroy_lease_on_failure(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -934,6 +951,70 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertTrue(
                 all(isinstance(error, dotnet_ipc.DotNetIPCProtocolError) for error in errors)
             )
+
+    def test_public_disposable_validation_races_close_without_double_transport_or_promotion(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            dispatcher = FakeDispatcher(ipc_dir)
+            client = self._disposable_client(ipc_dir, root, dispatcher)
+            lease = self._issue_disposable(client, root)
+            start = threading.Barrier(2)
+            kwargs = {
+                "candidate_identity": "candidate-001",
+                "source_identity": "source-001",
+                "source_fingerprint": "a" * 64,
+            }
+
+            def validate_once():
+                start.wait()
+                return self._validate_disposable(client, lease, **kwargs)
+
+            def close_once():
+                start.wait()
+                return client.close_disposable_workspace(lease, **kwargs)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(validate_once), pool.submit(close_once)]
+            outcomes = []
+            errors = []
+            for future in futures:
+                try:
+                    outcomes.append(future.result())
+                except Exception as exc:  # noqa: BLE001 - categorical race oracle
+                    errors.append(exc)
+
+            if errors:
+                self.assertTrue(
+                    all(isinstance(error, AssertionError) for error in errors)
+                )
+            else:
+                self.assertTrue(
+                    any(
+                        isinstance(outcome, dotnet_ipc.DisposableWorkspaceClosure)
+                        for outcome in outcomes
+                    )
+                )
+                self.assertEqual(1, len(dispatcher.requests))
+                self.assertEqual("closed", lease.lifecycle_state)
+
+    def test_public_disposable_validation_preserves_reparse_and_alias_containment(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            root = ipc_dir / "disposable-workspaces"
+            client = self._disposable_client(ipc_dir, root, lambda: None)
+            lease = self._issue_disposable(client, root)
+            alias = ipc_dir / "workspace-alias"
+            try:
+                alias.symlink_to(root, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlink unavailable: {exc}")
+
+            state = client._disposable_states[lease.lease_id]
+            state.workspace_path = alias / lease.workspace_path.name
+            with self.assertRaises(dotnet_ipc.DotNetIPCProtocolError):
+                self._validate_disposable(client, lease)
+            self.assertEqual("active", lease.lifecycle_state)
 
     def test_owner_issues_one_server_owned_disposable_workspace_lease(self) -> None:
         with TemporaryDirectory() as temporary:
