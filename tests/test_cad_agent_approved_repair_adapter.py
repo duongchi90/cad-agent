@@ -744,3 +744,22 @@ def test_public_r6_result_validator_binding_error_is_privacy_safe_and_non_mutati
     assert "BINDING_MISMATCH" in str(exc_info.value)
     assert secret not in str(exc_info.value)
     assert result == snapshot
+
+
+@pytest.mark.parametrize(
+    ("closure_field", "foreign_value"),
+    [
+        ("candidate_identity", "foreign-candidate"),
+        ("source_identity", "foreign-r5-failure"),
+        ("source_fingerprint", "f" * 64),
+    ],
+)
+def test_public_r6_result_validator_rejects_resealed_foreign_closure_identity(
+    closure_field: str,
+    foreign_value: str,
+) -> None:
+    result = _valid_r6_result()
+    result["closure"][closure_field] = foreign_value
+    _reseal_result(result)
+    with pytest.raises(Exception, match="BINDING_MISMATCH"):
+        _result_validator()(result)

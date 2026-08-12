@@ -419,7 +419,14 @@ def validate_approved_repair_result(
         _fail("MALFORMED")
     if type(result["requires_new_r5_cycle"]) is not bool or result["requires_new_r5_cycle"] is not True:
         _fail("MALFORMED")
-    _validate_result_closure(result["closure"])
+    closure = result["closure"]
+    _validate_result_closure(closure)
+    if (
+        closure["candidate_identity"] != result["candidate_revision_id"]
+        or closure["source_identity"] != result["r5_failure_id"]
+        or closure["source_fingerprint"] != result["r5_failure_sha256"]
+    ):
+        _fail("BINDING_MISMATCH")
 
     semantic_result = dict(result)
     supplied_sha256 = semantic_result.pop("result_sha256")
