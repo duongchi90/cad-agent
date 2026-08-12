@@ -67,17 +67,23 @@ paths = [
     Path('docs/superpowers/specs/2026-08-12-sol-first-operating-model-design.md'),
     Path('docs/superpowers/plans/2026-08-12-sol-first-operating-model.md'),
 ]
+forbidden = (
+    'T' + 'BD',
+    'TO' + 'DO',
+    'implement' + ' later',
+    'fill' + ' in details',
+)
 for path in paths:
     text = path.read_text(encoding='utf-8')
-    for forbidden in ('TBD', 'TODO', 'implement later', 'fill in details'):
-        assert forbidden not in text, (path, forbidden)
-print('planning-placeholder-scan: PASS')
+    for marker in forbidden:
+        assert marker not in text, (path, marker)
+print('planning-marker-scan: PASS')
 PY
 
 git diff --check origin/main...HEAD
 ```
 
-Expected: placeholder scan PASS and `git diff --check` exits 0.
+Expected: marker scan PASS and `git diff --check` exits 0.
 
 - [ ] **Step 3: Open a DRAFT docs-only PR**
 
