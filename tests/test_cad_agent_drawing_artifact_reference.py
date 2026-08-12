@@ -1797,3 +1797,125 @@ def test_errors_are_categorical_and_do_not_echo_private_values() -> None:
         module.validate_drawing_artifact_reference(payload)
     assert str(exc.value) == "INVALID_REFERENCE"
     assert private_value not in str(exc.value)
+
+
+def _accepted_r6_result_for_transition(
+    transition: dict[str, object],
+) -> dict[str, object]:
+    r6 = importlib.import_module("cad_agent.approved_repair_adapter")
+    operation = importlib.import_module("cad_agent.repair_operation_contract")
+    candidate_id = "candidate-r6-dara-215"
+    candidate_sha256 = "c" * 64
+    result: dict[str, object] = {
+        "schema_version": r6.R6_RESULT_SCHEMA_VERSION,
+        "candidate_revision_id": candidate_id,
+        "candidate_revision_sha256": candidate_sha256,
+        "r5_failure_id": transition["r5_failure_id"],
+        "r5_failure_sha256": transition["r5_failure_sha256"],
+        "repair_plan_id": "repair-plan-r6-dara-215",
+        "repair_plan_sha256": "d" * 64,
+        "repair_plan_version": "repair-plan-1.0",
+        "repair_operation_contract_version": operation.REPAIR_OPERATION_SCHEMA_VERSION,
+        "repair_operation_contract_fingerprint": "e" * 64,
+        "authorization_id": "authorization-r6-dara-215",
+        "executor_capability": "LINE",
+        "executor_result_category": "HANDLE_RETURNED",
+        "mutation_outcome": "SUCCESS",
+        "closure": {
+            "lease_id": "lease-r6-dara-215",
+            "candidate_identity": candidate_id,
+            "source_identity": transition["r5_failure_id"],
+            "source_fingerprint": transition["r5_failure_sha256"],
+            "close_outcome": "closed",
+            "cleanup_outcome": "zero_survivors",
+            "save_changes": False,
+            "lifecycle_state": "closed",
+        },
+        "requires_new_r5_cycle": True,
+    }
+    result["result_sha256"] = canonical_json_sha256(result)
+    accepted = r6.validate_approved_repair_result(
+        result,
+        expected_r5_failure_id=transition["r5_failure_id"],
+        expected_r5_failure_sha256=transition["r5_failure_sha256"],
+    )
+    assert accepted == result
+    return result
+
+
+def _mutation_evidence_with_accepted_r6_result(
+    *,
+    candidate_reference: dict[str, object],
+    pre_sha256: str,
+    post_sha256: str,
+) -> dict[str, object]:
+    transition = _mutation_evidence(
+        candidate_reference=candidate_reference,
+        pre_sha256=pre_sha256,
+        post_sha256=post_sha256,
+    )
+    accepted_r6_result = _accepted_r6_result_for_transition(transition)
+    transition["accepted_r6_result"] = accepted_r6_result
+    transition["r6_result_id"] = accepted_r6_result["result_sha256"]
+    transition["r6_result_sha256"] = accepted_r6_result["result_sha256"]
+    return _seal_mutation_evidence(transition)
+
+
+def test_post_repair_child_accepts_owner_validated_r6_result_binding() -> None:
+    module = _module()
+    parent = _issue_r3_candidate()
+    child_bytes = _artifact_bytes("r6-owner-bound-child")
+    transition = _mutation_evidence_with_accepted_r6_result(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+
+    child = module.issue_drawing_artifact_reference(
+        run_id=parent["run_id"],
+        project_id=parent["project_id"],
+        drawing_id=parent["drawing_id"],
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=child_bytes,
+        upstream_evidence=transition,
+        parent_reference=parent,
+        r3_provenance_binding=_r3_binding(),
+    )
+
+    assert child["upstream_evidence"]["accepted_r6_result"] == transition[
+        "accepted_r6_result"
+    ]
+    assert child["upstream_evidence"]["r6_result_id"] == transition[
+        "accepted_r6_result"
+    ]["result_sha256"]
+    assert child["upstream_evidence"]["r6_result_sha256"] == transition[
+        "accepted_r6_result"
+    ]["result_sha256"]
+
+
+def test_post_repair_child_rejects_generic_resealed_r6_pair_without_owner_result() -> None:
+    module = _module()
+    parent = _issue_r3_candidate()
+    child_bytes = _artifact_bytes("generic-r6-pair-child")
+    transition = _mutation_evidence(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+    transition["r6_result_id"] = "caller-resealed-generic-result"
+    transition["r6_result_sha256"] = "f" * 64
+    _seal_mutation_evidence(transition)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=transition,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+
+    assert str(exc.value) == "R6_RESULT_INVALID"
