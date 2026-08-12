@@ -623,10 +623,24 @@ def _reseal_result(result: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def _expected_result_bindings(result: dict[str, object]) -> dict[str, object]:
+    return {
+        "expected_candidate_revision_id": result["candidate_revision_id"],
+        "expected_candidate_revision_sha256": result["candidate_revision_sha256"],
+        "expected_r5_failure_id": result["r5_failure_id"],
+        "expected_r5_failure_sha256": result["r5_failure_sha256"],
+        "expected_repair_plan_id": result["repair_plan_id"],
+        "expected_repair_plan_sha256": result["repair_plan_sha256"],
+        "expected_repair_plan_version": result["repair_plan_version"],
+        "expected_repair_operation_contract_version": result["repair_operation_contract_version"],
+        "expected_repair_operation_contract_fingerprint": result["repair_operation_contract_fingerprint"],
+    }
+
+
 def test_public_r6_result_validator_is_causal_red_and_deep_copy_isolated() -> None:
     result = _valid_r6_result()
     snapshot = deepcopy(result)
-    validated = _result_validator()(result)
+    validated = _result_validator()(result, **_expected_result_bindings(result))
     assert result == snapshot
     assert validated == result
     assert validated is not result
@@ -691,8 +705,11 @@ def test_public_r6_result_validator_rejects_resealed_non_closed_closure(field: s
 
 
 def test_public_r6_result_validator_rejects_resealed_closure_dict_subclass() -> None:
+    class PlainDictSubclass(dict):
+        pass
+
     result = _valid_r6_result()
-    result["closure"] = _HostileMapping(result["closure"])
+    result["closure"] = PlainDictSubclass(result["closure"])
     _reseal_result(result)
     with pytest.raises(Exception, match="CLOSURE_FAILED"):
         _result_validator()(result)
