@@ -86,6 +86,10 @@ def _mutation_evidence(
         "rollback_failed": False,
         "cleanup_state": "VERIFIED",
     }
+    accepted_r6_result = _accepted_r6_result_for_transition(evidence)
+    evidence["accepted_r6_result"] = accepted_r6_result
+    evidence["r6_result_id"] = accepted_r6_result["result_sha256"]
+    evidence["r6_result_sha256"] = accepted_r6_result["result_sha256"]
     return evidence
 
 
@@ -754,14 +758,10 @@ def test_post_repair_child_accepts_structurally_valid_opaque_external_evidence()
         r3_provenance_binding=_r3_binding(),
     )
     opaque_external_evidence = {
-        "r5_failure_id": "opaque-failure-alpha",
-        "r5_failure_sha256": "c" * 64,
         "r4_transition_id": "opaque-transition-beta",
         "r4_transition_sha256": "d" * 64,
         "r6_mutation_request_id": "opaque-request-gamma",
         "r6_mutation_request_sha256": "e" * 64,
-        "r6_result_id": "opaque-result-delta",
-        "r6_result_sha256": "f" * 64,
         "executor_result_id": "opaque-executor-epsilon",
         "executor_result_sha256": "0" * 64,
         "protected_constraints_sha256": "1" * 64,
@@ -988,7 +988,7 @@ def test_post_repair_child_rejects_forged_post_sha_even_when_r6_result_sha_exist
         post_sha256="d" * 64,
     )
     _seal_mutation_evidence(mutation)
-    assert mutation["r6_result_sha256"] == "5" * 64
+    assert mutation["r6_result_sha256"] == mutation["accepted_r6_result"]["result_sha256"]
     with pytest.raises(module.DrawingArtifactReferenceError) as exc:
         module.issue_drawing_artifact_reference(
             run_id=parent["run_id"],
@@ -1101,7 +1101,12 @@ def test_post_repair_child_rejects_each_unsealed_opaque_evidence_mutation(
             parent_reference=parent,
             r3_provenance_binding=_r3_binding(),
         )
-    assert str(exc.value) == "MUTATION_EVIDENCE_MISMATCH"
+    expected_code = (
+        "R6_RESULT_INVALID"
+        if field in {"r5_failure_id", "r5_failure_sha256", "r6_result_id", "r6_result_sha256"}
+        else "MUTATION_EVIDENCE_MISMATCH"
+    )
+    assert str(exc.value) == expected_code
 
 
 @pytest.mark.parametrize(
@@ -1153,7 +1158,12 @@ def test_post_repair_child_rejects_each_malformed_opaque_evidence_binding(
             parent_reference=parent,
             r3_provenance_binding=_r3_binding(),
         )
-    assert str(exc.value) == "MUTATION_EVIDENCE_MISSING"
+    expected_code = (
+        "R6_RESULT_INVALID"
+        if field in {"r6_result_id", "r6_result_sha256"}
+        else "MUTATION_EVIDENCE_MISSING"
+    )
+    assert str(exc.value) == expected_code
 
 
 def test_post_repair_child_rejects_transition_evidence_category_confusion() -> None:
@@ -1649,6 +1659,7 @@ def test_static_authority_boundary_is_stateless_and_allows_no_seam_imports() -> 
         "copy",
         "dataclasses",
         "hashlib",
+        "importlib",
         "typing",
     }
     canonical_imports: list[ast.ImportFrom] = []
@@ -1671,6 +1682,7 @@ def test_static_authority_boundary_is_stateless_and_allows_no_seam_imports() -> 
 
     assert len(canonical_imports) == 1
     assert module.canonical_json_sha256 is canonical_json_sha256
+    assert "from cad_agent.approved_repair_adapter" not in source
 
     mutable_nodes = (
         ast.Dict,
@@ -1861,6 +1873,12 @@ def _mutation_evidence_with_accepted_r6_result(
     return _seal_mutation_evidence(transition)
 
 
+def _reseal_r6_result(result: dict[str, object]) -> dict[str, object]:
+    result.pop("result_sha256", None)
+    result["result_sha256"] = canonical_json_sha256(result)
+    return result
+
+
 def test_post_repair_child_accepts_owner_validated_r6_result_binding() -> None:
     module = _module()
     parent = _issue_r3_candidate()
@@ -1870,6 +1888,7 @@ def test_post_repair_child_accepts_owner_validated_r6_result_binding() -> None:
         pre_sha256=parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    transition_before = deepcopy(transition)
 
     child = module.issue_drawing_artifact_reference(
         run_id=parent["run_id"],
@@ -1882,7 +1901,11 @@ def test_post_repair_child_accepts_owner_validated_r6_result_binding() -> None:
         r3_provenance_binding=_r3_binding(),
     )
 
+    assert transition == transition_before
     assert child["upstream_evidence"]["accepted_r6_result"] == transition[
+        "accepted_r6_result"
+    ]
+    assert child["upstream_evidence"]["accepted_r6_result"] is not transition[
         "accepted_r6_result"
     ]
     assert child["upstream_evidence"]["r6_result_id"] == transition[
@@ -1902,6 +1925,7 @@ def test_post_repair_child_rejects_generic_resealed_r6_pair_without_owner_result
         pre_sha256=parent["artifact_sha256"],
         post_sha256=hashlib.sha256(child_bytes).hexdigest(),
     )
+    transition.pop("accepted_r6_result")
     transition["r6_result_id"] = "caller-resealed-generic-result"
     transition["r6_result_sha256"] = "f" * 64
     _seal_mutation_evidence(transition)
@@ -1919,3 +1943,103 @@ def test_post_repair_child_rejects_generic_resealed_r6_pair_without_owner_result
         )
 
     assert str(exc.value) == "R6_RESULT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda result: result.__setitem__("result_sha256", "f" * 64),
+        lambda result: _reseal_r6_result({**result, "mutation_outcome": "FAILED"}),
+        lambda result: _reseal_r6_result({**result, "requires_new_r5_cycle": False}),
+        lambda result: _reseal_r6_result({**result, "executor_result_category": "FOREIGN"}),
+    ],
+)
+def test_post_repair_child_rejects_invalid_embedded_r6_result(mutator) -> None:
+    module = _module()
+    parent = _issue_r3_candidate()
+    child_bytes = _artifact_bytes("invalid-r6-result-child")
+    transition = _mutation_evidence(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+    result = deepcopy(transition["accepted_r6_result"])
+    mutated = mutator(result)
+    if mutated is not None:
+        result = mutated
+    transition["accepted_r6_result"] = result
+    _seal_mutation_evidence(transition)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=transition,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "R6_RESULT_INVALID"
+
+
+def test_post_repair_child_rejects_r5_substitution_against_embedded_r6_result() -> None:
+    module = _module()
+    parent = _issue_r3_candidate()
+    child_bytes = _artifact_bytes("foreign-r5-child")
+    transition = _mutation_evidence(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+    transition["r5_failure_id"] = "foreign-r5-failure"
+    _seal_mutation_evidence(transition)
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=transition,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "R6_RESULT_INVALID"
+
+
+def test_hostile_embedded_r6_result_is_refused_before_mapping_protocol_traversal() -> None:
+    module = _module()
+
+    class HostileResult(dict):
+        touched = False
+
+        def items(self):
+            type(self).touched = True
+            raise AssertionError("hostile result mapping protocol invoked")
+
+    parent = _issue_r3_candidate()
+    child_bytes = _artifact_bytes("hostile-r6-result-child")
+    transition = _mutation_evidence(
+        candidate_reference=parent,
+        pre_sha256=parent["artifact_sha256"],
+        post_sha256=hashlib.sha256(child_bytes).hexdigest(),
+    )
+    transition["accepted_r6_result"] = HostileResult(transition["accepted_r6_result"])
+    HostileResult.touched = False
+
+    with pytest.raises(module.DrawingArtifactReferenceError) as exc:
+        module.issue_drawing_artifact_reference(
+            run_id=parent["run_id"],
+            project_id=parent["project_id"],
+            drawing_id=parent["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=child_bytes,
+            upstream_evidence=transition,
+            parent_reference=parent,
+            r3_provenance_binding=_r3_binding(),
+        )
+    assert str(exc.value) == "R6_RESULT_INVALID"
+    assert HostileResult.touched is False
