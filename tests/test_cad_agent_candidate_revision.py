@@ -140,6 +140,51 @@ def _transition_evidence(
         "rollback_failed": False,
         "cleanup_state": "VERIFIED",
     }
+    r6 = __import__(
+        "cad_agent.approved_repair_adapter",
+        fromlist=["R6_RESULT_SCHEMA_VERSION", "validate_approved_repair_result"],
+    )
+    operation = __import__(
+        "cad_agent.repair_operation_contract",
+        fromlist=["REPAIR_OPERATION_SCHEMA_VERSION"],
+    )
+    candidate_id = f"candidate-r6-r4-{tag}"
+    accepted_r6_result: dict[str, object] = {
+        "schema_version": r6.R6_RESULT_SCHEMA_VERSION,
+        "candidate_revision_id": candidate_id,
+        "candidate_revision_sha256": "c" * 64,
+        "r5_failure_id": evidence["r5_failure_id"],
+        "r5_failure_sha256": evidence["r5_failure_sha256"],
+        "repair_plan_id": f"repair-plan-r6-r4-{tag}",
+        "repair_plan_sha256": "d" * 64,
+        "repair_plan_version": "repair-plan-1.0",
+        "repair_operation_contract_version": operation.REPAIR_OPERATION_SCHEMA_VERSION,
+        "repair_operation_contract_fingerprint": "e" * 64,
+        "authorization_id": f"authorization-r6-r4-{tag}",
+        "executor_capability": "LINE",
+        "executor_result_category": "HANDLE_RETURNED",
+        "mutation_outcome": "SUCCESS",
+        "closure": {
+            "lease_id": f"lease-r6-r4-{tag}",
+            "candidate_identity": candidate_id,
+            "source_identity": evidence["r5_failure_id"],
+            "source_fingerprint": evidence["r5_failure_sha256"],
+            "close_outcome": "closed",
+            "cleanup_outcome": "zero_survivors",
+            "save_changes": False,
+            "lifecycle_state": "closed",
+        },
+        "requires_new_r5_cycle": True,
+    }
+    accepted_r6_result["result_sha256"] = canonical_json_sha256(accepted_r6_result)
+    accepted_r6_result = r6.validate_approved_repair_result(
+        accepted_r6_result,
+        expected_r5_failure_id=evidence["r5_failure_id"],
+        expected_r5_failure_sha256=evidence["r5_failure_sha256"],
+    )
+    evidence["accepted_r6_result"] = accepted_r6_result
+    evidence["r6_result_id"] = accepted_r6_result["result_sha256"]
+    evidence["r6_result_sha256"] = accepted_r6_result["result_sha256"]
     evidence["accepted_transition_evidence_sha256"] = canonical_json_sha256(
         evidence
     )
