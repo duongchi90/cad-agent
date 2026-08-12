@@ -947,6 +947,7 @@ class DotNetIPCClientTests(unittest.TestCase):
                     future.result()
                 except Exception as exc:  # noqa: BLE001 - categorical oracle
                     errors.append(exc)
+            self.assertEqual(2, len(errors))
             self.assertTrue(
                 all(
                     isinstance(error, (AssertionError, dotnet_ipc.DotNetIPCProtocolError))
