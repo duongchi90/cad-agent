@@ -557,6 +557,20 @@ class DisposableWorkspaceClosure:
     lifecycle_state: str
 
 
+@dataclass(frozen=True, slots=True)
+class DisposableWorkspaceValidation:
+    """Privacy-safe evidence that an owner lease is valid before mutation."""
+
+    lease_id: str
+    candidate_identity: str
+    source_identity: str
+    source_fingerprint: str
+    purpose: str
+    disposable: bool
+    save_changes: bool
+    lifecycle_state: str
+
+
 class DisposableWorkspaceClosureError(DisposableWorkspaceError):
     """Fail-closed close/cleanup evidence; the lease remains open for retry."""
 
@@ -577,7 +591,9 @@ class _DisposableWorkspaceState:
     source_identity: str
     source_fingerprint: str
     purpose: str
+    created_at: float
     expires_at: float
+    lifecycle: _DisposableWorkspaceLifecycle
     lifecycle_state: str = "active"
     closure: DisposableWorkspaceClosure | None = field(default=None, repr=False)
     failure: DisposableWorkspaceClosure | None = field(default=None, repr=False)
@@ -816,7 +832,9 @@ class DotNetIPCClient:
                 source_identity=source_identity,
                 source_fingerprint=source_fingerprint,
                 purpose=purpose,
+                created_at=created_at,
                 expires_at=created_at + float(ttl_seconds),
+                lifecycle=lifecycle,
             )
             return lease
         raise ValueError("disposable workspace identity collision")
@@ -927,6 +945,82 @@ class DotNetIPCClient:
             lease._lifecycle.value = "closed"
             self._disposable_closures[state.lease_id] = closure
             return closure
+
+    def validate_disposable_workspace(
+        self,
+        lease: DisposableWorkspaceLease,
+        *,
+        candidate_identity: str,
+        source_identity: str,
+        source_fingerprint: str,
+    ) -> DisposableWorkspaceValidation:
+        """Validate an active owner lease without changing its lifecycle."""
+
+        self._validate_disposable_lease(lease)
+        state = self._disposable_states.get(lease.lease_id)
+        if state is None:
+            raise DotNetIPCProtocolError("disposable workspace lease provenance invalid")
+
+        with state.lock:
+            self._validate_disposable_binding(
+                candidate_identity,
+                source_identity,
+                source_fingerprint,
+                state.purpose,
+            )
+            path_type = type(Path("."))
+            if (
+                type(lease.lease_id) is not str
+                or type(lease.workspace_path) is not path_type
+                or type(lease.candidate_identity) is not str
+                or type(lease.source_identity) is not str
+                or type(lease.source_fingerprint) is not str
+                or type(lease.purpose) is not str
+                or type(lease.disposable) is not bool
+                or type(lease.save_changes) is not bool
+                or type(lease.created_at) not in (int, float)
+                or type(lease.expires_at) not in (int, float)
+            ):
+                raise DotNetIPCProtocolError("disposable workspace lease provenance invalid")
+            if (
+                lease.lease_id != state.lease_id
+                or lease.workspace_path != state.workspace_path
+                or lease.candidate_identity != state.candidate_identity
+                or lease.source_identity != state.source_identity
+                or lease.source_fingerprint != state.source_fingerprint
+                or lease.purpose != state.purpose
+                or lease.disposable is not True
+                or lease.save_changes is not False
+                or lease._lifecycle is not state.lifecycle
+                or lease.created_at != state.created_at
+                or lease.expires_at != state.expires_at
+                or state.lifecycle_state != "active"
+                or state.failure is not None
+                or time.time() >= state.expires_at
+            ):
+                raise DotNetIPCProtocolError("disposable workspace lease is not active")
+            if (
+                type(candidate_identity) is not str
+                or type(source_identity) is not str
+                or type(source_fingerprint) is not str
+                or candidate_identity != state.candidate_identity
+                or source_identity != state.source_identity
+                or source_fingerprint != state.source_fingerprint
+            ):
+                raise DotNetIPCProtocolError("disposable workspace binding mismatch")
+            if not self._workspace_path_is_owned(state.workspace_path):
+                raise DotNetIPCProtocolError("disposable workspace path is unsafe")
+
+            return DisposableWorkspaceValidation(
+                lease_id=state.lease_id,
+                candidate_identity=state.candidate_identity,
+                source_identity=state.source_identity,
+                source_fingerprint=state.source_fingerprint,
+                purpose=state.purpose,
+                disposable=True,
+                save_changes=False,
+                lifecycle_state="active",
+            )
 
     @staticmethod
     def _validate_disposable_binding(
