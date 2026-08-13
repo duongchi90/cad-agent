@@ -173,10 +173,14 @@ def _validate_initial_evidence(evidence: object, artifact_role: str) -> dict[str
 def _validate_accepted_r6_result_binding(
     evidence: Mapping[str, object],
     *,
-    expected_candidate_artifact_reference_id: str,
-    expected_candidate_artifact_reference_sha256: str,
+    expected_candidate_artifact_reference_id: str | None = None,
+    expected_candidate_artifact_reference_sha256: str | None = None,
 ) -> dict[str, object]:
-    if (
+    if (expected_candidate_artifact_reference_id is None) != (
+        expected_candidate_artifact_reference_sha256 is None
+    ):
+        _fail("R6_RESULT_INVALID")
+    if expected_candidate_artifact_reference_id is not None and (
         not isinstance(expected_candidate_artifact_reference_id, str)
         or not expected_candidate_artifact_reference_id
         or not _is_sha256(expected_candidate_artifact_reference_sha256)
@@ -232,11 +236,7 @@ def _normalize_reference_r6_evidence(
         return normalized
     normalized_evidence = dict(evidence)
     normalized_evidence["accepted_r6_result"] = _validate_accepted_r6_result_binding(
-        normalized_evidence,
-        expected_candidate_artifact_reference_id=normalized["parent_reference_id"],
-        expected_candidate_artifact_reference_sha256=normalized[
-            "parent_reference_sha256"
-        ],
+        normalized_evidence
     )
     normalized["upstream_evidence"] = normalized_evidence
     return normalized
