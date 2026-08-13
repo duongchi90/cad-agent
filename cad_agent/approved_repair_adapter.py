@@ -26,7 +26,7 @@ DisposableWorkspaceValidation = _DOTNET_IPC.DisposableWorkspaceValidation
 DotNetIPCClient = _DOTNET_IPC.DotNetIPCClient
 
 
-R6_RESULT_SCHEMA_VERSION = "r6-repair-executor-result-1.0"
+R6_RESULT_SCHEMA_VERSION = "r6-repair-executor-result-1.1"
 
 
 def _execute_supported_repair_capability(*args: object, **kwargs: object) -> object:
@@ -198,7 +198,7 @@ def _validate_candidate(value: object, context: dict[str, object]) -> dict[str, 
     )
     if current is None or current.get("revision_id") != context["candidate_revision_id"]:
         _fail("BINDING_MISMATCH")
-    return state
+    return current
 
 
 def _validate_scope(context: dict[str, object], operation_payload: dict[str, object]) -> None:
@@ -351,6 +351,8 @@ def validate_approved_repair_result(
     *,
     expected_candidate_revision_id: str | None = None,
     expected_candidate_revision_sha256: str | None = None,
+    expected_candidate_artifact_reference_id: str | None = None,
+    expected_candidate_artifact_reference_sha256: str | None = None,
     expected_r5_failure_id: str | None = None,
     expected_r5_failure_sha256: str | None = None,
     expected_repair_plan_id: str | None = None,
@@ -365,6 +367,8 @@ def validate_approved_repair_result(
         "schema_version",
         "candidate_revision_id",
         "candidate_revision_sha256",
+        "candidate_artifact_reference_id",
+        "candidate_artifact_reference_sha256",
         "r5_failure_id",
         "r5_failure_sha256",
         "repair_plan_id",
@@ -390,6 +394,7 @@ def validate_approved_repair_result(
     for field in (
         "schema_version",
         "candidate_revision_id",
+        "candidate_artifact_reference_id",
         "r5_failure_id",
         "repair_plan_id",
         "repair_plan_version",
@@ -402,6 +407,7 @@ def validate_approved_repair_result(
         _text(result[field], "MALFORMED")
     for field in (
         "candidate_revision_sha256",
+        "candidate_artifact_reference_sha256",
         "r5_failure_sha256",
         "repair_plan_sha256",
         "repair_operation_contract_fingerprint",
@@ -435,6 +441,7 @@ def validate_approved_repair_result(
 
     expected_text_bindings = (
         (expected_candidate_revision_id, "candidate_revision_id"),
+        (expected_candidate_artifact_reference_id, "candidate_artifact_reference_id"),
         (expected_r5_failure_id, "r5_failure_id"),
         (expected_repair_plan_id, "repair_plan_id"),
         (expected_repair_plan_version, "repair_plan_version"),
@@ -452,6 +459,10 @@ def validate_approved_repair_result(
 
     expected_sha_bindings = (
         (expected_candidate_revision_sha256, "candidate_revision_sha256"),
+        (
+            expected_candidate_artifact_reference_sha256,
+            "candidate_artifact_reference_sha256",
+        ),
         (expected_r5_failure_sha256, "r5_failure_sha256"),
         (expected_repair_plan_sha256, "repair_plan_sha256"),
         (
@@ -484,7 +495,16 @@ def execute_approved_repair(
 
     context = _validate_context(repair_context)
     failure = _validate_r5_failure(r5_failure, context)
-    _validate_candidate(candidate_state, context)
+    current_candidate = _validate_candidate(candidate_state, context)
+    candidate_artifacts = current_candidate.get("candidate_artifacts")
+    if type(candidate_artifacts) is not dict:
+        _fail("CANDIDATE_INVALID")
+    candidate_artifact_reference_id = _text(
+        candidate_artifacts.get("reference_id"), "CANDIDATE_INVALID"
+    )
+    candidate_artifact_reference_sha256 = _sha(
+        candidate_artifacts.get("reference_sha256"), "CANDIDATE_INVALID"
+    )
 
     try:
         normalized = normalize_repair_operation(repair_operation)
@@ -554,6 +574,8 @@ def execute_approved_repair(
         "schema_version": R6_RESULT_SCHEMA_VERSION,
         "candidate_revision_id": context["candidate_revision_id"],
         "candidate_revision_sha256": context["candidate_revision_sha256"],
+        "candidate_artifact_reference_id": candidate_artifact_reference_id,
+        "candidate_artifact_reference_sha256": candidate_artifact_reference_sha256,
         "r5_failure_id": failure["failure_id"],
         "r5_failure_sha256": failure["failure_sha256"],
         "repair_plan_id": context["repair_plan_id"],
