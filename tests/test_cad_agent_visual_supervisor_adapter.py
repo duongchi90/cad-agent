@@ -108,14 +108,72 @@ def _provider_result(scope: dict[str, object], task6: CodexWorkerResult) -> dict
     }
 
 
+def _b4_evidence_set(scope: dict[str, object]) -> list[dict[str, object]]:
+    packages: list[dict[str, object]] = []
+    for region in scope["regions"]:
+        region_id = region["region_id"]
+        packages.append(
+            {
+                "payload": {
+                    "run_id": scope["run_id"],
+                    "evidence_id": f"evidence-{region_id}",
+                    "region_id": region_id,
+                    "drawing_sha256_before": SHA_DRAWING,
+                    "drawing_sha256_after": SHA_DRAWING,
+                    "latest_mutation_sha256": SHA_MUTATION,
+                    "visual_run_manifest_sha256": SHA_MANIFEST,
+                    "region_config_sha256": SHA_REGISTRY,
+                    "session_state_sha256_before": SHA_STATE,
+                    "session_state_sha256_after": SHA_STATE,
+                    "captured_at_utc": "2026-08-13T00:00:00Z",
+                    "artifacts": [
+                        {
+                            "artifact_id": f"render-{region_id}",
+                            "kind": "render",
+                            "relative_path": "cad-render.png",
+                            "sha256": "7" * 64,
+                            "byte_length": 128,
+                            "mime_type": "image/png",
+                            "width": 100,
+                            "height": 80,
+                        },
+                        {
+                            "artifact_id": f"entities-{region_id}",
+                            "kind": "entity_map",
+                            "relative_path": "entities.json",
+                            "sha256": "8" * 64,
+                            "byte_length": 64,
+                            "mime_type": "application/json",
+                        },
+                        {
+                            "artifact_id": f"measurements-{region_id}",
+                            "kind": "measurements",
+                            "relative_path": "measurements.json",
+                            "sha256": "9" * 64,
+                            "byte_length": 64,
+                            "mime_type": "application/json",
+                        },
+                    ],
+                }
+            }
+        )
+    return packages
+
+
 def _owner_state(scope: dict[str, object], task6: CodexWorkerResult) -> dict[str, object]:
     return {
         "visual_review_scope": copy.deepcopy(scope),
         "candidate_revision_state": {"current_candidate_revision_sha256": SHA_CANDIDATE},
-        "drawing_reference": {"reference_sha256": SHA_DARA},
-        "drawing_observation": {"reference_sha256": SHA_DARA},
+        "drawing_reference": {
+            "reference_sha256": SHA_DARA,
+            "artifact_sha256": SHA_DRAWING,
+        },
+        "drawing_observation": {
+            "reference_sha256": SHA_DARA,
+            "lookup_sha256": "3" * 64,
+        },
         "drawing_artifact_bytes": b"current drawing",
-        "visual_evidence": {"payload": "owner-validated"},
+        "visual_evidence": _b4_evidence_set(scope),
         "visual_run_manifest": {"latest_mutation_sha256": SHA_MUTATION},
         "manifest_bytes_sha256": SHA_MANIFEST,
         "drawing_sha256_before_dispatch": SHA_DRAWING,
@@ -137,7 +195,9 @@ def _valid_inputs() -> dict[str, object]:
 
 
 def _owner_patches() -> tuple[Mock, Mock, Mock, Mock]:
-    def normalize_scope(payload: object, *, contract: str, server_scope: object) -> dict[str, object]:
+    def normalize_scope(
+        payload: object, *, contract: str, server_scope: object
+    ) -> dict[str, object]:
         normalized = copy.deepcopy(payload)
         normalized["regions"] = sorted(
             normalized["regions"], key=lambda region: str(region["region_id"])
@@ -156,23 +216,67 @@ def _owner_patches() -> tuple[Mock, Mock, Mock, Mock]:
     return scope_validator, candidate_validator, dara_validator, evidence_validator
 
 
+def _request_fixture(inputs: dict[str, object]) -> tuple[object, object, Mock, object, Mock]:
+    authority_context = Mock(
+        provider_policy={
+            "approval_mode": "deny_all",
+            "experimental_api": False,
+            "model_identity": "vision-model",
+            "config_sha256": "6" * 64,
+        }
+    )
+    resumed = Mock(
+        run_id=inputs["server_scope"]["run_id"],
+        thread_id="thread-1",
+        adapter_version="adapter-1.0",
+        model_config_identity={
+            "model_identity": "vision-model",
+            "config_sha256": "6" * 64,
+        },
+        instruction_source_identity=(
+            {
+                "source_id": "system-instructions",
+                "role": "system",
+                "sha256": "a" * 64,
+            },
+        ),
+        output_schema_sha256="b" * 64,
+        output_validator_version="vision-output-validator-1",
+        approval_reference="approval-1",
+        approval_authority="OWNER",
+    )
+    return object(), object(), authority_context, object(), Mock(return_value=resumed)
+
+
 def _finalize(inputs: dict[str, object]) -> object:
     import cad_agent.visual_supervisor_adapter as module
 
     scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    request_handoff, worker_binding, authority_context, worker_context, resume = (
+        _request_fixture(inputs)
+    )
     with (
         patch.object(module, "validate_visual_contract", scope_validator),
         patch.object(module, "validate_candidate_revision_state", candidate_validator),
         patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
         patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+        patch.object(module, "resume_worker_thread", resume),
     ):
-        return module.finalize_visual_verdict(**inputs)
+        return module.finalize_visual_verdict(
+            **inputs,
+            request_handoff=request_handoff,
+            worker_binding=worker_binding,
+            authority_context=authority_context,
+            worker_context=worker_context,
+        )
 
 
 def test_valid_owner_context_finalizes_deterministically_without_provider_hash_authority() -> None:
     result = _finalize(_valid_inputs())
+    assert result["schema_version"] == "r5-visual-verdict-result-1.0"
     assert result["verdict"] == "PASS"
     assert result["task6_thread_id"] == "thread-1"
+    assert result["verdict_id"] == result["verdict_sha256"]
     assert all("evidence_sha256" not in region for region in result["regions"])
 
 
@@ -188,22 +292,35 @@ def test_composition_calls_existing_scope_revision_dara_and_visual_evidence_owne
 
     inputs = _valid_inputs()
     scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    request_handoff, worker_binding, authority_context, worker_context, resume = (
+        _request_fixture(inputs)
+    )
     with (
         patch.object(module, "validate_visual_contract", scope_validator),
         patch.object(module, "validate_candidate_revision_state", candidate_validator),
         patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
         patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+        patch.object(module, "resume_worker_thread", resume),
     ):
-        module.finalize_visual_verdict(**inputs)
+        module.finalize_visual_verdict(
+            **inputs,
+            request_handoff=request_handoff,
+            worker_binding=worker_binding,
+            authority_context=authority_context,
+            worker_context=worker_context,
+        )
     assert scope_validator.call_count >= 3
     assert candidate_validator.call_count == 2
     assert dara_validator.call_count == 2
-    assert evidence_validator.call_count == 2
+    assert evidence_validator.call_count == 4
+    assert resume.call_count == 1
 
 
 def test_candidate_selection_change_after_provider_return_fails_closed() -> None:
     inputs = _valid_inputs()
-    inputs["post_provider_state"]["candidate_revision_state"]["current_candidate_revision_sha256"] = SHA_CHANGED
+    inputs["post_provider_state"]["candidate_revision_state"][
+        "current_candidate_revision_sha256"
+    ] = SHA_CHANGED
     with pytest.raises(Exception, match="candidate|current"):
         _finalize(inputs)
 
@@ -235,7 +352,9 @@ def test_dara_bytes_change_after_provider_return_fails_closed() -> None:
 
 def test_visual_evidence_stale_after_provider_return_fails_closed() -> None:
     inputs = _valid_inputs()
-    inputs["post_provider_state"]["visual_run_manifest"] = {"latest_mutation_sha256": SHA_CHANGED}
+    inputs["post_provider_state"]["visual_run_manifest"] = {
+        "latest_mutation_sha256": SHA_CHANGED
+    }
     with pytest.raises(Exception, match="fresh|stale|mutation|evidence|manifest"):
         _finalize(inputs)
 
@@ -265,6 +384,8 @@ def test_provider_cannot_mask_or_shrink_critical_scope(change: str) -> None:
         inputs["server_scope"]["regions"].pop(0)
         inputs["authoritative_state"]["visual_review_scope"]["regions"].pop(0)
         inputs["post_provider_state"]["visual_review_scope"]["regions"].pop(0)
+        for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
+            state["visual_evidence"] = state["visual_evidence"][1:]
     with pytest.raises(Exception, match="scope|region|critical"):
         _finalize(inputs)
 
@@ -300,14 +421,16 @@ def test_task6_tuple_mismatch_does_not_burn_result() -> None:
     issued_run = inputs["server_scope"]["run_id"]
     for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
         state["visual_review_scope"]["run_id"] = "wrong-run"
+        for evidence in state["visual_evidence"]:
+            evidence["payload"]["run_id"] = "wrong-run"
     inputs["server_scope"]["run_id"] = "wrong-run"
     with pytest.raises(Exception, match="consume|Task6|provenance|tuple"):
         _finalize(inputs)
     for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
         state["visual_review_scope"]["run_id"] = issued_run
+        for evidence in state["visual_evidence"]:
+            evidence["payload"]["run_id"] = issued_run
     inputs["server_scope"]["run_id"] = issued_run
-    # The first mismatch must not consume the result; restoring the issued
-    # server tuple allows the exact result to finalize once.
     assert _finalize(inputs)["verdict"] == "PASS"
 
 
@@ -339,14 +462,15 @@ def test_task6_non_success_terminal_result_cannot_be_visual_verdict(status: str)
         _finalize(inputs)
 
 
-def test_provider_region_order_does_not_change_final_result() -> None:
+def test_provider_region_order_is_normalized() -> None:
     first = _finalize(_valid_inputs())
     second_inputs = _valid_inputs()
     second_inputs["provider_result"]["regions"] = list(
         reversed(second_inputs["provider_result"]["regions"])
     )
     second = _finalize(second_inputs)
-    assert second == first
+    assert second["verdict"] == first["verdict"]
+    assert second["regions"] == first["regions"]
 
 
 def test_critical_region_failure_forces_final_fail() -> None:
@@ -384,3 +508,120 @@ def test_old_caller_mintable_mapping_is_rejected_with_explicit_seam_blocker() ->
             post_provider_state={"task6_attempt_id": "attempt-1"},
             server_scope=_scope(),
         )
+
+
+def test_two_region_scope_requires_one_owner_fresh_visual_evidence_package_per_region() -> None:
+    inputs = _valid_inputs()
+    assert len(inputs["server_scope"]["regions"]) == 2
+    for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
+        state["visual_evidence"] = state["visual_evidence"][:1]
+    with pytest.raises(
+        Exception,
+        match="R5_EVIDENCE_SET_INVALID|evidence.*region|region.*evidence",
+    ):
+        _finalize(inputs)
+
+
+def _sealed_b4_result() -> dict[str, object]:
+    from cad_agent.drawing_contracts import canonical_json_sha256
+
+    regions = copy.deepcopy(_scope()["regions"])
+    for region in regions:
+        region["status"] = "PASS"
+    payload: dict[str, object] = {
+        "schema_version": "r5-visual-verdict-result-1.0",
+        "request_sha256": "4" * 64,
+        "observation_sha256": "5" * 64,
+        "verdict": "PASS",
+        "candidate_revision_sha256": SHA_CANDIDATE,
+        "candidate_state_sha256": SHA_STATE,
+        "registry_snapshot_sha256": SHA_REGISTRY,
+        "drawing_reference_sha256": SHA_DARA,
+        "drawing_observation_sha256": "3" * 64,
+        "latest_mutation_sha256": SHA_MUTATION,
+        "task6_thread_id": "thread-1",
+        "task6_turn_id": "turn-1",
+        "regions": regions,
+    }
+    digest = canonical_json_sha256(payload)
+    return {**payload, "verdict_id": digest, "verdict_sha256": digest}
+
+
+def test_r5_b4_public_result_validator_accepts_only_closed_identity_sealed_result() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    result = _sealed_b4_result()
+    validated = module.validate_visual_verdict_result(
+        result,
+        expected_request_sha256=result["request_sha256"],
+        expected_candidate_revision_sha256=SHA_CANDIDATE,
+        expected_candidate_state_sha256=SHA_STATE,
+        expected_latest_mutation_sha256=SHA_MUTATION,
+    )
+    assert validated == result
+    assert validated is not result
+    mutated = copy.deepcopy(result)
+    mutated["verdict"] = "FAIL"
+    with pytest.raises(Exception, match="R5_VERDICT_RESULT_INVALID|hash|verdict"):
+        module.validate_visual_verdict_result(mutated)
+
+
+def test_r5_b4_revalidates_request_binding_before_emitting_identity_result() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    inputs = _valid_inputs()
+    scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    request_handoff, worker_binding, authority_context, worker_context, resume = (
+        _request_fixture(inputs)
+    )
+    consume = Mock()
+    with (
+        patch.object(module, "validate_visual_contract", scope_validator),
+        patch.object(module, "validate_candidate_revision_state", candidate_validator),
+        patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
+        patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+        patch.object(module, "resume_worker_thread", resume),
+        patch.object(module, "consume_task6_result", consume),
+    ):
+        result = module.finalize_visual_verdict(
+            **inputs,
+            request_handoff=request_handoff,
+            worker_binding=worker_binding,
+            authority_context=authority_context,
+            worker_context=worker_context,
+        )
+    assert resume.call_count == 1
+    assert result["schema_version"] == "r5-visual-verdict-result-1.0"
+    assert result["verdict_id"] == result["verdict_sha256"]
+    assert len(result["request_sha256"]) == 64
+    assert len(result["observation_sha256"]) == 64
+    assert consume.call_count == 1
+
+
+def test_r5_b4_request_binding_refusal_does_not_consume_task6() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    inputs = _valid_inputs()
+    scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    consume = Mock()
+    with (
+        patch.object(module, "validate_visual_contract", scope_validator),
+        patch.object(module, "validate_candidate_revision_state", candidate_validator),
+        patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
+        patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+        patch.object(
+            module,
+            "resume_worker_thread",
+            Mock(side_effect=ValueError("foreign request")),
+        ),
+        patch.object(module, "consume_task6_result", consume),
+    ):
+        with pytest.raises(Exception, match="R5_REQUEST_BINDING_INVALID"):
+            module.finalize_visual_verdict(
+                **inputs,
+                request_handoff=object(),
+                worker_binding=object(),
+                authority_context=object(),
+                worker_context=object(),
+            )
+    consume.assert_not_called()
