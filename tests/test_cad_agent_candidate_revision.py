@@ -153,6 +153,8 @@ def _transition_evidence(
         "schema_version": r6.R6_RESULT_SCHEMA_VERSION,
         "candidate_revision_id": candidate_id,
         "candidate_revision_sha256": "c" * 64,
+        "candidate_artifact_reference_id": parent["reference_id"],
+        "candidate_artifact_reference_sha256": parent["reference_sha256"],
         "r5_failure_id": evidence["r5_failure_id"],
         "r5_failure_sha256": evidence["r5_failure_sha256"],
         "repair_plan_id": f"repair-plan-r6-r4-{tag}",
@@ -179,6 +181,8 @@ def _transition_evidence(
     accepted_r6_result["result_sha256"] = canonical_json_sha256(accepted_r6_result)
     accepted_r6_result = r6.validate_approved_repair_result(
         accepted_r6_result,
+        expected_candidate_artifact_reference_id=parent["reference_id"],
+        expected_candidate_artifact_reference_sha256=parent["reference_sha256"],
         expected_r5_failure_id=evidence["r5_failure_id"],
         expected_r5_failure_sha256=evidence["r5_failure_sha256"],
     )
