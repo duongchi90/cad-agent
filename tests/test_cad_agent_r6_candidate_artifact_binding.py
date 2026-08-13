@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import importlib.util
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -16,7 +17,12 @@ def _accepted_r6_fixture_module():
     if spec is None or spec.loader is None:
         raise AssertionError("accepted R6 fixture loader unavailable")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
