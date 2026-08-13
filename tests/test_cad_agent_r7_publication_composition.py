@@ -193,3 +193,44 @@ def test_claimed_exact_claim_replay_refuses_before_prepare(tmp_path: Path) -> No
                 target_path=target,
             )
     prepare.assert_not_called()
+
+
+def test_cleanup_failure_keeps_authorization_unconsumed(tmp_path: Path) -> None:
+    module = _r7_module()
+    candidate = tmp_path / "candidate.dwg"
+    target = tmp_path / "target.dwg"
+    manifest = tmp_path / "manifest.json"
+    candidate.write_bytes(b"candidate")
+    target.write_bytes(b"target")
+    manifest.write_text("{}", encoding="utf-8")
+    actions: list[str] = []
+    claimed = {"publication_lifecycle": {"authorization_state": "CLAIMED", "publication_state": "INTENT_RECORDED"}}
+
+    def transition(*_args, action: str, **_kwargs):
+        actions.append(action)
+        return copy.deepcopy(claimed)
+
+    with (
+        patch.object(module, "validate_candidate_revision_state", Mock(return_value=copy.deepcopy(_state()))),
+        patch.object(module, "validate_visual_verdict_result", Mock(return_value=_r5())),
+        patch.object(module, "validate_visual_contract", Mock(return_value=_auth())),
+        patch.object(module, "require_auto_publish_authorized", Mock()),
+        patch.object(module, "snapshot_publication_file", Mock(side_effect=[_snapshot(SHA_ARTIFACT, 2), _snapshot(SHA_TARGET, 3)])),
+        patch.object(module, "_transition", transition),
+        patch.object(module, "_manifest_sha", Mock(return_value="2" * 64)),
+        patch.object(module, "prepare_publication_replacement", Mock(return_value={})),
+        patch.object(module, "commit_publication_replacement", Mock(return_value={"published_sha256": SHA_ARTIFACT})),
+        patch.object(module, "cleanup_publication_replacement", Mock(side_effect=OSError("cleanup blocked"))),
+    ):
+        with pytest.raises(module.VerifiedPublisherError, match="R7_CLEANUP_FAILED"):
+            module.execute_verified_publication(
+                run_id=RUN_ID,
+                candidate_state=_state(),
+                r5_verdict_result=_r5(),
+                auto_publish_authorization=_auth(),
+                manifest_path=manifest,
+                expected_manifest_sha256=SHA_MANIFEST,
+                candidate_path=candidate,
+                target_path=target,
+            )
+    assert actions == ["CLAIM", "RECORD_PUBLISHED"]
