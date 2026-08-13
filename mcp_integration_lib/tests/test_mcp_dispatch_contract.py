@@ -790,3 +790,18 @@ def test_dispatcher_rejects_exact_result_part_before_command_execution() -> None
     assert part_marker in body
     assert dispatch_marker in body
     assert body.index(part_marker) < body.index(dispatch_marker)
+
+
+def test_drawing_close_does_not_close_active_document_inside_command_operation() -> None:
+    source = _dispatcher_source()
+    match = re.search(
+        r"\(defun\s+mcp-op-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body").casefold()
+    assert "(vla-close" not in body, (
+        "drawing-close must not synchronously close the active document inside the "
+        "command operation before the bound File-IPC result envelope is committed"
+    )
