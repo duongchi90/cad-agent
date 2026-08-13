@@ -5,7 +5,9 @@
 (setq *mcp-max-json-bytes* 1048576)
 (setq *mcp-request-prefix* "autocad_mcp_cmd_")
 (setq *mcp-result-prefix* "autocad_mcp_result_")
-(setq *mcp-pending-result-owner* nil)
+(if (not (boundp '*mcp-pending-result-owner*))
+  (setq *mcp-pending-result-owner* nil)
+)
 
 (setq *mcp-error-root* "IPC_ROOT_INVALID")
 (setq *mcp-error-missing* "IPC_REQUEST_MISSING")
@@ -620,10 +622,16 @@
   )
 )
 
-(defun mcp-result-slot-free-p (root request-id / final part)
+(defun mcp-result-slot-free-p (root request-id owner-nonce / final part)
   (setq final (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
         part (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
-  (not (or (vl-file-size final) (vl-file-size part)))
+  (and
+    (or
+      (not owner-nonce)
+      (mcp-result-owner-matches-p root request-id owner-nonce)
+    )
+    (not (or (vl-file-size final) (vl-file-size part)))
+  )
 )
 
 (defun mcp-write-result (root request-id envelope owner-nonce / final part handle encoded renamed)
@@ -631,7 +639,7 @@
         part (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
   (if
     (or
-      (not (mcp-result-slot-free-p root request-id))
+      (not (mcp-result-slot-free-p root request-id owner-nonce))
       (and
         owner-nonce
         (not (mcp-result-owner-matches-p root request-id owner-nonce))
@@ -776,15 +784,15 @@
     (not (mcp-result-owner-matches-p root request-id nonce))
     (princ (strcat "\n" *mcp-error-result-conflict*))
     (if
-      (not (mcp-result-slot-free-p root request-id))
+      (not (mcp-result-slot-free-p root request-id nonce))
       (princ (strcat "\n" *mcp-error-result-conflict*))
       (progn
         (cond
-          ((= reaction ':vlr-lispEnded)
+          ((eq reaction ':vlr-lispEnded)
             (setq close-result
               (vl-catch-all-apply
                 'vla-Close
-                (list doc (if (= save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
+                (list doc (if (eq save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
               )
               result
               (if (vl-catch-all-error-p close-result)
@@ -793,7 +801,7 @@
               )
             )
           )
-          ((= reaction ':vlr-lispCancelled)
+          ((eq reaction ':vlr-lispCancelled)
             (setq result (mcp-failure request-id *mcp-error-failed*))
           )
           (T

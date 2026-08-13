@@ -825,7 +825,7 @@ def test_deferred_drawing_close_commits_only_after_verified_close() -> None:
     assert "(mcp-failure request-id *mcp-error-failed*)" in body
     assert result_marker in body
     assert body.index(close_marker) < body.index(vla_close_marker) < body.index(result_marker)
-    assert "(if (= save 'mcp_json_true) :vlax-true :vlax-false)" in body
+    assert "(if (eq save 'mcp_json_true) :vlax-true :vlax-false)" in body
 
 
 def test_deferred_drawing_close_cancellation_commits_failure_without_close() -> None:
@@ -837,7 +837,7 @@ def test_deferred_drawing_close_cancellation_commits_failure_without_close() -> 
     )
     assert match is not None
     body = match.group("body").casefold()
-    assert "(= reaction ':vlr-lispcancelled)" in body
+    assert "(eq reaction ':vlr-lispcancelled)" in body
     assert "(mcp-failure request-id *mcp-error-failed*)" in body
 
 
@@ -950,9 +950,66 @@ def test_deferred_close_cancellation_and_close_failure_use_bound_terminal_failur
     )
     assert match is not None
     body = match.group("body")
-    assert "(= reaction ':vlr-lispcancelled)" in body
+    assert "(eq reaction ':vlr-lispcancelled)" in body
     assert "(vl-catch-all-error-p close-result)" in body
     assert "(mcp-failure request-id *mcp-error-failed*)" in body
     cancelled = body[body.index("':vlr-lispcancelled"):]
     assert "mcp-failure request-id *mcp-error-failed*" in cancelled
     assert "'vla-close" not in cancelled
+
+
+def test_deferred_close_uses_symbol_safe_comparisons_for_reaction_and_json_boolean() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "(eq reaction ':vlr-lispended)" in body
+    assert "(eq reaction ':vlr-lispcancelled)" in body
+    assert "(eq save 'mcp_json_true)" in body
+    assert "(= reaction ':vlr-lispended)" not in body
+    assert "(= reaction ':vlr-lispcancelled)" not in body
+    assert "(= save 'mcp_json_true)" not in body
+
+
+def test_dispatcher_reload_preserves_pending_owner_for_old_reactor_and_replay_guard() -> None:
+    source = _dispatcher_source().casefold()
+    assert re.search(
+        r"\(if\s+\(not\s+\(boundp\s+'\*mcp-pending-result-owner\*\)\)\s*"
+        r"\(setq\s+\*mcp-pending-result-owner\*\s+nil\)\s*\)",
+        source,
+        flags=re.DOTALL,
+    ) is not None
+    assert not re.search(
+        r"^\(setq\s+\*mcp-pending-result-owner\*\s+nil\)",
+        source,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    assert "(mcp-pending-result-owner-p root request-id)" in source
+
+
+def test_deferred_close_binds_existing_owner_into_result_slot_preflight_before_close() -> None:
+    source = _dispatcher_source().casefold()
+    slot = re.search(
+        r"\(defun\s+mcp-result-slot-free-p\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert slot is not None
+    slot_body = slot.group("body")
+    assert "owner-nonce" in slot_body
+    assert "(mcp-result-owner-matches-p root request-id owner-nonce)" in slot_body
+
+    deferred = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert deferred is not None
+    deferred_body = deferred.group("body")
+    preflight = "(mcp-result-slot-free-p root request-id nonce)"
+    assert preflight in deferred_body
+    assert deferred_body.index(preflight) < deferred_body.index("'vla-close")
