@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import inspect
+import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -57,12 +58,22 @@ def _public_owner_chain() -> dict[str, tuple[object, ...]]:
     }
 
 
-def _fixture_module(filename: str, module_name: str):
+def _fixture_module(filename: str, _module_name: str):
     path = Path(__file__).with_name(filename)
-    spec = importlib.util.spec_from_file_location(module_name, path)
+    canonical_name = path.stem
+    existing = sys.modules.get(canonical_name)
+    if existing is not None:
+        return existing
+
+    spec = importlib.util.spec_from_file_location(canonical_name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[canonical_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(canonical_name, None)
+        raise
     return module
 
 
