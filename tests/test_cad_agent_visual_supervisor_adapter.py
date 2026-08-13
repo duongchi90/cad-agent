@@ -306,8 +306,6 @@ def test_task6_tuple_mismatch_does_not_burn_result() -> None:
     for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
         state["visual_review_scope"]["run_id"] = issued_run
     inputs["server_scope"]["run_id"] = issued_run
-    # The first mismatch must not consume the result; restoring the issued
-    # server tuple allows the exact result to finalize once.
     assert _finalize(inputs)["verdict"] == "PASS"
 
 
@@ -384,3 +382,13 @@ def test_old_caller_mintable_mapping_is_rejected_with_explicit_seam_blocker() ->
             post_provider_state={"task6_attempt_id": "attempt-1"},
             server_scope=_scope(),
         )
+
+
+def test_two_region_scope_requires_one_owner_fresh_visual_evidence_package_per_region() -> None:
+    inputs = _valid_inputs()
+    assert len(inputs["server_scope"]["regions"]) == 2
+    # Current B3 accepts one singular owner-validated package for a two-region
+    # scope. B4 must refuse before Task6 consumption because one exact scoped
+    # region has no independent VS-T3 freshness package.
+    with pytest.raises(Exception, match="R5_EVIDENCE_SET_INVALID|evidence.*region|region.*evidence"):
+        _finalize(inputs)
