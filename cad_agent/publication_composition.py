@@ -434,6 +434,7 @@ def execute_verified_publication(
         type(claim_lifecycle) is not dict
         or claim_lifecycle.get("authorization_state") != "CLAIMED"
         or claim_lifecycle.get("publication_state") != "INTENT_RECORDED"
+        or _manifest_sha(manifest_path) == expected_manifest_sha
     ):
         _fail("R7_CLAIM_REPLAY")
 
@@ -584,6 +585,11 @@ def execute_verified_publication(
         raise VerifiedPublisherError("R7_PUBLICATION_ROLLED_BACK") from error
 
     try:
+        cleanup_publication_replacement(prepared)
+    except Exception as error:
+        raise VerifiedPublisherError("R7_CLEANUP_FAILED") from error
+
+    try:
         _transition(
             manifest_path,
             expected_manifest_sha=_manifest_sha(manifest_path),
@@ -606,11 +612,6 @@ def execute_verified_publication(
             target_snapshot_sha=target_snapshot_sha,
         )
         raise VerifiedPublisherError("R7_PUBLICATION_ROLLED_BACK") from error
-
-    try:
-        cleanup_publication_replacement(prepared)
-    except Exception as error:
-        raise VerifiedPublisherError("R7_CLEANUP_FAILED") from error
 
     result_payload = {
         "schema_version": R7_VERIFIED_PUBLICATION_RESULT_SCHEMA_VERSION,
