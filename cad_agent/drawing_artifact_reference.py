@@ -172,7 +172,16 @@ def _validate_initial_evidence(evidence: object, artifact_role: str) -> dict[str
 
 def _validate_accepted_r6_result_binding(
     evidence: Mapping[str, object],
+    *,
+    expected_candidate_artifact_reference_id: str,
+    expected_candidate_artifact_reference_sha256: str,
 ) -> dict[str, object]:
+    if (
+        not isinstance(expected_candidate_artifact_reference_id, str)
+        or not expected_candidate_artifact_reference_id
+        or not _is_sha256(expected_candidate_artifact_reference_sha256)
+    ):
+        _fail("R6_RESULT_INVALID")
     r5_failure_id = evidence.get("r5_failure_id")
     r5_failure_sha256 = evidence.get("r5_failure_sha256")
     if not isinstance(r5_failure_id, str) or not r5_failure_id:
@@ -185,6 +194,12 @@ def _validate_accepted_r6_result_binding(
         ).validate_approved_repair_result
         validated = validator(
             evidence.get("accepted_r6_result"),
+            expected_candidate_artifact_reference_id=(
+                expected_candidate_artifact_reference_id
+            ),
+            expected_candidate_artifact_reference_sha256=(
+                expected_candidate_artifact_reference_sha256
+            ),
             expected_r5_failure_id=r5_failure_id,
             expected_r5_failure_sha256=r5_failure_sha256,
         )
@@ -217,7 +232,11 @@ def _normalize_reference_r6_evidence(
         return normalized
     normalized_evidence = dict(evidence)
     normalized_evidence["accepted_r6_result"] = _validate_accepted_r6_result_binding(
-        normalized_evidence
+        normalized_evidence,
+        expected_candidate_artifact_reference_id=normalized["parent_reference_id"],
+        expected_candidate_artifact_reference_sha256=normalized[
+            "parent_reference_sha256"
+        ],
     )
     normalized["upstream_evidence"] = normalized_evidence
     return normalized
@@ -276,7 +295,11 @@ def _validate_transition_evidence(
             _fail("MUTATION_EVIDENCE_MISSING")
         if accepted != accepted_transition_evidence_sha256:
             _fail("MUTATION_EVIDENCE_MISMATCH")
-    validated_r6_result = _validate_accepted_r6_result_binding(evidence)
+    validated_r6_result = _validate_accepted_r6_result_binding(
+        evidence,
+        expected_candidate_artifact_reference_id=parent_reference_id,
+        expected_candidate_artifact_reference_sha256=parent_reference_sha256,
+    )
     normalized = dict(evidence)
     normalized["accepted_r6_result"] = validated_r6_result
     sealed = dict(normalized)
