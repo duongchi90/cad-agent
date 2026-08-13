@@ -7,11 +7,13 @@ import hashlib
 import json
 import os
 import re
+from contextlib import contextmanager
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from cad_agent.source_bundle import SourceBundleError, source_bundle_sha256, validate_source_bundle
+from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.source_integrity import (
     R1C_EXPIRY_POLICY_VERSION,
     R1C_NUMERIC_POLICY_VERSION,
@@ -84,6 +86,56 @@ _DRAFT_REFERENCE_FIELDS: dict[str, object] = {
     "release_profile": "DRAFT_REFERENCE",
     "authoritative_release_eligible": False,
     "drawing_setup_evidence": None,
+}
+
+PUBLICATION_LIFECYCLE_SCHEMA_VERSION = "publication-lifecycle-1.0"
+_PUBLICATION_LIFECYCLE_FIELDS = {
+    "schema_version",
+    "publication_id",
+    "authorization_id",
+    "authorization_sha256",
+    "intent",
+    "intent_sha256",
+    "authorization_state",
+    "publication_state",
+    "result",
+    "recovery",
+}
+_PUBLICATION_INTENT_FIELDS = {
+    "candidate_revision_sha256",
+    "r5_verdict_sha256",
+    "publishable_artifact_sha256",
+    "target_identity_sha256",
+}
+_PUBLICATION_RESULT_FIELDS = {
+    "result_sha256",
+    "published_artifact_sha256",
+    "target_snapshot_sha256",
+    "publication_outcome",
+}
+_PUBLICATION_RECOVERY_FIELDS = {
+    "recovery_sha256",
+    "target_snapshot_sha256",
+    "restored_artifact_sha256",
+    "recovery_outcome",
+}
+_PUBLICATION_AUTHORIZATION_STATES = {"CLAIMED", "CONSUMED"}
+_PUBLICATION_STATES = {
+    "INTENT_RECORDED",
+    "PUBLISHED",
+    "FAILED",
+    "RECOVERY_REQUIRED",
+    "ROLLED_BACK",
+}
+_PUBLICATION_RESULT_OUTCOMES = {"PUBLISHED", "FAILED"}
+_PUBLICATION_RECOVERY_OUTCOMES = {"RECOVERY_REQUIRED", "ROLLED_BACK"}
+_PUBLICATION_ACTIONS = {
+    "CLAIM",
+    "RECORD_PUBLISHED",
+    "RECORD_FAILED",
+    "REQUIRE_RECOVERY",
+    "RECORD_ROLLBACK",
+    "CONSUME",
 }
 
 
@@ -359,6 +411,113 @@ def classify_draft_reference(manifest: dict[str, Any]) -> dict[str, Any]:
     return manifest
 
 
+def _publication_error(category: str) -> ManifestError:
+    return ManifestError(category)
+
+
+def _publication_identifier(value: object) -> str:
+    if type(value) is not str or not _SOURCE_BUNDLE_IDENTIFIER_RE.fullmatch(value):
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    return value
+
+
+def _publication_hash(value: object) -> str:
+    if type(value) is not str or not _SOURCE_BUNDLE_SHA256_RE.fullmatch(value):
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    return value
+
+
+def _publication_closed_record(
+    value: object,
+    fields: set[str],
+    *,
+    hashes: tuple[str, ...],
+    outcome_field: str,
+    outcomes: set[str],
+) -> dict[str, object]:
+    if type(value) is not dict or set(value) != fields:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    normalized = dict(value)
+    for field in hashes:
+        normalized[field] = _publication_hash(normalized[field])
+    outcome = normalized[outcome_field]
+    if type(outcome) is not str or outcome not in outcomes:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    return copy.deepcopy(normalized)
+
+
+def _validate_publication_intent(value: object) -> dict[str, object]:
+    if type(value) is not dict or set(value) != _PUBLICATION_INTENT_FIELDS:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    return {
+        field: _publication_hash(value[field])
+        for field in sorted(_PUBLICATION_INTENT_FIELDS)
+    }
+
+
+def validate_publication_lifecycle(value: object) -> dict[str, object]:
+    """Return a closed durable publication lifecycle record or fail closed."""
+    if type(value) is not dict or set(value) != _PUBLICATION_LIFECYCLE_FIELDS:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    if value["schema_version"] != PUBLICATION_LIFECYCLE_SCHEMA_VERSION:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    publication_id = _publication_identifier(value["publication_id"])
+    authorization_id = _publication_identifier(value["authorization_id"])
+    authorization_sha256 = _publication_hash(value["authorization_sha256"])
+    intent = _validate_publication_intent(value["intent"])
+    intent_sha256 = _publication_hash(value["intent_sha256"])
+    if canonical_json_sha256(intent) != intent_sha256:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    authorization_state = value["authorization_state"]
+    publication_state = value["publication_state"]
+    if type(authorization_state) is not str or authorization_state not in _PUBLICATION_AUTHORIZATION_STATES:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    if type(publication_state) is not str or publication_state not in _PUBLICATION_STATES:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    result = value["result"]
+    if result is not None:
+        result = _publication_closed_record(
+            result,
+            _PUBLICATION_RESULT_FIELDS,
+            hashes=("result_sha256", "published_artifact_sha256", "target_snapshot_sha256"),
+            outcome_field="publication_outcome",
+            outcomes=_PUBLICATION_RESULT_OUTCOMES,
+        )
+    recovery = value["recovery"]
+    if recovery is not None:
+        recovery = _publication_closed_record(
+            recovery,
+            _PUBLICATION_RECOVERY_FIELDS,
+            hashes=("recovery_sha256", "target_snapshot_sha256", "restored_artifact_sha256"),
+            outcome_field="recovery_outcome",
+            outcomes=_PUBLICATION_RECOVERY_OUTCOMES,
+        )
+    if publication_state == "INTENT_RECORDED" and (result is not None or recovery is not None):
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    if publication_state == "PUBLISHED" and result is None:
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    if publication_state == "FAILED" and (result is None or result["publication_outcome"] != "FAILED"):
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    if publication_state == "RECOVERY_REQUIRED" and (recovery is None or recovery["recovery_outcome"] != "RECOVERY_REQUIRED"):
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    if publication_state == "ROLLED_BACK" and (recovery is None or recovery["recovery_outcome"] != "ROLLED_BACK"):
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    if authorization_state == "CONSUMED" and publication_state != "PUBLISHED":
+        raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+    return {
+        "schema_version": PUBLICATION_LIFECYCLE_SCHEMA_VERSION,
+        "publication_id": publication_id,
+        "authorization_id": authorization_id,
+        "authorization_sha256": authorization_sha256,
+        "intent": intent,
+        "intent_sha256": intent_sha256,
+        "authorization_state": authorization_state,
+        "publication_state": publication_state,
+        "result": result,
+        "recovery": recovery,
+    }
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -397,14 +556,189 @@ def read_manifest(path: Path) -> dict[str, Any]:
     for key, validator in _TASK8_REFERENCE_VALIDATORS.items():
         if key in payload:
             payload[key] = validator(payload[key])
+    if "publication_lifecycle" in payload:
+        payload["publication_lifecycle"] = validate_publication_lifecycle(payload["publication_lifecycle"])
     return classify_draft_reference(payload)
 
 
-def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
+def _manifest_lock_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".lock")
+
+
+@contextmanager
+def _manifest_lock(path: Path):
+    lock_path = _manifest_lock_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise _publication_error("PUBLICATION_MANIFEST_BUSY") from exc
+    try:
+        os.close(descriptor)
+        yield
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _write_manifest_unlocked(path: Path, manifest: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
+    with _manifest_lock(path):
+        _write_manifest_unlocked(path, manifest)
+
+
+def _publication_pair_matches(
+    lifecycle: Mapping[str, object],
+    *,
+    publication_id: str,
+    authorization_id: str,
+    authorization_sha256: str,
+    intent: Mapping[str, object],
+) -> bool:
+    return (
+        lifecycle["publication_id"] == publication_id
+        and lifecycle["authorization_id"] == authorization_id
+        and lifecycle["authorization_sha256"] == authorization_sha256
+        and lifecycle["intent"] == intent
+    )
+
+
+def transition_publication_lifecycle(
+    path: Path,
+    *,
+    expected_manifest_sha256: str,
+    action: str,
+    publication_id: str,
+    authorization_id: str,
+    authorization_sha256: str,
+    intent: Mapping[str, object] | None = None,
+    result: Mapping[str, object] | None = None,
+    recovery: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    """Atomically compare-and-transition the publication lifecycle in a manifest."""
+    try:
+        expected = _publication_hash(expected_manifest_sha256)
+        if type(action) is not str or action not in _PUBLICATION_ACTIONS:
+            raise _publication_error("PUBLICATION_TRANSITION_INVALID")
+        publication_id = _publication_identifier(publication_id)
+        authorization_id = _publication_identifier(authorization_id)
+        authorization_sha256 = _publication_hash(authorization_sha256)
+        normalized_intent = None if intent is None else _validate_publication_intent(dict(intent))
+        normalized_result = None if result is None else _publication_closed_record(
+            dict(result),
+            _PUBLICATION_RESULT_FIELDS,
+            hashes=("result_sha256", "published_artifact_sha256", "target_snapshot_sha256"),
+            outcome_field="publication_outcome",
+            outcomes=_PUBLICATION_RESULT_OUTCOMES,
+        )
+        normalized_recovery = None if recovery is None else _publication_closed_record(
+            dict(recovery),
+            _PUBLICATION_RECOVERY_FIELDS,
+            hashes=("recovery_sha256", "target_snapshot_sha256", "restored_artifact_sha256"),
+            outcome_field="recovery_outcome",
+            outcomes=_PUBLICATION_RECOVERY_OUTCOMES,
+        )
+    except (ManifestError, TypeError, ValueError) as exc:
+        if isinstance(exc, ManifestError):
+            raise
+        raise _publication_error("PUBLICATION_TRANSITION_INVALID") from exc
+
+    with _manifest_lock(path):
+        try:
+            current_sha = sha256_file(path)
+            if current_sha != expected:
+                raise _publication_error("PUBLICATION_MANIFEST_STALE")
+            current = read_manifest(path)
+            existing = current.get("publication_lifecycle")
+            if action == "CLAIM":
+                if normalized_intent is None:
+                    raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
+                if existing is not None:
+                    lifecycle = validate_publication_lifecycle(existing)
+                    if _publication_pair_matches(
+                        lifecycle,
+                        publication_id=publication_id,
+                        authorization_id=authorization_id,
+                        authorization_sha256=authorization_sha256,
+                        intent=normalized_intent,
+                    ):
+                        return copy.deepcopy(current)
+                    raise _publication_error("PUBLICATION_AUTHORIZATION_CONFLICT")
+                lifecycle = {
+                    "schema_version": PUBLICATION_LIFECYCLE_SCHEMA_VERSION,
+                    "publication_id": publication_id,
+                    "authorization_id": authorization_id,
+                    "authorization_sha256": authorization_sha256,
+                    "intent": normalized_intent,
+                    "intent_sha256": canonical_json_sha256(normalized_intent),
+                    "authorization_state": "CLAIMED",
+                    "publication_state": "INTENT_RECORDED",
+                    "result": None,
+                    "recovery": None,
+                }
+            else:
+                if existing is None:
+                    raise _publication_error("PUBLICATION_TRANSITION_INVALID")
+                lifecycle = validate_publication_lifecycle(existing)
+                if normalized_intent is None:
+                    normalized_intent = lifecycle["intent"]
+                if not _publication_pair_matches(
+                    lifecycle,
+                    publication_id=publication_id,
+                    authorization_id=authorization_id,
+                    authorization_sha256=authorization_sha256,
+                    intent=normalized_intent,
+                ):
+                    if lifecycle["authorization_state"] == "CONSUMED":
+                        raise _publication_error("PUBLICATION_REPLAY_MISMATCH")
+                    raise _publication_error("PUBLICATION_AUTHORIZATION_CONFLICT")
+                if action == "CONSUME" and lifecycle["authorization_state"] == "CONSUMED":
+                    return copy.deepcopy(current)
+                if action == "CONSUME":
+                    if lifecycle["publication_state"] != "PUBLISHED" or lifecycle["result"] is None:
+                        raise _publication_error("PUBLICATION_TRANSITION_INVALID")
+                    lifecycle["authorization_state"] = "CONSUMED"
+                elif action == "RECORD_PUBLISHED":
+                    if lifecycle["publication_state"] != "INTENT_RECORDED" or normalized_result is None:
+                        raise _publication_error("PUBLICATION_TRANSITION_INVALID")
+                    lifecycle["publication_state"] = "PUBLISHED"
+                    lifecycle["result"] = normalized_result
+                elif action == "RECORD_FAILED":
+                    if normalized_result is None or normalized_result["publication_outcome"] != "FAILED":
+                        raise _publication_error("PUBLICATION_TRANSITION_INVALID")
+                    lifecycle["publication_state"] = "FAILED"
+                    lifecycle["result"] = normalized_result
+                elif action == "REQUIRE_RECOVERY":
+                    if normalized_recovery is None or normalized_recovery["recovery_outcome"] != "RECOVERY_REQUIRED":
+                        raise _publication_error("PUBLICATION_TRANSITION_INVALID")
+                    lifecycle["publication_state"] = "RECOVERY_REQUIRED"
+                    lifecycle["recovery"] = normalized_recovery
+                elif action == "RECORD_ROLLBACK":
+                    if normalized_recovery is None or normalized_recovery["recovery_outcome"] != "ROLLED_BACK":
+                        raise _publication_error("PUBLICATION_TRANSITION_INVALID")
+                    lifecycle["publication_state"] = "ROLLED_BACK"
+                    lifecycle["recovery"] = normalized_recovery
+            current["publication_lifecycle"] = validate_publication_lifecycle(lifecycle)
+            _write_manifest_unlocked(path, current)
+            return copy.deepcopy(current)
+        except ManifestError:
+            raise
+        except (OSError, TypeError, ValueError) as exc:
+            raise _publication_error("PUBLICATION_TRANSITION_INVALID") from exc
 
 
 def verify_source(manifest: dict[str, Any], source: Path) -> None:
