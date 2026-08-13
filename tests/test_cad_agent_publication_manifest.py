@@ -189,15 +189,48 @@ def test_lock_contention_has_one_transition_success_and_no_lost_update(tmp_path:
     failures = [value for value in results if isinstance(value, Exception)]
     assert len(successes) == 1
     assert len(failures) == 1
-    assert "PUBLICATION_MANIFEST_BUSY" in str(failures[0]) or "PUBLICATION_AUTHORIZATION_CONFLICT" in str(failures[0])
+    assert "PUBLICATION_MANIFEST_BUSY" in str(failures[0]) or "PUBLICATION_MANIFEST_STALE" in str(failures[0])
 
 
-def test_ordinary_write_manifest_honors_publication_lock(tmp_path: Path) -> None:
+def test_ordinary_write_manifest_honors_active_publication_lock(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "run-manifest.json"
     expected = _write(path)
-    _transition(path, expected)
+    transition = _api("transition_publication_lifecycle")
+    entered = threading.Event()
+    release = threading.Event()
+    original_replace = manifest_owner.os.replace
+
+    def blocking_replace(source: object, target: object) -> None:
+        if Path(target) == path and not entered.is_set():
+            entered.set()
+            assert release.wait(timeout=5)
+        original_replace(source, target)
+
+    monkeypatch.setattr(manifest_owner.os, "replace", blocking_replace)
+    errors: list[Exception] = []
+
+    def claim() -> None:
+        try:
+            transition(
+                path,
+                expected_manifest_sha256=expected,
+                action="CLAIM",
+                publication_id="publication-227",
+                authorization_id="authorization-227",
+                authorization_sha256=SHA_D,
+                intent=_intent(),
+            )
+        except Exception as exc:  # noqa: BLE001 - bounded concurrency oracle
+            errors.append(exc)
+
+    worker = threading.Thread(target=claim)
+    worker.start()
+    assert entered.wait(timeout=5)
     with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_MANIFEST_BUSY"):
         manifest_owner.write_manifest(path, _manifest())
+    release.set()
+    worker.join(timeout=5)
+    assert not errors
 
 
 @pytest.mark.parametrize(
@@ -228,6 +261,7 @@ def test_terminal_lifecycle_transitions_bind_existing_claim(
     )
     lifecycle = updated["publication_lifecycle"]
     assert lifecycle["publication_state"] == publication_state
+    assert lifecycle["authorization_state"] == "CLAIMED"
 
 
 def test_failure_recovery_and_rollback_never_return_grant_to_unused(tmp_path: Path) -> None:
@@ -241,6 +275,16 @@ def test_failure_recovery_and_rollback_never_return_grant_to_unused(tmp_path: Pa
         result=_result(publication_outcome="FAILED"),
     )
     assert updated["publication_lifecycle"]["authorization_state"] == "CLAIMED"
+
+
+def test_consume_before_published_refuses_without_releasing_claim(tmp_path: Path) -> None:
+    path = tmp_path / "run-manifest.json"
+    expected = _write(path)
+    _transition(path, expected)
+    with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_TRANSITION_INVALID"):
+        _transition(path, hashlib.sha256(path.read_bytes()).hexdigest(), action="CONSUME")
+    current = manifest_owner.read_manifest(path)
+    assert current["publication_lifecycle"]["authorization_state"] == "CLAIMED"
 
 
 def test_consume_requires_exact_pair_and_replay_is_idempotent(tmp_path: Path) -> None:
