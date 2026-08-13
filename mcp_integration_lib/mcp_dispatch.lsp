@@ -697,10 +697,8 @@
   (mcp-object nil)
 )
 
-(defun mcp-op-drawing-close (params / save doc)
-  (setq save (mcp-param params "save_changes")
-        doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-  (vla-Close doc (if (= save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
+(defun mcp-op-drawing-close (params)
+  ; Close only after the bound success envelope is durably committed.
   (mcp-object nil)
 )
 
@@ -1062,7 +1060,25 @@
                               (T
                                 (setq envelope (mcp-success request-id result))
                                 (if (mcp-write-result root request-id envelope)
-                                  (list request-id nil)
+                                  (progn
+                                    (if (= command "drawing-close")
+                                      (vl-catch-all-apply
+                                        'command-s
+                                        (list
+                                          "_.CLOSE"
+                                          (if
+                                            (=
+                                              (mcp-param params "save_changes")
+                                              'MCP_JSON_TRUE
+                                            )
+                                            "_Y"
+                                            "_N"
+                                          )
+                                        )
+                                      )
+                                    )
+                                    (list request-id nil)
+                                  )
                                   (list request-id *mcp-error-result-conflict*)
                                 )
                               )
