@@ -805,3 +805,55 @@ def test_drawing_close_does_not_close_active_document_inside_command_operation()
         "drawing-close must not synchronously close the active document inside the "
         "command operation before the bound File-IPC result envelope is committed"
     )
+
+
+def test_deferred_drawing_close_commits_only_after_verified_close() -> None:
+    source = _dispatcher_source()
+    match = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body").casefold()
+    close_marker = "(vl-catch-all-apply"
+    vla_close_marker = "'vla-close"
+    result_marker = "(mcp-write-result"
+    assert close_marker in body
+    assert vla_close_marker in body
+    assert "(vl-catch-all-error-p close-result)" in body
+    assert "(mcp-failure request-id *mcp-error-failed*)" in body
+    assert result_marker in body
+    assert body.index(close_marker) < body.index(vla_close_marker) < body.index(result_marker)
+    assert "(if (= save 'mcp_json_true) :vlax-true :vlax-false)" in body
+
+
+def test_deferred_drawing_close_cancellation_commits_failure_without_close() -> None:
+    source = _dispatcher_source()
+    match = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body").casefold()
+    assert "(= reaction ':vlr-lispcancelled)" in body
+    assert "(mcp-failure request-id *mcp-error-failed*)" in body
+
+
+def test_drawing_close_defers_the_single_result_commit_to_reactor() -> None:
+    source = _dispatcher_source()
+    match = re.search(
+        r"\(defun\s+mcp-dispatch-core\b(?P<body>.*?)(?=\n\(defun\s+c:mcp-dispatch\b)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body").casefold()
+    assert re.search(
+        r'\(if\s+\(= command "drawing-close"\)\s*\(progn.*?'
+        r"mcp-defer-drawing-close.*?\(list root request-id params envelope\).*?"
+        r"\)\s*\(if\s+\(mcp-write-result root request-id envelope\)",
+        body,
+        flags=re.DOTALL,
+    ) is not None

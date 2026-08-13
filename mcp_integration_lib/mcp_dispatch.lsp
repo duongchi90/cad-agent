@@ -702,24 +702,46 @@
   (mcp-object nil)
 )
 
-(defun mcp-deferred-drawing-close (reactor event-data / pending reaction)
+(defun mcp-deferred-drawing-close (reactor event-data / pending reaction root request-id doc save envelope close-result result)
   (vl-load-com)
   (setq pending (vlr-data reactor)
-        reaction (vlr-current-reaction-name))
+        reaction (vlr-current-reaction-name)
+        root (nth 0 pending)
+        request-id (nth 1 pending)
+        doc (nth 2 pending)
+        save (nth 3 pending)
+        envelope (nth 4 pending))
   (vlr-remove reactor)
   (if (= reaction ':vlr-lispEnded)
-    (vla-Close
-      (car pending)
-      (if (= (cadr pending) 'MCP_JSON_TRUE) :vlax-true :vlax-false)
+    (progn
+      (setq close-result
+        (vl-catch-all-apply
+          'vla-Close
+          (list doc (if (= save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
+        )
+        result
+        (if (vl-catch-all-error-p close-result)
+          (mcp-failure request-id *mcp-error-failed*)
+          envelope
+        )
+      )
+      (mcp-write-result root request-id result)
+    )
+    (if (= reaction ':vlr-lispCancelled)
+      (mcp-write-result
+        root
+        request-id
+        (mcp-failure request-id *mcp-error-failed*)
+      )
     )
   )
 )
 
-(defun mcp-defer-drawing-close (params / save doc)
+(defun mcp-defer-drawing-close (root request-id params envelope / save doc)
   (setq save (mcp-param params "save_changes")
         doc (vla-get-ActiveDocument (vlax-get-acad-object)))
   (vlr-lisp-reactor
-    (list doc save)
+    (list root request-id doc save envelope)
     '(
       (:vlr-lispEnded . mcp-deferred-drawing-close)
       (:vlr-lispCancelled . mcp-deferred-drawing-close)
@@ -1084,37 +1106,27 @@
                               )
                               (T
                                 (setq envelope (mcp-success request-id result))
-                                (setq deferred-close
-                                  (if (= command "drawing-close")
-                                    (vl-catch-all-apply
-                                      'mcp-defer-drawing-close
-                                      (list params)
+                                (if (= command "drawing-close")
+                                  (progn
+                                    (setq deferred-close
+                                      (vl-catch-all-apply
+                                        'mcp-defer-drawing-close
+                                        (list root request-id params envelope)
+                                      )
                                     )
-                                    T
-                                  )
-                                )
-                                (if
-                                  (or
-                                    (not (= command "drawing-close"))
-                                    (and
-                                      deferred-close
-                                      (not (vl-catch-all-error-p deferred-close))
+                                    (if
+                                      (and
+                                        deferred-close
+                                        (not (vl-catch-all-error-p deferred-close))
+                                      )
+                                      (list request-id nil)
+                                      (list request-id *mcp-error-failed*)
                                     )
                                   )
                                   (if (mcp-write-result root request-id envelope)
                                     (list request-id nil)
-                                    (progn
-                                      (if
-                                        (and
-                                          (= command "drawing-close")
-                                          (not (vl-catch-all-error-p deferred-close))
-                                        )
-                                        (vlr-remove deferred-close)
-                                      )
-                                      (list request-id *mcp-error-result-conflict*)
-                                    )
+                                    (list request-id *mcp-error-result-conflict*)
                                   )
-                                  (list request-id *mcp-error-failed*)
                                 )
                               )
                             )
