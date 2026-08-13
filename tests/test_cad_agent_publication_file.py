@@ -85,78 +85,106 @@ def test_snapshot_rejects_symlink_or_reparse_ancestry(tmp_path: Path) -> None:
         _api("snapshot_publication_file")(link)
 
 
-def test_snapshot_rejects_symlink_before_resolution(tmp_path: Path) -> None:
+def test_snapshot_rejects_reparse_before_resolution(tmp_path: Path) -> None:
     target = tmp_path / "target.bin"
     target.write_bytes(b"target")
-    link = tmp_path / "snapshot-link.bin"
+    link = tmp_path / "link-before-resolve.bin"
     try:
         link.symlink_to(target)
     except (OSError, NotImplementedError):
         pytest.skip("symlink creation unavailable")
-    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+    with patch.object(
+        Path,
+        "resolve",
+        side_effect=AssertionError("resolve called before reparse rejection"),
+    ) as resolve:
         with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
             _api("snapshot_publication_file")(link)
+    resolve.assert_not_called()
 
 
 def test_prepare_rejects_target_symlink_before_any_resolution(tmp_path: Path) -> None:
-    target, candidate, target_sha, candidate_sha = _pair(tmp_path)
-    link = tmp_path / "target-link.bin"
+    real_target = tmp_path / "real-target.bin"
+    candidate = tmp_path / "candidate.bin"
+    target_sha = _write(real_target, b"original-target")
+    candidate_sha = _write(candidate, b"candidate-replacement")
+    target_link = tmp_path / "target-link.bin"
     try:
-        link.symlink_to(target)
+        target_link.symlink_to(real_target)
     except (OSError, NotImplementedError):
         pytest.skip("symlink creation unavailable")
-    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+    with patch.object(
+        Path,
+        "resolve",
+        side_effect=AssertionError("resolve called before target reparse rejection"),
+    ) as resolve:
         with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
             _api("prepare_publication_replacement")(
-                target_path=link,
+                target_path=target_link,
                 candidate_path=candidate,
                 expected_target_sha256=target_sha,
                 expected_candidate_sha256=candidate_sha,
             )
-    assert list(tmp_path.glob(".*")) == []
-    assert target.read_bytes() == b"original-target"
+    resolve.assert_not_called()
+    assert real_target.read_bytes() == b"original-target"
     assert candidate.read_bytes() == b"candidate-replacement"
+    assert list(tmp_path.glob(".*.publication-*.tmp")) == []
 
 
 def test_prepare_rejects_candidate_symlink_before_any_resolution(tmp_path: Path) -> None:
-    target, candidate, target_sha, candidate_sha = _pair(tmp_path)
-    link = tmp_path / "candidate-link.bin"
+    target = tmp_path / "target.bin"
+    real_candidate = tmp_path / "real-candidate.bin"
+    target_sha = _write(target, b"original-target")
+    candidate_sha = _write(real_candidate, b"candidate-replacement")
+    candidate_link = tmp_path / "candidate-link.bin"
     try:
-        link.symlink_to(candidate)
+        candidate_link.symlink_to(real_candidate)
     except (OSError, NotImplementedError):
         pytest.skip("symlink creation unavailable")
-    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+    with patch.object(
+        Path,
+        "resolve",
+        side_effect=AssertionError("resolve called before candidate reparse rejection"),
+    ) as resolve:
         with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
             _api("prepare_publication_replacement")(
                 target_path=target,
-                candidate_path=link,
+                candidate_path=candidate_link,
                 expected_target_sha256=target_sha,
                 expected_candidate_sha256=candidate_sha,
             )
-    assert list(tmp_path.glob(".*")) == []
+    resolve.assert_not_called()
     assert target.read_bytes() == b"original-target"
-    assert candidate.read_bytes() == b"candidate-replacement"
+    assert real_candidate.read_bytes() == b"candidate-replacement"
+    assert list(tmp_path.glob(".*.publication-*.tmp")) == []
 
 
-@pytest.mark.parametrize("field", ["backup_path", "stage_path"])
-def test_cleanup_rejects_prepared_symlink_before_any_resolution(tmp_path: Path, field: str) -> None:
+@pytest.mark.parametrize("path_field", ["backup_path", "stage_path"])
+def test_prepared_record_rejects_owner_stage_symlink_before_any_resolution(
+    tmp_path: Path,
+    path_field: str,
+) -> None:
     target, candidate, _, _, prepared = _prepared(tmp_path)
-    real_path = Path(prepared[field])
-    link = tmp_path / f"{field}-link.tmp"
+    real_stage = Path(prepared[path_field])
+    alias = tmp_path / f"{path_field}-link.tmp"
     try:
-        link.symlink_to(real_path)
+        alias.symlink_to(real_stage)
     except (OSError, NotImplementedError):
-        _api("cleanup_publication_replacement")(prepared)
         pytest.skip("symlink creation unavailable")
-    tampered = dict(prepared)
-    tampered[field] = link
-    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+    hostile = dict(prepared)
+    hostile[path_field] = alias
+    with patch.object(
+        Path,
+        "resolve",
+        side_effect=AssertionError("resolve called before prepared reparse rejection"),
+    ) as resolve:
         with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
-            _api("cleanup_publication_replacement")(tampered)
-    assert real_path.is_file()
+            _api("cleanup_publication_replacement")(hostile)
+    resolve.assert_not_called()
     assert target.read_bytes() == b"original-target"
     assert candidate.read_bytes() == b"candidate-replacement"
-    _api("cleanup_publication_replacement")(prepared)
+    assert Path(prepared["backup_path"]).exists()
+    assert Path(prepared["stage_path"]).exists()
 
 
 def test_prepare_rejects_target_candidate_hardlink_alias(tmp_path: Path) -> None:
