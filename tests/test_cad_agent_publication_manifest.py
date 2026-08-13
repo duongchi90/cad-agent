@@ -386,3 +386,44 @@ def test_publication_owner_does_not_import_downstream_authority_or_live_owners()
     source = inspect.getsource(manifest_owner)
     forbidden = ("visual_contracts", "approved_repair_adapter", "visual_supervisor_adapter", "autocad", "file_ipc", "publisher")
     assert not any(name in source.lower() for name in forbidden)
+
+
+def test_validator_rejects_published_state_with_failed_outcome(tmp_path: Path) -> None:
+    path = tmp_path / "run-manifest.json"
+    expected = _write(path)
+    _transition(path, expected)
+    published = _transition(
+        path,
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+        action="RECORD_PUBLISHED",
+        result=_result(),
+    )
+    lifecycle = published["publication_lifecycle"]
+    assert isinstance(lifecycle, dict)
+    result = lifecycle["result"]
+    assert isinstance(result, dict)
+    result["publication_outcome"] = "FAILED"
+    with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_LIFECYCLE_INVALID"):
+        manifest_owner.validate_publication_lifecycle(lifecycle)
+
+
+def test_record_published_rejects_failed_outcome_and_cannot_consume(tmp_path: Path) -> None:
+    path = tmp_path / "run-manifest.json"
+    expected = _write(path)
+    _transition(path, expected)
+    before = path.read_bytes()
+    with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_TRANSITION_INVALID"):
+        _transition(
+            path,
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            action="RECORD_PUBLISHED",
+            result=_result(publication_outcome="FAILED"),
+        )
+    assert path.read_bytes() == before
+    current = manifest_owner.read_manifest(path)
+    lifecycle = current["publication_lifecycle"]
+    assert lifecycle["authorization_state"] == "CLAIMED"
+    assert lifecycle["publication_state"] == "INTENT_RECORDED"
+    assert lifecycle["result"] is None
+    with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_TRANSITION_INVALID"):
+        _transition(path, hashlib.sha256(path.read_bytes()).hexdigest(), action="CONSUME")
