@@ -15,19 +15,19 @@ import inspect
 MODULE = "cad_agent.verified_publisher"
 
 
-def _publisher_module():
+def _r7_module():
     spec = importlib.util.find_spec(MODULE)
     assert spec is not None, "R7_VERIFIED_PUBLISHER_MISSING"
     return importlib.import_module(MODULE)
 
 
 def test_r7_publication_composition_module_exists() -> None:
-    module = _publisher_module()
+    module = _r7_module()
     assert module.__name__ == MODULE
 
 
 def test_r7_publication_composition_exposes_exact_public_entrypoints() -> None:
-    module = _publisher_module()
+    module = _r7_module()
     execute = getattr(module, "execute_verified_publication", None)
     validate = getattr(module, "validate_verified_publication_result", None)
     error = getattr(module, "VerifiedPublisherError", None)
@@ -40,7 +40,7 @@ def test_r7_publication_composition_exposes_exact_public_entrypoints() -> None:
 
 
 def test_r7_execute_surface_requires_only_composition_inputs() -> None:
-    module = _publisher_module()
+    module = _r7_module()
     execute = getattr(module, "execute_verified_publication", None)
     assert callable(execute), "R7_EXECUTE_PUBLIC_SEAM_MISSING"
 
