@@ -460,6 +460,23 @@ def _publication_file_reparse(path: Path) -> bool:
         return True
 
 
+def _publication_file_original_path(value: object) -> Path:
+    path = _publication_file_path(value)
+    if _publication_file_reparse(path):
+        raise _publication_file_error("PUBLICATION_FILE_REPARSE")
+    return path
+
+
+def _publication_file_resolve_checked(path: Path) -> Path:
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise _publication_file_error("PUBLICATION_FILE_INVALID") from None
+    if _publication_file_reparse(resolved):
+        raise _publication_file_error("PUBLICATION_FILE_REPARSE")
+    return resolved
+
+
 def _publication_file_identity(stat_result: os.stat_result) -> tuple[int, int, int]:
     values = (stat_result.st_dev, stat_result.st_ino, stat_result.st_size)
     if any(type(value) is not int for value in values):
@@ -468,9 +485,8 @@ def _publication_file_identity(stat_result: os.stat_result) -> tuple[int, int, i
 
 
 def _publication_file_snapshot(path: Path) -> tuple[dict[str, object], bytes]:
-    candidate = _publication_file_path(path).resolve()
-    if _publication_file_reparse(path) or _publication_file_reparse(candidate):
-        raise _publication_file_error("PUBLICATION_FILE_REPARSE")
+    original = _publication_file_original_path(path)
+    candidate = _publication_file_resolve_checked(original)
     try:
         before = os.stat(candidate)
         identity_before = _publication_file_identity(before)
@@ -542,7 +558,9 @@ def _publication_file_prepared(value: object) -> dict[str, object]:
         raise _publication_file_error("PUBLICATION_STAGE_INVALID")
     if value["state"] not in _PUBLICATION_FILE_STATES:
         raise _publication_file_error("PUBLICATION_STAGE_INVALID")
-    paths = {name: _publication_file_path(value[name]).resolve() for name in ("target_path", "candidate_path", "backup_path", "stage_path")}
+    path_names = ("target_path", "candidate_path", "backup_path", "stage_path")
+    originals = {name: _publication_file_original_path(value[name]) for name in path_names}
+    paths = {name: _publication_file_resolve_checked(originals[name]) for name in path_names}
     snapshots = {name: _validate_publication_file_snapshot(value[f"{name}_snapshot"]) for name in ("target", "candidate", "backup", "stage")}
     if paths["target_path"].parent != paths["candidate_path"].parent or paths["target_path"].parent != paths["backup_path"].parent or paths["target_path"].parent != paths["stage_path"].parent:
         raise _publication_file_error("PUBLICATION_STAGE_INVALID")
@@ -567,8 +585,10 @@ def prepare_publication_replacement(
 
     expected_target = _publication_file_sha(expected_target_sha256)
     expected_candidate = _publication_file_sha(expected_candidate_sha256)
-    target = _publication_file_path(target_path).resolve()
-    candidate = _publication_file_path(candidate_path).resolve()
+    original_target = _publication_file_original_path(target_path)
+    original_candidate = _publication_file_original_path(candidate_path)
+    target = _publication_file_resolve_checked(original_target)
+    candidate = _publication_file_resolve_checked(original_candidate)
     if target.parent != candidate.parent:
         raise _publication_file_error("PUBLICATION_FILE_ALIAS")
     target_snapshot, target_data = _publication_file_snapshot(target)

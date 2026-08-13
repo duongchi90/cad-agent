@@ -85,6 +85,80 @@ def test_snapshot_rejects_symlink_or_reparse_ancestry(tmp_path: Path) -> None:
         _api("snapshot_publication_file")(link)
 
 
+def test_snapshot_rejects_symlink_before_resolution(tmp_path: Path) -> None:
+    target = tmp_path / "target.bin"
+    target.write_bytes(b"target")
+    link = tmp_path / "snapshot-link.bin"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+        with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
+            _api("snapshot_publication_file")(link)
+
+
+def test_prepare_rejects_target_symlink_before_any_resolution(tmp_path: Path) -> None:
+    target, candidate, target_sha, candidate_sha = _pair(tmp_path)
+    link = tmp_path / "target-link.bin"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+        with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
+            _api("prepare_publication_replacement")(
+                target_path=link,
+                candidate_path=candidate,
+                expected_target_sha256=target_sha,
+                expected_candidate_sha256=candidate_sha,
+            )
+    assert list(tmp_path.glob(".*")) == []
+    assert target.read_bytes() == b"original-target"
+    assert candidate.read_bytes() == b"candidate-replacement"
+
+
+def test_prepare_rejects_candidate_symlink_before_any_resolution(tmp_path: Path) -> None:
+    target, candidate, target_sha, candidate_sha = _pair(tmp_path)
+    link = tmp_path / "candidate-link.bin"
+    try:
+        link.symlink_to(candidate)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+        with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
+            _api("prepare_publication_replacement")(
+                target_path=target,
+                candidate_path=link,
+                expected_target_sha256=target_sha,
+                expected_candidate_sha256=candidate_sha,
+            )
+    assert list(tmp_path.glob(".*")) == []
+    assert target.read_bytes() == b"original-target"
+    assert candidate.read_bytes() == b"candidate-replacement"
+
+
+@pytest.mark.parametrize("field", ["backup_path", "stage_path"])
+def test_cleanup_rejects_prepared_symlink_before_any_resolution(tmp_path: Path, field: str) -> None:
+    target, candidate, _, _, prepared = _prepared(tmp_path)
+    real_path = Path(prepared[field])
+    link = tmp_path / f"{field}-link.tmp"
+    try:
+        link.symlink_to(real_path)
+    except (OSError, NotImplementedError):
+        _api("cleanup_publication_replacement")(prepared)
+        pytest.skip("symlink creation unavailable")
+    tampered = dict(prepared)
+    tampered[field] = link
+    with patch.object(owner.Path, "resolve", side_effect=AssertionError("resolve must not run")):
+        with pytest.raises(_error_type(), match="PUBLICATION_FILE_REPARSE"):
+            _api("cleanup_publication_replacement")(tampered)
+    assert real_path.is_file()
+    assert target.read_bytes() == b"original-target"
+    assert candidate.read_bytes() == b"candidate-replacement"
+    _api("cleanup_publication_replacement")(prepared)
+
+
 def test_prepare_rejects_target_candidate_hardlink_alias(tmp_path: Path) -> None:
     target = tmp_path / "target.bin"
     alias = tmp_path / "alias.bin"
