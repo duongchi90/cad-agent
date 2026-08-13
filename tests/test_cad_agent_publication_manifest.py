@@ -7,10 +7,8 @@ is absent, while legacy manifest reads remain backward compatible.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import inspect
-import json
 import threading
 from pathlib import Path
 
