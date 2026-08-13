@@ -246,6 +246,16 @@ def _caller_resealed_parent_child_chain():
     evidence["pre_artifact_sha256"] = forged_parent["artifact_sha256"]
     evidence["executor_result_id"] = "caller-minted-custody-success"
     evidence["executor_result_sha256"] = "e" * 64
+    accepted_r6_result = evidence["accepted_r6_result"]
+    accepted_r6_result["candidate_artifact_reference_id"] = forged_parent[
+        "reference_id"
+    ]
+    accepted_r6_result["candidate_artifact_reference_sha256"] = forged_parent[
+        "reference_sha256"
+    ]
+    _reseal_r6_result(accepted_r6_result)
+    evidence["r6_result_id"] = accepted_r6_result["result_sha256"]
+    evidence["r6_result_sha256"] = accepted_r6_result["result_sha256"]
     _seal_mutation_evidence(
         evidence,
     )
