@@ -494,7 +494,9 @@ def validate_publication_lifecycle(value: object) -> dict[str, object]:
         )
     if publication_state == "INTENT_RECORDED" and (result is not None or recovery is not None):
         raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
-    if publication_state == "PUBLISHED" and result is None:
+    if publication_state == "PUBLISHED" and (
+        result is None or result["publication_outcome"] != "PUBLISHED"
+    ):
         raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
     if publication_state == "FAILED" and (result is None or result["publication_outcome"] != "FAILED"):
         raise _publication_error("PUBLICATION_LIFECYCLE_INVALID")
@@ -713,7 +715,11 @@ def transition_publication_lifecycle(
                         raise _publication_error("PUBLICATION_TRANSITION_INVALID")
                     lifecycle["authorization_state"] = "CONSUMED"
                 elif action == "RECORD_PUBLISHED":
-                    if lifecycle["publication_state"] != "INTENT_RECORDED" or normalized_result is None:
+                    if (
+                        lifecycle["publication_state"] != "INTENT_RECORDED"
+                        or normalized_result is None
+                        or normalized_result["publication_outcome"] != "PUBLISHED"
+                    ):
                         raise _publication_error("PUBLICATION_TRANSITION_INVALID")
                     lifecycle["publication_state"] = "PUBLISHED"
                     lifecycle["result"] = normalized_result
