@@ -424,6 +424,348 @@ def write_visual_evidence(
         raise
 
 
+PUBLICATION_FILE_SNAPSHOT_SCHEMA_VERSION = "publication-file-snapshot-1.0"
+_PUBLICATION_FILE_PREPARED_SCHEMA_VERSION = "publication-file-prepared-1.0"
+_PUBLICATION_FILE_RESULT_SCHEMA_VERSION = "publication-file-result-1.0"
+_PUBLICATION_FILE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PUBLICATION_FILE_STATES = {"PREPARED", "PUBLISHED", "RESTORED"}
+
+
+class PublicationFileError(ValueError):
+    """Categorical, privacy-safe failure for generic publication-file operations."""
+
+
+def _publication_file_error(category: str) -> PublicationFileError:
+    return PublicationFileError(category)
+
+
+def _publication_file_sha(value: object) -> str:
+    if type(value) is not str or _PUBLICATION_FILE_SHA256.fullmatch(value) is None:
+        raise _publication_file_error("PUBLICATION_FILE_INVALID")
+    return value
+
+
+def _publication_file_path(value: object) -> Path:
+    if not isinstance(value, Path):
+        raise _publication_file_error("PUBLICATION_FILE_INVALID")
+    if not value.is_absolute():
+        raise _publication_file_error("PUBLICATION_FILE_INVALID")
+    return value
+
+
+def _publication_file_reparse(path: Path) -> bool:
+    try:
+        return _path_contains_windows_reparse_point(path) or path.is_symlink()
+    except (OSError, ValueError):
+        return True
+
+
+def _publication_file_original_path(value: object) -> Path:
+    path = _publication_file_path(value)
+    if _publication_file_reparse(path):
+        raise _publication_file_error("PUBLICATION_FILE_REPARSE")
+    return path
+
+
+def _publication_file_resolve_checked(path: Path) -> Path:
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise _publication_file_error("PUBLICATION_FILE_INVALID") from None
+    if _publication_file_reparse(resolved):
+        raise _publication_file_error("PUBLICATION_FILE_REPARSE")
+    return resolved
+
+
+def _publication_file_identity(stat_result: os.stat_result) -> tuple[int, int, int]:
+    values = (stat_result.st_dev, stat_result.st_ino, stat_result.st_size)
+    if any(type(value) is not int for value in values):
+        raise _publication_file_error("PUBLICATION_FILE_INVALID")
+    return values
+
+
+def _publication_file_snapshot(path: Path) -> tuple[dict[str, object], bytes]:
+    original = _publication_file_original_path(path)
+    candidate = _publication_file_resolve_checked(original)
+    try:
+        before = os.stat(candidate)
+        identity_before = _publication_file_identity(before)
+        if not os.path.isfile(candidate):
+            raise _publication_file_error("PUBLICATION_FILE_INVALID")
+        with candidate.open("rb") as stream:
+            data = stream.read()
+        after = os.stat(candidate)
+        identity_after = _publication_file_identity(after)
+    except PublicationFileError:
+        raise
+    except (OSError, ValueError):
+        raise _publication_file_error("PUBLICATION_FILE_INVALID") from None
+    if identity_before != identity_after:
+        raise _publication_file_error("PUBLICATION_FILE_STALE")
+    snapshot = {
+        "schema_version": PUBLICATION_FILE_SNAPSHOT_SCHEMA_VERSION,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": identity_after[2],
+        "device_id": identity_after[0],
+        "file_id": identity_after[1],
+    }
+    return snapshot, data
+
+
+def _validate_publication_file_snapshot(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version", "sha256", "size_bytes", "device_id", "file_id"
+    }:
+        raise _publication_file_error("PUBLICATION_FILE_INVALID")
+    if type(value["schema_version"]) is not str or value["schema_version"] != PUBLICATION_FILE_SNAPSHOT_SCHEMA_VERSION:
+        raise _publication_file_error("PUBLICATION_FILE_INVALID")
+    sha = _publication_file_sha(value["sha256"])
+    for name in ("size_bytes", "device_id", "file_id"):
+        if type(value[name]) is not int or value[name] < 0:
+            raise _publication_file_error("PUBLICATION_FILE_INVALID")
+    return {
+        "schema_version": PUBLICATION_FILE_SNAPSHOT_SCHEMA_VERSION,
+        "sha256": sha,
+        "size_bytes": value["size_bytes"],
+        "device_id": value["device_id"],
+        "file_id": value["file_id"],
+    }
+
+
+def snapshot_publication_file(path: Path) -> dict[str, object]:
+    """Return a closed identity/hash snapshot for one safe regular file."""
+
+    snapshot, _ = _publication_file_snapshot(path)
+    return snapshot
+
+
+def _publication_file_read_verified(path: Path, expected: Mapping[str, object]) -> bytes:
+    expected_snapshot = _validate_publication_file_snapshot(expected)
+    observed, data = _publication_file_snapshot(path)
+    if observed != expected_snapshot:
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    return data
+
+
+def _publication_file_prepared(value: object) -> dict[str, object]:
+    required = {
+        "schema_version", "state", "target_path", "candidate_path", "backup_path", "stage_path",
+        "target_snapshot", "candidate_snapshot", "backup_snapshot", "stage_snapshot",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    if type(value["schema_version"]) is not str or value["schema_version"] != _PUBLICATION_FILE_PREPARED_SCHEMA_VERSION:
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    if value["state"] not in _PUBLICATION_FILE_STATES:
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    path_names = ("target_path", "candidate_path", "backup_path", "stage_path")
+    originals = {name: _publication_file_original_path(value[name]) for name in path_names}
+    paths = {name: _publication_file_resolve_checked(originals[name]) for name in path_names}
+    snapshots = {name: _validate_publication_file_snapshot(value[f"{name}_snapshot"]) for name in ("target", "candidate", "backup", "stage")}
+    if paths["target_path"].parent != paths["candidate_path"].parent or paths["target_path"].parent != paths["backup_path"].parent or paths["target_path"].parent != paths["stage_path"].parent:
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    if len(set(paths.values())) != 4:
+        raise _publication_file_error("PUBLICATION_FILE_ALIAS")
+    return {"schema_version": _PUBLICATION_FILE_PREPARED_SCHEMA_VERSION, "state": value["state"], **paths, **{f"{name}_snapshot": snapshot for name, snapshot in snapshots.items()}}
+
+
+def _publication_file_assert_expected(value: object, expected: str) -> None:
+    if _publication_file_sha(expected) != _validate_publication_file_snapshot(value)["sha256"]:
+        raise _publication_file_error("PUBLICATION_FILE_STALE")
+
+
+def prepare_publication_replacement(
+    *,
+    target_path: Path,
+    candidate_path: Path,
+    expected_target_sha256: str,
+    expected_candidate_sha256: str,
+) -> dict[str, object]:
+    """Stage a verified candidate beside an existing target without replacing it."""
+
+    expected_target = _publication_file_sha(expected_target_sha256)
+    expected_candidate = _publication_file_sha(expected_candidate_sha256)
+    original_target = _publication_file_original_path(target_path)
+    original_candidate = _publication_file_original_path(candidate_path)
+    target = _publication_file_resolve_checked(original_target)
+    candidate = _publication_file_resolve_checked(original_candidate)
+    if target.parent != candidate.parent:
+        raise _publication_file_error("PUBLICATION_FILE_ALIAS")
+    target_snapshot, target_data = _publication_file_snapshot(target)
+    candidate_snapshot, candidate_data = _publication_file_snapshot(candidate)
+    if target_snapshot["sha256"] != expected_target or candidate_snapshot["sha256"] != expected_candidate:
+        raise _publication_file_error("PUBLICATION_FILE_STALE")
+    try:
+        if os.path.samefile(target, candidate):
+            raise _publication_file_error("PUBLICATION_FILE_ALIAS")
+    except FileNotFoundError:
+        raise _publication_file_error("PUBLICATION_FILE_INVALID") from None
+    backup = target.parent / f".{target.name}.publication-backup-{uuid.uuid4().hex}.tmp"
+    stage = target.parent / f".{target.name}.publication-stage-{uuid.uuid4().hex}.tmp"
+    created: list[Path] = []
+    try:
+        for path, data in ((backup, target_data), (stage, candidate_data)):
+            with path.open("xb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            created.append(path)
+        backup_snapshot, _ = _publication_file_snapshot(backup)
+        stage_snapshot, _ = _publication_file_snapshot(stage)
+        if backup_snapshot["sha256"] != target_snapshot["sha256"] or stage_snapshot["sha256"] != candidate_snapshot["sha256"]:
+            raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    except PublicationFileError:
+        for path in created:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise
+    except (OSError, ValueError):
+        for path in created:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID") from None
+    return {
+        "schema_version": _PUBLICATION_FILE_PREPARED_SCHEMA_VERSION,
+        "state": "PREPARED",
+        "target_path": target,
+        "candidate_path": candidate,
+        "backup_path": backup,
+        "stage_path": stage,
+        "target_snapshot": target_snapshot,
+        "candidate_snapshot": candidate_snapshot,
+        "backup_snapshot": backup_snapshot,
+        "stage_snapshot": stage_snapshot,
+    }
+
+
+def commit_publication_replacement(
+    prepared: Mapping[str, object], *,
+    expected_target_sha256: str,
+    expected_candidate_sha256: str,
+) -> dict[str, object]:
+    """Atomically replace the target after revalidating every prepared identity."""
+
+    record = _publication_file_prepared(prepared)
+    if record["state"] != "PREPARED":
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    target = record["target_path"]
+    candidate = record["candidate_path"]
+    target_snapshot, _ = _publication_file_snapshot(target)
+    candidate_snapshot, _ = _publication_file_snapshot(candidate)
+    if target_snapshot != record["target_snapshot"] or candidate_snapshot != record["candidate_snapshot"]:
+        raise _publication_file_error("PUBLICATION_FILE_STALE")
+    if target_snapshot["sha256"] != _publication_file_sha(expected_target_sha256) or candidate_snapshot["sha256"] != _publication_file_sha(expected_candidate_sha256):
+        raise _publication_file_error("PUBLICATION_FILE_STALE")
+    backup_snapshot, _ = _publication_file_snapshot(record["backup_path"])
+    stage_snapshot, _ = _publication_file_snapshot(record["stage_path"])
+    if backup_snapshot != record["backup_snapshot"] or stage_snapshot != record["stage_snapshot"]:
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    try:
+        os.replace(record["stage_path"], target)
+    except (OSError, ValueError):
+        raise _publication_file_error("PUBLICATION_REPLACE_FAILED") from None
+    try:
+        # Two reads make a post-replace verifier failure observable without restoring blindly.
+        observed_hash = sha256_file(target)
+        observed_hash_again = sha256_file(target)
+        if observed_hash != candidate_snapshot["sha256"] or observed_hash_again != candidate_snapshot["sha256"]:
+            raise _publication_file_error("PUBLICATION_VERIFY_FAILED")
+        final_snapshot, _ = _publication_file_snapshot(target)
+    except PublicationFileError:
+        raise
+    except (OSError, ValueError):
+        raise _publication_file_error("PUBLICATION_VERIFY_FAILED") from None
+    if final_snapshot["sha256"] != candidate_snapshot["sha256"]:
+        raise _publication_file_error("PUBLICATION_VERIFY_FAILED")
+    return {
+        "schema_version": _PUBLICATION_FILE_RESULT_SCHEMA_VERSION,
+        "state": "PUBLISHED",
+        "initial_sha256": target_snapshot["sha256"],
+        "published_sha256": final_snapshot["sha256"],
+        "backup_sha256": backup_snapshot["sha256"],
+    }
+
+
+def restore_publication_target(
+    prepared: Mapping[str, object], *,
+    expected_current_sha256: str,
+) -> dict[str, object]:
+    """Restore the verified original target over one exact published hash."""
+
+    record = _publication_file_prepared(prepared)
+    if record["state"] not in {"PREPARED", "PUBLISHED"}:
+        raise _publication_file_error("PUBLICATION_RESTORE_FAILED")
+    expected_current = _publication_file_sha(expected_current_sha256)
+    target_snapshot, _ = _publication_file_snapshot(record["target_path"])
+    if target_snapshot["sha256"] != expected_current:
+        raise _publication_file_error("PUBLICATION_RECOVERY_CONFLICT")
+    backup_snapshot, backup_data = _publication_file_snapshot(record["backup_path"])
+    if backup_snapshot != record["backup_snapshot"] or backup_snapshot["sha256"] != record["target_snapshot"]["sha256"]:
+        raise _publication_file_error("PUBLICATION_STAGE_INVALID")
+    restore_stage = record["target_path"].parent / f".{record['target_path'].name}.publication-restore-{uuid.uuid4().hex}.tmp"
+    try:
+        with restore_stage.open("xb") as stream:
+            stream.write(backup_data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        restore_snapshot, _ = _publication_file_snapshot(restore_stage)
+        if restore_snapshot["sha256"] != record["target_snapshot"]["sha256"]:
+            raise _publication_file_error("PUBLICATION_RESTORE_FAILED")
+        current_again, _ = _publication_file_snapshot(record["target_path"])
+        if current_again["sha256"] != expected_current:
+            raise _publication_file_error("PUBLICATION_RECOVERY_CONFLICT")
+        os.replace(restore_stage, record["target_path"])
+        final_snapshot, _ = _publication_file_snapshot(record["target_path"])
+        if final_snapshot["sha256"] != record["target_snapshot"]["sha256"]:
+            raise _publication_file_error("PUBLICATION_RESTORE_FAILED")
+    except PublicationFileError:
+        try:
+            if restore_stage.exists():
+                restore_stage.unlink()
+        except OSError:
+            pass
+        raise
+    except (OSError, ValueError):
+        try:
+            if restore_stage.exists():
+                restore_stage.unlink()
+        except OSError:
+            pass
+        raise _publication_file_error("PUBLICATION_RESTORE_FAILED") from None
+    return {
+        "schema_version": _PUBLICATION_FILE_RESULT_SCHEMA_VERSION,
+        "state": "RESTORED",
+        "restored_sha256": final_snapshot["sha256"],
+        "previous_sha256": expected_current,
+    }
+
+
+def cleanup_publication_replacement(prepared: Mapping[str, object]) -> None:
+    """Delete only the exact owner-created stage files from a prepared record."""
+
+    record = _publication_file_prepared(prepared)
+    for name in ("backup_path", "stage_path"):
+        path = record[name]
+        if path.parent != record["target_path"].parent or path in {record["target_path"], record["candidate_path"]}:
+            raise _publication_file_error("PUBLICATION_CLEANUP_FAILED")
+        try:
+            if _publication_file_reparse(path):
+                raise _publication_file_error("PUBLICATION_CLEANUP_FAILED")
+            if path.exists():
+                current, _ = _publication_file_snapshot(path)
+                if current != record[name.replace("_path", "_snapshot")]:
+                    raise _publication_file_error("PUBLICATION_CLEANUP_FAILED")
+                path.unlink()
+        except PublicationFileError:
+            raise
+        except (OSError, ValueError):
+            raise _publication_file_error("PUBLICATION_CLEANUP_FAILED") from None
+
+
 def _validate_artifact_descriptors(artifacts: object) -> None:
     if not isinstance(artifacts, list) or len(artifacts) != 3:
         raise VisualEvidenceError("visual evidence must contain exactly three artifacts")
@@ -493,11 +835,18 @@ def _remove_tree_if_safe(path: Path) -> None:
 
 
 __all__ = [
+    "PUBLICATION_FILE_SNAPSHOT_SCHEMA_VERSION",
+    "PublicationFileError",
     "VisualEvidenceError",
     "assert_dimension_register_unchanged",
     "build_dimension_register_datum_bindings",
     "canonical_region_config_sha256",
     "sha256_file",
+    "snapshot_publication_file",
+    "prepare_publication_replacement",
+    "commit_publication_replacement",
+    "restore_publication_target",
+    "cleanup_publication_replacement",
     "snapshot_dimension_register",
     "snapshot_visual_run_manifest",
     "validate_visual_evidence_freshness",
