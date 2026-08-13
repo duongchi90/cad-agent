@@ -853,7 +853,106 @@ def test_drawing_close_defers_the_single_result_commit_to_reactor() -> None:
     assert re.search(
         r'\(if\s+\(= command "drawing-close"\)\s*\(progn.*?'
         r"mcp-defer-drawing-close.*?\(list root request-id params envelope\).*?"
-        r"\)\s*\(if\s+\(mcp-write-result root request-id envelope\)",
+        r"\)\s*\(if\s+\(mcp-write-result root request-id envelope nil\)",
         body,
         flags=re.DOTALL,
     ) is not None
+
+
+def test_deferred_close_claims_exclusive_result_owner_and_binds_nonce() -> None:
+    source = _dispatcher_source().casefold()
+    assert "*mcp-pending-result-owner*" in source
+    assert "mcp-result-owner-reserve" in source
+    assert "mcp-result-owner-matches-p" in source
+    match = re.search(
+        r"\(defun\s+mcp-defer-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert re.search(r"\(mcp-result-owner-reserve\s+root\s+request-id\)", body)
+    assert re.search(
+        r"\(list\s+root\s+request-id\s+nonce\s+doc\s+save\s+envelope\)",
+        body,
+    )
+
+    deferred = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert deferred is not None
+    deferred_body = deferred.group("body")
+    assert "(mcp-result-owner-matches-p root request-id nonce)" in deferred_body
+    assert "(mcp-write-result root request-id result nonce)" in deferred_body
+
+
+def test_deferred_close_replay_is_rejected_before_command_execution() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-dispatch-core\b(?P<body>.*?)(?=\n\(defun\s+c:mcp-dispatch\b)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    owner_marker = "(mcp-pending-result-owner-p root request-id)"
+    dispatch_marker = "(mcp-dispatch-command command params)"
+    assert owner_marker in body
+    assert dispatch_marker in body
+    assert body.index(owner_marker) < body.index(dispatch_marker)
+    assert "(list request-id *mcp-error-result-conflict*)" in body
+
+
+def test_deferred_close_replay_cannot_publish_a_competing_terminal_result() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+c:mcp-dispatch\b(?P<body>.*)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    guard = "(not (mcp-pending-result-owner-p root request-id))"
+    writer = "(mcp-write-result root request-id (mcp-failure request-id error-code) nil)"
+    assert guard in body
+    assert writer in body
+    assert body.index(guard) < body.index(writer)
+
+
+def test_deferred_close_checks_result_slot_before_close_and_releases_only_after_commit() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "mcp-result-slot-free-p" in body
+    assert "mcp-result-owner-release" in body
+    assert re.search(
+        r"\(if\s+\(mcp-write-result\s+root\s+request-id\s+result\s+nonce\).*?"
+        r"mcp-result-owner-release.*?mcp-error-result-conflict",
+        body,
+        flags=re.DOTALL,
+    ) is not None
+    assert body.index("mcp-result-slot-free-p") < body.index("'vla-close")
+
+
+def test_deferred_close_cancellation_and_close_failure_use_bound_terminal_failure() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "(= reaction ':vlr-lispcancelled)" in body
+    assert "(vl-catch-all-error-p close-result)" in body
+    assert "(mcp-failure request-id *mcp-error-failed*)" in body
+    cancelled = body[body.index("':vlr-lispcancelled"):]
+    assert "mcp-failure request-id *mcp-error-failed*" in cancelled
+    assert "'vla-close" not in cancelled

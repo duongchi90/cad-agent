@@ -5,6 +5,7 @@
 (setq *mcp-max-json-bytes* 1048576)
 (setq *mcp-request-prefix* "autocad_mcp_cmd_")
 (setq *mcp-result-prefix* "autocad_mcp_result_")
+(setq *mcp-pending-result-owner* nil)
 
 (setq *mcp-error-root* "IPC_ROOT_INVALID")
 (setq *mcp-error-missing* "IPC_REQUEST_MISSING")
@@ -38,6 +39,51 @@
 
 (defun mcp-path (root name)
   (strcat root "/" name)
+)
+
+(defun mcp-result-owner-nonce (root request-id)
+  (strcat request-id ":" root)
+)
+
+(defun mcp-result-owner-matches-p (root request-id nonce / owner)
+  (setq owner *mcp-pending-result-owner*)
+  (and
+    owner
+    (= (nth 0 owner) root)
+    (= (nth 1 owner) request-id)
+    (= (nth 2 owner) nonce)
+  )
+)
+
+(defun mcp-result-owner-active-p (root / owner)
+  (setq owner *mcp-pending-result-owner*)
+  (and owner (= (nth 0 owner) root))
+)
+
+(defun mcp-pending-result-owner-p (root request-id / owner)
+  (setq owner *mcp-pending-result-owner*)
+  (and
+    owner
+    (= (nth 0 owner) root)
+    (= (nth 1 owner) request-id)
+  )
+)
+
+(defun mcp-result-owner-reserve (root request-id / nonce)
+  (if *mcp-pending-result-owner*
+    nil
+    (progn
+      (setq nonce (mcp-result-owner-nonce root request-id)
+            *mcp-pending-result-owner* (list root request-id nonce))
+      nonce
+    )
+  )
+)
+
+(defun mcp-result-owner-release (root request-id nonce)
+  (if (mcp-result-owner-matches-p root request-id nonce)
+    (setq *mcp-pending-result-owner* nil)
+  )
 )
 
 (defun mcp-hex-char-p (ch / code)
@@ -574,10 +620,23 @@
   )
 )
 
-(defun mcp-write-result (root request-id envelope / final part handle encoded renamed)
+(defun mcp-result-slot-free-p (root request-id / final part)
   (setq final (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
         part (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
-  (if (or (vl-file-size final) (vl-file-size part))
+  (not (or (vl-file-size final) (vl-file-size part)))
+)
+
+(defun mcp-write-result (root request-id envelope owner-nonce / final part handle encoded renamed)
+  (setq final (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
+        part (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
+  (if
+    (or
+      (not (mcp-result-slot-free-p root request-id))
+      (and
+        owner-nonce
+        (not (mcp-result-owner-matches-p root request-id owner-nonce))
+      )
+    )
     nil
     (progn
       (setq encoded (mcp-json-encode envelope))
@@ -702,49 +761,87 @@
   (mcp-object nil)
 )
 
-(defun mcp-deferred-drawing-close (reactor event-data / pending reaction root request-id doc save envelope close-result result)
+(defun mcp-deferred-drawing-close (reactor event-data / pending reaction root request-id nonce doc save envelope close-result result)
   (vl-load-com)
   (setq pending (vlr-data reactor)
         reaction (vlr-current-reaction-name)
         root (nth 0 pending)
         request-id (nth 1 pending)
-        doc (nth 2 pending)
-        save (nth 3 pending)
-        envelope (nth 4 pending))
+        nonce (nth 2 pending)
+        doc (nth 3 pending)
+        save (nth 4 pending)
+        envelope (nth 5 pending))
   (vlr-remove reactor)
-  (if (= reaction ':vlr-lispEnded)
-    (progn
-      (setq close-result
-        (vl-catch-all-apply
-          'vla-Close
-          (list doc (if (= save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
+  (if
+    (not (mcp-result-owner-matches-p root request-id nonce))
+    (princ (strcat "\n" *mcp-error-result-conflict*))
+    (if
+      (not (mcp-result-slot-free-p root request-id))
+      (princ (strcat "\n" *mcp-error-result-conflict*))
+      (progn
+        (cond
+          ((= reaction ':vlr-lispEnded)
+            (setq close-result
+              (vl-catch-all-apply
+                'vla-Close
+                (list doc (if (= save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
+              )
+              result
+              (if (vl-catch-all-error-p close-result)
+                (mcp-failure request-id *mcp-error-failed*)
+                envelope
+              )
+            )
+          )
+          ((= reaction ':vlr-lispCancelled)
+            (setq result (mcp-failure request-id *mcp-error-failed*))
+          )
+          (T
+            (setq result nil)
+          )
         )
-        result
-        (if (vl-catch-all-error-p close-result)
-          (mcp-failure request-id *mcp-error-failed*)
-          envelope
+        (if result
+          (if (mcp-write-result root request-id result nonce)
+            (mcp-result-owner-release root request-id nonce)
+            (princ (strcat "\n" *mcp-error-result-conflict*))
+          )
+          (princ (strcat "\n" *mcp-error-result-conflict*))
         )
-      )
-      (mcp-write-result root request-id result)
-    )
-    (if (= reaction ':vlr-lispCancelled)
-      (mcp-write-result
-        root
-        request-id
-        (mcp-failure request-id *mcp-error-failed*)
       )
     )
   )
 )
 
-(defun mcp-defer-drawing-close (root request-id params envelope / save doc)
+(defun mcp-defer-drawing-close (root request-id params envelope / save doc nonce reactor)
   (setq save (mcp-param params "save_changes")
         doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-  (vlr-lisp-reactor
-    (list root request-id doc save envelope)
-    '(
-      (:vlr-lispEnded . mcp-deferred-drawing-close)
-      (:vlr-lispCancelled . mcp-deferred-drawing-close)
+  (setq nonce (mcp-result-owner-reserve root request-id))
+  (if (not nonce)
+    nil
+    (progn
+      (setq reactor
+        (vl-catch-all-apply
+          'vlr-lisp-reactor
+          (list
+            (list root request-id nonce doc save envelope)
+            '(
+              (:vlr-lispEnded . mcp-deferred-drawing-close)
+              (:vlr-lispCancelled . mcp-deferred-drawing-close)
+            )
+          )
+        )
+      )
+      (if
+        (or
+          (vl-catch-all-error-p reactor)
+          (not reactor)
+        )
+        (progn
+          (mcp-result-owner-release root request-id nonce)
+          nil
+        )
+        reactor
+      )
     )
   )
 )
@@ -1069,8 +1166,15 @@
   (if (not request-id)
     (list nil *mcp-error-request-id*)
     (progn
-      (setq request-path (mcp-path root request-name))
-      (if (not (mcp-file-size-valid-p request-path))
+      (if
+        (or
+          (mcp-result-owner-active-p root)
+          (mcp-pending-result-owner-p root request-id)
+        )
+        (list request-id *mcp-error-result-conflict*)
+        (progn
+          (setq request-path (mcp-path root request-name))
+          (if (not (mcp-file-size-valid-p request-path))
         (list request-id *mcp-error-oversized*)
         (progn
           (setq request-text (mcp-read-bounded-file request-path))
@@ -1123,7 +1227,7 @@
                                       (list request-id *mcp-error-failed*)
                                     )
                                   )
-                                  (if (mcp-write-result root request-id envelope)
+                                  (if (mcp-write-result root request-id envelope nil)
                                     (list request-id nil)
                                     (list request-id *mcp-error-result-conflict*)
                                   )
@@ -1144,6 +1248,8 @@
     )
   )
 )
+    )
+  )
 
 (defun c:mcp-dispatch (/ root candidates request-parts result-parts request-name outcome request-id error-code)
   (setq root
@@ -1186,13 +1292,14 @@
                     (and
                       request-id
                       (mcp-hex-string-p request-id)
+                      (not (mcp-pending-result-owner-p root request-id))
                       (not
                         (vl-file-size
                           (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
                         )
                       )
                     )
-                    (mcp-write-result root request-id (mcp-failure request-id error-code))
+                    (mcp-write-result root request-id (mcp-failure request-id error-code) nil)
                   )
                   (princ (strcat "\n" error-code))
                 )
