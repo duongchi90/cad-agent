@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.visual_evidence import (
     VisualEvidenceError,
     canonical_region_config_sha256,
@@ -108,6 +109,86 @@ def _prepare(tmp: Path) -> tuple[Path, dict[str, object], dict[str, Path], Path,
     evidence = _evidence(paths, drawing_path, drawing_sha)
     evidence["payload"]["visual_run_manifest_sha256"] = digest  # type: ignore[index]
     return manifest, evidence, paths, drawing_path, drawing_sha
+
+
+def _camera_plan() -> dict[str, object]:
+    return {
+        "schema_version": "visual-capture-plan-1.0",
+        "plan_id": "PLAN-SIDE-001",
+        "run_id": RUN_ID,
+        "scope_id": "SCOPE-SIDE-001",
+        "registry_snapshot_sha256": "a" * 64,
+        "candidate_revision_sha256": "b" * 64,
+        "candidate_state_sha256": "c" * 64,
+        "latest_mutation_sha256": MUTATION_SHA,
+        "captures": [
+            {
+                "capture_id": "GLOBAL-SIDE",
+                "capture_class": "GLOBAL",
+                "parent_region_id": None,
+                "region_id": None,
+                "view_id": "SIDE",
+                "sheet_id": "SHEET-001",
+                "layout_id": "MODEL",
+                "zoom_mode": "EXTENTS",
+                "wcs_bbox": None,
+                "margin_ratio": 0.05,
+                "view_direction": "TOP",
+                "ucs": "WORLD",
+                "visual_style": "2D_WIREFRAME",
+            },
+            {
+                "capture_id": "REGION-SIDE-CABIN",
+                "capture_class": "REGION",
+                "parent_region_id": None,
+                "region_id": REGION_ID,
+                "view_id": "SIDE",
+                "sheet_id": "SHEET-001",
+                "layout_id": "MODEL",
+                "zoom_mode": "WINDOW",
+                "wcs_bbox": [0.0, 0.0, 2400.0, 2200.0],
+                "margin_ratio": 0.10,
+                "view_direction": "TOP",
+                "ucs": "WORLD",
+                "visual_style": "2D_WIREFRAME",
+            },
+        ],
+    }
+
+
+def _camera_receipt(evidence: dict[str, object], plan: dict[str, object]) -> dict[str, object]:
+    artifacts = evidence["payload"]["artifacts"]  # type: ignore[index]
+    render = next(item for item in artifacts if item["kind"] == "render")  # type: ignore[union-attr]
+    return {
+        "schema_version": "visual-capture-receipt-1.0",
+        "receipt_id": "RECEIPT-SIDE-CABIN-001",
+        "capture_id": "REGION-SIDE-CABIN",
+        "run_id": RUN_ID,
+        "scope_id": "SCOPE-SIDE-001",
+        "region_id": REGION_ID,
+        "view_id": "SIDE",
+        "sheet_id": "SHEET-001",
+        "layout_id": "MODEL",
+        "candidate_revision_sha256": "b" * 64,
+        "candidate_state_sha256": "c" * 64,
+        "latest_mutation_sha256": MUTATION_SHA,
+        "visual_capture_plan_sha256": canonical_json_sha256(plan),
+        "capture_class": "REGION",
+        "zoom_mode": "WINDOW",
+        "requested_wcs_bbox": [0.0, 0.0, 2400.0, 2200.0],
+        "observed_wcs_bbox": [0.0, 0.0, 2400.0, 2200.0],
+        "view_center": [1200.0, 1100.0],
+        "view_width": 2880.0,
+        "view_height": 2640.0,
+        "view_direction": "TOP",
+        "ucs": "WORLD",
+        "visual_style": "2D_WIREFRAME",
+        "artifact_sha256": render["sha256"],
+        "artifact_width": render["width"],
+        "artifact_height": render["height"],
+        "captured_at_utc": "2026-08-04T12:00:00.000Z",
+        "transient_state_restored": True,
+    }
 
 
 def test_manifest_snapshot_hashes_exact_bytes_and_validates_contract() -> None:
@@ -225,3 +306,124 @@ def test_manifest_snapshot_rejects_a_junction_component() -> None:
             pytest.skip(f"mklink /J unavailable: {result.stderr.strip()}")
         with pytest.raises(VisualEvidenceError, match="reparse point"):
             snapshot_visual_run_manifest(junction / "manifest.json")
+
+
+def test_camera_freshness_accepts_exact_plan_receipt_and_render_binding() -> None:
+    with TemporaryDirectory() as temporary:
+        manifest_path, evidence, _, _, drawing_sha = _prepare(Path(temporary))
+        _, manifest, digest = snapshot_visual_run_manifest(manifest_path)
+        plan = _camera_plan()
+        receipt = _camera_receipt(evidence, plan)
+        validated = validate_visual_evidence_freshness(
+            evidence,
+            digest,
+            manifest,
+            drawing_sha,
+            visual_capture_plan=plan,
+            visual_capture_receipt=receipt,
+        )
+        assert validated == evidence
+
+
+def test_camera_freshness_requires_plan_and_receipt_as_one_context() -> None:
+    with TemporaryDirectory() as temporary:
+        manifest_path, evidence, _, _, drawing_sha = _prepare(Path(temporary))
+        _, manifest, digest = snapshot_visual_run_manifest(manifest_path)
+        plan = _camera_plan()
+        receipt = _camera_receipt(evidence, plan)
+        with pytest.raises(VisualEvidenceError, match="plan.*receipt|receipt.*plan"):
+            validate_visual_evidence_freshness(
+                evidence,
+                digest,
+                manifest,
+                drawing_sha,
+                visual_capture_plan=plan,
+            )
+        with pytest.raises(VisualEvidenceError, match="plan.*receipt|receipt.*plan"):
+            validate_visual_evidence_freshness(
+                evidence,
+                digest,
+                manifest,
+                drawing_sha,
+                visual_capture_receipt=receipt,
+            )
+
+
+def test_camera_freshness_rejects_stale_plan_against_manifest_mutation() -> None:
+    with TemporaryDirectory() as temporary:
+        manifest_path, evidence, _, _, drawing_sha = _prepare(Path(temporary))
+        _, manifest, digest = snapshot_visual_run_manifest(manifest_path)
+        plan = _camera_plan()
+        plan["latest_mutation_sha256"] = "9" * 64
+        receipt = _camera_receipt(evidence, plan)
+        receipt["latest_mutation_sha256"] = "9" * 64
+        with pytest.raises(VisualEvidenceError, match="stale|mutation"):
+            validate_visual_evidence_freshness(
+                evidence,
+                digest,
+                manifest,
+                drawing_sha,
+                visual_capture_plan=plan,
+                visual_capture_receipt=receipt,
+            )
+
+
+def test_camera_freshness_rejects_foreign_receipt_region() -> None:
+    with TemporaryDirectory() as temporary:
+        manifest_path, evidence, _, _, drawing_sha = _prepare(Path(temporary))
+        _, manifest, digest = snapshot_visual_run_manifest(manifest_path)
+        plan = _camera_plan()
+        receipt = _camera_receipt(evidence, plan)
+        receipt["region_id"] = "FOREIGN-REGION"
+        with pytest.raises(VisualEvidenceError, match="region"):
+            validate_visual_evidence_freshness(
+                evidence,
+                digest,
+                manifest,
+                drawing_sha,
+                visual_capture_plan=plan,
+                visual_capture_receipt=receipt,
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("artifact_sha256", "f" * 64), ("artifact_width", 1599), ("artifact_height", 1199)),
+)
+def test_camera_freshness_rejects_receipt_render_artifact_mismatch(
+    field: str, value: object
+) -> None:
+    with TemporaryDirectory() as temporary:
+        manifest_path, evidence, _, _, drawing_sha = _prepare(Path(temporary))
+        _, manifest, digest = snapshot_visual_run_manifest(manifest_path)
+        plan = _camera_plan()
+        receipt = _camera_receipt(evidence, plan)
+        receipt[field] = value
+        with pytest.raises(VisualEvidenceError, match="artifact|render|width|height"):
+            validate_visual_evidence_freshness(
+                evidence,
+                digest,
+                manifest,
+                drawing_sha,
+                visual_capture_plan=plan,
+                visual_capture_receipt=receipt,
+            )
+
+
+def test_camera_writer_passes_plan_receipt_binding_through_freshness_gate() -> None:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        manifest_path, evidence, _, drawing_path, drawing_sha = _prepare(root)
+        plan = _camera_plan()
+        receipt = _camera_receipt(evidence, plan)
+        destination = write_visual_evidence(
+            root / "runs",
+            evidence,
+            manifest_path,
+            "EVIDENCE-001",
+            drawing_path=drawing_path,
+            drawing_sha256_before_dispatch=drawing_sha,
+            visual_capture_plan=plan,
+            visual_capture_receipt=receipt,
+        )
+        assert destination.is_dir()
