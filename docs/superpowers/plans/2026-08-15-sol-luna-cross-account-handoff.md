@@ -57,9 +57,9 @@
 - Consumes: docs-only branch head.
 - Produces: discoverable pointer for a new account even before the handoff document is merged to `main`.
 
-- [ ] Open a docs-only draft PR to `main` with exact head and note that merge is intentionally deferred while R8-D pins `main`.
-- [ ] Add a concise governance pointer to Issue #131 naming the PR and `docs/SOL_HANDOFF.md`.
-- [ ] Fresh-read the PR/head and verify `main` did not move.
+- [x] Open a docs-only draft PR to `main` with exact head and note that merge is intentionally deferred while R8-D pins `main`.
+- [x] Add a concise governance pointer to Issue #131 naming the PR and `docs/SOL_HANDOFF.md`.
+- [x] Fresh-read the PR/head and verify `main` did not move.
 
 ## Verification
 
