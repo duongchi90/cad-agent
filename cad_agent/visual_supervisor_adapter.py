@@ -151,6 +151,7 @@ _OWNER_STATE_FIELDS = {
     "task6_result",
     "cleanup_result",
 }
+_CAMERA_OWNER_STATE_FIELDS = {"visual_capture_plan", "visual_capture_receipts"}
 
 
 def _owner_state(value: object, *, label: str) -> Mapping[str, object]:
@@ -159,7 +160,18 @@ def _owner_state(value: object, *, label: str) -> Mapping[str, object]:
         _fail(
             "R5_B3_TASK6_PUBLIC_SEAM_MISSING: owner state has no accepted task6_result"
         )
-    _closed(state, _OWNER_STATE_FIELDS, label=label, optional={"pre_repair_r5_verdict"})
+    _closed(
+        state,
+        _OWNER_STATE_FIELDS,
+        label=label,
+        optional={"pre_repair_r5_verdict"} | _CAMERA_OWNER_STATE_FIELDS,
+    )
+    has_plan = "visual_capture_plan" in state
+    has_receipts = "visual_capture_receipts" in state
+    if has_plan != has_receipts:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture plan and receipts must be provided together")
+    if has_receipts and type(state["visual_capture_receipts"]) is not list:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture receipts must be a list")
     _sha(state["manifest_bytes_sha256"], label=f"{label}.manifest_bytes_sha256")
     _sha(
         state["drawing_sha256_before_dispatch"],
@@ -329,11 +341,152 @@ def _stable_evidence_identity(value: object, *, label: str) -> dict[str, object]
     }
 
 
+def _validate_camera_context(
+    state: Mapping[str, object],
+    *,
+    scope: Mapping[str, object],
+    label: str,
+) -> dict[str, object] | None:
+    if "visual_capture_plan" not in state and "visual_capture_receipts" not in state:
+        return None
+    if "visual_capture_plan" not in state or "visual_capture_receipts" not in state:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture plan and receipts must be provided together")
+    try:
+        plan = validate_visual_contract(
+            state["visual_capture_plan"],
+            contract="visual_capture_plan",
+            server_scope=scope,
+        )
+    except VisualSupervisorAdapterError:
+        raise
+    except Exception:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture plan is invalid")
+    manifest = _mapping(
+        state["visual_run_manifest"], label=f"{label}.visual_run_manifest"
+    )
+    plan_mutation = _sha(
+        plan.get("latest_mutation_sha256"),
+        label=f"{label}.visual_capture_plan.latest_mutation_sha256",
+    )
+    manifest_mutation = _sha(
+        manifest.get("latest_mutation_sha256"),
+        label=f"{label}.visual_run_manifest.latest_mutation_sha256",
+    )
+    if plan_mutation != manifest_mutation:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture plan is stale against latest mutation")
+
+    raw_receipts = state["visual_capture_receipts"]
+    if type(raw_receipts) is not list or not raw_receipts:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture receipts must be a non-empty list")
+    captures = plan.get("captures")
+    if type(captures) is not list or not captures:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture plan has no captures")
+    expected_capture_ids = {
+        _identifier(capture.get("capture_id"), label=f"{label}.visual_capture_plan.capture_id")
+        for capture in captures
+        if isinstance(capture, Mapping)
+    }
+    if len(expected_capture_ids) != len(captures):
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture plan identities are invalid")
+
+    normalized_receipts: list[dict[str, object]] = []
+    identities: list[dict[str, object]] = []
+    observed_capture_ids: set[str] = set()
+    region_receipts: dict[str, dict[str, object]] = {}
+    for index, raw_receipt in enumerate(raw_receipts):
+        try:
+            receipt = validate_visual_contract(
+                raw_receipt,
+                contract="visual_capture_receipt",
+                server_scope=plan,
+            )
+        except VisualSupervisorAdapterError:
+            raise
+        except Exception:
+            _fail("R5_CAMERA_CONTEXT_INVALID: visual capture receipt is invalid")
+        capture_id = _identifier(
+            receipt.get("capture_id"),
+            label=f"{label}.visual_capture_receipts[{index}].capture_id",
+        )
+        if capture_id in observed_capture_ids:
+            _fail("R5_CAMERA_CONTEXT_INVALID: duplicate visual capture receipt")
+        observed_capture_ids.add(capture_id)
+        capture_class = _plain_string(
+            receipt.get("capture_class"),
+            label=f"{label}.visual_capture_receipts[{index}].capture_class",
+        )
+        region_id_raw = receipt.get("region_id")
+        region_id: str | None
+        if region_id_raw is None:
+            region_id = None
+        else:
+            region_id = _identifier(
+                region_id_raw,
+                label=f"{label}.visual_capture_receipts[{index}].region_id",
+            )
+        try:
+            receipt_sha = canonical_json_sha256(receipt)
+        except Exception:
+            _fail("R5_CAMERA_CONTEXT_INVALID: visual capture receipt is not canonicalizable")
+        identity = {
+            "capture_id": capture_id,
+            "capture_class": capture_class,
+            "region_id": region_id,
+            "artifact_sha256": _sha(
+                receipt.get("artifact_sha256"),
+                label=f"{label}.visual_capture_receipts[{index}].artifact_sha256",
+            ),
+            "artifact_width": receipt.get("artifact_width"),
+            "artifact_height": receipt.get("artifact_height"),
+            "visual_capture_receipt_sha256": receipt_sha,
+        }
+        if type(identity["artifact_width"]) is not int or identity["artifact_width"] <= 0:
+            _fail("R5_CAMERA_CONTEXT_INVALID: visual capture artifact width is invalid")
+        if type(identity["artifact_height"]) is not int or identity["artifact_height"] <= 0:
+            _fail("R5_CAMERA_CONTEXT_INVALID: visual capture artifact height is invalid")
+        normalized_receipts.append(copy.deepcopy(receipt))
+        identities.append(identity)
+        if capture_class == "REGION":
+            if region_id is None or region_id in region_receipts:
+                _fail("R5_CAMERA_CONTEXT_INVALID: REGION receipt identity is duplicate or missing")
+            region_receipts[region_id] = copy.deepcopy(receipt)
+
+    if observed_capture_ids != expected_capture_ids:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture receipt coverage does not match plan")
+    raw_scope_regions = scope.get("regions")
+    if not isinstance(raw_scope_regions, Sequence) or isinstance(
+        raw_scope_regions, (str, bytes, bytearray)
+    ):
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual scope regions are invalid")
+    expected_region_ids = {
+        _identifier(region.get("region_id"), label=f"{label}.visual_scope.region_id")
+        for region in raw_scope_regions
+        if isinstance(region, Mapping)
+    }
+    if len(expected_region_ids) != len(raw_scope_regions) or set(region_receipts) != expected_region_ids:
+        _fail("R5_CAMERA_CONTEXT_INVALID: REGION receipt coverage does not match visual scope")
+
+    normalized_receipts.sort(key=lambda item: str(item["capture_id"]))
+    identities.sort(key=lambda item: str(item["capture_id"]))
+    try:
+        plan_sha = canonical_json_sha256(plan)
+    except Exception:
+        _fail("R5_CAMERA_CONTEXT_INVALID: visual capture plan is not canonicalizable")
+    return {
+        "plan": copy.deepcopy(plan),
+        "plan_sha256": plan_sha,
+        "receipts": normalized_receipts,
+        "identities": identities,
+        "region_receipts": region_receipts,
+    }
+
+
 def _validate_evidence_set(
     state: Mapping[str, object],
     *,
     scope: Mapping[str, object],
     label: str,
+    camera: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     raw = state["visual_evidence"]
     if type(raw) is not list:
@@ -357,13 +510,40 @@ def _validate_evidence_set(
     identities: list[dict[str, object]] = []
     observed_ids: set[str] = set()
     for index, evidence in enumerate(raw):
+        raw_payload = _evidence_payload(
+            evidence, label=f"{label}.visual_evidence[{index}]"
+        )
+        raw_region_id = _identifier(
+            raw_payload.get("region_id"),
+            label=f"{label}.visual_evidence[{index}].region_id",
+        )
         try:
-            validated = validate_visual_evidence_freshness(
-                evidence,
-                state["manifest_bytes_sha256"],
-                state["visual_run_manifest"],
-                state["drawing_sha256_before_dispatch"],
-            )
+            if camera is None:
+                validated = validate_visual_evidence_freshness(
+                    evidence,
+                    state["manifest_bytes_sha256"],
+                    state["visual_run_manifest"],
+                    state["drawing_sha256_before_dispatch"],
+                )
+            else:
+                plan = _mapping(camera.get("plan"), label=f"{label}.camera.plan")
+                region_receipts = _mapping(
+                    camera.get("region_receipts"),
+                    label=f"{label}.camera.region_receipts",
+                )
+                receipt = region_receipts.get(raw_region_id)
+                if not isinstance(receipt, Mapping):
+                    _fail("R5_CAMERA_CONTEXT_INVALID: regional camera receipt is missing")
+                validated = validate_visual_evidence_freshness(
+                    evidence,
+                    state["manifest_bytes_sha256"],
+                    state["visual_run_manifest"],
+                    state["drawing_sha256_before_dispatch"],
+                    visual_capture_plan=plan,
+                    visual_capture_receipt=receipt,
+                )
+        except VisualSupervisorAdapterError:
+            raise
         except Exception:
             _fail("R5_EVIDENCE_STALE")
         payload = _evidence_payload(
@@ -417,8 +597,14 @@ def _validate_owner_state(
         raise
     except Exception:
         _fail(f"{label} accepted owner validation failed")
-    evidence = _validate_evidence_set(state, scope=scope, label=label)
-    return {"scope": scope, "candidate": candidate, "evidence": evidence}
+    camera = _validate_camera_context(state, scope=scope, label=label)
+    evidence = _validate_evidence_set(
+        state,
+        scope=scope,
+        label=label,
+        camera=camera,
+    )
+    return {"scope": scope, "candidate": candidate, "evidence": evidence, "camera": camera}
 
 
 def _assert_r5_not_stale(
@@ -812,6 +998,10 @@ def finalize_visual_verdict(
         _fail("visual evidence freshness changed after provider return")
     if auth_evidence["identities"] != post_evidence["identities"]:
         _fail("visual evidence identity changed after provider return")
+    auth_camera = auth_validated["camera"]
+    post_camera = post_validated["camera"]
+    if auth_camera != post_camera:
+        _fail("canonical camera context changed after provider return")
     _assert_r5_not_stale(
         authoritative,
         _mapping(
@@ -879,6 +1069,14 @@ def finalize_visual_verdict(
         "visual_evidence": copy.deepcopy(auth_evidence["identities"]),
         "request_binding": request_binding,
     }
+    if auth_camera is not None:
+        camera = _mapping(auth_camera, label="authoritative_camera")
+        request_payload["visual_capture_plan_sha256"] = _sha(
+            camera.get("plan_sha256"), label="visual_capture_plan_sha256"
+        )
+        request_payload["visual_capture_receipts"] = copy.deepcopy(
+            camera.get("identities")
+        )
     try:
         request_sha = canonical_json_sha256(request_payload)
     except Exception:
