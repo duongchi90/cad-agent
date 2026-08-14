@@ -5,6 +5,9 @@
 (setq *mcp-max-json-bytes* 1048576)
 (setq *mcp-request-prefix* "autocad_mcp_cmd_")
 (setq *mcp-result-prefix* "autocad_mcp_result_")
+(if (not (boundp '*mcp-pending-result-owner*))
+  (setq *mcp-pending-result-owner* nil)
+)
 
 (setq *mcp-error-root* "IPC_ROOT_INVALID")
 (setq *mcp-error-missing* "IPC_REQUEST_MISSING")
@@ -38,6 +41,51 @@
 
 (defun mcp-path (root name)
   (strcat root "/" name)
+)
+
+(defun mcp-result-owner-nonce (root request-id)
+  (strcat request-id ":" root)
+)
+
+(defun mcp-result-owner-matches-p (root request-id nonce / owner)
+  (setq owner *mcp-pending-result-owner*)
+  (and
+    owner
+    (= (nth 0 owner) root)
+    (= (nth 1 owner) request-id)
+    (= (nth 2 owner) nonce)
+  )
+)
+
+(defun mcp-result-owner-active-p (root / owner)
+  (setq owner *mcp-pending-result-owner*)
+  (and owner (= (nth 0 owner) root))
+)
+
+(defun mcp-pending-result-owner-p (root request-id / owner)
+  (setq owner *mcp-pending-result-owner*)
+  (and
+    owner
+    (= (nth 0 owner) root)
+    (= (nth 1 owner) request-id)
+  )
+)
+
+(defun mcp-result-owner-reserve (root request-id / nonce)
+  (if *mcp-pending-result-owner*
+    nil
+    (progn
+      (setq nonce (mcp-result-owner-nonce root request-id)
+            *mcp-pending-result-owner* (list root request-id nonce))
+      nonce
+    )
+  )
+)
+
+(defun mcp-result-owner-release (root request-id nonce)
+  (if (mcp-result-owner-matches-p root request-id nonce)
+    (setq *mcp-pending-result-owner* nil)
+  )
 )
 
 (defun mcp-hex-char-p (ch / code)
@@ -442,14 +490,32 @@
   (reverse out)
 )
 
-(defun mcp-request-object-valid-p (request / keys id command params)
+(defun mcp-request-object-valid-p (request / keys id claim command params)
   (setq keys (mcp-json-object-keys request)
         id (mcp-json-get request "request_id")
+        claim (mcp-json-get request "claim")
         command (mcp-json-get request "command")
         params (mcp-json-get request "params"))
   (and
     (mcp-json-object-p request)
-    (= (length keys) 3)
+    (or
+      (and
+        (= (length keys) 3)
+        (member "request_id" keys)
+        (not (member "claim" keys))
+        (member "command" keys)
+        (member "params" keys)
+      )
+      (and
+        (= (length keys) 4)
+        (member "request_id" keys)
+        (member "claim" keys)
+        (member "command" keys)
+        (member "params" keys)
+        (= (type claim) 'STR)
+        (> (strlen claim) 0)
+      )
+    )
     (member "request_id" keys)
     (member "command" keys)
     (member "params" keys)
@@ -554,30 +620,55 @@
   (cons 'MCP_JSON_ARRAY items)
 )
 
-(defun mcp-success (request-id payload)
+(defun mcp-success (request-id claim payload)
   (mcp-object
-    (list
-      (cons "request_id" request-id)
-      (cons "ok" 'MCP_JSON_TRUE)
-      (cons "payload" payload)
+    (append
+      (list (cons "request_id" request-id))
+      (if claim (list (cons "claim" claim)) nil)
+      (list
+        (cons "ok" 'MCP_JSON_TRUE)
+        (cons "payload" payload)
+      )
     )
   )
 )
 
-(defun mcp-failure (request-id code)
+(defun mcp-failure (request-id claim code)
   (mcp-object
-    (list
-      (cons "request_id" request-id)
-      (cons "ok" 'MCP_JSON_FALSE)
-      (cons "error" code)
+    (append
+      (list (cons "request_id" request-id))
+      (if claim (list (cons "claim" claim)) nil)
+      (list
+        (cons "ok" 'MCP_JSON_FALSE)
+        (cons "error" code)
+      )
     )
   )
 )
 
-(defun mcp-write-result (root request-id envelope / final part handle encoded renamed)
+(defun mcp-result-slot-free-p (root request-id owner-nonce / final part)
   (setq final (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
         part (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
-  (if (or (vl-file-size final) (vl-file-size part))
+  (and
+    (or
+      (not owner-nonce)
+      (mcp-result-owner-matches-p root request-id owner-nonce)
+    )
+    (not (or (vl-file-size final) (vl-file-size part)))
+  )
+)
+
+(defun mcp-write-result (root request-id envelope owner-nonce / final part handle encoded renamed)
+  (setq final (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
+        part (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
+  (if
+    (or
+      (not (mcp-result-slot-free-p root request-id owner-nonce))
+      (and
+        owner-nonce
+        (not (mcp-result-owner-matches-p root request-id owner-nonce))
+      )
+    )
     nil
     (progn
       (setq encoded (mcp-json-encode envelope))
@@ -697,11 +788,95 @@
   (mcp-object nil)
 )
 
-(defun mcp-op-drawing-close (params / save doc)
+(defun mcp-op-drawing-close (params)
+  ; Close only after the bound success envelope is durably committed.
+  (mcp-object nil)
+)
+
+(defun mcp-deferred-drawing-close (reactor event-data / pending reaction root request-id claim nonce doc save envelope close-result result)
+  (vl-load-com)
+  (setq pending (vlr-data reactor)
+        reaction (vlr-current-reaction-name)
+        root (nth 0 pending)
+        request-id (nth 1 pending)
+        nonce (nth 2 pending)
+        doc (nth 3 pending)
+        save (nth 4 pending)
+        envelope (nth 5 pending)
+        claim (mcp-json-get envelope "claim"))
+  (vlr-remove reactor)
+  (if
+    (not (mcp-result-owner-matches-p root request-id nonce))
+    (princ (strcat "\n" *mcp-error-result-conflict*))
+    (if
+      (not (mcp-result-slot-free-p root request-id nonce))
+      (princ (strcat "\n" *mcp-error-result-conflict*))
+      (progn
+        (cond
+          ((eq reaction ':vlr-lispEnded)
+            (setq close-result
+              (vl-catch-all-apply
+                'vla-Close
+                (list doc (if (eq save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
+              )
+              result
+              (if (vl-catch-all-error-p close-result)
+                (mcp-failure request-id claim *mcp-error-failed*)
+                envelope
+              )
+            )
+          )
+          ((eq reaction ':vlr-lispCancelled)
+            (setq result (mcp-failure request-id claim *mcp-error-failed*))
+          )
+          (T
+            (setq result nil)
+          )
+        )
+        (if result
+          (if (mcp-write-result root request-id result nonce)
+            (mcp-result-owner-release root request-id nonce)
+            (princ (strcat "\n" *mcp-error-result-conflict*))
+          )
+          (princ (strcat "\n" *mcp-error-result-conflict*))
+        )
+      )
+    )
+  )
+)
+
+(defun mcp-defer-drawing-close (root request-id params envelope / save doc nonce reactor)
   (setq save (mcp-param params "save_changes")
         doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-  (vla-Close doc (if (= save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
-  (mcp-object nil)
+  (setq nonce (mcp-result-owner-reserve root request-id))
+  (if (not nonce)
+    nil
+    (progn
+      (setq reactor
+        (vl-catch-all-apply
+          'vlr-lisp-reactor
+          (list
+            (list root request-id nonce doc save envelope)
+            '(
+              (:vlr-lispEnded . mcp-deferred-drawing-close)
+              (:vlr-lispCancelled . mcp-deferred-drawing-close)
+            )
+          )
+        )
+      )
+      (if
+        (or
+          (vl-catch-all-error-p reactor)
+          (not reactor)
+        )
+        (progn
+          (mcp-result-owner-release root request-id nonce)
+          nil
+        )
+        reactor
+      )
+    )
+  )
 )
 
 (defun mcp-op-drawing-list-open-paths (params / docs paths)
@@ -1019,51 +1194,78 @@
   )
 )
 
-(defun mcp-dispatch-core (root request-name / request-id request-path request-text parsed request params command result envelope final-path part-path)
-  (setq request-id (mcp-request-id-from-name request-name))
+(defun mcp-dispatch-core (root request-name / request-id claim request-path request-text parsed request params command result envelope final-path part-path deferred-close)
+  (setq request-id (mcp-request-id-from-name request-name)
+        claim nil)
   (if (not request-id)
-    (list nil *mcp-error-request-id*)
+    (list nil nil *mcp-error-request-id*)
     (progn
       (setq request-path (mcp-path root request-name))
       (if (not (mcp-file-size-valid-p request-path))
-        (list request-id *mcp-error-oversized*)
+        (list request-id nil *mcp-error-oversized*)
         (progn
           (setq request-text (mcp-read-bounded-file request-path))
           (if (not request-text)
-            (list request-id *mcp-error-request*)
+            (list request-id nil *mcp-error-request*)
             (progn
               (setq parsed (mcp-json-parse-document request-text))
               (if (not parsed)
-                (list request-id *mcp-error-json*)
+                (list request-id nil *mcp-error-json*)
                 (progn
-                  (setq request (cadr parsed))
+                  (setq request (cadr parsed)
+                        claim (mcp-json-get request "claim"))
                   (if (not (mcp-request-object-valid-p request))
-                    (list request-id *mcp-error-request*)
+                    (list request-id claim *mcp-error-request*)
                     (if (not (= (mcp-json-get request "request_id") request-id))
-                      (list request-id *mcp-error-request-id*)
-                      (progn
-                        (setq final-path
-                          (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
-                              part-path
-                          (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
-                        (if (or (vl-file-size final-path) (vl-file-size part-path))
-                          (list request-id *mcp-error-result-conflict*)
-                          (progn
-                            (setq command (mcp-json-get request "command")
-                                  params (mcp-json-get request "params")
-                                  result (mcp-dispatch-command command params))
-                            (cond
-                              ((= result 'MCP_COMMAND_UNSUPPORTED_SENTINEL)
-                                (list request-id *mcp-error-command*)
-                              )
-                              ((vl-catch-all-error-p result)
-                                (list request-id *mcp-error-failed*)
-                              )
-                              (T
-                                (setq envelope (mcp-success request-id result))
-                                (if (mcp-write-result root request-id envelope)
-                                  (list request-id nil)
-                                  (list request-id *mcp-error-result-conflict*)
+                      (list request-id claim *mcp-error-request-id*)
+                      (if
+                        (or
+                          (mcp-result-owner-active-p root)
+                          (mcp-pending-result-owner-p root request-id)
+                        )
+                        (list request-id claim *mcp-error-result-conflict*)
+                        (progn
+                          (setq final-path
+                            (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
+                                part-path
+                            (mcp-path root (strcat *mcp-result-prefix* request-id ".json.part")))
+                          (if (or (vl-file-size final-path) (vl-file-size part-path))
+                            (list request-id claim *mcp-error-result-conflict*)
+                            (progn
+                              (setq command (mcp-json-get request "command")
+                                    params (mcp-json-get request "params")
+                                    result (mcp-dispatch-command command params))
+                              (cond
+                                ((= result 'MCP_COMMAND_UNSUPPORTED_SENTINEL)
+                                  (list request-id claim *mcp-error-command*)
+                                )
+                                ((vl-catch-all-error-p result)
+                                  (list request-id claim *mcp-error-failed*)
+                                )
+                                (T
+                                  (setq envelope (mcp-success request-id claim result))
+                                  (if (= command "drawing-close")
+                                    (progn
+                                      (setq deferred-close
+                                        (vl-catch-all-apply
+                                          'mcp-defer-drawing-close
+                                          (list root request-id params envelope)
+                                        )
+                                      )
+                                      (if
+                                        (and
+                                          deferred-close
+                                          (not (vl-catch-all-error-p deferred-close))
+                                        )
+                                        (list request-id claim nil)
+                                        (list request-id claim *mcp-error-failed*)
+                                      )
+                                    )
+                                    (if (mcp-write-result root request-id envelope nil)
+                                      (list request-id claim nil)
+                                      (list request-id claim *mcp-error-result-conflict*)
+                                    )
+                                  )
                                 )
                               )
                             )
@@ -1080,9 +1282,9 @@
       )
     )
   )
-)
+  )
 
-(defun c:mcp-dispatch (/ root candidates request-parts result-parts request-name outcome request-id error-code)
+(defun c:mcp-dispatch (/ root candidates request-parts result-parts request-name outcome request-id claim error-code)
   (setq root
     (if (boundp '*cad-agent-file-ipc-root*)
       *cad-agent-file-ipc-root*
@@ -1116,20 +1318,22 @@
               (setq request-name (car candidates)
                     outcome (mcp-dispatch-core root request-name)
                     request-id (car outcome)
-                    error-code (cadr outcome))
+                    claim (nth 1 outcome)
+                    error-code (nth 2 outcome))
               (if error-code
                 (progn
                   (if
                     (and
                       request-id
                       (mcp-hex-string-p request-id)
+                      (not (mcp-pending-result-owner-p root request-id))
                       (not
                         (vl-file-size
                           (mcp-path root (strcat *mcp-result-prefix* request-id ".json"))
                         )
                       )
                     )
-                    (mcp-write-result root request-id (mcp-failure request-id error-code))
+                    (mcp-write-result root request-id (mcp-failure request-id claim error-code) nil)
                   )
                   (princ (strcat "\n" error-code))
                 )

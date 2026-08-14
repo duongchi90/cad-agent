@@ -8,6 +8,7 @@ from ctypes import wintypes
 import ntpath
 import os
 import re
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
@@ -226,15 +227,31 @@ def _strict_file_ipc_json_object(raw: bytes, *, error_code: str) -> dict[str, An
     return data
 
 
-def _validate_file_ipc_result(data: dict[str, Any], request_id: str) -> dict[str, Any]:
+def _validate_file_ipc_result(
+    data: dict[str, Any], request_id: str, claim: Optional[str] = None
+) -> dict[str, Any]:
     if data.get("request_id") != request_id or type(data.get("ok")) is not bool:
         raise MCPToolError("IPC_RESULT_INVALID")
+    if claim is None:
+        if "claim" in data:
+            raise MCPToolError("IPC_RESULT_INVALID")
+    elif data.get("claim") != claim:
+        raise MCPToolError("IPC_RESULT_INVALID")
     if data["ok"] is True:
-        if set(data) != {"request_id", "ok", "payload"} or not isinstance(data["payload"], dict):
+        expected_keys = {"request_id", "ok", "payload"}
+        if claim is not None:
+            expected_keys.add("claim")
+        if (
+            set(data) != expected_keys
+            or not isinstance(data["payload"], dict)
+        ):
             raise MCPToolError("IPC_RESULT_INVALID")
         return data["payload"]
+    expected_keys = {"request_id", "ok", "error"}
+    if claim is not None:
+        expected_keys.add("claim")
     if (
-        set(data) != {"request_id", "ok", "error"}
+        set(data) != expected_keys
         or not isinstance(data["error"], str)
         or not data["error"]
     ):
@@ -255,10 +272,18 @@ class FileIPCLiveMCPClient:
                  bootstrap_lisp_path: Optional[str] = None,
                  document_settle_s: float = 2.0,
                  command_trigger: Optional[Callable[[str], None]] = None,
-                 start_tab_no_document_probe: Optional[Callable[[], bool]] = None) -> None:
+                 start_tab_no_document_probe: Optional[Callable[[], bool]] = None,
+                 legacy_fixture_mode: Optional[bool] = None) -> None:
         self._dir = _validate_file_ipc_root(ipc_dir)
         self._root_identity = _file_ipc_root_identity(self._dir)
         self._trigger = trigger
+        if legacy_fixture_mode is None:
+            legacy_fixture_mode = not bool(
+                getattr(trigger, "_mcp_claim_bound", False)
+            )
+        if type(legacy_fixture_mode) is not bool:
+            raise TypeError("legacy_fixture_mode must be a bool or None")
+        self._legacy_fixture_mode = legacy_fixture_mode
         self._timeout, self._poll = timeout_s, poll_interval_s
         self._raw_lisp_trigger = raw_lisp_trigger
         self._bootstrap_lisp_path = bootstrap_lisp_path
@@ -308,14 +333,19 @@ class FileIPCLiveMCPClient:
             raise MCPToolError("IPC_RESULT_CONFLICT")
 
         request_id = uuid.uuid4().hex[:12]
+        claim = None if self._legacy_fixture_mode else secrets.token_hex(32)
         cmd = self._dir / f"{_FILE_IPC_REQUEST_PREFIX}{request_id}.json"
         result = self._dir / f"{_FILE_IPC_RESULT_PREFIX}{request_id}.json"
         cmd_part = self._dir / f"{_FILE_IPC_REQUEST_PREFIX}{request_id}.json.part"
         result_part = self._dir / f"{_FILE_IPC_RESULT_PREFIX}{request_id}.json.part"
-        raw = json.dumps(
-            {"request_id": request_id, "command": command, "params": params},
-            separators=(",", ":"),
-        ).encode("utf-8")
+        request = {
+            "request_id": request_id,
+            "command": command,
+            "params": params,
+        }
+        if claim is not None:
+            request["claim"] = claim
+        raw = json.dumps(request, separators=(",", ":")).encode("utf-8")
         if len(raw) > _FILE_IPC_MAX_JSON_BYTES:
             raise MCPToolError("IPC_REQUEST_OVERSIZED")
         owned_paths = (cmd_part, cmd, result_part, result)
@@ -355,7 +385,7 @@ class FileIPCLiveMCPClient:
                         raw_result,
                         error_code="IPC_RESULT_INVALID",
                     )
-                    return _validate_file_ipc_result(data, request_id)
+                    return _validate_file_ipc_result(data, request_id, claim)
                 time.sleep(self._poll)
             raise MCPTimeoutError(f"Timeout waiting for result (request_id={request_id})")
         finally:
@@ -674,7 +704,12 @@ def make_windows_command_trigger(hwnd: int) -> Callable[[str], None]:
 def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:
     """Return a trigger that invokes the loaded AutoLISP dispatcher."""
     raw_trigger = make_windows_lisp_trigger(hwnd)
-    return lambda: raw_trigger("(c:mcp-dispatch)")
+
+    def trigger() -> None:
+        raw_trigger("(c:mcp-dispatch)")
+
+    setattr(trigger, "_mcp_claim_bound", True)
+    return trigger
 
 
 CallTool = Callable[[str, str, Dict[str, Any]], Dict[str, Any]]
