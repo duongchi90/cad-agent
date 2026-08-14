@@ -8,6 +8,7 @@ from ctypes import wintypes
 import ntpath
 import os
 import re
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
@@ -226,15 +227,24 @@ def _strict_file_ipc_json_object(raw: bytes, *, error_code: str) -> dict[str, An
     return data
 
 
-def _validate_file_ipc_result(data: dict[str, Any], request_id: str) -> dict[str, Any]:
-    if data.get("request_id") != request_id or type(data.get("ok")) is not bool:
+def _validate_file_ipc_result(
+    data: dict[str, Any], request_id: str, claim: str
+) -> dict[str, Any]:
+    if (
+        data.get("request_id") != request_id
+        or data.get("claim") != claim
+        or type(data.get("ok")) is not bool
+    ):
         raise MCPToolError("IPC_RESULT_INVALID")
     if data["ok"] is True:
-        if set(data) != {"request_id", "ok", "payload"} or not isinstance(data["payload"], dict):
+        if (
+            set(data) != {"request_id", "claim", "ok", "payload"}
+            or not isinstance(data["payload"], dict)
+        ):
             raise MCPToolError("IPC_RESULT_INVALID")
         return data["payload"]
     if (
-        set(data) != {"request_id", "ok", "error"}
+        set(data) != {"request_id", "claim", "ok", "error"}
         or not isinstance(data["error"], str)
         or not data["error"]
     ):
@@ -308,12 +318,18 @@ class FileIPCLiveMCPClient:
             raise MCPToolError("IPC_RESULT_CONFLICT")
 
         request_id = uuid.uuid4().hex[:12]
+        claim = secrets.token_hex(32)
         cmd = self._dir / f"{_FILE_IPC_REQUEST_PREFIX}{request_id}.json"
         result = self._dir / f"{_FILE_IPC_RESULT_PREFIX}{request_id}.json"
         cmd_part = self._dir / f"{_FILE_IPC_REQUEST_PREFIX}{request_id}.json.part"
         result_part = self._dir / f"{_FILE_IPC_RESULT_PREFIX}{request_id}.json.part"
         raw = json.dumps(
-            {"request_id": request_id, "command": command, "params": params},
+            {
+                "request_id": request_id,
+                "claim": claim,
+                "command": command,
+                "params": params,
+            },
             separators=(",", ":"),
         ).encode("utf-8")
         if len(raw) > _FILE_IPC_MAX_JSON_BYTES:
@@ -355,7 +371,7 @@ class FileIPCLiveMCPClient:
                         raw_result,
                         error_code="IPC_RESULT_INVALID",
                     )
-                    return _validate_file_ipc_result(data, request_id)
+                    return _validate_file_ipc_result(data, request_id, claim)
                 time.sleep(self._poll)
             raise MCPTimeoutError(f"Timeout waiting for result (request_id={request_id})")
         finally:

@@ -219,11 +219,13 @@ def test_file_ipc_dispatch_binds_request_filename_payload_and_result_identity(tm
         filename_id = request_path.stem.removeprefix("autocad_mcp_cmd_")
         assert request["request_id"] == filename_id
         observed["request_id"] = filename_id
+        observed["claim"] = request["claim"]
         result_path = tmp_path / f"autocad_mcp_result_{filename_id}.json"
         result_path.write_text(
             json.dumps(
                 {
                     "request_id": filename_id,
+                    "claim": request["claim"],
                     "ok": True,
                     "payload": {"ready": True},
                 }
@@ -239,8 +241,15 @@ def test_file_ipc_dispatch_binds_request_filename_payload_and_result_identity(tm
     )
     assert client._dispatch("ping", {}) == {"ready": True}
     assert observed["request_id"]
+    assert observed["claim"]
     assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
     assert not list(tmp_path.glob("autocad_mcp_result_*.json"))
+
+
+def test_file_ipc_client_mints_fresh_unpredictable_claims() -> None:
+    source = MCP_CLIENT.read_text(encoding="utf-8")
+    assert "import secrets" in source
+    assert "secrets.token_hex(32)" in source
 
 
 def test_file_ipc_dispatch_rejects_result_request_id_mismatch_categorically(tmp_path: Path) -> None:
@@ -672,6 +681,24 @@ def test_ping_and_result_envelope_preserve_request_identity_without_granting_aut
         assert forbidden_authority not in source
 
 
+def test_request_and_terminal_envelopes_bind_the_exact_per_request_claim() -> None:
+    source = _dispatcher_source().casefold()
+    assert '(mcp-json-get request "claim")' in source
+    assert '(cons "claim" claim)' in source
+    request_validator = re.search(
+        r"\(defun\s+mcp-request-object-valid-p\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert request_validator is not None
+    assert "(= (length keys) 4)" in request_validator.group("body")
+    assert "(member \"claim\" keys)" in request_validator.group("body")
+    assert re.search(r"\(defun\s+mcp-success\s+\(request-id\s+claim\s+payload\)", source)
+    assert re.search(r"\(defun\s+mcp-failure\s+\(request-id\s+claim\s+code\)", source)
+    assert "(mcp-success request-id claim result)" in source
+    assert "(mcp-failure request-id claim *mcp-error-failed*)" in source
+
+
 def test_failures_use_fixed_categorical_material_and_never_own_python_cleanup() -> None:
     source = _dispatcher_source()
     lowered = source.casefold()
@@ -822,7 +849,7 @@ def test_deferred_drawing_close_commits_only_after_verified_close() -> None:
     assert close_marker in body
     assert vla_close_marker in body
     assert "(vl-catch-all-error-p close-result)" in body
-    assert "(mcp-failure request-id *mcp-error-failed*)" in body
+    assert "(mcp-failure request-id claim *mcp-error-failed*)" in body
     assert result_marker in body
     assert body.index(close_marker) < body.index(vla_close_marker) < body.index(result_marker)
     assert "(if (eq save 'mcp_json_true) :vlax-true :vlax-false)" in body
@@ -838,7 +865,7 @@ def test_deferred_drawing_close_cancellation_commits_failure_without_close() -> 
     assert match is not None
     body = match.group("body").casefold()
     assert "(eq reaction ':vlr-lispcancelled)" in body
-    assert "(mcp-failure request-id *mcp-error-failed*)" in body
+    assert "(mcp-failure request-id claim *mcp-error-failed*)" in body
 
 
 def test_drawing_close_defers_the_single_result_commit_to_reactor() -> None:
@@ -902,7 +929,7 @@ def test_deferred_close_replay_is_rejected_before_command_execution() -> None:
     assert owner_marker in body
     assert dispatch_marker in body
     assert body.index(owner_marker) < body.index(dispatch_marker)
-    assert "(list request-id *mcp-error-result-conflict*)" in body
+    assert "(list request-id claim *mcp-error-result-conflict*)" in body
 
 
 def test_deferred_close_replay_cannot_publish_a_competing_terminal_result() -> None:
@@ -915,7 +942,7 @@ def test_deferred_close_replay_cannot_publish_a_competing_terminal_result() -> N
     assert match is not None
     body = match.group("body")
     guard = "(not (mcp-pending-result-owner-p root request-id))"
-    writer = "(mcp-write-result root request-id (mcp-failure request-id error-code) nil)"
+    writer = "(mcp-write-result root request-id (mcp-failure request-id claim error-code) nil)"
     assert guard in body
     assert writer in body
     assert body.index(guard) < body.index(writer)
@@ -932,6 +959,7 @@ def test_deferred_close_checks_result_slot_before_close_and_releases_only_after_
     body = match.group("body")
     assert "mcp-result-slot-free-p" in body
     assert "mcp-result-owner-release" in body
+    assert '(mcp-json-get envelope "claim")' in body
     assert re.search(
         r"\(if\s+\(mcp-write-result\s+root\s+request-id\s+result\s+nonce\).*?"
         r"mcp-result-owner-release.*?mcp-error-result-conflict",
@@ -952,9 +980,9 @@ def test_deferred_close_cancellation_and_close_failure_use_bound_terminal_failur
     body = match.group("body")
     assert "(eq reaction ':vlr-lispcancelled)" in body
     assert "(vl-catch-all-error-p close-result)" in body
-    assert "(mcp-failure request-id *mcp-error-failed*)" in body
+    assert "(mcp-failure request-id claim *mcp-error-failed*)" in body
     cancelled = body[body.index("':vlr-lispcancelled"):]
-    assert "mcp-failure request-id *mcp-error-failed*" in cancelled
+    assert "mcp-failure request-id claim *mcp-error-failed*" in cancelled
     assert "'vla-close" not in cancelled
 
 

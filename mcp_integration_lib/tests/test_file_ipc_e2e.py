@@ -1,5 +1,6 @@
 """Opt-in real AutoCAD Phase 4 smoke test."""
 from contextlib import contextmanager
+import json
 import os
 import tempfile
 import unittest
@@ -22,9 +23,11 @@ from primitive_ir_lib.models import (
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
+    _validate_file_ipc_result,
     make_windows_command_trigger,
     make_windows_dispatch_trigger,
     make_windows_lisp_trigger,
+    MCPToolError,
 )
 from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import review_dxf_live
@@ -33,6 +36,88 @@ from dxf_builder_lib.reviewer import review_dxf
 
 
 pytestmark = pytest.mark.autocad_mechanical
+
+
+def test_file_ipc_result_requires_exact_per_request_claim() -> None:
+    request_id = "a1b2c3d4e5f6"
+    claim = "fresh-unpredictable-claim"
+    accepted = {
+        "request_id": request_id,
+        "claim": claim,
+        "ok": True,
+        "payload": {},
+    }
+
+    for rejected in (
+        {key: value for key, value in accepted.items() if key != "claim"},
+        {**accepted, "claim": "different-claim"},
+    ):
+        with pytest.raises(MCPToolError, match="IPC_RESULT_INVALID"):
+            _validate_file_ipc_result(rejected, request_id, claim)
+
+    assert _validate_file_ipc_result(accepted, request_id, claim) == {}
+
+
+def test_file_ipc_dispatch_binds_fresh_claim_to_request_and_terminal_result(tmp_path) -> None:
+    claims = []
+
+    def trigger() -> None:
+        request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        request_id = request["request_id"]
+        claim = request["claim"]
+        claims.append(claim)
+        (tmp_path / f"autocad_mcp_result_{request_id}.json").write_text(
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "claim": claim,
+                    "ok": True,
+                    "payload": {"ready": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.2,
+        poll_interval_s=0.001,
+    )
+
+    assert client._dispatch("ping", {}) == {"ready": True}
+    assert client._dispatch("ping", {}) == {"ready": True}
+    assert len(claims) == 2
+    assert claims[0] != claims[1]
+
+
+def test_file_ipc_dispatch_accepts_exact_claim_on_terminal_error(tmp_path) -> None:
+    def trigger() -> None:
+        request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        result_path = tmp_path / f"autocad_mcp_result_{request['request_id']}.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "request_id": request["request_id"],
+                    "claim": request["claim"],
+                    "ok": False,
+                    "error": "IPC_COMMAND_FAILED",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        timeout_s=0.2,
+        poll_interval_s=0.001,
+    )
+
+    with pytest.raises(MCPToolError, match="IPC_COMMAND_FAILED"):
+        client._dispatch("ping", {})
 
 
 @unittest.skipUnless(os.getenv("CAD_AGENT_FILE_IPC") == "1", "requires AutoCAD File IPC")
