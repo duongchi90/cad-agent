@@ -15,7 +15,7 @@ The system therefore needs an explicit, server-owned capture plan and an observe
 
 ## 2. Goals
 
-1. Make every R5 visual cycle start from a canonical whole-drawing view.
+1. Make every R5 visual cycle begin from canonical whole-context coverage for each server-owned view/sheet/layout group that is actually under review.
 2. Make every required R5 region receive a deterministic region view derived from CAD-space coordinates, not from ad-hoc mouse zooming.
 3. Allow bounded detail captures only when the visual supervisor asks for more evidence.
 4. Bind every capture to the exact current candidate, latest mutation, visual scope, view/layout and render/image artifact.
@@ -56,22 +56,26 @@ Neither contract may issue a verdict, mutate CAD, approve repair, publish artifa
 
 ## 5. Canonical capture hierarchy
 
-Every visual cycle uses three capture classes.
+A capture group is the server-owned tuple `(view_id, sheet_id, layout_id)` represented by one or more regions in `visual_review_scope`.
 
 ### 5.1 GLOBAL
 
-Purpose: establish whole-drawing context before any local judgement.
+Purpose: establish whole-context framing before local judgement.
 
 Required semantics:
 
 - `capture_class = GLOBAL`
 - `zoom_mode = EXTENTS`
 - deterministic margin policy
-- canonical top/world view for 2D drawing review unless the server-owned scope explicitly references another accepted view
+- one GLOBAL capture for each capture group under review
+- the first capture consumed for a group is its GLOBAL capture
+- canonical top/world view for 2D drawing review unless the accepted server-owned view explicitly requires another orientation
 - canonical visual style
 - canonical background/render policy inherited from the accepted native-render path where applicable
 
-GLOBAL is mandatory for every R5 cycle. A missing GLOBAL receipt makes the visual cycle non-PASS.
+For the common single-layout case this means exactly one initial ZOOM EXTENTS/FIT capture. For multi-layout or multi-view review it means exactly one GLOBAL per distinct capture group, not one arbitrary global image for the entire run.
+
+Missing GLOBAL coverage for any required capture group makes the visual cycle non-PASS.
 
 ### 5.2 REGION
 
@@ -84,6 +88,7 @@ Required semantics:
 - window is derived from a server-owned WCS bounding box
 - a deterministic margin is applied to the bounding box
 - the region identity must already exist in the accepted `visual_review_scope`
+- the REGION capture must use the same view/sheet/layout capture group as that region
 
 The provider/model may not replace the WCS window with a self-chosen crop.
 
@@ -97,8 +102,9 @@ Required semantics:
 
 - `capture_class = DETAIL`
 - `zoom_mode = WINDOW`
-- bounded by the parent REGION identity
-- requested explicitly as next evidence by the visual supervisor or by an equivalent server-owned decision
+- `parent_region_id` identifies the already accepted REGION that owns the detail
+- detail WCS bbox must be bounded by, or deterministically derived from, that parent region policy
+- requested explicitly as next evidence by the visual supervisor or an equivalent server-owned decision
 - cannot replace mandatory GLOBAL or REGION evidence
 
 DETAIL is optional. Absence is acceptable only when the current R5 cycle does not request it.
@@ -119,12 +125,13 @@ The plan is closed and server-owned. Suggested normalized shape:
   "latest_mutation_sha256": "...",
   "captures": [
     {
-      "capture_id": "global-1",
+      "capture_id": "global-model",
       "capture_class": "GLOBAL",
       "region_id": null,
-      "view_id": "...",
-      "sheet_id": "...",
-      "layout_id": "...",
+      "parent_region_id": null,
+      "view_id": "view-front",
+      "sheet_id": "sheet-a",
+      "layout_id": "model",
       "zoom_mode": "EXTENTS",
       "wcs_bbox": null,
       "margin_ratio": 0.05,
@@ -136,9 +143,10 @@ The plan is closed and server-owned. Suggested normalized shape:
       "capture_id": "region-a",
       "capture_class": "REGION",
       "region_id": "region-a",
-      "view_id": "...",
-      "sheet_id": "...",
-      "layout_id": "...",
+      "parent_region_id": null,
+      "view_id": "view-front",
+      "sheet_id": "sheet-a",
+      "layout_id": "model",
       "zoom_mode": "WINDOW",
       "wcs_bbox": [0.0, 0.0, 100.0, 50.0],
       "margin_ratio": 0.10,
@@ -150,16 +158,17 @@ The plan is closed and server-owned. Suggested normalized shape:
 }
 ```
 
-The concrete implementation may use existing project identifier conventions, but the following invariants are mandatory:
+Mandatory invariants:
 
 - plan is bound to exact server-owned scope/current candidate/current mutation;
-- exactly one GLOBAL capture exists per cycle;
-- GLOBAL uses EXTENTS semantics and has no arbitrary WCS crop;
+- each distinct capture group in the scope has exactly one GLOBAL capture;
+- GLOBAL uses EXTENTS semantics and has no caller-chosen WCS crop;
 - every server-required region has exactly one REGION capture;
 - REGION/DETAIL use finite, non-degenerate WCS bounding boxes;
-- margins are finite and restricted to a bounded policy range;
+- DETAIL has exactly one valid `parent_region_id` and cannot parent to another DETAIL;
+- margins are finite and restricted to a bounded server policy range;
 - unknown properties fail closed;
-- duplicate capture IDs or duplicate required REGION coverage fail closed;
+- duplicate capture IDs, duplicate GLOBAL coverage within a group, or duplicate required REGION coverage fail closed;
 - provider-supplied plan substitution is rejected.
 
 The canonical SHA-256 of the normalized plan becomes `visual_capture_plan_sha256`.
@@ -176,9 +185,10 @@ The receipt records what was actually observed/executed. Suggested normalized sh
   "run_id": "...",
   "scope_id": "...",
   "region_id": "region-a",
-  "view_id": "...",
-  "sheet_id": "...",
-  "layout_id": "...",
+  "parent_region_id": null,
+  "view_id": "view-front",
+  "sheet_id": "sheet-a",
+  "layout_id": "model",
   "candidate_revision_sha256": "...",
   "candidate_state_sha256": "...",
   "latest_mutation_sha256": "...",
@@ -207,9 +217,10 @@ Mandatory receipt invariants:
 
 - exact plan SHA match;
 - exact run/scope/candidate/mutation match;
-- exact capture identity/class match;
-- GLOBAL receipt proves EXTENTS/FIT-equivalent canonical framing;
+- exact capture identity/class/group match;
+- GLOBAL receipt proves EXTENTS/FIT-equivalent canonical framing for its capture group;
 - REGION/DETAIL receipt proves requested window framing within an explicit numeric tolerance owned by the validator;
+- DETAIL receipt matches its `parent_region_id`;
 - exact view/layout/UCS/view-direction/visual-style policy match;
 - artifact SHA and dimensions are validated;
 - transient AutoCAD state is restored after capture;
@@ -229,7 +240,7 @@ For `bbox = [xmin, ymin, xmax, ymax]`:
 - if the region is degenerate or effectively point/line-only, use an explicit minimum-view-size policy rather than an unbounded zoom;
 - all numeric normalization must follow existing deterministic numeric/canonical JSON policy where possible.
 
-The first implementation should use a fixed default margin policy rather than expose free-form provider tuning. The recommended defaults are:
+Initial server policy defaults:
 
 - GLOBAL margin: 5%;
 - REGION margin: 10%;
@@ -244,7 +255,7 @@ A visual comparison is camera-compatible only when both observations resolve to 
 At minimum, the comparator must require equality of:
 
 - capture class;
-- view/layout identity;
+- capture-group identity;
 - zoom mode;
 - normalized requested camera/window policy;
 - view direction;
@@ -254,7 +265,7 @@ At minimum, the comparator must require equality of:
 
 The image pixels do not need to be byte-identical because the CAD geometry may have changed. The camera *policy* must be equivalent.
 
-For a mutation that changes region extents, a fresh REGION plan may legitimately produce a different WCS bbox. In that case the comparison is still valid only if both plans derive from the same deterministic region-bbox policy and the comparison layer records the two plan identities rather than pretending the raw windows were equal.
+For a mutation that changes region extents, a fresh REGION plan may legitimately produce a different WCS bbox. In that case the comparison is valid only if both plans derive from the same deterministic region-bbox policy and the comparison layer records both plan identities rather than pretending the raw windows were equal.
 
 ## 10. Freshness and mutation semantics
 
@@ -274,8 +285,8 @@ R5 may produce a visual PASS only if:
 
 1. server-owned `visual_review_scope` is current;
 2. server-owned `visual_capture_plan` is current;
-3. one valid GLOBAL receipt exists;
-4. every required region has one valid REGION receipt;
+3. every required capture group has exactly one valid GLOBAL receipt;
+4. every required region has exactly one valid REGION receipt;
 5. every requested DETAIL capture has a valid receipt;
 6. each receipt is fresh and bound to the exact artifact supplied to the visual provider;
 7. no receipt is camera-incompatible with its plan;
@@ -295,19 +306,19 @@ server-owned visual_review_scope
         v
 visual_capture_plan
         |
-        +--> GLOBAL EXTENTS capture --------+
+        +--> GLOBAL EXTENTS per capture group --+
         |
-        +--> REGION WINDOW capture(s) ------+--> receipts + exact artifacts
-        |                                    |
-        +--> optional DETAIL capture(s) -----+
-                                             |
-                                             v
-                                      R5 visual provider
-                                             |
-                                             v
-                              post-provider freshness validation
-                                             |
-                                      PASS / FAIL / NEEDS_HUMAN
+        +--> REGION WINDOW capture(s) ----------+--> receipts + exact artifacts
+        |                                        |
+        +--> optional DETAIL capture(s) ---------+
+                                                 |
+                                                 v
+                                          R5 visual provider
+                                                 |
+                                                 v
+                                  post-provider freshness validation
+                                                 |
+                                          PASS / FAIL / NEEDS_HUMAN
 ```
 
 The visual provider may request DETAIL evidence, but it may not alter mandatory GLOBAL/REGION membership or camera policy.
@@ -361,8 +372,9 @@ This live slice must reuse the existing File-IPC owner. It may not create an R8-
 
 Contract RED tests must include at least:
 
-- missing GLOBAL;
-- two GLOBAL captures;
+- missing GLOBAL for a required capture group;
+- duplicate GLOBAL within one capture group;
+- multi-layout scope with one layout missing GLOBAL;
 - missing required REGION;
 - duplicate REGION coverage;
 - unknown capture class;
@@ -375,13 +387,14 @@ Contract RED tests must include at least:
 - plan SHA mismatch;
 - candidate revision/state mismatch;
 - mutation mismatch/stale receipt;
-- view/layout mismatch;
+- view/layout/capture-group mismatch;
 - UCS/view-direction/visual-style mismatch;
 - requested/observed window mismatch beyond tolerance;
 - wrong artifact SHA/dimensions;
 - transient state not restored;
 - replay across run/scope/mutation;
-- DETAIL not parented to an accepted REGION;
+- DETAIL without `parent_region_id`;
+- DETAIL parented to wrong/foreign REGION;
 - DETAIL attempting to replace mandatory REGION;
 - SKIP/NOT_RUN coverage treated as non-PASS;
 - before/after camera-policy incompatibility.
@@ -427,7 +440,7 @@ The feature is complete only when:
 
 - closed plan/receipt contracts are merged with RED-first coverage;
 - evidence freshness rejects stale/foreign camera receipts;
-- R5 PASS requires canonical GLOBAL + all required REGION coverage;
+- R5 PASS requires canonical GLOBAL coverage for every required capture group plus all required REGION coverage;
 - on-demand DETAIL works without replacing mandatory coverage;
 - live AutoCAD can execute EXTENTS/WINDOW framing and return an observed receipt;
 - capture is proven read-only and transient state is restored;
