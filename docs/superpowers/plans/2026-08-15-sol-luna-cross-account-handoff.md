@@ -43,10 +43,10 @@
 - Consumes: `docs/SOL_HANDOFF.md`.
 - Produces: a copy/paste ChatGPT Project instruction block that directs new accounts to the current SOL role rather than the superseded PO-read-only role.
 
-- [ ] Replace the stale PO-only bootstrap with SOL-first instructions.
-- [ ] Make `docs/SOL_HANDOFF.md` the first role/authority document read.
-- [ ] Preserve fresh GitHub verification and truthful PASS/FAIL/SKIP/NOT RUN rules.
-- [ ] Explicitly reserve Luna for machine-local gates.
+- [x] Replace the stale PO-only bootstrap with SOL-first instructions.
+- [x] Make `docs/SOL_HANDOFF.md` the first role/authority document read.
+- [x] Preserve fresh GitHub verification and truthful PASS/FAIL/SKIP/NOT RUN rules.
+- [x] Explicitly reserve Luna for machine-local gates.
 
 ### Task 3: Publish discoverability without drifting main
 
