@@ -35,9 +35,6 @@ from dxf_builder_lib.repair import repair_insert_components
 from dxf_builder_lib.reviewer import review_dxf
 
 
-pytestmark = pytest.mark.autocad_mechanical
-
-
 def test_file_ipc_result_requires_exact_per_request_claim() -> None:
     request_id = "a1b2c3d4e5f6"
     claim = "fresh-unpredictable-claim"
@@ -122,6 +119,7 @@ def test_file_ipc_dispatch_accepts_exact_claim_on_terminal_error(tmp_path) -> No
         client._dispatch("ping", {})
 
 
+@pytest.mark.autocad_mechanical
 @unittest.skipUnless(os.getenv("CAD_AGENT_FILE_IPC") == "1", "requires AutoCAD File IPC")
 class FileIPCEndToEndTests(unittest.TestCase):
     def _client(self):
