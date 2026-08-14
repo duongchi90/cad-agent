@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.PlottingServices;
 using CadAgent.AutoCAD2027.Ipc;
 using AcadApplication = Autodesk.AutoCAD.ApplicationServices.Application;
@@ -16,6 +17,14 @@ public static class AutoCadNativeRenderReader
     private const string A4MediaName = "ISO_A4_(210.00_x_297.00_MM)";
     private const double A4WidthMillimeters = 210;
     private const double A4HeightMillimeters = 297;
+
+    private sealed record CameraWindow(
+        IReadOnlyList<double>? RequestedWcsBbox,
+        IReadOnlyList<double>? ObservedWcsBbox,
+        IReadOnlyList<double> ViewCenter,
+        double ViewWidth,
+        double ViewHeight,
+        Extents2d PlotWindow);
 
     public static NativeRenderEvidenceSnapshot Capture(
         Document document,
@@ -54,11 +63,12 @@ public static class AutoCadNativeRenderReader
         var backgroundPlotBefore = AcadApplication.GetSystemVariable("BACKGROUNDPLOT");
         Exception? operationFailure = null;
         var sessionStateRestored = false;
+        CameraWindow? cameraWindow = null;
 
         try
         {
             AcadApplication.SetSystemVariable("BACKGROUNDPLOT", 0);
-            PlotLayout(document, request, reservation.TemporaryPath);
+            cameraWindow = PlotLayout(document, request, reservation.TemporaryPath);
         }
         catch (Exception exception)
         {
@@ -96,6 +106,12 @@ public static class AutoCadNativeRenderReader
             sessionStateRestored);
 
         var artifact = boundary.Publish(reservation);
+        var receipt = CreateCameraReceipt(
+            request,
+            cameraWindow,
+            artifact,
+            captureTimestamp.ToUniversalTime(),
+            sessionStateRestored);
         return new NativeRenderEvidenceSnapshot(
             request.RequestId,
             request.RunId,
@@ -109,10 +125,11 @@ public static class AutoCadNativeRenderReader
             captureTimestamp.ToUniversalTime(),
             dbmodBefore,
             dbmodAfter,
-            Array.Empty<string>());
+            Array.Empty<string>(),
+            receipt);
     }
 
-    private static void PlotLayout(
+    private static CameraWindow? PlotLayout(
         Document document,
         NativeRenderRequest request,
         string outputPath)
@@ -126,6 +143,7 @@ public static class AutoCadNativeRenderReader
             ?? throw new InvalidOperationException("The active AutoCAD document has no database.");
         ObjectId layoutId;
         PlotSettings plotSettings;
+        CameraWindow? cameraWindow;
         using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
         {
             var layouts = (DBDictionary)transaction.GetObject(
@@ -150,9 +168,15 @@ public static class AutoCadNativeRenderReader
             }
 
             layoutId = matches[0].Id;
+            cameraWindow = request.RenderOptions.Camera is null
+                ? null
+                : BuildCanonicalCameraWindow(
+                    transaction,
+                    matches[0].Layout,
+                    request.RenderOptions.Camera);
             plotSettings = new PlotSettings(matches[0].Layout.ModelType);
             plotSettings.CopyFrom(matches[0].Layout);
-            ConfigurePlotSettings(plotSettings, request);
+            ConfigurePlotSettings(plotSettings, request, cameraWindow);
         }
 
         using (plotSettings)
@@ -166,11 +190,182 @@ public static class AutoCadNativeRenderReader
             plotInfoValidator.Validate(plotInfo);
             ExecutePlot(document, plotInfo, outputPath);
         }
+
+        return cameraWindow;
+    }
+
+    private static CameraWindow BuildCanonicalCameraWindow(
+        Transaction transaction,
+        Layout layout,
+        NativeRenderCamera camera)
+    {
+        NativeRenderPolicy.EnsureCameraSupported(camera);
+        IReadOnlyList<double>? requested = null;
+        double minX;
+        double minY;
+        double maxX;
+        double maxY;
+
+        if (camera.CaptureClass == "GLOBAL")
+        {
+            var extents = ReadLayoutExtents(transaction, layout);
+            minX = extents.MinPoint.X;
+            minY = extents.MinPoint.Y;
+            maxX = extents.MaxPoint.X;
+            maxY = extents.MaxPoint.Y;
+        }
+        else
+        {
+            var bbox = camera.WcsBbox
+                ?? throw new InvalidDataException("WINDOW canonical camera requires wcs_bbox.");
+            requested = bbox.ToArray();
+            minX = bbox[0];
+            minY = bbox[1];
+            maxX = bbox[2];
+            maxY = bbox[3];
+        }
+
+        var rawWidth = maxX - minX;
+        var rawHeight = maxY - minY;
+        if (!double.IsFinite(rawWidth)
+            || !double.IsFinite(rawHeight)
+            || rawWidth <= 0
+            || rawHeight <= 0)
+        {
+            throw new InvalidDataException("The canonical camera extents are degenerate.");
+        }
+
+        var centerX = (minX + maxX) / 2.0;
+        var centerY = (minY + maxY) / 2.0;
+        var viewWidth = rawWidth * (1.0 + 2.0 * camera.MarginRatio);
+        var viewHeight = rawHeight * (1.0 + 2.0 * camera.MarginRatio);
+        if (!double.IsFinite(viewWidth)
+            || !double.IsFinite(viewHeight)
+            || viewWidth <= 0
+            || viewHeight <= 0)
+        {
+            throw new InvalidDataException("The canonical camera margin produced invalid extents.");
+        }
+
+        var halfWidth = viewWidth / 2.0;
+        var halfHeight = viewHeight / 2.0;
+        var plotWindow = new Extents2d(
+            new Point2d(centerX - halfWidth, centerY - halfHeight),
+            new Point2d(centerX + halfWidth, centerY + halfHeight));
+        return new CameraWindow(
+            requested,
+            requested?.ToArray(),
+            new[] { centerX, centerY },
+            viewWidth,
+            viewHeight,
+            plotWindow);
+    }
+
+    private static Extents3d ReadLayoutExtents(Transaction transaction, Layout layout)
+    {
+        var blockRecord = (BlockTableRecord)transaction.GetObject(
+            layout.BlockTableRecordId,
+            OpenMode.ForRead);
+        Extents3d? combined = null;
+        foreach (ObjectId objectId in blockRecord)
+        {
+            if (!objectId.IsValid || objectId.IsErased)
+            {
+                continue;
+            }
+
+            var entity = transaction.GetObject(objectId, OpenMode.ForRead, false) as Entity;
+            if (entity is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                var extents = entity.GeometricExtents;
+                if (combined is null)
+                {
+                    combined = extents;
+                }
+                else
+                {
+                    var value = combined.Value;
+                    value.AddExtents(extents);
+                    combined = value;
+                }
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                // Some non-graphical/empty entities do not expose extents. They cannot
+                // define visual framing and are intentionally ignored.
+            }
+        }
+
+        return combined
+            ?? throw new InvalidDataException(
+                "GLOBAL canonical camera could not derive non-degenerate layout extents.");
+    }
+
+    private static NativeRenderCameraReceipt? CreateCameraReceipt(
+        NativeRenderRequest request,
+        CameraWindow? cameraWindow,
+        NativeRenderArtifact artifact,
+        DateTimeOffset captureTimestamp,
+        bool transientStateRestored)
+    {
+        var camera = request.RenderOptions.Camera;
+        if (camera is null)
+        {
+            if (cameraWindow is not null)
+            {
+                throw new InvalidDataException("Legacy native render unexpectedly produced camera state.");
+            }
+            return null;
+        }
+        if (cameraWindow is null)
+        {
+            throw new InvalidDataException("Canonical camera render did not produce observed camera state.");
+        }
+        if (!artifact.Width.HasValue || !artifact.Height.HasValue)
+        {
+            throw new InvalidDataException("Canonical camera render requires PNG artifact dimensions.");
+        }
+
+        return new NativeRenderCameraReceipt(
+            "visual-capture-receipt-1.0",
+            $"receipt-{camera.CaptureId}",
+            camera.CaptureId,
+            request.RunId,
+            camera.ScopeId,
+            camera.RegionId,
+            camera.ViewId,
+            camera.SheetId,
+            camera.LayoutId,
+            camera.CandidateRevisionSha256,
+            camera.CandidateStateSha256,
+            request.LatestMutationSha256,
+            camera.VisualCapturePlanSha256,
+            camera.CaptureClass,
+            camera.ZoomMode,
+            cameraWindow.RequestedWcsBbox,
+            cameraWindow.ObservedWcsBbox,
+            cameraWindow.ViewCenter,
+            cameraWindow.ViewWidth,
+            cameraWindow.ViewHeight,
+            camera.ViewDirection,
+            camera.Ucs,
+            camera.VisualStyle,
+            artifact.Sha256,
+            artifact.Width.Value,
+            artifact.Height.Value,
+            captureTimestamp,
+            transientStateRestored);
     }
 
     private static void ConfigurePlotSettings(
         PlotSettings plotSettings,
-        NativeRenderRequest request)
+        NativeRenderRequest request,
+        CameraWindow? cameraWindow)
     {
         var validator = PlotSettingsValidator.Current;
         var device = request.ArtifactKind == "PNG" ? PngDevice : PdfDevice;
@@ -244,7 +439,20 @@ public static class AutoCadNativeRenderReader
                 + "The approved media could not be selected.",
                 exception);
         }
-        validator.SetPlotType(plotSettings, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
+
+        if (request.RenderOptions.Camera is null)
+        {
+            validator.SetPlotType(plotSettings, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
+        }
+        else
+        {
+            if (cameraWindow is null)
+            {
+                throw new InvalidDataException("Canonical camera plot window is missing.");
+            }
+            validator.SetPlotType(plotSettings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
+            validator.SetPlotWindowArea(plotSettings, cameraWindow.PlotWindow);
+        }
         validator.SetUseStandardScale(plotSettings, true);
         validator.SetStdScaleType(plotSettings, StdScaleType.ScaleToFit);
         validator.SetCurrentStyleSheet(plotSettings, request.RenderOptions.PlotStyle);
