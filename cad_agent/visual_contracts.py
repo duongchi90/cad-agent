@@ -1102,6 +1102,34 @@ def _normalize_visual_capture_plan_payload(
     return normalized
 
 
+def _bbox_contains(parent: list[object], child: list[object]) -> bool:
+    parent_min_x, parent_min_y, parent_max_x, parent_max_y = map(float, parent)
+    child_min_x, child_min_y, child_max_x, child_max_y = map(float, child)
+
+    def not_below(value: float, lower: float) -> bool:
+        return value > lower or math.isclose(
+            value,
+            lower,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        )
+
+    def not_above(value: float, upper: float) -> bool:
+        return value < upper or math.isclose(
+            value,
+            upper,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        )
+
+    return (
+        not_below(child_min_x, parent_min_x)
+        and not_below(child_min_y, parent_min_y)
+        and not_above(child_max_x, parent_max_x)
+        and not_above(child_max_y, parent_max_y)
+    )
+
+
 def _validate_visual_capture_plan(
     payload: dict[str, Any], *, server_scope: Mapping[str, object] | None = None
 ) -> None:
@@ -1131,6 +1159,13 @@ def _validate_visual_capture_plan(
     region_counts = {region_id: 0 for region_id in region_by_id}
     captures = normalized["captures"]
     assert isinstance(captures, list)
+    region_capture_by_id = {
+        str(capture["region_id"]): capture
+        for capture in captures
+        if capture["capture_class"] == "REGION"
+    }
+    seen_groups: set[tuple[str, str, str]] = set()
+
     for capture in captures:
         capture_class = capture["capture_class"]
         identity = (
@@ -1142,6 +1177,7 @@ def _validate_visual_capture_plan(
             if identity not in global_counts:
                 _fail(contract, "GLOBAL capture is outside the server-owned scope")
             global_counts[identity] += 1
+            seen_groups.add(identity)
             continue
         region_id = str(capture["region_id"])
         region = region_by_id.get(region_id)
@@ -1154,12 +1190,23 @@ def _validate_visual_capture_plan(
         )
         if identity != expected_identity:
             _fail(contract, "view_id/sheet_id/layout_id do not match the server-owned scope")
+        if identity not in seen_groups:
+            _fail(contract, "the first capture for each server-owned group must be GLOBAL")
         if capture_class == "REGION":
             region_counts[region_id] += 1
         else:
             parent_region_id = capture["parent_region_id"]
             if parent_region_id != region_id or parent_region_id not in region_by_id:
                 _fail(contract, "parent_region_id must identify the accepted parent REGION")
+            parent_capture = region_capture_by_id.get(str(parent_region_id))
+            if parent_capture is None:
+                _fail(contract, "DETAIL parent REGION capture is missing")
+            parent_bbox = parent_capture["wcs_bbox"]
+            detail_bbox = capture["wcs_bbox"]
+            assert isinstance(parent_bbox, list)
+            assert isinstance(detail_bbox, list)
+            if not _bbox_contains(parent_bbox, detail_bbox):
+                _fail(contract, "DETAIL bbox must be bounded by its parent REGION bbox")
 
     if any(count != 1 for count in global_counts.values()):
         _fail(contract, "exactly one GLOBAL capture is required per server-owned view/sheet/layout")
@@ -1291,10 +1338,47 @@ def _validate_visual_capture_receipt(
             _fail(contract, "observed_wcs_bbox is outside the accepted camera tolerance")
 
     _validate_point(payload["view_center"], contract=contract, path="view_center")
-    for key in ("view_width", "view_height"):
-        value = _finite_number(payload[key], contract=contract, path=key)
-        if value <= 0:
-            _fail(contract, f"{key} must be positive")
+    view_width = _finite_number(payload["view_width"], contract=contract, path="view_width")
+    view_height = _finite_number(payload["view_height"], contract=contract, path="view_height")
+    if view_width <= 0:
+        _fail(contract, "view_width must be positive")
+    if view_height <= 0:
+        _fail(contract, "view_height must be positive")
+
+    if capture["capture_class"] != "GLOBAL":
+        assert isinstance(expected_bbox, list)
+        min_x, min_y, max_x, max_y = map(float, expected_bbox)
+        margin = float(capture["margin_ratio"])
+        expected_center = ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
+        actual_center = payload["view_center"]
+        assert isinstance(actual_center, list)
+        if any(
+            not math.isclose(
+                float(actual),
+                expected,
+                rel_tol=_CAPTURE_BBOX_REL_TOL,
+                abs_tol=_CAPTURE_BBOX_ABS_TOL,
+            )
+            for actual, expected in zip(actual_center, expected_center, strict=True)
+        ):
+            _fail(contract, "view_center does not match the accepted bbox center")
+        expected_width = (max_x - min_x) * (1.0 + 2.0 * margin)
+        expected_height = (max_y - min_y) * (1.0 + 2.0 * margin)
+        if not math.isclose(
+            float(view_width),
+            expected_width,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        ):
+            _fail(contract, "view_width does not match the accepted bbox margin policy")
+        if not math.isclose(
+            float(view_height),
+            expected_height,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        ):
+            _fail(contract, "view_height does not match the accepted bbox margin policy")
+
     _sha256(payload["artifact_sha256"], contract=contract, path="artifact_sha256")
     _positive_integer(payload["artifact_width"], contract=contract, path="artifact_width")
     _positive_integer(payload["artifact_height"], contract=contract, path="artifact_height")
