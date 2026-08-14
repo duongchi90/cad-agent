@@ -498,14 +498,28 @@
         params (mcp-json-get request "params"))
   (and
     (mcp-json-object-p request)
-    (= (length keys) 4)
+    (or
+      (and
+        (= (length keys) 3)
+        (member "request_id" keys)
+        (not (member "claim" keys))
+        (member "command" keys)
+        (member "params" keys)
+      )
+      (and
+        (= (length keys) 4)
+        (member "request_id" keys)
+        (member "claim" keys)
+        (member "command" keys)
+        (member "params" keys)
+        (= (type claim) 'STR)
+        (> (strlen claim) 0)
+      )
+    )
     (member "request_id" keys)
-    (member "claim" keys)
     (member "command" keys)
     (member "params" keys)
     (= (type id) 'STR)
-    (= (type claim) 'STR)
-    (> (strlen claim) 0)
     (= (type command) 'STR)
     (mcp-json-object-p params)
   )
@@ -608,22 +622,26 @@
 
 (defun mcp-success (request-id claim payload)
   (mcp-object
-    (list
-      (cons "request_id" request-id)
-      (cons "claim" claim)
-      (cons "ok" 'MCP_JSON_TRUE)
-      (cons "payload" payload)
+    (append
+      (list (cons "request_id" request-id))
+      (if claim (list (cons "claim" claim)) nil)
+      (list
+        (cons "ok" 'MCP_JSON_TRUE)
+        (cons "payload" payload)
+      )
     )
   )
 )
 
 (defun mcp-failure (request-id claim code)
   (mcp-object
-    (list
-      (cons "request_id" request-id)
-      (cons "claim" claim)
-      (cons "ok" 'MCP_JSON_FALSE)
-      (cons "error" code)
+    (append
+      (list (cons "request_id" request-id))
+      (if claim (list (cons "claim" claim)) nil)
+      (list
+        (cons "ok" 'MCP_JSON_FALSE)
+        (cons "error" code)
+      )
     )
   )
 )

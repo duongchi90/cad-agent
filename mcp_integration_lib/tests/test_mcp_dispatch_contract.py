@@ -236,6 +236,7 @@ def test_file_ipc_dispatch_binds_request_filename_payload_and_result_identity(tm
     client = FileIPCLiveMCPClient(
         ipc_dir=str(tmp_path),
         trigger=trigger,
+        legacy_fixture_mode=False,
         timeout_s=0.2,
         poll_interval_s=0.001,
     )
@@ -252,16 +253,15 @@ def test_file_ipc_client_mints_fresh_unpredictable_claims() -> None:
     assert "secrets.token_hex(32)" in source
 
 
-def test_file_ipc_dispatch_rejects_result_request_id_mismatch_categorically(tmp_path: Path) -> None:
+def test_file_ipc_claim_bound_client_rejects_claimless_terminal_result(tmp_path: Path) -> None:
     def trigger() -> None:
         request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
         request = json.loads(request_path.read_text(encoding="utf-8"))
-        request_id = request["request_id"]
-        result_path = tmp_path / f"autocad_mcp_result_{request_id}.json"
-        result_path.write_text(
+        assert request["claim"]
+        (tmp_path / f"autocad_mcp_result_{request['request_id']}.json").write_text(
             json.dumps(
                 {
-                    "request_id": "different-request-id",
+                    "request_id": request["request_id"],
                     "ok": True,
                     "payload": {},
                 }
@@ -272,6 +272,62 @@ def test_file_ipc_dispatch_rejects_result_request_id_mismatch_categorically(tmp_
     client = FileIPCLiveMCPClient(
         ipc_dir=str(tmp_path),
         trigger=trigger,
+        legacy_fixture_mode=False,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    with pytest.raises(MCPToolError, match="IPC_RESULT_INVALID"):
+        client._dispatch("ping", {})
+
+
+def test_file_ipc_legacy_fixture_mode_binds_only_request_id(tmp_path: Path) -> None:
+    def trigger() -> None:
+        request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        assert set(request) == {"request_id", "command", "params"}
+        (tmp_path / f"autocad_mcp_result_{request['request_id']}.json").write_text(
+            json.dumps(
+                {
+                    "request_id": request["request_id"],
+                    "ok": True,
+                    "payload": {"legacy": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        legacy_fixture_mode=True,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+    assert client._dispatch("ping", {}) == {"legacy": True}
+
+
+def test_file_ipc_dispatch_rejects_result_request_id_mismatch_categorically(tmp_path: Path) -> None:
+    def trigger() -> None:
+        request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        request_id = request["request_id"]
+        result_path = tmp_path / f"autocad_mcp_result_{request_id}.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "request_id": "different-request-id",
+                    "claim": request["claim"],
+                    "ok": True,
+                    "payload": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        legacy_fixture_mode=False,
         timeout_s=0.02,
         poll_interval_s=0.001,
     )
@@ -697,6 +753,35 @@ def test_request_and_terminal_envelopes_bind_the_exact_per_request_claim() -> No
     assert re.search(r"\(defun\s+mcp-failure\s+\(request-id\s+claim\s+code\)", source)
     assert "(mcp-success request-id claim result)" in source
     assert "(mcp-failure request-id claim *mcp-error-failed*)" in source
+
+
+def test_dispatcher_legacy_envelopes_are_claimless_only_for_claimless_requests() -> None:
+    source = _dispatcher_source().casefold()
+    request_validator = re.search(
+        r"\(defun\s+mcp-request-object-valid-p\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert request_validator is not None
+    body = request_validator.group("body")
+    assert "(= (length keys) 3)" in body
+    assert "(= (length keys) 4)" in body
+    assert "(member \"claim\" keys)" in body
+
+    success = re.search(
+        r"\(defun\s+mcp-success\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    failure = re.search(
+        r"\(defun\s+mcp-failure\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert success is not None and failure is not None
+    for envelope in (success.group("body"), failure.group("body")):
+        assert "(cons \"claim\" claim)" in envelope
+        assert "(if claim" in envelope
 
 
 def test_failures_use_fixed_categorical_material_and_never_own_python_cleanup() -> None:

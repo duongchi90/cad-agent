@@ -82,6 +82,7 @@ def test_file_ipc_dispatch_binds_fresh_claim_to_request_and_terminal_result(tmp_
     client = FileIPCLiveMCPClient(
         ipc_dir=str(tmp_path),
         trigger=trigger,
+        legacy_fixture_mode=False,
         timeout_s=0.2,
         poll_interval_s=0.001,
     )
@@ -112,6 +113,7 @@ def test_file_ipc_dispatch_accepts_exact_claim_on_terminal_error(tmp_path) -> No
     client = FileIPCLiveMCPClient(
         ipc_dir=str(tmp_path),
         trigger=trigger,
+        legacy_fixture_mode=False,
         timeout_s=0.2,
         poll_interval_s=0.001,
     )
