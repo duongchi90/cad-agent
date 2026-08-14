@@ -792,3 +792,52 @@ def test_visual_capture_receipt_rejects_unknown_property() -> None:
     payload["provider_confidence"] = 1.0
     with pytest.raises(VisualContractError, match="Unexpected properties"):
         _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_plan_requires_global_before_local_capture_in_each_group() -> None:
+    payload = _valid_visual_capture_plan()
+    region = payload["captures"].pop(2)
+    payload["captures"].insert(0, region)
+    with pytest.raises(VisualContractError, match="GLOBAL|first|before"):
+        _validate_visual_capture_plan(payload)
+
+
+def test_visual_capture_plan_rejects_detail_bbox_outside_parent_region() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"].append(
+        {
+            "capture_id": "detail-critical-outside",
+            "capture_class": "DETAIL",
+            "parent_region_id": "region-critical",
+            "region_id": "region-critical",
+            "view_id": "view-front",
+            "sheet_id": "sheet-a",
+            "layout_id": "layout-a",
+            "zoom_mode": "WINDOW",
+            "wcs_bbox": [-1.0, 10.0, 20.0, 20.0],
+            "margin_ratio": 0.05,
+            "view_direction": "TOP",
+            "ucs": "WORLD",
+            "visual_style": "2D_WIREFRAME",
+        }
+    )
+    with pytest.raises(VisualContractError, match="DETAIL|bbox|parent"):
+        _validate_visual_capture_plan(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("view_center", [51.0, 25.0]),
+        ("view_width", 119.0),
+        ("view_height", 61.0),
+    ),
+)
+def test_visual_capture_receipt_rejects_incoherent_window_camera_geometry(
+    field: str, value: object
+) -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload[field] = value
+    with pytest.raises(VisualContractError, match=field):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
