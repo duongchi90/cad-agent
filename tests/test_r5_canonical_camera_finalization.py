@@ -168,12 +168,14 @@ def _camera_finalize(inputs: dict[str, object]) -> tuple[dict[str, object], Mock
     )
     dara_validator = Mock()
     evidence_validator = Mock(side_effect=lambda evidence, *_args, **_kwargs: copy.deepcopy(evidence))
+    consume = Mock()
     request_handoff, worker_binding, authority_context, worker_context, resume = _request_fixture(inputs)
     with (
         patch.object(module, "validate_candidate_revision_state", candidate_validator),
         patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
         patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
         patch.object(module, "resume_worker_thread", resume),
+        patch.object(module, "consume_task6_result", consume),
     ):
         result = module.finalize_visual_verdict(
             **inputs,
@@ -182,6 +184,7 @@ def _camera_finalize(inputs: dict[str, object]) -> tuple[dict[str, object], Mock
             authority_context=authority_context,
             worker_context=worker_context,
         )
+    assert consume.call_count == 1
     return result, evidence_validator
 
 
@@ -289,6 +292,7 @@ def test_camera_identities_are_bound_into_r5_request_hash_input() -> None:
             Mock(side_effect=lambda evidence, *_args, **_kwargs: copy.deepcopy(evidence)),
         ),
         patch.object(module, "resume_worker_thread", resume),
+        patch.object(module, "consume_task6_result", Mock()),
         patch.object(module, "canonical_json_sha256", side_effect=capture_hash),
     ):
         result = module.finalize_visual_verdict(
