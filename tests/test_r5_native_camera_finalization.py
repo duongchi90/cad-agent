@@ -6,10 +6,6 @@ from unittest.mock import Mock, patch
 import pytest
 
 from cad_agent.drawing_contracts import canonical_json_sha256
-from mcp_integration_lib.autocad_render_evidence import (
-    build_canonical_camera_render_evidence_request,
-    validate_render_evidence,
-)
 from tests.test_cad_agent_visual_supervisor_adapter import (
     SHA_DRAWING,
     SHA_MANIFEST,
@@ -86,25 +82,30 @@ def _native_evidence(
     capture_id: str,
     artifact_sha256: str,
 ) -> dict[str, object]:
-    request = build_canonical_camera_render_evidence_request(
-        request_id=f"request-{capture_id}",
-        drawing_sha256=SHA_DRAWING,
-        visual_run_manifest_sha256=SHA_MANIFEST,
-        layout={"identity": "layout-1", "name": "Layout1"},
-        artifact_kind="PNG",
-        render_options={
-            "background": "white",
-            "dpi": 300,
-            "fit_to_paper": True,
-            "paper_size": "A4",
-            "plot_style": "monochrome.ctb",
-        },
-        requested_at="2026-08-14T05:30:00Z",
-        server_scope=scope,
-        visual_capture_plan=plan,
-        capture_id=capture_id,
+    capture = next(
+        item for item in plan["captures"] if item["capture_id"] == capture_id
     )
-    camera = request["render_options"]["camera"]
+    plan_sha = canonical_json_sha256(plan)
+    camera = {
+        "schema_version": "canonical-camera-render-1.0",
+        "capture_id": capture["capture_id"],
+        "capture_class": capture["capture_class"],
+        "parent_region_id": capture["parent_region_id"],
+        "region_id": capture["region_id"],
+        "scope_id": plan["scope_id"],
+        "view_id": capture["view_id"],
+        "sheet_id": capture["sheet_id"],
+        "layout_id": capture["layout_id"],
+        "candidate_revision_sha256": plan["candidate_revision_sha256"],
+        "candidate_state_sha256": plan["candidate_state_sha256"],
+        "visual_capture_plan_sha256": plan_sha,
+        "zoom_mode": capture["zoom_mode"],
+        "wcs_bbox": copy.deepcopy(capture["wcs_bbox"]),
+        "margin_ratio": capture["margin_ratio"],
+        "view_direction": capture["view_direction"],
+        "ucs": capture["ucs"],
+        "visual_style": capture["visual_style"],
+    }
     bbox = copy.deepcopy(camera["wcs_bbox"])
     if bbox is None:
         center = [0.0, 0.0]
@@ -116,16 +117,23 @@ def _native_evidence(
         center = [(xmin + xmax) / 2.0, (ymin + ymax) / 2.0]
         view_width = (xmax - xmin) * (1.0 + 2.0 * margin)
         view_height = (ymax - ymin) * (1.0 + 2.0 * margin)
-    evidence = {
+    return {
         "schema_version": "autocad-native-render-evidence-1.0",
-        "request_id": request["request_id"],
-        "run_id": request["run_id"],
-        "drawing_sha256": request["drawing_sha256"],
-        "latest_mutation_sha256": request["latest_mutation_sha256"],
-        "visual_run_manifest_sha256": request["visual_run_manifest_sha256"],
-        "layout": copy.deepcopy(request["layout"]),
+        "request_id": f"request-{capture_id}",
+        "run_id": scope["run_id"],
+        "drawing_sha256": SHA_DRAWING,
+        "latest_mutation_sha256": SHA_MUTATION,
+        "visual_run_manifest_sha256": SHA_MANIFEST,
+        "layout": {"identity": "layout-1", "name": "Layout1"},
         "artifact_kind": "PNG",
-        "render_options": copy.deepcopy(request["render_options"]),
+        "render_options": {
+            "background": "white",
+            "dpi": 300,
+            "fit_to_paper": True,
+            "paper_size": "A4",
+            "plot_style": "monochrome.ctb",
+            "camera": camera,
+        },
         "renderer": "AUTOCAD_NATIVE",
         "artifact": {
             "relative_path": f"artifacts/{capture_id}.png",
@@ -142,7 +150,7 @@ def _native_evidence(
             "schema_version": "visual-capture-receipt-1.0",
             "receipt_id": f"receipt-{capture_id}",
             "capture_id": capture_id,
-            "run_id": request["run_id"],
+            "run_id": scope["run_id"],
             "scope_id": camera["scope_id"],
             "region_id": camera["region_id"],
             "view_id": camera["view_id"],
@@ -150,8 +158,8 @@ def _native_evidence(
             "layout_id": camera["layout_id"],
             "candidate_revision_sha256": camera["candidate_revision_sha256"],
             "candidate_state_sha256": camera["candidate_state_sha256"],
-            "latest_mutation_sha256": request["latest_mutation_sha256"],
-            "visual_capture_plan_sha256": camera["visual_capture_plan_sha256"],
+            "latest_mutation_sha256": SHA_MUTATION,
+            "visual_capture_plan_sha256": plan_sha,
             "capture_class": camera["capture_class"],
             "zoom_mode": camera["zoom_mode"],
             "requested_wcs_bbox": copy.deepcopy(bbox),
@@ -169,7 +177,6 @@ def _native_evidence(
             "transient_state_restored": True,
         },
     }
-    return validate_render_evidence(evidence, request=request)
 
 
 def _declare_native_camera(inputs: dict[str, object]) -> None:
@@ -185,7 +192,7 @@ def _declare_native_camera(inputs: dict[str, object]) -> None:
         state["native_render_evidence"] = copy.deepcopy(evidence)
 
 
-def _finalize_native(inputs: dict[str, object]) -> tuple[dict[str, object], Mock]:
+def _finalize_native(inputs: dict[str, object]) -> tuple[dict[str, object], list[str]]:
     import cad_agent.visual_supervisor_adapter as module
 
     candidate_validator = Mock(
@@ -195,13 +202,21 @@ def _finalize_native(inputs: dict[str, object]) -> tuple[dict[str, object], Mock
         }
     )
     evidence_validator = Mock(side_effect=lambda evidence, *_args: copy.deepcopy(evidence))
-    native_validator = Mock(side_effect=lambda evidence: validate_render_evidence(evidence))
+    calls: list[str] = []
+    real_validate = module.validate_visual_contract
+
+    def validating(
+        payload: object, *, contract: str, server_scope: object | None = None
+    ) -> object:
+        calls.append(contract)
+        return real_validate(payload, contract=contract, server_scope=server_scope)
+
     request_handoff, worker_binding, authority_context, worker_context, resume = _request_fixture(inputs)
     with (
         patch.object(module, "validate_candidate_revision_state", candidate_validator),
         patch.object(module, "require_current_drawing_artifact_reference", Mock()),
         patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
-        patch.object(module, "validate_render_evidence", native_validator),
+        patch.object(module, "validate_visual_contract", side_effect=validating),
         patch.object(module, "resume_worker_thread", resume),
         patch.object(module, "consume_task6_result", Mock()),
     ):
@@ -212,21 +227,23 @@ def _finalize_native(inputs: dict[str, object]) -> tuple[dict[str, object], Mock
             authority_context=authority_context,
             worker_context=worker_context,
         )
-    return result, native_validator
+    return result, calls
 
 
 def test_legacy_r5_without_declared_camera_still_finalizes() -> None:
-    result, native_validator = _finalize_native(_valid_inputs())
+    result, calls = _finalize_native(_valid_inputs())
     assert result["verdict"] == "PASS"
-    assert native_validator.call_count == 0
+    assert "visual_capture_plan" not in calls
+    assert "visual_capture_receipt" not in calls
 
 
 def test_declared_native_camera_complete_coverage_can_finalize_pass() -> None:
     inputs = _valid_inputs()
     _declare_native_camera(inputs)
-    result, native_validator = _finalize_native(inputs)
+    result, calls = _finalize_native(inputs)
     assert result["verdict"] == "PASS"
-    assert native_validator.call_count == 6
+    assert calls.count("visual_capture_plan") >= 2
+    assert calls.count("visual_capture_receipt") == 6
 
 
 def test_declared_camera_requires_plan_and_native_evidence_together() -> None:
