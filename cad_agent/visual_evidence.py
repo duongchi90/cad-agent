@@ -247,6 +247,9 @@ def validate_visual_evidence_freshness(
     manifest_bytes_sha256: str,
     manifest: Mapping[str, object],
     drawing_sha256_before_dispatch: str,
+    *,
+    visual_capture_plan: Mapping[str, object] | None = None,
+    visual_capture_receipt: Mapping[str, object] | None = None,
 ) -> Mapping[str, object]:
     """Validate result identity and no-change invariants against one manifest snapshot."""
 
@@ -329,6 +332,12 @@ def validate_visual_evidence_freshness(
         raise VisualEvidenceError("captured_at_utc must be RFC3339 UTC")
 
     _validate_artifact_descriptors(payload["artifacts"])
+    _validate_camera_evidence_binding(
+        payload,
+        validated_manifest,
+        visual_capture_plan=visual_capture_plan,
+        visual_capture_receipt=visual_capture_receipt,
+    )
     return copy.deepcopy(dict(evidence))
 
 
@@ -340,6 +349,8 @@ def write_visual_evidence(
     *,
     drawing_path: Path,
     drawing_sha256_before_dispatch: str,
+    visual_capture_plan: Mapping[str, object] | None = None,
+    visual_capture_receipt: Mapping[str, object] | None = None,
 ) -> Path:
     """Copy verified request artifacts and atomically create one evidence package."""
 
@@ -356,6 +367,8 @@ def write_visual_evidence(
         manifest_hash,
         manifest,
         drawing_sha256_before_dispatch,
+        visual_capture_plan=visual_capture_plan,
+        visual_capture_receipt=visual_capture_receipt,
     )
     payload = validated.get("payload") if isinstance(validated.get("payload"), Mapping) else validated
     if not isinstance(payload, Mapping) or payload.get("evidence_id") != evidence_id:
@@ -794,6 +807,54 @@ def _validate_artifact_descriptors(artifacts: object) -> None:
         total += size
     if kinds != set(_MAX_BYTES) or total > _MAX_TOTAL_BYTES:
         raise VisualEvidenceError("artifact set is incomplete or exceeds total size")
+
+
+def _validate_camera_evidence_binding(
+    payload: Mapping[str, object],
+    manifest: Mapping[str, object],
+    *,
+    visual_capture_plan: Mapping[str, object] | None,
+    visual_capture_receipt: Mapping[str, object] | None,
+) -> None:
+    has_plan = visual_capture_plan is not None
+    has_receipt = visual_capture_receipt is not None
+    if has_plan != has_receipt:
+        raise VisualEvidenceError("visual capture plan and receipt must be provided together")
+    if not has_plan:
+        return
+    if not isinstance(visual_capture_plan, Mapping) or not isinstance(visual_capture_receipt, Mapping):
+        raise VisualEvidenceError("visual capture plan and receipt must be objects")
+    if visual_capture_plan.get("run_id") != manifest.get("run_id"):
+        raise VisualEvidenceError("visual capture plan run_id does not match the manifest")
+    if visual_capture_plan.get("latest_mutation_sha256") != manifest.get("latest_mutation_sha256"):
+        raise VisualEvidenceError("visual capture plan is stale against latest mutation")
+    try:
+        receipt = validate_visual_contract(
+            visual_capture_receipt,
+            contract="visual_capture_receipt",
+            server_scope=visual_capture_plan,
+        )
+    except Exception as exc:
+        raise VisualEvidenceError(f"visual capture receipt is invalid: {exc}") from exc
+    if receipt.get("region_id") != payload.get("region_id"):
+        raise VisualEvidenceError("visual capture receipt region does not match visual evidence")
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise VisualEvidenceError("visual evidence artifacts are invalid")
+    render = next(
+        (artifact for artifact in artifacts if isinstance(artifact, Mapping) and artifact.get("kind") == "render"),
+        None,
+    )
+    if render is None:
+        raise VisualEvidenceError("visual evidence render artifact is missing")
+    if receipt.get("artifact_sha256") != render.get("sha256"):
+        raise VisualEvidenceError("visual capture receipt artifact does not match render hash")
+    if receipt.get("artifact_width") != render.get("width"):
+        raise VisualEvidenceError("visual capture receipt artifact width does not match render")
+    if receipt.get("artifact_height") != render.get("height"):
+        raise VisualEvidenceError("visual capture receipt artifact height does not match render")
+    if receipt.get("captured_at_utc") != payload.get("captured_at_utc"):
+        raise VisualEvidenceError("visual capture receipt timestamp does not match visual evidence")
 
 
 def _safe_relative_path(value: str) -> bool:
