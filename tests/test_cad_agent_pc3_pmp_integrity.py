@@ -320,6 +320,112 @@ def test_selected_file_identity_drift_during_hash_fails_closed(
     assert read_completed
 
 
+def test_transient_swap_and_restore_selected_file_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    selected = _write(root_a, "selected.PC3", b"selected")
+    outside = tmp_path / "outside.PC3"
+    outside.write_bytes(b"outside")
+    probe = tmp_path / "symlink-probe"
+    _symlink_or_skip(probe, outside)
+    probe.unlink()
+
+    original_os_open = os.open
+    swapped = False
+
+    def raced_open(path: os.PathLike[str] | str, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal swapped
+        if Path(path) != selected:
+            return original_os_open(path, flags, *args, **kwargs)
+        backup = selected.with_suffix(".backup")
+        selected.rename(backup)
+        selected.symlink_to(outside)
+        try:
+            fd = original_os_open(path, flags, *args, **kwargs)
+            swapped = True
+            return fd
+        finally:
+            selected.unlink(missing_ok=True)
+            backup.rename(selected)
+
+    monkeypatch.setattr(os, "open", raced_open)
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="race|drift|changed|identity|reparse|replaced",
+    ):
+        _manifest(root_a, root_b)
+
+    assert swapped
+
+
+def test_root_identity_drift_before_traversal_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    _write(root_a, "selected.PC3", b"selected")
+    original_lstat = Path.lstat
+    root_calls = 0
+
+    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
+        nonlocal root_calls
+        result = original_lstat(path, *args, **kwargs)
+        if path == root_a:
+            root_calls += 1
+            if root_calls >= 3:
+                return _with_changed_file_identity(result)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="root|directory|race|drift|changed|identity|replaced",
+    ):
+        _manifest(root_a, root_b)
+
+
+def test_nested_directory_identity_drift_before_descent_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    nested = root_a / "nested"
+    nested.mkdir()
+    _write(nested, "selected.PC3", b"selected")
+    original_lstat = Path.lstat
+    nested_calls = 0
+
+    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
+        nonlocal nested_calls
+        result = original_lstat(path, *args, **kwargs)
+        if path == nested:
+            nested_calls += 1
+            if nested_calls >= 3:
+                return _with_changed_file_identity(result)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="directory|race|drift|changed|identity|reparse|replaced",
+    ):
+        _manifest(root_a, root_b)
+
+
 def test_byte_change_and_root_slot_order_change_aggregate(tmp_path: Path) -> None:
     root_a = tmp_path / "plotters-a"
     root_b = tmp_path / "plotters-b"
@@ -360,6 +466,17 @@ def test_two_explicit_roots_must_exist_and_be_directories(tmp_path: Path) -> Non
     root_b.mkdir()
     with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="root|directory"):
         _manifest(root_a, root_b)
+
+
+def test_two_explicit_roots_must_be_distinct(tmp_path: Path) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_a.mkdir()
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="distinct|duplicate|same|root",
+    ):
+        _manifest(root_a, root_a)
 
 
 def test_two_explicit_roots_reject_symlink_or_reparse_root(tmp_path: Path) -> None:
@@ -445,7 +562,7 @@ def test_module_uses_only_fail_closed_read_hash_authority_surface() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
 
-    allowed_imported_modules = {"hashlib", "stat"}
+    allowed_imported_modules = {"hashlib", "os", "stat"}
     allowed_imports_from = {
         ("__future__", "annotations"),
         ("pathlib", "Path"),
@@ -457,6 +574,8 @@ def test_module_uses_only_fail_closed_read_hash_authority_surface() -> None:
         "append",
         "as_posix",
         "casefold",
+        "close",
+        "fstat",
         "hexdigest",
         "is_absolute",
         "is_symlink",
@@ -464,7 +583,8 @@ def test_module_uses_only_fail_closed_read_hash_authority_surface() -> None:
         "join",
         "lower",
         "lstat",
-        "read_bytes",
+        "open",
+        "read",
         "relative_to",
         "sha256",
         "split",
