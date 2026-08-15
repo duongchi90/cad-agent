@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
+import os
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,6 +45,18 @@ def _symlink_or_skip(link: Path, target: Path, *, is_directory: bool = False) ->
         pytest.skip(f"symlink support is unavailable for this test: {exc}")
 
 
+def _with_windows_reparse_attribute(result: object) -> SimpleNamespace:
+    attrs: dict[str, object] = {}
+    for name in dir(result):
+        if name.startswith("st_"):
+            try:
+                attrs[name] = getattr(result, name)
+            except (AttributeError, OSError):
+                continue
+    attrs["st_file_attributes"] = int(attrs.get("st_file_attributes", 0)) | stat.FILE_ATTRIBUTE_REPARSE_POINT
+    return SimpleNamespace(**attrs)
+
+
 def test_public_surface_is_closed_and_versioned(tmp_path: Path) -> None:
     root_a = tmp_path / "plotters-a"
     root_b = tmp_path / "plotters-b"
@@ -55,6 +71,15 @@ def test_public_surface_is_closed_and_versioned(tmp_path: Path) -> None:
     result = _manifest(root_a, root_b)
 
     _assert_public_result(result, count=0)
+
+
+def test_plotter_roots_is_required_with_no_default_or_ambient_fallback() -> None:
+    build = pc3_pmp_integrity.build_pc3_pmp_integrity_manifest
+    parameter = inspect.signature(build).parameters["plotter_roots"]
+
+    assert parameter.default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        build()
 
 
 def test_manifest_selects_only_supported_regular_files_and_hides_paths(tmp_path: Path) -> None:
@@ -271,6 +296,46 @@ def test_two_explicit_roots_reject_symlink_or_reparse_root(tmp_path: Path) -> No
         _manifest(linked_root, other_root)
 
 
+def test_windows_reparse_attribute_root_fails_closed_without_symlink_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+
+    original_path_stat = Path.stat
+    original_path_lstat = Path.lstat
+    original_os_lstat = os.lstat
+
+    def path_stat(path: Path, *args: object, **kwargs: object) -> object:
+        result = original_path_stat(path, *args, **kwargs)
+        if path == root_a:
+            return _with_windows_reparse_attribute(result)
+        return result
+
+    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
+        result = original_path_lstat(path, *args, **kwargs)
+        if path == root_a:
+            return _with_windows_reparse_attribute(result)
+        return result
+
+    def os_lstat(path: os.PathLike[str] | str, *args: object, **kwargs: object) -> object:
+        result = original_os_lstat(path, *args, **kwargs)
+        if Path(path) == root_a:
+            return _with_windows_reparse_attribute(result)
+        return result
+
+    monkeypatch.setattr(Path, "is_symlink", lambda _path: False)
+    monkeypatch.setattr(Path, "stat", path_stat)
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+    monkeypatch.setattr(os, "lstat", os_lstat)
+
+    with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="root|reparse|junction"):
+        _manifest(root_a, root_b)
+
+
 def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_path() -> None:
     source = Path(pc3_pmp_integrity.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -286,10 +351,15 @@ def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_p
         if isinstance(node, ast.Import)
         for alias in node.names
     }
-    calls = {
+    attribute_calls = {
         node.func.attr
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    named_calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
 
     assert ("cad_agent.drawing_contracts", "canonical_json_sha256") in imported_from
@@ -297,6 +367,8 @@ def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_p
         "winreg",
         "subprocess",
         "ctypes",
+        "json",
+        "glob",
         "mcp_integration_lib",
         "autocad_plugin",
         "cad_agent.manifest",
@@ -307,8 +379,11 @@ def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_p
         for module in imported_modules | {module for module, _name in imported_from}
         if any(module == forbidden or module.startswith(f"{forbidden}.") for forbidden in forbidden_import_roots)
     }
-    assert calls.isdisjoint(
+    assert attribute_calls.isdisjoint(
         {
+            "getenv",
+            "expanduser",
+            "home",
             "write_bytes",
             "write_text",
             "mkdir",
@@ -317,5 +392,12 @@ def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_p
             "rename",
             "replace",
             "chmod",
+            "open",
+            "write",
+            "writelines",
+            "truncate",
+            "dump",
+            "dumps",
         }
     )
+    assert named_calls.isdisjoint({"open"})
