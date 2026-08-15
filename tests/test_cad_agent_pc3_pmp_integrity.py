@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
+from cad_agent.drawing_contracts import canonical_json_sha256
 import cad_agent.pc3_pmp_integrity as pc3_pmp_integrity
 
 
@@ -101,6 +103,53 @@ def test_manifest_is_stable_across_equivalent_creation_permutations(tmp_path: Pa
     _assert_public_result(first, count=4)
 
 
+def test_aggregate_recipe_uses_exact_canonical_records_and_per_file_sha256(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    _write(root_a, "B.PMP", b"beta")
+    _write(root_a, "a.PC3", b"alpha")
+    _write(root_b, r"Nested\C.Pc3", b"gamma")
+
+    observed_payloads: list[object] = []
+
+    def capture_canonical_hash(payload: object) -> str:
+        observed_payloads.append(payload)
+        return canonical_json_sha256(payload)
+
+    monkeypatch.setattr(pc3_pmp_integrity, "canonical_json_sha256", capture_canonical_hash)
+
+    result = _manifest(root_a, root_b)
+    expected_payload = {
+        "manifest_version": "pc3-pmp-integrity-manifest-1.0",
+        "records": [
+            {
+                "root_slot": 0,
+                "relative_path": "a.pc3",
+                "sha256": hashlib.sha256(b"alpha").hexdigest(),
+            },
+            {
+                "root_slot": 0,
+                "relative_path": "b.pmp",
+                "sha256": hashlib.sha256(b"beta").hexdigest(),
+            },
+            {
+                "root_slot": 1,
+                "relative_path": "nested/c.pc3",
+                "sha256": hashlib.sha256(b"gamma").hexdigest(),
+            },
+        ],
+    }
+
+    assert observed_payloads == [expected_payload]
+    assert result["aggregate_sha256"] == canonical_json_sha256(expected_payload)
+    _assert_public_result(result, count=3)
+
+
 def test_canonical_relative_paths_normalize_separator_and_case_and_reject_escape() -> None:
     normalize = pc3_pmp_integrity.canonicalize_pc3_pmp_relative_path
 
@@ -194,6 +243,32 @@ def test_scope_requires_exactly_two_explicit_existing_ordinary_roots(
     del tmp_path
     with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="two|root"):
         _manifest(*roots)
+
+
+def test_two_explicit_roots_must_exist_and_be_directories(tmp_path: Path) -> None:
+    missing_a = tmp_path / "missing-a"
+    missing_b = tmp_path / "missing-b"
+    with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="root|exist|directory"):
+        _manifest(missing_a, missing_b)
+
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.write_bytes(b"not-a-directory")
+    root_b.mkdir()
+    with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="root|directory"):
+        _manifest(root_a, root_b)
+
+
+def test_two_explicit_roots_reject_symlink_or_reparse_root(tmp_path: Path) -> None:
+    actual_root = tmp_path / "actual-plotters"
+    other_root = tmp_path / "other-plotters"
+    actual_root.mkdir()
+    other_root.mkdir()
+    linked_root = tmp_path / "linked-plotters"
+    _symlink_or_skip(linked_root, actual_root, is_directory=True)
+
+    with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="root|symlink|reparse"):
+        _manifest(linked_root, other_root)
 
 
 def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_path() -> None:
