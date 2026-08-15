@@ -48,6 +48,18 @@ def test_managed_reader_uses_deterministic_plot_window_not_zoom_command_text() -
     assert "ZoomExtents" not in source
 
 
+def test_managed_reader_transforms_wcs_camera_window_to_dcs_before_plotting() -> None:
+    source = _text(READER)
+    assert "Editor.GetCurrentView()" in source
+    assert "Matrix3d.PlaneToWorld(" in source
+    assert "Matrix3d.Displacement(" in source
+    assert "Matrix3d.Rotation(" in source
+    assert ".ViewTwist" in source
+    assert ".Inverse()" in source
+    assert "TransformBy(" in source
+    assert "SetPlotWindowArea(" in source
+
+
 def test_managed_reader_preserves_legacy_layout_plot_path_without_camera() -> None:
     source = _text(READER)
     assert "request.RenderOptions.Camera is null" in source
