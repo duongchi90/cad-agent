@@ -57,6 +57,18 @@ def _with_windows_reparse_attribute(result: object) -> SimpleNamespace:
     return SimpleNamespace(**attrs)
 
 
+def _with_changed_file_identity(result: object) -> SimpleNamespace:
+    attrs: dict[str, object] = {}
+    for name in dir(result):
+        if name.startswith("st_"):
+            try:
+                attrs[name] = getattr(result, name)
+            except (AttributeError, OSError):
+                continue
+    attrs["st_ino"] = int(attrs.get("st_ino", 0)) + 1
+    return SimpleNamespace(**attrs)
+
+
 def test_public_surface_is_closed_and_versioned(tmp_path: Path) -> None:
     root_a = tmp_path / "plotters-a"
     root_b = tmp_path / "plotters-b"
@@ -218,6 +230,33 @@ def test_symlink_or_reparse_entries_and_root_escape_fail_closed(tmp_path: Path) 
         _manifest(root_a, root_b)
 
 
+def test_windows_reparse_attribute_entry_fails_closed_without_symlink_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    selected = _write(root_a, "selected.PC3", b"selected")
+    original_lstat = Path.lstat
+
+    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
+        result = original_lstat(path, *args, **kwargs)
+        if path == selected:
+            return _with_windows_reparse_attribute(result)
+        return result
+
+    monkeypatch.setattr(Path, "is_symlink", lambda _path: False)
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="entry|file|reparse|junction|outside",
+    ):
+        _manifest(root_a, root_b)
+
+
 @pytest.mark.parametrize("exception", [FileNotFoundError("raced"), PermissionError("unreadable")])
 def test_missing_unreadable_or_raced_selected_file_fails_closed(
     tmp_path: Path,
@@ -240,6 +279,45 @@ def test_missing_unreadable_or_raced_selected_file_fails_closed(
 
     with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="read|missing|unreadable|race"):
         _manifest(root_a, root_b)
+
+
+def test_selected_file_identity_drift_during_hash_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    selected = _write(root_a, "selected.PC3", b"selected")
+    original_lstat = Path.lstat
+    original_read_bytes = Path.read_bytes
+    read_completed = False
+
+    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
+        result = original_lstat(path, *args, **kwargs)
+        if path == selected and read_completed:
+            return _with_changed_file_identity(result)
+        return result
+
+    def read_bytes(path: Path) -> bytes:
+        nonlocal read_completed
+        result = original_read_bytes(path)
+        if path == selected:
+            read_completed = True
+        return result
+
+    monkeypatch.setattr(Path, "is_symlink", lambda _path: False)
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="race|drift|changed|identity|replaced",
+    ):
+        _manifest(root_a, root_b)
+
+    assert read_completed
 
 
 def test_byte_change_and_root_slot_order_change_aggregate(tmp_path: Path) -> None:
@@ -336,7 +414,7 @@ def test_windows_reparse_attribute_root_fails_closed_without_symlink_semantics(
         _manifest(root_a, root_b)
 
 
-def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_path() -> None:
+def test_module_uses_only_fail_closed_read_hash_authority_surface() -> None:
     source = Path(pc3_pmp_integrity.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     imported_from = {
@@ -361,43 +439,67 @@ def test_module_reuses_canonical_hash_owner_and_contains_no_discovery_or_write_p
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
+    local_callables = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+
+    allowed_imported_modules = {"hashlib", "stat"}
+    allowed_imports_from = {
+        ("__future__", "annotations"),
+        ("pathlib", "Path"),
+        ("cad_agent.drawing_contracts", "canonical_json_sha256"),
+    }
+    allowed_attribute_calls = {
+        "S_ISDIR",
+        "S_ISREG",
+        "append",
+        "as_posix",
+        "casefold",
+        "hexdigest",
+        "is_absolute",
+        "is_symlink",
+        "iterdir",
+        "join",
+        "lower",
+        "lstat",
+        "read_bytes",
+        "relative_to",
+        "sha256",
+        "split",
+        "startswith",
+    }
+    allowed_named_calls = local_callables | {
+        "all",
+        "any",
+        "bool",
+        "bytes",
+        "canonical_json_sha256",
+        "dict",
+        "enumerate",
+        "getattr",
+        "int",
+        "isinstance",
+        "len",
+        "list",
+        "set",
+        "sorted",
+        "str",
+        "tuple",
+    }
 
     assert ("cad_agent.drawing_contracts", "canonical_json_sha256") in imported_from
-    forbidden_import_roots = {
-        "winreg",
-        "subprocess",
-        "ctypes",
-        "json",
-        "glob",
-        "mcp_integration_lib",
-        "autocad_plugin",
-        "cad_agent.manifest",
-        "cad_agent.visual_evidence",
-    }
-    assert not {
-        module
-        for module in imported_modules | {module for module, _name in imported_from}
-        if any(module == forbidden or module.startswith(f"{forbidden}.") for forbidden in forbidden_import_roots)
-    }
-    assert attribute_calls.isdisjoint(
-        {
-            "getenv",
-            "expanduser",
-            "home",
-            "write_bytes",
-            "write_text",
-            "mkdir",
-            "touch",
-            "unlink",
-            "rename",
-            "replace",
-            "chmod",
-            "open",
-            "write",
-            "writelines",
-            "truncate",
-            "dump",
-            "dumps",
-        }
-    )
-    assert named_calls.isdisjoint({"open"})
+    assert imported_modules <= allowed_imported_modules
+    assert imported_from <= allowed_imports_from
+    assert attribute_calls <= allowed_attribute_calls
+    assert named_calls <= allowed_named_calls
+
+    path_constructor_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Path"
+    ]
+    assert path_constructor_calls == []
