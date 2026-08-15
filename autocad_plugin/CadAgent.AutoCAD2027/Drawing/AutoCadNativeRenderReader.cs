@@ -171,6 +171,7 @@ public static class AutoCadNativeRenderReader
             cameraWindow = request.RenderOptions.Camera is null
                 ? null
                 : BuildCanonicalCameraWindow(
+                    document,
                     transaction,
                     matches[0].Layout,
                     request.RenderOptions.Camera);
@@ -195,6 +196,7 @@ public static class AutoCadNativeRenderReader
     }
 
     private static CameraWindow BuildCanonicalCameraWindow(
+        Document document,
         Transaction transaction,
         Layout layout,
         NativeRenderCamera camera)
@@ -249,9 +251,16 @@ public static class AutoCadNativeRenderReader
 
         var halfWidth = viewWidth / 2.0;
         var halfHeight = viewHeight / 2.0;
-        var plotWindow = new Extents2d(
-            new Point2d(centerX - halfWidth, centerY - halfHeight),
-            new Point2d(centerX + halfWidth, centerY + halfHeight));
+        var wcsMinX = centerX - halfWidth;
+        var wcsMinY = centerY - halfHeight;
+        var wcsMaxX = centerX + halfWidth;
+        var wcsMaxY = centerY + halfHeight;
+        var plotWindow = TransformWcsWindowToDcs(
+            document,
+            wcsMinX,
+            wcsMinY,
+            wcsMaxX,
+            wcsMaxY);
         return new CameraWindow(
             requested,
             requested?.ToArray(),
@@ -259,6 +268,38 @@ public static class AutoCadNativeRenderReader
             viewWidth,
             viewHeight,
             plotWindow);
+    }
+
+    private static Extents2d TransformWcsWindowToDcs(
+        Document document,
+        double minX,
+        double minY,
+        double maxX,
+        double maxY)
+    {
+        using var view = document.Editor.GetCurrentView();
+        var wcsToDcs = Matrix3d.PlaneToWorld(view.ViewDirection);
+        wcsToDcs = Matrix3d.Displacement(view.Target - Point3d.Origin) * wcsToDcs;
+        wcsToDcs = Matrix3d.Rotation(
+            -view.ViewTwist,
+            view.ViewDirection,
+            view.Target) * wcsToDcs;
+        wcsToDcs = wcsToDcs.Inverse();
+
+        var corners = new[]
+        {
+            new Point3d(minX, minY, 0).TransformBy(wcsToDcs),
+            new Point3d(minX, maxY, 0).TransformBy(wcsToDcs),
+            new Point3d(maxX, minY, 0).TransformBy(wcsToDcs),
+            new Point3d(maxX, maxY, 0).TransformBy(wcsToDcs)
+        };
+        var dcsMinX = corners.Min(point => point.X);
+        var dcsMinY = corners.Min(point => point.Y);
+        var dcsMaxX = corners.Max(point => point.X);
+        var dcsMaxY = corners.Max(point => point.Y);
+        return new Extents2d(
+            new Point2d(dcsMinX, dcsMinY),
+            new Point2d(dcsMaxX, dcsMaxY));
     }
 
     private static Extents3d ReadLayoutExtents(Transaction transaction, Layout layout)
