@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 from pathlib import Path
 
@@ -53,7 +54,7 @@ def canonicalize_pc3_pmp_relative_path(relative_path: str) -> str:
     return "/".join(parts)
 
 
-def _validate_root(root: object) -> Path:
+def _validate_root(root: object) -> tuple[Path, tuple[int, int, int, int, int, int]]:
     if not isinstance(root, Path):
         raise PC3PMPIntegrityError("plotter root must be a Path")
     try:
@@ -66,20 +67,88 @@ def _validate_root(root: object) -> Path:
         raise PC3PMPIntegrityError("plotter root reparse or junction is forbidden")
     if not stat.S_ISDIR(int(getattr(metadata, "st_mode", 0))):
         raise PC3PMPIntegrityError("plotter root must be a directory")
-    return root
+    return root, _file_identity(metadata)
+
+
+def _require_directory_identity(
+    directory: Path,
+    expected_identity: tuple[int, int, int, int, int, int],
+) -> None:
+    try:
+        if directory.is_symlink():
+            raise PC3PMPIntegrityError("directory identity changed to symlink or reparse")
+        metadata = directory.lstat()
+    except OSError as exc:
+        raise PC3PMPIntegrityError("directory identity became unreadable") from exc
+    if _is_reparse(metadata):
+        raise PC3PMPIntegrityError("directory identity changed to reparse or junction")
+    if not stat.S_ISDIR(int(getattr(metadata, "st_mode", 0))):
+        raise PC3PMPIntegrityError("directory identity changed during traversal")
+    if _file_identity(metadata) != expected_identity:
+        raise PC3PMPIntegrityError("directory identity drifted during traversal")
+
+
+def _read_selected_file(
+    entry: Path,
+    before: object,
+) -> tuple[bytes, object]:
+    flags = os.O_RDONLY | int(getattr(os, "O_BINARY", 0))
+    try:
+        descriptor = os.open(entry, flags)
+    except OSError as exc:
+        raise PC3PMPIntegrityError(
+            "selected file open failed due to missing, unreadable, or raced state"
+        ) from exc
+
+    try:
+        opened = os.fstat(descriptor)
+        if _is_reparse(opened):
+            raise PC3PMPIntegrityError("selected file opened as a reparse target")
+        if not stat.S_ISREG(int(getattr(opened, "st_mode", 0))):
+            raise PC3PMPIntegrityError("selected file opened as a non-regular object")
+        if _file_identity(opened) != _file_identity(before):
+            raise PC3PMPIntegrityError("selected file identity changed before read")
+
+        expected_size = int(getattr(opened, "st_size", 0))
+        data = os.read(descriptor, expected_size + 1)
+        if len(data) != expected_size:
+            raise PC3PMPIntegrityError("selected file byte length drifted during read")
+
+        opened_after = os.fstat(descriptor)
+        if _file_identity(opened_after) != _file_identity(opened):
+            raise PC3PMPIntegrityError("selected file opened identity drifted during read")
+    finally:
+        os.close(descriptor)
+
+    try:
+        if entry.is_symlink():
+            raise PC3PMPIntegrityError("selected file path changed to symlink or reparse")
+        after = entry.lstat()
+    except OSError as exc:
+        raise PC3PMPIntegrityError("selected file path changed during read") from exc
+    if _is_reparse(after):
+        raise PC3PMPIntegrityError("selected file path changed to reparse or junction")
+    if not stat.S_ISREG(int(getattr(after, "st_mode", 0))):
+        raise PC3PMPIntegrityError("selected file path changed during read")
+    if _file_identity(before) != _file_identity(after):
+        raise PC3PMPIntegrityError("selected file identity drifted during read")
+    return data, after
 
 
 def _collect_records(
     root: Path,
     root_slot: int,
     directory: Path,
+    directory_identity: tuple[int, int, int, int, int, int],
     records: list[dict[str, object]],
     seen_identities: list[tuple[int, str]],
 ) -> None:
+    _require_directory_identity(directory, directory_identity)
     try:
         entries = list(directory.iterdir())
     except OSError as exc:
         raise PC3PMPIntegrityError("plotter root traversal failed") from exc
+    _require_directory_identity(directory, directory_identity)
 
     for entry in entries:
         try:
@@ -94,7 +163,14 @@ def _collect_records(
 
         mode = int(getattr(before, "st_mode", 0))
         if stat.S_ISDIR(mode):
-            _collect_records(root, root_slot, entry, records, seen_identities)
+            _collect_records(
+                root,
+                root_slot,
+                entry,
+                _file_identity(before),
+                records,
+                seen_identities,
+            )
             continue
         if not stat.S_ISREG(mode):
             continue
@@ -113,21 +189,7 @@ def _collect_records(
             raise PC3PMPIntegrityError("duplicate normalized path collision")
         seen_identities.append(identity)
 
-        try:
-            data = entry.read_bytes()
-            after = entry.lstat()
-        except OSError as exc:
-            raise PC3PMPIntegrityError(
-                "selected file read failed due to missing, unreadable, or raced state"
-            ) from exc
-
-        if entry.is_symlink() or _is_reparse(after):
-            raise PC3PMPIntegrityError("selected file identity changed during read")
-        if not stat.S_ISREG(int(getattr(after, "st_mode", 0))):
-            raise PC3PMPIntegrityError("selected file identity changed during read")
-        if _file_identity(before) != _file_identity(after):
-            raise PC3PMPIntegrityError("selected file identity drifted during read")
-
+        data, _ = _read_selected_file(entry, before)
         records.append(
             {
                 "root_slot": root_slot,
@@ -145,13 +207,25 @@ def build_pc3_pmp_integrity_manifest(
     if not isinstance(plotter_roots, (tuple, list)) or len(plotter_roots) != 2:
         raise PC3PMPIntegrityError("exactly two explicit plotter roots are required")
 
-    roots = list(plotter_roots)
+    validated_roots = [_validate_root(candidate_root) for candidate_root in plotter_roots]
+    if _file_identity(validated_roots[0][0].lstat()) == _file_identity(
+        validated_roots[1][0].lstat()
+    ):
+        raise PC3PMPIntegrityError("two explicit plotter roots must be distinct")
+
     records: list[dict[str, object]] = []
     seen_identities: list[tuple[int, str]] = []
 
-    for root_slot, candidate_root in enumerate(roots):
-        root = _validate_root(candidate_root)
-        _collect_records(root, root_slot, root, records, seen_identities)
+    for root_slot, validated_root in enumerate(validated_roots):
+        root, root_identity = validated_root
+        _collect_records(
+            root,
+            root_slot,
+            root,
+            root_identity,
+            records,
+            seen_identities,
+        )
 
     ordered_records = sorted(
         records,
