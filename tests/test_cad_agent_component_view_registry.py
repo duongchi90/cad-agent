@@ -2027,3 +2027,69 @@ def test_task3_dara_currentness_cannot_mint_r3_registry_current_or_r4_selection(
     source = Path(_registry_module().__file__).read_text(encoding="utf-8")
     for forbidden in ("r4_selected", "selection_authority", "current_authority"):
         assert forbidden not in source
+
+
+# R3 public-seam RED (Issue #273): the existing Task3 provenance material is
+# canonical R3-owned behavior.  The follow-up GREEN must expose that behavior
+# through one public importable/exported seam so downstream owners do not call
+# the private helper or copy its recipe.  These tests are intentionally RED on
+# the current main because that seam does not exist yet.
+TASK4_PUBLIC_PROVENANCE_NAME = "component_view_registry_provenance_evidence"
+
+
+def _task4_public_provenance(material: dict[str, object]) -> object:
+    module = _registry_module()
+    public = getattr(module, TASK4_PUBLIC_PROVENANCE_NAME, None)
+    assert callable(
+        public
+    ), "R3 public provenance-evidence seam is missing from component_view_registry.py"
+    return public(material["registry"])
+
+
+def test_task4_public_provenance_evidence_is_importable_and_exported() -> None:
+    module = _registry_module()
+    public = getattr(module, TASK4_PUBLIC_PROVENANCE_NAME, None)
+    assert callable(public)
+    assert TASK4_PUBLIC_PROVENANCE_NAME in module.__all__
+    wildcard_namespace: dict[str, object] = {}
+    exec("from cad_agent.component_view_registry import *", wildcard_namespace)
+    assert wildcard_namespace[TASK4_PUBLIC_PROVENANCE_NAME] is public
+
+
+def test_task4_public_provenance_evidence_matches_canonical_task3_material() -> None:
+    material = _task3_material()
+    first = _task4_public_provenance(material)
+    second = _task4_public_provenance(material)
+
+    assert first == material["provenance_material"]
+    assert second == first
+    assert canonical_json_sha256(first) == material["binding"]["provenance_sha256"]
+    assert set(first) == {
+        "identity_kind",
+        "registry_snapshot_sha256",
+        "component_bindings",
+        "view_bindings",
+    }
+
+
+def test_task4_public_provenance_evidence_does_not_mutate_registry_or_reuse_caller_output() -> None:
+    material = _task3_material()
+    registry_before = deepcopy(material["registry"])
+    first = _task4_public_provenance(material)
+    first["component_bindings"][0]["component_id"] = "caller-forged"
+
+    second = _task4_public_provenance(material)
+    assert material["registry"] == registry_before
+    assert second == material["provenance_material"]
+    assert second["component_bindings"][0]["component_id"] != "caller-forged"
+
+
+def test_task4_public_provenance_evidence_rejects_registry_snapshot_tampering() -> None:
+    material = _task3_material()
+    forged_registry = deepcopy(material["registry"])
+    forged_registry["registry_snapshot_sha256"] = "f" * 64
+    module = _registry_module()
+    public = getattr(module, TASK4_PUBLIC_PROVENANCE_NAME, None)
+    assert callable(public)
+    with pytest.raises(module.ComponentViewRegistryError):
+        public(forged_registry)
