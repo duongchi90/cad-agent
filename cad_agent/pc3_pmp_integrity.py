@@ -148,8 +148,8 @@ def _collect_records(
         entries = list(directory.iterdir())
     except OSError as exc:
         raise PC3PMPIntegrityError("plotter root traversal failed") from exc
-    _require_directory_identity(directory, directory_identity)
 
+    captured_entries: list[tuple[Path, object]] = []
     for entry in entries:
         try:
             if entry.is_symlink():
@@ -157,10 +157,13 @@ def _collect_records(
             before = entry.lstat()
         except OSError as exc:
             raise PC3PMPIntegrityError("entry metadata read failed") from exc
-
         if _is_reparse(before):
             raise PC3PMPIntegrityError("entry reparse or junction is forbidden")
+        captured_entries.append((entry, before))
 
+    _require_directory_identity(directory, directory_identity)
+
+    for entry, before in captured_entries:
         mode = int(getattr(before, "st_mode", 0))
         if stat.S_ISDIR(mode):
             _collect_records(
@@ -171,6 +174,7 @@ def _collect_records(
                 records,
                 seen_identities,
             )
+            _require_directory_identity(directory, directory_identity)
             continue
         if not stat.S_ISREG(mode):
             continue
@@ -190,6 +194,7 @@ def _collect_records(
         seen_identities.append(identity)
 
         data, _ = _read_selected_file(entry, before)
+        _require_directory_identity(directory, directory_identity)
         records.append(
             {
                 "root_slot": root_slot,
@@ -197,6 +202,8 @@ def _collect_records(
                 "sha256": hashlib.sha256(data).hexdigest(),
             }
         )
+
+    _require_directory_identity(directory, directory_identity)
 
 
 def build_pc3_pmp_integrity_manifest(
