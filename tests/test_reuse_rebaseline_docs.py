@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "docs/superpowers/reuse/2026-08-04-reuse-integration-audit.md"
 ARCHITECTURE = ROOT / "docs/ARCHITECTURE.md"
 STATUS = ROOT / "docs/STATUS.md"
+STATUS_HISTORY = ROOT / "docs/STATUS_HISTORY.md"
 OLD_ROLLOUT = ROOT / "docs/superpowers/plans/2026-08-04-visual-supervisor-rollout.md"
 
 
@@ -85,12 +86,22 @@ def test_old_rollout_is_explicitly_superseded_after_vs_t3() -> None:
         assert historical_marker in text
 
 
-def test_architecture_and_status_reference_the_reuse_inventory() -> None:
+def test_status_routes_mutable_state_to_github() -> None:
+    status = STATUS.read_text(encoding="utf-8")
+    assert "Routing index — not live project state" in status
+    assert "Issue [#131]" in status
+    assert "actual current `main`" in status
+    assert "open PR heads/synthetics" in status
+    assert "not a scheduler, currentness store, merge authority" in status
+    assert "STATUS_HISTORY.md" in status
+
+
+def test_architecture_and_status_history_reference_the_reuse_inventory() -> None:
     inventory_path = "docs/superpowers/reuse/2026-08-04-reuse-inventory.json"
     assert inventory_path in ARCHITECTURE.read_text(encoding="utf-8")
-    status = STATUS.read_text(encoding="utf-8")
-    assert inventory_path in status
-    assert "State: **Executing**" in status
-    assert "Private-data gate: **NOT RUN**" in status
-    assert "AutoCAD Mechanical live gate: **NOT RUN**" in status
-    assert "Codex SDK spike: **NOT RUN**" in status
+    history = STATUS_HISTORY.read_text(encoding="utf-8")
+    assert inventory_path in history
+    assert "State: **Executing**" in history
+    assert "Private-data gate: **NOT RUN**" in history
+    assert "AutoCAD Mechanical live gate: **NOT RUN**" in history
+    assert "Codex SDK spike: **NOT RUN**" in history
