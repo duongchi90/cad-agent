@@ -5,7 +5,7 @@
 - Issue: #187
 - Control contract: `CONTROL_CONTRACT_VERSION=1.3`
 - Planning epoch: `ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae`
-- Authority: Issue #187 plus its V3 delta comment `5255200043`, Human Owner written-spec approval recorded at #187 comment `5306410590`, with newer #131 / Human Owner / SOL control always taking precedence.
+- Binding authority: Issue #187, V3 delta comment `5255200043`, Human Owner written-spec approval at #187 comment `5306410590`, with newer #131 / Human Owner / SOL control always taking precedence.
 - Scope: PLANNING / DESIGN ONLY.
 - Repository production/runtime implementation: NOT AUTHORIZED by #187.
 - AutoCAD, File-IPC, provider, private/customer CAD, publication, PC3/PMP, profile, registry, printer/driver/system execution: NOT AUTHORIZED.
@@ -17,25 +17,25 @@ This design must not move the currently pinned `main`, merge any HOLD PR, or cha
 
 ## Problem
 
-The project already has repository, CI, exact-tuple review, merge, authority, and live-execution gates. The control-plane inefficiency is orchestration latency and duplicate reconstruction: a material change can become actionable while Luna waits for a later scan, reconstructs too much state, respawns an equivalent role, or fails to distinguish a real transition from a clock-only observation change.
+The project already has repository, CI, exact-tuple review, merge, authority, and live-execution gates. The control-plane inefficiency is orchestration latency and duplicate reconstruction: a material change can become actionable while Luna waits for a later scan, reconstructs too much state, respawns equivalent role work, or fails to distinguish a real transition from an observation-only change.
 
-The design must solve two different problems without conflating them:
+The design solves two different problems with two different contracts:
 
 1. **Material-transition detection** — determine whether canonical execution-relevant state changed since the last observation.
-2. **Ephemeral-task de-duplication** — determine whether a role/task invocation is already in-flight or already terminal for the exact same work identity.
+2. **Ephemeral-task de-duplication** — determine whether equivalent role/task work is already in-flight or already terminal for the exact same work identity.
 
-These are separate contracts and therefore use separate canonical projections and fingerprints.
+These contracts MUST NOT be conflated.
 
 ## Goals
 
 The design SHALL:
 
 - keep GitHub and accepted contracts as the only authority;
-- use the existing Luna watchdog as transport/fallback rather than add a second scheduler;
+- use the existing Luna watchdog as transport/fallback instead of adding a second scheduler;
 - detect bounded material state transitions deterministically;
-- explicitly ignore observation-only changes such as watchdog time;
+- ignore observation-only changes such as watchdog time;
 - enforce no-material-event/no-duplicate-agent semantics;
-- prevent a same task fingerprint from suppressing a changed material state;
+- prevent a same task fingerprint from suppressing changed material state;
 - route already-authorized actions in the same scan cycle that observes the material transition;
 - preserve strict exact-head/exact-synthetic reviewer currentness;
 - preserve/rejoin the same correct-role reviewer context where possible while requiring a fresh verdict for a changed tuple;
@@ -43,7 +43,9 @@ The design SHALL:
 - support explicit conditional SOL preauthorization without inventing authority;
 - target N+1 readiness as `PATCH_READY` or `ONLY_LATE_BINDINGS_PENDING` where safe;
 - require `REQUIRED_PUBLIC_SEAMS` audit before downstream RED;
-- derive cycle-time KPIs from existing GitHub/action/comment timestamps where possible;
+- derive cycle-time/resource KPIs from existing GitHub/action/comment evidence where possible;
+- optimize Luna discovery/reconstruction and equivalent ephemeral spawn duplication only;
+- preserve full Master Audit, Integration/Security, and R3/R4/R5/R6 specialist reasoning depth;
 - fail closed whenever canonical state reconstruction is incomplete or contradictory.
 
 ## Non-goals
@@ -56,69 +58,70 @@ This design SHALL NOT:
 - treat cache state, model memory, chat history, stale SHA, stale synthetic, or stale reviewer verdict as authority;
 - weaken STOP_WRITE, RED-first, hosted CI/reuse, paired independent review, exact-main pin, or live gates;
 - touch AutoCAD/File-IPC/provider/private/customer/publication/system surfaces;
-- alter the R0-R8 functional architecture.
+- alter the R0-R8 functional architecture;
+- apply token/resource suppression to Master Audit, Integration/Security review, persistent R3/R4/R5/R6 Web Code lanes, required fresh GitHub reads, material-transition communication, or exact terminal evidence.
 
 ## Reuse audit
 
-The selected control-plane design reuses existing owners and surfaces rather than adding infrastructure.
+The selected design reuses existing owners and surfaces rather than adding infrastructure.
 
 ### Existing GitHub authority/state surfaces
 
 Reuse directly:
 
 - actual `refs/heads/main` and commit identity;
-- #131 / Human Owner / SOL issue comments as the durable authority epoch and baton bus;
-- PR base/head, merge ref/synthetic, draft/open/merged state, merge SHA and timestamps;
+- #131 / Human Owner / SOL issue comments as durable authority epoch and baton bus;
+- PR base/head, merge-ref/synthetic, draft/open/merged state, merge SHA and timestamps;
 - GitHub Actions tests/reuse workflow states and terminal timestamps;
-- exact-head Integration/Security review submissions and review timestamps;
+- exact-head Integration/Security review submissions and timestamps;
 - issue/PR/comment/action timestamps for KPI derivation.
 
-These surfaces already contain the canonical evidence needed by the detector. No second project database, event store, approval store, review store, or merge state store is needed.
+No second project database, event store, approval store, review store, or merge-state store is required.
 
 ### Existing Luna/SOL orchestration mechanisms
 
 Reuse directly:
 
-- the existing periodic Luna watchdog/scan as transport and missed-event fallback;
+- existing periodic Luna watchdog/scan as transport and missed-event fallback;
 - SOL as repository/governance/integration authority;
 - Luna as bounded local executor/scheduler within delegated authority;
 - existing correct-role reviewer handles for bounded context reuse, while still requiring a fresh exact-tuple verdict after tuple changes;
-- existing `STOP_WRITE`, terminal handoff, explicit owner/next-trigger/blocker and exact-main pin controls.
+- existing `STOP_WRITE`, terminal handoff, explicit owner/next-trigger/blocker, and exact-main pin controls.
 
-The missing capability is not a new scheduler. It is a deterministic contract for deciding whether canonical material state changed and whether equivalent role work is already in flight.
+The missing capability is not a new scheduler. It is a deterministic contract for deciding whether canonical material state changed and whether equivalent role work already exists.
 
 ### Existing repository verification mechanisms
 
 Reuse directly:
 
-- `scripts/verify.ps1` as the canonical hosted/offline verification owner;
+- `scripts/verify.ps1` as canonical hosted/offline verification owner;
 - `scripts/check_architecture_boundaries.py` for architecture boundaries;
-- `scripts/check_reuse_declaration.py` and the reuse-declaration workflow;
+- `scripts/check_reuse_declaration.py` plus the reuse-declaration workflow;
 - `scripts/reuse_inventory.py` for reuse ownership/completeness;
-- existing focused pytest/.NET owner tests, Ruff/static checks and `git diff --check`.
+- existing focused pytest/.NET owner tests, Ruff/static checks, and `git diff --check`.
 
-#187 creates no second verifier. Its pre-push owner-contract bundle composes these accepted checks only.
+#187 creates no second verifier.
 
 ### Reuse conclusion
 
-Current GitHub + Luna + existing verification surfaces are sufficient for the default rollout. The genuinely missing capability is a documented material-state projection/transition contract plus a separate task de-dup contract. Therefore the default implementation recommendation remains **no new repository runtime**.
+Current GitHub + Luna + existing verification surfaces are sufficient for the default rollout. The genuinely missing capability is a documented material-state projection/transition contract plus a separate task de-dup contract. Therefore the default recommendation remains **no new repository runtime**.
 
 ## Alternatives and trade-offs
 
 ### Alternative A — GitHub-native observation + existing Luna watchdog
 
-Each normal Luna scan fresh-reads the bounded canonical GitHub state, builds `MATERIAL_STATE_PROJECTION`, classifies changes, resolves authority, then applies separate task de-duplication.
+Each normal Luna scan fresh-reads bounded canonical GitHub state, builds `MATERIAL_STATE_PROJECTION`, classifies changes, resolves authority, then applies separate task de-duplication.
 
 Advantages:
 
 - reuses current GitHub authority and Luna scheduler/watchdog;
 - no workflow, daemon, secret-bearing service, database, queue, or second authority;
-- missed/corrupt local cache naturally falls back to a full fresh-read on the next watchdog scan;
-- preserves exact-main, exact-head, reviewer-currentness and live gates.
+- missed/corrupt local cache falls back to full fresh-read on the next watchdog scan;
+- preserves exact-main, exact-head, reviewer-currentness, and live gates.
 
 Trade-off:
 
-- event-to-action latency is bounded by the normal watchdog scan rather than instantaneous push delivery.
+- event-to-action latency is bounded by normal watchdog cadence rather than instantaneous push delivery.
 
 **Selection:** chosen as the cheapest safe architecture.
 
@@ -133,16 +136,16 @@ Advantages:
 
 Trade-offs:
 
-- requires workflow mutation outside #187 planning authority;
-- introduces event ordering, duplicate delivery and missed-event reconciliation concerns;
+- requires workflow mutation outside #187 authority;
+- introduces event-ordering, duplicate-delivery, and missed-event reconciliation concerns;
 - risks drifting into a second scheduler/control authority unless tightly constrained;
-- still requires the same fresh authority validation and periodic watchdog fallback.
+- still requires fresh authority validation and watchdog fallback.
 
-This remains a future fallback only if measured KPI evidence shows Alternative A cannot meet the accepted SLA and a separate implementation issue explicitly authorizes it.
+This is a future fallback only if measured KPI evidence shows Alternative A cannot meet the accepted SLA and a separate implementation issue explicitly authorizes it.
 
 ### Alternative C — dedicated webhook/daemon + persistent state store
 
-A long-running service could receive GitHub webhooks, persist state and drive orchestration transitions.
+A long-running service could receive GitHub webhooks, persist state, and drive orchestration transitions.
 
 Advantages:
 
@@ -151,10 +154,10 @@ Advantages:
 
 Trade-offs:
 
-- creates a new service, deployment/availability surface, secret handling and persistent store;
-- duplicates state already recoverable from GitHub;
+- creates service/deployment/availability, secret-handling, and persistent-store surfaces;
+- duplicates state recoverable from GitHub;
 - materially increases risk of a second truth/scheduler/authority plane;
-- adds recovery, ordering and migration complexity without current evidence it is needed.
+- adds recovery, ordering, and migration complexity without evidence it is needed.
 
 **Decision:** rejected under reuse-first/YAGNI and current #187 authority.
 
@@ -165,13 +168,13 @@ Select **GitHub-native observation plus the existing Luna watchdog**.
 The system is **edge-triggered in semantics, watchdog-driven in transport**:
 
 1. Luna fresh-reads canonical GitHub state required by the current baton.
-2. Luna normalizes a canonical **material-state projection** containing only execution-relevant state.
+2. Luna normalizes a canonical material-state projection containing only execution-relevant state.
 3. Luna hashes that projection as `MATERIAL_STATE_FINGERPRINT` and compares it with the prior advisory observation.
-4. If the material projection is identical, there is no material transition even if `observed_at` or watchdog time changed.
-5. If the material projection changed, Luna computes a deterministic transition set and applies stable precedence.
-6. Luna fresh-validates the controlling authority packet.
+4. If the projection is identical, there is no material transition even if `observed_at` or watchdog time changed.
+5. If the projection changed, Luna computes a deterministic transition set and stable precedence.
+6. Luna fresh-validates controlling authority.
 7. If an action is already authorized, Luna routes/starts it in the same cycle.
-8. Only after actionability is known does Luna use the separate **task fingerprint** to decide whether to spawn, rejoin, or suppress duplicate role work.
+8. Only after actionability is known does Luna use the separate `TASK_FINGERPRINT` to spawn, rejoin, or suppress duplicate role work.
 9. Missing/corrupt cache causes full reconstruction from GitHub; it never fails open.
 
 The detector decides **what changed**. The authority resolver decides **what may happen**. The task de-dup layer decides **whether equivalent role work already exists**.
@@ -219,39 +222,28 @@ A Luna observation MAY contain:
 }
 ```
 
-`observed_at` is explicitly **observation-only** and is excluded from all material-transition comparisons.
-
-The observation is an advisory cache/index only. It SHALL NOT contain secrets, private CAD data, raw evidence payloads, private file contents, or authority not present on GitHub.
+`observed_at` is observation-only and excluded from all material comparisons. The observation is advisory/cache-only and SHALL NOT contain secrets, private CAD data, raw evidence payloads, private file contents, or authority not present on GitHub.
 
 ## Canonical material-state projection
 
-`MATERIAL_STATE_PROJECTION` is the exact canonical projection used for event detection.
-
-It contains exactly these normalized fields:
+`MATERIAL_STATE_PROJECTION` contains exactly these normalized fields:
 
 ```text
 current_main
-
 authority_epoch
-
 task_or_issue
-
 pr.number
 pr.head
 pr.synthetic_or_state
 pr.draft
 pr.merged
 pr.merge_sha
-
 ci.tests
 ci.reuse
-
 reviews.REVIEWER_INTEGRATION
 reviews.REVIEWER_SECURITY
-
 writer.state
 writer.terminal_id
-
 baton.current_owner
 baton.next_trigger
 baton.blocker
@@ -272,15 +264,11 @@ free-form chat text
 non-controlling repeated comments
 ```
 
-Absent optional values are normalized to literal `NONE`. Closed enums are used wherever possible. Keys are serialized in canonical sorted order and hashed with SHA-256.
-
-The result is `MATERIAL_STATE_FINGERPRINT`.
+Absent optional values normalize to literal `NONE`; closed enums are used wherever possible; keys serialize in canonical sorted order; SHA-256 produces `MATERIAL_STATE_FINGERPRINT`.
 
 ## Material-transition comparison
 
-The event detector compares the previous and current canonical material-state projections field-by-field before hashing is used as a compact equality check.
-
-Rules:
+The detector compares previous/current canonical material projections field-by-field before hash equality is used as a compact check.
 
 ```text
 identical MATERIAL_STATE_PROJECTION
@@ -291,41 +279,37 @@ any canonical material field changed
     => MATERIAL_TRANSITION_SET = deterministic changed classes
 ```
 
-A same task fingerprint MUST NOT suppress a changed material projection.
+A same task fingerprint MUST NOT suppress changed material state.
 
-### Transition classes and exact triggers
+### Transition classes
 
 `AUTHORITY_EPOCH_CHANGED`
-- trigger: `authority_epoch` changed.
+- `authority_epoch` changed.
 
 `ACTUAL_MERGE`
-- trigger: `pr.merged` changes false -> true, or `pr.merge_sha` changes `NONE` -> exact merge SHA.
+- `pr.merged` false -> true, or `pr.merge_sha` `NONE` -> exact merge SHA.
 
 `PR_HEAD_CHANGED`
-- trigger: `pr.head` changed while the PR/task identity remains the same.
+- `pr.head` changed while PR/task identity remains the same.
 
 `SYNTHETIC_OR_MAIN_CLASSIFICATION_CHANGED`
-- trigger: `current_main`, `pr.synthetic_or_state`, or PR draft/open/closed state changed in a way that changes tuple/currentness classification and is not already represented as `ACTUAL_MERGE`.
+- `current_main`, `pr.synthetic_or_state`, or PR currentness/draft state changed in a way that changes tuple/currentness classification and is not already represented as `ACTUAL_MERGE`.
 
 `HOSTED_CI_TERMINAL_CHANGED`
-- trigger: either `ci.tests` or `ci.reuse` changes state, including `PENDING -> SUCCESS`, `PENDING -> FAILURE`, or a terminal state changing because a fresh run superseded the prior run.
+- `ci.tests` or `ci.reuse` changes state, including pending -> terminal or a fresh run superseding prior terminal evidence.
 
 `REVIEWER_TERMINAL_CHANGED`
-- trigger: either canonical reviewer state changes, including `PENDING -> PASS`, `PENDING -> CHANGES_REQUIRED`, `PASS -> CHANGES_REQUIRED`, `CHANGES_REQUIRED -> PASS`, or a fresh exact-head verdict supersedes a prior verdict.
+- canonical reviewer state changes, including pending -> PASS/CHANGES_REQUIRED or a fresh exact-head verdict superseding prior verdict.
 
 `WRITER_STOP_WRITE_OR_TERMINAL`
-- trigger: `writer.state` enters `STOP_WRITE`, `TERMINAL_PASS`, or `TERMINAL_BLOCKED`, or `writer.terminal_id` changes to a new stable terminal identity.
+- writer enters `STOP_WRITE`, `TERMINAL_PASS`, or `TERMINAL_BLOCKED`, or `writer.terminal_id` changes.
 
 `BATON_CHANGED`
-- trigger: `baton.current_owner`, `baton.next_trigger`, or `baton.blocker` changes without a newer authority epoch. This class is advisory and cannot create authority.
-
-`BATON_CHANGED` is intentionally separated from `AUTHORITY_EPOCH_CHANGED` so a canonical transition packet can update owner/action semantics even when represented outside #131, while the authority resolver still fresh-checks the controlling packet.
+- baton owner/next-trigger/blocker changes without a newer authority epoch; this is advisory and cannot create authority.
 
 ## Multiple simultaneous changes
 
-A single watchdog scan can observe several material changes since the previous observation. The detector SHALL return a stable transition set, not an implementation-dependent single winner.
-
-Canonical precedence for processing is:
+A scan may observe several transitions. The detector returns a stable ordered transition set:
 
 ```text
 1. AUTHORITY_EPOCH_CHANGED
@@ -338,22 +322,11 @@ Canonical precedence for processing is:
 8. BATON_CHANGED
 ```
 
-All detected classes remain recorded in `TRANSITION_SET`; precedence only controls validation/action ordering.
-
-Example:
-
-```text
-TRANSITION_SET=[HOSTED_CI_TERMINAL_CHANGED, REVIEWER_TERMINAL_CHANGED]
-PRIMARY_TRANSITION=HOSTED_CI_TERMINAL_CHANGED
-```
-
-If a higher-precedence transition invalidates a lower one — for example main/head movement makes a reviewer verdict stale — the lower event is observed but cannot authorize use of stale evidence.
+All classes remain in `TRANSITION_SET`; precedence controls validation/action ordering only. If a higher-precedence transition invalidates lower evidence, lower evidence remains observed but cannot authorize stale use.
 
 ## Ephemeral task fingerprint and de-duplication
 
-`TASK_FINGERPRINT` is separate from `MATERIAL_STATE_FINGERPRINT`.
-
-It identifies one unit of role work:
+`TASK_FINGERPRINT` is separate from `MATERIAL_STATE_FINGERPRINT` and identifies one unit of role work:
 
 ```text
 (role,
@@ -365,34 +338,16 @@ It identifies one unit of role work:
  intended_output)
 ```
 
-Allowed `intended_output` values include:
+Canonical `intended_output` values include `WRITE_RED`, `WRITE_GREEN`, `REVIEW`, `MERGE_DECISION`, `LOCAL_PREFLIGHT`, and `STATUS_ONLY`.
 
-```text
-WRITE_RED
-WRITE_GREEN
-REVIEW
-MERGE_DECISION
-LOCAL_PREFLIGHT
-STATUS_ONLY
-```
-
-Canonicalization:
-
-- role uses closed canonical role names;
-- missing values use literal `NONE`;
-- exact current main/head/synthetic/authority epoch are included;
-- serialization uses canonical sorted keys;
-- SHA-256 may be used for compact identity.
-
-Decision rule is applied **after material-state comparison**:
+Decision order:
 
 ```text
 material state changed
-    => classify and resolve actionability first
-
+    => classify transition and resolve actionability first
 same TASK_FINGERPRINT + valid correct-role in-flight handle
     => REJOIN_HANDLE
-same TASK_FINGERPRINT + equivalent terminal already durable and still current
+same TASK_FINGERPRINT + equivalent durable current terminal
     => NO_DUPLICATE_SPAWN
 same TASK_FINGERPRINT + no new material state
     => NO_ACTION
@@ -400,9 +355,9 @@ changed TASK_FINGERPRINT + authorized work required
     => SPAWN_OR_ROUTE_MINIMUM_REQUIRED_ROLE
 ```
 
-A same task fingerprint is never evidence that CI/review/writer state did not change.
+A same task fingerprint is never evidence that CI/review/writer/material state did not change.
 
-## Material transition handling
+## Material transition handling and authority resolution
 
 For every material transition Luna derives:
 
@@ -417,25 +372,11 @@ PRIMARY_NEXT_OWNER=<role>
 NEXT_TRIGGER=<exact trigger>
 ```
 
-If `ACTIONABILITY=AUTHORIZED`, the bounded action is routed/started in the same watchdog cycle unless an equivalent valid in-flight task handle exists.
+If `ACTIONABILITY=AUTHORIZED`, route/start the bounded action in the same watchdog cycle unless an equivalent valid in-flight task handle exists.
 
-If `ACTIONABILITY=BLOCKED`, exactly one controlling missing prerequisite/authority and next trigger are persisted. Generic `WAIT` is not sufficient where a concrete blocker can be named.
+If `ACTIONABILITY=BLOCKED`, persist exactly one controlling missing prerequisite/authority and next trigger. Generic `WAIT` is insufficient where a concrete blocker can be named.
 
-## Authority resolution
-
-Transition detection never creates authority.
-
-For every material transition Luna SHALL fresh-read the controlling Human Owner / #131 / SOL packet and validate:
-
-- exact current main/base where bound;
-- exact head/synthetic where bound;
-- current writer lock/write-set;
-- required CI/review predicates;
-- local/live main-pin constraints;
-- explicit next owner and next trigger;
-- material invalidators.
-
-If the packet is absent, stale, contradictory, or does not authorize the action, `ACTIONABILITY=BLOCKED`.
+Transition detection never creates authority. For every material transition Luna fresh-validates the controlling Human Owner / #131 / SOL packet, exact main/base, exact head/synthetic where bound, writer lock/write-set, required CI/review predicates, local/live pin constraints, next owner/trigger, and material invalidators. Missing/stale/contradictory authority fails closed.
 
 ## Conditional SOL preauthorization
 
@@ -452,8 +393,8 @@ Conditional preauthorization is valid only when an explicit GitHub control packe
 Examples:
 
 - expected RED evidence -> bounded GREEN write;
-- paired PASS on exact unchanged tuple -> merge-eligibility decision;
-- actual merge -> capture merge SHA, re-epoch affected successors, activate next eligible gate.
+- paired final PASS on exact unchanged tuple -> merge-eligibility decision;
+- actual merge -> capture merge SHA, re-epoch affected successors, activate next eligible bounded gate.
 
 Pinned-main/local-live constraints override generic preauthorization.
 
@@ -470,7 +411,7 @@ BATON_STATE = (
 )
 ```
 
-Every material transition ending one role's work must leave one of:
+Every material transition ending one role's work leaves exactly one of:
 
 - executable next owner/action;
 - concrete blocker owner + missing prerequisite;
@@ -478,15 +419,15 @@ Every material transition ending one role's work must leave one of:
 
 ## CONTROL_PLANE_DEADLOCK
 
-A deadlock exists only if all are true:
+A deadlock exists only when all are true:
 
 1. canonical baton identifies an executable action;
-2. required authority/evidence is fresh and already present;
+2. required authority/evidence is fresh and present;
 3. no writer/main/live lock forbids it;
-4. action was neither started/routed in the transition cycle nor represented by a valid in-flight task handle;
+4. action was neither started/routed in the transition cycle nor represented by a valid in-flight equivalent handle;
 5. a later watchdog scan sees the same actionable material state unchanged.
 
-On detection Luna reports the deadlock and performs/routes the already-authorized action in that scan.
+Target: `CONTROL_PLANE_DEADLOCK=0`.
 
 True external waits, pinned-main HOLD, CI/reviewer in-flight, local-machine prerequisite, or explicit Human gate are not deadlocks.
 
@@ -497,20 +438,18 @@ Canonical reviewer roles:
 - `REVIEWER_INTEGRATION`
 - `REVIEWER_SECURITY`
 
-When both are required they are routed in parallel. A bounded repair may rejoin the same correct-role context, but a changed head/synthetic/material authority tuple requires a fresh exact-head verdict. Prior PASS/CHANGES_REQUIRED is never promoted to the new tuple.
+When both are required they are routed in parallel. A bounded repair may rejoin the same correct-role context, but a changed head/synthetic/authority tuple requires a fresh exact-head verdict. Prior PASS/CHANGES_REQUIRED is never promoted to the changed tuple.
 
-A reviewer terminal is part of `MATERIAL_STATE_PROJECTION`, so a fresh reviewer verdict is observable even when `TASK_FINGERPRINT` itself is unchanged.
+A reviewer terminal is part of `MATERIAL_STATE_PROJECTION`, so fresh reviewer state remains observable even when `TASK_FINGERPRINT` itself is unchanged.
 
 ## N+1 readiness
 
-While phase N executes, safe off-critical-path preparation for phase N+1 should target:
+Safe off-critical-path phase N+1 preparation targets:
 
 - `PATCH_READY`; or
 - `ONLY_LATE_BINDINGS_PENDING`.
 
-`PLANNING_ONLY_READY` is not the target when architecture, owner, public seam, write-set, and RED matrix can safely be closed further.
-
-This does not authorize overlapping writers.
+`PLANNING_ONLY_READY` is not the target when owner/public-seam/write-set/RED-matrix work can be safely closed further. This does not authorize overlapping writers.
 
 ## REQUIRED_PUBLIC_SEAMS audit
 
@@ -529,7 +468,7 @@ A private-only, speculative, duplicated, or missing seam blocks downstream RED u
 
 ## Pre-push GREEN owner-contract bundle
 
-Before first GREEN push for a production slice, use only existing owners/checkers:
+Before first GREEN push for a production slice, compose existing owners/checkers only:
 
 1. exact focused RED/GREEN tests;
 2. focused tests for consumed public-seam owners;
@@ -541,112 +480,129 @@ Before first GREEN push for a production slice, use only existing owners/checker
 
 No second verifier is created by #187.
 
-## Failure behavior
+## Binding KPI derivation contract
 
-### Missing or corrupt observation cache
+This section is binding under Issue #187 and V3 comment `5255200043`. Any narrower KPI list in the implementation plan is illustrative only; Task 9 MUST consume this entire set.
 
-- discard cache;
-- fresh-reconstruct from GitHub;
-- do not fail open.
+Metrics SHALL be derived from existing GitHub/action/comment timestamps where possible. No second metrics database is allowed.
 
-### GitHub/cache disagreement
+### Core latency metrics
 
-- GitHub wins;
-- rebuild projection and both fingerprints;
-- invalidate stale task handles as required.
+- `writer_unlock_to_stop_write` = writer `STOP_WRITE` timestamp - production unlock timestamp.
+- `stop_write_to_ci_terminal` = final required hosted CI terminal timestamp - `STOP_WRITE` timestamp.
+- `stop_write_to_review_start` = first required reviewer-start/routing timestamp - `STOP_WRITE` timestamp.
+- `ci_terminal_to_reviewer_terminal` = paired/final required review terminal timestamp - final required CI terminal timestamp.
+- `paired_pass_to_merge` = actual merge timestamp - timestamp when final required PASS made the exact tuple merge-eligible.
+- `merge_to_successor_activation` = successor issuance/unlock timestamp - actual merge timestamp.
 
-### Incomplete canonical evidence
+If merge is intentionally blocked by an explicit policy/epoch/main pin, `paired_pass_to_merge` is `HOLD_BY_POLICY`, not control-plane idle time. A held PR MUST NOT be treated as latency debt merely because the hold is long.
+
+### Quality and efficiency metrics
+
+- `actionable_baton_idle_cycles`: watchdog cycles where an unchanged executable baton existed without a valid in-flight action. Target `0`.
+- `review_repair_cycles`: count of `CHANGES_REQUIRED -> repair -> fresh-review` loops for the bounded task/tuple lineage.
+- `architecture_blockers_first_discovered_after_green`: required-owner/public-seam/architecture blockers first identified only after GREEN. Target `0`.
+- `luna_discovery_token_share`: Luna tokens spent reconstructing already-available state divided by Luna orchestration tokens for the sampled cycle/window.
+- `duplicate_ephemeral_spawn_on_unchanged_material_state`: equivalent expensive role spawns with unchanged canonical material state. Target `0`.
+- `zero_silent_baton_violation`: material role-ending transitions that leave no executable owner/action, concrete blocker, or true terminal. Target `0`.
+- `control_plane_deadlock`: actionable baton deadlock as defined above. Target `0`.
+
+For `luna_discovery_token_share`, if trustworthy token accounting is not exposed, report literal `NOT_AVAILABLE`; never invent or estimate a value and present it as evidence.
+
+The KPI chain therefore covers the full required sequence:
 
 ```text
-OBSERVATION_INCOMPLETE
-ACTIONABILITY=BLOCKED
-MISSING=<exact missing canonical evidence>
+writer unlock
+-> STOP_WRITE
+-> hosted CI terminal
+-> reviewer start
+-> reviewer terminal
+-> paired PASS / merge-eligible
+-> actual merge or HOLD_BY_POLICY
+-> successor activation
 ```
 
-### Material change with same task fingerprint
+## Binding resource policy
 
-- process material transition;
-- do not suppress it;
-- rejoin existing role only if still correct/current.
+Token/resource optimization applies **ONLY** to:
 
-### Clock-only observation change
+- Luna discovery/reconstruction of already-available state;
+- duplicate equivalent Luna routing work;
+- equivalent ephemeral orchestration spawn de-duplication.
 
-- no material transition;
-- no duplicate role spawn.
+It SHALL NOT:
+
+- reduce Master Audit depth, adversarial analysis, or lookahead;
+- reduce `REVIEWER_INTEGRATION` depth;
+- reduce `REVIEWER_SECURITY` depth;
+- reduce persistent R3/R4/R5/R6 specialist reasoning;
+- replace or skip fresh GitHub reads required by the role;
+- suppress material-transition communication;
+- suppress exact reviewer/writer terminal evidence;
+- omit required evidence merely to save tokens;
+- shorten required reasoning/evidence in Audit or specialist Code lanes.
+
+Master Audit and persistent R3/R4/R5/R6 Web Code lanes are explicitly **NOT token-constrained** by #187. Integration/Security review depth is likewise never a target of Luna token optimization.
+
+The optimization mechanism is de-duplication and delta-first reconstruction, not shallower engineering analysis.
+
+## Failure behavior and rollback
+
+- Missing/corrupt cache -> discard and full fresh GitHub reconstruction.
+- GitHub/cache disagreement -> GitHub wins; rebuild both projections/fingerprints.
+- Incomplete canonical evidence -> `ACTIONABILITY=BLOCKED` with exact missing evidence.
+- Material change with same task fingerprint -> process material transition; do not suppress it.
+- Clock-only observation change -> no material transition; no duplicate spawn.
+- Missed event -> next normal watchdog scan reconstructs current truth.
+- Changed main/head/synthetic/authority -> invalidate dependent classification and re-evaluate.
+- Conflicting writer or pinned-main lock -> HOLD/BLOCKED even if other predicates pass.
+- Reviewer handle unavailable -> use a fresh correct-role reviewer, never substitute wrong role.
+- Metrics unavailable -> literal `NOT_AVAILABLE`; no synthetic estimate as evidence.
+
+Planning rollback: close PR unmerged. Operational no-code rollback: discard advisory cache and return to full fresh-read watchdog behavior. Any future helper, if separately authorized, is reverted independently; GitHub authority remains unaffected.
 
 ## Adversarial acceptance matrix
 
-The default no-code rollout and any future helper must prove all of these semantics:
+The default no-code rollout and any future helper must prove:
 
-| Case | Expected material result | Expected orchestration result |
-|---|---|---|
-| identical canonical projection | `NO_MATERIAL_TRANSITION` | `NO_ACTION` or valid-handle reuse only |
-| only `observed_at` changes | `NO_MATERIAL_TRANSITION` | no spawn |
-| CI tests PENDING -> SUCCESS | `HOSTED_CI_TERMINAL_CHANGED` | fresh authority/actionability resolution |
-| reuse PENDING -> FAILURE | `HOSTED_CI_TERMINAL_CHANGED` | fail closed / route blocker |
-| Integration PENDING -> PASS | `REVIEWER_TERMINAL_CHANGED` | consume fresh verdict if current |
-| Security PASS -> CHANGES_REQUIRED | `REVIEWER_TERMINAL_CHANGED` | stale actionability invalidated |
-| writer ACTIVE -> STOP_WRITE | `WRITER_STOP_WRITE_OR_TERMINAL` | successor/review routing considered same cycle |
-| writer terminal id changes | `WRITER_STOP_WRITE_OR_TERMINAL` | consume exact new terminal |
-| head changes | `PR_HEAD_CHANGED` | prior reviews/currentness invalidated |
-| main/synthetic classification changes | `SYNTHETIC_OR_MAIN_CLASSIFICATION_CHANGED` | re-epoch/revalidation required |
-| merged false -> true + merge SHA appears | `ACTUAL_MERGE` | capture merge/re-epoch successors |
-| authority comment changes | `AUTHORITY_EPOCH_CHANGED` | fresh authority dominates all lower events |
-| CI + reviewer change in one scan | stable ordered transition set | process CI before reviewer, preserve both |
-| same task fingerprint but reviewer changes | reviewer transition still detected | no suppression by task de-dup |
-| cache deleted | full reconstruction | same canonical material result |
-
-## KPI definitions
-
-Measure from existing timestamps where possible:
-
-- `STOP_WRITE -> review route latency`;
-- `paired PASS -> SOL merge-decision latency`;
-- `actual merge -> successor activation latency`;
-- duplicate ephemeral role spawns per unchanged material state;
-- actionable `CONTROL_PLANE_DEADLOCK` count;
-- `ZERO-SILENT-BATON` violation count;
-- post-GREEN architecture/public-seam blocker leakage count;
-- full-state reconstruction scans avoided through safe bounded delta handling.
-
-Targets:
-
-```text
-CONTROL_PLANE_DEADLOCK = 0
-ZERO_SILENT_BATON_VIOLATION = 0
-DUPLICATE_EPHEMERAL_SPAWN_ON_UNCHANGED_MATERIAL_STATE = 0
-POST_GREEN_ARCHITECTURE_BLOCKER_LEAKAGE = 0
-```
-
-Latency targets are measured first; no workflow/daemon/helper is justified without evidence that the existing watchdog cannot meet the accepted target.
+| Case | Expected result |
+|---|---|
+| identical canonical material projection | `NO_MATERIAL_TRANSITION`; no new spawn |
+| only `observed_at`/watchdog time changes | `NO_MATERIAL_TRANSITION` |
+| CI/reuse pending -> terminal | `HOSTED_CI_TERMINAL_CHANGED` |
+| reviewer pending/PASS/CHANGES_REQUIRED changes | `REVIEWER_TERMINAL_CHANGED` |
+| writer ACTIVE -> STOP_WRITE or new terminal id | `WRITER_STOP_WRITE_OR_TERMINAL` |
+| head changes | `PR_HEAD_CHANGED`; stale verdict invalidated |
+| main/synthetic classification changes | `SYNTHETIC_OR_MAIN_CLASSIFICATION_CHANGED` |
+| merged false -> true + merge SHA | `ACTUAL_MERGE` |
+| authority epoch changes | `AUTHORITY_EPOCH_CHANGED` |
+| simultaneous CI + reviewer changes | stable ordered set preserves both |
+| same task fingerprint but material state changes | material transition still processed |
+| cache deleted/corrupt | full reconstruction, same canonical result |
+| explicit policy HOLD after paired PASS | KPI class `HOLD_BY_POLICY`, not idle |
+| token accounting unavailable | `luna_discovery_token_share=NOT_AVAILABLE` |
+| attempted Luna optimization reduces Audit/reviewer/R3-R6 depth | FAIL governance acceptance |
 
 ## Default rollout and conditional future helper
 
 Default recommendation: **NO NEW REPOSITORY RUNTIME**.
 
-Luna applies the two-projection semantics within the existing orchestration/watchdog process:
+Luna applies:
 
 - canonical material projection + `MATERIAL_STATE_FINGERPRINT` for event detection;
-- task tuple + `TASK_FINGERPRINT` for duplicate role-work suppression.
+- task tuple + `TASK_FINGERPRINT` for duplicate role-work suppression;
+- full binding KPI/resource contracts above during the no-code trial.
 
-If a measured trial proves deterministic local handling is insufficient, a future separate implementation issue may authorize exactly:
+If measured evidence proves deterministic local handling insufficient, a future separate implementation issue may authorize exactly:
 
 - `scripts/control_plane_state.py`
 - `tests/test_control_plane_state.py`
 
-That helper must be pure/offline, receive already-fetched normalized data, emit advisory projection/diff/fingerprints only, add no dependency, call no GitHub/network, spawn no agent, write no comment, merge nothing, and hold no authority.
-
-## Rollback
-
-Planning rollback: close PR unmerged.
-
-Operational no-code rollout rollback: discard advisory cache and return to full fresh-read watchdog behavior.
-
-Future helper rollback, if separately authorized: revert the bounded helper commit; GitHub authority remains unaffected.
+Any helper must be pure/offline, receive already-fetched normalized data, emit advisory projection/diff/fingerprint results only, add no dependency, call no GitHub/network, spawn no agent, write no comment, merge nothing, and hold no authority.
 
 ## Acceptance
 
-#187 planning is acceptable only when independent Integration and Security review confirm that:
+#187 planning is acceptable only when independent Integration and Security review confirm all of the following:
 
 - material-state detection and task de-duplication are separate deterministic contracts;
 - observation-only time cannot false-trigger a material event;
@@ -654,5 +610,16 @@ Future helper rollback, if separately authorized: revert the bounded helper comm
 - simultaneous material changes have deterministic ordering;
 - cache remains advisory and reconstructible;
 - GitHub remains sole authority;
+- reuse audit and three alternatives/trade-offs are present, with Alternative A selected;
+- the full KPI chain and V3 quality/resource metrics are explicit;
+- `HOLD_BY_POLICY` is distinguished from control-plane idle;
+- `luna_discovery_token_share` uses literal `NOT_AVAILABLE` when trustworthy accounting is absent;
+- resource optimization is scoped to Luna discovery/reconstruction and equivalent ephemeral spawn de-duplication only;
+- **Master Audit remains non-token-limited and must retain full adversarial/lookahead depth**;
+- **REVIEWER_INTEGRATION and REVIEWER_SECURITY remain non-token-limited in required review depth**;
+- **persistent R3/R4/R5/R6 specialist lanes remain non-token-limited and retain required detailed fresh analysis**;
+- required fresh GitHub reads, material-transition communication, and exact terminal evidence are never suppressed for token savings;
 - no runtime/workflow/dependency/live/system scope is introduced;
 - exact planning write-set remains the two authorized docs.
+
+The implementation plan's Task 9 and self-review SHALL be interpreted against this full acceptance contract. Any checklist omission in the plan cannot narrow this binding design contract.
