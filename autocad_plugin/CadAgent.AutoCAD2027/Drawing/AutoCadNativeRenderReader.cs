@@ -17,6 +17,12 @@ public static class AutoCadNativeRenderReader
     private const string A4MediaName = "ISO_A4_(210.00_x_297.00_MM)";
     private const double A4WidthMillimeters = 210;
     private const double A4HeightMillimeters = 297;
+    private const double CameraStateTolerance = 1e-9;
+
+    private sealed record ObservedCameraState(
+        string ViewDirection,
+        string Ucs,
+        string VisualStyle);
 
     private sealed record CameraWindow(
         IReadOnlyList<double>? RequestedWcsBbox,
@@ -24,6 +30,9 @@ public static class AutoCadNativeRenderReader
         IReadOnlyList<double> ViewCenter,
         double ViewWidth,
         double ViewHeight,
+        string ObservedViewDirection,
+        string ObservedUcs,
+        string ObservedVisualStyle,
         Extents2d PlotWindow);
 
     public static NativeRenderEvidenceSnapshot Capture(
@@ -174,6 +183,7 @@ public static class AutoCadNativeRenderReader
                     document,
                     transaction,
                     matches[0].Layout,
+                    request,
                     request.RenderOptions.Camera);
             plotSettings = new PlotSettings(matches[0].Layout.ModelType);
             plotSettings.CopyFrom(matches[0].Layout);
@@ -199,9 +209,16 @@ public static class AutoCadNativeRenderReader
         Document document,
         Transaction transaction,
         Layout layout,
+        NativeRenderRequest request,
         NativeRenderCamera camera)
     {
         NativeRenderPolicy.EnsureCameraSupported(camera);
+        using var currentView = document.Editor.GetCurrentView();
+        var observedCameraState = EnsureObservedCanonicalCameraState(
+            request,
+            camera,
+            currentView);
+
         IReadOnlyList<double>? requested = null;
         double minX;
         double minY;
@@ -256,7 +273,7 @@ public static class AutoCadNativeRenderReader
         var wcsMaxX = centerX + halfWidth;
         var wcsMaxY = centerY + halfHeight;
         var plotWindow = TransformWcsWindowToDcs(
-            document,
+            currentView,
             wcsMinX,
             wcsMinY,
             wcsMaxX,
@@ -267,17 +284,104 @@ public static class AutoCadNativeRenderReader
             new[] { centerX, centerY },
             viewWidth,
             viewHeight,
+            observedCameraState.ViewDirection,
+            observedCameraState.Ucs,
+            observedCameraState.VisualStyle,
             plotWindow);
     }
 
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(
+        NativeRenderRequest request,
+        NativeRenderCamera camera,
+        ViewTableRecord currentView)
+    {
+        var currentLayout = Convert.ToString(
+            AcadApplication.GetSystemVariable("CTAB"),
+            CultureInfo.InvariantCulture) ?? string.Empty;
+        if (!string.Equals(currentLayout, request.Layout.Name, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "NATIVE_RENDER_CAMERA_LAYOUT_NOT_ACTIVE: "
+                + "The requested camera layout is not the active AutoCAD layout.");
+        }
+
+        var currentViewport = Convert.ToInt32(
+            AcadApplication.GetSystemVariable("CVPORT"),
+            CultureInfo.InvariantCulture);
+        if (currentViewport != 1)
+        {
+            throw new InvalidDataException(
+                "NATIVE_RENDER_CAMERA_LAYOUT_NOT_ACTIVE: "
+                + "Canonical camera rendering requires the paper-space viewport for the active layout.");
+        }
+
+        var worldUcs = Convert.ToInt32(
+            AcadApplication.GetSystemVariable("WORLDUCS"),
+            CultureInfo.InvariantCulture);
+        if (worldUcs != 1)
+        {
+            throw new InvalidDataException(
+                "NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active UCS is not WORLD.");
+        }
+
+        if (AcadApplication.GetSystemVariable("VIEWDIR") is not Point3d observedViewDirection
+            || !IsTopDirection(
+                observedViewDirection.X,
+                observedViewDirection.Y,
+                observedViewDirection.Z)
+            || !IsTopDirection(
+                currentView.ViewDirection.X,
+                currentView.ViewDirection.Y,
+                currentView.ViewDirection.Z))
+        {
+            throw new InvalidDataException(
+                "NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active view direction is not TOP.");
+        }
+
+        var observedViewTwist = Convert.ToDouble(
+            AcadApplication.GetSystemVariable("VIEWTWIST"),
+            CultureInfo.InvariantCulture);
+        if (Math.Abs(observedViewTwist) > CameraStateTolerance
+            || Math.Abs(currentView.ViewTwist) > CameraStateTolerance
+            || Math.Abs(observedViewTwist - currentView.ViewTwist) > CameraStateTolerance)
+        {
+            throw new InvalidDataException(
+                "NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active view has non-zero twist.");
+        }
+
+        var observedVisualStyle = Convert.ToString(
+            AcadApplication.GetSystemVariable("VSCURRENT"),
+            CultureInfo.InvariantCulture) ?? string.Empty;
+        if (!string.Equals(observedVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active visual style is not 2D Wireframe.");
+        }
+
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.ViewDirection, observed.ViewDirection, StringComparison.Ordinal)
+            || !string.Equals(camera.Ucs, observed.Ucs, StringComparison.Ordinal)
+            || !string.Equals(camera.VisualStyle, observed.VisualStyle, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "NATIVE_RENDER_CAMERA_STATE_MISMATCH: Requested and observed camera profiles differ.");
+        }
+
+        return observed;
+    }
+
+    private static bool IsTopDirection(double x, double y, double z) =>
+        Math.Abs(x) <= CameraStateTolerance
+        && Math.Abs(y) <= CameraStateTolerance
+        && Math.Abs(z - 1.0) <= CameraStateTolerance;
+
     private static Extents2d TransformWcsWindowToDcs(
-        Document document,
+        ViewTableRecord view,
         double minX,
         double minY,
         double maxX,
         double maxY)
     {
-        using var view = document.Editor.GetCurrentView();
         var wcsToDcs = Matrix3d.PlaneToWorld(view.ViewDirection);
         wcsToDcs = Matrix3d.Displacement(view.Target - Point3d.Origin) * wcsToDcs;
         wcsToDcs = Matrix3d.Rotation(
@@ -393,9 +497,9 @@ public static class AutoCadNativeRenderReader
             cameraWindow.ViewCenter,
             cameraWindow.ViewWidth,
             cameraWindow.ViewHeight,
-            camera.ViewDirection,
-            camera.Ucs,
-            camera.VisualStyle,
+            cameraWindow.ObservedViewDirection,
+            cameraWindow.ObservedUcs,
+            cameraWindow.ObservedVisualStyle,
             artifact.Sha256,
             artifact.Width.Value,
             artifact.Height.Value,
