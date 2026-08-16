@@ -6,10 +6,10 @@ on:
       - sol/status-currentness-builder
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  prepend-status-banner:
+  probe-status-banner:
     runs-on: ubuntu-latest
     steps:
       - name: Check out clean target branch
@@ -17,60 +17,57 @@ jobs:
         with:
           ref: sol/status-currentness-banner-v2
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
-      - name: Prepend stable currentness banner only
+      - name: Probe all prepend pre/postconditions
         shell: bash
         run: |
-          set -euo pipefail
-          echo "CHECKPOINT=head"
+          set +e
           actual_head="$(git rev-parse HEAD)"
-          echo "actual_head=$actual_head"
-          test "$actual_head" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae"
-          echo "CHECKPOINT=blob"
           actual_blob="$(git hash-object docs/STATUS.md)"
-          echo "actual_blob=$actual_blob"
-          test "$actual_blob" = "45e4eb45643c485b40c7f50df8c0811e978c6226"
-          echo "CHECKPOINT=python"
-          python - <<'PY'
+          head_ok=false
+          blob_ok=false
+          [ "$actual_head" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae" ] && head_ok=true
+          [ "$actual_blob" = "45e4eb45643c485b40c7f50df8c0811e978c6226" ] && blob_ok=true
+
+          python - <<'PY' > /tmp/python-diag.txt
           from pathlib import Path
 
           path = Path("docs/STATUS.md")
           old = path.read_bytes()
           title = b"# CAD Agent Status\n"
-          print(f"old_len={len(old)}")
-          print(f"prefix_ok={old.startswith(title + b'\n## Status vocabulary\n')}")
-          assert old.startswith(title + b"\n## Status vocabulary\n")
-
+          expected_prefix = title + b"\n## Status vocabulary\n"
           banner = b"""> [!IMPORTANT]\n> **Historical evidence index — not live project state.**\n>\n> This file preserves SHA-bound status/evidence snapshots from the epochs in which they\n> were recorded. Terms below such as `current`, `locked`, `next`, `before merge`, or\n> `Executing` are historical unless a section explicitly says otherwise.\n>\n> **Do not use this file to decide current `main`, active owner/baton, blocker, merge\n> readiness, live authority, or next action.** For mutable project state, fresh-read\n> GitHub in this order: Issue [#131](https://github.com/duongchi90/cad-agent/issues/131),\n> actual current `main`, open PRs and their current CI/review state, then the newest\n> applicable task-specific authority/evidence comments. Newer GitHub evidence supersedes\n> this document.\n>\n> `docs/STATUS.md` is not a scheduler, currentness store, merge authority, or live-action\n> authority. Preserve the historical sections below as audit evidence; do not rewrite old\n> snapshots merely to make them look current.\n"""
-
           rest = old[len(title):]
           new = title + b"\n" + banner + rest
           prefix_len = len(title) + 1 + len(banner)
-          print(f"rest_equal={new[prefix_len:] == rest}")
-          assert new[prefix_len:] == rest
-          assert old == title + rest
+          print("old_len=" + str(len(old)))
+          print("prefix_ok=" + str(old.startswith(expected_prefix)).lower())
+          print("rest_equal=" + str(new[prefix_len:] == rest).lower())
+          print("roundtrip_old=" + str(old == title + rest).lower())
           path.write_bytes(new)
-          print(f"new_len={len(new)}")
+          print("new_len=" + str(len(new)))
           PY
-          echo "CHECKPOINT=diff-check"
-          git diff --check
-          echo "CHECKPOINT=changed-path"
-          changed="$(git diff --name-only)"
-          printf 'changed=%s\n' "$changed"
-          test "$changed" = "docs/STATUS.md"
-          echo "CHECKPOINT=diff"
-          git diff -- docs/STATUS.md
+          python_status=$?
 
-      - name: Commit exact one-file delta to target branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "duongchi90"
-          git config user.email "duongchi903@gmail.com"
-          git add docs/STATUS.md
-          changed="$(git diff --cached --name-only)"
-          printf 'cached_changed=%s\n' "$changed"
-          test "$changed" = "docs/STATUS.md"
-          git commit -m "docs: mark status ledger as historical evidence"
-          git push origin HEAD:sol/status-currentness-banner-v2
+          git diff --check >/tmp/diff-check.txt 2>&1
+          diff_status=$?
+          changed="$(git diff --name-only | tr '\n' ',' | sed 's/,$//')"
+
+          {
+            echo "### STATUS prepend diagnostic"
+            echo "- actual_head: \`$actual_head\`"
+            echo "- head_ok: \`$head_ok\`"
+            echo "- actual_blob: \`$actual_blob\`"
+            echo "- blob_ok: \`$blob_ok\`"
+            echo "- python_status: \`$python_status\`"
+            while IFS= read -r line; do echo "- python: \`$line\`"; done < /tmp/python-diag.txt
+            echo "- diff_check_status: \`$diff_status\`"
+            echo "- changed: \`$changed\`"
+            echo "- diff_check_output:"
+            echo '```'
+            cat /tmp/diff-check.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit 0
