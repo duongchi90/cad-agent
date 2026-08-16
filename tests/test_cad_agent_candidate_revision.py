@@ -1560,3 +1560,223 @@ def test_task2_state_checksum_mutation_and_unknown_fields_fail_closed() -> None:
             root,
             _task2_transition("SELECT", root, expected_current=None),
         )
+
+
+# R4 #271 RED/design contract.  The current v1.0 record is deliberately
+# closed around accepted_transition_evidence_sha256.  A future implementation
+# must add this explicit discriminator without inferring ROOT from parent=None
+# or from a missing/None transition hash.
+TASK3_ROOT_SCHEMA_VERSION = "candidate-revision-1.1"
+TASK3_ROOT_KIND = "ROOT_PRE_REPAIR"
+
+
+def _task3_root_pre_repair_args(
+    *, material: dict[str, object] | None = None
+) -> dict[str, object]:
+    """Describe an explicit transition-free ROOT/PRE_REPAIR candidate."""
+    material = material or _accepted_r3_material()
+    root_reference = deepcopy(material["parent_reference"])
+    root_observation = deepcopy(material["parent_observation"])
+    root_correspondence = {
+        "parent_reference_id": None,
+        "parent_reference_sha256": None,
+        "child_reference_id": root_reference["reference_id"],
+        "child_reference_sha256": root_reference["reference_sha256"],
+        "registry_snapshot_sha256": material["registry"][
+            "registry_snapshot_sha256"
+        ],
+        "provenance_sha256": material["correspondence"]["provenance_sha256"],
+        "component_bindings": deepcopy(
+            material["correspondence"]["component_bindings"]
+        ),
+        "view_bindings": deepcopy(material["correspondence"]["view_bindings"]),
+    }
+    root_change_impact = {
+        "registry_snapshot_sha256": material["registry"][
+            "registry_snapshot_sha256"
+        ],
+        "impact": deepcopy(material["impact"]),
+        "correspondence": root_correspondence,
+        "upstream_context": deepcopy(material["context"]),
+        "correspondence_context": {
+            "parent_reference": None,
+            "parent_observation": None,
+            "parent_artifact_bytes": None,
+            "child_reference": root_reference,
+            "child_observation": root_observation,
+            "child_artifact_bytes": material["candidate_bytes"],
+            "accepted_transition_evidence_sha256": None,
+        },
+    }
+    root_mutation = {
+        "evidence_kind": "R4_CANDIDATE_BUILD",
+        "evidence_id": "r4-root-pre-repair-red",
+        "r3_candidate_reference_id": root_reference["reference_id"],
+        "r3_candidate_reference_sha256": root_reference["reference_sha256"],
+        "candidate_artifact_sha256": root_reference["artifact_sha256"],
+        "accepted_transition_evidence_sha256": None,
+        "latest_mutation_evidence_sha256": canonical_json_sha256(
+            root_reference["upstream_evidence"]
+        ),
+        "mutation_terminal": "SEALED",
+    }
+    root_mutation["evidence_sha256"] = canonical_json_sha256(root_mutation)
+    return {
+        "registry": deepcopy(material["registry"]),
+        "base_cad_handoff": deepcopy(material["context"]["reuse_handoff"]),
+        "baseline_context": deepcopy(_baseline_context()),
+        "parent_candidate": None,
+        "change_impact": root_change_impact,
+        "mutation_evidence": root_mutation,
+        "lineage_context": (),
+    }
+
+
+def _task3_build(
+    args: dict[str, object],
+    *,
+    schema_version: str = TASK3_ROOT_SCHEMA_VERSION,
+    candidate_kind: str = TASK3_ROOT_KIND,
+) -> dict[str, object]:
+    """Call the proposed explicit versioned/discriminated R4 seam."""
+    # These optional keywords are intentionally absent on current main.  Their
+    # TypeError is the causal RED: the existing v1.0 API has no legal way to
+    # represent a transition-free ROOT without semantic aliasing.
+    return candidate_module.build_candidate_revision(
+        **deepcopy(args),
+        schema_version=schema_version,
+        candidate_kind=candidate_kind,
+    )
+
+
+def test_task3_root_pre_repair_requires_explicit_versioned_discriminator() -> None:
+    args = _task3_root_pre_repair_args()
+    root = _task3_build(args)
+
+    assert root["schema_version"] == TASK3_ROOT_SCHEMA_VERSION
+    assert root["candidate_kind"] == TASK3_ROOT_KIND
+    assert root["parent_candidate_revision_sha256"] is None
+    assert root["candidate_artifacts"]["accepted_transition_evidence_sha256"] is None
+    assert root["mutation_evidence"]["accepted_transition_evidence_sha256"] is None
+    assert "accepted_r6_result" not in root["mutation_evidence"]
+
+    state = candidate_module.build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    assert state["current_candidate_revision_sha256"] == root[
+        "candidate_revision_sha256"
+    ]
+
+
+def test_task3_root_state_remains_consumable_by_existing_r6_boundary() -> None:
+    import cad_agent.approved_repair_adapter as r6
+
+    args = _task3_root_pre_repair_args()
+    root = _task3_build(args)
+    state = candidate_module.build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    context = {
+        "run_id": SCOPE["run_id"],
+        "work_item_id": "work-r4-root-pre-repair-red",
+        "candidate_revision_id": root["revision_id"],
+        "candidate_revision_sha256": root["candidate_revision_sha256"],
+        "candidate_state_sha256": state["state_sha256"],
+        "repair_plan_id": "repair-plan-r4-root-pre-repair-red",
+        "repair_plan_sha256": "a" * 64,
+        "repair_plan_version": "repair-plan-1.0",
+        "repair_operation_contract_version": "repair-operation-1.0",
+        "repair_operation_contract_fingerprint": "b" * 64,
+        "r3_target_handles": ["H-ROOT"],
+        "protected_target_handles": ["H-ROOT"],
+    }
+
+    assert r6._validate_candidate(state, context) == root
+
+
+def test_task3_parent_none_does_not_infer_root_without_discriminator() -> None:
+    args = _task3_root_pre_repair_args()
+    with pytest.raises(CandidateRevisionError):
+        build_candidate_revision(**args)
+
+
+def test_task3_mixed_mode_root_with_transition_authority_fails_closed() -> None:
+    args = _task3_root_pre_repair_args()
+    args["mutation_evidence"]["accepted_transition_evidence_sha256"] = "f" * 64
+    _rebind_mutation_evidence_checksum(args["mutation_evidence"])
+    with pytest.raises(CandidateRevisionError):
+        _task3_build(args)
+
+
+def test_task3_post_repair_child_cannot_be_relabelled_as_root() -> None:
+    material = _accepted_r3_material()
+    args = _task3_root_pre_repair_args(material=material)
+    args["change_impact"]["correspondence_context"].update(
+        {
+            "child_reference": deepcopy(material["child_reference"]),
+            "child_observation": deepcopy(material["child_observation"]),
+            "child_artifact_bytes": material["child_bytes"],
+        }
+    )
+    with pytest.raises(CandidateRevisionError):
+        _task3_build(args)
+
+
+@pytest.mark.parametrize("case", ["stale", "foreign", "wrong_candidate", "forged_hash"])
+def test_task3_root_rejects_stale_foreign_wrong_or_forged_inputs(case: str) -> None:
+    args = _task3_root_pre_repair_args()
+    context = args["change_impact"]["correspondence_context"]
+    if case == "stale":
+        context["child_observation"] = dara.observe_drawing_artifact_currentness(
+            reference=context["child_reference"],
+            artifact_bytes=b"stale-root-candidate",
+            observation_evidence_sha256="d" * 64,
+        )
+    elif case == "foreign":
+        foreign = dara.issue_drawing_artifact_reference(
+            **{**SCOPE, "project_id": "foreign-project"},
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=context["child_artifact_bytes"],
+            upstream_evidence=deepcopy(
+                context["child_reference"]["upstream_evidence"]
+            ),
+            r3_provenance_binding=deepcopy(
+                context["child_reference"]["r3_provenance_binding"]
+            ),
+        )
+        context["child_reference"] = foreign
+        context["child_observation"] = dara.observe_drawing_artifact_currentness(
+            reference=foreign,
+            artifact_bytes=context["child_artifact_bytes"],
+            observation_evidence_sha256="e" * 64,
+        )
+    elif case == "wrong_candidate":
+        args["mutation_evidence"]["r3_candidate_reference_id"] = (
+            "dara-ref-foreign-candidate"
+        )
+    else:
+        context["child_reference"]["reference_sha256"] = "f" * 64
+
+    with pytest.raises(CandidateRevisionError):
+        _task3_build(args)
+
+
+def test_task3_legacy_v10_post_repair_semantics_remain_strict() -> None:
+    args = _valid_args()
+    legacy = build_candidate_revision(**deepcopy(args))
+    assert legacy["schema_version"] == CANDIDATE_SCHEMA_VERSION
+    assert isinstance(
+        legacy["candidate_artifacts"]["accepted_transition_evidence_sha256"],
+        str,
+    )
+
+    malformed = deepcopy(args)
+    malformed["mutation_evidence"]["accepted_transition_evidence_sha256"] = None
+    malformed["change_impact"]["correspondence_context"][
+        "accepted_transition_evidence_sha256"
+    ] = None
+    _rebind_mutation_evidence_checksum(malformed["mutation_evidence"])
+    with pytest.raises(CandidateRevisionError):
+        build_candidate_revision(**malformed)
