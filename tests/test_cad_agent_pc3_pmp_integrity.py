@@ -429,6 +429,88 @@ def test_nested_directory_identity_drift_before_descent_fails_closed(
         _manifest(root_a, root_b)
 
 
+def test_root_substitution_after_post_enumeration_check_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    replacement = tmp_path / "replacement-root"
+    backup = tmp_path / "plotters-a-original"
+    root_a.mkdir()
+    root_b.mkdir()
+    replacement.mkdir()
+    selected = _write(root_a, "selected.PC3", b"inside")
+    _write(replacement, "selected.PC3", b"outside")
+    original_lstat = Path.lstat
+    swapped = False
+
+    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
+        nonlocal swapped
+        if path == selected and not swapped:
+            root_a.rename(backup)
+            replacement.rename(root_a)
+            swapped = True
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+
+    try:
+        with pytest.raises(
+            pc3_pmp_integrity.PC3PMPIntegrityError,
+            match="root|directory|parent|race|drift|changed|identity|replaced|metadata",
+        ):
+            _manifest(root_a, root_b)
+    finally:
+        if swapped:
+            root_a.rename(replacement)
+            backup.rename(root_a)
+
+    assert swapped
+
+
+def test_nested_parent_substitution_after_post_enumeration_check_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_a = tmp_path / "plotters-a"
+    root_b = tmp_path / "plotters-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    nested = root_a / "nested"
+    nested.mkdir()
+    replacement = tmp_path / "replacement-nested"
+    replacement.mkdir()
+    backup = root_a / "nested-original"
+    selected = _write(nested, "selected.PC3", b"inside")
+    _write(replacement, "selected.PC3", b"outside")
+    original_lstat = Path.lstat
+    swapped = False
+
+    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
+        nonlocal swapped
+        if path == selected and not swapped:
+            nested.rename(backup)
+            replacement.rename(nested)
+            swapped = True
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+
+    try:
+        with pytest.raises(
+            pc3_pmp_integrity.PC3PMPIntegrityError,
+            match="directory|parent|race|drift|changed|identity|replaced|metadata",
+        ):
+            _manifest(root_a, root_b)
+    finally:
+        if swapped:
+            nested.rename(replacement)
+            backup.rename(nested)
+
+    assert swapped
+
+
 def test_byte_change_and_root_slot_order_change_aggregate(tmp_path: Path) -> None:
     root_a = tmp_path / "plotters-a"
     root_b = tmp_path / "plotters-b"
