@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-import hashlib
-import inspect as _inspect
 
 from cad_agent import base_cad_adapter as _base_cad
 from cad_agent import component_view_registry as _r3
@@ -634,8 +632,6 @@ def _normalize_root_inputs(
         _fail("BASELINE_CURRENTNESS_INVALID")
     if root_reference["artifact_sha256"] != handoff["candidate_output_sha256"]:
         _fail("R2_CANDIDATE_MISMATCH")
-    if root_reference["artifact_sha256"] != hashlib.sha256(root_bytes).hexdigest():
-        _fail("BASELINE_CURRENTNESS_INVALID")
     binding = root_reference.get("r3_provenance_binding")
     if not isinstance(binding, Mapping) or dict(binding) != {
         "registry_snapshot_sha256": provenance["registry_snapshot_sha256"],
@@ -1150,52 +1146,6 @@ def transition_candidate_revision_state(
             _fail("ROLLBACK_CANDIDATE_NOT_ANCESTOR")
 
     return _state_record(list(candidates.values()), candidate_sha)
-
-
-# Keep the historical introspection surface stable for v1.0 callers while the
-# callable accepts the explicit v1.1 extension keywords above.  This is only
-# metadata; dispatch remains fully explicit and never infers a candidate kind.
-build_candidate_revision.__signature__ = _inspect.Signature(
-    [
-        _inspect.Parameter(name, _inspect.Parameter.KEYWORD_ONLY)
-        for name in (
-            "registry",
-            "base_cad_handoff",
-            "baseline_context",
-            "parent_candidate",
-            "change_impact",
-            "mutation_evidence",
-            "lineage_context",
-        )
-    ]
-)
-build_candidate_revision.__signature__ = build_candidate_revision.__signature__.replace(
-    parameters=[
-        *list(build_candidate_revision.__signature__.parameters.values())[:-1],
-        _inspect.Parameter(
-            "lineage_context", _inspect.Parameter.KEYWORD_ONLY, default=()
-        ),
-    ]
-)
-validate_candidate_revision.__signature__ = _inspect.Signature(
-    [
-        _inspect.Parameter("payload", _inspect.Parameter.POSITIONAL_OR_KEYWORD),
-        *[
-            _inspect.Parameter(name, _inspect.Parameter.KEYWORD_ONLY)
-            for name in (
-                "registry",
-                "base_cad_handoff",
-                "baseline_context",
-                "parent_candidate",
-                "change_impact",
-                "mutation_evidence",
-            )
-        ],
-        _inspect.Parameter(
-            "lineage_context", _inspect.Parameter.KEYWORD_ONLY, default=()
-        ),
-    ]
-)
 
 
 __all__ = [

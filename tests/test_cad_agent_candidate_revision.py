@@ -442,7 +442,7 @@ def _candidate_module_call_names(tree: ast.Module) -> set[str]:
     return names
 
 
-def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
+def test_public_surface_exposes_versioned_discriminator_signatures() -> None:
     assert CANDIDATE_REVISION_SCHEMA_VERSION == CANDIDATE_SCHEMA_VERSION
     assert issubclass(CandidateRevisionError, ValueError)
     keyword_only_names = [
@@ -453,6 +453,8 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         "change_impact",
         "mutation_evidence",
         "lineage_context",
+        "schema_version",
+        "candidate_kind",
     ]
     build_parameters = inspect.signature(build_candidate_revision).parameters
     assert list(build_parameters) == keyword_only_names
@@ -461,10 +463,15 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         for parameter in build_parameters.values()
     )
     assert build_parameters["lineage_context"].default == ()
+    assert (
+        build_parameters["schema_version"].default
+        == candidate_module.CANDIDATE_REVISION_SCHEMA_VERSION
+    )
+    assert build_parameters["candidate_kind"].default is None
     assert all(
         parameter.default is inspect.Parameter.empty
         for name, parameter in build_parameters.items()
-        if name != "lineage_context"
+        if name not in {"lineage_context", "schema_version", "candidate_kind"}
     )
 
     validate_parameters = inspect.signature(validate_candidate_revision).parameters
@@ -480,10 +487,16 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         if name != "payload"
     )
     assert validate_parameters["lineage_context"].default == ()
+    assert (
+        validate_parameters["schema_version"].default
+        == candidate_module.CANDIDATE_REVISION_SCHEMA_VERSION
+    )
+    assert validate_parameters["candidate_kind"].default is None
     assert all(
         parameter.default is inspect.Parameter.empty
         for name, parameter in validate_parameters.items()
-        if name not in {"payload", "lineage_context"}
+        if name
+        not in {"payload", "lineage_context", "schema_version", "candidate_kind"}
     )
 
 
@@ -896,6 +909,13 @@ def test_candidate_module_has_no_io_live_or_second_store_authority() -> None:
     }
     imported_roots = {module.split(".", 1)[0].lower() for module in imported_modules}
     assert imported_roots.isdisjoint(forbidden_import_roots)
+    assert "hashlib" not in imported_modules
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "sha256"
+        for node in ast.walk(tree)
+    )
 
     forbidden_tokens = (
         "sqlite3",
