@@ -144,6 +144,9 @@ def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp
 
     dispatcher = tmp_path / "mcp_dispatch.lsp"
     dispatcher.write_text("", encoding="utf-8")
+    ipc_dir = tmp_path / "ipc-root"
+    ipc_dir.mkdir()
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(ipc_dir))
     monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
 
     client = _live_client(42, dispatcher, timeout_s=60.0)
@@ -152,3 +155,225 @@ def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp
     assert captured["timeout_s"] == 60.0
     with pytest.raises(CommandError, match="timeout"):
         _live_client(42, dispatcher, timeout_s=0.0)
+
+
+def test_live_client_forwards_explicit_file_ipc_dir_before_construction(monkeypatch, tmp_path: Path) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    ipc_dir = tmp_path / "ipc-root"
+    ipc_dir.mkdir()
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(ipc_dir))
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    _live_client(42, dispatcher, timeout_s=60.0)
+
+    assert captured["ipc_dir"] == str(ipc_dir)
+
+
+@pytest.mark.parametrize(
+    "ipc_dir",
+    [
+        None,
+        "",
+        "relative\\ipc-root",
+        r"\\server\share\ipc-root",
+        r"C:\base\..\escape",
+    ],
+)
+def test_live_client_rejects_invalid_file_ipc_dir_before_construction(
+    monkeypatch, tmp_path: Path, ipc_dir: str | None
+) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    constructed = False
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            nonlocal constructed
+            constructed = True
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    if ipc_dir is None:
+        monkeypatch.delenv("CAD_AGENT_FILE_IPC_DIR", raising=False)
+    else:
+        monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", ipc_dir)
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    with pytest.raises(CommandError, match="IPC_ROOT_INVALID|CAD_AGENT_FILE_IPC_DIR"):
+        _live_client(42, dispatcher)
+
+    assert not constructed
+
+
+def test_live_client_reuses_canonical_root_validator_before_construction(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    requested_root = tmp_path / "requested-root"
+    requested_root.mkdir()
+    observed: list[str] = []
+    captured: dict[str, object] = {}
+
+    def canonical_validator(value: str) -> Path:
+        observed.append(value)
+        return requested_root
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(requested_root))
+    monkeypatch.setattr(mcp_client, "_validate_file_ipc_root", canonical_validator)
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    _live_client(42, dispatcher)
+
+    assert observed == [str(requested_root)]
+    assert captured["ipc_dir"] == str(requested_root)
+
+
+def test_live_client_rejects_non_directory_root_before_construction(monkeypatch, tmp_path: Path) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    constructed = False
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            nonlocal constructed
+            constructed = True
+
+    non_directory = tmp_path / "ipc-file"
+    non_directory.write_text("not a directory", encoding="utf-8")
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(non_directory))
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    with pytest.raises(CommandError, match="IPC_ROOT_INVALID"):
+        _live_client(42, dispatcher)
+
+    assert not constructed
+
+
+def test_live_client_rejects_reparse_root_before_construction(monkeypatch, tmp_path: Path) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+    import subprocess
+
+    physical_root = tmp_path / "physical-root"
+    physical_root.mkdir()
+    alias_root = tmp_path / "alias-root"
+    try:
+        alias_root.symlink_to(physical_root, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        junction = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(alias_root), str(physical_root)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if junction.returncode != 0:
+            pytest.skip(f"reparse-point creation is unavailable: {junction.stderr or junction.stdout}")
+
+    constructed = False
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            nonlocal constructed
+            constructed = True
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(alias_root))
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    with pytest.raises(CommandError, match="IPC_ROOT_INVALID"):
+        _live_client(42, dispatcher)
+
+    assert not constructed
+
+
+def test_live_client_rejects_validator_root_mismatch_before_construction(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    requested_root = tmp_path / "requested-root"
+    requested_root.mkdir()
+    mismatched_root = tmp_path / "mismatched-root"
+    mismatched_root.mkdir()
+    constructed = False
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            nonlocal constructed
+            constructed = True
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(requested_root))
+    monkeypatch.setattr(mcp_client, "_validate_file_ipc_root", lambda value: mismatched_root)
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+
+    with pytest.raises(CommandError, match="IPC_ROOT_INVALID"):
+        _live_client(42, dispatcher)
+
+    assert not constructed
+
+
+def test_live_client_root_errors_are_categorical_and_privacy_safe(monkeypatch, tmp_path: Path) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    secret_root = tmp_path / "PRIVATE_IPC_ROOT_SECRET"
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(secret_root))
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", lambda **kwargs: None)
+
+    with pytest.raises(CommandError, match="IPC_ROOT_INVALID") as caught:
+        _live_client(42, dispatcher)
+
+    message = str(caught.value)
+    assert "PRIVATE_IPC_ROOT_SECRET" not in message
+    assert str(secret_root) not in message
+
+
+def test_live_client_has_no_ambient_temp_or_second_owner_authority() -> None:
+    import inspect
+
+    from cad_agent import cli
+
+    source = inspect.getsource(cli._live_client).casefold().replace("\\", "/")
+    for forbidden in (
+        "c:/temp",
+        "c:/windows/temp",
+        "tempfile",
+        "gettempdir",
+        "cad_agent_dotnet_ipc_dir",
+        "dotnetipcclient",
+        "make_windows_dotnet_dispatch_trigger",
+        "subprocess",
+        "socket",
+        "requests",
+        "urllib",
+        "os.remove",
+        ".unlink(",
+        "cleanup",
+        "second_dispatcher",
+        "alternate_root",
+    ):
+        assert forbidden not in source
+    assert source.count("fileipclivemcpclient(") == 1
+    assert "make_windows_dispatch_trigger" in source
+    assert "make_windows_lisp_trigger" in source
