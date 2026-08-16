@@ -441,32 +441,44 @@ def test_root_substitution_after_post_enumeration_check_fails_closed(
     root_b.mkdir()
     replacement.mkdir()
     selected = _write(root_a, "selected.PC3", b"inside")
-    _write(replacement, "selected.PC3", b"outside")
+    foreign = _write(replacement, "selected.PC3", b"outside")
     original_lstat = Path.lstat
-    swapped = False
+    original_os_open = os.open
+    post_final_swap_attempted = False
 
     def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
-        nonlocal swapped
-        if path == selected and not swapped:
-            root_a.rename(backup)
-            replacement.rename(root_a)
-            swapped = True
+        if path == selected:
+            return original_lstat(foreign, *args, **kwargs)
         return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "lstat", path_lstat)
-
-    try:
-        with pytest.raises(
-            pc3_pmp_integrity.PC3PMPIntegrityError,
-            match="root|directory|parent|race|drift|changed|identity|replaced|metadata",
-        ):
-            _manifest(root_a, root_b)
-    finally:
-        if swapped:
+    def raced_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal post_final_swap_attempted
+        if Path(path) != selected:
+            return original_os_open(path, flags, *args, **kwargs)
+        post_final_swap_attempted = True
+        root_a.rename(backup)
+        replacement.rename(root_a)
+        try:
+            return original_os_open(path, flags, *args, **kwargs)
+        finally:
             root_a.rename(replacement)
             backup.rename(root_a)
 
-    assert swapped
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+    monkeypatch.setattr(os, "open", raced_open)
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="root|directory|parent|race|drift|changed|identity|replaced|metadata|open",
+    ):
+        _manifest(root_a, root_b)
+
+    assert post_final_swap_attempted
 
 
 def test_nested_parent_substitution_after_post_enumeration_check_fails_closed(
@@ -483,32 +495,49 @@ def test_nested_parent_substitution_after_post_enumeration_check_fails_closed(
     replacement.mkdir()
     backup = root_a / "nested-original"
     selected = _write(nested, "selected.PC3", b"inside")
-    _write(replacement, "selected.PC3", b"outside")
+    foreign = _write(replacement, "selected.PC3", b"outside")
+    root_before = root_a.stat()
     original_lstat = Path.lstat
-    swapped = False
+    original_os_open = os.open
+    post_final_swap_attempted = False
 
     def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
-        nonlocal swapped
-        if path == selected and not swapped:
-            nested.rename(backup)
-            replacement.rename(nested)
-            swapped = True
+        if path == selected:
+            return original_lstat(foreign, *args, **kwargs)
         return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "lstat", path_lstat)
-
-    try:
-        with pytest.raises(
-            pc3_pmp_integrity.PC3PMPIntegrityError,
-            match="directory|parent|race|drift|changed|identity|replaced|metadata",
-        ):
-            _manifest(root_a, root_b)
-    finally:
-        if swapped:
+    def raced_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        nonlocal post_final_swap_attempted
+        if Path(path) != selected:
+            return original_os_open(path, flags, *args, **kwargs)
+        post_final_swap_attempted = True
+        nested.rename(backup)
+        replacement.rename(nested)
+        try:
+            return original_os_open(path, flags, *args, **kwargs)
+        finally:
             nested.rename(replacement)
             backup.rename(nested)
+            os.utime(
+                root_a,
+                ns=(root_before.st_atime_ns, root_before.st_mtime_ns),
+            )
 
-    assert swapped
+    monkeypatch.setattr(Path, "lstat", path_lstat)
+    monkeypatch.setattr(os, "open", raced_open)
+
+    with pytest.raises(
+        pc3_pmp_integrity.PC3PMPIntegrityError,
+        match="directory|parent|race|drift|changed|identity|replaced|metadata|open",
+    ):
+        _manifest(root_a, root_b)
+
+    assert post_final_swap_attempted
 
 
 def test_byte_change_and_root_slot_order_change_aggregate(tmp_path: Path) -> None:
@@ -647,17 +676,21 @@ def test_module_uses_only_fail_closed_read_hash_authority_surface() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
 
-    allowed_imported_modules = {"hashlib", "os", "stat"}
+    allowed_imported_modules = {"ctypes", "hashlib", "os", "stat"}
     allowed_imports_from = {
         ("__future__", "annotations"),
         ("pathlib", "Path"),
         ("cad_agent.drawing_contracts", "canonical_json_sha256"),
     }
     allowed_attribute_calls = {
+        "CloseHandle",
+        "CreateFileW",
         "S_ISDIR",
         "S_ISREG",
+        "WinDLL",
         "append",
         "as_posix",
+        "c_void_p",
         "casefold",
         "close",
         "fstat",
