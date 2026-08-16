@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 import stat
@@ -11,6 +12,12 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 
 
 PC3_PMP_INTEGRITY_MANIFEST_VERSION = "pc3-pmp-integrity-manifest-1.0"
+
+_FILE_READ_ATTRIBUTES = 0x00000080
+_FILE_SHARE_READ = 0x00000001
+_OPEN_EXISTING = 3
+_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 
 
 class PC3PMPIntegrityError(ValueError):
@@ -88,6 +95,46 @@ def _require_directory_identity(
         raise PC3PMPIntegrityError("directory identity drifted during traversal")
 
 
+def _acquire_directory_lease(directory: Path) -> tuple[object, object] | None:
+    if os.name != "nt":
+        return None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = (
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    )
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    handle = kernel32.CreateFileW(
+        str(directory),
+        _FILE_READ_ATTRIBUTES,
+        _FILE_SHARE_READ,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle is None or handle == invalid_handle:
+        raise PC3PMPIntegrityError("directory lease could not be acquired safely")
+    return kernel32, handle
+
+
+def _release_directory_lease(lease: tuple[object, object] | None) -> None:
+    if lease is None:
+        return
+    kernel32, handle = lease
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    kernel32.CloseHandle.restype = ctypes.c_int
+    if not kernel32.CloseHandle(ctypes.c_void_p(handle)):
+        raise PC3PMPIntegrityError("directory lease release failed")
+
+
 def _read_selected_file(
     entry: Path,
     before: object,
@@ -143,67 +190,71 @@ def _collect_records(
     records: list[dict[str, object]],
     seen_identities: list[tuple[int, str]],
 ) -> None:
-    _require_directory_identity(directory, directory_identity)
+    lease = _acquire_directory_lease(directory)
     try:
-        entries = list(directory.iterdir())
-    except OSError as exc:
-        raise PC3PMPIntegrityError("plotter root traversal failed") from exc
-
-    captured_entries: list[tuple[Path, object]] = []
-    for entry in entries:
-        try:
-            if entry.is_symlink():
-                raise PC3PMPIntegrityError("entry symlink or reparse is forbidden")
-            before = entry.lstat()
-        except OSError as exc:
-            raise PC3PMPIntegrityError("entry metadata read failed") from exc
-        if _is_reparse(before):
-            raise PC3PMPIntegrityError("entry reparse or junction is forbidden")
-        captured_entries.append((entry, before))
-
-    _require_directory_identity(directory, directory_identity)
-
-    for entry, before in captured_entries:
-        mode = int(getattr(before, "st_mode", 0))
-        if stat.S_ISDIR(mode):
-            _collect_records(
-                root,
-                root_slot,
-                entry,
-                _file_identity(before),
-                records,
-                seen_identities,
-            )
-            _require_directory_identity(directory, directory_identity)
-            continue
-        if not stat.S_ISREG(mode):
-            continue
-        if entry.suffix.casefold() not in {".pc3", ".pmp"}:
-            continue
-
-        try:
-            relative = canonicalize_pc3_pmp_relative_path(
-                entry.relative_to(root).as_posix()
-            )
-        except ValueError as exc:
-            raise PC3PMPIntegrityError("entry escaped its plotter root") from exc
-
-        identity = (root_slot, relative)
-        if identity in seen_identities:
-            raise PC3PMPIntegrityError("duplicate normalized path collision")
-        seen_identities.append(identity)
-
-        data, _ = _read_selected_file(entry, before)
         _require_directory_identity(directory, directory_identity)
-        records.append(
-            {
-                "root_slot": root_slot,
-                "relative_path": relative,
-                "sha256": hashlib.sha256(data).hexdigest(),
-            }
-        )
+        try:
+            entries = list(directory.iterdir())
+        except OSError as exc:
+            raise PC3PMPIntegrityError("plotter root traversal failed") from exc
 
-    _require_directory_identity(directory, directory_identity)
+        captured_entries: list[tuple[Path, object]] = []
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    raise PC3PMPIntegrityError("entry symlink or reparse is forbidden")
+                before = entry.lstat()
+            except OSError as exc:
+                raise PC3PMPIntegrityError("entry metadata read failed") from exc
+            if _is_reparse(before):
+                raise PC3PMPIntegrityError("entry reparse or junction is forbidden")
+            captured_entries.append((entry, before))
+
+        _require_directory_identity(directory, directory_identity)
+
+        for entry, before in captured_entries:
+            mode = int(getattr(before, "st_mode", 0))
+            if stat.S_ISDIR(mode):
+                _collect_records(
+                    root,
+                    root_slot,
+                    entry,
+                    _file_identity(before),
+                    records,
+                    seen_identities,
+                )
+                _require_directory_identity(directory, directory_identity)
+                continue
+            if not stat.S_ISREG(mode):
+                continue
+            if entry.suffix.casefold() not in {".pc3", ".pmp"}:
+                continue
+
+            try:
+                relative = canonicalize_pc3_pmp_relative_path(
+                    entry.relative_to(root).as_posix()
+                )
+            except ValueError as exc:
+                raise PC3PMPIntegrityError("entry escaped its plotter root") from exc
+
+            identity = (root_slot, relative)
+            if identity in seen_identities:
+                raise PC3PMPIntegrityError("duplicate normalized path collision")
+            seen_identities.append(identity)
+
+            data, _ = _read_selected_file(entry, before)
+            _require_directory_identity(directory, directory_identity)
+            records.append(
+                {
+                    "root_slot": root_slot,
+                    "relative_path": relative,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+
+        _require_directory_identity(directory, directory_identity)
+    finally:
+        _release_directory_lease(lease)
 
 
 def build_pc3_pmp_integrity_manifest(
