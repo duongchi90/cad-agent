@@ -1673,7 +1673,7 @@ def test_task3_v11_root_state_consumes_through_existing_r6_boundary() -> None:
 def test_task3_mixed_v10_v11_state_fails_closed() -> None:
     legacy = build_candidate_revision(**_valid_args())
     root = build_candidate_revision(**_task3_root_args())
-    with pytest.raises(CandidateRevisionError, match="STATE|SCHEMA|MIXED|VERSION"):
+    with pytest.raises(CandidateRevisionError, match="^STATE_SCHEMA_MIXED$"):
         candidate_module.build_candidate_revision_state(
             candidate_revisions=[legacy, root],
         )
@@ -1682,6 +1682,13 @@ def test_task3_mixed_v10_v11_state_fails_closed() -> None:
 def test_task3_root_never_inferred_when_candidate_kind_is_missing() -> None:
     args = _task3_root_args()
     args.pop("candidate_kind")
+    with pytest.raises(CandidateRevisionError, match="^CANDIDATE_KIND_INVALID$"):
+        build_candidate_revision(**args)
+
+
+def test_task3_foreign_candidate_kind_fails_closed() -> None:
+    args = _task3_root_args()
+    args["candidate_kind"] = "UNKNOWN"
     with pytest.raises(CandidateRevisionError, match="^CANDIDATE_KIND_INVALID$"):
         build_candidate_revision(**args)
 
