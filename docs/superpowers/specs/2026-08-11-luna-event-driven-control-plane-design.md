@@ -58,6 +58,106 @@ This design SHALL NOT:
 - touch AutoCAD/File-IPC/provider/private/customer/publication/system surfaces;
 - alter the R0-R8 functional architecture.
 
+## Reuse audit
+
+The selected control-plane design reuses existing owners and surfaces rather than adding infrastructure.
+
+### Existing GitHub authority/state surfaces
+
+Reuse directly:
+
+- actual `refs/heads/main` and commit identity;
+- #131 / Human Owner / SOL issue comments as the durable authority epoch and baton bus;
+- PR base/head, merge ref/synthetic, draft/open/merged state, merge SHA and timestamps;
+- GitHub Actions tests/reuse workflow states and terminal timestamps;
+- exact-head Integration/Security review submissions and review timestamps;
+- issue/PR/comment/action timestamps for KPI derivation.
+
+These surfaces already contain the canonical evidence needed by the detector. No second project database, event store, approval store, review store, or merge state store is needed.
+
+### Existing Luna/SOL orchestration mechanisms
+
+Reuse directly:
+
+- the existing periodic Luna watchdog/scan as transport and missed-event fallback;
+- SOL as repository/governance/integration authority;
+- Luna as bounded local executor/scheduler within delegated authority;
+- existing correct-role reviewer handles for bounded context reuse, while still requiring a fresh exact-tuple verdict after tuple changes;
+- existing `STOP_WRITE`, terminal handoff, explicit owner/next-trigger/blocker and exact-main pin controls.
+
+The missing capability is not a new scheduler. It is a deterministic contract for deciding whether canonical material state changed and whether equivalent role work is already in flight.
+
+### Existing repository verification mechanisms
+
+Reuse directly:
+
+- `scripts/verify.ps1` as the canonical hosted/offline verification owner;
+- `scripts/check_architecture_boundaries.py` for architecture boundaries;
+- `scripts/check_reuse_declaration.py` and the reuse-declaration workflow;
+- `scripts/reuse_inventory.py` for reuse ownership/completeness;
+- existing focused pytest/.NET owner tests, Ruff/static checks and `git diff --check`.
+
+#187 creates no second verifier. Its pre-push owner-contract bundle composes these accepted checks only.
+
+### Reuse conclusion
+
+Current GitHub + Luna + existing verification surfaces are sufficient for the default rollout. The genuinely missing capability is a documented material-state projection/transition contract plus a separate task de-dup contract. Therefore the default implementation recommendation remains **no new repository runtime**.
+
+## Alternatives and trade-offs
+
+### Alternative A — GitHub-native observation + existing Luna watchdog
+
+Each normal Luna scan fresh-reads the bounded canonical GitHub state, builds `MATERIAL_STATE_PROJECTION`, classifies changes, resolves authority, then applies separate task de-duplication.
+
+Advantages:
+
+- reuses current GitHub authority and Luna scheduler/watchdog;
+- no workflow, daemon, secret-bearing service, database, queue, or second authority;
+- missed/corrupt local cache naturally falls back to a full fresh-read on the next watchdog scan;
+- preserves exact-main, exact-head, reviewer-currentness and live gates.
+
+Trade-off:
+
+- event-to-action latency is bounded by the normal watchdog scan rather than instantaneous push delivery.
+
+**Selection:** chosen as the cheapest safe architecture.
+
+### Alternative B — GitHub Actions event dispatcher
+
+A future GitHub Actions workflow could react to PR/check/review/merge events and emit a compact transition packet for Luna/SOL consumption.
+
+Advantages:
+
+- potentially lower event-to-detection latency;
+- remains GitHub-hosted rather than adding an external daemon.
+
+Trade-offs:
+
+- requires workflow mutation outside #187 planning authority;
+- introduces event ordering, duplicate delivery and missed-event reconciliation concerns;
+- risks drifting into a second scheduler/control authority unless tightly constrained;
+- still requires the same fresh authority validation and periodic watchdog fallback.
+
+This remains a future fallback only if measured KPI evidence shows Alternative A cannot meet the accepted SLA and a separate implementation issue explicitly authorizes it.
+
+### Alternative C — dedicated webhook/daemon + persistent state store
+
+A long-running service could receive GitHub webhooks, persist state and drive orchestration transitions.
+
+Advantages:
+
+- lowest theoretical event latency;
+- flexible event aggregation.
+
+Trade-offs:
+
+- creates a new service, deployment/availability surface, secret handling and persistent store;
+- duplicates state already recoverable from GitHub;
+- materially increases risk of a second truth/scheduler/authority plane;
+- adds recovery, ordering and migration complexity without current evidence it is needed.
+
+**Decision:** rejected under reuse-first/YAGNI and current #187 authority.
+
 ## Selected architecture
 
 Select **GitHub-native observation plus the existing Luna watchdog**.
