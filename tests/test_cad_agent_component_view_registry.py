@@ -2031,10 +2031,20 @@ def test_task3_dara_currentness_cannot_mint_r3_registry_current_or_r4_selection(
 
 # R3 public-seam RED (Issue #273): the existing Task3 provenance material is
 # canonical R3-owned behavior.  The follow-up GREEN must expose that behavior
-# through one public importable/exported seam so downstream owners do not call
-# the private helper or copy its recipe.  These tests are intentionally RED on
-# the current main because that seam does not exist yet.
+# through one public importable/exported seam that validates the exact upstream
+# context, returns owner-derived provenance evidence, and never lets a caller
+# copy or mint a second provenance/hash authority.  These tests are intentionally
+# RED on current main because that seam does not exist yet.
 TASK4_PUBLIC_PROVENANCE_NAME = "component_view_registry_provenance_evidence"
+TASK4_RESULT_FIELDS = frozenset(
+    {
+        "identity_kind",
+        "registry_snapshot_sha256",
+        "provenance_sha256",
+        "component_bindings",
+        "view_bindings",
+    }
+)
 
 
 def _task4_public_provenance(material: dict[str, object]) -> object:
@@ -2043,48 +2053,95 @@ def _task4_public_provenance(material: dict[str, object]) -> object:
     assert callable(
         public
     ), "R3 public provenance-evidence seam is missing from component_view_registry.py"
-    return public(material["registry"])
+    return public(material["registry"], upstream_context=material["context"])
 
 
 def test_task4_public_provenance_evidence_is_importable_and_exported() -> None:
     module = _registry_module()
     public = getattr(module, TASK4_PUBLIC_PROVENANCE_NAME, None)
     assert callable(public)
+    assert list(inspect.signature(public).parameters) == [
+        "registry",
+        "upstream_context",
+    ]
+    assert inspect.signature(public).parameters["upstream_context"].kind is (
+        inspect.Parameter.KEYWORD_ONLY
+    )
     assert TASK4_PUBLIC_PROVENANCE_NAME in module.__all__
     wildcard_namespace: dict[str, object] = {}
     exec("from cad_agent.component_view_registry import *", wildcard_namespace)
     assert wildcard_namespace[TASK4_PUBLIC_PROVENANCE_NAME] is public
 
 
-def test_task4_public_provenance_evidence_matches_canonical_task3_material() -> None:
+def test_task4_public_provenance_evidence_is_closed_and_owner_derived() -> None:
     material = _task3_material()
-    first = _task4_public_provenance(material)
-    second = _task4_public_provenance(material)
+    result = _task4_public_provenance(material)
 
-    assert first == material["provenance_material"]
-    assert second == first
-    assert canonical_json_sha256(first) == material["binding"]["provenance_sha256"]
-    assert set(first) == {
-        "identity_kind",
-        "registry_snapshot_sha256",
-        "component_bindings",
-        "view_bindings",
-    }
+    assert set(result) == TASK4_RESULT_FIELDS
+    assert result["identity_kind"] == material["provenance_material"]["identity_kind"]
+    assert result["registry_snapshot_sha256"] == material["registry"][
+        "registry_snapshot_sha256"
+    ]
+    assert result["component_bindings"] == material["component_bindings"]
+    assert result["view_bindings"] == material["view_bindings"]
+    assert result["provenance_sha256"] == canonical_json_sha256(
+        material["provenance_material"]
+    )
 
 
-def test_task4_public_provenance_evidence_does_not_mutate_registry_or_reuse_caller_output() -> None:
+def test_task4_public_provenance_evidence_reuses_private_owner_not_a_copied_recipe(
+    monkeypatch,
+) -> None:
+    material = _task3_material()
+    module = _registry_module()
+    owner = getattr(module, "_task3_provenance_material", None)
+    assert callable(owner)
+    calls: list[dict[str, object]] = []
+
+    def record(registry: dict[str, object]) -> dict[str, object]:
+        calls.append(registry)
+        return owner(registry)
+
+    monkeypatch.setattr(module, "_task3_provenance_material", record)
+    _task4_public_provenance(material)
+    assert calls
+    assert calls[0] is not material["registry"]
+
+
+def test_task4_public_provenance_evidence_is_deterministic_detached_and_non_mutating() -> None:
     material = _task3_material()
     registry_before = deepcopy(material["registry"])
     first = _task4_public_provenance(material)
-    first["component_bindings"][0]["component_id"] = "caller-forged"
-
     second = _task4_public_provenance(material)
+
+    assert first == second
+    first["component_bindings"][0]["component_id"] = "caller-forged"
+    replay = _task4_public_provenance(material)
     assert material["registry"] == registry_before
-    assert second == material["provenance_material"]
-    assert second["component_bindings"][0]["component_id"] != "caller-forged"
+    assert replay["component_bindings"][0]["component_id"] != "caller-forged"
 
 
-def test_task4_public_provenance_evidence_rejects_registry_snapshot_tampering() -> None:
+@pytest.mark.parametrize("context_factory", [
+    lambda context: _upstream_context(primitive_ids=("foreign-a", "foreign-b")),
+    lambda context: _remapped_candidate_context(context, candidate_handle="FOREIGN"),
+    lambda context: _disconnected_r2_lineage_context(
+        context, field="source_fusion_sha256"
+    ),
+    lambda context: dict(deepcopy(context), source_fusion_sha256="f" * 64),
+])
+def test_task4_public_provenance_evidence_rejects_foreign_or_stale_upstream_context(
+    context_factory,
+) -> None:
+    material = _task3_material()
+    bad_context = context_factory(material["context"])
+    module = _registry_module()
+    public = getattr(module, TASK4_PUBLIC_PROVENANCE_NAME, None)
+    assert callable(public)
+    with pytest.raises(module.ComponentViewRegistryError):
+        public(material["registry"], upstream_context=bad_context)
+
+
+def test_task4_public_provenance_evidence_rejects_registry_snapshot_cross_binding() -> None:
     material = _task3_material()
     forged_registry = deepcopy(material["registry"])
     forged_registry["registry_snapshot_sha256"] = "f" * 64
@@ -2092,4 +2149,4 @@ def test_task4_public_provenance_evidence_rejects_registry_snapshot_tampering() 
     public = getattr(module, TASK4_PUBLIC_PROVENANCE_NAME, None)
     assert callable(public)
     with pytest.raises(module.ComponentViewRegistryError):
-        public(forged_registry)
+        public(forged_registry, upstream_context=material["context"])
