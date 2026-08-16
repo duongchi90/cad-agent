@@ -13,6 +13,7 @@ import pytest
 
 from cad_agent import component_view_registry as r3
 from cad_agent import drawing_artifact_reference as dara
+from cad_agent import approved_repair_adapter as r6
 from cad_agent.drawing_contracts import canonical_json_sha256
 import cad_agent.candidate_revision as candidate_module
 from cad_agent.candidate_revision import (
@@ -1654,6 +1655,21 @@ def test_task3_v11_root_and_current_state_are_r6_compatible() -> None:
     assert candidate_module.validate_candidate_revision_state(state) == state
 
 
+def test_task3_v11_root_state_consumes_through_existing_r6_boundary() -> None:
+    args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(args))
+    state = candidate_module.build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    context = {
+        "candidate_state_sha256": state["state_sha256"],
+        "candidate_revision_sha256": root["candidate_revision_sha256"],
+        "candidate_revision_id": root["revision_id"],
+    }
+    assert r6._validate_candidate(state, context) == root
+
+
 def test_task3_mixed_v10_v11_state_fails_closed() -> None:
     legacy = build_candidate_revision(**_valid_args())
     root = build_candidate_revision(**_task3_root_args())
@@ -1666,7 +1682,7 @@ def test_task3_mixed_v10_v11_state_fails_closed() -> None:
 def test_task3_root_never_inferred_when_candidate_kind_is_missing() -> None:
     args = _task3_root_args()
     args.pop("candidate_kind")
-    with pytest.raises(CandidateRevisionError, match="ROOT|SCHEMA|KIND|TRANSITION"):
+    with pytest.raises(CandidateRevisionError, match="^CANDIDATE_KIND_INVALID$"):
         build_candidate_revision(**args)
 
 
@@ -1675,14 +1691,39 @@ def test_task3_child_cannot_be_relabelled_as_root() -> None:
     root = build_candidate_revision(**deepcopy(root_args))
     child_args = _task3_post_args(root_args, root)
     child_args["candidate_kind"] = TASK3_ROOT_KIND
-    with pytest.raises(CandidateRevisionError, match="ROOT|KIND|POST_REPAIR"):
+    with pytest.raises(CandidateRevisionError, match="^ROOT_TRANSITION_FORBIDDEN$"):
         build_candidate_revision(**child_args)
 
 
 def test_task3_malformed_mixed_mode_root_fails_categorically() -> None:
     args = _task3_root_args()
     args["change_impact"]["accepted_transition_evidence_sha256"] = "f" * 64
-    with pytest.raises(CandidateRevisionError, match="ROOT|TRANSITION|MIXED"):
+    with pytest.raises(CandidateRevisionError, match="^ROOT_TRANSITION_FORBIDDEN$"):
+        build_candidate_revision(**args)
+
+
+def test_task3_v11_post_repair_missing_transition_never_infers_root() -> None:
+    root_args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    args = _task3_post_args(root_args, root)
+    args["mutation_evidence"].pop("accepted_transition_evidence_sha256")
+    with pytest.raises(
+        CandidateRevisionError,
+        match="^POST_REPAIR_TRANSITION_REQUIRED$",
+    ):
+        build_candidate_revision(**args)
+
+
+def test_task3_v11_post_repair_none_transition_never_infers_root() -> None:
+    root_args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    args = _task3_post_args(root_args, root)
+    args["mutation_evidence"]["accepted_transition_evidence_sha256"] = None
+    _rebind_mutation_evidence_checksum(args["mutation_evidence"])
+    with pytest.raises(
+        CandidateRevisionError,
+        match="^POST_REPAIR_TRANSITION_REQUIRED$",
+    ):
         build_candidate_revision(**args)
 
 
@@ -1699,25 +1740,25 @@ def test_task3_malformed_mixed_mode_root_fails_categorically() -> None:
                     }
                 )
             ),
-            "STALE|FOREIGN|SCOPE|BASELINE",
+            "^BASELINE_CURRENTNESS_INVALID$",
         ),
         (
             lambda args: args["registry"].update(
                 registry_snapshot_sha256="f" * 64
             ),
-            "HASH|REGISTRY|PROVENANCE",
+            "^REGISTRY_INVALID$",
         ),
         (
             lambda args: args["base_cad_handoff"].update(
                 candidate_output_sha256="f" * 64
             ),
-            "CANDIDATE|BINDING|HANDOFF",
+            "^R2_CANDIDATE_MISMATCH$",
         ),
         (
             lambda args: args.update(
                 lineage_context={"scope": {"run_id": "wrong-scope"}}
             ),
-            "SCOPE|LINEAGE|ROOT",
+            "^LINEAGE_CONTEXT_UNEXPECTED$",
         ),
     ],
 )
