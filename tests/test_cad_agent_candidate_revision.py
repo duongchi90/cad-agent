@@ -370,10 +370,9 @@ def _root_pre_repair_args(
     material = material or _accepted_r3_material()
     root_reference = deepcopy(material["parent_reference"])
     root_observation = deepcopy(material["parent_observation"])
-    root_binding_sha256 = canonical_json_sha256(root_reference["upstream_evidence"])
     root_correspondence = {
-        "parent_reference_id": root_reference["reference_id"],
-        "parent_reference_sha256": root_reference["reference_sha256"],
+        "parent_reference_id": None,
+        "parent_reference_sha256": None,
         "child_reference_id": root_reference["reference_id"],
         "child_reference_sha256": root_reference["reference_sha256"],
         "registry_snapshot_sha256": material["registry"][
@@ -393,9 +392,9 @@ def _root_pre_repair_args(
         "correspondence": root_correspondence,
         "upstream_context": deepcopy(material["context"]),
         "correspondence_context": {
-            "parent_reference": root_reference,
-            "parent_observation": root_observation,
-            "parent_artifact_bytes": material["candidate_bytes"],
+            "parent_reference": None,
+            "parent_observation": None,
+            "parent_artifact_bytes": None,
             "child_reference": root_reference,
             "child_observation": root_observation,
             "child_artifact_bytes": material["candidate_bytes"],
@@ -409,10 +408,10 @@ def _root_pre_repair_args(
         "r3_candidate_reference_id": root_reference["reference_id"],
         "r3_candidate_reference_sha256": root_reference["reference_sha256"],
         "candidate_artifact_sha256": root_reference["artifact_sha256"],
-        # The frozen R4 record keeps this slot, but the root binding is R3
-        # custody—not an accepted R6 result or a post-repair transition.
-        "accepted_transition_evidence_sha256": root_binding_sha256,
-        "latest_mutation_evidence_sha256": root_binding_sha256,
+        "accepted_transition_evidence_sha256": None,
+        "latest_mutation_evidence_sha256": canonical_json_sha256(
+            root_reference["upstream_evidence"]
+        ),
         "mutation_terminal": "SEALED",
     }
     root_mutation["evidence_sha256"] = canonical_json_sha256(root_mutation)
@@ -502,6 +501,8 @@ def test_root_pre_repair_candidate_requires_no_post_repair_transition() -> None:
     assert root["candidate_artifacts"]["artifact_sha256"] == args[
         "mutation_evidence"
     ]["candidate_artifact_sha256"]
+    assert root["candidate_artifacts"]["accepted_transition_evidence_sha256"] is None
+    assert root["mutation_evidence"]["accepted_transition_evidence_sha256"] is None
     assert args["change_impact"]["correspondence_context"][
         "accepted_transition_evidence_sha256"
     ] is None
@@ -514,6 +515,88 @@ def test_root_pre_repair_candidate_requires_no_post_repair_transition() -> None:
     assert state["current_candidate_revision_sha256"] == root[
         "candidate_revision_sha256"
     ]
+
+
+def test_root_candidate_state_is_consumable_by_r6_candidate_boundary() -> None:
+    import cad_agent.approved_repair_adapter as r6
+
+    args = _root_pre_repair_args()
+    root = build_candidate_revision(**deepcopy(args))
+    state = candidate_module.build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    context = {
+        "run_id": SCOPE["run_id"],
+        "work_item_id": "work-r4-root-red",
+        "candidate_revision_id": root["revision_id"],
+        "candidate_revision_sha256": root["candidate_revision_sha256"],
+        "candidate_state_sha256": state["state_sha256"],
+        "repair_plan_id": "repair-plan-r4-root-red",
+        "repair_plan_sha256": "a" * 64,
+        "repair_plan_version": "repair-plan-1.0",
+        "repair_operation_contract_version": "repair-operation-1.0",
+        "repair_operation_contract_fingerprint": "b" * 64,
+        "r3_target_handles": ["H-ROOT"],
+        "protected_target_handles": ["H-ROOT"],
+    }
+
+    assert r6._validate_candidate(state, context) == root
+    assert "accepted_r6_result" not in root["mutation_evidence"]
+
+
+def test_root_candidate_cannot_relabel_post_repair_child_as_root() -> None:
+    material = _accepted_r3_material()
+    args = _root_pre_repair_args(material=material)
+    args["change_impact"]["correspondence_context"].update(
+        {
+            "child_reference": deepcopy(material["child_reference"]),
+            "child_observation": deepcopy(material["child_observation"]),
+            "child_artifact_bytes": material["child_bytes"],
+        }
+    )
+
+    with pytest.raises(CandidateRevisionError, match="ROOT|CORRESPONDENCE"):
+        build_candidate_revision(**args)
+
+
+@pytest.mark.parametrize("case", ["stale", "foreign", "wrong_candidate", "forged_hash"])
+def test_root_candidate_rejects_stale_foreign_wrong_or_forged_inputs(case: str) -> None:
+    args = _root_pre_repair_args()
+    context = args["change_impact"]["correspondence_context"]
+    if case == "stale":
+        context["child_observation"] = dara.observe_drawing_artifact_currentness(
+            reference=context["child_reference"],
+            artifact_bytes=b"stale-root-candidate",
+            observation_evidence_sha256="d" * 64,
+        )
+    elif case == "foreign":
+        foreign = dara.issue_drawing_artifact_reference(
+            **{**SCOPE, "project_id": "foreign-project"},
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=context["child_artifact_bytes"],
+            upstream_evidence=deepcopy(
+                context["child_reference"]["upstream_evidence"]
+            ),
+            r3_provenance_binding=deepcopy(
+                context["child_reference"]["r3_provenance_binding"]
+            ),
+        )
+        context["child_reference"] = foreign
+        context["child_observation"] = dara.observe_drawing_artifact_currentness(
+            reference=foreign,
+            artifact_bytes=context["child_artifact_bytes"],
+            observation_evidence_sha256="e" * 64,
+        )
+    elif case == "wrong_candidate":
+        args["mutation_evidence"]["r3_candidate_reference_id"] = (
+            "dara-ref-foreign-candidate"
+        )
+    else:
+        context["child_reference"]["reference_sha256"] = "f" * 64
+
+    with pytest.raises(CandidateRevisionError):
+        build_candidate_revision(**args)
 
 
 def _candidate_module_source_and_tree() -> tuple[str, ast.Module]:

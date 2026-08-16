@@ -181,6 +181,9 @@ def _normalize_registry(
 def _normalize_impact(
     value: object,
     registry: dict[str, object],
+    *,
+    root_candidate: bool = False,
+    expected_scope: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     root = _closed(value, _CHANGE_IMPACT_FIELDS, "CHANGE_IMPACT_INVALID")
     registry_sha = registry["registry_snapshot_sha256"]
@@ -221,6 +224,66 @@ def _normalize_impact(
         _CORRESPONDENCE_CONTEXT_FIELDS,
         "CORRESPONDENCE_CONTEXT_INVALID",
     )
+    if root_candidate:
+        if expected_scope is None:
+            _fail("ROOT_SCOPE_INVALID")
+        if any(
+            context[field] is not None
+            for field in (
+                "parent_reference",
+                "parent_observation",
+                "parent_artifact_bytes",
+                "accepted_transition_evidence_sha256",
+            )
+        ):
+            _fail("ROOT_TRANSITION_EVIDENCE_FORBIDDEN")
+        try:
+            root_reference = _dara.validate_drawing_artifact_reference(
+                context["child_reference"],
+                expected_artifact_role="R3_CANDIDATE",
+            )
+            root_observation = _dara.validate_drawing_artifact_current_observation(
+                context["child_observation"]
+            )
+            _dara.require_current_drawing_artifact_reference(
+                reference=root_reference,
+                observation=root_observation,
+                artifact_bytes=context["child_artifact_bytes"],
+            )
+        except Exception as error:
+            raise CandidateRevisionError("ROOT_CANDIDATE_CURRENTNESS_INVALID") from error
+        if any(
+            root_reference[field] != expected_scope[field]
+            for field in ("run_id", "project_id", "drawing_id")
+        ):
+            _fail("ROOT_SCOPE_MISMATCH")
+        try:
+            provenance_material = _r3._task3_provenance_material(registry)
+        except Exception as error:
+            raise CandidateRevisionError("ROOT_PROVENANCE_INVALID") from error
+        expected_binding = {
+            "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+            "provenance_sha256": canonical_json_sha256(provenance_material),
+        }
+        if root_reference["r3_provenance_binding"] != expected_binding:
+            _fail("ROOT_PROVENANCE_MISMATCH")
+        expected_correspondence = {
+            "parent_reference_id": None,
+            "parent_reference_sha256": None,
+            "child_reference_id": root_reference["reference_id"],
+            "child_reference_sha256": root_reference["reference_sha256"],
+            "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+            "provenance_sha256": expected_binding["provenance_sha256"],
+            "component_bindings": provenance_material["component_bindings"],
+            "view_bindings": provenance_material["view_bindings"],
+        }
+        if correspondence != expected_correspondence:
+            _fail("CORRESPONDENCE_REGISTRY_MISMATCH")
+        return {
+            "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+            "impact": deepcopy(expected_impact),
+            "correspondence": deepcopy(expected_correspondence),
+        }
     try:
         expected_correspondence = _r3.finalize_component_view_correspondence(
             registry=registry,
@@ -246,7 +309,11 @@ def _normalize_impact(
     }
 
 
-def _normalize_mutation(value: object) -> dict[str, object]:
+def _normalize_mutation(
+    value: object,
+    *,
+    root_candidate: bool = False,
+) -> dict[str, object]:
     mutation = _closed(value, _MUTATION_FIELDS, "MUTATION_EVIDENCE_INVALID")
     _text(mutation["evidence_kind"], "MUTATION_EVIDENCE_INVALID")
     _text(mutation["evidence_id"], "MUTATION_EVIDENCE_INVALID")
@@ -255,11 +322,18 @@ def _normalize_mutation(value: object) -> dict[str, object]:
     for field in (
         "r3_candidate_reference_sha256",
         "candidate_artifact_sha256",
-        "accepted_transition_evidence_sha256",
         "latest_mutation_evidence_sha256",
         "evidence_sha256",
     ):
         _sha(mutation[field], "MUTATION_EVIDENCE_INVALID")
+    if root_candidate:
+        if mutation["accepted_transition_evidence_sha256"] is not None:
+            _fail("ROOT_TRANSITION_EVIDENCE_FORBIDDEN")
+    else:
+        _sha(
+            mutation["accepted_transition_evidence_sha256"],
+            "MUTATION_EVIDENCE_INVALID",
+        )
     _text(mutation["r3_candidate_reference_id"], "MUTATION_EVIDENCE_INVALID")
     _text(mutation["mutation_terminal"], "MUTATION_EVIDENCE_INVALID")
     if mutation["mutation_terminal"] != "SEALED":
@@ -392,11 +466,31 @@ def _normalize_inputs(
     baseline = _normalize_baseline(baseline_context)
     handoff = _normalize_handoff(base_cad_handoff)
     raw_impact = _closed(change_impact, _CHANGE_IMPACT_FIELDS, "CHANGE_IMPACT_INVALID")
+    correspondence_context = _closed(
+        raw_impact["correspondence_context"],
+        _CORRESPONDENCE_CONTEXT_FIELDS,
+        "CORRESPONDENCE_CONTEXT_INVALID",
+    )
+    root_candidate = (
+        parent_candidate is None
+        and correspondence_context["parent_reference"] is None
+        and correspondence_context["accepted_transition_evidence_sha256"] is None
+        and isinstance(mutation_evidence, Mapping)
+        and mutation_evidence.get("accepted_transition_evidence_sha256") is None
+    )
     normalized_registry = _normalize_registry(
         registry, handoff, raw_impact["upstream_context"]
     )
-    normalized_impact = _normalize_impact(raw_impact, normalized_registry)
-    normalized_mutation = _normalize_mutation(mutation_evidence)
+    normalized_impact = _normalize_impact(
+        raw_impact,
+        normalized_registry,
+        root_candidate=root_candidate,
+        expected_scope=baseline["reference"],
+    )
+    normalized_mutation = _normalize_mutation(
+        mutation_evidence,
+        root_candidate=root_candidate,
+    )
     correspondence = normalized_impact["correspondence"]
     if correspondence["child_reference_sha256"] != normalized_mutation[
         "r3_candidate_reference_sha256"
