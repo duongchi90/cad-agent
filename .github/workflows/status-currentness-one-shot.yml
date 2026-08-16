@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  assert-status-banner:
+  isolate-status-banner:
     runs-on: ubuntu-latest
     steps:
       - name: Check out clean target branch
@@ -19,12 +19,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Assert all prepend pre/postconditions
+      - name: Invariant 1 exact target HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae"
+
+      - name: Invariant 2 exact original STATUS blob
+        shell: bash
+        run: test "$(git hash-object docs/STATUS.md)" = "45e4eb45643c485b40c7f50df8c0811e978c6226"
+
+      - name: Invariant 3 prepend preserves exact old suffix
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae"
-          test "$(git hash-object docs/STATUS.md)" = "45e4eb45643c485b40c7f50df8c0811e978c6226"
           python - <<'PY'
           from pathlib import Path
 
@@ -42,5 +48,11 @@ jobs:
           assert old == title + rest
           path.write_bytes(new)
           PY
-          git diff --check
-          test "$(git diff --name-only)" = "docs/STATUS.md"
+
+      - name: Invariant 4 git diff check
+        shell: bash
+        run: git diff --check
+
+      - name: Invariant 5 exact one changed path
+        shell: bash
+        run: test "$(git diff --name-only)" = "docs/STATUS.md"
