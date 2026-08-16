@@ -2150,3 +2150,23 @@ def test_task4_public_provenance_evidence_rejects_registry_snapshot_cross_bindin
     assert callable(public)
     with pytest.raises(module.ComponentViewRegistryError):
         public(forged_registry, upstream_context=material["context"])
+
+
+def test_task4_public_provenance_evidence_is_permutation_invariant() -> None:
+    material = _task3_material()
+    module = _registry_module()
+    permuted_registry = module.build_component_view_registry(
+        upstream_context=material["context"],
+        components=list(
+            reversed(deepcopy(_component_inputs(material["context"])))
+        ),
+        views=list(
+            reversed(deepcopy(_task2_view_inputs(module, material["context"])))
+        ),
+    )
+    assert permuted_registry == material["registry"]
+    public = getattr(module, TASK4_PUBLIC_PROVENANCE_NAME, None)
+    assert callable(public)
+    first = public(material["registry"], upstream_context=material["context"])
+    second = public(permuted_registry, upstream_context=material["context"])
+    assert second == first
