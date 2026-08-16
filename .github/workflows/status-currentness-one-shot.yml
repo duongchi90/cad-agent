@@ -23,14 +23,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae"
-          test "$(git hash-object docs/STATUS.md)" = "45e4eb45643c485b40c7f50df8c0811e978c6226"
+          echo "CHECKPOINT=head"
+          actual_head="$(git rev-parse HEAD)"
+          echo "actual_head=$actual_head"
+          test "$actual_head" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae"
+          echo "CHECKPOINT=blob"
+          actual_blob="$(git hash-object docs/STATUS.md)"
+          echo "actual_blob=$actual_blob"
+          test "$actual_blob" = "45e4eb45643c485b40c7f50df8c0811e978c6226"
+          echo "CHECKPOINT=python"
           python - <<'PY'
           from pathlib import Path
 
           path = Path("docs/STATUS.md")
           old = path.read_bytes()
           title = b"# CAD Agent Status\n"
+          print(f"old_len={len(old)}")
+          print(f"prefix_ok={old.startswith(title + b'\n## Status vocabulary\n')}")
           assert old.startswith(title + b"\n## Status vocabulary\n")
 
           banner = b"""> [!IMPORTANT]\n> **Historical evidence index — not live project state.**\n>\n> This file preserves SHA-bound status/evidence snapshots from the epochs in which they\n> were recorded. Terms below such as `current`, `locked`, `next`, `before merge`, or\n> `Executing` are historical unless a section explicitly says otherwise.\n>\n> **Do not use this file to decide current `main`, active owner/baton, blocker, merge\n> readiness, live authority, or next action.** For mutable project state, fresh-read\n> GitHub in this order: Issue [#131](https://github.com/duongchi90/cad-agent/issues/131),\n> actual current `main`, open PRs and their current CI/review state, then the newest\n> applicable task-specific authority/evidence comments. Newer GitHub evidence supersedes\n> this document.\n>\n> `docs/STATUS.md` is not a scheduler, currentness store, merge authority, or live-action\n> authority. Preserve the historical sections below as audit evidence; do not rewrite old\n> snapshots merely to make them look current.\n"""
@@ -38,12 +47,19 @@ jobs:
           rest = old[len(title):]
           new = title + b"\n" + banner + rest
           prefix_len = len(title) + 1 + len(banner)
+          print(f"rest_equal={new[prefix_len:] == rest}")
           assert new[prefix_len:] == rest
           assert old == title + rest
           path.write_bytes(new)
+          print(f"new_len={len(new)}")
           PY
+          echo "CHECKPOINT=diff-check"
           git diff --check
-          test "$(git diff --name-only)" = "docs/STATUS.md"
+          echo "CHECKPOINT=changed-path"
+          changed="$(git diff --name-only)"
+          printf 'changed=%s\n' "$changed"
+          test "$changed" = "docs/STATUS.md"
+          echo "CHECKPOINT=diff"
           git diff -- docs/STATUS.md
 
       - name: Commit exact one-file delta to target branch
@@ -53,6 +69,8 @@ jobs:
           git config user.name "duongchi90"
           git config user.email "duongchi903@gmail.com"
           git add docs/STATUS.md
-          test "$(git diff --cached --name-only)" = "docs/STATUS.md"
+          changed="$(git diff --cached --name-only)"
+          printf 'cached_changed=%s\n' "$changed"
+          test "$changed" = "docs/STATUS.md"
           git commit -m "docs: mark status ledger as historical evidence"
           git push origin HEAD:sol/status-currentness-banner-v2
