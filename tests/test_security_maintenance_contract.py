@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 
@@ -28,7 +27,8 @@ def test_codeql_is_least_privilege_and_pinned_to_exact_action_commit() -> None:
     assert "language: python" in content
     assert f"github/codeql-action/init@{CODEQL_SHA}" in content
     assert f"github/codeql-action/analyze@{CODEQL_SHA}" in content
-    assert not re.search(r"github/codeql-action/(?:init|analyze)@v\\d+", content)
+    assert "github/codeql-action/init@v" not in content
+    assert "github/codeql-action/analyze@v" not in content
 
 
 def test_security_policy_requires_private_reporting_without_claiming_release_support() -> None:
