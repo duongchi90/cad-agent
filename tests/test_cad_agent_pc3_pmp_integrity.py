@@ -444,7 +444,22 @@ def test_root_substitution_after_post_enumeration_check_fails_closed(
     foreign = _write(replacement, "selected.PC3", b"outside")
     original_lstat = Path.lstat
     original_os_open = os.open
+    lease_acquired = False
+    foreign_opened = False
     post_final_swap_attempted = False
+
+    root_a.rename(backup)
+    backup.rename(root_a)
+
+    acquire_lease = getattr(pc3_pmp_integrity, "_acquire_directory_lease", None)
+    if acquire_lease is not None:
+        def tracked_acquire(directory: Path) -> object:
+            nonlocal lease_acquired
+            lease = acquire_lease(directory)
+            if directory == root_a:
+                lease_acquired = True
+            return lease
+        monkeypatch.setattr(pc3_pmp_integrity, "_acquire_directory_lease", tracked_acquire)
 
     def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
         if path == selected:
@@ -457,14 +472,23 @@ def test_root_substitution_after_post_enumeration_check_fails_closed(
         *args: object,
         **kwargs: object,
     ) -> int:
-        nonlocal post_final_swap_attempted
+        nonlocal foreign_opened, post_final_swap_attempted
         if Path(path) != selected:
             return original_os_open(path, flags, *args, **kwargs)
         post_final_swap_attempted = True
-        root_a.rename(backup)
-        replacement.rename(root_a)
         try:
-            return original_os_open(path, flags, *args, **kwargs)
+            root_a.rename(backup)
+            replacement.rename(root_a)
+        except OSError:
+            if lease_acquired:
+                raise pc3_pmp_integrity.PC3PMPIntegrityError(
+                    "directory lease blocked parent substitution"
+                )
+            raise AssertionError("parent substitution failed before any directory lease existed")
+        try:
+            fd = original_os_open(path, flags, *args, **kwargs)
+            foreign_opened = True
+            return fd
         finally:
             root_a.rename(replacement)
             backup.rename(root_a)
@@ -474,11 +498,12 @@ def test_root_substitution_after_post_enumeration_check_fails_closed(
 
     with pytest.raises(
         pc3_pmp_integrity.PC3PMPIntegrityError,
-        match="root|directory|parent|race|drift|changed|identity|replaced|metadata|open",
+        match="root|directory|parent|race|drift|changed|identity|replaced|metadata|open|lease",
     ):
         _manifest(root_a, root_b)
 
     assert post_final_swap_attempted
+    assert lease_acquired or foreign_opened
 
 
 def test_nested_parent_substitution_after_post_enumeration_check_fails_closed(
@@ -496,10 +521,24 @@ def test_nested_parent_substitution_after_post_enumeration_check_fails_closed(
     backup = root_a / "nested-original"
     selected = _write(nested, "selected.PC3", b"inside")
     foreign = _write(replacement, "selected.PC3", b"outside")
-    root_before = root_a.stat()
     original_lstat = Path.lstat
     original_os_open = os.open
+    lease_acquired = False
+    foreign_opened = False
     post_final_swap_attempted = False
+
+    nested.rename(backup)
+    backup.rename(nested)
+
+    acquire_lease = getattr(pc3_pmp_integrity, "_acquire_directory_lease", None)
+    if acquire_lease is not None:
+        def tracked_acquire(directory: Path) -> object:
+            nonlocal lease_acquired
+            lease = acquire_lease(directory)
+            if directory == nested:
+                lease_acquired = True
+            return lease
+        monkeypatch.setattr(pc3_pmp_integrity, "_acquire_directory_lease", tracked_acquire)
 
     def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
         if path == selected:
@@ -512,32 +551,38 @@ def test_nested_parent_substitution_after_post_enumeration_check_fails_closed(
         *args: object,
         **kwargs: object,
     ) -> int:
-        nonlocal post_final_swap_attempted
+        nonlocal foreign_opened, post_final_swap_attempted
         if Path(path) != selected:
             return original_os_open(path, flags, *args, **kwargs)
         post_final_swap_attempted = True
-        nested.rename(backup)
-        replacement.rename(nested)
         try:
-            return original_os_open(path, flags, *args, **kwargs)
+            nested.rename(backup)
+            replacement.rename(nested)
+        except OSError:
+            if lease_acquired:
+                raise pc3_pmp_integrity.PC3PMPIntegrityError(
+                    "directory lease blocked parent substitution"
+                )
+            raise AssertionError("parent substitution failed before any directory lease existed")
+        try:
+            fd = original_os_open(path, flags, *args, **kwargs)
+            foreign_opened = True
+            return fd
         finally:
             nested.rename(replacement)
             backup.rename(nested)
-            os.utime(
-                root_a,
-                ns=(root_before.st_atime_ns, root_before.st_mtime_ns),
-            )
 
     monkeypatch.setattr(Path, "lstat", path_lstat)
     monkeypatch.setattr(os, "open", raced_open)
 
     with pytest.raises(
         pc3_pmp_integrity.PC3PMPIntegrityError,
-        match="directory|parent|race|drift|changed|identity|replaced|metadata|open",
+        match="directory|parent|race|drift|changed|identity|replaced|metadata|open|lease",
     ):
         _manifest(root_a, root_b)
 
     assert post_final_swap_attempted
+    assert lease_acquired or foreign_opened
 
 
 def test_byte_change_and_root_slot_order_change_aggregate(tmp_path: Path) -> None:
