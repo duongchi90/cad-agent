@@ -363,6 +363,70 @@ def _valid_args(
     }
 
 
+def _root_pre_repair_args(
+    *, material: dict[str, object] | None = None
+) -> dict[str, object]:
+    """Describe the missing root/pre-repair path without R5/R6 authority."""
+    material = material or _accepted_r3_material()
+    root_reference = deepcopy(material["parent_reference"])
+    root_observation = deepcopy(material["parent_observation"])
+    root_binding_sha256 = canonical_json_sha256(root_reference["upstream_evidence"])
+    root_correspondence = {
+        "parent_reference_id": root_reference["reference_id"],
+        "parent_reference_sha256": root_reference["reference_sha256"],
+        "child_reference_id": root_reference["reference_id"],
+        "child_reference_sha256": root_reference["reference_sha256"],
+        "registry_snapshot_sha256": material["registry"][
+            "registry_snapshot_sha256"
+        ],
+        "provenance_sha256": material["correspondence"]["provenance_sha256"],
+        "component_bindings": deepcopy(
+            material["correspondence"]["component_bindings"]
+        ),
+        "view_bindings": deepcopy(material["correspondence"]["view_bindings"]),
+    }
+    root_change_impact = {
+        "registry_snapshot_sha256": material["registry"][
+            "registry_snapshot_sha256"
+        ],
+        "impact": deepcopy(material["impact"]),
+        "correspondence": root_correspondence,
+        "upstream_context": deepcopy(material["context"]),
+        "correspondence_context": {
+            "parent_reference": root_reference,
+            "parent_observation": root_observation,
+            "parent_artifact_bytes": material["candidate_bytes"],
+            "child_reference": root_reference,
+            "child_observation": root_observation,
+            "child_artifact_bytes": material["candidate_bytes"],
+            # A root candidate has no post-repair transition evidence.
+            "accepted_transition_evidence_sha256": None,
+        },
+    }
+    root_mutation = {
+        "evidence_kind": "R4_CANDIDATE_BUILD",
+        "evidence_id": "r4-root-bootstrap-red",
+        "r3_candidate_reference_id": root_reference["reference_id"],
+        "r3_candidate_reference_sha256": root_reference["reference_sha256"],
+        "candidate_artifact_sha256": root_reference["artifact_sha256"],
+        # The frozen R4 record keeps this slot, but the root binding is R3
+        # custody—not an accepted R6 result or a post-repair transition.
+        "accepted_transition_evidence_sha256": root_binding_sha256,
+        "latest_mutation_evidence_sha256": root_binding_sha256,
+        "mutation_terminal": "SEALED",
+    }
+    root_mutation["evidence_sha256"] = canonical_json_sha256(root_mutation)
+    return {
+        "registry": deepcopy(material["registry"]),
+        "base_cad_handoff": deepcopy(material["context"]["reuse_handoff"]),
+        "baseline_context": deepcopy(_baseline_context()),
+        "parent_candidate": None,
+        "change_impact": root_change_impact,
+        "mutation_evidence": root_mutation,
+        "lineage_context": (),
+    }
+
+
 def _lineage_context(
     baseline_context: dict[str, object], ancestors: list[dict[str, object]]
 ) -> dict[str, object]:
@@ -424,6 +488,32 @@ def _valid_lineage_chain() -> tuple[
         "candidate_revision_sha256"
     ]
     return root_args, root, child, grandchild_args
+
+
+def test_root_pre_repair_candidate_requires_no_post_repair_transition() -> None:
+    """RED: current main forces a root candidate through R3 child correspondence."""
+    args = _root_pre_repair_args()
+    root = build_candidate_revision(**deepcopy(args))
+
+    assert root["parent_candidate_revision_sha256"] is None
+    assert root["candidate_artifacts"]["reference_id"] == args[
+        "mutation_evidence"
+    ]["r3_candidate_reference_id"]
+    assert root["candidate_artifacts"]["artifact_sha256"] == args[
+        "mutation_evidence"
+    ]["candidate_artifact_sha256"]
+    assert args["change_impact"]["correspondence_context"][
+        "accepted_transition_evidence_sha256"
+    ] is None
+    assert "accepted_r6_result" not in args["mutation_evidence"]
+
+    state = candidate_module.build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    assert state["current_candidate_revision_sha256"] == root[
+        "candidate_revision_sha256"
+    ]
 
 
 def _candidate_module_source_and_tree() -> tuple[str, ast.Module]:
