@@ -6,10 +6,10 @@ on:
       - sol/status-currentness-builder
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  isolate-status-banner:
+  prepend-status-banner:
     runs-on: ubuntu-latest
     steps:
       - name: Check out clean target branch
@@ -17,20 +17,14 @@ jobs:
         with:
           ref: sol/status-currentness-banner-v2
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
-      - name: Invariant 1 exact target HEAD
-        shell: bash
-        run: test "$(git rev-parse HEAD)" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae"
-
-      - name: Invariant 2 exact original STATUS blob
-        shell: bash
-        run: test "$(git hash-object docs/STATUS.md)" = "45e4eb45643c485b40c7f50df8c0811e978c6226"
-
-      - name: Invariant 3 prepend preserves exact old suffix
+      - name: Prepend stable currentness banner only
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "ff93ddaa2ebb69e21f81baaa4f3dceec1db009ae"
+          test "$(git hash-object docs/STATUS.md)" = "45e4eb45643c485b40c7f50df8c0811e978c6226"
           python - <<'PY'
           from pathlib import Path
 
@@ -40,7 +34,7 @@ jobs:
           expected_prefix = title + b"\n## Status vocabulary\n"
           assert old.startswith(expected_prefix)
 
-          banner = b"""> [!IMPORTANT]\n> **Historical evidence index — not live project state.**\n>\n> This file preserves SHA-bound status/evidence snapshots from the epochs in which they\n> were recorded. Terms below such as `current`, `locked`, `next`, `before merge`, or\n> `Executing` are historical unless a section explicitly says otherwise.\n>\n> **Do not use this file to decide current `main`, active owner/baton, blocker, merge\n> readiness, live authority, or next action.** For mutable project state, fresh-read\n> GitHub in this order: Issue [#131](https://github.com/duongchi90/cad-agent/issues/131),\n> actual current `main`, open PRs and their current CI/review state, then the newest\n> applicable task-specific authority/evidence comments. Newer GitHub evidence supersedes\n> this document.\n>\n> `docs/STATUS.md` is not a scheduler, currentness store, merge authority, or live-action\n> authority. Preserve the historical sections below as audit evidence; do not rewrite old\n> snapshots merely to make them look current.\n"""
+          banner = """> [!IMPORTANT]\n> **Historical evidence index — not live project state.**\n>\n> This file preserves SHA-bound status/evidence snapshots from the epochs in which they\n> were recorded. Terms below such as `current`, `locked`, `next`, `before merge`, or\n> `Executing` are historical unless a section explicitly says otherwise.\n>\n> **Do not use this file to decide current `main`, active owner/baton, blocker, merge\n> readiness, live authority, or next action.** For mutable project state, fresh-read\n> GitHub in this order: Issue [#131](https://github.com/duongchi90/cad-agent/issues/131),\n> actual current `main`, open PRs and their current CI/review state, then the newest\n> applicable task-specific authority/evidence comments. Newer GitHub evidence supersedes\n> this document.\n>\n> `docs/STATUS.md` is not a scheduler, currentness store, merge authority, or live-action\n> authority. Preserve the historical sections below as audit evidence; do not rewrite old\n> snapshots merely to make them look current.\n""".encode("utf-8")
           rest = old[len(title):]
           new = title + b"\n" + banner + rest
           prefix_len = len(title) + 1 + len(banner)
@@ -48,11 +42,16 @@ jobs:
           assert old == title + rest
           path.write_bytes(new)
           PY
+          git diff --check
+          test "$(git diff --name-only)" = "docs/STATUS.md"
 
-      - name: Invariant 4 git diff check
+      - name: Commit exact one-file delta to target branch
         shell: bash
-        run: git diff --check
-
-      - name: Invariant 5 exact one changed path
-        shell: bash
-        run: test "$(git diff --name-only)" = "docs/STATUS.md"
+        run: |
+          set -euo pipefail
+          git config user.name "duongchi90"
+          git config user.email "duongchi903@gmail.com"
+          git add docs/STATUS.md
+          test "$(git diff --cached --name-only)" = "docs/STATUS.md"
+          git commit -m "docs: mark status ledger as historical evidence"
+          git push origin HEAD:sol/status-currentness-banner-v2
