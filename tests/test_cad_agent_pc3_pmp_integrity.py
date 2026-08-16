@@ -268,16 +268,21 @@ def test_missing_unreadable_or_raced_selected_file_fails_closed(
     root_a.mkdir()
     root_b.mkdir()
     selected = _write(root_a, "selected.PC3", b"selected")
-    original_read_bytes = Path.read_bytes
+    original_os_open = os.open
 
-    def fail_selected_read(path: Path) -> bytes:
-        if path == selected:
+    def fail_selected_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        if Path(path) == selected:
             raise exception
-        return original_read_bytes(path)
+        return original_os_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", fail_selected_read)
+    monkeypatch.setattr(os, "open", fail_selected_open)
 
-    with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="read|missing|unreadable|race"):
+    with pytest.raises(pc3_pmp_integrity.PC3PMPIntegrityError, match="open|read|missing|unreadable|race"):
         _manifest(root_a, root_b)
 
 
@@ -289,27 +294,25 @@ def test_selected_file_identity_drift_during_hash_fails_closed(
     root_b = tmp_path / "plotters-b"
     root_a.mkdir()
     root_b.mkdir()
-    selected = _write(root_a, "selected.PC3", b"selected")
-    original_lstat = Path.lstat
-    original_read_bytes = Path.read_bytes
+    _write(root_a, "selected.PC3", b"selected")
+    original_os_read = os.read
+    original_os_fstat = os.fstat
     read_completed = False
 
-    def path_lstat(path: Path, *args: object, **kwargs: object) -> object:
-        result = original_lstat(path, *args, **kwargs)
-        if path == selected and read_completed:
+    def tracked_read(descriptor: int, size: int) -> bytes:
+        nonlocal read_completed
+        result = original_os_read(descriptor, size)
+        read_completed = True
+        return result
+
+    def drifting_fstat(descriptor: int) -> object:
+        result = original_os_fstat(descriptor)
+        if read_completed:
             return _with_changed_file_identity(result)
         return result
 
-    def read_bytes(path: Path) -> bytes:
-        nonlocal read_completed
-        result = original_read_bytes(path)
-        if path == selected:
-            read_completed = True
-        return result
-
-    monkeypatch.setattr(Path, "is_symlink", lambda _path: False)
-    monkeypatch.setattr(Path, "lstat", path_lstat)
-    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(os, "read", tracked_read)
+    monkeypatch.setattr(os, "fstat", drifting_fstat)
 
     with pytest.raises(
         pc3_pmp_integrity.PC3PMPIntegrityError,
