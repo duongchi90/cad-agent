@@ -102,6 +102,30 @@ def _candidate_binding() -> tuple[dict[str, object], dict[str, object]]:
     return deepcopy(state), deepcopy(root)
 
 
+@lru_cache(maxsize=1)
+def _accepted_foreign_candidate_binding() -> tuple[
+    dict[str, object], dict[str, object]
+]:
+    """Build a second owner-valid current tuple for cross-binding negatives."""
+    path = Path(__file__).with_name("test_cad_agent_candidate_revision.py")
+    spec = importlib.util.spec_from_file_location("r4_foreign_candidate_fixtures", path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("accepted R4 fixture loader unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _root_args, _root, child, _grandchild_args = module._valid_lineage_chain()
+    state = build_candidate_revision_state(
+        candidate_revisions=[child],
+        current_candidate_revision_sha256=child["candidate_revision_sha256"],
+    )
+    return state, child
+
+
+def _foreign_candidate_binding() -> tuple[dict[str, object], dict[str, object]]:
+    state, child = _accepted_foreign_candidate_binding()
+    return deepcopy(state), deepcopy(child)
+
+
 def _operation_fingerprint() -> str:
     return canonical_json_sha256(_operation().as_executor_payload())
 
@@ -1019,16 +1043,37 @@ def test_r6_planner_has_no_authority_or_side_effects(monkeypatch) -> None:
         monkeypatch.setattr(module.DotNetIPCClient, name, bomb)
 
     result = _call_planner(*inputs)
+    _assert_planner_output_has_no_authority(result)
+
+
+def _assert_planner_output_has_no_authority(value: object, path: tuple[object, ...] = ()) -> None:
+    """Reject nested execution/authority payloads without banning declarative operations."""
     forbidden = {
+        "approval",
         "authorization",
         "authorization_id",
-        "workspace_owner",
-        "workspace_lease",
+        "executor",
         "executor_client",
+        "executor_payload",
+        "lease",
         "publication",
         "r4_selection",
+        "repair_operation",
+        "workspace",
+        "workspace_lease",
+        "workspace_owner",
     }
-    assert forbidden.isdisjoint(result)
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = key.lower() if isinstance(key, str) else key
+            assert normalized not in forbidden, (
+                "planner output leaked forbidden authority/executor material at "
+                f"{path + (key,)!r}"
+            )
+            _assert_planner_output_has_no_authority(nested, path + (key,))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _assert_planner_output_has_no_authority(nested, path + (index,))
 
 
 def test_r6_planner_reuses_sealed_r5_identity_and_is_deterministic() -> None:
@@ -1076,6 +1121,29 @@ def _planner_rejection(mutator) -> None:
         _call_planner(sealed, state, candidate, plan, context)
 
 
+def _replace_with_owner_valid_foreign_tuple(
+    _result: dict[str, object],
+    state: dict[str, object],
+    candidate: dict[str, object],
+    _plan: dict[str, object],
+    context: dict[str, object],
+) -> None:
+    foreign_state, foreign_candidate = _foreign_candidate_binding()
+    state.clear()
+    state.update(foreign_state)
+    candidate.clear()
+    candidate.update(foreign_candidate)
+    context.update(
+        {
+            "candidate_revision_id": foreign_candidate["revision_id"],
+            "candidate_revision_sha256": foreign_candidate[
+                "candidate_revision_sha256"
+            ],
+            "candidate_state_sha256": foreign_state["state_sha256"],
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "mutator",
     [
@@ -1112,9 +1180,7 @@ def _planner_rejection(mutator) -> None:
         lambda _result, _state, _candidate, _plan, context: context.__setitem__(
             "candidate_state_sha256", "f" * 64
         ),
-        lambda _result, _state, candidate, _plan, _context: candidate.__setitem__(
-            "run_id", "foreign-run"
-        ),
+        _replace_with_owner_valid_foreign_tuple,
         lambda _result, _state, _candidate, plan, _context: plan.__setitem__(
             "source_review_id", "caller-failure"
         ),
@@ -1166,19 +1232,47 @@ def test_r6_planner_rejects_caller_substituted_failure_and_plan_identity() -> No
 
 def test_r6_planner_plan_never_falls_back_to_operation(monkeypatch) -> None:
     sealed, state, candidate, plan, context = _planner_inputs()
+    validation_contracts: list[object] = []
+    module = _module()
+    canonical_validator = getattr(module, "validate_visual_contract", None)
+
+    def record_repair_plan_validation(payload, *args, **kwargs):
+        contract = kwargs.get("contract")
+        if contract is None and args:
+            contract = args[0]
+        validation_contracts.append(contract)
+        if canonical_validator is None:
+            raise AssertionError("planner has no canonical repair-plan validator owner")
+        return canonical_validator(payload, *args, **kwargs)
 
     def bomb(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("planner silently normalized a repair operation")
 
-    monkeypatch.setattr(_module(), "normalize_repair_operation", bomb)
+    monkeypatch.setattr(module, "validate_visual_contract", record_repair_plan_validation, raising=False)
+    monkeypatch.setattr(module, "normalize_repair_operation", bomb)
     plan["operations"][0]["operation"] = "REPAIR_DXF_PRIMITIVE"
     with pytest.raises((VisualSupervisorAdapterError, VisualContractError)):
         _call_planner(sealed, state, candidate, plan, context)
+    assert validation_contracts and validation_contracts[0] == "repair_plan"
 
 
-def test_r6_executor_rejects_malformed_sealed_r5_without_legacy_material() -> None:
+def test_r6_executor_rejects_malformed_sealed_r5_without_legacy_material(monkeypatch) -> None:
     inputs, owner, executor = _sealed_executor_inputs()
     inputs["r5_result"]["verdict_sha256"] = "f" * 64
+    calls: list[str] = []
+
+    def forbidden_call(name: str):
+        def bomb(*_args: object, **_kwargs: object) -> None:
+            calls.append(name)
+            raise AssertionError(f"malformed sealed R5 reached {name}")
+
+        return bomb
+
+    module = _module()
+    monkeypatch.setattr(module, "consume_repair_authorization", forbidden_call("authorization"))
+    monkeypatch.setattr(owner, "validate_disposable_workspace", forbidden_call("workspace_validate"))
+    monkeypatch.setattr(owner, "close_disposable_workspace", forbidden_call("workspace_close"))
+    monkeypatch.setattr(inputs["executor_client"], "entity_create_line", forbidden_call("executor"))
     try:
         _execute(inputs)
     except TypeError:
@@ -1187,5 +1281,6 @@ def test_r6_executor_rejects_malformed_sealed_r5_without_legacy_material() -> No
         )
     except (RepairExecutorAdapterError, VisualSupervisorAdapterError):
         pass
+    assert calls == []
     assert owner.close_calls == []
     assert executor.calls == []
