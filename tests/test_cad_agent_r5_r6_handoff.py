@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import inspect
 
 import pytest
 
@@ -69,9 +70,18 @@ def _candidate_state() -> dict[str, object]:
                 "run_id": RUN_ID,
                 "candidate_revision_sha256": SHA_CANDIDATE,
                 "candidate_artifacts": {
-                    "candidate_artifact_sha256": SHA_ARTIFACT,
+                    "artifact_sha256": SHA_ARTIFACT,
                 },
-                "change_scope": {"component_ids": [COMPONENT_ID]},
+                "change_scope": {
+                    "registry_snapshot_sha256": SHA_REGISTRY,
+                    "impact": {
+                        "component_ids": [COMPONENT_ID],
+                        "view_ids": [],
+                        "layout_bindings": [],
+                        "link_ids": [],
+                    },
+                    "provenance_evidence": {},
+                },
             }
         ],
     }
@@ -194,6 +204,30 @@ def test_missing_public_owner_handoff_is_the_causal_red() -> None:
     assert callable(r5.materialize_r5_repair_handoff)
 
 
+def test_public_handoff_surface_accepts_owner_objects_not_caller_minted_ids() -> None:
+    parameters = inspect.signature(r5.materialize_r5_repair_handoff).parameters
+    assert list(parameters) == [
+        "verdict_result",
+        "candidate_state",
+        "repair_plan",
+        "repair_operation",
+        "r3_registry",
+        "r3_upstream_context",
+    ]
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in parameters.values()
+    )
+    assert {
+        "work_item_id",
+        "failure_id",
+        "failure_sha256",
+        "repair_plan_sha256",
+        "r3_target_handles",
+        "protected_target_handles",
+    }.isdisjoint(parameters)
+
+
 def test_exact_fail_materializes_closed_packet_consumable_by_current_r6(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -264,6 +298,7 @@ def test_work_item_and_plan_bindings_are_owner_derived_and_deterministic(
         ("foreign_plan_run", "run|plan|binding"),
         ("foreign_plan_review", "review|verdict|plan|binding"),
         ("foreign_target", "target|R3|registry|binding"),
+        ("foreign_anchor", "anchor|plan|binding"),
     ],
 )
 def test_stale_foreign_or_unbound_inputs_fail_closed(
@@ -283,8 +318,10 @@ def test_stale_foreign_or_unbound_inputs_fail_closed(
         plan["run_id"] = "foreign-run"
     elif change == "foreign_plan_review":
         plan["source_review_id"] = "foreign-review"
-    else:
+    elif change == "foreign_target":
         operation["target"]["target_handle"] = "FOREIGN"
+    else:
+        operation["preserve_anchors"] = ["foreign-anchor"]
     with pytest.raises(Exception, match=expected):
         _materialize(
             monkeypatch,
