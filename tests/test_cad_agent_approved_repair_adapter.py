@@ -1046,8 +1046,29 @@ def test_r6_planner_has_no_authority_or_side_effects(monkeypatch) -> None:
     _assert_planner_output_has_no_authority(result)
 
 
+_ALLOWED_PLANNER_RESULT_KEYS = {
+    "schema_version",
+    "planner_schema_version",
+    "r5_failure_id",
+    "r5_failure_sha256",
+    "repair_plan",
+    "repair_plan_sha256",
+    "repair_plan_version",
+    "plan",
+    "plan_sha256",
+    "plan_version",
+    "run_id",
+    "work_item_id",
+    "request_sha256",
+    "latest_mutation_sha256",
+    "candidate_revision_id",
+    "candidate_revision_sha256",
+    "candidate_state_sha256",
+}
+
+
 def _assert_planner_output_has_no_authority(value: object, path: tuple[object, ...] = ()) -> None:
-    """Reject nested execution/authority payloads without banning declarative operations."""
+    """Require the closed, JSON-only planner result contract."""
     forbidden = {
         "approval",
         "authorization",
@@ -1063,17 +1084,29 @@ def _assert_planner_output_has_no_authority(value: object, path: tuple[object, .
         "workspace_lease",
         "workspace_owner",
     }
-    if isinstance(value, dict):
+    if path == ():
+        assert type(value) is dict, "planner result must be a plain mapping"
+        unknown = set(value) - _ALLOWED_PLANNER_RESULT_KEYS
+        assert not unknown, f"planner result has unknown fields: {sorted(unknown)!r}"
+        assert {"r5_failure_id", "r5_failure_sha256"} <= set(value)
+        assert bool({"repair_plan", "plan"} & set(value))
+        assert bool({"repair_plan_sha256", "plan_sha256"} & set(value))
+    if type(value) is dict:
         for key, nested in value.items():
-            normalized = key.lower() if isinstance(key, str) else key
+            assert type(key) is str, f"planner result key is not plain str at {path!r}"
+            normalized = key.lower()
             assert normalized not in forbidden, (
                 "planner output leaked forbidden authority/executor material at "
                 f"{path + (key,)!r}"
             )
             _assert_planner_output_has_no_authority(nested, path + (key,))
-    elif isinstance(value, list):
+    elif type(value) is list:
         for index, nested in enumerate(value):
             _assert_planner_output_has_no_authority(nested, path + (index,))
+    else:
+        assert type(value) in {str, int, float, bool, type(None)}, (
+            f"planner result contains non-JSON value at {path!r}"
+        )
 
 
 def test_r6_planner_reuses_sealed_r5_identity_and_is_deterministic() -> None:
@@ -1212,7 +1245,18 @@ def test_r6_planner_rejects_hostile_subclasses() -> None:
         _call_planner(HostileMapping(sealed), state, candidate, plan, context)
 
 
-def test_r6_planner_rejects_caller_substituted_failure_and_plan_identity() -> None:
+@pytest.mark.parametrize(
+    ("authority_field", "authority_value"),
+    [
+        ("r5_failure_id", "caller-failure"),
+        ("r5_failure_sha256", "f" * 64),
+        ("repair_plan_id", "caller-plan"),
+        ("repair_plan_sha256", "f" * 64),
+    ],
+)
+def test_r6_planner_rejects_each_caller_substituted_authority(
+    authority_field: str, authority_value: str
+) -> None:
     sealed, state, candidate, plan, context = _planner_inputs()
     planner = getattr(_module(), "prepare_repair_plan", None)
     assert callable(planner), "R6 causal RED: planner public seam is absent"
@@ -1223,10 +1267,7 @@ def test_r6_planner_rejects_caller_substituted_failure_and_plan_identity() -> No
             candidate_state=state,
             repair_plan=plan,
             r3_context=context,
-            r5_failure_id="caller-failure",
-            r5_failure_sha256="f" * 64,
-            repair_plan_id="caller-plan",
-            repair_plan_sha256="f" * 64,
+            **{authority_field: authority_value},
         )
 
 
@@ -1270,6 +1311,11 @@ def test_r6_executor_rejects_malformed_sealed_r5_without_legacy_material(monkeyp
 
     module = _module()
     monkeypatch.setattr(module, "consume_repair_authorization", forbidden_call("authorization"))
+    monkeypatch.setattr(
+        module,
+        "_execute_supported_repair_capability",
+        forbidden_call("executor_capability"),
+    )
     monkeypatch.setattr(owner, "validate_disposable_workspace", forbidden_call("workspace_validate"))
     monkeypatch.setattr(owner, "close_disposable_workspace", forbidden_call("workspace_close"))
     monkeypatch.setattr(inputs["executor_client"], "entity_create_line", forbidden_call("executor"))
