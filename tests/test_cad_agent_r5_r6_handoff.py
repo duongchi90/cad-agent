@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import inspect
+from unittest.mock import Mock
 
 import pytest
 
@@ -228,6 +229,42 @@ def test_public_handoff_surface_accepts_owner_objects_not_caller_minted_ids() ->
     }.isdisjoint(parameters)
 
 
+def test_handoff_delegates_validation_to_existing_owners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verdict_validator = Mock(side_effect=lambda payload, **_kwargs: deepcopy(payload))
+    candidate_validator = Mock(side_effect=lambda payload: deepcopy(payload))
+    plan_validator = Mock(side_effect=lambda payload, *, contract, **_kwargs: deepcopy(payload))
+    registry_validator = Mock(
+        side_effect=lambda payload, *, upstream_context: deepcopy(payload)
+    )
+    operation_validator = Mock(side_effect=normalize_repair_operation)
+    monkeypatch.setattr(r5, "validate_visual_verdict_result", verdict_validator)
+    monkeypatch.setattr(r5, "validate_candidate_revision_state", candidate_validator)
+    monkeypatch.setattr(r5, "validate_visual_contract", plan_validator)
+    monkeypatch.setattr(
+        r5, "validate_component_view_registry", registry_validator, raising=False
+    )
+    monkeypatch.setattr(
+        r5, "normalize_repair_operation", operation_validator, raising=False
+    )
+    verdict = _verdict()
+    r5.materialize_r5_repair_handoff(
+        verdict_result=verdict,
+        candidate_state=_candidate_state(),
+        repair_plan=_repair_plan(verdict),
+        repair_operation=_repair_operation(),
+        r3_registry=_registry(),
+        r3_upstream_context={"accepted": True},
+    )
+    assert verdict_validator.call_count == 1
+    assert candidate_validator.call_count == 1
+    assert plan_validator.call_count == 1
+    assert plan_validator.call_args.kwargs["contract"] == "repair_plan"
+    assert registry_validator.call_count == 1
+    assert operation_validator.call_count == 1
+
+
 def test_exact_fail_materializes_closed_packet_consumable_by_current_r6(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -297,6 +334,8 @@ def test_work_item_and_plan_bindings_are_owner_derived_and_deterministic(
         ("foreign_candidate", "candidate|binding|current"),
         ("foreign_plan_run", "run|plan|binding"),
         ("foreign_plan_review", "review|verdict|plan|binding"),
+        ("foreign_plan_artifact", "artifact|drawing|candidate|plan|binding"),
+        ("foreign_plan_target", "target|plan|R3|registry|binding"),
         ("foreign_target", "target|R3|registry|binding"),
         ("foreign_anchor", "anchor|plan|binding"),
     ],
@@ -318,6 +357,10 @@ def test_stale_foreign_or_unbound_inputs_fail_closed(
         plan["run_id"] = "foreign-run"
     elif change == "foreign_plan_review":
         plan["source_review_id"] = "foreign-review"
+    elif change == "foreign_plan_artifact":
+        plan["target_drawing_sha256"] = "9" * 64
+    elif change == "foreign_plan_target":
+        plan["operations"][0]["target"]["stable_entity_id"] = "foreign-component"
     elif change == "foreign_target":
         operation["target"]["target_handle"] = "FOREIGN"
     else:
