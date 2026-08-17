@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from importlib import import_module
 import importlib.util
+import inspect
 from functools import lru_cache
 from pathlib import Path
 from tempfile import mkdtemp
@@ -763,3 +764,90 @@ def test_public_r6_result_validator_rejects_resealed_foreign_closure_identity(
     _reseal_result(result)
     with pytest.raises(Exception, match="BINDING_MISMATCH"):
         _result_validator()(result)
+
+
+def _sealed_r5_fail_result() -> dict[str, object]:
+    """Minimal exact-shape R5 result used to pin the desired R6 planner seam."""
+    semantic = {
+        "schema_version": "r5-visual-verdict-result-1.0",
+        "verdict": "FAIL",
+        "candidate_revision_sha256": SHA_CANDIDATE,
+        "candidate_state_sha256": SHA_STATE,
+        "registry_snapshot_sha256": "f" * 64,
+        "request_sha256": "1" * 64,
+        "observation_sha256": "2" * 64,
+    }
+    verdict_sha256 = canonical_json_sha256(semantic)
+    return {
+        **semantic,
+        "verdict_id": verdict_sha256,
+        "verdict_sha256": verdict_sha256,
+    }
+
+
+def test_r6_planner_public_seam_is_the_causal_red() -> None:
+    """R6 must expose a bounded planner; production currently has no such seam."""
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), (
+        "R6 causal RED: missing bounded public prepare_repair_plan seam"
+    )
+
+
+def test_r6_executor_accepts_sealed_r5_fail_without_legacy_caller_material() -> None:
+    """The exact sealed R5 result must be consumable without caller-minted r5_failure."""
+    parameters = inspect.signature(_module().execute_approved_repair).parameters
+    assert any(
+        name in parameters for name in ("r5_result", "verdict_result", "visual_verdict_result")
+    ), (
+        "R6 causal RED: execute_approved_repair only accepts legacy caller-supplied "
+        "r5_failure material"
+    )
+
+
+def test_r6_planner_contract_excludes_execution_and_authority_inputs() -> None:
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), "R6 causal RED: planner public seam is absent"
+    parameters = inspect.signature(planner).parameters
+    forbidden = {
+        "authorization",
+        "authorization_id",
+        "workspace_owner",
+        "workspace_lease",
+        "executor_client",
+        "publication",
+        "r4_selection",
+    }
+    assert forbidden.isdisjoint(parameters)
+
+
+def test_r6_planner_reuses_sealed_r5_identity_and_is_deterministic() -> None:
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), "R6 causal RED: planner public seam is absent"
+    signature = inspect.signature(planner)
+    assert "r5_result" in signature.parameters
+    assert "repair_plan" in signature.parameters
+    assert "candidate_state" in signature.parameters
+    assert "r3_context" in signature.parameters
+
+    # The exact sealed result is the only permitted source identity; callers do
+    # not supply failure/plan ids or hashes as independent authority.
+    sealed = _sealed_r5_fail_result()
+    assert sealed["verdict"] == "FAIL"
+    assert sealed["verdict_id"] == sealed["verdict_sha256"]
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda value: value.__setitem__("verdict", "PASS"),
+        lambda value: value.__setitem__("verdict_sha256", "f" * 64),
+        lambda value: value.__setitem__("candidate_revision_sha256", "f" * 64),
+    ],
+)
+def test_r6_planner_rejects_pass_resealed_or_foreign_r5_inputs(mutator) -> None:
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), "R6 causal RED: planner public seam is absent"
+    result = _sealed_r5_fail_result()
+    mutator(result)
+    with pytest.raises(Exception):
+        planner(r5_result=result)
