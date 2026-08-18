@@ -706,6 +706,53 @@ def test_dispatcher_covers_every_existing_file_ipc_dispatch_command() -> None:
     assert not missing, f"dispatcher is missing existing File IPC commands: {missing}"
 
 
+@pytest.mark.parametrize(
+    ("entity_type", "projection_marker"),
+    [("LINE", r'(cons "start" (mcp-array'), ("CIRCLE", r'(cons "center" (mcp-array')],
+)
+def test_entity_get_projection_preserves_builtin_type_for_dynamic_json_encoding(
+    entity_type: str,
+    projection_marker: str,
+) -> None:
+    """Entity projection must not dynamically shadow AutoLISP's built-in ``type``.
+
+    AutoLISP dynamically scopes ``/`` locals into callees.  The LINE and CIRCLE
+    branches both build array values, which reach ``mcp-json-encode``; that
+    encoder calls the built-in ``(type value)`` while serializing the result.
+    A local named ``type`` in ``mcp-op-entity-get`` therefore reproduces the
+    live ``no function definition: TYPE`` failure before a result is built.
+    """
+
+    source = _dispatcher_source()
+    entity_get = re.search(
+        r"\(defun\s+mcp-op-entity-get\s+\((?P<args>[^)]*)\)(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    encoder = re.search(
+        r"\(defun\s+mcp-json-encode\s+\((?P<args>[^)]*)\)(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert entity_get is not None and encoder is not None
+
+    entity_body = entity_get.group("body")
+    encoder_body = encoder.group("body")
+    local_clause = entity_get.group("args").split("/", 1)[1]
+    local_names = set(re.findall(r"[A-Za-z_*][A-Za-z0-9_*:-]*", local_clause))
+
+    # This is the semantic call path, not a variable-name-only check: each
+    # representative branch builds an array and the encoder invokes TYPE.
+    assert f'((= type "{entity_type}")' in entity_body
+    assert projection_marker in entity_body
+    assert re.search(r"\(mcp-array\s+", entity_body)
+    assert re.search(r"\(type\s+value\)", encoder_body, flags=re.IGNORECASE)
+    assert "type" not in local_names, (
+        "mcp-op-entity-get dynamically shadows AutoLISP TYPE while its "
+        f"{entity_type} projection reaches mcp-json-encode"
+    )
+
+
 def test_dispatcher_never_converts_json_into_executable_autolisp() -> None:
     source = _dispatcher_source().casefold()
     for forbidden_form in (
