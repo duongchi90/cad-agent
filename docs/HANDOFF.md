@@ -1,5 +1,19 @@
 # CAD Agent — Current Operational Handoff
 
+> [!IMPORTANT]
+> **Historical handoff snapshot — not live operational authority.**
+>
+> This file preserves the 2026-08-06 PO/Codex-era handoff as historical evidence. The
+> cached SHAs, PRs, owner language, locked work, and next action below are not live
+> project state. For mutable decisions, fresh-read GitHub in this order: Issue #131,
+> actual current `main`, open PR/CI/reviewer state, then the newest applicable
+> task-specific authority/evidence. Newer GitHub evidence always wins.
+>
+> `docs/STATUS.md` is a historical evidence ledger, not a currentness authority.
+> `docs/SOL_HANDOFF.md` is the stable SOL/Luna role contract when present on `main` or
+> when the newest canonical Issue #131 pointer names its staged version. Do not use the
+> historical material below to schedule, merge, authorize live work, or infer a baton.
+
 Status: current operational handoff for PO and coding agents.
 
 Updated: 2026-08-06
