@@ -1,5 +1,23 @@
 # CAD Agent Status
 
+> [!IMPORTANT]
+> **Historical evidence index — not live project state.**
+>
+> This file preserves SHA-bound status/evidence snapshots from the epochs in which they
+> were recorded. Terms below such as `current`, `locked`, `next`, `before merge`, or
+> `Executing` are historical unless a section explicitly says otherwise.
+>
+> **Do not use this file to decide current `main`, active owner/baton, blocker, merge
+> readiness, live authority, or next action.** For mutable project state, fresh-read
+> GitHub in this order: Issue [#131](https://github.com/duongchi90/cad-agent/issues/131),
+> actual current `main`, open PRs and their current CI/review state, then the newest
+> applicable task-specific authority/evidence comments. Newer GitHub evidence supersedes
+> this document.
+>
+> `docs/STATUS.md` is not a scheduler, currentness store, merge authority, or live-action
+> authority. Preserve the historical sections below as audit evidence; do not rewrite old
+> snapshots merely to make them look current.
+
 ## Status vocabulary
 
 - **Verified:** the named command ran successfully on the named commit and
