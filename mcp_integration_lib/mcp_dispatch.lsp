@@ -1017,21 +1017,21 @@
   (* value (/ 180.0 pi))
 )
 
-(defun mcp-op-entity-get (params / ename data type pairs)
+(defun mcp-op-entity-get (params / ename data entity-type pairs)
   (setq ename (mcp-entity-from-handle (mcp-param params "entity_id")))
   (if (not ename)
     (mcp-object nil)
     (progn
       (setq data (entget ename)
-            type (cdr (assoc 0 data))
+            entity-type (cdr (assoc 0 data))
             pairs
               (list
                 (cons "handle" (cdr (assoc 5 data)))
-                (cons "type" type)
+                (cons "type" entity-type)
                 (cons "layer" (cdr (assoc 8 data)))
               ))
       (cond
-        ((= type "LINE")
+        ((= entity-type "LINE")
           (setq pairs
             (append pairs
               (list
@@ -1041,7 +1041,7 @@
             )
           )
         )
-        ((= type "CIRCLE")
+        ((= entity-type "CIRCLE")
           (setq pairs
             (append pairs
               (list
@@ -1051,7 +1051,7 @@
             )
           )
         )
-        ((= type "ARC")
+        ((= entity-type "ARC")
           (setq pairs
             (append pairs
               (list
@@ -1063,7 +1063,7 @@
             )
           )
         )
-        ((member type '("TEXT" "MTEXT"))
+        ((member entity-type '("TEXT" "MTEXT"))
           (setq pairs
             (append pairs
               (list
