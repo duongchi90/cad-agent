@@ -140,7 +140,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         f"Counterfeit-2 rejected: ObservedCameraState.VisualStyle references camera.VisualStyle ({vs_arg!r})"
     )
 
-    # 7. Reaching definition analysis:
+    # 7. Authoritative reaching-definition analysis:
     code_before_ocs = ensure_body[:ocs_match.start()]
     vs_var_name = vs_arg.split(".")[-1].split("(")[0].strip()
 
@@ -152,17 +152,14 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     assert len(assignments) > 0, (
         f"Dataflow rejected: variable {vs_var_name!r} has no assignment before ObservedCameraState construction"
     )
-    last_assignment = assignments[-1].strip()
-    assert ".VisualStyleId" in last_assignment, (
-        f"Counterfeit-5 rejected: reaching definition for {vs_var_name!r} is {last_assignment!r}, which does not derive from .VisualStyleId"
-    )
     for a in assignments:
-        if a.strip().startswith('"') or "camera.VisualStyle" in a:
+        rhs = a.strip()
+        if '"' in rhs or "camera.VisualStyle" in rhs or ".VisualStyleId" not in rhs:
             raise AssertionError(
-                f"Counterfeit-5 rejected: assignment to {vs_var_name!r} overwrites with literal/request: {a.strip()!r}"
+                f"Counterfeit-7 rejected: assignment to {vs_var_name!r} is not unconditionally derived from .VisualStyleId: {rhs!r}"
             )
 
-    # 8. Mismatch check linkage:
+    # 8. Mismatch check control-flow linkage:
     obs_inst_pattern = re.compile(
         rf'(?:var\s+)?([a-zA-Z0-9_]+)\s*=\s*{re.escape(ocs_match.group(0))}',
         re.DOTALL,
@@ -171,19 +168,31 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     obs_var = obs_inst_match.group(1) if obs_inst_match else "observed"
 
     valid_targets = [vs_var_name, f"{obs_var}.VisualStyle", f"observed.VisualStyle"]
-    mismatch_link_found = False
+
+    # Match if-statement whose body directly throws NATIVE_RENDER_CAMERA_STATE_MISMATCH
+    mismatch_block_pattern = re.compile(
+        r'if\s*\((.*?)\)\s*\{[^{}]*throw\s+new\s+InvalidDataException\s*\(\s*"[^"]*NATIVE_RENDER_CAMERA_STATE_MISMATCH[^"]*"',
+        re.DOTALL,
+    )
+    mismatch_match = mismatch_block_pattern.search(ensure_body)
+    assert mismatch_match is not None, (
+        "Counterfeit-4 rejected: no if-statement directly throwing NATIVE_RENDER_CAMERA_STATE_MISMATCH"
+    )
+    mismatch_cond = mismatch_match.group(1)
+
+    cond_valid = False
     for vt in valid_targets:
         escaped_vt = re.escape(vt)
         p1 = rf'string\.Equals\s*\(\s*camera\.VisualStyle\s*,\s*{escaped_vt}\b'
         p2 = rf'string\.Equals\s*\(\s*{escaped_vt}\s*,\s*camera\.VisualStyle\b'
         p3 = rf'camera\.VisualStyle\s*!=\s*{escaped_vt}\b'
         p4 = rf'{escaped_vt}\s*!=\s*camera\.VisualStyle\b'
-        if any(re.search(p, ensure_body) for p in (p1, p2, p3, p4)):
-            mismatch_link_found = True
+        if any(re.search(p, mismatch_cond) for p in (p1, p2, p3, p4)):
+            cond_valid = True
             break
 
-    assert mismatch_link_found and "NATIVE_RENDER_CAMERA_STATE_MISMATCH" in ensure_body, (
-        f"Counterfeit-6 rejected: mismatch check does not compare camera.VisualStyle against the bound observed visual style ({vs_var_name!r} or {obs_var}.VisualStyle)"
+    assert cond_valid, (
+        f"Counterfeit-8 rejected: throwing if-condition ({mismatch_cond.strip()!r}) does not compare camera.VisualStyle against the bound observed visual style ({vs_var_name!r} or {obs_var}.VisualStyle)"
     )
 
 
@@ -243,7 +252,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
         return observed;
     }
     '''
-    with pytest.raises(AssertionError, match="Counterfeit-6 rejected"):
+    with pytest.raises(AssertionError, match="Counterfeit-4 rejected"):
         _validate_paper_space_visual_style_dataflow(c4)
 
     # Counterfeit 5: .VisualStyleId assigned but overwritten with literal before constructor
@@ -252,24 +261,57 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         observedVisualStyle = "2D_WIREFRAME";
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
-        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
         return observed;
     }
     '''
-    with pytest.raises(AssertionError, match="Counterfeit-5 rejected"):
+    with pytest.raises(AssertionError, match="Counterfeit-7 rejected"):
         _validate_paper_space_visual_style_dataflow(c5)
 
-    # Counterfeit 6: correct viewport constructor value, but mismatch check compares against unrelated variable/literal
+    # Counterfeit 6: correct viewport constructor value, but mismatch check compares against unrelated literal
     c6 = '''
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
-        if (!string.Equals(camera.VisualStyle, "2D_WIREFRAME")) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        if (!string.Equals(camera.VisualStyle, "2D_WIREFRAME")) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
         return observed;
     }
     '''
-    with pytest.raises(AssertionError, match="Counterfeit-6 rejected"):
+    with pytest.raises(AssertionError, match="Counterfeit-8 rejected"):
         _validate_paper_space_visual_style_dataflow(c6)
+
+    # Counterfeit 7: constant-dominant conditional / dead .VisualStyleId branch
+    c7 = '''
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = false ? Resolve(currentView.VisualStyleId) : "2D_WIREFRAME";
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-7 rejected"):
+        _validate_paper_space_visual_style_dataflow(c7)
+
+    # Counterfeit 8: unused correct comparison + unrelated throwing predicate
+    c8 = '''
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        var unusedComparison = string.Equals(camera.VisualStyle, observed.VisualStyle);
+        if (dummyFlag) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-8 rejected"):
+        _validate_paper_space_visual_style_dataflow(c8)
 
     # Valid synthetic implementation passes
     valid = '''
