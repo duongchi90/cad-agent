@@ -69,7 +69,7 @@ def test_managed_camera_fails_closed_unless_requested_layout_is_current() -> Non
 
 def test_managed_camera_attests_observed_top_world_wireframe_state() -> None:
     source = _text(READER)
-    for system_variable in ("WORLDUCS", "VIEWDIR", "VIEWTWIST", "VSCURRENT"):
+    for system_variable in ("WORLDUCS", "VIEWDIR", "VIEWTWIST"):
         assert f'GetSystemVariable("{system_variable}")' in source
     assert "NATIVE_RENDER_CAMERA_STATE_MISMATCH" in source
     assert "ObservedViewDirection" in source
@@ -78,6 +78,12 @@ def test_managed_camera_attests_observed_top_world_wireframe_state() -> None:
     assert "cameraWindow.ObservedViewDirection" in source
     assert "cameraWindow.ObservedUcs" in source
     assert "cameraWindow.ObservedVisualStyle" in source
+
+
+def test_managed_camera_paper_space_visual_style_does_not_use_vscurrent_system_variable() -> None:
+    source = _text(READER)
+    assert 'GetSystemVariable("VSCURRENT")' not in source
+    assert "VisualStyleId" in source
 
 
 def test_managed_reader_preserves_legacy_layout_plot_path_without_camera() -> None:
