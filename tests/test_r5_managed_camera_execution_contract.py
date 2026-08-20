@@ -81,9 +81,46 @@ def test_managed_camera_attests_observed_top_world_wireframe_state() -> None:
 
 
 def test_managed_camera_paper_space_visual_style_does_not_use_vscurrent_system_variable() -> None:
+    """Causal RED for terminal 5349900479: VSCURRENT throws eInvalidInput in
+    paper-space root viewport (CVPORT=1).  Visual style must be acquired from
+    the actual active viewport/view object, not the VSCURRENT system variable."""
     source = _text(READER)
+    # Negative: VSCURRENT system-variable query must be absent.
     assert 'GetSystemVariable("VSCURRENT")' not in source
-    assert "VisualStyleId" in source
+
+    # Positive structural binding — the production code must:
+    # 1. Acquire visual style from actual viewport/view object property
+    #    (Viewport.VisualStyleId / AbstractViewTableRecord.VisualStyleId),
+    #    not from a string system-variable or a request/literal substitute.
+    assert ".VisualStyleId" in source  # object property access, not bare token
+
+    # 2. The observed visual style must flow into ObservedCameraState
+    #    construction from the acquired viewport/view value — not from a
+    #    hard-coded literal like "2D_WIREFRAME" or "2D Wireframe".
+    #    Find the ObservedCameraState constructor call and verify the
+    #    VisualStyle argument references a variable, not a string literal.
+    import re
+    ocs_pattern = re.compile(
+        r'new\s+ObservedCameraState\s*\('
+        r'[^)]*'           # ViewDirection arg
+        r','
+        r'[^)]*'           # Ucs arg
+        r','
+        r'\s*([^)]+?)\s*'  # VisualStyle arg (capture group 1)
+        r'\)',
+        re.DOTALL,
+    )
+    match = ocs_pattern.search(source)
+    assert match is not None, (
+        "ObservedCameraState constructor call not found in reader source"
+    )
+    visual_style_arg = match.group(1).strip()
+    # Must NOT be a string literal (hard-coded value).
+    assert not visual_style_arg.startswith('"'), (
+        f"ObservedCameraState.VisualStyle is a hard-coded literal: "
+        f"{visual_style_arg!r}; it must reference the acquired viewport "
+        f"visual style"
+    )
 
 
 def test_managed_reader_preserves_legacy_layout_plot_path_without_camera() -> None:
