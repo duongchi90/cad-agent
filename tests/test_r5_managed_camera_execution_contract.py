@@ -80,47 +80,152 @@ def test_managed_camera_attests_observed_top_world_wireframe_state() -> None:
     assert "cameraWindow.ObservedVisualStyle" in source
 
 
+def _validate_paper_space_visual_style_dataflow(source: str) -> None:
+    """Validate authoritative dataflow from viewport/view VisualStyleId to observed camera state."""
+    import re
+
+    # Negative: VSCURRENT system-variable query must be absent
+    assert 'GetSystemVariable("VSCURRENT")' not in source, (
+        "VSCURRENT system variable query must not be used in paper space"
+    )
+
+    # Extract EnsureObservedCanonicalCameraState method body
+    ensure_match = re.search(
+        r'(private\s+static\s+ObservedCameraState\s+EnsureObservedCanonicalCameraState'
+        r'\s*\([^)]*\)\s*\{)',
+        source,
+        re.DOTALL,
+    )
+    assert ensure_match is not None, (
+        "EnsureObservedCanonicalCameraState method not found"
+    )
+    start_idx = ensure_match.end()
+    depth = 1
+    pos = start_idx
+    while depth > 0 and pos < len(source):
+        if source[pos] == '{':
+            depth += 1
+        elif source[pos] == '}':
+            depth -= 1
+        pos += 1
+    ensure_body = source[ensure_match.start():pos]
+
+    # Counterfeit 1: dead/unrelated .VisualStyleId
+    assert ".VisualStyleId" in ensure_body, (
+        "Counterfeit-1 rejected: .VisualStyleId not found in EnsureObservedCanonicalCameraState"
+    )
+
+    # Counterfeit 3: constant/literal-derived variable
+    ocs_pattern = re.compile(
+        r'new\s+ObservedCameraState\s*\('
+        r'([^,]+),'   # arg 1 (ViewDirection)
+        r'([^,]+),'   # arg 2 (Ucs)
+        r'\s*([^)]+?)' # arg 3 (VisualStyle)
+        r'\s*\)',
+        re.DOTALL,
+    )
+    ocs_match = ocs_pattern.search(ensure_body)
+    assert ocs_match is not None, (
+        "ObservedCameraState constructor call not found in EnsureObservedCanonicalCameraState"
+    )
+    vs_arg = ocs_match.group(3).strip()
+    assert not vs_arg.startswith('"'), (
+        f"Counterfeit-3 rejected: ObservedCameraState.VisualStyle is a hard-coded literal {vs_arg!r}"
+    )
+
+    # Counterfeit 2: request-derived (camera.VisualStyle)
+    assert "camera.VisualStyle" not in vs_arg, (
+        f"Counterfeit-2 rejected: ObservedCameraState.VisualStyle references camera.VisualStyle ({vs_arg!r})"
+    )
+
+    # Counterfeit 4: unconditional/pass-through (missing mismatch check)
+    assert "camera.VisualStyle" in ensure_body and "NATIVE_RENDER_CAMERA_STATE_MISMATCH" in ensure_body, (
+        "Counterfeit-4 rejected: EnsureObservedCanonicalCameraState must compare observed against camera.VisualStyle"
+    )
+
+    # Authoritative Dataflow: vs_arg must be derived from an expression containing .VisualStyleId
+    vs_var_name = vs_arg.split(".")[-1].split("(")[0].strip()
+    assignment_pattern = re.compile(
+        rf'(?:var\s+)?{re.escape(vs_var_name)}\s*=\s*([^;]+);',
+        re.DOTALL,
+    )
+    assignments = assignment_pattern.findall(ensure_body)
+    assert any(".VisualStyleId" in rhs for rhs in assignments), (
+        f"Dataflow rejected: variable {vs_var_name!r} is not derived from an expression containing .VisualStyleId"
+    )
+
+
 def test_managed_camera_paper_space_visual_style_does_not_use_vscurrent_system_variable() -> None:
     """Causal RED for terminal 5349900479: VSCURRENT throws eInvalidInput in
     paper-space root viewport (CVPORT=1).  Visual style must be acquired from
     the actual active viewport/view object, not the VSCURRENT system variable."""
     source = _text(READER)
-    # Negative: VSCURRENT system-variable query must be absent.
-    assert 'GetSystemVariable("VSCURRENT")' not in source
+    _validate_paper_space_visual_style_dataflow(source)
 
-    # Positive structural binding — the production code must:
-    # 1. Acquire visual style from actual viewport/view object property
-    #    (Viewport.VisualStyleId / AbstractViewTableRecord.VisualStyleId),
-    #    not from a string system-variable or a request/literal substitute.
-    assert ".VisualStyleId" in source  # object property access, not bare token
 
-    # 2. The observed visual style must flow into ObservedCameraState
-    #    construction from the acquired viewport/view value — not from a
-    #    hard-coded literal like "2D_WIREFRAME" or "2D Wireframe".
-    #    Find the ObservedCameraState constructor call and verify the
-    #    VisualStyle argument references a variable, not a string literal.
-    import re
-    ocs_pattern = re.compile(
-        r'new\s+ObservedCameraState\s*\('
-        r'[^)]*'           # ViewDirection arg
-        r','
-        r'[^)]*'           # Ucs arg
-        r','
-        r'\s*([^)]+?)\s*'  # VisualStyle arg (capture group 1)
-        r'\)',
-        re.DOTALL,
-    )
-    match = ocs_pattern.search(source)
-    assert match is not None, (
-        "ObservedCameraState constructor call not found in reader source"
-    )
-    visual_style_arg = match.group(1).strip()
-    # Must NOT be a string literal (hard-coded value).
-    assert not visual_style_arg.startswith('"'), (
-        f"ObservedCameraState.VisualStyle is a hard-coded literal: "
-        f"{visual_style_arg!r}; it must reference the acquired viewport "
-        f"visual style"
-    )
+def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
+    """Self-test demonstrating that the discriminator rejects all four counterfeit families."""
+    import pytest
+
+    # Counterfeit 1: dead/unrelated .VisualStyleId in another method
+    c1 = '''
+    private void OtherMethod() { var x = viewport.VisualStyleId; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-1 rejected"):
+        _validate_paper_space_visual_style_dataflow(c1)
+
+    # Counterfeit 2: request-derived camera.VisualStyle passed as observed
+    c2 = '''
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var dummy = currentView.VisualStyleId;
+        var observed = new ObservedCameraState("TOP", "WORLD", camera.VisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-2 rejected"):
+        _validate_paper_space_visual_style_dataflow(c2)
+
+    # Counterfeit 3: constant/literal-derived variable
+    c3 = '''
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var dummy = currentView.VisualStyleId;
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-3 rejected"):
+        _validate_paper_space_visual_style_dataflow(c3)
+
+    # Counterfeit 4: unconditional/pass-through (no mismatch check against camera.VisualStyle)
+    c4 = '''
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-4 rejected"):
+        _validate_paper_space_visual_style_dataflow(c4)
+
+    # Valid synthetic implementation passes
+    valid = '''
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    _validate_paper_space_visual_style_dataflow(valid)
 
 
 def test_managed_reader_preserves_legacy_layout_plot_path_without_camera() -> None:
