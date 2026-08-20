@@ -143,7 +143,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         f"Counterfeit-19 rejected: raw visual style assignment uses ToString() on ObjectId instead of resolving visual style name"
     )
 
-    # 5. Helper provenance & SDK-real read-only acquisition resolving exact overload by arity:
+    # 5. Helper provenance & SDK-real read-only acquisition resolving exact overload with ObjectId parameter:
     helper_call_match = re.search(r'([A-Za-z0-9_]+)\s*\(([^)]*\bcurrentView\.VisualStyleId\b[^)]*)\)', rhs)
     assert helper_call_match is not None, (
         f"Counterfeit-25 rejected: unsupported direct RHS expression {rhs!r}; must resolve via approved DBVisualStyle helper"
@@ -169,16 +169,18 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     matched_helper_def = None
     for h_match in helper_defs:
         p_str = h_match.group(1).strip()
-        p_list = [p.strip().split()[-1].strip() for p in p_str.split(',') if p.strip()]
-        if len(p_list) == call_arity:
-            matched_helper_def = (h_match, p_list)
-            break
+        params = [p.strip() for p in p_str.split(',') if p.strip()]
+        if len(params) == call_arity:
+            target_p = params[arg_idx]
+            if re.match(r'^(?:(?:Autodesk\.AutoCAD\.DatabaseServices\.)?ObjectId)\s+([A-Za-z0-9_]+)$', target_p):
+                p_var = target_p.split()[-1]
+                matched_helper_def = (h_match, p_var)
+                break
 
     assert matched_helper_def is not None, (
-        f"Counterfeit-16 rejected: helper method {helper_name!r} with arity {call_arity} is missing from source"
+        f"Counterfeit-16 rejected: helper method {helper_name!r} with arity {call_arity} and ObjectId parameter at index {arg_idx} is missing from source"
     )
-    helper_def_match, param_list = matched_helper_def
-    target_param = param_list[arg_idx]
+    helper_def_match, target_param = matched_helper_def
 
     h_start = helper_def_match.end()
     h_depth = 1
@@ -191,19 +193,23 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         h_pos += 1
     helper_body = source[h_start:h_pos-1]
 
-    assert "DBVisualStyle" in helper_body, (
+    # Strip comments to prevent comment-only tokens
+    helper_clean = re.sub(r'//.*', '', helper_body)
+    helper_clean = re.sub(r'/\*.*?\*/', '', helper_clean, flags=re.DOTALL)
+
+    assert re.search(r'\bDBVisualStyle\b', helper_clean) is not None, (
         f"Counterfeit-21 rejected: helper {helper_name!r} must resolve visual style via SDK-real DBVisualStyle"
     )
-    assert "ForWrite" not in helper_body, (
+    assert "ForWrite" not in helper_clean, (
         f"Counterfeit-24 rejected: DBVisualStyle opened ForWrite; read-only observation requires OpenMode.ForRead"
     )
-    assert re.search(r'\b(?:OpenMode\.)?ForRead\b', helper_body) is not None, (
+    assert re.search(r'\b(?:OpenMode\.)?ForRead\b', helper_clean) is not None, (
         f"Helper {helper_name!r} must open DBVisualStyle with OpenMode.ForRead"
     )
-    assert '?' not in helper_body, (
+    assert '?' not in helper_clean, (
         f"Counterfeit-17 rejected: helper {helper_name!r} contains ternary/null-coalescing conditional logic"
     )
-    return_match = re.search(r'return\s+([^;]+);', helper_body)
+    return_match = re.search(r'return\s+([^;]+);', helper_clean)
     assert return_match is not None, (
         f"Helper method {helper_name!r} has no return statement"
     )
@@ -218,29 +224,27 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     ret_var = return_expr.split('.')[0].strip()
     ret_var_assignments = re.findall(
         rf'(?:var\s+|[A-Za-z0-9_<>?]+\s+)?(?<![\.\w])\b{re.escape(ret_var)}\b\s*=\s*([^;]+);',
-        helper_body,
+        helper_clean,
     )
     assert len(ret_var_assignments) == 1, (
         f"Counterfeit-26 rejected: helper {helper_name!r} overwrites or has multiple assignments to return record {ret_var!r}"
     )
     r_rhs = ret_var_assignments[0].strip()
-    assert re.search(rf'GetObject\s*\(\s*{re.escape(target_param)}\b', r_rhs) and "DBVisualStyle" in r_rhs and re.search(r'\b(?:OpenMode\.)?ForRead\b', r_rhs), (
-        f"Counterfeit-17 rejected: bound parameter {target_param!r} (at index {arg_idx}) is not opened as DBVisualStyle ForRead reaching return {return_expr!r} in helper {helper_name!r}"
+
+    assert re.search(rf'GetObject\s*\(\s*{re.escape(target_param)}\b', r_rhs) is not None, (
+        f"Counterfeit-17 rejected: bound parameter {target_param!r} (at index {arg_idx}) is not opened in helper {helper_name!r}"
     )
 
-    # 6. Raw name attestation fail-closed check:
-    raw_attestation_block = re.search(
-        r'if\s*\(\s*!\s*string\.Equals\s*\(\s*'
-        + re.escape(raw_var)
-        + r'\s*,\s*"2D Wireframe"\s*,\s*StringComparison\.OrdinalIgnoreCase\s*\)\s*\)\s*(?:\{[^{}]*)?throw\s+new\s+InvalidDataException\s*\(\s*"[^"]*NATIVE_RENDER_CAMERA_STATE_MISMATCH[^"]*"',
-        ensure_body,
-        re.DOTALL,
+    # Exact type-bearing DBVisualStyle acquisition:
+    exact_dbvs_cast = (
+        re.search(rf'\(\s*(?:Autodesk\.AutoCAD\.DatabaseServices\.)?DBVisualStyle\s*\)\s*[A-Za-z0-9_.]*GetObject\s*\(\s*{re.escape(target_param)}\s*,\s*(?:OpenMode\.)?ForRead\b', r_rhs)
+        or re.search(rf'GetObject\s*\(\s*{re.escape(target_param)}\s*,\s*(?:OpenMode\.)?ForRead\b[^;]*\bas\s+(?:Autodesk\.AutoCAD\.DatabaseServices\.)?DBVisualStyle\b', r_rhs)
     )
-    assert raw_attestation_block is not None, (
-        f"Counterfeit-28 rejected: raw visual style {raw_var!r} must be attested in a throwing if-block via !string.Equals({raw_var}, \"2D Wireframe\", StringComparison.OrdinalIgnoreCase)"
+    assert exact_dbvs_cast is not None, (
+        f"Counterfeit-21 rejected: helper {helper_name!r} must resolve visual style via SDK-real DBVisualStyle cast from bound parameter {target_param!r} opened ForRead"
     )
 
-    # 7. ObservedCameraState constructor call & canonical token verification:
+    # 6. ObservedCameraState constructor call & canonical token verification:
     ocs_pattern = re.compile(
         r'new\s+ObservedCameraState\s*\('
         r'\s*([^,]+)\s*,'   # arg 1 (ViewDirection)
@@ -255,17 +259,21 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     )
     vs_arg = ocs_match.group(3).strip()
 
-    assert vs_arg != raw_var and f"{raw_var}.Name" not in vs_arg, (
-        f"Counterfeit-23 rejected: raw DBVisualStyle.Name ({vs_arg!r}) passed directly into ObservedCameraState / camera comparison without canonicalizing to 2D_WIREFRAME"
+    assert vs_arg == '"2D_WIREFRAME"', (
+        f"Counterfeit-3 rejected: ObservedCameraState.VisualStyle must be exact literal \"2D_WIREFRAME\", found {vs_arg!r}"
     )
-    assert vs_arg != "camera" and "camera.VisualStyle" not in vs_arg, (
-        f"Counterfeit-2 rejected: ObservedCameraState.VisualStyle references camera.VisualStyle ({vs_arg!r})"
+
+    # 7. Raw name attestation fail-closed check preceding constructor call:
+    code_before_ocs = ensure_body[:ocs_match.start()]
+    raw_attestation_block = re.search(
+        r'if\s*\(\s*!\s*string\.Equals\s*\(\s*'
+        + re.escape(raw_var)
+        + r'\s*,\s*"2D Wireframe"\s*,\s*StringComparison\.OrdinalIgnoreCase\s*\)\s*\)\s*(?:\{[^{}]*)?throw\s+new\s+InvalidDataException\s*\(\s*"[^"]*NATIVE_RENDER_CAMERA_STATE_MISMATCH[^"]*"',
+        code_before_ocs,
+        re.DOTALL,
     )
-    assert not (vs_arg.startswith('"') and vs_arg != '"2D_WIREFRAME"'), (
-        f"Counterfeit-3 rejected: ObservedCameraState.VisualStyle is a non-canonical hard-coded literal {vs_arg!r}"
-    )
-    assert vs_arg == '"2D_WIREFRAME"' or vs_arg == "observedVisualStyle" or re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', vs_arg), (
-        f"Counterfeit-3 rejected: ObservedCameraState.VisualStyle must be '2D_WIREFRAME' or a canonical identifier, found {vs_arg!r}"
+    assert raw_attestation_block is not None, (
+        f"Counterfeit-28 rejected: raw visual style {raw_var!r} must be attested in a direct throwing if-guard before ObservedCameraState construction"
     )
 
     # 8. Closed Mismatch Predicate against exact constructed observed instance field:
@@ -387,7 +395,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
         return observed;
     }
     '''
-    with pytest.raises(AssertionError, match="Counterfeit-2 rejected"):
+    with pytest.raises(AssertionError, match="Counterfeit-3 rejected"):
         _validate_paper_space_visual_style_dataflow(c2)
 
     # Counterfeit 3: non-canonical literal in constructor
@@ -724,7 +732,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
         return observed;
     }
     '''
-    with pytest.raises(AssertionError, match="Counterfeit-23 rejected"):
+    with pytest.raises(AssertionError, match="Counterfeit-3 rejected"):
         _validate_paper_space_visual_style_dataflow(c23)
 
     # Counterfeit 24 (Probe b): DBVisualStyle opened OpenMode.ForWrite
@@ -832,7 +840,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
     with pytest.raises(AssertionError, match="Counterfeit-8 rejected"):
         _validate_paper_space_visual_style_dataflow(c29)
 
-    # Counterfeit 30: same-name overload decoy (safe 1-arg overload exists, but call site uses 2-arg unsafe overload)
+    # Counterfeit 30: same-name different-arity overload decoy (safe 1-arg overload exists, but call site uses 2-arg unsafe overload)
     c30 = '''
     private static string ResolveVisualStyle(ObjectId vsId) {
         var record = (DBVisualStyle)transaction.GetObject(vsId, OpenMode.ForRead);
@@ -857,6 +865,81 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
     '''
     with pytest.raises(AssertionError, match="Counterfeit-21 rejected"):
         _validate_paper_space_visual_style_dataflow(c30)
+
+    # Counterfeit 31: local variable alias passed into ObservedCameraState constructor
+    c31 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (DBVisualStyle)t.GetObject(vsId, OpenMode.ForRead); return record.Name; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        var canonicalVs = "2D_WIREFRAME";
+        var observed = new ObservedCameraState("TOP", "WORLD", canonicalVs);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-3 rejected"):
+        _validate_paper_space_visual_style_dataflow(c31)
+
+    # Counterfeit 32: comment-only DBVisualStyle token / DBVisualStyleFake
+    c32 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) {
+        // DBVisualStyle
+        var record = (DBVisualStyleFake)transaction.GetObject(vsId, OpenMode.ForRead);
+        return record.Name;
+    }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-21 rejected"):
+        _validate_paper_space_visual_style_dataflow(c32)
+
+    # Counterfeit 33: post-hoc raw visual style attestation guard placed after constructor call
+    c33 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (DBVisualStyle)t.GetObject(vsId, OpenMode.ForRead); return record.Name; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-28 rejected"):
+        _validate_paper_space_visual_style_dataflow(c33)
+
+    # Counterfeit 34: same-name same-arity overload decoy (safe non-ObjectId overload vs unsafe ObjectId overload)
+    c34 = '''
+    private static string ResolveVisualStyle(int dummy) {
+        var record = (DBVisualStyle)transaction.GetObject(dummyId, OpenMode.ForRead);
+        return record.Name;
+    }
+    private static string ResolveVisualStyle(ObjectId vsId) {
+        return "2D_WIREFRAME";
+    }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-21 rejected"):
+        _validate_paper_space_visual_style_dataflow(c34)
 
     # Valid synthetic with pre-existing earlier WORLD/TOP mismatch checks and SDK-real DBVisualStyle helper passes
     valid_with_earlier_checks = '''
