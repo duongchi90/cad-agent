@@ -143,7 +143,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         f"Counterfeit-19 rejected: raw visual style assignment uses ToString() on ObjectId instead of resolving visual style name"
     )
 
-    # 5. Helper provenance & SDK-real read-only acquisition:
+    # 5. Helper provenance & SDK-real read-only acquisition resolving exact overload by arity:
     helper_call_match = re.search(r'([A-Za-z0-9_]+)\s*\(([^)]*\bcurrentView\.VisualStyleId\b[^)]*)\)', rhs)
     assert helper_call_match is not None, (
         f"Counterfeit-25 rejected: unsupported direct RHS expression {rhs!r}; must resolve via approved DBVisualStyle helper"
@@ -151,6 +151,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     helper_name = helper_call_match.group(1)
     args_str = helper_call_match.group(2)
     call_args = [a.strip() for a in args_str.split(',')]
+    call_arity = len(call_args)
     arg_idx = None
     for i, a in enumerate(call_args):
         if re.search(r'\bcurrentView\.VisualStyleId\b', a):
@@ -158,17 +159,25 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
             break
     assert arg_idx is not None
 
-    helper_def_match = re.search(
-        rf'(?:private|public|internal|protected)\s+(?:static\s+)?[A-Za-z0-9_<>?]+\s+{re.escape(helper_name)}\s*\(([^)]+)\)\s*\{{',
+    helper_defs = list(re.finditer(
+        r'(?:private|public|internal|protected)\s+(?:static\s+)?[A-Za-z0-9_<>?]+\s+'
+        + re.escape(helper_name)
+        + r'\s*\(([^)]*)\)\s*\{',
         source,
         re.DOTALL,
+    ))
+    matched_helper_def = None
+    for h_match in helper_defs:
+        p_str = h_match.group(1).strip()
+        p_list = [p.strip().split()[-1].strip() for p in p_str.split(',') if p.strip()]
+        if len(p_list) == call_arity:
+            matched_helper_def = (h_match, p_list)
+            break
+
+    assert matched_helper_def is not None, (
+        f"Counterfeit-16 rejected: helper method {helper_name!r} with arity {call_arity} is missing from source"
     )
-    assert helper_def_match is not None, (
-        f"Counterfeit-16 rejected: helper method {helper_name!r} definition is missing from source"
-    )
-    params_str = helper_def_match.group(1)
-    param_list = [p.strip().split()[-1].strip() for p in params_str.split(',') if p.strip()]
-    assert arg_idx < len(param_list), f"Helper {helper_name!r} has fewer parameters than call arguments"
+    helper_def_match, param_list = matched_helper_def
     target_param = param_list[arg_idx]
 
     h_start = helper_def_match.end()
@@ -219,13 +228,16 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         f"Counterfeit-17 rejected: bound parameter {target_param!r} (at index {arg_idx}) is not opened as DBVisualStyle ForRead reaching return {return_expr!r} in helper {helper_name!r}"
     )
 
-    # 6. Raw name attestation check:
-    raw_attestation = re.search(
-        rf'!\s*string\.Equals\s*\(\s*{re.escape(raw_var)}\s*,\s*"2D Wireframe"\s*,\s*StringComparison\.OrdinalIgnoreCase\s*\)',
+    # 6. Raw name attestation fail-closed check:
+    raw_attestation_block = re.search(
+        r'if\s*\(\s*!\s*string\.Equals\s*\(\s*'
+        + re.escape(raw_var)
+        + r'\s*,\s*"2D Wireframe"\s*,\s*StringComparison\.OrdinalIgnoreCase\s*\)\s*\)\s*(?:\{[^{}]*)?throw\s+new\s+InvalidDataException\s*\(\s*"[^"]*NATIVE_RENDER_CAMERA_STATE_MISMATCH[^"]*"',
         ensure_body,
+        re.DOTALL,
     )
-    assert raw_attestation is not None, (
-        f"Raw visual style {raw_var!r} must be attested to be '2D Wireframe' (case-insensitive) before canonical state is constructed"
+    assert raw_attestation_block is not None, (
+        f"Counterfeit-28 rejected: raw visual style {raw_var!r} must be attested in a throwing if-block via !string.Equals({raw_var}, \"2D Wireframe\", StringComparison.OrdinalIgnoreCase)"
     )
 
     # 7. ObservedCameraState constructor call & canonical token verification:
@@ -256,13 +268,16 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         f"Counterfeit-3 rejected: ObservedCameraState.VisualStyle must be '2D_WIREFRAME' or a canonical identifier, found {vs_arg!r}"
     )
 
-    # 8. Closed Mismatch Predicate:
+    # 8. Closed Mismatch Predicate against exact constructed observed instance field:
     obs_inst_pattern = re.compile(
         rf'(?:var\s+|ObservedCameraState\s+)?(?<![\.\w])\b([A-Za-z0-9_]+)\b\s*=\s*{re.escape(ocs_match.group(0))}',
         re.DOTALL,
     )
     obs_inst_match = obs_inst_pattern.search(ensure_body)
-    obs_var = obs_inst_match.group(1).strip() if obs_inst_match else None
+    assert obs_inst_match is not None, (
+        "Constructed ObservedCameraState must be assigned to an observed instance variable"
+    )
+    obs_var = obs_inst_match.group(1).strip()
 
     mismatch_block_pattern = re.compile(
         r'if\s*\((.*?)\)\s*\{[^{}]*throw\s+new\s+InvalidDataException\s*\(\s*"[^"]*NATIVE_RENDER_CAMERA_STATE_MISMATCH[^"]*"',
@@ -273,7 +288,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         "Counterfeit-4 rejected: no if-statement directly throwing NATIVE_RENDER_CAMERA_STATE_MISMATCH"
     )
 
-    def _is_approved_camera_inequality_clause(cl: str, raw_name_var: str, obs_var_name: str | None, vs_canonical_arg: str) -> tuple[bool, bool]:
+    def _is_approved_camera_inequality_clause(cl: str, obs_var_name: str) -> tuple[bool, bool]:
         while cl.startswith('(') and cl.endswith(')'):
             inner = cl[1:-1].strip()
             d = 0
@@ -298,39 +313,20 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         if cl in ("true", "!false", "1 == 1", "0 == 0", "null == null") or re.match(r'^\s*([0-9]+)\s*==\s*\1\s*$', cl):
             return (False, False)
 
-        # Reject if camera.VisualStyle is compared directly to raw_name_var
-        if re.search(rf'\b{re.escape(raw_name_var)}\b', cl) and "camera.VisualStyle" in cl:
-            return (False, False)
+        # EXACT VisualStyle comparison: must compare camera.VisualStyle against exact obs_var_name.VisualStyle
+        p_vs1 = rf'^!\s*string\.Equals\s*\(\s*camera\.VisualStyle\s*,\s*{re.escape(obs_var_name)}\.VisualStyle(?:\s*,\s*[^)]+)?\s*\)$'
+        p_vs2 = rf'^!\s*string\.Equals\s*\(\s*{re.escape(obs_var_name)}\.VisualStyle\s*,\s*camera\.VisualStyle(?:\s*,\s*[^)]+)?\s*\)$'
+        p_vs3 = rf'^camera\.VisualStyle\s*!=\s*{re.escape(obs_var_name)}\.VisualStyle$'
+        p_vs4 = rf'^{re.escape(obs_var_name)}\.VisualStyle\s*!=\s*camera\.VisualStyle$'
+        if any(re.search(p, cl) for p in (p_vs1, p_vs2, p_vs3, p_vs4)):
+            return (True, True)
 
-        # Approved VisualStyle comparisons:
-        approved_vs_targets = []
-        if obs_var_name:
-            approved_vs_targets.append(f"{obs_var_name}.VisualStyle")
-        if vs_canonical_arg != raw_name_var:
-            approved_vs_targets.append(vs_canonical_arg)
-        approved_vs_targets.append('"2D_WIREFRAME"')
-
-        for vt in approved_vs_targets:
-            escaped_vt = re.escape(vt)
-            p1 = rf'^!\s*string\.Equals\s*\(\s*camera\.VisualStyle\s*,\s*{escaped_vt}(?:\s*,\s*[^)]+)?\s*\)$'
-            p2 = rf'^!\s*string\.Equals\s*\(\s*{escaped_vt}\s*,\s*camera\.VisualStyle(?:\s*,\s*[^)]+)?\s*\)$'
-            p3 = rf'^camera\.VisualStyle\s*!=\s*{escaped_vt}$'
-            p4 = rf'^{escaped_vt}\s*!=\s*camera\.VisualStyle$'
-            if any(re.search(p, cl) for p in (p1, p2, p3, p4)):
-                return (True, True)
-
-        # Approved other camera paired fields (exact pairs only):
-        if obs_var_name:
-            p_vd1 = rf'^!\s*string\.Equals\s*\(\s*camera\.ViewDirection\s*,\s*{re.escape(obs_var_name)}\.ViewDirection(?:\s*,\s*[^)]+)?\s*\)$'
-            p_vd2 = rf'^camera\.ViewDirection\s*!=\s*{re.escape(obs_var_name)}\.ViewDirection$'
-            p_ucs1 = rf'^!\s*string\.Equals\s*\(\s*camera\.Ucs\s*,\s*{re.escape(obs_var_name)}\.Ucs(?:\s*,\s*[^)]+)?\s*\)$'
-            p_ucs2 = rf'^camera\.Ucs\s*!=\s*{re.escape(obs_var_name)}\.Ucs$'
-            if any(re.search(p, cl) for p in (p_vd1, p_vd2, p_ucs1, p_ucs2)):
-                return (True, False)
-
-        # Standalone raw attestation clause:
-        p_raw = rf'^!\s*string\.Equals\s*\(\s*{re.escape(raw_name_var)}\s*,\s*"2D Wireframe"\s*,\s*StringComparison\.OrdinalIgnoreCase\s*\)$'
-        if re.search(p_raw, cl):
+        # EXACT ViewDirection and Ucs paired comparisons:
+        p_vd1 = rf'^!\s*string\.Equals\s*\(\s*camera\.ViewDirection\s*,\s*{re.escape(obs_var_name)}\.ViewDirection(?:\s*,\s*[^)]+)?\s*\)$'
+        p_vd2 = rf'^camera\.ViewDirection\s*!=\s*{re.escape(obs_var_name)}\.ViewDirection$'
+        p_ucs1 = rf'^!\s*string\.Equals\s*\(\s*camera\.Ucs\s*,\s*{re.escape(obs_var_name)}\.Ucs(?:\s*,\s*[^)]+)?\s*\)$'
+        p_ucs2 = rf'^camera\.Ucs\s*!=\s*{re.escape(obs_var_name)}\.Ucs$'
+        if any(re.search(p, cl) for p in (p_vd1, p_vd2, p_ucs1, p_ucs2)):
             return (True, False)
 
         return (False, False)
@@ -341,7 +337,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         all_clauses_approved = True
         has_vs_pair = False
         for clause in clauses:
-            approved, is_vs = _is_approved_camera_inequality_clause(clause.strip(), raw_var, obs_var, vs_arg)
+            approved, is_vs = _is_approved_camera_inequality_clause(clause.strip(), obs_var)
             if not approved:
                 all_clauses_approved = False
                 break
@@ -352,7 +348,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
             break
 
     assert cond_valid, (
-        f"Counterfeit-8 rejected: no throwing if-condition has closed, approved inequality comparison clauses with VisualStyle pair"
+        f"Counterfeit-8 rejected: no throwing if-condition has closed, approved inequality comparison clauses against {obs_var}.VisualStyle"
     )
 
 
@@ -797,6 +793,70 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
     '''
     with pytest.raises(AssertionError, match="Counterfeit-8 rejected"):
         _validate_paper_space_visual_style_dataflow(c27)
+
+    # Counterfeit 28: dead raw visual style attestation (no throwing if-branch for !string.Equals(raw, "2D Wireframe", ...))
+    c28 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (DBVisualStyle)t.GetObject(vsId, OpenMode.ForRead); return record.Name; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var is2D = string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase);
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.ViewDirection, observed.ViewDirection, StringComparison.Ordinal)
+            || !string.Equals(camera.Ucs, observed.Ucs, StringComparison.Ordinal)
+            || !string.Equals(camera.VisualStyle, observed.VisualStyle, StringComparison.Ordinal)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH: Visual style mismatch");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-28 rejected"):
+        _validate_paper_space_visual_style_dataflow(c28)
+
+    # Counterfeit 29: literal canonical mismatch shortcut (!string.Equals(camera.VisualStyle, "2D_WIREFRAME"))
+    c29 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (DBVisualStyle)t.GetObject(vsId, OpenMode.ForRead); return record.Name; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active visual style is not 2D Wireframe.");
+        }
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.ViewDirection, observed.ViewDirection, StringComparison.Ordinal)
+            || !string.Equals(camera.Ucs, observed.Ucs, StringComparison.Ordinal)
+            || !string.Equals(camera.VisualStyle, "2D_WIREFRAME", StringComparison.Ordinal)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH: Visual style mismatch");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-8 rejected"):
+        _validate_paper_space_visual_style_dataflow(c29)
+
+    # Counterfeit 30: same-name overload decoy (safe 1-arg overload exists, but call site uses 2-arg unsafe overload)
+    c30 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) {
+        var record = (DBVisualStyle)transaction.GetObject(vsId, OpenMode.ForRead);
+        return record.Name;
+    }
+    private static string ResolveVisualStyle(ObjectId vsId, ObjectId decoy) {
+        return "2D_WIREFRAME";
+    }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId, decoyId);
+        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active visual style is not 2D Wireframe.");
+        }
+        var observed = new ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME");
+        if (!string.Equals(camera.ViewDirection, observed.ViewDirection, StringComparison.Ordinal)
+            || !string.Equals(camera.Ucs, observed.Ucs, StringComparison.Ordinal)
+            || !string.Equals(camera.VisualStyle, observed.VisualStyle, StringComparison.Ordinal)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH: Visual style mismatch");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-21 rejected"):
+        _validate_paper_space_visual_style_dataflow(c30)
 
     # Valid synthetic with pre-existing earlier WORLD/TOP mismatch checks and SDK-real DBVisualStyle helper passes
     valid_with_earlier_checks = '''
