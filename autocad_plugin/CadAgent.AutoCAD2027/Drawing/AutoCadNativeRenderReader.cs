@@ -349,10 +349,8 @@ public static class AutoCadNativeRenderReader
                 "NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active view has non-zero twist.");
         }
 
-        var observedVisualStyle = Convert.ToString(
-            AcadApplication.GetSystemVariable("VSCURRENT"),
-            CultureInfo.InvariantCulture) ?? string.Empty;
-        if (!string.Equals(observedVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase))
+        var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
                 "NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active visual style is not 2D Wireframe.");
@@ -368,6 +366,13 @@ public static class AutoCadNativeRenderReader
         }
 
         return observed;
+    }
+
+    private static string ResolveVisualStyle(ObjectId vsId)
+    {
+        using var transaction = vsId.Database.TransactionManager.StartOpenCloseTransaction();
+        var record = (DBVisualStyle)transaction.GetObject(vsId, OpenMode.ForRead);
+        return record.Name;
     }
 
     private static bool IsTopDirection(double x, double y, double z) =>
