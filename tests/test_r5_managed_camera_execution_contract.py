@@ -81,7 +81,7 @@ def test_managed_camera_attests_observed_top_world_wireframe_state() -> None:
 
 
 def _validate_paper_space_visual_style_dataflow(source: str) -> None:
-    """Validate authoritative dataflow from viewport/view VisualStyleId to observed camera state."""
+    """Validate authoritative dataflow from currentView.VisualStyleId to observed camera state."""
     import re
 
     # 1. Negative: VSCURRENT system-variable query must be absent
@@ -110,9 +110,9 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         pos += 1
     ensure_body = source[ensure_match.start():pos]
 
-    # 3. Counterfeit 1: dead/unrelated .VisualStyleId
-    assert ".VisualStyleId" in ensure_body, (
-        "Counterfeit-1 rejected: .VisualStyleId not found in EnsureObservedCanonicalCameraState"
+    # 3. Exact actual-view provenance: EnsureObservedCanonicalCameraState must acquire from currentView.VisualStyleId
+    assert "currentView.VisualStyleId" in ensure_body, (
+        "Counterfeit-14 rejected: acquisition must be rooted in exact parameter currentView.VisualStyleId"
     )
 
     # 4. Find the ObservedCameraState constructor call
@@ -130,31 +130,32 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     )
     vs_arg = ocs_match.group(3).strip()
 
-    # 5. Counterfeit 3: constant/literal in constructor
+    # 5. Check argument format & reject literals or request-derived substitutes
+    assert vs_arg != "camera" and "camera.VisualStyle" not in vs_arg, (
+        f"Counterfeit-2 rejected: ObservedCameraState.VisualStyle references camera.VisualStyle ({vs_arg!r})"
+    )
     assert not vs_arg.startswith('"'), (
         f"Counterfeit-3 rejected: ObservedCameraState.VisualStyle is a hard-coded literal {vs_arg!r}"
     )
-
-    # 6. Counterfeit 2: request-derived in constructor argument
-    assert "camera.VisualStyle" not in vs_arg, (
-        f"Counterfeit-2 rejected: ObservedCameraState.VisualStyle references camera.VisualStyle ({vs_arg!r})"
+    assert re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', vs_arg), (
+        f"Counterfeit-3 rejected: ObservedCameraState.VisualStyle must be an identifier, found {vs_arg!r}"
     )
 
-    # 7. Authoritative reaching-definition analysis:
+    # 5. Exact reaching binding: exactly one assignment to vs_arg before constructor
     code_before_ocs = ensure_body[:ocs_match.start()]
-    vs_var_name = vs_arg.split(".")[-1].split("(")[0].strip()
+    vs_var_name = vs_arg
 
     assignment_pattern = re.compile(
-        rf'(?:var\s+)?{re.escape(vs_var_name)}\s*=\s*([^;]+);',
+        rf'(?:var\s+|string\s+)?\b{re.escape(vs_var_name)}\b\s*=\s*([^;]+);',
         re.DOTALL,
     )
     assignments = assignment_pattern.findall(code_before_ocs)
     assert len(assignments) == 1, (
-        f"Counterfeit-7 rejected: expected exactly 1 assignment to {vs_var_name!r} before constructor, found {len(assignments)}"
+        f"Counterfeit-15 rejected: expected exactly 1 reaching assignment to identifier {vs_var_name!r}, found {len(assignments)}"
     )
     rhs = assignments[0].strip()
-    assert ".VisualStyleId" in rhs, (
-        f"Counterfeit-7 rejected: assignment to {vs_var_name!r} does not directly contain .VisualStyleId: {rhs!r}"
+    assert "currentView.VisualStyleId" in rhs, (
+        f"Counterfeit-14 rejected: reaching assignment to {vs_var_name!r} does not derive from currentView.VisualStyleId: {rhs!r}"
     )
     assert '"' not in rhs, (
         f"Counterfeit-7 rejected: assignment to {vs_var_name!r} contains string literal: {rhs!r}"
@@ -166,8 +167,9 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
         f"Counterfeit-7 rejected: assignment to {vs_var_name!r} contains ternary or nullable operator: {rhs!r}"
     )
 
-    # Dead-helper provenance check: if a helper function is invoked, verify it uses its parameter and does not return a constant
-    helper_call_match = re.search(r'([A-Za-z0-9_]+)\s*\([^)]*\.VisualStyleId[^)]*\)', rhs)
+    # 6. Helper route validation: if a helper is invoked on currentView.VisualStyleId, its definition is mandatory
+    # and its returned value must structurally derive from the ObjectId parameter.
+    helper_call_match = re.search(r'([A-Za-z0-9_]+)\s*\([^)]*currentView\.VisualStyleId[^)]*\)', rhs)
     if helper_call_match:
         helper_name = helper_call_match.group(1)
         helper_def_match = re.search(
@@ -175,30 +177,46 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
             source,
             re.DOTALL,
         )
-        if helper_def_match:
-            params_str = helper_def_match.group(1)
-            param_names = [p.strip().split()[-1].strip() for p in params_str.split(',') if p.strip()]
-            h_start = helper_def_match.end()
-            h_depth = 1
-            h_pos = h_start
-            while h_depth > 0 and h_pos < len(source):
-                if source[h_pos] == '{':
-                    h_depth += 1
-                elif source[h_pos] == '}':
-                    h_depth -= 1
-                h_pos += 1
-            helper_body = source[h_start:h_pos-1]
-            for p in param_names:
-                assert re.search(rf'\b{re.escape(p)}\b', helper_body) is not None, (
-                    f"Counterfeit-13 rejected: helper method {helper_name!r} ignores parameter {p!r}"
-                )
-            assert not re.search(r'^\s*return\s+"[^"]*"\s*;\s*$', helper_body.strip()), (
-                f"Counterfeit-13 rejected: helper method {helper_name!r} unconditionally returns a constant string"
-            )
+        assert helper_def_match is not None, (
+            f"Counterfeit-16 rejected: helper method {helper_name!r} definition is missing from source"
+        )
+        params_str = helper_def_match.group(1)
+        param_names = [p.strip().split()[-1].strip() for p in params_str.split(',') if p.strip()]
+        h_start = helper_def_match.end()
+        h_depth = 1
+        h_pos = h_start
+        while h_depth > 0 and h_pos < len(source):
+            if source[h_pos] == '{':
+                h_depth += 1
+            elif source[h_pos] == '}':
+                h_depth -= 1
+            h_pos += 1
+        helper_body = source[h_start:h_pos-1]
+        return_match = re.search(r'return\s+([^;]+);', helper_body)
+        assert return_match is not None, (
+            f"Helper method {helper_name!r} has no return statement"
+        )
+        return_expr = return_match.group(1).strip()
+        assert not return_expr.startswith('"'), (
+            f"Counterfeit-13 rejected: helper method {helper_name!r} returns a constant literal: {return_expr!r}"
+        )
+        ret_var = return_expr.split('.')[0].strip()
+        param_used_in_ret_chain = False
+        if any(p in return_expr for p in param_names):
+            param_used_in_ret_chain = True
+        else:
+            ret_var_assignments = re.findall(rf'(?:var\s+|[A-Za-z0-9_<>?]+\s+)?\b{re.escape(ret_var)}\b\s*=\s*([^;]+);', helper_body)
+            for r_rhs in ret_var_assignments:
+                if any(p in r_rhs for p in param_names):
+                    param_used_in_ret_chain = True
+                    break
+        assert param_used_in_ret_chain, (
+            f"Counterfeit-17 rejected: parameter {param_names} in helper {helper_name!r} does not participate in the value chain reaching return {return_expr!r}"
+        )
 
-    # 8. Mismatch check control-flow linkage with anchored inequality validation:
+    # 7. Effective mismatch predicate linkage:
     obs_inst_pattern = re.compile(
-        rf'(?:var\s+)?([a-zA-Z0-9_]+)\s*=\s*{re.escape(ocs_match.group(0))}',
+        rf'(?:var\s+|ObservedCameraState\s+)?\b([A-Za-z0-9_]+)\b\s*=\s*{re.escape(ocs_match.group(0))}',
         re.DOTALL,
     )
     obs_inst_match = obs_inst_pattern.search(ensure_body)
@@ -220,9 +238,10 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
     cond_valid = False
     for cond in mismatch_blocks:
         clauses = [c.strip() for c in cond.split('||')]
+        if any(c == "true" or c.startswith("true ") or c.endswith(" true") for c in clauses):
+            continue
         for clause in clauses:
             cl = clause.strip()
-            # Unwrap balanced parentheses
             while cl.startswith('(') and cl.endswith(')'):
                 inner = cl[1:-1].strip()
                 d = 0
@@ -244,6 +263,8 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
                 continue
             if re.search(r'(&&\s*false|\bfalse\s*&&)', cl):
                 continue
+            if cl == "true" or "|| true" in cl or "true ||" in cl:
+                continue
 
             for vt in valid_targets:
                 escaped_vt = re.escape(vt)
@@ -260,7 +281,7 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
             break
 
     assert cond_valid, (
-        f"Counterfeit-8 rejected: no throwing if-condition has an authentic inequality comparison for camera.VisualStyle against bound observed visual style ({valid_targets})"
+        f"Counterfeit-8 rejected: no throwing if-condition has an effective, authentic inequality comparison for camera.VisualStyle against bound observed visual style ({valid_targets})"
     )
 
 
@@ -285,7 +306,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
         return observed;
     }
     '''
-    with pytest.raises(AssertionError, match="Counterfeit-1 rejected"):
+    with pytest.raises(AssertionError, match="Counterfeit-14 rejected"):
         _validate_paper_space_visual_style_dataflow(c1)
 
     # Counterfeit 2: request-derived camera.VisualStyle passed as observed
@@ -314,6 +335,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 4: unconditional/pass-through (no mismatch check against camera.VisualStyle)
     c4 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
@@ -325,6 +347,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 5: multiple assignments / overwritten before constructor
     c5 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         observedVisualStyle = "2D_WIREFRAME";
@@ -335,11 +358,12 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
         return observed;
     }
     '''
-    with pytest.raises(AssertionError, match="Counterfeit-7 rejected"):
+    with pytest.raises(AssertionError, match="Counterfeit-15 rejected"):
         _validate_paper_space_visual_style_dataflow(c5)
 
     # Counterfeit 6: correct viewport constructor value, but mismatch check compares against unrelated literal
     c6 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
@@ -354,6 +378,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 7: unquoted variable fallback / dead .VisualStyleId ternary branch
     c7 = '''
+    private static string Resolve(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var fallback = "2D";
         var observedVisualStyle = false ? Resolve(currentView.VisualStyleId) : fallback;
@@ -369,6 +394,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 8: unused correct comparison + unrelated throwing predicate
     c8 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
@@ -384,6 +410,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 9: positive-equality throw (throws when EQUAL instead of NOT equal)
     c9 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
@@ -398,6 +425,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 10: wrong uncaptured alias (mismatch checks unlinked variable name)
     c10 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var state = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
@@ -412,6 +440,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 11: negated comparison modified by `== false`
     c11 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
@@ -426,6 +455,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
 
     # Counterfeit 12: negated comparison neutralized by `&& false`
     c12 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
     private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
         var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
         var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
@@ -438,7 +468,7 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
     with pytest.raises(AssertionError, match="Counterfeit-8 rejected"):
         _validate_paper_space_visual_style_dataflow(c12)
 
-    # Counterfeit 13: dead helper that ignores its ObjectId parameter and returns a constant string
+    # Counterfeit 13: dead helper that returns a constant literal string
     c13 = '''
     private static string ResolveVisualStyle(ObjectId vsId) {
         return "2D_WIREFRAME";
@@ -454,6 +484,83 @@ def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
     '''
     with pytest.raises(AssertionError, match="Counterfeit-13 rejected"):
         _validate_paper_space_visual_style_dataflow(c13)
+
+    # Counterfeit 14: otherView.VisualStyleId instead of currentView.VisualStyleId
+    c14 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = ResolveVisualStyle(otherView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-14 rejected"):
+        _validate_paper_space_visual_style_dataflow(c14)
+
+    # Counterfeit 15: fakeobservedVisualStyle assigned while constructor reads unassigned/literal observedVisualStyle
+    c15 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var fakeobservedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-15 rejected"):
+        _validate_paper_space_visual_style_dataflow(c15)
+
+    # Counterfeit 16: missing helper definition
+    c16 = '''
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = MissingHelperFunction(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-16 rejected"):
+        _validate_paper_space_visual_style_dataflow(c16)
+
+    # Counterfeit 17: parameter in dead statement inside helper then constant return
+    c17 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) {
+        var dead = vsId;
+        return "2D_WIREFRAME";
+    }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle)) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-13 rejected"):
+        _validate_paper_space_visual_style_dataflow(c17)
+
+    # Counterfeit 18: tautological mismatch condition `!string.Equals(...) || true`
+    c18 = '''
+    private static string ResolveVisualStyle(ObjectId vsId) { var record = (VisualStyleTableRecord)t.GetObject(vsId); return record.Name; }
+    private static ObservedCameraState EnsureObservedCanonicalCameraState(NativeRenderRequest request, NativeRenderCamera camera, ViewTableRecord currentView) {
+        var observedVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
+        var observed = new ObservedCameraState("TOP", "WORLD", observedVisualStyle);
+        if (!string.Equals(camera.VisualStyle, observed.VisualStyle) || true) {
+            throw new InvalidDataException("NATIVE_RENDER_CAMERA_STATE_MISMATCH");
+        }
+        return observed;
+    }
+    '''
+    with pytest.raises(AssertionError, match="Counterfeit-8 rejected"):
+        _validate_paper_space_visual_style_dataflow(c18)
 
     # Valid synthetic with pre-existing earlier WORLD/TOP mismatch checks and valid helper passes
     valid_with_earlier_checks = '''
