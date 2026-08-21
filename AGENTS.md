@@ -9,6 +9,7 @@ Read these before planning or changing behavior:
 - Verified status: `docs/STATUS.md`
 - Quality and release gates: `docs/QUALITY.md`
 - AI roles and authority: `docs/AI_OPERATING_MODEL.md`
+- SOL / Luna control and Audit protocol: `docs/CONTROL_PROTOCOL.md`
 - Active accelerated reuse-first program: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md` and `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`
 - Design/plan record policy: `docs/superpowers/README.md`
 
@@ -50,6 +51,35 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 7. Keep commits scoped and run focused checks after each task.
 8. Run `scripts/verify.ps1` before claiming completion or committing a release
    candidate.
+
+## SOL / Luna control-plane rules
+
+For governance/runtime baton work, `docs/CONTROL_PROTOCOL.md` is mandatory.
+
+- Every wake starts with fresh `main`, canonical HOT STATE, newest terminal/action,
+  then current PR/head/CI only when relevant.
+- `NEXT_OWNER` is exactly `SOL` or `Luna / Codex Desktop`; Human Owner is not a
+  relay.
+- New action packets use explicit `STOP_REPO_WRITE`, `STOP_LIVE`, and
+  `STOP_PERSISTENT_MUTATION`. Standalone `STOP_WRITE` is deprecated.
+- Live actions require explicit `LIVE_AUTHORITY`, integer `ATTEMPT_BUDGET`, and
+  exact carve-out/supersession semantics when an older live lock exists.
+- A terminal has one controlling consumer. Later consumers are
+  `VOID_FOR_CONTROL` and cannot open parallel execution branches.
+- Do not rely on connector timestamps alone. Use predecessor/consumer links,
+  `CONTROL_SEQ`, exact SHA/artifact identity, and canonical HOT STATE.
+- `NO_MATERIAL_DELTA => NO_COMMENT`; Audit does not generate governance churn.
+- Accepted local artifacts remain retained until a successor epoch is accepted
+  or the owning task explicitly releases retention.
+- Live/persistent actions require Luna ACK before execution; offline/read-only
+  actions do not unless explicitly requested.
+- Missing causal evidence is `EVIDENCE_INSUFFICIENT`; never infer unretained
+  values or turn `NOT RUN` into PASS.
+
+The Issue #131 dual-review standing rule `5308943608` remains binding: freeze one
+canonical evidence set, finalize Pass A, then finalize an independent Pass B
+without exposing A's verdict/findings to B, and reconcile only after both are
+final. Evidence drift re-epochs both reviews.
 
 ## Specialized gates
 
