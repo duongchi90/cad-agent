@@ -4,11 +4,11 @@ Status: owner-approved governance protocol.
 
 Protocol version: **1.4**.
 
-This document defines the control-plane contract used by SOL and Luna / Codex Desktop for baton ownership, Audit, live-action authorization, evidence retention, and exactly-once terminal consumption. It complements `docs/AI_OPERATING_MODEL.md`; it does not expand product/runtime authority by itself.
+This document defines the control-plane contract used by SOL and Luna / Codex Desktop for baton ownership, Audit, live-action authorization, evidence retention, parallel-lane isolation, and exactly-once terminal consumption. It complements `docs/AI_OPERATING_MODEL.md`; it does not expand product/runtime authority by itself.
 
 ## 1. Canonical scan order
 
-Every SOL/Audit wake follows this order:
+Every SOL/Audit wake follows this order for the relevant lane:
 
 1. fresh `main`;
 2. canonical HOT STATE for the active lane/frontier;
@@ -26,7 +26,7 @@ GitHub current state beats chat memory, PR body, stale handoff text, and older c
 - `SOL`
 - `Luna / Codex Desktop`
 
-No third owner is valid. Human Owner is not a relay; Human involvement is reserved for a hard gate that SOL and Luna cannot safely resolve.
+No third baton owner is valid. Human Owner is not a relay. When Human action is genuinely required, it is represented as a bounded gate condition on the owning lane; `NEXT_OWNER` remains SOL or Luna / Codex Desktop. Satisfying a Human gate never grants authority beyond the exact waiting packet.
 
 ## 3. Required action-packet fields
 
@@ -35,8 +35,11 @@ Every new SOL action packet declares:
 ```text
 CONTROL_PROTOCOL_VERSION
 CONTROL_SEQ
+LANE_ID
 AUTHORITY_ID
 CONSUMES_TERMINAL or PREDECESSOR_AUTHORITY
+FRESH_MAIN
+PINNED_MAIN=<sha|NONE>
 NEXT_OWNER
 ACTION_CLASS
 LIVE_AUTHORITY=YES|NO
@@ -47,6 +50,8 @@ STOP_PERSISTENT_MUTATION=YES|NO
 HARD_LOCKS
 EXPECTED_TERMINAL
 ```
+
+When a Human action is required, the packet also declares the exact `HUMAN_GATE` and the observable condition that satisfies it. Human interaction is a gate, not a baton transfer.
 
 When artifacts or local files matter, the packet also freezes exact literal paths, lengths, and SHA-256 identities.
 
@@ -84,11 +89,27 @@ Once any part of an authorized live attempt begins, its attempt budget is consum
 
 ## 6. Exactly-once terminal consumption
 
-A terminal has only one controlling SOL consumer.
+A terminal has only one controlling SOL consumer within its `LANE_ID`.
 
-The earliest valid consumer records `CONSUMER_OF=<terminal id>` and becomes controlling. A later consumer of the same terminal is `VOID_FOR_CONTROL` and must not create a parallel execution branch.
+The earliest valid consumer records `CONSUMER_OF=<terminal id>` and becomes controlling for that lane. A later consumer of the same terminal is `VOID_FOR_CONTROL` and must not create a parallel execution branch from that terminal.
 
 Audit may post one `CONTROL_RESOLUTION` identifying the winner. It must not union authorities or evidence from a void branch.
+
+### 6.1 Parallel-lane isolation
+
+Independent lanes may execute concurrently. Exactly-once terminal consumption does **not** serialize unrelated work.
+
+Parallel execution is allowed only when all of the following are true:
+
+- each lane has a distinct stable `LANE_ID` and its own HOT STATE;
+- repository writers have disjoint write-sets, or all but one overlapping lane are read-only;
+- no two lanes mutate the same AutoCAD process/session/document, File-IPC channel, candidate artifact, or other live resource concurrently;
+- neither lane changes an exact input pinned by another active lane;
+- cross-lane dependencies are explicit rather than inferred from chat chronology.
+
+An exact-main live lane with `PINNED_MAIN=<sha>` blocks merge/ref movement of `main` while that pin is active, but it does **not** block independent branch-only commits, PR review, hosted CI, documentation work, or offline tests whose write-set and runtime resources do not overlap the live lane. Those parallel lanes must remain unmerged until moving `main` is explicitly safe.
+
+A terminal in one lane cannot be consumed as authority in another lane unless the first lane has terminated and a later packet explicitly records the cross-lane dependency/handoff.
 
 ## 7. Chronology without timestamp dependence
 
@@ -96,17 +117,20 @@ GitHub connector timestamps can be absent and very long Issue threads can be tru
 
 Use, in order:
 
-1. explicit predecessor/consumer links;
-2. `CONTROL_SEQ`;
+1. explicit predecessor/consumer links within the same `LANE_ID`;
+2. `CONTROL_SEQ` within that lane;
 3. exact SHA/head/artifact identities;
-4. canonical HOT STATE;
+4. canonical HOT STATE for that lane;
 5. comment-ID ordering only as a fallback when explicit links cannot resolve the relation.
+
+Never compare `CONTROL_SEQ` values from different lanes as if they formed one global sequence.
 
 ## 8. Canonical HOT STATE
 
 Maintain one canonical HOT STATE per active lane/frontier. It contains only the minimum current control facts:
 
-- fresh main;
+- `LANE_ID`;
+- fresh main and any exact `PINNED_MAIN`;
 - active PR/head when relevant;
 - latest accepted terminal;
 - controlling decision;
@@ -114,6 +138,7 @@ Maintain one canonical HOT STATE per active lane/frontier. It contains only the 
 - exact next trigger/action class;
 - live/write/persistent-mutation authority;
 - attempt budget;
+- repository write-set and live-resource identity when concurrency matters;
 - hard locks.
 
 HOT STATE is an index/pointer, not a replacement for underlying evidence. PR body and historical handoff text are not current authority when they disagree with HOT STATE plus fresh GitHub state.
@@ -122,7 +147,7 @@ HOT STATE is an index/pointer, not a replacement for underlying evidence. PR bod
 
 `NO_MATERIAL_DELTA => NO_COMMENT`.
 
-Audit does not regenerate packets just to restate existing constraints. One technical terminal gets one controlling disposition. A governance clarification that changes no executable scope must state `NO_NEW_EXECUTION_ACTION=YES`.
+Audit does not regenerate packets just to restate existing constraints. One technical terminal gets one controlling disposition in its lane. A governance clarification that changes no executable scope must state `NO_NEW_EXECUTION_ACTION=YES`.
 
 Stale, duplicate, and void evidence is labeled explicitly and never rolls the frontier backward.
 
@@ -133,6 +158,7 @@ Before any live or persistent-mutation action, Luna records a compact ACK:
 ```text
 ACK_AUTHORITY
 CONTROL_SEQ
+LANE_ID
 LIVE_ALLOWED
 ATTEMPT_BUDGET
 ```
@@ -145,6 +171,7 @@ Offline/read-only packets do not require ACK unless explicitly requested.
 
 For local/live work, retain when applicable:
 
+- `LANE_ID` and exact authority/control sequence;
 - requested literal path and observed returned identity (`FullName` / Name);
 - command/API boundary reached and exact completion/failure;
 - DLL/deps/fixture literal path + length + SHA-256;
@@ -184,7 +211,7 @@ SOL decisions state what **is authorized** before listing prohibitions. Luna ter
 
 `PASS`, `BLOCKED`, `PRECONDITION_BLOCKED`, and `EVIDENCE_INSUFFICIENT` are distinct states and must not be used interchangeably.
 
-Every action packet and terminal ends with exactly one `NEXT_OWNER`.
+Every action packet and terminal ends with exactly one `NEXT_OWNER`. A Human gate may pause that owner but does not replace it.
 
 When GitHub is writable, no party should require the Human Owner to copy/paste control messages between SOL and Luna.
 
