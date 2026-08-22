@@ -368,6 +368,19 @@ def test_managed_camera_paper_space_visual_style_does_not_use_vscurrent_system_v
     _validate_paper_space_visual_style_dataflow(source)
 
 
+def test_managed_sdk_real_visualstyle_token_is_normalized_to_protocol_token() -> None:
+    """The SDK-real DBVisualStyle.Name token must be accepted and canonicalized."""
+    import re
+
+    source = _text(READER)
+    assert re.search(
+        r'string\.Equals\(\s*rawVisualStyle\s*,\s*"2dWireframe"\s*,\s*'
+        r'StringComparison\.OrdinalIgnoreCase\s*\)',
+        source,
+    ), "SDK-real raw token 2dWireframe must be recognized as valid 2D wireframe"
+    assert 'ObservedCameraState("TOP", "WORLD", "2D_WIREFRAME")' in source
+
+
 def test_paper_space_visual_style_discriminator_rejects_counterfeits() -> None:
     """Self-test demonstrating that the discriminator rejects all counterfeit families."""
     import pytest
