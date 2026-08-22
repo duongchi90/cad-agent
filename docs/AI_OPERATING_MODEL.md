@@ -240,7 +240,60 @@ Every new PO or Codex session must first read:
 3. `docs/ARCHITECTURE.md`
 4. the active specification and plan named in the handoff
 5. the active issue and current PR, if any
+6. `docs/CONTROL_PROTOCOL.md` when the session participates in SOL/Luna baton, Audit, local/live execution, or control-plane governance
 
 Then verify current `main`, issue state, branch/PR, exact head, changed files, diff, and CI.
 
 No task work or status conclusion should precede this verification.
+
+## 9. SOL / Luna baton and Audit control plane
+
+For SOL/Luna orchestration, `docs/CONTROL_PROTOCOL.md` is the normative control-plane contract.
+
+### 9.1 Baton ownership
+
+`NEXT_OWNER` is exactly one of `SOL` or `Luna / Codex Desktop`. SOL owns governance, architecture/audit/security disposition, evidence reconciliation, and action authorization. Luna / Codex Desktop owns bounded local Windows/AutoCAD execution and approved repository implementation work. Human Owner is not used as a relay between the two agents.
+
+Every wake begins with fresh GitHub state and follows:
+
+`fresh main -> canonical HOT STATE -> newest terminal/action -> NEXT_OWNER -> act only for that owner`.
+
+If there is no material delta and Luna is executing the correct packet, SOL/Audit creates no new work or comment.
+
+### 9.2 Explicit action authority
+
+New packets do not use standalone `STOP_WRITE`. They separately declare repository-write, live-execution, and persistent-mutation authority with:
+
+```text
+LIVE_AUTHORITY=YES|NO
+ATTEMPT_BUDGET=<integer>
+STOP_REPO_WRITE=YES|NO
+STOP_LIVE=YES|NO
+STOP_PERSISTENT_MUTATION=YES|NO
+```
+
+Live carve-outs must explicitly identify any superseded older live lock and are valid only for the named action. No live carve-out implicitly unlocks camera/render/File-IPC business execution, R6/R7, merge, or retry.
+
+### 9.3 Exactly-once control
+
+A technical terminal has one controlling SOL consumer. The earliest valid consumer controls; later consumers of the same terminal are `VOID_FOR_CONTROL` and cannot open a parallel execution branch. Audit resolves duplicates without unioning authorities from void paths.
+
+Control chronology uses explicit predecessor/consumer links, monotonic `CONTROL_SEQ`, canonical HOT STATE, and exact SHA/artifact identity. Connector timestamps are not sufficient authority ordering because they can be absent.
+
+### 9.4 Audit anti-churn and evidence truthfulness
+
+`NO_MATERIAL_DELTA => NO_COMMENT`.
+
+Audit does not regenerate packets solely to restate the same contract. `PASS`, `BLOCKED`, `PRECONDITION_BLOCKED`, and `EVIDENCE_INSUFFICIENT` remain distinct. Missing or unretained causal evidence must not be inferred and cannot be promoted to a defect conclusion.
+
+Accepted local artifact epochs remain retained until SOL accepts a successor or the owning task explicitly releases retention. Artifact authority is literal path + length + SHA-256, never a path guessed or reconstructed from a commit SHA.
+
+### 9.5 Live acknowledgement and terminal completeness
+
+Before live or persistent-mutation execution, Luna records an ACK bound to the exact authority, control sequence, attempt budget, and relevant literal artifact identities. Contradictory authority fails closed as `PACKET_CONTRADICTION`.
+
+Local/live terminals retain the first causal boundary plus relevant requested/observed document identity, artifact hashes, process/session identity, trace integrity, cleanup/survivor state, repository parity, and material `NOT_RUN` gates.
+
+### 9.6 Independent dual review
+
+Issue #131 standing rule comment `5308943608` remains binding. When SOL requires two independent reviews, SOL freezes one canonical evidence set, completes Pass A, then completes Pass B without exposing Pass A verdict/findings to B before B is final. Reconciliation occurs only after both are independently complete. Evidence drift re-epochs both. Luna is not reviewer #2 merely to manufacture independence.
