@@ -265,15 +265,74 @@ def _validate_paper_space_visual_style_dataflow(source: str) -> None:
 
     # 7. Raw name attestation fail-closed check preceding constructor call:
     code_before_ocs = ensure_body[:ocs_match.start()]
-    raw_attestation_block = re.search(
-        r'if\s*\(\s*!\s*string\.Equals\s*\(\s*'
+    def _strip_outer_parens(expression: str) -> str:
+        expression = expression.strip()
+        while expression.startswith("(") and expression.endswith(")"):
+            depth = 0
+            balanced = True
+            for index, character in enumerate(expression):
+                if character == "(":
+                    depth += 1
+                elif character == ")":
+                    depth -= 1
+                    if depth == 0 and index != len(expression) - 1:
+                        balanced = False
+                        break
+            if balanced and depth == 0:
+                expression = expression[1:-1].strip()
+            else:
+                break
+        return expression
+
+    def _condition_before_throw(text: str, throw_start: int) -> str | None:
+        if_matches = list(re.finditer(r"\bif\s*\(", text[:throw_start]))
+        if not if_matches:
+            return None
+        open_index = text.find("(", if_matches[-1].start(), throw_start)
+        depth = 0
+        for index in range(open_index, len(text)):
+            if text[index] == "(":
+                depth += 1
+            elif text[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    return text[open_index + 1:index]
+        return None
+
+    alias_clause = re.compile(
+        r"!\s*string\.Equals\s*\(\s*"
         + re.escape(raw_var)
-        + r'\s*,\s*"2D Wireframe"\s*,\s*StringComparison\.OrdinalIgnoreCase\s*\)\s*\)\s*(?:\{[^{}]*)?throw\s+new\s+InvalidDataException\s*\(\s*"[^"]*NATIVE_RENDER_CAMERA_STATE_MISMATCH[^"]*"',
-        code_before_ocs,
+        + r'\s*,\s*"(?P<token>2dWireframe|2D Wireframe)"\s*,\s*'
+        r"StringComparison\.OrdinalIgnoreCase\s*\)",
         re.DOTALL,
     )
+
+    def _is_direct_raw_attestation(condition: str) -> bool:
+        clauses = [
+            _strip_outer_parens(clause.strip())
+            for clause in condition.split("&&")
+        ]
+        matches = [alias_clause.fullmatch(clause) for clause in clauses]
+        if any(match is None for match in matches):
+            return False
+        tokens = [match.group("token") for match in matches if match is not None]
+        return tokens == ["2D Wireframe"] or set(tokens) == {
+            "2dWireframe",
+            "2D Wireframe",
+        }
+
+    raw_attestation_block = None
+    for throw_match in re.finditer(
+        r'throw\s+new\s+InvalidDataException\s*\(\s*"[^"]*NATIVE_RENDER_CAMERA_STATE_MISMATCH[^"]*"',
+        code_before_ocs,
+        re.DOTALL,
+    ):
+        condition = _condition_before_throw(code_before_ocs, throw_match.start())
+        if condition is not None and _is_direct_raw_attestation(condition):
+            raw_attestation_block = condition
+            break
     assert raw_attestation_block is not None, (
-        f"Counterfeit-28 rejected: raw visual style {raw_var!r} must be attested in a direct throwing if-guard before ObservedCameraState construction"
+        f"Counterfeit-28 rejected: raw visual style {raw_var!r} must be attested by a direct throwing single- or dual-alias if-guard before ObservedCameraState construction"
     )
 
     # 8. Closed Mismatch Predicate against exact constructed observed instance field:
