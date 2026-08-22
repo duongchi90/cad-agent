@@ -350,7 +350,8 @@ public static class AutoCadNativeRenderReader
         }
 
         var rawVisualStyle = ResolveVisualStyle(currentView.VisualStyleId);
-        if (!string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(rawVisualStyle, "2dWireframe", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(rawVisualStyle, "2D Wireframe", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
                 "NATIVE_RENDER_CAMERA_STATE_MISMATCH: The active visual style is not 2D Wireframe.");
