@@ -151,6 +151,7 @@ _OWNER_STATE_FIELDS = {
     "task6_result",
     "cleanup_result",
 }
+_CAMERA_OWNER_FIELDS = {"visual_capture_plan", "native_render_evidence"}
 
 
 def _owner_state(value: object, *, label: str) -> Mapping[str, object]:
@@ -159,7 +160,16 @@ def _owner_state(value: object, *, label: str) -> Mapping[str, object]:
         _fail(
             "R5_B3_TASK6_PUBLIC_SEAM_MISSING: owner state has no accepted task6_result"
         )
-    _closed(state, _OWNER_STATE_FIELDS, label=label, optional={"pre_repair_r5_verdict"})
+    _closed(
+        state,
+        _OWNER_STATE_FIELDS,
+        label=label,
+        optional={"pre_repair_r5_verdict", *_CAMERA_OWNER_FIELDS},
+    )
+    has_plan = "visual_capture_plan" in state
+    has_native = "native_render_evidence" in state
+    if has_plan != has_native:
+        _fail("canonical camera plan and native render evidence must be declared together")
     _sha(state["manifest_bytes_sha256"], label=f"{label}.manifest_bytes_sha256")
     _sha(
         state["drawing_sha256_before_dispatch"],
@@ -398,6 +408,275 @@ def _validate_evidence_set(
     }
 
 
+_NATIVE_EVIDENCE_FIELDS = {
+    "schema_version",
+    "request_id",
+    "run_id",
+    "drawing_sha256",
+    "latest_mutation_sha256",
+    "visual_run_manifest_sha256",
+    "layout",
+    "artifact_kind",
+    "render_options",
+    "renderer",
+    "artifact",
+    "capture_timestamp",
+    "changed",
+    "dbmod_before",
+    "dbmod_after",
+    "warnings",
+    "visual_capture_receipt",
+}
+_NATIVE_CAMERA_FIELDS = {
+    "schema_version",
+    "capture_id",
+    "capture_class",
+    "parent_region_id",
+    "region_id",
+    "scope_id",
+    "view_id",
+    "sheet_id",
+    "layout_id",
+    "candidate_revision_sha256",
+    "candidate_state_sha256",
+    "visual_capture_plan_sha256",
+    "zoom_mode",
+    "wcs_bbox",
+    "margin_ratio",
+    "view_direction",
+    "ucs",
+    "visual_style",
+}
+
+
+def _positive_int(value: object, *, label: str) -> int:
+    if type(value) is not int or value <= 0:
+        _fail(f"{label} must be a positive integer")
+    return value
+
+
+def _native_camera_state(
+    state: Mapping[str, object],
+    *,
+    scope: Mapping[str, object],
+    label: str,
+) -> dict[str, object] | None:
+    if "visual_capture_plan" not in state:
+        return None
+    try:
+        plan = validate_visual_contract(
+            state["visual_capture_plan"],
+            contract="visual_capture_plan",
+            server_scope=scope,
+        )
+        plan_sha = canonical_json_sha256(plan)
+    except Exception:
+        _fail("native camera plan is invalid or outside server-owned scope")
+
+    raw = state["native_render_evidence"]
+    if type(raw) is not list:
+        _fail("native camera evidence must be a list")
+    captures = plan.get("captures")
+    if type(captures) is not list or not captures:
+        _fail("native camera plan has no captures")
+    expected = {
+        _identifier(capture.get("capture_id"), label=f"{label}.camera.capture_id"): capture
+        for capture in captures
+        if isinstance(capture, Mapping)
+    }
+    if len(expected) != len(captures) or len(raw) != len(expected):
+        _fail("native camera evidence coverage does not match every plan capture")
+
+    manifest = _mapping(
+        state["visual_run_manifest"], label=f"{label}.visual_run_manifest"
+    )
+    latest_mutation = _sha(
+        manifest.get("latest_mutation_sha256"),
+        label=f"{label}.visual_run_manifest.latest_mutation_sha256",
+    )
+    manifest_sha = _sha(
+        state["manifest_bytes_sha256"], label=f"{label}.manifest_bytes_sha256"
+    )
+    drawing_before = _sha(
+        state["drawing_sha256_before_dispatch"],
+        label=f"{label}.drawing_sha256_before_dispatch",
+    )
+    drawing_reference = _mapping(
+        state["drawing_reference"], label=f"{label}.drawing_reference"
+    )
+    drawing_artifact = _sha(
+        drawing_reference.get("artifact_sha256"),
+        label=f"{label}.drawing_reference.artifact_sha256",
+    )
+    if drawing_before != drawing_artifact:
+        _fail("native camera drawing identity is stale against the current DARA artifact")
+    if plan.get("latest_mutation_sha256") != latest_mutation:
+        _fail("native camera plan is stale against the latest mutation")
+
+    records: list[tuple[str, object]] = []
+    identities: list[dict[str, object]] = []
+    observed: set[str] = set()
+    for index, raw_evidence in enumerate(raw):
+        evidence = _mapping(raw_evidence, label=f"{label}.native_render_evidence[{index}]")
+        _closed(
+            evidence,
+            _NATIVE_EVIDENCE_FIELDS,
+            label=f"{label}.native_render_evidence[{index}]",
+        )
+        if evidence["schema_version"] != "autocad-native-render-evidence-1.0":
+            _fail("native camera evidence schema is unsupported")
+        _plain_string(evidence["request_id"], label=f"{label}.native.request_id")
+        if evidence["run_id"] != plan.get("run_id"):
+            _fail("native camera evidence run is foreign")
+        if evidence["drawing_sha256"] != drawing_artifact:
+            _fail("native camera evidence drawing is stale")
+        if evidence["latest_mutation_sha256"] != latest_mutation:
+            _fail("native camera evidence mutation is stale")
+        if evidence["visual_run_manifest_sha256"] != manifest_sha:
+            _fail("native camera evidence manifest is stale")
+        if evidence["artifact_kind"] != "PNG" or evidence["renderer"] != "AUTOCAD_NATIVE":
+            _fail("native camera evidence is not an AutoCAD-native PNG")
+        if evidence["changed"] is not False:
+            _fail("native camera evidence changed the drawing")
+        dbmod_before = evidence["dbmod_before"]
+        dbmod_after = evidence["dbmod_after"]
+        if (
+            type(dbmod_before) is not int
+            or type(dbmod_after) is not int
+            or dbmod_before < 0
+            or dbmod_after < 0
+            or dbmod_before != dbmod_after
+        ):
+            _fail("native camera evidence DBMOD is not read-only")
+        warnings = evidence["warnings"]
+        if type(warnings) is not list or any(type(item) is not str for item in warnings):
+            _fail("native camera evidence warnings are invalid")
+
+        layout = _mapping(evidence["layout"], label=f"{label}.native.layout")
+        _closed(layout, {"identity", "name"}, label=f"{label}.native.layout")
+        layout_identity = _identifier(
+            layout["identity"], label=f"{label}.native.layout.identity"
+        )
+        _plain_string(layout["name"], label=f"{label}.native.layout.name")
+
+        options = _mapping(
+            evidence["render_options"], label=f"{label}.native.render_options"
+        )
+        _closed(
+            options,
+            {"background", "dpi", "fit_to_paper", "paper_size", "plot_style", "camera"},
+            label=f"{label}.native.render_options",
+        )
+        if not (
+            options["background"] == "white"
+            and options["dpi"] == 300
+            and options["fit_to_paper"] is True
+            and options["paper_size"] == "A4"
+            and options["plot_style"] == "monochrome.ctb"
+        ):
+            _fail("native camera evidence does not use the canonical render policy")
+        camera = _mapping(options["camera"], label=f"{label}.native.camera")
+        _closed(camera, _NATIVE_CAMERA_FIELDS, label=f"{label}.native.camera")
+
+        try:
+            receipt = validate_visual_contract(
+                evidence["visual_capture_receipt"],
+                contract="visual_capture_receipt",
+                server_scope=plan,
+            )
+        except Exception:
+            _fail("native camera visual capture receipt is invalid")
+        capture_id = _identifier(
+            receipt.get("capture_id"), label=f"{label}.native.receipt.capture_id"
+        )
+        capture = expected.get(capture_id)
+        if capture is None:
+            _fail("native camera evidence contains a foreign capture")
+        if capture_id in observed:
+            _fail("native camera evidence contains duplicate capture coverage")
+        observed.add(capture_id)
+
+        expected_camera = {
+            "schema_version": "canonical-camera-render-1.0",
+            "capture_id": capture["capture_id"],
+            "capture_class": capture["capture_class"],
+            "parent_region_id": capture["parent_region_id"],
+            "region_id": capture["region_id"],
+            "scope_id": plan["scope_id"],
+            "view_id": capture["view_id"],
+            "sheet_id": capture["sheet_id"],
+            "layout_id": capture["layout_id"],
+            "candidate_revision_sha256": plan["candidate_revision_sha256"],
+            "candidate_state_sha256": plan["candidate_state_sha256"],
+            "visual_capture_plan_sha256": plan_sha,
+            "zoom_mode": capture["zoom_mode"],
+            "wcs_bbox": copy.deepcopy(capture["wcs_bbox"]),
+            "margin_ratio": capture["margin_ratio"],
+            "view_direction": capture["view_direction"],
+            "ucs": capture["ucs"],
+            "visual_style": capture["visual_style"],
+        }
+        if dict(camera) != expected_camera:
+            _fail("native camera render context does not match the server-owned plan")
+        if layout_identity != capture["layout_id"]:
+            _fail("native camera layout is foreign to the selected plan capture")
+
+        artifact = _mapping(evidence["artifact"], label=f"{label}.native.artifact")
+        _closed(
+            artifact,
+            {"relative_path", "sha256", "width", "height"},
+            label=f"{label}.native.artifact",
+        )
+        artifact_path = _plain_string(
+            artifact["relative_path"], label=f"{label}.native.artifact.relative_path"
+        )
+        if not artifact_path:
+            _fail("native camera artifact path is empty")
+        artifact_sha = _sha(
+            artifact["sha256"], label=f"{label}.native.artifact.sha256"
+        )
+        artifact_width = _positive_int(
+            artifact["width"], label=f"{label}.native.artifact.width"
+        )
+        artifact_height = _positive_int(
+            artifact["height"], label=f"{label}.native.artifact.height"
+        )
+        if (
+            receipt.get("artifact_sha256") != artifact_sha
+            or receipt.get("artifact_width") != artifact_width
+            or receipt.get("artifact_height") != artifact_height
+        ):
+            _fail("native camera receipt does not match its render artifact")
+        capture_timestamp = _plain_string(
+            evidence["capture_timestamp"], label=f"{label}.native.capture_timestamp"
+        )
+        if receipt.get("captured_at_utc") != capture_timestamp:
+            _fail("native camera receipt timestamp does not match render evidence")
+        try:
+            receipt_sha = canonical_json_sha256(receipt)
+        except Exception:
+            _fail("native camera receipt identity cannot be sealed")
+        records.append((capture_id, copy.deepcopy(evidence)))
+        identities.append(
+            {
+                "capture_id": capture_id,
+                "artifact_sha256": artifact_sha,
+                "visual_capture_receipt_sha256": receipt_sha,
+            }
+        )
+
+    if observed != set(expected):
+        _fail("native camera evidence coverage is incomplete")
+    records.sort(key=lambda item: item[0])
+    identities.sort(key=lambda item: str(item["capture_id"]))
+    return {
+        "plan": plan,
+        "visual_capture_plan_sha256": plan_sha,
+        "records": [item[1] for item in records],
+        "identities": identities,
+    }
+
+
 def _validate_owner_state(
     state: Mapping[str, object], *, label: str, server_scope: Mapping[str, object]
 ) -> dict[str, object]:
@@ -418,7 +697,13 @@ def _validate_owner_state(
     except Exception:
         _fail(f"{label} accepted owner validation failed")
     evidence = _validate_evidence_set(state, scope=scope, label=label)
-    return {"scope": scope, "candidate": candidate, "evidence": evidence}
+    native_camera = _native_camera_state(state, scope=scope, label=label)
+    return {
+        "scope": scope,
+        "candidate": candidate,
+        "evidence": evidence,
+        "native_camera": native_camera,
+    }
 
 
 def _assert_r5_not_stale(
@@ -812,6 +1097,10 @@ def finalize_visual_verdict(
         _fail("visual evidence freshness changed after provider return")
     if auth_evidence["identities"] != post_evidence["identities"]:
         _fail("visual evidence identity changed after provider return")
+    auth_camera = auth_validated["native_camera"]
+    post_camera = post_validated["native_camera"]
+    if auth_camera != post_camera:
+        _fail("native camera evidence changed after provider return")
     _assert_r5_not_stale(
         authoritative,
         _mapping(
@@ -879,6 +1168,15 @@ def finalize_visual_verdict(
         "visual_evidence": copy.deepcopy(auth_evidence["identities"]),
         "request_binding": request_binding,
     }
+    if auth_camera is not None:
+        if auth_camera["plan"]["latest_mutation_sha256"] != latest_mutation_sha:
+            _fail("native camera plan is stale at final R5 request sealing")
+        request_payload["visual_capture_plan_sha256"] = auth_camera[
+            "visual_capture_plan_sha256"
+        ]
+        request_payload["native_camera_evidence"] = copy.deepcopy(
+            auth_camera["identities"]
+        )
     try:
         request_sha = canonical_json_sha256(request_payload)
     except Exception:

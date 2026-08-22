@@ -10,8 +10,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 
+from .drawing_contracts import canonical_json_sha256
+
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_CAPTURED_AT_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 
 
 class VisualContractError(ValueError):
@@ -65,6 +68,12 @@ def _identifier(value: object, *, contract: str, path: str) -> str:
     return text
 
 
+def _nullable_identifier(value: object, *, contract: str, path: str) -> str | None:
+    if value is None:
+        return None
+    return _identifier(value, contract=contract, path=path)
+
+
 def _sha256(value: object, *, contract: str, path: str) -> str:
     text = _string(value, contract=contract, path=path)
     if _HASH_RE.fullmatch(text) is None:
@@ -83,6 +92,12 @@ def _finite_number(value: object, *, contract: str, path: str) -> float | int:
 def _non_negative_integer(value: object, *, contract: str, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         _fail(contract, f"{path} must be a non-negative integer")
+    return value
+
+
+def _positive_integer(value: object, *, contract: str, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        _fail(contract, f"{path} must be a positive integer")
     return value
 
 
@@ -128,6 +143,15 @@ def _validate_bbox(value: object, *, contract: str, path: str) -> None:
         _fail(contract, f"{path} must contain exactly four numbers")
     for index, item in enumerate(value):
         _finite_number(item, contract=contract, path=f"{path}[{index}]")
+
+
+def _validate_wcs_bbox(value: object, *, contract: str, path: str) -> list[float | int]:
+    _validate_bbox(value, contract=contract, path=path)
+    assert isinstance(value, list)
+    xmin, ymin, xmax, ymax = value
+    if xmax <= xmin or ymax <= ymin:
+        _fail(contract, f"{path} must be a non-degenerate [xmin, ymin, xmax, ymax] bbox")
+    return value
 
 
 def _validate_point(value: object, *, contract: str, path: str) -> None:
@@ -522,6 +546,13 @@ _GATE_STATUSES = {"PASS", "FAIL", "NOT_RUN"}
 _CRITICALITIES = {"CRITICAL", "NORMAL"}
 _PUBLISH_POLICY = "AUTO_PUBLISH_AFTER_ALL_GATES"
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/].+")
+_CAPTURE_CLASSES = {"GLOBAL", "REGION", "DETAIL"}
+_CAPTURE_MARGIN_BY_CLASS = {"GLOBAL": 0.05, "REGION": 0.10, "DETAIL": 0.05}
+_CAPTURE_VIEW_DIRECTION = "TOP"
+_CAPTURE_UCS = "WORLD"
+_CAPTURE_VISUAL_STYLE = "2D_WIREFRAME"
+_CAPTURE_BBOX_REL_TOL = 1e-6
+_CAPTURE_BBOX_ABS_TOL = 1e-7
 
 
 def _validate_geometry_comparison(payload: dict[str, Any]) -> None:
@@ -933,6 +964,431 @@ def _validate_visual_review_scope(
     payload.update(normalized_payload)
 
 
+def _normalize_capture_record(
+    value: object,
+    *,
+    contract: str,
+    path: str,
+) -> dict[str, object]:
+    capture = _object(value, contract=contract, path=path)
+    _keys(
+        capture,
+        contract=contract,
+        required={
+            "capture_id",
+            "capture_class",
+            "parent_region_id",
+            "region_id",
+            "view_id",
+            "sheet_id",
+            "layout_id",
+            "zoom_mode",
+            "wcs_bbox",
+            "margin_ratio",
+            "view_direction",
+            "ucs",
+            "visual_style",
+        },
+    )
+    normalized: dict[str, object] = {
+        "capture_id": _identifier(capture["capture_id"], contract=contract, path=f"{path}.capture_id")
+    }
+    capture_class = _string(capture["capture_class"], contract=contract, path=f"{path}.capture_class")
+    if capture_class not in _CAPTURE_CLASSES:
+        _fail(contract, f"{path}.capture_class is invalid")
+    normalized["capture_class"] = capture_class
+    normalized["parent_region_id"] = _nullable_identifier(
+        capture["parent_region_id"], contract=contract, path=f"{path}.parent_region_id"
+    )
+    normalized["region_id"] = _nullable_identifier(
+        capture["region_id"], contract=contract, path=f"{path}.region_id"
+    )
+    for key in ("view_id", "sheet_id", "layout_id"):
+        normalized[key] = _identifier(capture[key], contract=contract, path=f"{path}.{key}")
+
+    zoom_mode = _string(capture["zoom_mode"], contract=contract, path=f"{path}.zoom_mode")
+    expected_margin = _CAPTURE_MARGIN_BY_CLASS[capture_class]
+    margin = _finite_number(capture["margin_ratio"], contract=contract, path=f"{path}.margin_ratio")
+    if margin != expected_margin:
+        _fail(contract, f"{path}.margin_ratio must equal canonical {capture_class} margin {expected_margin}")
+
+    view_direction = _string(
+        capture["view_direction"], contract=contract, path=f"{path}.view_direction"
+    )
+    ucs = _string(capture["ucs"], contract=contract, path=f"{path}.ucs")
+    visual_style = _string(
+        capture["visual_style"], contract=contract, path=f"{path}.visual_style"
+    )
+    if view_direction != _CAPTURE_VIEW_DIRECTION:
+        _fail(contract, f"{path}.view_direction must be {_CAPTURE_VIEW_DIRECTION}")
+    if ucs != _CAPTURE_UCS:
+        _fail(contract, f"{path}.ucs must be {_CAPTURE_UCS}")
+    if visual_style != _CAPTURE_VISUAL_STYLE:
+        _fail(contract, f"{path}.visual_style must be {_CAPTURE_VISUAL_STYLE}")
+
+    if capture_class == "GLOBAL":
+        if zoom_mode != "EXTENTS" or capture["wcs_bbox"] is not None:
+            _fail(contract, f"{path} GLOBAL capture requires EXTENTS and null wcs_bbox")
+        if normalized["region_id"] is not None or normalized["parent_region_id"] is not None:
+            _fail(contract, f"{path} GLOBAL capture cannot carry region identity")
+        bbox: object = None
+    else:
+        if zoom_mode != "WINDOW":
+            _fail(contract, f"{path} {capture_class} capture requires WINDOW zoom_mode")
+        bbox = list(_validate_wcs_bbox(capture["wcs_bbox"], contract=contract, path=f"{path}.wcs_bbox"))
+        if normalized["region_id"] is None:
+            _fail(contract, f"{path}.region_id is required for {capture_class}")
+        if capture_class == "REGION" and normalized["parent_region_id"] is not None:
+            _fail(contract, f"{path}.parent_region_id must be null for REGION")
+        if capture_class == "DETAIL" and normalized["parent_region_id"] is None:
+            _fail(contract, f"{path}.parent_region_id is required for DETAIL")
+
+    normalized.update(
+        {
+            "zoom_mode": zoom_mode,
+            "wcs_bbox": bbox,
+            "margin_ratio": margin,
+            "view_direction": view_direction,
+            "ucs": ucs,
+            "visual_style": visual_style,
+        }
+    )
+    return normalized
+
+
+def _normalize_visual_capture_plan_payload(
+    payload: Mapping[str, object], *, contract: str
+) -> dict[str, object]:
+    _keys(
+        payload,
+        contract=contract,
+        required={
+            "schema_version",
+            "plan_id",
+            "run_id",
+            "scope_id",
+            "registry_snapshot_sha256",
+            "candidate_revision_sha256",
+            "candidate_state_sha256",
+            "latest_mutation_sha256",
+            "captures",
+        },
+    )
+    if payload["schema_version"] != "visual-capture-plan-1.0":
+        _fail(contract, "schema_version must be 'visual-capture-plan-1.0'")
+    normalized: dict[str, object] = {"schema_version": payload["schema_version"]}
+    for key in ("plan_id", "run_id", "scope_id"):
+        normalized[key] = _identifier(payload[key], contract=contract, path=key)
+    for key in (
+        "registry_snapshot_sha256",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "latest_mutation_sha256",
+    ):
+        normalized[key] = _sha256(payload[key], contract=contract, path=key)
+    captures = payload["captures"]
+    if not isinstance(captures, list) or not captures:
+        _fail(contract, "captures must contain at least one item")
+    normalized_captures: list[dict[str, object]] = []
+    capture_ids: set[str] = set()
+    for index, raw_capture in enumerate(captures):
+        capture = _normalize_capture_record(raw_capture, contract=contract, path=f"captures[{index}]")
+        capture_id = str(capture["capture_id"])
+        if capture_id in capture_ids:
+            _fail(contract, f"duplicate capture_id: {capture_id}")
+        capture_ids.add(capture_id)
+        normalized_captures.append(capture)
+    normalized["captures"] = normalized_captures
+    return normalized
+
+
+def _bbox_contains(parent: list[object], child: list[object]) -> bool:
+    parent_min_x, parent_min_y, parent_max_x, parent_max_y = map(float, parent)
+    child_min_x, child_min_y, child_max_x, child_max_y = map(float, child)
+
+    def not_below(value: float, lower: float) -> bool:
+        return value > lower or math.isclose(
+            value,
+            lower,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        )
+
+    def not_above(value: float, upper: float) -> bool:
+        return value < upper or math.isclose(
+            value,
+            upper,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        )
+
+    return (
+        not_below(child_min_x, parent_min_x)
+        and not_below(child_min_y, parent_min_y)
+        and not_above(child_max_x, parent_max_x)
+        and not_above(child_max_y, parent_max_y)
+    )
+
+
+def _validate_visual_capture_plan(
+    payload: dict[str, Any], *, server_scope: Mapping[str, object] | None = None
+) -> None:
+    contract = "visual_capture_plan"
+    if server_scope is None:
+        _fail(contract, "server_scope is required for server-owned validation")
+    normalized = _normalize_visual_capture_plan_payload(payload, contract=contract)
+    scope = _normalize_visual_review_scope(server_scope, contract=contract)
+    for key in (
+        "run_id",
+        "scope_id",
+        "registry_snapshot_sha256",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+    ):
+        if normalized[key] != scope[key]:
+            _fail(contract, f"{key} does not match the server-owned scope")
+
+    scope_regions = scope["regions"]
+    assert isinstance(scope_regions, list)
+    region_by_id = {str(region["region_id"]): region for region in scope_regions}
+    required_views = {
+        (str(region["view_id"]), str(region["sheet_id"]), str(region["layout_id"]))
+        for region in scope_regions
+    }
+    global_counts = {identity: 0 for identity in required_views}
+    region_counts = {region_id: 0 for region_id in region_by_id}
+    captures = normalized["captures"]
+    assert isinstance(captures, list)
+    region_capture_by_id = {
+        str(capture["region_id"]): capture
+        for capture in captures
+        if capture["capture_class"] == "REGION"
+    }
+    seen_groups: set[tuple[str, str, str]] = set()
+
+    for capture in captures:
+        capture_class = capture["capture_class"]
+        identity = (
+            str(capture["view_id"]),
+            str(capture["sheet_id"]),
+            str(capture["layout_id"]),
+        )
+        if capture_class == "GLOBAL":
+            if identity not in global_counts:
+                _fail(contract, "GLOBAL capture is outside the server-owned scope")
+            global_counts[identity] += 1
+            seen_groups.add(identity)
+            continue
+        region_id = str(capture["region_id"])
+        region = region_by_id.get(region_id)
+        if region is None:
+            _fail(contract, "region_id is outside the server-owned scope")
+        expected_identity = (
+            str(region["view_id"]),
+            str(region["sheet_id"]),
+            str(region["layout_id"]),
+        )
+        if identity != expected_identity:
+            _fail(contract, "view_id/sheet_id/layout_id do not match the server-owned scope")
+        if identity not in seen_groups:
+            _fail(contract, "the first capture for each server-owned group must be GLOBAL")
+        if capture_class == "REGION":
+            region_counts[region_id] += 1
+        else:
+            parent_region_id = capture["parent_region_id"]
+            if parent_region_id != region_id or parent_region_id not in region_by_id:
+                _fail(contract, "parent_region_id must identify the accepted parent REGION")
+            parent_capture = region_capture_by_id.get(str(parent_region_id))
+            if parent_capture is None:
+                _fail(contract, "DETAIL parent REGION capture is missing")
+            parent_bbox = parent_capture["wcs_bbox"]
+            detail_bbox = capture["wcs_bbox"]
+            assert isinstance(parent_bbox, list)
+            assert isinstance(detail_bbox, list)
+            if not _bbox_contains(parent_bbox, detail_bbox):
+                _fail(contract, "DETAIL bbox must be bounded by its parent REGION bbox")
+
+    if any(count != 1 for count in global_counts.values()):
+        _fail(contract, "exactly one GLOBAL capture is required per server-owned view/sheet/layout")
+    if any(count != 1 for count in region_counts.values()):
+        _fail(contract, "exactly one REGION capture is required per server-owned region")
+    payload.clear()
+    payload.update(normalized)
+
+
+def _bbox_matches(expected: list[object], observed: list[object]) -> bool:
+    return all(
+        math.isclose(
+            float(expected_value),
+            float(observed_value),
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        )
+        for expected_value, observed_value in zip(expected, observed, strict=True)
+    )
+
+
+def _validate_visual_capture_receipt(
+    payload: dict[str, Any], *, server_plan: Mapping[str, object] | None = None
+) -> None:
+    contract = "visual_capture_receipt"
+    if server_plan is None:
+        _fail(contract, "server_scope is required for server-owned validation")
+    plan = _normalize_visual_capture_plan_payload(server_plan, contract=contract)
+    _keys(
+        payload,
+        contract=contract,
+        required={
+            "schema_version",
+            "receipt_id",
+            "capture_id",
+            "run_id",
+            "scope_id",
+            "region_id",
+            "view_id",
+            "sheet_id",
+            "layout_id",
+            "candidate_revision_sha256",
+            "candidate_state_sha256",
+            "latest_mutation_sha256",
+            "visual_capture_plan_sha256",
+            "capture_class",
+            "zoom_mode",
+            "requested_wcs_bbox",
+            "observed_wcs_bbox",
+            "view_center",
+            "view_width",
+            "view_height",
+            "view_direction",
+            "ucs",
+            "visual_style",
+            "artifact_sha256",
+            "artifact_width",
+            "artifact_height",
+            "captured_at_utc",
+            "transient_state_restored",
+        },
+    )
+    if payload["schema_version"] != "visual-capture-receipt-1.0":
+        _fail(contract, "schema_version must be 'visual-capture-receipt-1.0'")
+    _identifier(payload["receipt_id"], contract=contract, path="receipt_id")
+    capture_id = _identifier(payload["capture_id"], contract=contract, path="capture_id")
+    captures = plan["captures"]
+    assert isinstance(captures, list)
+    matched = [capture for capture in captures if capture["capture_id"] == capture_id]
+    if len(matched) != 1:
+        _fail(contract, "capture_id does not identify exactly one accepted plan capture")
+    capture = matched[0]
+
+    for key in ("run_id", "scope_id"):
+        _identifier(payload[key], contract=contract, path=key)
+        if payload[key] != plan[key]:
+            _fail(contract, f"{key} does not match the server-owned plan")
+    for key in (
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "latest_mutation_sha256",
+    ):
+        _sha256(payload[key], contract=contract, path=key)
+        if payload[key] != plan[key]:
+            _fail(contract, f"{key} does not match the server-owned plan")
+    plan_sha = _sha256(
+        payload["visual_capture_plan_sha256"],
+        contract=contract,
+        path="visual_capture_plan_sha256",
+    )
+    expected_plan_sha = canonical_json_sha256(plan)
+    if plan_sha != expected_plan_sha:
+        _fail(contract, "visual_capture_plan_sha256 does not match the server-owned plan sha")
+
+    region_id = _nullable_identifier(payload["region_id"], contract=contract, path="region_id")
+    if region_id != capture["region_id"]:
+        _fail(contract, "region_id does not match the accepted capture")
+    for key in (
+        "view_id",
+        "sheet_id",
+        "layout_id",
+        "capture_class",
+        "zoom_mode",
+        "view_direction",
+        "ucs",
+        "visual_style",
+    ):
+        _string(payload[key], contract=contract, path=key)
+        if payload[key] != capture[key]:
+            _fail(contract, f"{key} does not match the accepted capture")
+
+    expected_bbox = capture["wcs_bbox"]
+    requested_bbox = payload["requested_wcs_bbox"]
+    observed_bbox = payload["observed_wcs_bbox"]
+    if capture["capture_class"] == "GLOBAL":
+        if requested_bbox is not None or observed_bbox is not None:
+            _fail(contract, "GLOBAL requested_wcs_bbox and observed_wcs_bbox must be null")
+    else:
+        requested = list(
+            _validate_wcs_bbox(requested_bbox, contract=contract, path="requested_wcs_bbox")
+        )
+        observed = list(
+            _validate_wcs_bbox(observed_bbox, contract=contract, path="observed_wcs_bbox")
+        )
+        assert isinstance(expected_bbox, list)
+        if requested != expected_bbox:
+            _fail(contract, "requested_wcs_bbox does not match the accepted plan")
+        if not _bbox_matches(expected_bbox, observed):
+            _fail(contract, "observed_wcs_bbox is outside the accepted camera tolerance")
+
+    _validate_point(payload["view_center"], contract=contract, path="view_center")
+    view_width = _finite_number(payload["view_width"], contract=contract, path="view_width")
+    view_height = _finite_number(payload["view_height"], contract=contract, path="view_height")
+    if view_width <= 0:
+        _fail(contract, "view_width must be positive")
+    if view_height <= 0:
+        _fail(contract, "view_height must be positive")
+
+    if capture["capture_class"] != "GLOBAL":
+        assert isinstance(expected_bbox, list)
+        min_x, min_y, max_x, max_y = map(float, expected_bbox)
+        margin = float(capture["margin_ratio"])
+        expected_center = ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
+        actual_center = payload["view_center"]
+        assert isinstance(actual_center, list)
+        if any(
+            not math.isclose(
+                float(actual),
+                expected,
+                rel_tol=_CAPTURE_BBOX_REL_TOL,
+                abs_tol=_CAPTURE_BBOX_ABS_TOL,
+            )
+            for actual, expected in zip(actual_center, expected_center, strict=True)
+        ):
+            _fail(contract, "view_center does not match the accepted bbox center")
+        expected_width = (max_x - min_x) * (1.0 + 2.0 * margin)
+        expected_height = (max_y - min_y) * (1.0 + 2.0 * margin)
+        if not math.isclose(
+            float(view_width),
+            expected_width,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        ):
+            _fail(contract, "view_width does not match the accepted bbox margin policy")
+        if not math.isclose(
+            float(view_height),
+            expected_height,
+            rel_tol=_CAPTURE_BBOX_REL_TOL,
+            abs_tol=_CAPTURE_BBOX_ABS_TOL,
+        ):
+            _fail(contract, "view_height does not match the accepted bbox margin policy")
+
+    _sha256(payload["artifact_sha256"], contract=contract, path="artifact_sha256")
+    _positive_integer(payload["artifact_width"], contract=contract, path="artifact_width")
+    _positive_integer(payload["artifact_height"], contract=contract, path="artifact_height")
+    captured_at = _string(payload["captured_at_utc"], contract=contract, path="captured_at_utc")
+    if _CAPTURED_AT_UTC_RE.fullmatch(captured_at) is None:
+        _fail(contract, "captured_at_utc must be RFC3339 UTC")
+    if payload["transient_state_restored"] is not True:
+        _fail(contract, "transient_state_restored must be true")
+
+
 def _normalize_windows_path(value: object, *, contract: str, path: str) -> str:
     text = _string(value, contract=contract, path=path)
     if _WINDOWS_ABSOLUTE_PATH_RE.fullmatch(text) is None:
@@ -1076,6 +1532,8 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "repair_plan": _validate_repair_plan,
     "region_verification_register": _validate_region_verification_register,
     "visual_review_scope": _validate_visual_review_scope,
+    "visual_capture_plan": _validate_visual_capture_plan,
+    "visual_capture_receipt": _validate_visual_capture_receipt,
     "auto_publish_authorization": _validate_auto_publish_authorization,
 }
 SUPPORTED_VISUAL_CONTRACTS = tuple(sorted(_VALIDATORS))
@@ -1104,12 +1562,17 @@ def validate_visual_contract(
     if not isinstance(payload, Mapping):
         raise VisualContractError(f"{contract}: root must be an object")
     copied = copy.deepcopy(dict(payload))
-    if key == "visual_review_scope":
+    if key in {"visual_review_scope", "visual_capture_plan", "visual_capture_receipt"}:
         if server_scope is None or not isinstance(server_scope, Mapping):
             raise VisualContractError(
-                "visual_review_scope: server_scope is required for server-owned validation"
+                f"{key}: server_scope is required for server-owned validation"
             )
-        _validate_visual_review_scope(copied, server_scope=server_scope)
+        if key == "visual_review_scope":
+            _validate_visual_review_scope(copied, server_scope=server_scope)
+        elif key == "visual_capture_plan":
+            _validate_visual_capture_plan(copied, server_scope=server_scope)
+        else:
+            _validate_visual_capture_receipt(copied, server_plan=server_scope)
     else:
         validator(copied)
     return copied
