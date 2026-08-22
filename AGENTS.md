@@ -58,14 +58,19 @@ For governance/runtime baton work, `docs/CONTROL_PROTOCOL.md` is mandatory.
 
 - Every wake starts with fresh `main`, canonical HOT STATE, newest terminal/action,
   then current PR/head/CI only when relevant.
+- Every new packet/HOT STATE has a stable `LANE_ID`; `CONTROL_SEQ` ordering is
+  lane-local, not global across unrelated work.
 - `NEXT_OWNER` is exactly `SOL` or `Luna / Codex Desktop`; Human Owner is not a
-  relay.
+  relay. Human action is represented as a bounded gate on the owning lane.
 - New action packets use explicit `STOP_REPO_WRITE`, `STOP_LIVE`, and
   `STOP_PERSISTENT_MUTATION`. Standalone `STOP_WRITE` is deprecated.
 - Live actions require explicit `LIVE_AUTHORITY`, integer `ATTEMPT_BUDGET`, and
   exact carve-out/supersession semantics when an older live lock exists.
-- A terminal has one controlling consumer. Later consumers are
-  `VOID_FOR_CONTROL` and cannot open parallel execution branches.
+- A terminal has one controlling consumer within its lane. Later consumers are
+  `VOID_FOR_CONTROL` and cannot open competing branches from that terminal.
+- Independent lanes may run in parallel when write-sets and live resources are
+  disjoint. An exact-main live pin blocks `main` merge/ref movement, not safe
+  branch-only commits, reviews, CI, docs work, or offline tests in another lane.
 - Do not rely on connector timestamps alone. Use predecessor/consumer links,
   `CONTROL_SEQ`, exact SHA/artifact identity, and canonical HOT STATE.
 - `NO_MATERIAL_DELTA => NO_COMMENT`; Audit does not generate governance churn.
