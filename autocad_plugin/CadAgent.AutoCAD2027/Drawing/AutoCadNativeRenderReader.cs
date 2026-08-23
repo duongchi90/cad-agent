@@ -115,12 +115,21 @@ public static class AutoCadNativeRenderReader
             sessionStateRestored);
 
         var artifact = boundary.Publish(reservation);
-        var receipt = CreateCameraReceipt(
-            request,
-            cameraWindow,
-            artifact,
-            captureTimestamp.ToUniversalTime(),
-            sessionStateRestored);
+        var receipt = request.ArtifactKind == "PNG"
+            ? CreateCameraReceipt(
+                request,
+                cameraWindow,
+                artifact,
+                captureTimestamp.ToUniversalTime(),
+                sessionStateRestored)
+            : null;
+        var cameraObservation = request.ArtifactKind == "PDF"
+            ? CreateCameraObservation(
+                request,
+                cameraWindow,
+                captureTimestamp.ToUniversalTime(),
+                sessionStateRestored)
+            : null;
         return new NativeRenderEvidenceSnapshot(
             request.RequestId,
             request.RunId,
@@ -135,7 +144,8 @@ public static class AutoCadNativeRenderReader
             dbmodBefore,
             dbmodAfter,
             Array.Empty<string>(),
-            receipt);
+            receipt,
+            cameraObservation);
     }
 
     private static CameraWindow? PlotLayout(
@@ -509,6 +519,47 @@ public static class AutoCadNativeRenderReader
             artifact.Sha256,
             artifact.Width.Value,
             artifact.Height.Value,
+            captureTimestamp,
+            transientStateRestored);
+    }
+
+    private static NativeRenderCameraObservation CreateCameraObservation(
+        NativeRenderRequest request,
+        CameraWindow? cameraWindow,
+        DateTimeOffset captureTimestamp,
+        bool transientStateRestored)
+    {
+        var camera = request.RenderOptions.Camera
+            ?? throw new InvalidDataException("Canonical camera PDF render requires camera context.");
+        if (cameraWindow is null)
+        {
+            throw new InvalidDataException("Canonical camera PDF render did not produce observed camera state.");
+        }
+
+        return new NativeRenderCameraObservation(
+            "native-camera-observation-1.0",
+            $"observation-{camera.CaptureId}",
+            camera.CaptureId,
+            request.RunId,
+            camera.ScopeId,
+            camera.RegionId,
+            camera.ViewId,
+            camera.SheetId,
+            camera.LayoutId,
+            camera.CandidateRevisionSha256,
+            camera.CandidateStateSha256,
+            request.LatestMutationSha256,
+            camera.VisualCapturePlanSha256,
+            camera.CaptureClass,
+            camera.ZoomMode,
+            cameraWindow.RequestedWcsBbox,
+            cameraWindow.ObservedWcsBbox,
+            cameraWindow.ViewCenter,
+            cameraWindow.ViewWidth,
+            cameraWindow.ViewHeight,
+            cameraWindow.ObservedViewDirection,
+            cameraWindow.ObservedUcs,
+            cameraWindow.ObservedVisualStyle,
             captureTimestamp,
             transientStateRestored);
     }

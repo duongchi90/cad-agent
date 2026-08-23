@@ -118,6 +118,58 @@ _CAPTURE_RECEIPT_FIELDS = frozenset(
         "transient_state_restored",
     }
 )
+_CAMERA_OBSERVATION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "observation_id",
+        "capture_id",
+        "run_id",
+        "scope_id",
+        "region_id",
+        "view_id",
+        "sheet_id",
+        "layout_id",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "latest_mutation_sha256",
+        "visual_capture_plan_sha256",
+        "capture_class",
+        "zoom_mode",
+        "requested_wcs_bbox",
+        "observed_wcs_bbox",
+        "view_center",
+        "view_width",
+        "view_height",
+        "view_direction",
+        "ucs",
+        "visual_style",
+        "captured_at_utc",
+        "transient_state_restored",
+    }
+)
+_DERIVED_RASTER_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source",
+        "native_binding",
+        "page_number",
+        "paper_size",
+        "dpi",
+        "width_px",
+        "height_px",
+        "has_alpha",
+        "opaque",
+        "pdf_sha256",
+        "png_sha256",
+        "drawing_sha256",
+        "latest_mutation_sha256",
+        "visual_run_manifest_sha256",
+        "layout",
+        "render_options",
+        "dbmod_before",
+        "dbmod_after",
+    }
+)
 _PNG_ARTIFACT_FIELDS = frozenset({"relative_path", "sha256", "width", "height"})
 _PDF_ARTIFACT_FIELDS = frozenset({"relative_path", "sha256", "page_count"})
 _FORBIDDEN_FIELDS = frozenset(
@@ -346,6 +398,123 @@ def _render_options(value: object) -> dict[str, object]:
     return result
 
 
+def _camera_frame(
+    result: Mapping[str, object], camera: Mapping[str, object], context: str
+) -> None:
+    center = _point(result["view_center"], f"{context}.view_center")
+    width = _finite_number(result["view_width"], f"{context}.view_width", positive=True)
+    height = _finite_number(result["view_height"], f"{context}.view_height", positive=True)
+    if result["capture_class"] not in {"GLOBAL", "REGION", "DETAIL"}:
+        _error(f"{context}.capture_class is invalid")
+    if result["zoom_mode"] not in {"EXTENTS", "WINDOW"}:
+        _error(f"{context}.zoom_mode is invalid")
+    if result["view_direction"] != "TOP":
+        _error(f"{context}.view_direction must be TOP")
+    if result["ucs"] != "WORLD":
+        _error(f"{context}.ucs must be WORLD")
+    if result["visual_style"] != "2D_WIREFRAME":
+        _error(f"{context}.visual_style must be 2D_WIREFRAME")
+    if result["capture_class"] == "GLOBAL":
+        if result["requested_wcs_bbox"] is not None or result["observed_wcs_bbox"] is not None:
+            _error(f"{context} GLOBAL bbox values must be null")
+    else:
+        requested = _bbox(result["requested_wcs_bbox"], f"{context}.requested_wcs_bbox")
+        observed = _bbox(result["observed_wcs_bbox"], f"{context}.observed_wcs_bbox")
+        camera_bbox = camera["wcs_bbox"]
+        if not isinstance(camera_bbox, list) or not _bbox_matches(
+            requested, [float(value) for value in camera_bbox]
+        ) or not _bbox_matches(observed, requested):
+            _error(f"{context} WINDOW bbox does not match camera")
+        expected_center = [(requested[0] + requested[2]) / 2.0, (requested[1] + requested[3]) / 2.0]
+        margin = float(camera["margin_ratio"])
+        expected_width = (requested[2] - requested[0]) * (1.0 + 2.0 * margin)
+        expected_height = (requested[3] - requested[1]) * (1.0 + 2.0 * margin)
+        if not all(math.isclose(actual, expected, rel_tol=_BBOX_REL_TOL, abs_tol=_BBOX_ABS_TOL)
+                   for actual, expected in zip(center, expected_center, strict=True)):
+            _error(f"{context}.view_center does not match camera bbox")
+        if not math.isclose(width, expected_width, rel_tol=_BBOX_REL_TOL, abs_tol=_BBOX_ABS_TOL):
+            _error(f"{context}.view_width does not match camera margin")
+        if not math.isclose(height, expected_height, rel_tol=_BBOX_REL_TOL, abs_tol=_BBOX_ABS_TOL):
+            _error(f"{context}.view_height does not match camera margin")
+
+
+def _camera_observation(
+    value: object, *, evidence: Mapping[str, object], camera: Mapping[str, object]
+) -> dict[str, object]:
+    result = _closed_fields(value, _CAMERA_OBSERVATION_FIELDS, "native_camera_observation")
+    if result["schema_version"] != "native-camera-observation-1.0":
+        _error("native_camera_observation.schema_version is unsupported")
+    _string(result["observation_id"], "native_camera_observation.observation_id", identifier=True)
+    for field in ("capture_id", "run_id", "scope_id", "view_id", "sheet_id", "layout_id"):
+        _string(result[field], f"native_camera_observation.{field}", identifier=True)
+    _nullable_identifier(result["region_id"], "native_camera_observation.region_id")
+    for field in (
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "latest_mutation_sha256",
+        "visual_capture_plan_sha256",
+    ):
+        _hash(result[field], f"native_camera_observation.{field}")
+    _timestamp(result["captured_at_utc"], "native_camera_observation.captured_at_utc")
+    if result["transient_state_restored"] is not True:
+        _error("native_camera_observation.transient_state_restored must be true")
+    comparisons = {
+        "capture_id": camera["capture_id"],
+        "scope_id": camera["scope_id"],
+        "region_id": camera["region_id"],
+        "view_id": camera["view_id"],
+        "sheet_id": camera["sheet_id"],
+        "layout_id": camera["layout_id"],
+        "candidate_revision_sha256": camera["candidate_revision_sha256"],
+        "candidate_state_sha256": camera["candidate_state_sha256"],
+        "visual_capture_plan_sha256": camera["visual_capture_plan_sha256"],
+        "capture_class": camera["capture_class"],
+        "zoom_mode": camera["zoom_mode"],
+        "view_direction": camera["view_direction"],
+        "ucs": camera["ucs"],
+        "visual_style": camera["visual_style"],
+        "run_id": evidence["run_id"],
+        "latest_mutation_sha256": evidence["latest_mutation_sha256"],
+        "captured_at_utc": evidence["capture_timestamp"],
+    }
+    for field, expected in comparisons.items():
+        if result[field] != expected:
+            _error(f"native_camera_observation.{field} does not match camera request")
+    _camera_frame(result, camera, "native_camera_observation")
+    result["region_id"] = _nullable_identifier(result["region_id"], "native_camera_observation.region_id")
+    result["view_center"] = _point(result["view_center"], "native_camera_observation.view_center")
+    result["view_width"] = _finite_number(result["view_width"], "native_camera_observation.view_width", positive=True)
+    result["view_height"] = _finite_number(result["view_height"], "native_camera_observation.view_height", positive=True)
+    return result
+
+
+def _derived_raster(value: object, *, evidence: Mapping[str, object]) -> dict[str, object]:
+    result = _closed_fields(value, _DERIVED_RASTER_FIELDS, "derived_raster_evidence")
+    if result["schema_version"] != "derived-raster-evidence-1.0" or result["source"] != "NATIVE_PDF_BINDING":
+        _error("derived_raster_evidence schema/source is unsupported")
+    for field in ("pdf_sha256", "png_sha256", "drawing_sha256", "latest_mutation_sha256", "visual_run_manifest_sha256"):
+        _hash(result[field], f"derived_raster_evidence.{field}")
+    if result["pdf_sha256"] != evidence["artifact"]["sha256"]:
+        _error("derived_raster_evidence PDF SHA does not match native PDF artifact")
+    if result["drawing_sha256"] != evidence["drawing_sha256"] or result["latest_mutation_sha256"] != evidence["latest_mutation_sha256"] or result["visual_run_manifest_sha256"] != evidence["visual_run_manifest_sha256"]:
+        _error("derived_raster_evidence binding is stale")
+    if result["page_number"] != 1 or result["paper_size"] != "A4" or result["dpi"] != 300 or result["width_px"] != 2480 or result["height_px"] != 3508 or result["has_alpha"] is not False or result["opaque"] is not True:
+        _error("derived_raster_evidence does not satisfy the exact A4 300-DPI opaque RGB policy")
+    binding = _closed_fields(result["native_binding"], frozenset({"pdf_artifact_sha256", "drawing_sha256", "latest_mutation_sha256", "visual_run_manifest_sha256", "layout", "render_options", "dbmod_before", "dbmod_after"}), "derived_raster_evidence.native_binding")
+    if binding["pdf_artifact_sha256"] != result["pdf_sha256"] or binding["drawing_sha256"] != result["drawing_sha256"] or binding["latest_mutation_sha256"] != result["latest_mutation_sha256"] or binding["visual_run_manifest_sha256"] != result["visual_run_manifest_sha256"] or binding["dbmod_before"] != binding["dbmod_after"]:
+        _error("derived_raster_evidence native binding is inconsistent")
+    layout = _layout(result["layout"])
+    binding_layout = _closed_fields(binding["layout"], _LAYOUT_FIELDS, "derived_raster_evidence.native_binding.layout")
+    if layout != binding_layout or layout != evidence["layout"]:
+        _error("derived_raster_evidence layout binding is stale")
+    options = _closed_fields(result["render_options"], frozenset({"paper_size", "dpi", "background", "opaque"}), "derived_raster_evidence.render_options")
+    if options != binding["render_options"] or options != {"paper_size": "A4", "dpi": 300, "background": "white", "opaque": True}:
+        _error("derived_raster_evidence render options are not exact")
+    if result["dbmod_before"] != binding["dbmod_before"] or result["dbmod_after"] != binding["dbmod_after"] or result["dbmod_before"] != result["dbmod_after"]:
+        _error("derived_raster_evidence DBMOD binding is stale")
+    return deepcopy(result)
+
+
 def _artifact_path(value: object, artifact_kind: str) -> str:
     path = _string(value, "artifact.relative_path")
     if (
@@ -401,6 +570,7 @@ def _capture_receipt(
     *,
     evidence: Mapping[str, object],
     camera: Mapping[str, object],
+    derived_raster: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     result = _closed_fields(value, _CAPTURE_RECEIPT_FIELDS, "visual_capture_receipt")
     if result["schema_version"] != "visual-capture-receipt-1.0":
@@ -466,12 +636,20 @@ def _capture_receipt(
     artifact = evidence["artifact"]
     if not isinstance(artifact, Mapping):
         _error("evidence.artifact is invalid")
-    if result["artifact_sha256"] != artifact["sha256"]:
-        _error("visual_capture_receipt artifact SHA does not match render artifact")
-    if result["artifact_width"] != artifact["width"]:
-        _error("visual_capture_receipt artifact width does not match render artifact")
-    if result["artifact_height"] != artifact["height"]:
-        _error("visual_capture_receipt artifact height does not match render artifact")
+    if derived_raster is None:
+        expected_sha = artifact["sha256"]
+        expected_width = artifact["width"]
+        expected_height = artifact["height"]
+    else:
+        expected_sha = derived_raster["png_sha256"]
+        expected_width = derived_raster["width_px"]
+        expected_height = derived_raster["height_px"]
+    if result["artifact_sha256"] != expected_sha:
+        _error("visual_capture_receipt artifact SHA does not match final raster artifact")
+    if result["artifact_width"] != expected_width:
+        _error("visual_capture_receipt artifact width does not match final raster artifact")
+    if result["artifact_height"] != expected_height:
+        _error("visual_capture_receipt artifact height does not match final raster artifact")
 
     camera_bbox = camera["wcs_bbox"]
     if camera["capture_class"] == "GLOBAL":
@@ -533,8 +711,6 @@ def validate_render_request(payload: object) -> dict[str, object]:
     if artifact_kind not in {"PNG", "PDF"}:
         _error("request.artifact_kind must be PNG or PDF")
     options = _render_options(result["render_options"])
-    if "camera" in options and artifact_kind != "PNG":
-        _error("canonical camera native render is PNG-only")
     _timestamp(result["requested_at"], "request.requested_at")
     result["layout"] = layout
     result["render_options"] = options
@@ -584,8 +760,6 @@ def build_canonical_camera_render_evidence_request(
     capture_id: str,
 ) -> dict[str, object]:
     """Derive one native-render camera request from server-owned R5 scope and plan."""
-    if artifact_kind != "PNG":
-        _error("canonical camera native render is PNG-only")
     if "camera" in render_options:
         _error("render_options.camera must be server-derived")
     try:
@@ -663,9 +837,16 @@ def validate_render_evidence(
     raw = _mapping(payload, "evidence")
     raw_options = raw.get("render_options")
     has_camera = isinstance(raw_options, Mapping) and "camera" in raw_options
-    expected_fields = _EVIDENCE_FIELDS | (
-        {"visual_capture_receipt"} if has_camera else set()
-    )
+    artifact_kind_hint = raw.get("artifact_kind")
+    has_derived = "derived_raster_evidence" in raw
+    if has_camera and artifact_kind_hint == "PDF":
+        expected_fields = _EVIDENCE_FIELDS | {"native_camera_observation"}
+        if has_derived:
+            expected_fields |= {"derived_raster_evidence", "visual_capture_receipt"}
+    elif has_camera:
+        expected_fields = _EVIDENCE_FIELDS | {"visual_capture_receipt"}
+    else:
+        expected_fields = _EVIDENCE_FIELDS
     result = _closed_fields(raw, frozenset(expected_fields), "evidence")
     if result["schema_version"] != EVIDENCE_SCHEMA_VERSION:
         _error("evidence.schema_version is unsupported")
@@ -676,11 +857,15 @@ def validate_render_evidence(
         _error("evidence.artifact_kind must be PNG or PDF")
     result["render_options"] = _render_options(result["render_options"])
     camera = result["render_options"].get("camera")
-    if camera is not None and artifact_kind != "PNG":
-        _error("canonical camera native render is PNG-only")
     if result["renderer"] != "AUTOCAD_NATIVE":
         _error("evidence.renderer must be AUTOCAD_NATIVE")
     result["artifact"] = _artifact(result["artifact"], artifact_kind)
+    derived_raster = None
+    if has_derived:
+        if artifact_kind != "PDF" or camera is None:
+            _error("derived_raster_evidence is only valid for a camera PDF stage")
+        derived_raster = _derived_raster(result["derived_raster_evidence"], evidence=result)
+        result["derived_raster_evidence"] = derived_raster
     _timestamp(result["capture_timestamp"], "evidence.capture_timestamp")
     if type(result["changed"]) is not bool or result["changed"] is not False:
         _error("evidence.changed must be false")
@@ -691,11 +876,21 @@ def validate_render_evidence(
         _error("evidence DBMOD values must be equal")
     result["warnings"] = _warnings(result["warnings"])
     if camera is not None:
-        result["visual_capture_receipt"] = _capture_receipt(
-            result["visual_capture_receipt"],
-            evidence=result,
-            camera=camera,
-        )
+        if artifact_kind == "PDF":
+            result["native_camera_observation"] = _camera_observation(
+                result["native_camera_observation"], evidence=result, camera=camera
+            )
+            if derived_raster is not None:
+                result["visual_capture_receipt"] = _capture_receipt(
+                    result["visual_capture_receipt"],
+                    evidence=result,
+                    camera=camera,
+                    derived_raster=derived_raster,
+                )
+        else:
+            result["visual_capture_receipt"] = _capture_receipt(
+                result["visual_capture_receipt"], evidence=result, camera=camera
+            )
 
     if request is not None:
         expected = validate_render_request(request)
@@ -712,10 +907,20 @@ def validate_render_evidence(
             if result[field] != expected[field]:
                 _error(f"evidence.{field} does not match request")
         expected_camera = expected["render_options"].get("camera")
-        if expected_camera is None and "visual_capture_receipt" in result:
+        if expected_camera is None and any(
+            field in result
+            for field in (
+                "visual_capture_receipt",
+                "native_camera_observation",
+                "derived_raster_evidence",
+            )
+        ):
             _error("legacy render request cannot accept a camera receipt")
-        if expected_camera is not None and "visual_capture_receipt" not in result:
-            _error("camera render evidence is missing visual_capture_receipt")
+        if expected_camera is not None:
+            if expected["artifact_kind"] == "PDF" and "native_camera_observation" not in result:
+                _error("camera PDF evidence is missing native_camera_observation")
+            if expected["artifact_kind"] == "PNG" and "visual_capture_receipt" not in result:
+                _error("camera render evidence is missing visual_capture_receipt")
     return deepcopy(result)
 
 

@@ -278,6 +278,33 @@ public sealed record NativeRenderCameraReceipt(
     DateTimeOffset CapturedAtUtc,
     bool TransientStateRestored);
 
+public sealed record NativeRenderCameraObservation(
+    string SchemaVersion,
+    string ObservationId,
+    string CaptureId,
+    string RunId,
+    string ScopeId,
+    string? RegionId,
+    string ViewId,
+    string SheetId,
+    string LayoutId,
+    string CandidateRevisionSha256,
+    string CandidateStateSha256,
+    string LatestMutationSha256,
+    string VisualCapturePlanSha256,
+    string CaptureClass,
+    string ZoomMode,
+    IReadOnlyList<double>? RequestedWcsBbox,
+    IReadOnlyList<double>? ObservedWcsBbox,
+    IReadOnlyList<double> ViewCenter,
+    double ViewWidth,
+    double ViewHeight,
+    string ViewDirection,
+    string Ucs,
+    string VisualStyle,
+    DateTimeOffset CapturedAtUtc,
+    bool TransientStateRestored);
+
 public sealed record NativeRenderEvidenceSnapshot(
     string RequestId,
     string RunId,
@@ -292,7 +319,8 @@ public sealed record NativeRenderEvidenceSnapshot(
     int DbmodBefore,
     int DbmodAfter,
     IReadOnlyList<string> Warnings,
-    NativeRenderCameraReceipt? VisualCaptureReceipt = null);
+    NativeRenderCameraReceipt? VisualCaptureReceipt = null,
+    NativeRenderCameraObservation? CameraObservation = null);
 
 public static class NativeRenderPayload
 {
@@ -382,7 +410,7 @@ public static class NativeRenderPayload
             ["warnings"] = JsonSerializer.SerializeToElement(snapshot.Warnings.ToArray())
         };
 
-        if (snapshot.VisualCaptureReceipt is not null)
+        if (snapshot.ArtifactKind == "PNG" && snapshot.VisualCaptureReceipt is not null)
         {
             var receipt = snapshot.VisualCaptureReceipt;
             payload["visual_capture_receipt"] = JsonSerializer.SerializeToElement(new
@@ -415,6 +443,39 @@ public static class NativeRenderPayload
                 artifact_height = receipt.ArtifactHeight,
                 captured_at_utc = receipt.CapturedAtUtc.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
                 transient_state_restored = receipt.TransientStateRestored
+            });
+        }
+
+        if (snapshot.ArtifactKind == "PDF" && snapshot.CameraObservation is not null)
+        {
+            var observation = snapshot.CameraObservation;
+            payload["camera_observation"] = JsonSerializer.SerializeToElement(new
+            {
+                schema_version = "native-camera-observation-1.0",
+                observation_id = observation.ObservationId,
+                capture_id = observation.CaptureId,
+                run_id = observation.RunId,
+                scope_id = observation.ScopeId,
+                region_id = observation.RegionId,
+                view_id = observation.ViewId,
+                sheet_id = observation.SheetId,
+                layout_id = observation.LayoutId,
+                candidate_revision_sha256 = observation.CandidateRevisionSha256,
+                candidate_state_sha256 = observation.CandidateStateSha256,
+                latest_mutation_sha256 = observation.LatestMutationSha256,
+                visual_capture_plan_sha256 = observation.VisualCapturePlanSha256,
+                capture_class = observation.CaptureClass,
+                zoom_mode = observation.ZoomMode,
+                requested_wcs_bbox = observation.RequestedWcsBbox,
+                observed_wcs_bbox = observation.ObservedWcsBbox,
+                view_center = observation.ViewCenter,
+                view_width = observation.ViewWidth,
+                view_height = observation.ViewHeight,
+                view_direction = observation.ViewDirection,
+                ucs = observation.Ucs,
+                visual_style = observation.VisualStyle,
+                captured_at_utc = observation.CapturedAtUtc.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
+                transient_state_restored = observation.TransientStateRestored
             });
         }
 
@@ -525,11 +586,6 @@ public static class NativeRenderPolicy
 
         if (request.RenderOptions.Camera is not null)
         {
-            if (request.ArtifactKind != "PNG")
-            {
-                throw new InvalidDataException(
-                    $"{UnsupportedProfileErrorCode}: canonical camera native render must be PNG.");
-            }
             EnsureCameraSupported(request.RenderOptions.Camera);
             if (!string.Equals(
                     request.RenderOptions.Camera.LayoutId,
@@ -650,32 +706,66 @@ public static class NativeRenderPolicy
             mismatches.Add("render_options.camera");
         }
 
-        if ((request.RenderOptions.Camera is null) != (snapshot.VisualCaptureReceipt is null))
+        var requestCamera = request.RenderOptions.Camera;
+        if (requestCamera is null
+            && (snapshot.VisualCaptureReceipt is not null || snapshot.CameraObservation is not null))
         {
-            mismatches.Add("visual_capture_receipt");
+            mismatches.Add("camera_observation");
         }
-        if (request.RenderOptions.Camera is not null && snapshot.VisualCaptureReceipt is not null)
+        if (requestCamera is not null && request.ArtifactKind == "PNG")
         {
             var receipt = snapshot.VisualCaptureReceipt;
-            if (receipt.CaptureId != request.RenderOptions.Camera.CaptureId
+            if (receipt is null || snapshot.CameraObservation is not null)
+            {
+                mismatches.Add("visual_capture_receipt");
+            }
+            else if (receipt.CaptureId != requestCamera.CaptureId
                 || receipt.RunId != request.RunId
-                || receipt.ScopeId != request.RenderOptions.Camera.ScopeId
-                || receipt.RegionId != request.RenderOptions.Camera.RegionId
-                || receipt.ViewId != request.RenderOptions.Camera.ViewId
-                || receipt.SheetId != request.RenderOptions.Camera.SheetId
-                || receipt.LayoutId != request.RenderOptions.Camera.LayoutId
-                || receipt.CandidateRevisionSha256 != request.RenderOptions.Camera.CandidateRevisionSha256
-                || receipt.CandidateStateSha256 != request.RenderOptions.Camera.CandidateStateSha256
+                || receipt.ScopeId != requestCamera.ScopeId
+                || receipt.RegionId != requestCamera.RegionId
+                || receipt.ViewId != requestCamera.ViewId
+                || receipt.SheetId != requestCamera.SheetId
+                || receipt.LayoutId != requestCamera.LayoutId
+                || receipt.CandidateRevisionSha256 != requestCamera.CandidateRevisionSha256
+                || receipt.CandidateStateSha256 != requestCamera.CandidateStateSha256
                 || receipt.LatestMutationSha256 != request.LatestMutationSha256
-                || receipt.VisualCapturePlanSha256 != request.RenderOptions.Camera.VisualCapturePlanSha256
-                || receipt.CaptureClass != request.RenderOptions.Camera.CaptureClass
-                || receipt.ZoomMode != request.RenderOptions.Camera.ZoomMode
-                || receipt.ViewDirection != request.RenderOptions.Camera.ViewDirection
-                || receipt.Ucs != request.RenderOptions.Camera.Ucs
-                || receipt.VisualStyle != request.RenderOptions.Camera.VisualStyle
+                || receipt.VisualCapturePlanSha256 != requestCamera.VisualCapturePlanSha256
+                || receipt.CaptureClass != requestCamera.CaptureClass
+                || receipt.ZoomMode != requestCamera.ZoomMode
+                || receipt.ViewDirection != requestCamera.ViewDirection
+                || receipt.Ucs != requestCamera.Ucs
+                || receipt.VisualStyle != requestCamera.VisualStyle
                 || !receipt.TransientStateRestored)
             {
                 mismatches.Add("visual_capture_receipt.binding");
+            }
+        }
+        if (requestCamera is not null && request.ArtifactKind == "PDF")
+        {
+            var observation = snapshot.CameraObservation;
+            if (observation is null || snapshot.VisualCaptureReceipt is not null)
+            {
+                mismatches.Add("camera_observation");
+            }
+            else if (observation.CaptureId != requestCamera.CaptureId
+                || observation.RunId != request.RunId
+                || observation.ScopeId != requestCamera.ScopeId
+                || observation.RegionId != requestCamera.RegionId
+                || observation.ViewId != requestCamera.ViewId
+                || observation.SheetId != requestCamera.SheetId
+                || observation.LayoutId != requestCamera.LayoutId
+                || observation.CandidateRevisionSha256 != requestCamera.CandidateRevisionSha256
+                || observation.CandidateStateSha256 != requestCamera.CandidateStateSha256
+                || observation.LatestMutationSha256 != request.LatestMutationSha256
+                || observation.VisualCapturePlanSha256 != requestCamera.VisualCapturePlanSha256
+                || observation.CaptureClass != requestCamera.CaptureClass
+                || observation.ZoomMode != requestCamera.ZoomMode
+                || observation.ViewDirection != requestCamera.ViewDirection
+                || observation.Ucs != requestCamera.Ucs
+                || observation.VisualStyle != requestCamera.VisualStyle
+                || !observation.TransientStateRestored)
+            {
+                mismatches.Add("camera_observation.binding");
             }
         }
 
@@ -733,6 +823,10 @@ public static class NativeRenderPolicy
                     || snapshot.VisualCaptureReceipt.ArtifactHeight != snapshot.Artifact.Height.Value))
             {
                 mismatches.Add("visual_capture_receipt.artifact");
+            }
+            if (request.ArtifactKind == "PDF" && snapshot.CameraObservation is null)
+            {
+                mismatches.Add("camera_observation");
             }
         }
 

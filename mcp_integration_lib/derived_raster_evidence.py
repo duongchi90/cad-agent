@@ -143,10 +143,10 @@ def _derived_png(pdf_bytes: bytes) -> bytes:
         raise DerivedRasterEvidenceError("PDF page is not renderable") from exc
 
 
-def derive_raster_evidence(
+def derive_raster_evidence_with_png(
     *, pdf_bytes: bytes, native_binding: Mapping[str, object], page_number: int
-) -> dict[str, object]:
-    """Derive deterministic opaque A4 raster evidence without filesystem or live CAD access."""
+) -> tuple[bytes, dict[str, object]]:
+    """Return the deterministic PNG bytes and its closed evidence in one bounded pass."""
     if type(pdf_bytes) is not bytes or not pdf_bytes or len(pdf_bytes) > _MAX_PDF_BYTES:
         _error("pdf_bytes exceed the bounded in-memory resource contract")
     if type(page_number) is not int or page_number != 1:
@@ -178,7 +178,24 @@ def derive_raster_evidence(
         "dbmod_before": binding["dbmod_before"],
         "dbmod_after": binding["dbmod_after"],
     }
-    return deepcopy(result)
+    return png_bytes, deepcopy(result)
 
 
-__all__ = ["DerivedRasterEvidenceError", "SCHEMA_VERSION", "derive_raster_evidence"]
+def derive_raster_evidence(
+    *, pdf_bytes: bytes, native_binding: Mapping[str, object], page_number: int
+) -> dict[str, object]:
+    """Preserve the metadata-only PR #160 public API."""
+    _, evidence = derive_raster_evidence_with_png(
+        pdf_bytes=pdf_bytes,
+        native_binding=native_binding,
+        page_number=page_number,
+    )
+    return evidence
+
+
+__all__ = [
+    "DerivedRasterEvidenceError",
+    "SCHEMA_VERSION",
+    "derive_raster_evidence",
+    "derive_raster_evidence_with_png",
+]

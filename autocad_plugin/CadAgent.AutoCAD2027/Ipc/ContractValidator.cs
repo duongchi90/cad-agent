@@ -464,10 +464,6 @@ public static class ContractValidator
                 errors);
             if (TryGetProperty(renderOptions, "camera", out var camera))
             {
-                if (!string.Equals(artifactKind, "PNG", StringComparison.Ordinal))
-                {
-                    errors.Add("canonical camera native render must be PNG");
-                }
                 if (TryGetProperty(parameters, "layout", out layout)
                     && TryGetString(layout, "identity", out var layoutIdentity)
                     && TryGetString(camera, "layout_id", out var cameraLayoutIdentity)
@@ -1037,9 +1033,13 @@ public static class ContractValidator
         var hasCamera = TryGetProperty(payload, "render_options", out var rawOptions)
             && TryGetProperty(rawOptions, "camera", out _);
         var allowed = new HashSet<string>(required, StringComparer.Ordinal);
+        var artifactKind = TryGetString(payload, "artifact_kind", out var observedArtifactKind)
+            ? observedArtifactKind
+            : string.Empty;
+        var pdfCamera = hasCamera && artifactKind == "PDF";
         if (hasCamera)
         {
-            allowed.Add("visual_capture_receipt");
+            allowed.Add(pdfCamera ? "camera_observation" : "visual_capture_receipt");
         }
         foreach (var missing in required.Except(payload.Keys, StringComparer.Ordinal))
         {
@@ -1049,9 +1049,11 @@ public static class ContractValidator
         {
             errors.Add($"native_render_evidence payload contains unsupported field '{unsupported}'");
         }
-        if (hasCamera && !payload.ContainsKey("visual_capture_receipt"))
+        if (hasCamera
+            && !payload.ContainsKey(pdfCamera ? "camera_observation" : "visual_capture_receipt"))
         {
-            errors.Add("native_render_evidence camera payload is missing 'visual_capture_receipt'");
+            errors.Add(
+                $"native_render_evidence camera payload is missing '{(pdfCamera ? "camera_observation" : "visual_capture_receipt")}'");
         }
 
         if (!TryGetString(payload, "schema_version", out var schemaVersion)
@@ -1081,8 +1083,7 @@ public static class ContractValidator
         {
             ValidateNativeRenderLayout(layout, "native_render_evidence payload.layout", errors);
         }
-        if (!TryGetString(payload, "artifact_kind", out var artifactKind)
-            || artifactKind is not ("PNG" or "PDF"))
+        if (artifactKind is not ("PNG" or "PDF"))
         {
             errors.Add("native_render_evidence payload.artifact_kind must be PNG or PDF");
         }
@@ -1092,10 +1093,6 @@ public static class ContractValidator
                 renderOptions,
                 "native_render_evidence payload.render_options",
                 errors);
-        }
-        if (hasCamera && artifactKind != "PNG")
-        {
-            errors.Add("canonical camera native render must be PNG");
         }
         if (!TryGetString(payload, "renderer", out var renderer)
             || !string.Equals(renderer, "AUTOCAD_NATIVE", StringComparison.Ordinal))
@@ -1137,6 +1134,13 @@ public static class ContractValidator
 
         if (hasCamera
             && TryGetProperty(renderOptions, "camera", out var camera)
+            && artifactKind == "PDF"
+            && TryGetProperty(payload, "camera_observation", out var observation))
+        {
+            ValidateNativeRenderCameraObservation(observation, payload, camera, errors);
+        }
+        else if (hasCamera
+            && TryGetProperty(renderOptions, "camera", out camera)
             && TryGetProperty(payload, "visual_capture_receipt", out var receipt))
         {
             ValidateNativeRenderCameraReceipt(receipt, payload, camera, errors);
@@ -1306,6 +1310,132 @@ public static class ContractValidator
                 {
                     errors.Add("native_render_evidence WINDOW receipt bbox does not match camera");
                 }
+            }
+        }
+    }
+
+    private static void ValidateNativeRenderCameraObservation(
+        JsonElement observation,
+        IReadOnlyDictionary<string, JsonElement> payload,
+        JsonElement camera,
+        ICollection<string> errors)
+    {
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schema_version", "observation_id", "capture_id", "run_id", "scope_id", "region_id",
+            "view_id", "sheet_id", "layout_id", "candidate_revision_sha256",
+            "candidate_state_sha256", "latest_mutation_sha256", "visual_capture_plan_sha256",
+            "capture_class", "zoom_mode", "requested_wcs_bbox", "observed_wcs_bbox",
+            "view_center", "view_width", "view_height", "view_direction", "ucs", "visual_style",
+            "captured_at_utc", "transient_state_restored"
+        };
+        ValidateClosedObject(observation, required, "native_render_evidence camera_observation", errors);
+        if (!TryGetString(observation, "schema_version", out var schemaVersion)
+            || schemaVersion != "native-camera-observation-1.0")
+        {
+            errors.Add("native_render_evidence camera_observation schema_version is unsupported");
+        }
+        foreach (var name in new[]
+        {
+            "observation_id", "capture_id", "run_id", "scope_id", "view_id", "sheet_id", "layout_id"
+        })
+        {
+            if (!TryGetString(observation, name, out var identifier)
+                || !IsNativeRenderString(identifier, identifier: true))
+            {
+                errors.Add($"native_render_evidence camera_observation {name} is invalid");
+            }
+        }
+        if (!IsNullableNativeRenderIdentifier(observation, "region_id"))
+        {
+            errors.Add("native_render_evidence camera_observation region_id is invalid");
+        }
+        foreach (var name in new[]
+        {
+            "candidate_revision_sha256", "candidate_state_sha256", "latest_mutation_sha256",
+            "visual_capture_plan_sha256"
+        })
+        {
+            if (!TryGetString(observation, name, out var hash) || !LowercaseSha256Pattern.IsMatch(hash))
+            {
+                errors.Add($"native_render_evidence camera_observation {name} must be a lowercase SHA-256");
+            }
+        }
+        if (!TryGetArray(observation, "view_center", out var center)
+            || center.GetArrayLength() != 2
+            || center.EnumerateArray().Any(item =>
+                item.ValueKind != JsonValueKind.Number
+                || !item.TryGetDouble(out var number)
+                || !double.IsFinite(number)))
+        {
+            errors.Add("native_render_evidence camera_observation view_center is invalid");
+        }
+        if (!TryGetDouble(observation, "view_width", out var viewWidth)
+            || !double.IsFinite(viewWidth)
+            || viewWidth <= 0
+            || !TryGetDouble(observation, "view_height", out var viewHeight)
+            || !double.IsFinite(viewHeight)
+            || viewHeight <= 0)
+        {
+            errors.Add("native_render_evidence camera_observation view size is invalid");
+        }
+        if (!TryGetString(observation, "captured_at_utc", out var capturedAt)
+            || !IsNativeRenderTimestamp(capturedAt)
+            || !TryGetBoolean(observation, "transient_state_restored", out var restored)
+            || !restored)
+        {
+            errors.Add("native_render_evidence camera_observation capture/restoration evidence is invalid");
+        }
+        foreach (var name in new[]
+        {
+            "capture_id", "scope_id", "region_id", "view_id", "sheet_id", "layout_id",
+            "candidate_revision_sha256", "candidate_state_sha256", "visual_capture_plan_sha256",
+            "capture_class", "zoom_mode", "view_direction", "ucs", "visual_style"
+        })
+        {
+            if (TryGetProperty(observation, name, out var actual)
+                && TryGetProperty(camera, name, out var expected)
+                && actual.GetRawText() != expected.GetRawText())
+            {
+                errors.Add($"native_render_evidence camera_observation {name} does not match camera");
+            }
+        }
+        if (TryGetString(payload, "run_id", out var runId)
+            && (!TryGetString(observation, "run_id", out var observationRunId) || observationRunId != runId))
+        {
+            errors.Add("native_render_evidence camera_observation run_id does not match evidence");
+        }
+        if (TryGetString(payload, "latest_mutation_sha256", out var mutation)
+            && (!TryGetString(observation, "latest_mutation_sha256", out var observationMutation)
+                || observationMutation != mutation))
+        {
+            errors.Add("native_render_evidence camera_observation mutation does not match evidence");
+        }
+        if (TryGetString(payload, "capture_timestamp", out var timestamp)
+            && (!TryGetString(observation, "captured_at_utc", out var observationTimestamp)
+                || observationTimestamp != timestamp))
+        {
+            errors.Add("native_render_evidence camera_observation timestamp does not match evidence");
+        }
+        if (TryGetString(camera, "capture_class", out var captureClass))
+        {
+            var requestedValid = TryGetProperty(observation, "requested_wcs_bbox", out var requested);
+            var observedValid = TryGetProperty(observation, "observed_wcs_bbox", out var observed);
+            if (captureClass == "GLOBAL"
+                && (!requestedValid || requested.ValueKind != JsonValueKind.Null
+                    || !observedValid || observed.ValueKind != JsonValueKind.Null))
+            {
+                errors.Add("native_render_evidence GLOBAL observation bbox values must be null");
+            }
+            else if (captureClass is "REGION" or "DETAIL"
+                && (!requestedValid || !observedValid
+                    || !TryGetProperty(camera, "wcs_bbox", out var cameraBbox)
+                    || !IsFiniteNativeRenderBbox(requested)
+                    || !IsFiniteNativeRenderBbox(observed)
+                    || requested.GetRawText() != cameraBbox.GetRawText()
+                    || observed.GetRawText() != requested.GetRawText()))
+            {
+                errors.Add("native_render_evidence WINDOW observation bbox does not match camera");
             }
         }
     }

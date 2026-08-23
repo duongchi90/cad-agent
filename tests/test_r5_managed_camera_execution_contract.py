@@ -28,7 +28,7 @@ def test_managed_camera_pdf_stage_uses_closed_observation_without_png_receipt() 
     assert "NativeRenderCameraObservation" in models
     assert 'camera_observation' in models
     assert 'artifact_kind != "PDF"' not in models
-    assert 'Canonical camera render requires PNG artifact dimensions.' not in source
+    assert "CreateCameraObservation(" in source
 
 
 def test_managed_camera_render_emits_artifact_bound_visual_capture_receipt() -> None:
@@ -43,9 +43,10 @@ def test_managed_camera_render_emits_artifact_bound_visual_capture_receipt() -> 
 def test_ipc_validator_accepts_camera_only_as_closed_native_render_extension() -> None:
     source = _text(VALIDATOR)
     assert 'ValidateNativeRenderCamera(' in source
+    assert 'ValidateNativeRenderCameraObservation(' in source
     assert '"camera"' in source
     assert '"visual_capture_receipt"' in source
-    assert 'canonical camera native render must be PNG' in source
+    assert 'canonical camera native render must be PNG' not in source
 
 
 def test_managed_reader_uses_deterministic_plot_window_not_zoom_command_text() -> None:

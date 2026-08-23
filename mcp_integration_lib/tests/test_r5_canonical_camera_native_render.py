@@ -223,20 +223,20 @@ def test_camera_request_rejects_unknown_capture_and_layout_substitution() -> Non
         )
 
 
-def test_camera_request_is_png_only_and_rejects_forged_policy() -> None:
-    with pytest.raises(contract.AutoCADRenderEvidenceError, match="PNG"):
-        contract.build_canonical_camera_render_evidence_request(
-            request_id="render-region-side-cabin",
-            drawing_sha256="a" * 64,
-            visual_run_manifest_sha256="c" * 64,
-            layout={"identity": "layout-001", "name": "Layout1"},
-            artifact_kind="PDF",
-            render_options=_base_options(),
-            requested_at="2026-08-14T05:00:00Z",
-            server_scope=_scope(),
-            visual_capture_plan=_plan(),
-            capture_id="region-side-cabin",
-        )
+def test_camera_request_accepts_native_pdf_stage_and_rejects_forged_policy() -> None:
+    request = contract.build_canonical_camera_render_evidence_request(
+        request_id="render-region-side-cabin",
+        drawing_sha256="a" * 64,
+        visual_run_manifest_sha256="c" * 64,
+        layout={"identity": "layout-001", "name": "Layout1"},
+        artifact_kind="PDF",
+        render_options=_base_options(),
+        requested_at="2026-08-14T05:00:00Z",
+        server_scope=_scope(),
+        visual_capture_plan=_plan(),
+        capture_id="region-side-cabin",
+    )
+    assert request["artifact_kind"] == "PDF"
 
     forged = _camera_request()
     forged["render_options"]["camera"]["margin_ratio"] = 0.05

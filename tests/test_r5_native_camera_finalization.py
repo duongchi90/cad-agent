@@ -194,14 +194,12 @@ def _declare_native_camera(inputs: dict[str, object]) -> None:
 
 def _declare_pdf_camera_composition(inputs: dict[str, object]) -> None:
     _declare_native_camera(inputs)
-    for index, state in enumerate(
-        (inputs["authoritative_state"], inputs["post_provider_state"])
-    ):
+    for state in (inputs["authoritative_state"], inputs["post_provider_state"]):
         for evidence in state["native_render_evidence"]:
             receipt = evidence.pop("visual_capture_receipt")
             capture_id = receipt["capture_id"]
-            pdf_sha = f"{index + 7}" * 64
-            png_sha = f"{index + 4}" * 64
+            pdf_sha = "7" * 64
+            png_sha = "4" * 64
             evidence["artifact_kind"] = "PDF"
             evidence["artifact"] = {
                 "relative_path": f"artifacts/{capture_id}.pdf",

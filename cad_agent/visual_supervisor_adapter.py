@@ -9,6 +9,7 @@ identity needed by downstream gates.
 from __future__ import annotations
 
 import copy
+import importlib
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -425,7 +426,6 @@ _NATIVE_EVIDENCE_FIELDS = {
     "dbmod_before",
     "dbmod_after",
     "warnings",
-    "visual_capture_receipt",
 }
 _NATIVE_CAMERA_FIELDS = {
     "schema_version",
@@ -447,6 +447,99 @@ _NATIVE_CAMERA_FIELDS = {
     "ucs",
     "visual_style",
 }
+
+
+def _validate_native_pdf_composition(
+    evidence: Mapping[str, object],
+    *,
+    plan: Mapping[str, object],
+    capture: Mapping[str, object],
+    label: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        render_contract = importlib.import_module(
+            "mcp_integration_lib.autocad_render_evidence"
+        )
+        normalized = render_contract.validate_render_evidence(evidence)
+    except Exception:
+        _fail(f"{label} native PDF composition is invalid")
+    if normalized["artifact_kind"] != "PDF" or normalized["renderer"] != "AUTOCAD_NATIVE":
+        _fail(f"{label} native PDF composition has the wrong artifact or renderer")
+    observation = _mapping(
+        normalized.get("native_camera_observation"),
+        label=f"{label}.native_camera_observation",
+    )
+    derived = _mapping(
+        normalized.get("derived_raster_evidence"),
+        label=f"{label}.derived_raster_evidence",
+    )
+    expected_camera = {
+        "schema_version": "canonical-camera-render-1.0",
+        "capture_id": capture["capture_id"],
+        "capture_class": capture["capture_class"],
+        "parent_region_id": capture["parent_region_id"],
+        "region_id": capture["region_id"],
+        "scope_id": plan["scope_id"],
+        "view_id": capture["view_id"],
+        "sheet_id": capture["sheet_id"],
+        "layout_id": capture["layout_id"],
+        "candidate_revision_sha256": plan["candidate_revision_sha256"],
+        "candidate_state_sha256": plan["candidate_state_sha256"],
+        "visual_capture_plan_sha256": canonical_json_sha256(plan),
+        "zoom_mode": capture["zoom_mode"],
+        "wcs_bbox": copy.deepcopy(capture["wcs_bbox"]),
+        "margin_ratio": capture["margin_ratio"],
+        "view_direction": capture["view_direction"],
+        "ucs": capture["ucs"],
+        "visual_style": capture["visual_style"],
+    }
+    actual_camera = _mapping(
+        _mapping(normalized["render_options"], label=f"{label}.render_options").get("camera"),
+        label=f"{label}.camera",
+    )
+    if dict(actual_camera) != expected_camera:
+        _fail(f"{label} native PDF camera context does not match the server-owned plan")
+    layout = _mapping(normalized["layout"], label=f"{label}.layout")
+    if layout["identity"] != capture["layout_id"]:
+        _fail(f"{label} native PDF layout is foreign to the selected plan capture")
+    artifact = _mapping(normalized["artifact"], label=f"{label}.native_pdf_artifact")
+    if set(artifact) != {"relative_path", "sha256", "page_count"} or artifact["page_count"] != 1:
+        _fail(f"{label} native PDF artifact metadata is invalid")
+    for field in ("pdf_sha256", "png_sha256", "drawing_sha256", "latest_mutation_sha256", "visual_run_manifest_sha256"):
+        _sha(derived.get(field), label=f"{label}.derived.{field}")
+    if derived["pdf_sha256"] != artifact["sha256"]:
+        _fail(f"{label} derived raster is bound to a different PDF")
+    if derived["drawing_sha256"] != normalized["drawing_sha256"] or derived["latest_mutation_sha256"] != normalized["latest_mutation_sha256"] or derived["visual_run_manifest_sha256"] != normalized["visual_run_manifest_sha256"]:
+        _fail(f"{label} derived raster provenance is stale")
+    if derived["width_px"] != 2480 or derived["height_px"] != 3508 or derived["has_alpha"] is not False or derived["opaque"] is not True:
+        _fail(f"{label} derived raster dimensions/alpha policy is invalid")
+    receipt = validate_visual_contract(
+        normalized["visual_capture_receipt"],
+        contract="visual_capture_receipt",
+        server_scope=plan,
+    )
+    if (
+        receipt.get("capture_id") != capture["capture_id"]
+        or receipt.get("artifact_sha256") != derived["png_sha256"]
+        or receipt.get("artifact_width") != derived["width_px"]
+        or receipt.get("artifact_height") != derived["height_px"]
+    ):
+        _fail(f"{label} final visual receipt is not bound to the derived PNG")
+    try:
+        observation_sha = canonical_json_sha256(observation)
+        receipt_sha = canonical_json_sha256(receipt)
+    except Exception:
+        _fail(f"{label} native PDF composition identities cannot be sealed")
+    identity = {
+        "capture_id": capture["capture_id"],
+        "native_pdf_sha256": artifact["sha256"],
+        "native_camera_observation_sha256": observation_sha,
+        "derived_png_sha256": derived["png_sha256"],
+        "derived_png_width": derived["width_px"],
+        "derived_png_height": derived["height_px"],
+        "visual_capture_receipt_sha256": receipt_sha,
+    }
+    return identity, normalized
 
 
 def _positive_int(value: object, *, label: str) -> int:
@@ -522,6 +615,11 @@ def _native_camera_state(
             evidence,
             _NATIVE_EVIDENCE_FIELDS,
             label=f"{label}.native_render_evidence[{index}]",
+            optional={
+                "visual_capture_receipt",
+                "native_camera_observation",
+                "derived_raster_evidence",
+            },
         )
         if evidence["schema_version"] != "autocad-native-render-evidence-1.0":
             _fail("native camera evidence schema is unsupported")
@@ -534,8 +632,8 @@ def _native_camera_state(
             _fail("native camera evidence mutation is stale")
         if evidence["visual_run_manifest_sha256"] != manifest_sha:
             _fail("native camera evidence manifest is stale")
-        if evidence["artifact_kind"] != "PNG" or evidence["renderer"] != "AUTOCAD_NATIVE":
-            _fail("native camera evidence is not an AutoCAD-native PNG")
+        if evidence["artifact_kind"] not in {"PNG", "PDF"} or evidence["renderer"] != "AUTOCAD_NATIVE":
+            _fail("native camera evidence is not an AutoCAD-native render")
         if evidence["changed"] is not False:
             _fail("native camera evidence changed the drawing")
         dbmod_before = evidence["dbmod_before"]
@@ -551,6 +649,31 @@ def _native_camera_state(
         warnings = evidence["warnings"]
         if type(warnings) is not list or any(type(item) is not str for item in warnings):
             _fail("native camera evidence warnings are invalid")
+
+        if evidence["artifact_kind"] == "PDF":
+            observation = _mapping(
+                evidence.get("native_camera_observation"),
+                label=f"{label}.native_camera_observation",
+            )
+            capture_id = _identifier(
+                observation.get("capture_id"),
+                label=f"{label}.native.observation.capture_id",
+            )
+            capture = expected.get(capture_id)
+            if capture is None:
+                _fail("native camera evidence contains a foreign capture")
+            if capture_id in observed:
+                _fail("native camera evidence contains duplicate capture coverage")
+            observed.add(capture_id)
+            identity, normalized = _validate_native_pdf_composition(
+                evidence,
+                plan=plan,
+                capture=capture,
+                label=f"{label}.native_render_evidence[{index}]",
+            )
+            records.append((capture_id, copy.deepcopy(normalized)))
+            identities.append(identity)
+            continue
 
         layout = _mapping(evidence["layout"], label=f"{label}.native.layout")
         _closed(layout, {"identity", "name"}, label=f"{label}.native.layout")
