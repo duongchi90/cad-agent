@@ -192,6 +192,88 @@ def _declare_native_camera(inputs: dict[str, object]) -> None:
         state["native_render_evidence"] = copy.deepcopy(evidence)
 
 
+def _declare_pdf_camera_composition(inputs: dict[str, object]) -> None:
+    _declare_native_camera(inputs)
+    for index, state in enumerate(
+        (inputs["authoritative_state"], inputs["post_provider_state"])
+    ):
+        for evidence in state["native_render_evidence"]:
+            receipt = evidence.pop("visual_capture_receipt")
+            capture_id = receipt["capture_id"]
+            pdf_sha = f"{index + 7}" * 64
+            png_sha = f"{index + 4}" * 64
+            evidence["artifact_kind"] = "PDF"
+            evidence["artifact"] = {
+                "relative_path": f"artifacts/{capture_id}.pdf",
+                "sha256": pdf_sha,
+                "page_count": 1,
+            }
+            evidence["native_camera_observation"] = {
+                **{
+                    key: value
+                    for key, value in receipt.items()
+                    if key not in {"receipt_id", "artifact_sha256", "artifact_width", "artifact_height"}
+                },
+                "schema_version": "native-camera-observation-1.0",
+                "observation_id": f"observation-{capture_id}",
+            }
+            evidence["derived_raster_evidence"] = {
+                "schema_version": "derived-raster-evidence-1.0",
+                "source": "NATIVE_PDF_BINDING",
+                "native_binding": {
+                    "pdf_artifact_sha256": pdf_sha,
+                    "drawing_sha256": SHA_DRAWING,
+                    "latest_mutation_sha256": SHA_MUTATION,
+                    "visual_run_manifest_sha256": SHA_MANIFEST,
+                    "layout": {"identity": "layout-1", "name": "Layout1"},
+                    "render_options": {
+                        "paper_size": "A4",
+                        "dpi": 300,
+                        "background": "white",
+                        "opaque": True,
+                    },
+                    "dbmod_before": 0,
+                    "dbmod_after": 0,
+                },
+                "page_number": 1,
+                "paper_size": "A4",
+                "dpi": 300,
+                "width_px": 2480,
+                "height_px": 3508,
+                "has_alpha": False,
+                "opaque": True,
+                "pdf_sha256": pdf_sha,
+                "png_sha256": png_sha,
+                "drawing_sha256": SHA_DRAWING,
+                "latest_mutation_sha256": SHA_MUTATION,
+                "visual_run_manifest_sha256": SHA_MANIFEST,
+                "layout": {"identity": "layout-1", "name": "Layout1"},
+                "render_options": {
+                    "paper_size": "A4",
+                    "dpi": 300,
+                    "background": "white",
+                    "opaque": True,
+                },
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+            }
+            evidence["visual_capture_receipt"] = {
+                **receipt,
+                "artifact_sha256": png_sha,
+                "artifact_width": 2480,
+                "artifact_height": 3508,
+            }
+
+
+def test_native_pdf_camera_composition_binds_pdf_observation_to_derived_png() -> None:
+    inputs = _valid_inputs()
+    _declare_pdf_camera_composition(inputs)
+
+    result, _ = _finalize_native(inputs)
+
+    assert result["verdict"] == "PASS"
+
+
 def _finalize_native(inputs: dict[str, object]) -> tuple[dict[str, object], list[str]]:
     import cad_agent.visual_supervisor_adapter as module
 

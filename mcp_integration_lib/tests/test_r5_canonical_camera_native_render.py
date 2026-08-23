@@ -283,3 +283,21 @@ def test_legacy_request_rejects_unsolicited_camera_receipt() -> None:
     evidence["visual_capture_receipt"] = _camera_evidence(_camera_request())["visual_capture_receipt"]
     with pytest.raises(contract.AutoCADRenderEvidenceError, match="receipt|camera|unknown"):
         contract.validate_render_evidence(evidence, request=request)
+
+
+def test_canonical_camera_request_accepts_native_pdf_stage_without_png_media() -> None:
+    request = contract.build_canonical_camera_render_evidence_request(
+        request_id="render-global-side-pdf",
+        drawing_sha256="a" * 64,
+        visual_run_manifest_sha256="c" * 64,
+        layout={"identity": "layout-001", "name": "Layout1"},
+        artifact_kind="PDF",
+        render_options=_base_options(),
+        requested_at="2026-08-14T05:00:00Z",
+        server_scope=_scope(),
+        visual_capture_plan=_plan(),
+        capture_id="global-side",
+    )
+
+    assert request["artifact_kind"] == "PDF"
+    assert request["render_options"]["camera"]["capture_id"] == "global-side"

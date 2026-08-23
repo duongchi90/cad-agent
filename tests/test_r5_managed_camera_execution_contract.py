@@ -21,6 +21,16 @@ def test_managed_native_render_parses_optional_closed_camera_contract() -> None:
     assert '"canonical-camera-render-1.0"' in source
 
 
+def test_managed_camera_pdf_stage_uses_closed_observation_without_png_receipt() -> None:
+    source = _text(READER)
+    models = _text(MODELS)
+
+    assert "NativeRenderCameraObservation" in models
+    assert 'camera_observation' in models
+    assert 'artifact_kind != "PDF"' not in models
+    assert 'Canonical camera render requires PNG artifact dimensions.' not in source
+
+
 def test_managed_camera_render_emits_artifact_bound_visual_capture_receipt() -> None:
     source = _text(MODELS)
     assert "record NativeRenderCameraReceipt(" in source

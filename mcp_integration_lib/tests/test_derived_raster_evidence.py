@@ -253,3 +253,20 @@ def test_geometry_tokens_without_a_renderable_page_fail_closed() -> None:
 
     with pytest.raises(contract.DerivedRasterEvidenceError):
         contract.derive_raster_evidence(pdf_bytes=fake, native_binding=binding, page_number=1)
+
+
+def test_bytes_and_evidence_public_seam_returns_the_exact_derived_png() -> None:
+    source_pdf = _pdf()
+    binding = _binding()
+    binding["pdf_artifact_sha256"] = _sha256(source_pdf)
+
+    png_bytes, evidence = _contract().derive_raster_evidence_with_png(
+        pdf_bytes=source_pdf,
+        native_binding=binding,
+        page_number=1,
+    )
+
+    assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    assert evidence["png_sha256"] == _sha256(png_bytes)
+    assert evidence["width_px"] == 2480
+    assert evidence["height_px"] == 3508
