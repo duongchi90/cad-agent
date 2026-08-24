@@ -37,23 +37,28 @@ def _binding() -> dict[str, object]:
 def _pdf(
     *,
     media_box: str = "0 0 595.2756 841.8898",
-    crop_box: str = "0 0 595.2756 841.8898",
-    user_unit: str = "1.0",
+    crop_box: str | None = "0 0 595.2756 841.8898",
+    user_unit: str | None = "1.0",
     encrypted: bool = False,
     alpha: bool = False,
     content_stream: bytes = b"0 0 0 rg\n100 100 100 100 re f\n",
 ) -> bytes:
     page_extra = b" /SMask 9 0 R" if alpha else b""
+    crop_token = b"" if crop_box is None else f"/CropBox [{crop_box}] ".encode()
+    user_unit_token = b"" if user_unit is None else f"/UserUnit {user_unit} ".encode()
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [{media_box}] "
-            f"/CropBox [{crop_box}] /UserUnit {user_unit} "
         ).encode()
-        + b"/Resources << >> /Contents 4 0 R"
-        + page_extra
-        + b" >>",
+        + crop_token
+        + user_unit_token
+        + (
+            b"/Resources << >> /Contents 4 0 R"
+            + page_extra
+            + b" >>"
+        ),
         b"<< /Length %d >>\nstream\n" % len(content_stream)
         + content_stream
         + b"endstream",
@@ -181,6 +186,53 @@ def test_geometry_requires_a4_media_box_user_unit_and_crop_box_alignment(
 
     with pytest.raises(contract.DerivedRasterEvidenceError):
         _derive(_pdf(**kwargs))
+
+
+def test_omitted_crop_box_and_user_unit_use_effective_a4_defaults() -> None:
+    evidence = _derive(_pdf(crop_box=None, user_unit=None))
+
+    assert evidence["paper_size"] == "A4"
+
+
+def test_omitted_user_unit_is_exactly_the_explicit_one_default() -> None:
+    omitted = _derive(_pdf(crop_box=None, user_unit=None))
+    explicit = _derive(_pdf(crop_box=None, user_unit="1.0"))
+
+    for field in (
+        "paper_size",
+        "dpi",
+        "width_px",
+        "height_px",
+        "has_alpha",
+        "opaque",
+        "png_sha256",
+        "layout",
+        "render_options",
+        "dbmod_before",
+        "dbmod_after",
+    ):
+        assert omitted[field] == explicit[field]
+
+
+def test_a4_geometry_uses_inclusive_physical_tolerance_not_exact_points() -> None:
+    evidence = _derive(_pdf(media_box="0 0 595 842", crop_box=None, user_unit=None))
+
+    assert evidence["paper_size"] == "A4"
+
+
+@pytest.mark.parametrize(
+    ("media_box", "crop_box", "user_unit"),
+    [
+        ("0 0 612 792", None, None),
+        ("0 0 595 842", "0 0 594 842", None),
+        ("0 0 595 842", None, "0.0"),
+    ],
+)
+def test_effective_geometry_conflicts_and_invalid_defaults_fail_closed(
+    media_box: str, crop_box: str | None, user_unit: str | None
+) -> None:
+    with pytest.raises(_contract().DerivedRasterEvidenceError):
+        _derive(_pdf(media_box=media_box, crop_box=crop_box, user_unit=user_unit))
 
 
 def test_exact_a4_300_dpi_geometry_is_opaque_and_has_no_alpha() -> None:
