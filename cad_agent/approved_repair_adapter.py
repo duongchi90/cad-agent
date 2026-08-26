@@ -18,6 +18,11 @@ from cad_agent.repair_operation_contract import (
     REPAIR_OPERATION_SCHEMA_VERSION,
     normalize_repair_operation,
 )
+from cad_agent.visual_contracts import VisualContractError, validate_visual_contract
+from cad_agent.visual_supervisor_adapter import (
+    VisualSupervisorAdapterError,
+    validate_visual_verdict_result,
+)
 
 _DOTNET_IPC = import_module("mcp_integration_lib.dotnet_ipc")
 DisposableWorkspaceClosure = _DOTNET_IPC.DisposableWorkspaceClosure
@@ -27,6 +32,7 @@ DotNetIPCClient = _DOTNET_IPC.DotNetIPCClient
 
 
 R6_RESULT_SCHEMA_VERSION = "r6-repair-executor-result-1.1"
+R6_PLANNER_RESULT_SCHEMA_VERSION = "r6-repair-plan-preparation-1.0"
 
 
 def _execute_supported_repair_capability(*args: object, **kwargs: object) -> object:
@@ -122,7 +128,12 @@ def _validate_context(value: object) -> dict[str, object]:
         "r3_target_handles",
         "protected_target_handles",
     }
-    context = _closed(value, required, "MALFORMED")
+    optional = {"request_sha256", "latest_mutation_sha256"}
+    if type(value) is not dict or any(type(key) is not str for key in value):
+        _fail("MALFORMED")
+    if set(value) - optional != required or not set(value).issubset(required | optional):
+        _fail("MALFORMED")
+    context = deepcopy(value)
     for field in (
         "run_id",
         "work_item_id",
@@ -137,6 +148,9 @@ def _validate_context(value: object) -> dict[str, object]:
     _sha(context["candidate_state_sha256"], "MALFORMED")
     _sha(context["repair_plan_sha256"], "MALFORMED")
     _sha(context["repair_operation_contract_fingerprint"], "MALFORMED")
+    for field in optional:
+        if field in context:
+            _sha(context[field], "MALFORMED")
     if context["repair_operation_contract_version"] != REPAIR_OPERATION_SCHEMA_VERSION:
         _fail("BINDING_MISMATCH")
     _string_list(context["r3_target_handles"], "MALFORMED")
@@ -182,8 +196,7 @@ def _validate_candidate(value: object, context: dict[str, object]) -> dict[str, 
         raise RepairExecutorAdapterError("CANDIDATE_INVALID") from exc
     if (
         state.get("state_sha256") != context["candidate_state_sha256"]
-        or
-        state.get("current_candidate_revision_sha256")
+        or state.get("current_candidate_revision_sha256")
         != context["candidate_revision_sha256"]
     ):
         _fail("BINDING_MISMATCH")
@@ -199,6 +212,168 @@ def _validate_candidate(value: object, context: dict[str, object]) -> dict[str, 
     if current is None or current.get("revision_id") != context["candidate_revision_id"]:
         _fail("BINDING_MISMATCH")
     return current
+
+
+def _planner_fail(message: str) -> None:
+    raise VisualSupervisorAdapterError(message)
+
+
+def _planner_context(value: object) -> dict[str, object]:
+    required = {
+        "run_id",
+        "work_item_id",
+        "candidate_revision_id",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "request_sha256",
+        "latest_mutation_sha256",
+        "r3_target_handles",
+        "protected_target_handles",
+    }
+    if type(value) is not dict or set(value) != required:
+        _planner_fail("R6 planner context is malformed")
+    if any(type(key) is not str for key in value):
+        _planner_fail("R6 planner context is malformed")
+    context = deepcopy(value)
+    for field in ("run_id", "work_item_id", "candidate_revision_id"):
+        if type(context[field]) is not str or not context[field]:
+            _planner_fail("R6 planner context is malformed")
+    for field in (
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "request_sha256",
+        "latest_mutation_sha256",
+    ):
+        if (
+            type(context[field]) is not str
+            or len(context[field]) != 64
+            or any(char not in "0123456789abcdef" for char in context[field])
+        ):
+            _planner_fail("R6 planner context is malformed")
+    for field in ("r3_target_handles", "protected_target_handles"):
+        if (
+            type(context[field]) is not list
+            or any(type(item) is not str or not item for item in context[field])
+        ):
+            _planner_fail("R6 planner context is malformed")
+    return context
+
+
+def _planner_candidate(
+    candidate_state: object,
+    candidate_revision: object,
+    context: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        state = validate_candidate_revision_state(candidate_state)
+    except Exception as exc:
+        raise VisualSupervisorAdapterError("R6 current candidate state is invalid") from exc
+    if (
+        state.get("state_sha256") != context["candidate_state_sha256"]
+        or state.get("current_candidate_revision_sha256")
+        != context["candidate_revision_sha256"]
+    ):
+        _planner_fail("R6 current candidate binding is stale or foreign")
+    current = next(
+        (
+            record
+            for record in state["candidate_revisions"]
+            if record.get("candidate_revision_sha256")
+            == state.get("current_candidate_revision_sha256")
+        ),
+        None,
+    )
+    if current is None or current.get("revision_id") != context["candidate_revision_id"]:
+        _planner_fail("R6 current candidate binding is stale or foreign")
+    if type(candidate_revision) is not dict or candidate_revision != current:
+        _planner_fail("R6 candidate revision is not the current owner record")
+    return deepcopy(state), deepcopy(current)
+
+
+def _sealed_r5_failure(
+    value: object,
+    *,
+    context: dict[str, object],
+    current_candidate: dict[str, object],
+) -> dict[str, object]:
+    validated = validate_visual_verdict_result(
+        value,
+        expected_request_sha256=context.get("request_sha256"),
+        expected_candidate_revision_sha256=context["candidate_revision_sha256"],
+        expected_candidate_state_sha256=context["candidate_state_sha256"],
+        expected_latest_mutation_sha256=context.get("latest_mutation_sha256"),
+    )
+    if validated["verdict"] != "FAIL":
+        _planner_fail("R5 verdict must be literal FAIL")
+    change_scope = current_candidate.get("change_scope")
+    mutation_evidence = current_candidate.get("mutation_evidence")
+    if type(change_scope) is not dict or type(mutation_evidence) is not dict:
+        _planner_fail("R6 candidate currentness bindings are unavailable")
+    if validated["registry_snapshot_sha256"] != change_scope.get(
+        "registry_snapshot_sha256"
+    ):
+        _planner_fail("R5 registry binding is stale or foreign")
+    if validated["latest_mutation_sha256"] != mutation_evidence.get(
+        "latest_mutation_evidence_sha256"
+    ):
+        _planner_fail("R5 mutation binding is stale or foreign")
+    return validated
+
+
+def prepare_repair_plan(
+    *,
+    r5_result: object,
+    candidate_revision: object,
+    candidate_state: object,
+    repair_plan: object,
+    r3_context: object,
+) -> dict[str, object]:
+    """Validate a sealed R5 FAIL and return one declarative repair-plan binding."""
+
+    context = _planner_context(r3_context)
+    _state, current_candidate = _planner_candidate(
+        candidate_state, candidate_revision, context
+    )
+    sealed = _sealed_r5_failure(
+        r5_result, context=context, current_candidate=current_candidate
+    )
+    try:
+        validated_plan = validate_visual_contract(repair_plan, contract="repair_plan")
+    except (VisualContractError, VisualSupervisorAdapterError):
+        raise
+    except Exception as exc:
+        raise VisualContractError("R6 repair plan validation failed") from exc
+    if type(validated_plan) is not dict:
+        raise VisualContractError("R6 repair plan must be a plain mapping")
+    candidate_artifacts = current_candidate.get("candidate_artifacts")
+    if type(candidate_artifacts) is not dict:
+        _planner_fail("R6 candidate artifact binding is unavailable")
+    artifact_sha256 = candidate_artifacts.get("artifact_sha256")
+    if (
+        validated_plan.get("source_review_id") != sealed["verdict_id"]
+        or validated_plan.get("run_id") != context["run_id"]
+        or validated_plan.get("target_drawing_sha256") != artifact_sha256
+        or validated_plan.get("rollback_candidate_sha256") != artifact_sha256
+    ):
+        raise VisualContractError("R6 repair plan binding is stale or foreign")
+    plan_sha256 = canonical_json_sha256(validated_plan)
+    result: dict[str, object] = {
+        "schema_version": R6_PLANNER_RESULT_SCHEMA_VERSION,
+        "r5_failure_id": sealed["verdict_id"],
+        "r5_failure_sha256": sealed["verdict_sha256"],
+        "repair_plan": deepcopy(validated_plan),
+        "repair_plan_sha256": plan_sha256,
+        "repair_plan_version": validated_plan["schema_version"],
+        "run_id": context["run_id"],
+        "work_item_id": context["work_item_id"],
+        "request_sha256": context["request_sha256"],
+        "latest_mutation_sha256": context["latest_mutation_sha256"],
+        "candidate_revision_id": context["candidate_revision_id"],
+        "candidate_revision_sha256": context["candidate_revision_sha256"],
+        "candidate_state_sha256": context["candidate_state_sha256"],
+    }
+    canonical_json_sha256(result)
+    return result
 
 
 def _validate_scope(context: dict[str, object], operation_payload: dict[str, object]) -> None:
@@ -486,7 +661,8 @@ def execute_approved_repair(
     repair_operation: object,
     repair_context: Mapping[str, object],
     candidate_state: Mapping[str, object],
-    r5_failure: Mapping[str, object],
+    r5_failure: Mapping[str, object] | None = None,
+    r5_result: Mapping[str, object] | None = None,
     workspace_owner: DotNetIPCClient,
     workspace_lease: object,
     executor_client: object,
@@ -494,8 +670,28 @@ def execute_approved_repair(
     """Validate and delegate one approved repair through accepted owners."""
 
     context = _validate_context(repair_context)
-    failure = _validate_r5_failure(r5_failure, context)
     current_candidate = _validate_candidate(candidate_state, context)
+    if r5_result is not None:
+        if r5_failure is not None:
+            _fail("R5_FAILURE_INVALID")
+        sealed = _sealed_r5_failure(
+            r5_result, context=context, current_candidate=current_candidate
+        )
+        failure = {
+            "verdict": "FAIL",
+            "failure_id": sealed["verdict_id"],
+            "failure_sha256": sealed["verdict_sha256"],
+            "candidate_revision_id": context["candidate_revision_id"],
+            "candidate_revision_sha256": context["candidate_revision_sha256"],
+            "repair_plan_id": context["repair_plan_id"],
+            "repair_plan_sha256": context["repair_plan_sha256"],
+            "repair_plan_version": context["repair_plan_version"],
+        }
+    else:
+        if r5_failure is None:
+            _fail("R5_FAILURE_INVALID")
+        failure = _validate_r5_failure(r5_failure, context)
+
     candidate_artifacts = current_candidate.get("candidate_artifacts")
     if type(candidate_artifacts) is not dict:
         _fail("CANDIDATE_INVALID")
@@ -595,8 +791,10 @@ def execute_approved_repair(
 
 
 __all__ = [
+    "R6_PLANNER_RESULT_SCHEMA_VERSION",
     "R6_RESULT_SCHEMA_VERSION",
     "RepairExecutorAdapterError",
     "execute_approved_repair",
+    "prepare_repair_plan",
     "validate_approved_repair_result",
 ]

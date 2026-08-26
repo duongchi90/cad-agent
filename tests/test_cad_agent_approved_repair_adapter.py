@@ -25,6 +25,12 @@ from cad_agent.repair_operation_contract import (
     REPAIR_OPERATION_SCHEMA_VERSION,
     normalize_repair_operation,
 )
+from cad_agent.visual_contracts import VisualContractError, validate_visual_contract
+from cad_agent.visual_supervisor_adapter import (
+    VisualSupervisorAdapterError,
+    validate_visual_verdict_result,
+)
+from cad_agent.approved_repair_adapter import RepairExecutorAdapterError
 _DOTNET_IPC = importlib.import_module("mcp_integration_lib.dotnet_ipc")
 DisposableWorkspaceClosure = _DOTNET_IPC.DisposableWorkspaceClosure
 DisposableWorkspaceLease = _DOTNET_IPC.DisposableWorkspaceLease
@@ -94,6 +100,30 @@ def _accepted_candidate_binding() -> tuple[dict[str, object], dict[str, object]]
 def _candidate_binding() -> tuple[dict[str, object], dict[str, object]]:
     state, root = _accepted_candidate_binding()
     return deepcopy(state), deepcopy(root)
+
+
+@lru_cache(maxsize=1)
+def _accepted_foreign_candidate_binding() -> tuple[
+    dict[str, object], dict[str, object]
+]:
+    """Build a second owner-valid current tuple for cross-binding negatives."""
+    path = Path(__file__).with_name("test_cad_agent_candidate_revision.py")
+    spec = importlib.util.spec_from_file_location("r4_foreign_candidate_fixtures", path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("accepted R4 fixture loader unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _root_args, _root, child, _grandchild_args = module._valid_lineage_chain()
+    state = build_candidate_revision_state(
+        candidate_revisions=[child],
+        current_candidate_revision_sha256=child["candidate_revision_sha256"],
+    )
+    return state, child
+
+
+def _foreign_candidate_binding() -> tuple[dict[str, object], dict[str, object]]:
+    state, child = _accepted_foreign_candidate_binding()
+    return deepcopy(state), deepcopy(child)
 
 
 def _operation_fingerprint() -> str:
@@ -763,3 +793,540 @@ def test_public_r6_result_validator_rejects_resealed_foreign_closure_identity(
     _reseal_result(result)
     with pytest.raises(Exception, match="BINDING_MISMATCH"):
         _result_validator()(result)
+
+
+def _sealed_r5_fail_result() -> dict[str, object]:
+    """Build the exact closed owner-shaped R5 result, then validate it canonically."""
+    state, candidate = _candidate_binding()
+    semantic: dict[str, object] = {
+        "schema_version": "r5-visual-verdict-result-1.0",
+        "request_sha256": "1" * 64,
+        "observation_sha256": "2" * 64,
+        "verdict": "FAIL",
+        "candidate_revision_sha256": candidate["candidate_revision_sha256"],
+        "candidate_state_sha256": state["state_sha256"],
+        "registry_snapshot_sha256": candidate["change_scope"]["registry_snapshot_sha256"],
+        "drawing_reference_sha256": "3" * 64,
+        "drawing_observation_sha256": "4" * 64,
+        "latest_mutation_sha256": candidate["mutation_evidence"][
+            "latest_mutation_evidence_sha256"
+        ],
+        "task6_thread_id": "thread-r6-204",
+        "task6_turn_id": "turn-r6-204",
+        "regions": [
+            {
+                "region_id": "critical-region",
+                "view_id": "view-r6-204",
+                "sheet_id": "sheet-r6-204",
+                "layout_id": "layout-r6-204",
+                "criticality": "CRITICAL",
+                "status": "FAIL",
+            }
+        ],
+    }
+    verdict_sha256 = canonical_json_sha256(semantic)
+    result = {**semantic, "verdict_id": verdict_sha256, "verdict_sha256": verdict_sha256}
+    validated = validate_visual_verdict_result(
+        result,
+        expected_request_sha256=semantic["request_sha256"],
+        expected_candidate_revision_sha256=semantic["candidate_revision_sha256"],
+        expected_candidate_state_sha256=semantic["candidate_state_sha256"],
+        expected_latest_mutation_sha256=semantic["latest_mutation_sha256"],
+    )
+    assert validated == result
+    return validated
+
+
+def _accepted_repair_plan(
+    sealed: dict[str, object], candidate: dict[str, object]
+) -> dict[str, object]:
+    component_id = candidate["change_scope"]["impact"]["component_ids"][0]
+    plan: dict[str, object] = {
+        "schema_version": "repair-plan-1.0",
+        "repair_id": "repair-plan-r6-204",
+        "source_review_id": sealed["verdict_id"],
+        "run_id": candidate["run_id"],
+        "target_drawing_sha256": candidate["candidate_artifacts"]["artifact_sha256"],
+        "operations": [
+            {
+                "operation": "ADJUST_SPLINE_CONTROL_REGION",
+                "target": {"stable_entity_id": component_id, "feature": "EDGE"},
+                "preserve_anchors": ["anchor-r6-204"],
+                "constraint_refs": ["constraint-r6-204"],
+            }
+        ],
+        "affected_regions": ["critical-region"],
+        "expected_improvements": ["critical-region:PASS"],
+        "must_not_worsen": ["protected-geometry"],
+        "rollback_candidate_sha256": candidate["candidate_artifacts"]["artifact_sha256"],
+    }
+    validated = validate_visual_contract(plan, contract="repair_plan")
+    assert validated == plan
+    return validated
+
+
+def _planner_context(
+    sealed: dict[str, object],
+    state: dict[str, object],
+    candidate: dict[str, object],
+) -> dict[str, object]:
+    """R3/protected planner context with current candidate bindings only."""
+    return {
+        "run_id": candidate["run_id"],
+        "work_item_id": "work-r6-204",
+        "candidate_revision_id": candidate["revision_id"],
+        "candidate_revision_sha256": candidate["candidate_revision_sha256"],
+        "candidate_state_sha256": state["state_sha256"],
+        "request_sha256": sealed["request_sha256"],
+        "latest_mutation_sha256": sealed["latest_mutation_sha256"],
+        "r3_target_handles": ["H204"],
+        "protected_target_handles": ["H204"],
+    }
+
+
+def _executor_context(
+    sealed: dict[str, object],
+    state: dict[str, object],
+    candidate: dict[str, object],
+    plan: dict[str, object],
+) -> dict[str, object]:
+    context = _planner_context(sealed, state, candidate)
+    context.update(
+        {
+            "repair_plan_id": plan["repair_id"],
+            "repair_plan_sha256": canonical_json_sha256(plan),
+            "repair_plan_version": plan["schema_version"],
+            "repair_operation_contract_version": REPAIR_OPERATION_SCHEMA_VERSION,
+            "repair_operation_contract_fingerprint": _operation_fingerprint(),
+        }
+    )
+    return context
+
+
+def _planner_inputs() -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+]:
+    state, candidate = _candidate_binding()
+    sealed = _sealed_r5_fail_result()
+    plan = _accepted_repair_plan(sealed, candidate)
+    context = _planner_context(sealed, state, candidate)
+    return sealed, state, candidate, plan, context
+
+
+def _call_planner(
+    sealed: dict[str, object],
+    state: dict[str, object],
+    candidate: dict[str, object],
+    plan: dict[str, object],
+    context: dict[str, object],
+):
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), (
+        "R6 causal RED: missing bounded public prepare_repair_plan seam"
+    )
+    return planner(
+        r5_result=sealed,
+        candidate_revision=candidate,
+        candidate_state=state,
+        repair_plan=plan,
+        r3_context=context,
+    )
+
+
+def _sealed_r5_variant(verdict: str) -> dict[str, object]:
+    result = deepcopy(_sealed_r5_fail_result())
+    result["verdict"] = verdict
+    result["regions"][0]["status"] = "PASS" if verdict == "PASS" else "NOT_RUN"
+    semantic = {
+        key: deepcopy(value)
+        for key, value in result.items()
+        if key not in {"verdict_id", "verdict_sha256"}
+    }
+    digest = canonical_json_sha256(semantic)
+    result["verdict_id"] = digest
+    result["verdict_sha256"] = digest
+    validated = validate_visual_verdict_result(
+        result,
+        expected_request_sha256=result["request_sha256"],
+        expected_candidate_revision_sha256=result["candidate_revision_sha256"],
+        expected_candidate_state_sha256=result["candidate_state_sha256"],
+        expected_latest_mutation_sha256=result["latest_mutation_sha256"],
+    )
+    assert validated == result
+    return validated
+
+
+def _sealed_executor_inputs() -> tuple[
+    dict[str, object], DotNetIPCClient, _ExecutorClient
+]:
+    state, candidate = _candidate_binding()
+    sealed = _sealed_r5_fail_result()
+    plan = _accepted_repair_plan(sealed, candidate)
+    context = _executor_context(sealed, state, candidate, plan)
+    fields = {
+        "run_id": context["run_id"],
+        "work_item_id": context["work_item_id"],
+        "candidate_revision_id": context["candidate_revision_id"],
+        "candidate_revision_sha256": context["candidate_revision_sha256"],
+        "r5_failure_id": sealed["verdict_id"],
+        "r5_failure_sha256": sealed["verdict_sha256"],
+        "repair_plan_id": context["repair_plan_id"],
+        "repair_plan_sha256": context["repair_plan_sha256"],
+        "repair_plan_version": context["repair_plan_version"],
+        "repair_operation_contract_version": context[
+            "repair_operation_contract_version"
+        ],
+        "repair_operation_contract_fingerprint": context[
+            "repair_operation_contract_fingerprint"
+        ],
+    }
+    owner = _WorkspaceOwner()
+    executor = _ExecutorClient()
+    inputs: dict[str, object] = {
+        "authorization": issue_repair_authorization(**fields),
+        "repair_operation": _operation(),
+        "repair_context": context,
+        "candidate_state": state,
+        "r5_result": sealed,
+        "workspace_owner": owner,
+        "workspace_lease": _WorkspaceLease(
+            owner,
+            candidate_identity=candidate["revision_id"],
+            source_identity=sealed["verdict_id"],
+            source_fingerprint=sealed["verdict_sha256"],
+        ),
+        "executor_client": executor,
+    }
+    return inputs, owner, executor
+
+
+def test_r6_planner_public_seam_is_the_causal_red() -> None:
+    _call_planner(*_planner_inputs())
+
+
+def test_r6_executor_consumes_validated_sealed_r5_without_legacy_material() -> None:
+    inputs, _owner, _executor = _sealed_executor_inputs()
+    try:
+        result = _execute(inputs)
+    except TypeError:
+        pytest.fail(
+            "R6 causal RED: execute_approved_repair cannot consume the exact sealed "
+            "R5 result without legacy caller material"
+        )
+    sealed = inputs["r5_result"]
+    assert result["r5_failure_id"] == sealed["verdict_id"]
+    assert result["r5_failure_sha256"] == sealed["verdict_sha256"]
+
+
+def test_r6_planner_has_no_authority_or_side_effects(monkeypatch) -> None:
+    inputs = _planner_inputs()
+
+    def bomb(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("planner invoked an execution or authority owner")
+
+    module = _module()
+    for name in (
+        "consume_repair_authorization",
+        "normalize_repair_operation",
+        "_execute_supported_repair_capability",
+    ):
+        monkeypatch.setattr(module, name, bomb)
+    for name in (
+        "issue_disposable_workspace",
+        "validate_disposable_workspace",
+        "close_disposable_workspace",
+    ):
+        monkeypatch.setattr(module.DotNetIPCClient, name, bomb)
+
+    result = _call_planner(*inputs)
+    _assert_planner_output_has_no_authority(result)
+
+
+_ALLOWED_PLANNER_RESULT_KEYS = {
+    "schema_version",
+    "planner_schema_version",
+    "r5_failure_id",
+    "r5_failure_sha256",
+    "repair_plan",
+    "repair_plan_sha256",
+    "repair_plan_version",
+    "plan",
+    "plan_sha256",
+    "plan_version",
+    "run_id",
+    "work_item_id",
+    "request_sha256",
+    "latest_mutation_sha256",
+    "candidate_revision_id",
+    "candidate_revision_sha256",
+    "candidate_state_sha256",
+}
+
+
+def _assert_planner_output_has_no_authority(value: object, path: tuple[object, ...] = ()) -> None:
+    """Require the closed, JSON-only planner result contract."""
+    forbidden = {
+        "approval",
+        "authorization",
+        "authorization_id",
+        "executor",
+        "executor_client",
+        "executor_payload",
+        "lease",
+        "publication",
+        "r4_selection",
+        "repair_operation",
+        "workspace",
+        "workspace_lease",
+        "workspace_owner",
+    }
+    if path == ():
+        assert type(value) is dict, "planner result must be a plain mapping"
+        unknown = set(value) - _ALLOWED_PLANNER_RESULT_KEYS
+        assert not unknown, f"planner result has unknown fields: {sorted(unknown)!r}"
+        assert {"r5_failure_id", "r5_failure_sha256"} <= set(value)
+        assert bool({"repair_plan", "plan"} & set(value))
+        assert bool({"repair_plan_sha256", "plan_sha256"} & set(value))
+    if type(value) is dict:
+        for key, nested in value.items():
+            assert type(key) is str, f"planner result key is not plain str at {path!r}"
+            normalized = key.lower()
+            assert normalized not in forbidden, (
+                "planner output leaked forbidden authority/executor material at "
+                f"{path + (key,)!r}"
+            )
+            _assert_planner_output_has_no_authority(nested, path + (key,))
+    elif type(value) is list:
+        for index, nested in enumerate(value):
+            _assert_planner_output_has_no_authority(nested, path + (index,))
+    else:
+        assert type(value) in {str, int, float, bool, type(None)}, (
+            f"planner result contains non-JSON value at {path!r}"
+        )
+
+
+def test_r6_planner_reuses_sealed_r5_identity_and_is_deterministic() -> None:
+    first = _call_planner(*_planner_inputs())
+    second = _call_planner(*_planner_inputs())
+    assert first == second
+    assert first["r5_failure_id"] == first["r5_failure_sha256"]
+    assert first["r5_failure_id"] == _planner_inputs()[0]["verdict_id"]
+    plan = first.get("repair_plan", first.get("plan"))
+    plan_sha256 = first.get("repair_plan_sha256", first.get("plan_sha256"))
+    assert plan == _planner_inputs()[3]
+    assert plan_sha256 == canonical_json_sha256(plan)
+
+    changed = _planner_inputs()
+    changed_plan = deepcopy(changed[3])
+    changed_plan["expected_improvements"] = [
+        "critical-region:PASS",
+        "normal-region:PASS",
+    ]
+    changed_plan = validate_visual_contract(changed_plan, contract="repair_plan")
+    changed_result = _call_planner(
+        changed[0], changed[1], changed[2], changed_plan, changed[4]
+    )
+    assert changed_result != first
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "NEEDS_HUMAN"])
+def test_r6_planner_rejects_owner_valid_non_fail_r5(verdict: str) -> None:
+    sealed, state, candidate, plan, context = _planner_inputs()
+    sealed = _sealed_r5_variant(verdict)
+    plan["source_review_id"] = sealed["verdict_id"]
+    plan = validate_visual_contract(plan, contract="repair_plan")
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), "R6 causal RED: planner public seam is absent"
+    with pytest.raises((VisualSupervisorAdapterError, VisualContractError), match="FAIL|R5"):
+        _call_planner(sealed, state, candidate, plan, context)
+
+
+def _planner_rejection(mutator) -> None:
+    sealed, state, candidate, plan, context = _planner_inputs()
+    mutator(sealed, state, candidate, plan, context)
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), "R6 causal RED: planner public seam is absent"
+    with pytest.raises((VisualSupervisorAdapterError, VisualContractError)):
+        _call_planner(sealed, state, candidate, plan, context)
+
+
+def _replace_with_owner_valid_foreign_tuple(
+    _result: dict[str, object],
+    state: dict[str, object],
+    candidate: dict[str, object],
+    _plan: dict[str, object],
+    context: dict[str, object],
+) -> None:
+    foreign_state, foreign_candidate = _foreign_candidate_binding()
+    state.clear()
+    state.update(foreign_state)
+    candidate.clear()
+    candidate.update(foreign_candidate)
+    context.update(
+        {
+            "candidate_revision_id": foreign_candidate["revision_id"],
+            "candidate_revision_sha256": foreign_candidate[
+                "candidate_revision_sha256"
+            ],
+            "candidate_state_sha256": foreign_state["state_sha256"],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda result, _state, _candidate, _plan, _context: (
+            result.__setitem__("request_sha256", "f" * 64),
+            result.update(
+                {
+                    "verdict_id": canonical_json_sha256(
+                        {
+                            key: value
+                            for key, value in result.items()
+                            if key not in {"verdict_id", "verdict_sha256"}
+                        }
+                    )
+                }
+            ),
+            result.__setitem__("verdict_sha256", result["verdict_id"]),
+        ),
+        lambda result, _state, _candidate, _plan, _context: (
+            result.__setitem__("latest_mutation_sha256", "e" * 64),
+            result.update(
+                {
+                    "verdict_id": canonical_json_sha256(
+                        {
+                            key: value
+                            for key, value in result.items()
+                            if key not in {"verdict_id", "verdict_sha256"}
+                        }
+                    )
+                }
+            ),
+            result.__setitem__("verdict_sha256", result["verdict_id"]),
+        ),
+        lambda _result, _state, _candidate, _plan, context: context.__setitem__(
+            "candidate_state_sha256", "f" * 64
+        ),
+        _replace_with_owner_valid_foreign_tuple,
+        lambda _result, _state, _candidate, plan, _context: plan.__setitem__(
+            "source_review_id", "caller-failure"
+        ),
+        lambda _result, _state, _candidate, plan, _context: plan["operations"][0].__setitem__(
+            "operation", "REPAIR_DXF_PRIMITIVE"
+        ),
+        lambda result, _state, _candidate, _plan, _context: result.pop("regions"),
+    ],
+)
+def test_r6_planner_rejects_isolated_stale_foreign_or_ambiguous_inputs(mutator) -> None:
+    _planner_rejection(mutator)
+
+
+def test_r6_planner_rejects_hostile_subclasses() -> None:
+    sealed, state, candidate, plan, context = _planner_inputs()
+
+    class HostileString(str):
+        pass
+
+    class HostileMapping(dict):
+        pass
+
+    sealed["verdict"] = HostileString("FAIL")
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), "R6 causal RED: planner public seam is absent"
+    with pytest.raises(VisualSupervisorAdapterError):
+        _call_planner(sealed, state, candidate, plan, context)
+    with pytest.raises(VisualSupervisorAdapterError):
+        _call_planner(HostileMapping(sealed), state, candidate, plan, context)
+
+
+@pytest.mark.parametrize(
+    ("authority_field", "authority_value"),
+    [
+        ("r5_failure_id", "caller-failure"),
+        ("r5_failure_sha256", "f" * 64),
+        ("repair_plan_id", "caller-plan"),
+        ("repair_plan_sha256", "f" * 64),
+    ],
+)
+def test_r6_planner_rejects_each_caller_substituted_authority(
+    authority_field: str, authority_value: str
+) -> None:
+    sealed, state, candidate, plan, context = _planner_inputs()
+    planner = getattr(_module(), "prepare_repair_plan", None)
+    assert callable(planner), "R6 causal RED: planner public seam is absent"
+    with pytest.raises((VisualSupervisorAdapterError, VisualContractError, TypeError)):
+        planner(
+            r5_result=sealed,
+            candidate_revision=candidate,
+            candidate_state=state,
+            repair_plan=plan,
+            r3_context=context,
+            **{authority_field: authority_value},
+        )
+
+
+def test_r6_planner_plan_never_falls_back_to_operation(monkeypatch) -> None:
+    sealed, state, candidate, plan, context = _planner_inputs()
+    validation_contracts: list[object] = []
+    module = _module()
+    canonical_validator = getattr(module, "validate_visual_contract", None)
+
+    def record_repair_plan_validation(payload, *args, **kwargs):
+        contract = kwargs.get("contract")
+        if contract is None and args:
+            contract = args[0]
+        validation_contracts.append(contract)
+        if canonical_validator is None:
+            raise AssertionError("planner has no canonical repair-plan validator owner")
+        return canonical_validator(payload, *args, **kwargs)
+
+    def bomb(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("planner silently normalized a repair operation")
+
+    monkeypatch.setattr(module, "validate_visual_contract", record_repair_plan_validation, raising=False)
+    monkeypatch.setattr(module, "normalize_repair_operation", bomb)
+    plan["operations"][0]["operation"] = "REPAIR_DXF_PRIMITIVE"
+    with pytest.raises((VisualSupervisorAdapterError, VisualContractError)):
+        _call_planner(sealed, state, candidate, plan, context)
+    assert validation_contracts and validation_contracts[0] == "repair_plan"
+
+
+def test_r6_executor_rejects_malformed_sealed_r5_without_legacy_material(monkeypatch) -> None:
+    inputs, owner, executor = _sealed_executor_inputs()
+    inputs["r5_result"]["verdict_sha256"] = "f" * 64
+    calls: list[str] = []
+
+    def forbidden_call(name: str):
+        def bomb(*_args: object, **_kwargs: object) -> None:
+            calls.append(name)
+            raise AssertionError(f"malformed sealed R5 reached {name}")
+
+        return bomb
+
+    module = _module()
+    monkeypatch.setattr(module, "consume_repair_authorization", forbidden_call("authorization"))
+    monkeypatch.setattr(
+        module,
+        "_execute_supported_repair_capability",
+        forbidden_call("executor_capability"),
+    )
+    monkeypatch.setattr(owner, "validate_disposable_workspace", forbidden_call("workspace_validate"))
+    monkeypatch.setattr(owner, "close_disposable_workspace", forbidden_call("workspace_close"))
+    monkeypatch.setattr(inputs["executor_client"], "entity_create_line", forbidden_call("executor"))
+    try:
+        _execute(inputs)
+    except TypeError:
+        pytest.fail(
+            "R6 causal RED: execute_approved_repair has no direct sealed-R5 validation path"
+        )
+    except (RepairExecutorAdapterError, VisualSupervisorAdapterError):
+        pass
+    assert calls == []
+    assert owner.close_calls == []
+    assert executor.calls == []

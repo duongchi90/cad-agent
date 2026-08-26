@@ -13,6 +13,7 @@ import pytest
 
 from cad_agent import component_view_registry as r3
 from cad_agent import drawing_artifact_reference as dara
+from cad_agent import approved_repair_adapter as r6
 from cad_agent.drawing_contracts import canonical_json_sha256
 import cad_agent.candidate_revision as candidate_module
 from cad_agent.candidate_revision import (
@@ -84,28 +85,16 @@ def _baseline_context(
     }
 
 
-def _r3_provenance_binding(registry: dict[str, object]) -> dict[str, object]:
-    material = {
-        "identity_kind": "r3-component-view-registry-provenance-v1",
-        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
-        "component_bindings": [
-            {
-                "component_id": component["component_id"],
-                "record_sha256": canonical_json_sha256(component),
-            }
-            for component in registry["components"]
-        ],
-        "view_bindings": [
-            {
-                "view_id": view["view_id"],
-                "record_sha256": canonical_json_sha256(view),
-            }
-            for view in registry["views"]
-        ],
-    }
+def _r3_provenance_binding(
+    registry: dict[str, object], *, upstream_context: dict[str, object]
+) -> dict[str, object]:
+    material = r3.component_view_registry_provenance_evidence(
+        registry,
+        upstream_context=upstream_context,
+    )
     return {
         "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
-        "provenance_sha256": canonical_json_sha256(material),
+        "provenance_sha256": material["provenance_sha256"],
     }
 
 
@@ -226,7 +215,7 @@ def _accepted_r3_material(
     assert r3.component_view_registry_sha256(
         registry, upstream_context=context
     ) == registry["registry_snapshot_sha256"]
-    binding = _r3_provenance_binding(registry)
+    binding = _r3_provenance_binding(registry, upstream_context=context)
     parent = dara.issue_drawing_artifact_reference(
         **SCOPE,
         artifact_role="R3_CANDIDATE",
@@ -453,7 +442,7 @@ def _candidate_module_call_names(tree: ast.Module) -> set[str]:
     return names
 
 
-def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
+def test_public_surface_exposes_versioned_discriminator_signatures() -> None:
     assert CANDIDATE_REVISION_SCHEMA_VERSION == CANDIDATE_SCHEMA_VERSION
     assert issubclass(CandidateRevisionError, ValueError)
     keyword_only_names = [
@@ -464,6 +453,8 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         "change_impact",
         "mutation_evidence",
         "lineage_context",
+        "schema_version",
+        "candidate_kind",
     ]
     build_parameters = inspect.signature(build_candidate_revision).parameters
     assert list(build_parameters) == keyword_only_names
@@ -472,10 +463,15 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         for parameter in build_parameters.values()
     )
     assert build_parameters["lineage_context"].default == ()
+    assert (
+        build_parameters["schema_version"].default
+        == candidate_module.CANDIDATE_REVISION_SCHEMA_VERSION
+    )
+    assert build_parameters["candidate_kind"].default is None
     assert all(
         parameter.default is inspect.Parameter.empty
         for name, parameter in build_parameters.items()
-        if name != "lineage_context"
+        if name not in {"lineage_context", "schema_version", "candidate_kind"}
     )
 
     validate_parameters = inspect.signature(validate_candidate_revision).parameters
@@ -491,10 +487,16 @@ def test_public_surface_uses_frozen_build_and_validate_signatures() -> None:
         if name != "payload"
     )
     assert validate_parameters["lineage_context"].default == ()
+    assert (
+        validate_parameters["schema_version"].default
+        == candidate_module.CANDIDATE_REVISION_SCHEMA_VERSION
+    )
+    assert validate_parameters["candidate_kind"].default is None
     assert all(
         parameter.default is inspect.Parameter.empty
         for name, parameter in validate_parameters.items()
-        if name not in {"payload", "lineage_context"}
+        if name
+        not in {"payload", "lineage_context", "schema_version", "candidate_kind"}
     )
 
 
@@ -907,6 +909,13 @@ def test_candidate_module_has_no_io_live_or_second_store_authority() -> None:
     }
     imported_roots = {module.split(".", 1)[0].lower() for module in imported_modules}
     assert imported_roots.isdisjoint(forbidden_import_roots)
+    assert "hashlib" not in imported_modules
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "sha256"
+        for node in ast.walk(tree)
+    )
 
     forbidden_tokens = (
         "sqlite3",
@@ -1560,3 +1569,245 @@ def test_task2_state_checksum_mutation_and_unknown_fields_fail_closed() -> None:
             root,
             _task2_transition("SELECT", root, expected_current=None),
         )
+
+
+# R4 schema rebaseline RED-V2.  These tests deliberately describe the
+# explicit v1.1 root/post-repair contract before the production seam exists.
+TASK3_SCHEMA_VERSION = "candidate-revision-1.1"
+TASK3_ROOT_KIND = "ROOT_PRE_REPAIR"
+TASK3_POST_KIND = "POST_REPAIR"
+
+
+def _task3_root_args() -> dict[str, object]:
+    material = _accepted_r3_material()
+    args = _valid_args(material=material, tag="task3-root")
+    provenance = r3.component_view_registry_provenance_evidence(
+        material["registry"], upstream_context=material["context"]
+    )
+    args["schema_version"] = TASK3_SCHEMA_VERSION
+    args["candidate_kind"] = TASK3_ROOT_KIND
+    args["parent_candidate"] = None
+    args["lineage_context"] = ()
+    args["change_impact"] = {
+        "registry_snapshot_sha256": material["registry"][
+            "registry_snapshot_sha256"
+        ],
+        "impact": deepcopy(material["impact"]),
+        "provenance_evidence": provenance,
+        "upstream_context": deepcopy(material["context"]),
+        "root_candidate_reference": deepcopy(material["parent_reference"]),
+        "root_candidate_observation": deepcopy(material["parent_observation"]),
+        "root_candidate_artifact_bytes": material["candidate_bytes"],
+    }
+    args["mutation_evidence"] = {
+        "evidence_kind": "R4_ROOT_PRE_REPAIR",
+        "evidence_id": "r4-root-pre-repair-271-v2",
+        "r3_candidate_reference_id": material["parent_reference"]["reference_id"],
+        "r3_candidate_reference_sha256": material["parent_reference"][
+            "reference_sha256"
+        ],
+        "candidate_artifact_sha256": material["parent_reference"][
+            "artifact_sha256"
+        ],
+        "registry_snapshot_sha256": material["registry"][
+            "registry_snapshot_sha256"
+        ],
+    }
+    return args
+
+
+def _task3_post_args(
+    root_args: dict[str, object], root: dict[str, object]
+) -> dict[str, object]:
+    args = _valid_args(tag="task3-post")
+    args["schema_version"] = TASK3_SCHEMA_VERSION
+    args["candidate_kind"] = TASK3_POST_KIND
+    args["parent_candidate"] = deepcopy(root)
+    args["lineage_context"] = _lineage_context(
+        root_args["baseline_context"], [root]
+    )
+    return args
+
+
+def test_task3_public_v11_builder_accepts_explicit_root_and_closed_shape() -> None:
+    args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(args))
+    assert root["schema_version"] == TASK3_SCHEMA_VERSION
+    assert root["candidate_kind"] == TASK3_ROOT_KIND
+    assert root["parent_candidate_revision_sha256"] is None
+    assert "r5_failure_id" not in root
+    assert "r6_result_id" not in root
+    assert "repair_plan_id" not in root
+    assert validate_candidate_revision(root, **deepcopy(args)) == root
+
+
+def test_task3_v11_root_to_post_repair_child_lineage_is_representable() -> None:
+    root_args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    post_args = _task3_post_args(root_args, root)
+    post = build_candidate_revision(**deepcopy(post_args))
+    assert root["candidate_kind"] == TASK3_ROOT_KIND
+    assert post["candidate_kind"] == TASK3_POST_KIND
+    assert post["parent_candidate_revision_sha256"] == root[
+        "candidate_revision_sha256"
+    ]
+    assert validate_candidate_revision(post, **deepcopy(post_args)) == post
+
+
+def test_task3_legacy_v10_semantics_remain_strict() -> None:
+    args = _valid_args()
+    legacy = build_candidate_revision(**deepcopy(args))
+    assert legacy["schema_version"] == CANDIDATE_SCHEMA_VERSION
+    assert "candidate_kind" not in legacy
+    assert validate_candidate_revision(legacy, **deepcopy(args)) == legacy
+
+
+def test_task3_v11_root_and_current_state_are_r6_compatible() -> None:
+    args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(args))
+    state = candidate_module.build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    assert state["current_candidate_revision_sha256"] == root[
+        "candidate_revision_sha256"
+    ]
+    assert candidate_module.validate_candidate_revision_state(state) == state
+
+
+def test_task3_v11_root_state_consumes_through_existing_r6_boundary() -> None:
+    args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(args))
+    state = candidate_module.build_candidate_revision_state(
+        candidate_revisions=[root],
+        current_candidate_revision_sha256=root["candidate_revision_sha256"],
+    )
+    context = {
+        "candidate_state_sha256": state["state_sha256"],
+        "candidate_revision_sha256": root["candidate_revision_sha256"],
+        "candidate_revision_id": root["revision_id"],
+    }
+    assert r6._validate_candidate(state, context) == root
+
+
+def test_task3_mixed_v10_v11_state_fails_closed() -> None:
+    legacy = build_candidate_revision(**_valid_args())
+    root = build_candidate_revision(**_task3_root_args())
+    with pytest.raises(CandidateRevisionError, match="^STATE_SCHEMA_MIXED$"):
+        candidate_module.build_candidate_revision_state(
+            candidate_revisions=[legacy, root],
+        )
+
+
+def test_task3_root_never_inferred_when_candidate_kind_is_missing() -> None:
+    args = _task3_root_args()
+    args.pop("candidate_kind")
+    with pytest.raises(CandidateRevisionError, match="^CANDIDATE_KIND_INVALID$"):
+        build_candidate_revision(**args)
+
+
+def test_task3_foreign_candidate_kind_fails_closed() -> None:
+    args = _task3_root_args()
+    args["candidate_kind"] = "UNKNOWN"
+    with pytest.raises(CandidateRevisionError, match="^CANDIDATE_KIND_INVALID$"):
+        build_candidate_revision(**args)
+
+
+def test_task3_child_cannot_be_relabelled_as_root() -> None:
+    root_args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    child_args = _task3_post_args(root_args, root)
+    child_args["candidate_kind"] = TASK3_ROOT_KIND
+    with pytest.raises(CandidateRevisionError, match="^ROOT_TRANSITION_FORBIDDEN$"):
+        build_candidate_revision(**child_args)
+
+
+def test_task3_malformed_mixed_mode_root_fails_categorically() -> None:
+    args = _task3_root_args()
+    args["change_impact"]["accepted_transition_evidence_sha256"] = "f" * 64
+    with pytest.raises(CandidateRevisionError, match="^ROOT_TRANSITION_FORBIDDEN$"):
+        build_candidate_revision(**args)
+
+
+def test_task3_v11_post_repair_missing_transition_never_infers_root() -> None:
+    root_args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    args = _task3_post_args(root_args, root)
+    args["mutation_evidence"].pop("accepted_transition_evidence_sha256")
+    with pytest.raises(
+        CandidateRevisionError,
+        match="^POST_REPAIR_TRANSITION_REQUIRED$",
+    ):
+        build_candidate_revision(**args)
+
+
+def test_task3_v11_post_repair_none_transition_never_infers_root() -> None:
+    root_args = _task3_root_args()
+    root = build_candidate_revision(**deepcopy(root_args))
+    args = _task3_post_args(root_args, root)
+    args["mutation_evidence"]["accepted_transition_evidence_sha256"] = None
+    _rebind_mutation_evidence_checksum(args["mutation_evidence"])
+    with pytest.raises(
+        CandidateRevisionError,
+        match="^POST_REPAIR_TRANSITION_REQUIRED$",
+    ):
+        build_candidate_revision(**args)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        (
+            lambda args: args.update(
+                baseline_context=_baseline_context(
+                    scope={
+                        "run_id": "foreign-run",
+                        "project_id": SCOPE["project_id"],
+                        "drawing_id": SCOPE["drawing_id"],
+                    }
+                )
+            ),
+            "^BASELINE_CURRENTNESS_INVALID$",
+        ),
+        (
+            lambda args: args["registry"].update(
+                registry_snapshot_sha256="f" * 64
+            ),
+            "^REGISTRY_INVALID$",
+        ),
+        (
+            lambda args: args["base_cad_handoff"].update(
+                candidate_output_sha256="f" * 64
+            ),
+            "^R2_CANDIDATE_MISMATCH$",
+        ),
+        (
+            lambda args: args.update(
+                lineage_context={"scope": {"run_id": "wrong-scope"}}
+            ),
+            "^LINEAGE_CONTEXT_UNEXPECTED$",
+        ),
+    ],
+)
+def test_task3_root_oracles_are_categorical(
+    mutation: object, expected: str
+) -> None:
+    args = _task3_root_args()
+    mutation(args)
+    with pytest.raises(CandidateRevisionError, match=expected):
+        build_candidate_revision(**args)
+
+
+def test_task3_v11_root_replay_and_input_permutation_are_deterministic() -> None:
+    args = _task3_root_args()
+    first = build_candidate_revision(**deepcopy(args))
+    replay = build_candidate_revision(**deepcopy(args))
+    permuted = deepcopy(args)
+    permuted["change_impact"]["impact"]["component_ids"] = list(
+        reversed(permuted["change_impact"]["impact"]["component_ids"])
+    )
+    permuted["change_impact"]["impact"]["view_ids"] = list(
+        reversed(permuted["change_impact"]["impact"]["view_ids"])
+    )
+    assert replay == first
+    assert build_candidate_revision(**permuted) == first

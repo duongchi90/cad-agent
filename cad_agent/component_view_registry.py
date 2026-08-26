@@ -1334,6 +1334,28 @@ def _task3_provenance_material(
     }
 
 
+def component_view_registry_provenance_evidence(
+    registry: object,
+    *,
+    upstream_context: object,
+) -> dict[str, object]:
+    """Return detached, owner-derived R3 provenance evidence for a registry."""
+    normalized_registry = validate_component_view_registry(
+        registry,
+        upstream_context=upstream_context,
+    )
+    provenance_material = _task3_provenance_material(normalized_registry)
+    return {
+        "identity_kind": provenance_material["identity_kind"],
+        "registry_snapshot_sha256": provenance_material[
+            "registry_snapshot_sha256"
+        ],
+        "provenance_sha256": canonical_json_sha256(provenance_material),
+        "component_bindings": deepcopy(provenance_material["component_bindings"]),
+        "view_bindings": deepcopy(provenance_material["view_bindings"]),
+    }
+
+
 def finalize_component_view_correspondence(
     *,
     registry: object,
@@ -1546,6 +1568,7 @@ __all__ = [
     "build_component_view_registry",
     "validate_component_view_registry",
     "component_view_registry_sha256",
+    "component_view_registry_provenance_evidence",
     "finalize_component_view_correspondence",
     "project_linked_view_impacts",
 ]
