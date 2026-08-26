@@ -3,6 +3,14 @@ name: ChatGPT Local Executor
 on:
   workflow_dispatch:
     inputs:
+      expected_branch:
+        description: 'Nhánh làm việc bắt buộc phải khớp trên máy local'
+        required: false
+        default: ''
+      expected_sha:
+        description: 'Mã Commit SHA bắt buộc phải khớp trên máy local'
+        required: false
+        default: ''
       command:
         description: 'Lệnh chạy thêm (tuỳ chọn)'
         required: false
@@ -13,6 +21,30 @@ jobs:
     runs-on: [self-hosted, windows]
 
     steps:
+      - name: Guard Branch & SHA
+        shell: powershell
+        run: |
+          $repoPath = "C:\Users\dkv\Downloads\cad-agent-merge"
+          cd $repoPath
+          
+          $expectedBranch = "${{ github.event.inputs.expected_branch }}"
+          $expectedSha = "${{ github.event.inputs.expected_sha }}"
+          
+          if ($expectedBranch) {
+              $currentBranch = git branch --show-current
+              if ($currentBranch.Trim() -ne $expectedBranch.Trim()) {
+                  Write-Error "Local branch ($currentBranch) does not match expected branch ($expectedBranch)."
+                  exit 1
+              }
+          }
+          if ($expectedSha) {
+              $currentSha = git rev-parse HEAD
+              if (!$currentSha.StartsWith($expectedSha.Trim())) {
+                  Write-Error "Local SHA ($currentSha) does not match expected SHA ($expectedSha)."
+                  exit 1
+              }
+          }
+
       - name: Execute Local State Check
         shell: powershell
         run: |

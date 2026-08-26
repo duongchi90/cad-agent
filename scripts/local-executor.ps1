@@ -54,27 +54,39 @@ Write-Host "Executing authoritative commands..."
 Write-Host "Python: py -3.11"
 $python311 = py -3.11 -c "import sys; print(sys.executable)"
 
-Write-Host "Running: .\scripts\bootstrap.ps1 -PythonExe $python311"
-$bootstrapOutput = & .\scripts\bootstrap.ps1 -PythonExe $python311 2>&1
-$bootstrapExit = $LASTEXITCODE
+try {
+    Write-Host "Running: .\scripts\bootstrap.ps1 -PythonExe $python311"
+    $bootstrapOutput = & .\scripts\bootstrap.ps1 -PythonExe $python311 2>&1
+    $bootstrapExit = $LASTEXITCODE
 
-Write-Host "Running: .\scripts\verify.ps1"
-$verifyOutput = & .\scripts\verify.ps1 2>&1
-$verifyExit = $LASTEXITCODE
+    Write-Host "Running: .\scripts\verify.ps1"
+    $verifyOutput = & .\scripts\verify.ps1 2>&1
+    $verifyExit = $LASTEXITCODE
+} catch {
+    Write-Host "Script execution threw an error!"
+    $verifyExit = 1
+    # Capture the error record into the output so it gets saved to artifact
+    if ($null -eq $verifyOutput) { $verifyOutput = @() }
+    $verifyOutput += $_
+} finally {
+    Write-Host ""
+    Write-Host "Build/Verify Result:"
+    if ($bootstrapExit -eq 0 -and $verifyExit -eq 0) {
+        Write-Host "  PASS"
+    } else {
+        Write-Host "  FAIL"
+    }
 
-Write-Host ""
-Write-Host "Build/Verify Result:"
-if ($bootstrapExit -eq 0 -and $verifyExit -eq 0) {
-    Write-Host "  PASS"
-} else {
-    Write-Host "  FAIL"
+    # Save output to artifacts ALWAYS
+    $bootstrapOutput | Out-File -FilePath (Join-Path $ArtifactsDir "bootstrap-output.log")
+    $verifyOutput | Out-File -FilePath (Join-Path $ArtifactsDir "verify-output.log")
+    git diff > (Join-Path $ArtifactsDir "local-diff.patch")
+    git status > (Join-Path $ArtifactsDir "git-status.txt")
+
+    Write-Host ""
+    Write-Host "Artifacts generated in '$ArtifactsDir' folder."
 }
 
-# Save output to artifacts
-$bootstrapOutput | Out-File -FilePath (Join-Path $ArtifactsDir "bootstrap-output.log")
-$verifyOutput | Out-File -FilePath (Join-Path $ArtifactsDir "verify-output.log")
-git diff > (Join-Path $ArtifactsDir "local-diff.patch")
-git status > (Join-Path $ArtifactsDir "git-status.txt")
-
-Write-Host ""
-Write-Host "Artifacts generated in '$ArtifactsDir' folder."
+if ($verifyExit -ne 0) {
+    exit $verifyExit
+}
