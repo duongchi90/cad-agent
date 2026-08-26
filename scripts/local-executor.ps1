@@ -12,7 +12,7 @@ $repoPath = $PSScriptRoot | Split-Path -Parent
 Set-Location $repoPath
 
 Write-Host "LOCAL_MACHINE"
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━"
+Write-Host "-----------------------"
 Write-Host "Repo:       $repoPath"
 
 # Git Info
