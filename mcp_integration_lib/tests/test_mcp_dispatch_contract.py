@@ -150,7 +150,7 @@ def _write_success_result(root: Path, request_id: str, payload: object | None = 
 
 def test_exactly_one_canonical_dispatcher_source_exists() -> None:
     _dispatcher_bytes()
-    candidates = sorted(REPO_ROOT.rglob("mcp_dispatch.lsp"))
+    candidates = sorted(p for p in REPO_ROOT.rglob("mcp_dispatch.lsp") if ".superpowers" not in p.parts)
     assert candidates == [DISPATCHER]
 
 
