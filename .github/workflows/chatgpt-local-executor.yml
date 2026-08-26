@@ -1,0 +1,39 @@
+name: ChatGPT Local Executor
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Lệnh chạy thêm (tuỳ chọn)'
+        required: false
+        default: ''
+
+jobs:
+  inspect-local:
+    runs-on: [self-hosted, windows]
+
+    steps:
+      - name: Execute Local State Check
+        shell: powershell
+        run: |
+          # Di chuyển vào thư mục project local thực tế trên máy bạn
+          $repoPath = "C:\Users\dkv\Downloads\cad-agent-merge"
+          cd $repoPath
+          
+          # Chạy script Local Executor
+          .\scripts\local-executor.ps1 -ArtifactsDir "artifacts"
+          
+          # Nếu có lệnh bổ sung được yêu cầu từ trigger
+          $extraCmd = "${{ github.event.inputs.command }}"
+          if ($extraCmd) {
+            Write-Host "Chạy thêm lệnh: $extraCmd"
+            Invoke-Expression $extraCmd
+          }
+
+      - name: Upload Local State Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-state
+          path: C:\Users\dkv\Downloads\cad-agent-merge\artifacts\*
+          retention-days: 1
