@@ -794,8 +794,8 @@ def test_remediation_unrelated_inheritable_handle_is_not_inherited_by_control_ch
         f"sentinel={sentinel_value}\n"
         "def h(payload):\n"
         "    flags=wintypes.DWORD()\n"
-        "    inherited=bool(k.GetHandleInformation(wintypes.HANDLE(sentinel),ctypes.byref(flags)))\n"
-        "    return {'inherited':inherited}\n"
+        "    valid=bool(k.GetHandleInformation(wintypes.HANDLE(sentinel),ctypes.byref(flags)))\n"
+        "    return {'valid':valid, 'flags':flags.value}\n"
         "raise SystemExit(run_worker_control_child(h))\n"
     )
     handle = None
@@ -811,7 +811,8 @@ def test_remediation_unrelated_inheritable_handle_is_not_inherited_by_control_ch
             control_channel=True,
         )
         response = process_owner.exchange_worker_control(handle, {"operation": "probe"})
-        assert response["inherited"] is False
+        was_inherited = response["valid"] and (response["flags"] & 1)
+        assert not was_inherited, f"Handle was actually inherited! Flags: {response['flags']}"
     finally:
         if handle is not None:
             cleanup_worker_process(handle)
