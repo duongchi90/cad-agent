@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from cad_agent.drawing_contracts import canonical_json_sha256
 
