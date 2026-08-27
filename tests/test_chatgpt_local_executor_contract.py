@@ -77,6 +77,8 @@ def test_local_executor_uses_exact_identity_and_sealed_validation() -> None:
     assert "$ExpectedSha" in executor
     assert "BRANCH_MISMATCH" in executor
     assert "HEAD_SHA_MISMATCH" in executor
+    assert "DIRTY_WORKTREE" in executor
+    assert "git status --porcelain" in executor
     assert "validate_local_execution_envelope" in executor
     assert "active_pr_head_sha" in executor
     assert "RUNNER_TEMP" in executor
