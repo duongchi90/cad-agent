@@ -33,7 +33,6 @@ _RECEIPT_FIELDS = frozenset(
         "receipt_sha256",
     }
 )
-_RECEIPT_MATERIAL_FIELDS = _RECEIPT_FIELDS - {"receipt_sha256"}
 
 
 class EvidenceLedgerError(ValueError):
@@ -92,9 +91,7 @@ def make_verification_receipt(
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "head_sha": _sha(head_sha, field="head_sha"),
         "gate_id": _text(gate_id, field="gate_id"),
-        "artifact_identity": _text(
-            artifact_identity, field="artifact_identity"
-        ),
+        "artifact_identity": _text(artifact_identity, field="artifact_identity"),
         "verification_class": _text(
             verification_class, field="verification_class"
         ),
@@ -159,9 +156,7 @@ def _validate_contract(
     if payload["schema_version"] != ACCEPTANCE_SCHEMA_VERSION:
         _fail(f"acceptance schema_version must be {ACCEPTANCE_SCHEMA_VERSION!r}")
     gates_value = payload["gates"]
-    if isinstance(gates_value, (str, bytes)) or not isinstance(
-        gates_value, Sequence
-    ):
+    if isinstance(gates_value, (str, bytes)) or not isinstance(gates_value, Sequence):
         _fail("gates must be a list")
     gates: list[dict[str, object]] = []
     gate_ids: set[str] = set()
@@ -249,6 +244,38 @@ def _relation_allows(
     )
 
 
+def _select_gate_receipts(
+    validated: Sequence[Mapping[str, object]],
+    relations: Sequence[Mapping[str, str]],
+    *,
+    gate_id: str,
+    verification_class: str,
+    target_head: str,
+    expected_artifact: str,
+) -> list[Mapping[str, object]]:
+    matching = [
+        receipt
+        for receipt in validated
+        if receipt["gate_id"] == gate_id
+        and receipt["verification_class"] == verification_class
+        and receipt["artifact_identity"] == expected_artifact
+    ]
+    current = [receipt for receipt in matching if receipt["head_sha"] == target_head]
+    if current:
+        return current
+    return [
+        receipt
+        for receipt in matching
+        if _relation_allows(
+            relations,
+            receipt_head=str(receipt["head_sha"]),
+            target_head=target_head,
+            gate_id=gate_id,
+            artifact_identity=expected_artifact,
+        )
+    ]
+
+
 def first_unsatisfied_gate(
     acceptance_contract: Mapping[str, object],
     receipts: Sequence[Mapping[str, object]],
@@ -269,25 +296,25 @@ def first_unsatisfied_gate(
         gate_id = str(gate["gate_id"])
         verification_class = str(gate["verification_class"])
         expected_artifact = target_artifact if gate["artifact_bound"] else "NONE"
-        satisfied = False
-        for receipt in validated:
-            if receipt["gate_id"] != gate_id:
-                continue
-            if receipt["verification_class"] != verification_class:
-                continue
-            if receipt["verdict"] not in SATISFYING_VERDICTS:
-                continue
-            if receipt["artifact_identity"] != expected_artifact:
-                continue
-            if receipt["head_sha"] == target_head or _relation_allows(
-                relations,
-                receipt_head=str(receipt["head_sha"]),
-                target_head=target_head,
-                gate_id=gate_id,
-                artifact_identity=expected_artifact,
-            ):
-                satisfied = True
-                break
-        if not satisfied:
+        candidates = _select_gate_receipts(
+            validated,
+            relations,
+            gate_id=gate_id,
+            verification_class=verification_class,
+            target_head=target_head,
+            expected_artifact=expected_artifact,
+        )
+        if not candidates:
+            return gate_id
+        verdicts = {str(receipt["verdict"]) for receipt in candidates}
+        if len(verdicts) > 1:
+            provenance = (
+                "current"
+                if any(receipt["head_sha"] == target_head for receipt in candidates)
+                else "reused"
+            )
+            _fail(f"conflicting {provenance} receipts for gate {gate_id}")
+        verdict = next(iter(verdicts))
+        if verdict not in SATISFYING_VERDICTS:
             return gate_id
     return None
