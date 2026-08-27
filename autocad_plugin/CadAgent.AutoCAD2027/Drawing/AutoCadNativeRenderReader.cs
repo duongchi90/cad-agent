@@ -652,8 +652,8 @@ public static class AutoCadNativeRenderReader
             {
                 throw new InvalidDataException("Canonical camera plot window is missing.");
             }
-            validator.SetPlotType(plotSettings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
             validator.SetPlotWindowArea(plotSettings, cameraWindow.PlotWindow);
+            validator.SetPlotType(plotSettings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
         }
         validator.SetUseStandardScale(plotSettings, true);
         validator.SetStdScaleType(plotSettings, StdScaleType.ScaleToFit);

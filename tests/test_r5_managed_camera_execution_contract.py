@@ -59,6 +59,19 @@ def test_managed_reader_uses_deterministic_plot_window_not_zoom_command_text() -
     assert "ZoomExtents" not in source
 
 
+def test_managed_reader_sets_camera_window_before_window_plot_type() -> None:
+    source = _text(READER)
+    window_area = "SetPlotWindowArea(plotSettings, cameraWindow.PlotWindow)"
+    window_plot_type = (
+        "SetPlotType(plotSettings, "
+        "Autodesk.AutoCAD.DatabaseServices.PlotType.Window)"
+    )
+
+    assert source.count(window_area) == 1
+    assert source.count(window_plot_type) == 1
+    assert source.index(window_area) < source.index(window_plot_type)
+
+
 def test_managed_reader_transforms_wcs_camera_window_to_dcs_before_plotting() -> None:
     source = _text(READER)
     assert "Editor.GetCurrentView()" in source
