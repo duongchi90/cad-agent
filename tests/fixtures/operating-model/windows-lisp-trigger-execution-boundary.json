@@ -1,0 +1,22 @@
+{
+  "allowed_additional_signatures": [],
+  "causal_layer": "LOCAL_WINDOWS_TRIGGER",
+  "family_id": "WINDOWS_LISP_TRIGGER_EXECUTION_BOUNDARY",
+  "hard_escalation": "PUBLIC_OWNER_API_OR_SECURITY_SCOPE_EXPANSION",
+  "probe_id": "pytest:mcp_integration_lib/tests/test_file_ipc_windows_trigger.py",
+  "required_signatures": [
+    "CALLER_VISIBLE_EXECUTION_ACK_ABSENT",
+    "EXACT_HWND_PID_BINDING_MISSING",
+    "FOREIGN_RECEIVER_NOT_REJECTED",
+    "NEGATIVE_DELIVERY_NOT_CATEGORICAL",
+    "QUEUE_RETURN_WITHOUT_EXECUTION_RECEIPT",
+    "RECEIVER_PID_OWNERSHIP_UNVERIFIED"
+  ],
+  "safe_auto_repair": "NONE",
+  "schema_version": "cad-failure-family-1.0",
+  "source_refs": [
+    "issue:131#comment-5436656589",
+    "issue:284",
+    "pr:285"
+  ]
+}
