@@ -23,6 +23,7 @@ def _receipt(
     *,
     head_sha: str = HEAD,
     artifact_identity: str = "NONE",
+    source_suffix: str = "default",
 ) -> dict[str, object]:
     return make_verification_receipt(
         head_sha=head_sha,
@@ -30,7 +31,7 @@ def _receipt(
         artifact_identity=artifact_identity,
         verification_class="OFFLINE_DETERMINISTIC",
         verdict=verdict,
-        source_evidence_ref=f"github:run:{gate_id}",
+        source_evidence_ref=f"github:run:{gate_id}:{source_suffix}",
         verifier_role="SOL_WEB",
         observed_at="2026-08-27T10:00:00Z",
     )
@@ -151,6 +152,41 @@ def test_exact_reuse_relation_can_transfer_one_named_gate_only() -> None:
         )
         is None
     )
+
+
+def test_current_head_failure_overrides_reused_old_pass() -> None:
+    contract = _contract(
+        reuse_relations=[
+            {
+                "from_head_sha": OLD_HEAD,
+                "to_head_sha": HEAD,
+                "gate_id": "SNAPSHOT",
+                "artifact_identity": "NONE",
+                "source_ref": "issue:131#accepted-reuse",
+            }
+        ]
+    )
+    receipts = [
+        _receipt("SNAPSHOT", "PASS", head_sha=OLD_HEAD, source_suffix="old-pass"),
+        _receipt("SNAPSHOT", "FAIL", head_sha=HEAD, source_suffix="current-fail"),
+    ]
+    assert (
+        first_unsatisfied_gate(
+            contract, receipts, head_sha=HEAD, artifact_identity=ARTIFACT
+        )
+        == "SNAPSHOT"
+    )
+
+
+def test_conflicting_current_receipts_fail_closed() -> None:
+    receipts = [
+        _receipt("SNAPSHOT", "PASS", source_suffix="pass"),
+        _receipt("SNAPSHOT", "FAIL", source_suffix="fail"),
+    ]
+    with pytest.raises(EvidenceLedgerError, match="conflicting current receipts"):
+        first_unsatisfied_gate(
+            _contract(), receipts, head_sha=HEAD, artifact_identity=ARTIFACT
+        )
 
 
 def test_rejects_unknown_verdict() -> None:
