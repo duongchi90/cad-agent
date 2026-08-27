@@ -120,6 +120,13 @@ def test_rejects_web_capable_delegation() -> None:
         compile_local_mission(_snapshot(), routing, _request())
 
 
+def test_rejects_foreign_routing_schema_version() -> None:
+    routing = dict(_routing())
+    routing["schema_version"] = "foreign-routing-9.9"
+    with pytest.raises(MissionContractError, match="routing.schema_version"):
+        compile_local_mission(_snapshot(), routing, _request())
+
+
 def test_repo_mutation_requires_write_set_and_authority() -> None:
     request = _request()
     request["write_set"] = []
