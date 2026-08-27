@@ -12,9 +12,13 @@ def _opening(relative_path: str) -> str:
     )
 
 
+def _compact(value: str) -> str:
+    return " ".join(value.split())
+
+
 def test_legacy_authority_documents_fail_closed_to_live_github_control() -> None:
     for relative_path in ("docs/AI_OPERATING_MODEL.md", "docs/HANDOFF.md"):
-        opening = _opening(relative_path)
+        opening = _compact(_opening(relative_path))
         assert "Issue #131" in opening, relative_path
         assert "historical" in opening.casefold(), relative_path
         assert "not live" in opening.casefold(), relative_path
@@ -23,7 +27,7 @@ def test_legacy_authority_documents_fail_closed_to_live_github_control() -> None
 
 
 def test_status_is_historical_evidence_not_currentness_authority() -> None:
-    opening = _opening("docs/STATUS.md")
+    opening = _compact(_opening("docs/STATUS.md"))
     folded = opening.casefold()
     assert "historical" in folded
     assert "not live project state" in folded
