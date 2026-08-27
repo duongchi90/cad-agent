@@ -200,6 +200,40 @@ def test_terminal_is_evidence_only() -> None:
     assert terminal["publication_authority"] is False
 
 
+def test_terminal_allows_unvalidated_identity_only_for_fail() -> None:
+    adapter = _adapter()
+    terminal = adapter.build_local_mission_terminal(
+        mission_sha256="UNVALIDATED",
+        control_state_sha256="UNVALIDATED",
+        capability="OFFLINE_VERIFY",
+        local_branch="UNVALIDATED",
+        local_head_sha="UNVALIDATED",
+        result="FAIL",
+        bootstrap_exit_code=1,
+        verify_exit_code=1,
+    )
+
+    assert terminal["mission_sha256"] == "UNVALIDATED"
+    assert terminal["control_state_sha256"] == "UNVALIDATED"
+    assert terminal["local_head_sha"] == "UNVALIDATED"
+    assert terminal["live_result"] == "NOT_RUN"
+
+
+def test_terminal_rejects_unvalidated_identity_for_pass() -> None:
+    adapter = _adapter()
+    with pytest.raises(adapter.LocalExecutionEnvelopeError, match="UNVALIDATED"):
+        adapter.build_local_mission_terminal(
+            mission_sha256="UNVALIDATED",
+            control_state_sha256="UNVALIDATED",
+            capability="OFFLINE_VERIFY",
+            local_branch="UNVALIDATED",
+            local_head_sha="UNVALIDATED",
+            result="PASS",
+            bootstrap_exit_code=0,
+            verify_exit_code=0,
+        )
+
+
 def test_terminal_rejects_authority_shaped_inputs_by_closed_signature() -> None:
     adapter = _adapter()
     kwargs = {
