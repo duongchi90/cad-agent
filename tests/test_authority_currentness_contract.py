@@ -13,7 +13,13 @@ def _opening(relative_path: str) -> str:
 
 
 def _compact(value: str) -> str:
-    return " ".join(value.split())
+    lines: list[str] = []
+    for line in value.splitlines():
+        candidate = line.lstrip()
+        while candidate.startswith(">"):
+            candidate = candidate[1:].lstrip()
+        lines.append(candidate)
+    return " ".join(" ".join(lines).split())
 
 
 def test_legacy_authority_documents_fail_closed_to_live_github_control() -> None:
