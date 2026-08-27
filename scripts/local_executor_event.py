@@ -225,6 +225,7 @@ def find_watchdog_alert(
         if request is not None:
             dispatches.append((comment_id, created_at, request))
 
+    trusted_status_logins = {repository_owner, "github-actions[bot]"}
     for dispatch_id, created_at, request in sorted(
         dispatches,
         key=lambda item: item[0],
@@ -237,7 +238,10 @@ def find_watchdog_alert(
 
         for comment in rows:
             body = comment.get("body")
-            if not isinstance(body, str):
+            user = comment.get("user")
+            if not isinstance(body, str) or not isinstance(user, dict):
+                continue
+            if str(user.get("login", "")) not in trusted_status_logins:
                 continue
             if _comment_dispatch_id(body, TERMINAL_MARKER) == dispatch_token:
                 completed = True
