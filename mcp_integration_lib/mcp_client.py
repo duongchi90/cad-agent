@@ -666,24 +666,57 @@ class FileIPCLiveMCPClient:
 
 
 def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
-    """Return a trigger that types text at AutoCAD's command boundary."""
+    """Return a bounded, exact-owner trigger for AutoCAD's command boundary."""
     def trigger(text: str) -> None:
+        def window_pid(window: int) -> int:
+            pid = wintypes.DWORD()
+            if not ctypes.windll.user32.GetWindowThreadProcessId(
+                window, ctypes.byref(pid)
+            ):
+                raise MCPToolError("WINDOW_IDENTITY_INVALID")
+            if not pid.value:
+                raise MCPToolError("WINDOW_IDENTITY_INVALID")
+            return int(pid.value)
+
+        owner_pid = window_pid(hwnd)
         mdi_clients: List[int] = []
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
         def callback(child: int, _lparam: int) -> bool:
             name = ctypes.create_unicode_buffer(256)
-            ctypes.windll.user32.GetClassNameW(child, name, len(name))
+            if not ctypes.windll.user32.GetClassNameW(child, name, len(name)):
+                return True
             if name.value == "MDIClient":
                 mdi_clients.append(child)
-                return False
             return True
+
         ctypes.windll.user32.EnumChildWindows(hwnd, callback_type(callback), 0)
-        target = mdi_clients[0] if mdi_clients else hwnd
+        owned_mdi_clients = [
+            child for child in mdi_clients if window_pid(child) == owner_pid
+        ]
+        if len(owned_mdi_clients) != 1:
+            raise MCPToolError("WINDOW_RECEIVER_AMBIGUOUS")
+        target = owned_mdi_clients[0]
+
+        if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
+            raise MCPToolError("WINDOW_IDENTITY_CHANGED")
         ctypes.windll.user32.ShowWindow(hwnd, 9)
         ctypes.windll.user32.SetForegroundWindow(hwnd)
-        post = ctypes.windll.user32.PostMessageW
+        if ctypes.windll.user32.GetForegroundWindow() != hwnd:
+            raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+        if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
+            raise MCPToolError("WINDOW_IDENTITY_CHANGED")
+
+        send = ctypes.windll.user32.SendMessageTimeoutW
+        kernel32 = ctypes.windll.kernel32
         for ch in "\x1b\x1b" + text + "\r":
-            post(target, 0x0102, ord(ch), 0)
+            kernel32.SetLastError(0)
+            result = wintypes.DWORD()
+            if not send(target, 0x0102, ord(ch), 0, 0x0022, 1000, ctypes.byref(result)):
+                error = kernel32.GetLastError()
+                if error == 1460:
+                    raise MCPTimeoutError("WINDOW_DELIVERY_TIMEOUT")
+                raise MCPToolError("WINDOW_DELIVERY_FAILED")
     return trigger
 
 
