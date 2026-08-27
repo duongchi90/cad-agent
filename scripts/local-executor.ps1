@@ -244,7 +244,10 @@ print(json.dumps(terminal, sort_keys=True, separators=(",", ":")))
         }
         Write-Host "Artifacts generated in '$artifactsFull'."
     } catch {
-        Write-Host "Artifact/terminal emission failed: $($_.Exception.Message)"
+        $emissionFailure = $_.Exception.Message
+        Write-Host "Artifact/terminal emission failed: $emissionFailure"
+        $failureMessage = "ARTIFACT_TERMINAL_EMISSION_FAILED: $emissionFailure"
+        $result = "FAIL"
     }
 }
 
