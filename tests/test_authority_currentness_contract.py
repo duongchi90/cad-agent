@@ -27,7 +27,7 @@ def test_status_is_historical_evidence_not_currentness_authority() -> None:
     folded = opening.casefold()
     assert "historical" in folded
     assert "not live project state" in folded
-    assert "Issue #131" in opening
+    assert "#131" in opening
     assert "actual current `main`" in opening
     assert "not a scheduler" in folded
     assert "merge authority" in folded
