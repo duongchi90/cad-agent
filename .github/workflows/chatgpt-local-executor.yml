@@ -4,66 +4,48 @@ on:
   workflow_dispatch:
     inputs:
       expected_branch:
-        description: 'Nhánh làm việc bắt buộc phải khớp trên máy local'
-        required: false
-        default: ''
+        description: 'Exact local branch required for this mission'
+        required: true
+        type: string
       expected_sha:
-        description: 'Mã Commit SHA bắt buộc phải khớp trên máy local'
-        required: false
-        default: ''
-      command:
-        description: 'Lệnh chạy thêm (tuỳ chọn)'
-        required: false
-        default: ''
+        description: 'Exact 40-character local commit SHA required for this mission'
+        required: true
+        type: string
+      mission_envelope_json:
+        description: 'Sealed CAD Agent local execution envelope JSON'
+        required: true
+        type: string
 
 jobs:
   inspect-local:
     runs-on: [self-hosted, windows]
 
     steps:
-      - name: Guard Branch & SHA
+      - name: Execute sealed local mission
         shell: powershell
+        env:
+          CAD_AGENT_EXPECTED_BRANCH: ${{ inputs.expected_branch }}
+          CAD_AGENT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+          CAD_AGENT_MISSION_ENVELOPE_JSON: ${{ inputs.mission_envelope_json }}
         run: |
           $repoPath = "C:\Users\dkv\Downloads\cad-agent-merge"
-          cd $repoPath
-          
-          $expectedBranch = "${{ github.event.inputs.expected_branch }}"
-          $expectedSha = "${{ github.event.inputs.expected_sha }}"
-          
-          if ($expectedBranch) {
-              $currentBranch = git branch --show-current
-              if ($currentBranch.Trim() -ne $expectedBranch.Trim()) {
-                  Write-Error "Local branch ($currentBranch) does not match expected branch ($expectedBranch)."
-                  exit 1
-              }
-          }
-          if ($expectedSha) {
-              $currentSha = git rev-parse HEAD
-              if (!$currentSha.StartsWith($expectedSha.Trim())) {
-                  Write-Error "Local SHA ($currentSha) does not match expected SHA ($expectedSha)."
-                  exit 1
-              }
-          }
+          Set-Location $repoPath
 
-      - name: Execute Local State Check
-        shell: powershell
-        run: |
-          # Di chuyển vào thư mục project local thực tế trên máy bạn
-          $repoPath = "C:\Users\dkv\Downloads\cad-agent-merge"
-          cd $repoPath
-          
-          # Chạy script Local Executor
           $tempArtifacts = Join-Path $env:RUNNER_TEMP "artifacts"
-          .\scripts\local-executor.ps1 -ArtifactsDir $tempArtifacts
-          
-          # Nếu có lệnh bổ sung được yêu cầu từ trigger
-          $extraCmd = "${{ github.event.inputs.command }}"
-          if ($extraCmd) {
-            Write-Host "Chạy thêm lệnh: $extraCmd"
-            Invoke-Expression $extraCmd
-          }
+          $missionPath = Join-Path $env:RUNNER_TEMP "cad-agent-mission-envelope.json"
+          [System.IO.File]::WriteAllText(
+              $missionPath,
+              $env:CAD_AGENT_MISSION_ENVELOPE_JSON,
+              [System.Text.UTF8Encoding]::new($false)
+          )
 
-      - name: Upload Local State Artifacts
+          .\scripts\local-executor.ps1 `
+              -ArtifactsDir $tempArtifacts `
+              -MissionEnvelopePath $missionPath `
+              -ExpectedBranch $env:CAD_AGENT_EXPECTED_BRANCH `
+              -ExpectedSha $env:CAD_AGENT_EXPECTED_SHA
+
+      - name: Upload Local Mission Artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
