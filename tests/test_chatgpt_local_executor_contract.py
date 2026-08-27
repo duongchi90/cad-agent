@@ -1,4 +1,9 @@
+import os
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,23 +30,24 @@ def test_local_executor_has_no_arbitrary_command_surface() -> None:
 
 def test_dispatch_contract_is_closed_and_required() -> None:
     workflow, _ = _texts()
+    lines = workflow.splitlines()
 
-    assert "      expected_branch:" in workflow
-    assert "      expected_sha:" in workflow
-    assert "      mission_envelope_json:" in workflow
     for field in ("expected_branch", "expected_sha", "mission_envelope_json"):
-        start = workflow.index(f"      {field}:")
-        tail = workflow[start:]
-        next_field = tail.find("\n      ", 1)
-        block = tail if next_field == -1 else tail[:next_field]
-        assert "required: true" in block
-        assert "required: false" not in block
+        marker = f"      {field}:"
+        assert marker in lines
+        start = lines.index(marker)
+        block = lines[start : start + 5]
+        assert "        required: true" in block
+        assert "        required: false" not in block
 
 
 def test_mission_json_crosses_workflow_boundary_via_environment_only() -> None:
     workflow, _ = _texts()
 
-    assert "CAD_AGENT_MISSION_ENVELOPE_JSON: ${{ inputs.mission_envelope_json }}" in workflow
+    assert (
+        "CAD_AGENT_MISSION_ENVELOPE_JSON: ${{ inputs.mission_envelope_json }}"
+        in workflow
+    )
     assert "CAD_AGENT_EXPECTED_BRANCH: ${{ inputs.expected_branch }}" in workflow
     assert "CAD_AGENT_EXPECTED_SHA: ${{ inputs.expected_sha }}" in workflow
     assert "$env:CAD_AGENT_MISSION_ENVELOPE_JSON" in workflow
@@ -50,7 +56,9 @@ def test_mission_json_crosses_workflow_boundary_via_environment_only() -> None:
     assert 'Join-Path $env:RUNNER_TEMP "cad-agent-mission-envelope.json"' in workflow
 
     expression = "${{ inputs.mission_envelope_json }}"
-    expression_lines = [line.strip() for line in workflow.splitlines() if expression in line]
+    expression_lines = [
+        line.strip() for line in workflow.splitlines() if expression in line
+    ]
     assert expression_lines == [
         "CAD_AGENT_MISSION_ENVELOPE_JSON: ${{ inputs.mission_envelope_json }}"
     ]
@@ -95,3 +103,29 @@ def test_local_executor_emits_non_authoritative_terminal_and_fixed_verify_path()
     assert "control_seq" not in executor.lower()
     assert "merge_authority" in executor
     assert "publication_authority" in executor
+
+
+def test_local_executor_parses_in_windows_powershell() -> None:
+    if os.name != "nt":
+        pytest.skip("Windows PowerShell is the supported executor surface")
+
+    powershell = shutil.which("powershell.exe")
+    assert powershell is not None
+    env = os.environ.copy()
+    env["CAD_AGENT_PARSE_TARGET"] = str(EXECUTOR)
+    parser = (
+        "$tokens=$null;$errors=$null;"
+        "[System.Management.Automation.Language.Parser]::ParseFile("
+        "$env:CAD_AGENT_PARSE_TARGET,[ref]$tokens,[ref]$errors)|Out-Null;"
+        "if($errors.Count -gt 0){"
+        "$errors|ForEach-Object{Write-Output $_.Message};exit 1}"
+    )
+    completed = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-Command", parser],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
