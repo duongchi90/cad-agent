@@ -668,11 +668,64 @@ class FileIPCLiveMCPClient:
 def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
     """Return a bounded, exact-owner trigger for AutoCAD's command boundary."""
     def trigger(text: str) -> None:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        def set_native_signature(function: Any, argtypes: list[Any], restype: Any) -> None:
+            try:
+                function.argtypes = argtypes
+                function.restype = restype
+            except (AttributeError, TypeError):
+                # Test doubles expose the same callable surface without ctypes metadata.
+                pass
+
+        get_window_thread_process_id = user32.GetWindowThreadProcessId
+        get_class_name = user32.GetClassNameW
+        enum_child_windows = user32.EnumChildWindows
+        show_window = user32.ShowWindow
+        set_foreground_window = user32.SetForegroundWindow
+        get_foreground_window = user32.GetForegroundWindow
+        send_message_timeout = user32.SendMessageTimeoutW
+        set_last_error = kernel32.SetLastError
+        get_last_error = kernel32.GetLastError
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        set_native_signature(
+            get_window_thread_process_id,
+            [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)],
+            wintypes.DWORD,
+        )
+        set_native_signature(
+            get_class_name,
+            [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int],
+            ctypes.c_int,
+        )
+        set_native_signature(
+            enum_child_windows,
+            [wintypes.HWND, callback_type, wintypes.LPARAM],
+            wintypes.BOOL,
+        )
+        set_native_signature(show_window, [wintypes.HWND, ctypes.c_int], wintypes.BOOL)
+        set_native_signature(set_foreground_window, [wintypes.HWND], wintypes.BOOL)
+        set_native_signature(get_foreground_window, [], wintypes.HWND)
+        set_native_signature(
+            send_message_timeout,
+            [
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+                wintypes.UINT,
+                wintypes.UINT,
+                ctypes.POINTER(ctypes.c_size_t),
+            ],
+            ctypes.c_ssize_t,
+        )
+        set_native_signature(set_last_error, [wintypes.DWORD], None)
+        set_native_signature(get_last_error, [], wintypes.DWORD)
+
         def window_pid(window: int) -> int:
             pid = wintypes.DWORD()
-            if not ctypes.windll.user32.GetWindowThreadProcessId(
-                window, ctypes.byref(pid)
-            ):
+            if not get_window_thread_process_id(window, ctypes.byref(pid)):
                 raise MCPToolError("WINDOW_IDENTITY_INVALID")
             if not pid.value:
                 raise MCPToolError("WINDOW_IDENTITY_INVALID")
@@ -680,17 +733,23 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
 
         owner_pid = window_pid(hwnd)
         mdi_clients: List[int] = []
-        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        callback_error: Optional[str] = None
 
         def callback(child: int, _lparam: int) -> bool:
+            nonlocal callback_error
             name = ctypes.create_unicode_buffer(256)
-            if not ctypes.windll.user32.GetClassNameW(child, name, len(name)):
-                return True
+            if not get_class_name(child, name, len(name)):
+                callback_error = "WINDOW_CLASS_INVALID"
+                return False
             if name.value == "MDIClient":
                 mdi_clients.append(child)
             return True
 
-        ctypes.windll.user32.EnumChildWindows(hwnd, callback_type(callback), 0)
+        enum_result = enum_child_windows(hwnd, callback_type(callback), 0)
+        if callback_error is not None:
+            raise MCPToolError(callback_error)
+        if enum_result is not None and not enum_result:
+            raise MCPToolError("WINDOW_ENUMERATION_FAILED")
         owned_mdi_clients = [
             child for child in mdi_clients if window_pid(child) == owner_pid
         ]
@@ -700,20 +759,24 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
 
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise MCPToolError("WINDOW_IDENTITY_CHANGED")
-        ctypes.windll.user32.ShowWindow(hwnd, 9)
-        ctypes.windll.user32.SetForegroundWindow(hwnd)
-        if ctypes.windll.user32.GetForegroundWindow() != hwnd:
+        show_window(hwnd, 9)
+        set_foreground_window(hwnd)
+        if get_foreground_window() != hwnd:
             raise MCPToolError("WINDOW_FOREGROUND_INVALID")
-        if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
-            raise MCPToolError("WINDOW_IDENTITY_CHANGED")
 
-        send = ctypes.windll.user32.SendMessageTimeoutW
-        kernel32 = ctypes.windll.kernel32
-        for ch in "\x1b\x1b" + text + "\r":
-            kernel32.SetLastError(0)
-            result = wintypes.DWORD()
-            if not send(target, 0x0102, ord(ch), 0, 0x0022, 1000, ctypes.byref(result)):
-                error = kernel32.GetLastError()
+        framed_text = ("\x1b\x1b" + text + "\r").encode("utf-16-le")
+        for offset in range(0, len(framed_text), 2):
+            if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
+                raise MCPToolError("WINDOW_IDENTITY_CHANGED")
+            if get_foreground_window() != hwnd:
+                raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+            code_unit = int.from_bytes(framed_text[offset:offset + 2], "little")
+            set_last_error(0)
+            result = ctypes.c_size_t()
+            if not send_message_timeout(
+                target, 0x0102, code_unit, 0, 0x0022, 1000, ctypes.byref(result)
+            ):
+                error = get_last_error()
                 if error == 1460:
                     raise MCPTimeoutError("WINDOW_DELIVERY_TIMEOUT")
                 raise MCPToolError("WINDOW_DELIVERY_FAILED")
