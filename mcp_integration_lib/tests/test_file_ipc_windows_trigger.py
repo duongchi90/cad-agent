@@ -37,22 +37,26 @@ class RecordingUser32:
         children: list[tuple[int, str, int]] | None = None,
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = OWNED_HWND,
-        post_return: int = 1,
-        delivery_processed: bool = True,
+        send_returns: list[int] | None = None,
+        last_errors: list[int] | None = None,
+        send_result: int = 1,
     ) -> None:
         self.children = children if children is not None else [
             (RECEIVER_HWND, "MDIClient", OWNED_PID)
         ]
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
-        self.post_return = post_return
-        self.delivery_processed = delivery_processed
+        self.send_returns = send_returns or [1]
+        self.last_errors = last_errors or [0]
+        self.send_result = send_result
         self.enum_calls: list[tuple[int, int]] = []
         self.window_pid_calls: list[int] = []
         self._pid_call_counts: dict[int, int] = {}
         self.focus_calls: list[tuple[str, int]] = []
         self.post_calls: list[tuple[int, int, int, int]] = []
-        self.processed_messages: list[tuple[int, int, int, int]] = []
+        self.send_calls: list[tuple[int, int, int, int, int, int]] = []
+        self.message_calls: list[tuple[str, int, int, int, int]] = []
+        self._last_error_calls = 0
         self.class_names = {child: name for child, name, _pid in self.children}
         self.child_pids = {child: pid for child, _name, pid in self.children}
 
@@ -88,9 +92,20 @@ class RecordingUser32:
     def PostMessageW(self, target, message, wparam, lparam):
         call = (target, message, wparam, lparam)
         self.post_calls.append(call)
-        if self.post_return and self.delivery_processed:
-            self.processed_messages.append(call)
-        return self.post_return
+        self.message_calls.append(("PostMessageW", target, message, wparam, lparam))
+        return 1
+
+    def SendMessageTimeoutW(self, target, message, wparam, lparam, flags, timeout, result_pointer):
+        self.send_calls.append((target, message, wparam, lparam, flags, timeout))
+        self.message_calls.append(("SendMessageTimeoutW", target, message, wparam, lparam))
+        result_pointer._obj.value = self.send_result
+        call_index = len(self.send_calls) - 1
+        return self.send_returns[min(call_index, len(self.send_returns) - 1)]
+
+    def GetLastError(self):
+        error = self.last_errors[min(self._last_error_calls, len(self.last_errors) - 1)]
+        self._last_error_calls += 1
+        return error
 
 
 class WindowsTriggerExecutionRedTests(unittest.TestCase):
@@ -141,9 +156,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         )
         self._run_current_trigger(user32)
         self.assertEqual(
-            [call[0] for call in user32.post_calls],
+            [call[1] for call in user32.send_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
+        self.assertEqual(user32.post_calls, [])
 
     def test_receiver_pid_drift_at_delivery_boundary_is_rejected(self) -> None:
         user32 = RecordingUser32(
@@ -163,24 +179,64 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             self._run_current_trigger(user32)
         self.assertEqual(user32.post_calls, [])
 
-    def test_native_post_failure_is_categorical(self) -> None:
-        user32 = RecordingUser32(post_return=0, delivery_processed=False)
-        with self.assertRaises((MCPToolError, MCPTimeoutError)):
-            self._run_current_trigger(user32)
+    def test_bounded_native_delivery_uses_sendmessage_timeout(self) -> None:
+        user32 = RecordingUser32(send_returns=[1] * len(EXPECTED_FRAMED_TEXT))
+        self._run_current_trigger(user32)
+        self.assertEqual(user32.post_calls, [])
+        self.assertEqual(
+            [call[0] for call in user32.send_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertEqual(
+            [call[1] for call in user32.send_calls],
+            [0x0102] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertEqual(
+            [call[4] for call in user32.send_calls],
+            [0x0002] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertEqual(
+            [call[5] for call in user32.send_calls],
+            [1000] * len(EXPECTED_FRAMED_TEXT),
+        )
 
-    def test_post_success_without_processed_boundary_is_categorical_timeout(self) -> None:
-        user32 = RecordingUser32(post_return=1, delivery_processed=False)
-        with self.assertRaises(MCPTimeoutError):
-            self._run_current_trigger(user32)
-        self.assertEqual(user32.processed_messages, [])
+    def test_bounded_native_zero_timeout_and_error_fail_closed(self) -> None:
+        cases = {
+            "zero": (0, 0, MCPToolError),
+            "timeout": (0, 1460, MCPTimeoutError),
+            "native-error": (0, 5, MCPToolError),
+        }
+        for case, (send_return, last_error, expected_error) in cases.items():
+            with self.subTest(case=case):
+                user32 = RecordingUser32(
+                    send_returns=[send_return],
+                    last_errors=[last_error],
+                )
+                with self.assertRaises(expected_error) as raised:
+                    self._run_current_trigger(user32)
+                self.assertEqual(len(user32.send_calls), 1)
+                self.assertEqual(user32.post_calls, [])
+                self.assertNotIn(EXPRESSION, str(raised.exception))
 
     def test_expression_framing_is_exact_and_bounded(self) -> None:
         user32 = RecordingUser32()
         self._run_current_trigger(user32)
-        self.assertEqual([call[0] for call in user32.post_calls], [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT))
-        self.assertEqual([call[1] for call in user32.post_calls], [0x0102] * len(EXPECTED_FRAMED_TEXT))
-        self.assertEqual("".join(chr(call[2]) for call in user32.post_calls), EXPECTED_FRAMED_TEXT)
-        self.assertEqual([call[3] for call in user32.post_calls], [0] * len(EXPECTED_FRAMED_TEXT))
+        self.assertEqual(
+            [call[1] for call in user32.message_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertEqual(
+            [call[2] for call in user32.message_calls],
+            [0x0102] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertEqual(
+            "".join(chr(call[3]) for call in user32.message_calls),
+            EXPECTED_FRAMED_TEXT,
+        )
+        self.assertEqual(
+            [call[4] for call in user32.message_calls],
+            [0] * len(EXPECTED_FRAMED_TEXT),
+        )
 
     def test_receiver_discovery_is_single_owned_mdi_boundary(self) -> None:
         user32 = RecordingUser32()
