@@ -1,5 +1,19 @@
 # CAD Agent — AI Operating Model
 
+> [!IMPORTANT]
+> **Historical operating-model record — not live authority.**
+>
+> This file preserves legacy PO/Codex-era role guidance for audit history. It must not be
+> used to decide the current owner/baton, blocker, merge readiness, live authority, or
+> next action. For mutable project state, fresh-read GitHub in this order: Issue #131,
+> actual current `main`, open PR/CI/reviewer state, then the newest applicable
+> task-specific authority/evidence. Newer GitHub evidence always wins.
+>
+> `docs/STATUS.md` is a historical evidence ledger, not a currentness authority.
+> `docs/SOL_HANDOFF.md` is the stable SOL/Luna role contract when present on `main` or
+> when the newest canonical Issue #131 pointer names its staged version. Until then,
+> follow that canonical GitHub pointer rather than the legacy role/session rules below.
+
 Status: stable role and authority model.
 
 This document defines who may decide, implement, verify, and publish. It applies across ChatGPT, Codex, future coding agents, and the CAD Agent runtime.
