@@ -117,9 +117,12 @@ Minimum fields:
 - current live/repo-write locks;
 - accepted PASS evidence references selected for reuse;
 - first unresolved gate;
-- snapshot generation time and deterministic content hash.
+- `generated_at` metadata;
+- deterministic `state_sha256` over canonical state fields **excluding** `generated_at`.
 
-The snapshot is **derived state**, never an authority source. Every material execution decision still fresh-reads GitHub according to the standing model.
+The same canonical input state must produce the same `state_sha256`. `generated_at` is observational metadata only and must not alter state identity.
+
+The snapshot is **derived state**, never an authority source. Every material execution decision still fresh-reads GitHub according to the standing model. A snapshot without exact source references is invalid and cannot satisfy an authority or acceptance gate.
 
 Repository startup docs must point to this mechanism and must not cache current SHA/PR state as if static prose were canonical.
 
