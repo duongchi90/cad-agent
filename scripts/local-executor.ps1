@@ -1,92 +1,127 @@
+[CmdletBinding()]
 param (
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("STATE_CHECK", "VERIFY")]
+    [string]$Action,
+
+    [Parameter(Mandatory = $true)]
+    [string]$RepoPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedBranch,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string]$ExpectedSha,
+
     [string]$ArtifactsDir = "artifacts"
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-if (!(Test-Path $ArtifactsDir)) {
+if (-not (Test-Path -LiteralPath $RepoPath -PathType Container)) {
+    throw "LOCAL_REPO_NOT_FOUND"
+}
+
+$resolvedRepo = (Resolve-Path -LiteralPath $RepoPath).Path
+Set-Location $resolvedRepo
+
+$currentBranch = (& git branch --show-current | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($currentBranch)) {
+    throw "LOCAL_BRANCH_UNRESOLVED"
+}
+if ($currentBranch -cne $ExpectedBranch) {
+    throw "LOCAL_BRANCH_MISMATCH"
+}
+
+$currentSha = (& git rev-parse HEAD | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $currentSha -notmatch '^[0-9a-f]{40}$') {
+    throw "LOCAL_SHA_UNRESOLVED"
+}
+if ($currentSha -cne $ExpectedSha) {
+    throw "LOCAL_SHA_MISMATCH"
+}
+
+if (-not (Test-Path -LiteralPath $ArtifactsDir -PathType Container)) {
     New-Item -ItemType Directory -Path $ArtifactsDir -Force | Out-Null
 }
+$resolvedArtifacts = (Resolve-Path -LiteralPath $ArtifactsDir).Path
 
-$repoPath = $PSScriptRoot | Split-Path -Parent
-Set-Location $repoPath
-
-Write-Host "LOCAL_MACHINE"
-Write-Host "-----------------------"
-Write-Host "Repo:       $repoPath"
-
-# Git Info
-$branch = git branch --show-current
-Write-Host "Branch:     $branch"
-
-$head = git rev-parse --short HEAD
-Write-Host "HEAD:       $head"
-
-$status = git status --porcelain
-if ($status) {
-    Write-Host "Dirty:      YES"
-} else {
-    Write-Host "Dirty:      NO"
+$status = @(& git -c core.quotepath=false status --porcelain=v1 --untracked-files=all)
+if ($LASTEXITCODE -ne 0) {
+    throw "LOCAL_GIT_STATUS_FAILED"
 }
 
-Write-Host ""
-Write-Host "Modified/Untracked:"
-if ($status) {
-    $status | ForEach-Object { Write-Host "  $_" }
-} else {
-    Write-Host "  (none)"
+$acadProcesses = @(Get-Process -Name acad -ErrorAction SilentlyContinue)
+$stateLines = @(
+    "LOCAL_EXECUTOR_STATE_V1",
+    "ACTION=$Action",
+    "REPO=$resolvedRepo",
+    "BRANCH=$currentBranch",
+    "HEAD=$currentSha",
+    "DIRTY=$([bool]($status.Count -gt 0))",
+    "AUTOCAD_PROCESS_COUNT=$($acadProcesses.Count)"
+)
+if ($acadProcesses.Count -gt 0) {
+    $stateLines += "AUTOCAD_PIDS=$((@($acadProcesses | ForEach-Object { $_.Id }) -join ','))"
+}
+if ($status.Count -gt 0) {
+    $stateLines += "GIT_STATUS_BEGIN"
+    $stateLines += $status
+    $stateLines += "GIT_STATUS_END"
+}
+$statePath = Join-Path $resolvedArtifacts "local-state.txt"
+$stateLines | Out-File -LiteralPath $statePath -Encoding utf8
+$stateLines | ForEach-Object { Write-Host $_ }
+
+if ($Action -eq "STATE_CHECK") {
+    Write-Host "LOCAL_EXECUTOR_RESULT=PASS"
+    exit 0
 }
 
-# AutoCAD Info
-Write-Host ""
-Write-Host "AutoCAD:"
-$acadProcess = Get-Process -Name acad -ErrorAction SilentlyContinue
-if ($acadProcess) {
-    Write-Host "  Process:   RUNNING"
-    Write-Host "  PID:       $($acadProcess.Id)"
-} else {
-    Write-Host "  Process:   STOPPED"
-}
-
-# Run tests and collect logs
-Write-Host ""
-Write-Host "Executing authoritative commands..."
-Write-Host "Python: py -3.11"
-$python311 = py -3.11 -c "import sys; print(sys.executable)"
+$bootstrapOutput = @()
+$verifyOutput = @()
+$bootstrapExit = 1
+$verifyExit = 1
 
 try {
-    Write-Host "Running: .\scripts\bootstrap.ps1 -PythonExe $python311"
-    $bootstrapOutput = & .\scripts\bootstrap.ps1 -PythonExe $python311 2>&1
-    $bootstrapExit = $LASTEXITCODE
-
-    Write-Host "Running: .\scripts\verify.ps1"
-    $verifyOutput = & .\scripts\verify.ps1 2>&1
-    $verifyExit = $LASTEXITCODE
-} catch {
-    Write-Host "Script execution threw an error!"
-    $verifyExit = 1
-    # Capture the error record into the output so it gets saved to artifact
-    if ($null -eq $verifyOutput) { $verifyOutput = @() }
-    $verifyOutput += $_
-} finally {
-    Write-Host ""
-    Write-Host "Build/Verify Result:"
-    if ($bootstrapExit -eq 0 -and $verifyExit -eq 0) {
-        Write-Host "  PASS"
-    } else {
-        Write-Host "  FAIL"
+    $python311 = (& py -3.11 -c "import sys; print(sys.executable)" | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($python311)) {
+        throw "PYTHON_311_UNAVAILABLE"
     }
 
-    # Save output to artifacts ALWAYS
-    $bootstrapOutput | Out-File -FilePath (Join-Path $ArtifactsDir "bootstrap-output.log")
-    $verifyOutput | Out-File -FilePath (Join-Path $ArtifactsDir "verify-output.log")
-    git diff > (Join-Path $ArtifactsDir "local-diff.patch")
-    git status > (Join-Path $ArtifactsDir "git-status.txt")
+    Write-Host "Running: .\scripts\bootstrap.ps1 -PythonExe $python311"
+    $bootstrapOutput = @(& .\scripts\bootstrap.ps1 -PythonExe $python311 2>&1)
+    $bootstrapExit = $LASTEXITCODE
+    if ($bootstrapExit -ne 0) {
+        throw "BOOTSTRAP_FAILED"
+    }
 
-    Write-Host ""
-    Write-Host "Artifacts generated in '$ArtifactsDir' folder."
+    Write-Host "Running: .\scripts\verify.ps1"
+    $verifyOutput = @(& .\scripts\verify.ps1 2>&1)
+    $verifyExit = $LASTEXITCODE
+    if ($verifyExit -ne 0) {
+        throw "VERIFY_FAILED"
+    }
+} catch {
+    if ($verifyOutput.Count -eq 0) {
+        $verifyOutput = @($_ | Out-String)
+    } else {
+        $verifyOutput += ($_ | Out-String)
+    }
+} finally {
+    $bootstrapOutput | Out-File -LiteralPath (Join-Path $resolvedArtifacts "bootstrap-output.log") -Encoding utf8
+    $verifyOutput | Out-File -LiteralPath (Join-Path $resolvedArtifacts "verify-output.log") -Encoding utf8
+    (& git diff) | Out-File -LiteralPath (Join-Path $resolvedArtifacts "local-diff.patch") -Encoding utf8
+    (& git -c core.quotepath=false status --porcelain=v1 --untracked-files=all) |
+        Out-File -LiteralPath (Join-Path $resolvedArtifacts "git-status.txt") -Encoding utf8
 }
 
-if ($verifyExit -ne 0) {
-    exit $verifyExit
+if ($bootstrapExit -ne 0 -or $verifyExit -ne 0) {
+    Write-Host "LOCAL_EXECUTOR_RESULT=FAIL"
+    exit 1
 }
+
+Write-Host "LOCAL_EXECUTOR_RESULT=PASS"
+exit 0
