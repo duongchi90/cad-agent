@@ -7,6 +7,9 @@ boundary without inventing a public receipt or ACK schema.
 """
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -58,6 +61,7 @@ class RecordingUser32:
         children: list[tuple[int, str, int]] | None = None,
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = OWNED_HWND,
+        set_foreground_result: int = 1,
         send_returns: list[int] | None = None,
         send_errors: list[int] | None = None,
         send_result: int = 1,
@@ -67,6 +71,7 @@ class RecordingUser32:
         ]
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
+        self.set_foreground_result = set_foreground_result
         self.send_returns = send_returns or [1]
         self.send_errors = send_errors or [0]
         self.send_result = send_result
@@ -108,7 +113,7 @@ class RecordingUser32:
 
     def SetForegroundWindow(self, hwnd):
         self.focus_calls.append(("SetForegroundWindow", hwnd))
-        return 1
+        return self.set_foreground_result
 
     def PostMessageW(self, target, message, wparam, lparam):
         call = (target, message, wparam, lparam)
@@ -201,6 +206,29 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             self._run_current_trigger(user32)
         self.assertEqual(user32.post_calls, [])
 
+    def test_set_foreground_return_zero_with_exact_readback_still_delivers(self) -> None:
+        user32 = RecordingUser32(set_foreground_result=0)
+        self._run_current_trigger(user32)
+        self.assertEqual(user32.post_calls, [])
+        self.assertEqual(
+            [call[0] for call in user32.send_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertEqual(
+            [call[1] for call in user32.send_calls],
+            [0x0102] * len(EXPECTED_FRAMED_TEXT),
+        )
+
+    def test_set_foreground_return_zero_with_foreign_readback_fails_closed(self) -> None:
+        user32 = RecordingUser32(
+            foreground_hwnd=FOREIGN_HWND,
+            set_foreground_result=0,
+        )
+        with self.assertRaises(MCPToolError):
+            self._run_current_trigger(user32)
+        self.assertEqual(user32.send_calls, [])
+        self.assertEqual(user32.post_calls, [])
+
     def test_bounded_native_delivery_uses_sendmessage_timeout(self) -> None:
         user32 = RecordingUser32(send_returns=[1] * len(EXPECTED_FRAMED_TEXT))
         self._run_current_trigger(user32)
@@ -275,15 +303,53 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self.assertTrue(all(target == RECEIVER_HWND for target, *_ in user32.send_calls))
         self.assertEqual(user32.post_calls, [])
 
-    def test_trigger_does_not_create_a_second_fileipc_owner(self) -> None:
-        """The native text boundary must not create a second IPC lifecycle."""
-        user32 = RecordingUser32()
-        with patch.object(
-            mcp_client,
+    def test_trigger_owner_separation_oracle_and_native_route(self) -> None:
+        """The native text owner has no FileIPC lifecycle or persistence dependency."""
+        forbidden = {
             "FileIPCLiveMCPClient",
-            side_effect=AssertionError("trigger created a second FileIPC owner"),
-        ):
-            self._run_current_trigger(user32)
+            "_dispatch",
+            "_wait_for_dispatcher",
+            "_FILE_IPC_REQUEST_PREFIX",
+            "_FILE_IPC_RESULT_PREFIX",
+            "_validate_file_ipc_root",
+            "_file_ipc_root_identity",
+            "Path",
+            "uuid",
+            "secrets",
+            "json",
+            "os",
+        }
+
+        def referenced_forbidden(source: str) -> set[str]:
+            tree = ast.parse(textwrap.dedent(source))
+            references = {
+                node.id
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Name)
+            }
+            references.update(
+                node.attr
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Attribute)
+            )
+            return references & forbidden
+
+        synthetic = """
+        def synthetic_trigger(text):
+            return FileIPCLiveMCPClient(text)
+        """
+        self.assertEqual(referenced_forbidden(synthetic), {"FileIPCLiveMCPClient"})
+
+        real_source = inspect.getsource(mcp_client._make_windows_text_trigger)
+        self.assertEqual(referenced_forbidden(real_source), set())
+
+        user32 = RecordingUser32()
+        self._run_current_trigger(user32)
+        self.assertEqual(
+            [call[0] for call in user32.send_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertEqual(user32.post_calls, [])
 
 
 if __name__ == "__main__":
