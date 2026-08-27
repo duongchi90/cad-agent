@@ -3,70 +3,176 @@ name: ChatGPT Local Executor
 on:
   workflow_dispatch:
     inputs:
+      control_seq:
+        description: 'CONTROL_SEQ associated with this local action'
+        required: true
+        type: string
+      local_action:
+        description: 'Allowlisted local action'
+        required: true
+        type: choice
+        options:
+          - STATE_CHECK
+          - VERIFY
       expected_branch:
-        description: 'Nhánh làm việc bắt buộc phải khớp trên máy local'
-        required: false
-        default: ''
+        description: 'Exact branch required on PC05 working repository'
+        required: true
+        type: string
       expected_sha:
-        description: 'Mã Commit SHA bắt buộc phải khớp trên máy local'
-        required: false
-        default: ''
-      command:
-        description: 'Lệnh chạy thêm (tuỳ chọn)'
-        required: false
-        default: ''
+        description: 'Exact 40-character commit SHA required on PC05'
+        required: true
+        type: string
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chatgpt-local-executor-pc
+  cancel-in-progress: false
 
 jobs:
-  inspect-local:
-    runs-on: [self-hosted, windows]
-
+  gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && github.event.issue.number == 131)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.parse.outputs.should_run }}
+      dispatch_comment_id: ${{ steps.parse.outputs.dispatch_comment_id }}
+      control_seq: ${{ steps.parse.outputs.control_seq }}
+      action: ${{ steps.parse.outputs.action }}
+      expected_branch: ${{ steps.parse.outputs.expected_branch }}
+      expected_sha: ${{ steps.parse.outputs.expected_sha }}
     steps:
-      - name: Guard Branch & SHA
+      - name: Check out trusted control code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Parse strict dispatch contract
+        id: parse
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.local_executor_event import gate_event
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+          outputs = gate_event(
+              os.environ["EVENT_NAME"],
+              event,
+              repository_owner=os.environ["REPOSITORY_OWNER"],
+              run_id=os.environ["RUN_ID"],
+          )
+          for key, value in outputs.items():
+              print(f"{key}={value}")
+          PY
+
+  acknowledge:
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DISPATCH_COMMENT_ID: ${{ needs.gate.outputs.dispatch_comment_id }}
+      CONTROL_SEQ: ${{ needs.gate.outputs.control_seq }}
+      LOCAL_ACTION: ${{ needs.gate.outputs.action }}
+    steps:
+      - name: Post local-executor acknowledgement
+        shell: bash
+        run: |
+          body=$(cat <<EOF
+          LOCAL_EXECUTOR_ACK_V1
+          LOCAL_DISPATCH_COMMENT_ID=${DISPATCH_COMMENT_ID}
+          CONTROL_SEQ=${CONTROL_SEQ}
+          LOCAL_ACTION=${LOCAL_ACTION}
+          RUN_ID=${GITHUB_RUN_ID}
+          RUN_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+          )
+          gh api "repos/${GITHUB_REPOSITORY}/issues/131/comments" -f body="$body" >/dev/null
+
+  execute-local:
+    needs: [gate, acknowledge]
+    if: needs.gate.outputs.should_run == 'true'
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      LOCAL_ACTION: ${{ needs.gate.outputs.action }}
+      EXPECTED_BRANCH: ${{ needs.gate.outputs.expected_branch }}
+      EXPECTED_SHA: ${{ needs.gate.outputs.expected_sha }}
+    steps:
+      - name: Check out trusted executor code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Execute allowlisted local action
         shell: powershell
         run: |
           $repoPath = "C:\Users\dkv\Downloads\cad-agent-merge"
-          cd $repoPath
-          
-          $expectedBranch = "${{ github.event.inputs.expected_branch }}"
-          $expectedSha = "${{ github.event.inputs.expected_sha }}"
-          
-          if ($expectedBranch) {
-              $currentBranch = git branch --show-current
-              if ($currentBranch.Trim() -ne $expectedBranch.Trim()) {
-                  Write-Error "Local branch ($currentBranch) does not match expected branch ($expectedBranch)."
-                  exit 1
-              }
-          }
-          if ($expectedSha) {
-              $currentSha = git rev-parse HEAD
-              if (!$currentSha.StartsWith($expectedSha.Trim())) {
-                  Write-Error "Local SHA ($currentSha) does not match expected SHA ($expectedSha)."
-                  exit 1
-              }
-          }
+          $tempArtifacts = Join-Path $env:RUNNER_TEMP "local-executor-$env:GITHUB_RUN_ID"
+          .\scripts\local-executor.ps1 `
+            -RepoPath $repoPath `
+            -ArtifactsDir $tempArtifacts `
+            -Action $env:LOCAL_ACTION `
+            -ExpectedBranch $env:EXPECTED_BRANCH `
+            -ExpectedSha $env:EXPECTED_SHA
 
-      - name: Execute Local State Check
-        shell: powershell
-        run: |
-          # Di chuyển vào thư mục project local thực tế trên máy bạn
-          $repoPath = "C:\Users\dkv\Downloads\cad-agent-merge"
-          cd $repoPath
-          
-          # Chạy script Local Executor
-          $tempArtifacts = Join-Path $env:RUNNER_TEMP "artifacts"
-          .\scripts\local-executor.ps1 -ArtifactsDir $tempArtifacts
-          
-          # Nếu có lệnh bổ sung được yêu cầu từ trigger
-          $extraCmd = "${{ github.event.inputs.command }}"
-          if ($extraCmd) {
-            Write-Host "Chạy thêm lệnh: $extraCmd"
-            Invoke-Expression $extraCmd
-          }
-
-      - name: Upload Local State Artifacts
+      - name: Upload local executor artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: local-state
-          path: ${{ runner.temp }}\artifacts\*
+          name: local-state-${{ github.run_id }}
+          path: ${{ runner.temp }}\local-executor-${{ github.run_id }}\*
           retention-days: 1
+          if-no-files-found: warn
+
+  finalize:
+    needs: [gate, acknowledge, execute-local]
+    if: always() && needs.gate.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DISPATCH_COMMENT_ID: ${{ needs.gate.outputs.dispatch_comment_id }}
+      CONTROL_SEQ: ${{ needs.gate.outputs.control_seq }}
+      LOCAL_ACTION: ${{ needs.gate.outputs.action }}
+      LOCAL_RESULT: ${{ needs.execute-local.result }}
+    steps:
+      - name: Post local-executor terminal
+        shell: bash
+        run: |
+          body=$(cat <<EOF
+          LOCAL_EXECUTOR_TERMINAL_V1
+          LOCAL_DISPATCH_COMMENT_ID=${DISPATCH_COMMENT_ID}
+          CONTROL_SEQ=${CONTROL_SEQ}
+          LOCAL_ACTION=${LOCAL_ACTION}
+          RESULT=${LOCAL_RESULT}
+          RUN_ID=${GITHUB_RUN_ID}
+          RUN_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          ARTIFACT_NAME=local-state-${GITHUB_RUN_ID}
+          NEXT_OWNER=SOL
+          EOF
+          )
+          gh api "repos/${GITHUB_REPOSITORY}/issues/131/comments" -f body="$body" >/dev/null
