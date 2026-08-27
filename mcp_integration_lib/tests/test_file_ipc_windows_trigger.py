@@ -28,6 +28,27 @@ EXPRESSION = '(setq *r8d-test* "é")'
 EXPECTED_FRAMED_TEXT = "\x1b\x1b" + EXPRESSION + "\r"
 
 
+class RecordingKernel32:
+    """Thread last-error surface used by the real bounded-send contract."""
+
+    def __init__(self) -> None:
+        self.last_error = 0
+        self.set_calls: list[int] = []
+        self.get_calls: list[int] = []
+
+    def SetLastError(self, error):
+        self.set_calls.append(error)
+        self.last_error = error
+
+    def GetLastError(self):
+        self.get_calls.append(self.last_error)
+        return self.last_error
+
+    def set_native_error(self, error: int) -> None:
+        """Model the native call's thread error without inventing a user32 API."""
+        self.last_error = error
+
+
 class RecordingUser32:
     """Deterministic native boundary fake; it never executes AutoLISP."""
 
@@ -38,7 +59,7 @@ class RecordingUser32:
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = OWNED_HWND,
         send_returns: list[int] | None = None,
-        last_errors: list[int] | None = None,
+        send_errors: list[int] | None = None,
         send_result: int = 1,
     ) -> None:
         self.children = children if children is not None else [
@@ -47,8 +68,9 @@ class RecordingUser32:
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
         self.send_returns = send_returns or [1]
-        self.last_errors = last_errors or [0]
+        self.send_errors = send_errors or [0]
         self.send_result = send_result
+        self.kernel32 = RecordingKernel32()
         self.enum_calls: list[tuple[int, int]] = []
         self.window_pid_calls: list[int] = []
         self._pid_call_counts: dict[int, int] = {}
@@ -56,7 +78,6 @@ class RecordingUser32:
         self.post_calls: list[tuple[int, int, int, int]] = []
         self.send_calls: list[tuple[int, int, int, int, int, int]] = []
         self.message_calls: list[tuple[str, int, int, int, int]] = []
-        self._last_error_calls = 0
         self.class_names = {child: name for child, name, _pid in self.children}
         self.child_pids = {child: pid for child, _name, pid in self.children}
 
@@ -100,17 +121,18 @@ class RecordingUser32:
         self.message_calls.append(("SendMessageTimeoutW", target, message, wparam, lparam))
         result_pointer._obj.value = self.send_result
         call_index = len(self.send_calls) - 1
+        self.kernel32.set_native_error(
+            self.send_errors[min(call_index, len(self.send_errors) - 1)]
+        )
         return self.send_returns[min(call_index, len(self.send_returns) - 1)]
-
-    def GetLastError(self):
-        error = self.last_errors[min(self._last_error_calls, len(self.last_errors) - 1)]
-        self._last_error_calls += 1
-        return error
 
 
 class WindowsTriggerExecutionRedTests(unittest.TestCase):
     def _run_current_trigger(self, user32: RecordingUser32, text: str = EXPRESSION):
-        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
             trigger = make_windows_lisp_trigger(OWNED_HWND)
             return trigger(text)
 
@@ -156,7 +178,7 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         )
         self._run_current_trigger(user32)
         self.assertEqual(
-            [call[1] for call in user32.send_calls],
+            [call[0] for call in user32.send_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
         self.assertEqual(user32.post_calls, [])
@@ -193,29 +215,34 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         )
         self.assertEqual(
             [call[4] for call in user32.send_calls],
-            [0x0002] * len(EXPECTED_FRAMED_TEXT),
+            [0x0022] * len(EXPECTED_FRAMED_TEXT),
         )
         self.assertEqual(
             [call[5] for call in user32.send_calls],
             [1000] * len(EXPECTED_FRAMED_TEXT),
         )
+        self.assertEqual(user32.kernel32.set_calls, [0] * len(EXPECTED_FRAMED_TEXT))
+        self.assertEqual(user32.kernel32.get_calls, [])
 
     def test_bounded_native_zero_timeout_and_error_fail_closed(self) -> None:
         cases = {
             "zero": (0, 0, MCPToolError),
             "timeout": (0, 1460, MCPTimeoutError),
             "native-error": (0, 5, MCPToolError),
+            "destroyed-receiver": (0, 1400, MCPToolError),
         }
         for case, (send_return, last_error, expected_error) in cases.items():
             with self.subTest(case=case):
                 user32 = RecordingUser32(
                     send_returns=[send_return],
-                    last_errors=[last_error],
+                    send_errors=[last_error],
                 )
                 with self.assertRaises(expected_error) as raised:
                     self._run_current_trigger(user32)
                 self.assertEqual(len(user32.send_calls), 1)
                 self.assertEqual(user32.post_calls, [])
+                self.assertEqual(user32.kernel32.set_calls, [0])
+                self.assertEqual(user32.kernel32.get_calls, [last_error])
                 self.assertNotIn(EXPRESSION, str(raised.exception))
 
     def test_expression_framing_is_exact_and_bounded(self) -> None:
@@ -243,7 +270,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self._run_current_trigger(user32)
         self.assertEqual(user32.enum_calls, [(OWNED_HWND, 0)])
         self.assertIn(RECEIVER_HWND, user32.window_pid_calls)
-        self.assertTrue(all(target == RECEIVER_HWND for target, *_ in user32.post_calls))
+        self.assertEqual(len(user32.send_calls), len(EXPECTED_FRAMED_TEXT))
+        self.assertTrue(user32.send_calls)
+        self.assertTrue(all(target == RECEIVER_HWND for target, *_ in user32.send_calls))
+        self.assertEqual(user32.post_calls, [])
 
     def test_trigger_does_not_create_a_second_fileipc_owner(self) -> None:
         """The native text boundary must not create a second IPC lifecycle."""
