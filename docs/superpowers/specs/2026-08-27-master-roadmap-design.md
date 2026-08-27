@@ -1,366 +1,393 @@
 # CAD Agent Master Roadmap Design
 
 Date: 2026-08-27
-Status: APPROVED IN CHAT / WRITTEN SPEC FOR OWNER REVIEW
+Status: OWNER APPROVED
 Roadmap issue: #291
 Docs-only branch: `governance/master-roadmap-design`
-Exact design base: `1263db2f54f505209ba6837b86181af8646b5a58`
 Authority effect: NONE
 
 ## 1. Purpose
 
-CAD Agent needs one durable roadmap that covers both:
+CAD Agent uses one durable product roadmap, not parallel operating-model, CADmind, Mechanical, and R0-R8 roadmaps.
 
-1. how SOL/Web, reviewers, and the single Local Executor work efficiently without stale state, repeated discovery, or unnecessary live AutoCAD epochs; and
-2. how the product progresses from source understanding to useful Mechanical CAD intelligence and finally image/PDF -> verified Mechanical CAD.
+The roadmap has two jobs only:
 
-This document intentionally replaces the idea of maintaining separate competing roadmaps for operating-model enforcement, CADmind-inspired capabilities, Mechanical phases, and historical R0-R8 delivery labels.
+1. define the product direction from reliable AI work to verified Mechanical CAD; and
+2. define cross-cutting invariants that keep delivery efficient and fail-closed.
 
-Issue #131 remains the sole mutable runtime/control authority. This roadmap and its status references are planning/navigation only.
+It is not runtime authority and not a delivery-state database. Mutable state lives in Issue #131 plus the active delivery Issue/PR/CI/reviewer evidence. The roadmap may point to active delivery owners but must not copy current SHA, baton, CONTROL_SEQ, CI verdicts, terminal details, or first-unsatisfied-gate.
+
+Historical R0-R8 terminology remains valid implementation/history vocabulary under the existing package and contract boundaries.
 
 ## 2. North star
 
+> One real Mechanical image/PDF -> AI reads the exact current CAD/source state -> discovers the right typed capability -> creates or repairs real CAD -> reads it back -> proves geometry/editability/evidence -> verified candidate.
+
 ```text
 Image / PDF / DWG / user intent
-  -> AI reads current CAD state
-  -> discovers the right typed skill/capability
-  -> reasons / solves / creates or repairs a candidate
-  -> AutoCAD Mechanical only when machine evidence is genuinely required
-  -> read-back + deterministic/visual evidence
-  -> bounded repair if required
-  -> VERIFIED CAD OUTPUT
+ -> provenance-bound source/CAD read
+ -> typed capability discovery
+ -> semantic reasoning / solve / candidate mutation
+ -> AutoCAD Mechanical only when machine evidence is genuinely required
+ -> read-back + deterministic / visual evidence
+ -> bounded reviewed repair if required
+ -> fresh verification
+ -> VERIFIED MECHANICAL CAD CANDIDATE
 ```
 
-Every phase runs on the same operating rail:
+The roadmap optimizes for an early real vertical slice, not maximum subsystem coverage.
+
+## 3. Execution strategy — vertical slice driven
+
+Do not complete a broad Mechanical platform before testing product value.
+
+Preferred sequence:
 
 ```text
-FRESH STATE
- -> ROUTE TO THE RIGHT OWNER
- -> LONG-HORIZON MISSION
- -> REUSE VALID EVIDENCE
- -> LEARN FROM FAILURE
- -> VERIFY
+Phase 0 minimum closure
+ -> Phase 1 thin query façade
+ -> Phase 2 thin skill façade
+ -> Phase 3 only 2-3 Mechanical capabilities required by the pilot
+ -> Phase 4 real vertical slice as early as possible
+ -> pilot failures/evidence drive the next Phase 1/2/3 expansion
 ```
 
-The roadmap is optimized for useful vertical value, not maximum subsystem count.
+Phase 5 learning/hardening runs continuously.
 
-## 3. Design principles
+Phase 0 is not allowed to become an endless governance program. After its minimum exit oracle is satisfied, it becomes a maintenance rail. New workforce/enforcement slices require a concrete observed failure or missing acceptance boundary; they are not created merely because more optimization is possible.
 
-### 3.1 One roadmap, existing owners
+## 4. Five invariant rails
 
-Historical R0-R8 names remain implementation/history vocabulary. They do not become a second roadmap.
+The rails are invariants across all product phases, not five additional products.
 
-New capability should default to:
+### Rail A — Currentness
+
+Fresh canonical GitHub evidence precedes mutable decisions. Chat memory, roadmap text, historical STATUS/HANDOFF material, or copied terminal text is never current authority.
+
+A derived snapshot may deterministically represent already-fresh evidence but may not fetch, mint, or supersede authority.
+
+### Rail B — Routing
+
+- Web-capable research, architecture, root-cause, hosted evidence and review stay with SOL/Web.
+- Unpushed local state, Windows toolchain, AutoCAD/COM/ROT/UI/NETLOAD/live File-IPC evidence goes to the single Local Executor.
+- Real owner decisions, private secrets and irreversible approvals stay with the Human Owner.
+
+Preferred executor never overrides the required evidence surface.
+
+### Rail C — Mission
+
+Prefer one bounded causal mission containing goal, scope, accepted evidence, causal/expensive/live budgets, acceptance oracle, cleanup and hard-handoff conditions over command-by-command SOL↔Luna relay.
+
+Mission material never implies merge, publication, Human approval or arbitrary shell authority.
+
+### Rail D — Evidence
+
+Reuse exact satisfying PASS evidence absent relevant head/artifact/contract identity drift. Fresh exact-head evidence overrides reused older-head evidence. Conflicts fail closed. `SKIP` and `NOT_RUN` never satisfy PASS.
+
+### Rail E — Failure learning
+
+A materially solved failure should become reviewed executable knowledge: signature/family, probe/oracle, regression test/eval, and safe repair/escalation boundary.
+
+Known failure -> known probe. Unknown failure -> root-cause work -> reviewed family/eval if material.
+
+## 5. Phase 0 — Reliable AI Workforce / minimum closure
+
+### Goal
+
+Make the existing SOL/Web + independent reviewer + hosted CI + single Local Executor flow reliable enough that workforce/governance work stops being the main project.
+
+### Reuse
+
+Use the existing staged currentness, routing, mission, evidence, failure-family and sealed typed Local Executor contracts. Do not create a second control plane, state store, runner, transport or scheduler.
+
+### Minimum closure
+
+Phase 0 reaches minimum closure when a fresh SOL session can, without Human recap:
+
+- recover current authority and active delivery owner from fresh GitHub;
+- route Web/local/Human work correctly;
+- reuse valid accepted evidence and identify the next delivery gate;
+- recognize known execution failures and select reviewed probes;
+- issue/consume bounded missions through typed execution rather than arbitrary command text;
+- prepare successor/review packets without manual Human relay;
+- satisfy the independent review/acceptance gates required by the currently staged Phase 0 implementation.
+
+### Maintenance rule
+
+After minimum closure, do not create E2/E3/E4 merely to make the process more elegant. Reopen Phase 0 implementation only when a concrete failure, security boundary, or repeated delivery cost proves a missing capability.
+
+### Exit oracle
+
+`ACCEPTED` when the minimum closure above is evidenced on the accepted implementation path. Thereafter workforce changes are failure-driven maintenance.
+
+## 6. Phase 1 — Thin provenance-bound CAD read façade
+
+### Goal
+
+Let AI ask bounded questions about the exact drawing/candidate revision required by the real pilot without whole-drawing context dumps.
+
+The most important property is not query richness but identity:
+
+> Every result must prove exactly which drawing/candidate/state/version was read.
+
+### V1 capability
+
+V1 is deliberately closed:
+
+- type filter;
+- layer filter;
+- component identity filter when an existing owner exposes it;
+- bounded region;
+- whitelist field projection;
+- count/group over approved fields;
+- bounded result count;
+- exact drawing/candidate/state/version identity returned with every result.
+
+No arbitrary expressions, joins, SQL-like syntax, user-supplied predicates, executable callbacks or unbounded results.
+
+### Architecture
+
+Implement as a thin read-only façade over existing drawing gateways, provenance/currentness contracts and entity read surfaces. The façade may normalize and project existing typed results; it must not create a shadow DWG database or become a second CAD truth owner.
+
+Explicitly out for V1:
+
+- SQLite/drawing mirror;
+- vector database/embeddings;
+- generic query language;
+- new AutoCAD transport;
+- duplicate entity model;
+- cache that can be mistaken for current drawing authority.
+
+### Exit oracle
+
+`VERTICAL_SLICE_PASS` when the selected real Phase 4 pilot can retrieve the small exact information set it needs from the bound revision, with stale-state rejection, field/result bounds and provenance/currentness evidence.
+
+## 7. Phase 2 — Thin skill discovery façade
+
+### Goal
+
+Let the model discover the right existing typed capability instead of memorizing a broad raw tool/schema surface.
+
+### Authority boundary
+
+The registry is only:
 
 ```text
-existing owner + thin adapter
+metadata -> capability_id -> existing typed owner
 ```
 
-A new subsystem is allowed only when a reuse dossier proves a concrete missing capability.
+It is not an executor, authority layer, plugin runtime, script store or new tool implementation.
 
-### 3.2 GitHub currentness, not chat memory
+A skill entry contains only the metadata needed for discovery/validation:
 
-Mutable decisions must fresh-read GitHub. Roadmap snapshots, docs, terminals copied into chat, and historical STATUS/HANDOFF text are never current authority.
-
-The staged `control_snapshot` contract may represent already-fresh evidence deterministically, but it may not fetch or mint authority.
-
-### 3.3 Typed capability, not arbitrary execution
-
-The Local Executor must grow as a typed capability ladder. Arbitrary command/script fields are not an extension mechanism.
-
-E1 `OFFLINE_VERIFY` is the first capability pattern. Windows probes, repository mutation, AutoCAD read-only, and AutoCAD mutation/live are separate future capability classes and require their own reviewed boundaries.
-
-### 3.4 Evidence beats repeated reassurance
-
-Exact accepted evidence should be reused when head/artifact/contract identity has not drifted. `SKIP` and `NOT_RUN` never satisfy a PASS gate.
-
-### 3.5 One important failure should teach the system
-
-A materially solved failure should become a failure-family signature, reviewed probe/oracle, regression eval, and safe repair/escalation boundary. Repeated broad rediscovery of a known failure is a process regression.
-
-## 4. Master phases
-
-### Phase 0 — Reliable AI Workforce
-
-Goal: make SOL/Web, independent review, hosted CI, and the single Local Executor efficient and hard to misuse before expanding CAD capability.
-
-Reuse the staged A-D/E1 foundation rather than building a new control plane:
-
-- deterministic fresh-state projection;
-- Web/local/Human routing;
-- long-horizon mission compilation with causal budget, accepted evidence, cleanup and hard-handoff conditions;
-- exact verification receipts and first-unsatisfied-gate logic;
-- failure-family -> probe knowledge;
-- sealed Local Executor mission consumption beginning with `OFFLINE_VERIFY`.
-
-Operational target:
-
-- a fresh SOL session reconstructs current state without Human recap;
-- Web-capable analysis stays with SOL;
-- Luna receives one bounded causal mission rather than one command at a time;
-- SOL prepares N+1/N+2 read-only while local N executes;
-- pre-execution closure catches controller/parser/orchestration defects before expensive/live work;
-- review packets are exact-head, read-only, and invalidated by head drift.
-
-Phase 0 is complete when these behaviors are routinely enforceable rather than remembered manually.
-
-### Phase 1 — AI Reads CAD
-
-Goal: give the AI a summary-first, provenance-bound view of current CAD state without dumping the entire drawing into model context.
-
-Start with a thin query façade over existing owners:
-
-```text
-read_state(...)
-query_entities(...)
-```
-
-Initial query needs only high-value capabilities:
-
-- type/layer/component/region filters;
-- selected-field projection;
-- count/group/basic aggregation;
-- batch entity IDs;
-- drawing/state/version identity.
-
-Add component/view/dimension/constraint reads or delta-since-version only when a real pilot requires them.
-
-Reuse `mcp_integration_lib`, `primitive_ir_lib`, existing drawing gateways, provenance and currentness contracts. Do not create a shadow DWG database, SQLite mirror, vector database, or second CAD truth store.
-
-Success test: the AI can answer bounded questions such as “what holes are in this front view?” or “what changed since the last state?” with provenance and without whole-drawing context dumps.
-
-### Phase 2 — AI Uses Skills
-
-Goal: let the model discover the right typed capability instead of memorizing a broad raw tool surface.
-
-Minimal interface:
-
-```text
-search_skills(intent) -> typed descriptors
-invoke_skill(skill_id, validated_parameters) -> existing owner/candidate path
-```
-
-Minimal metadata:
-
-- skill id;
-- description;
-- input schema;
+- capability id;
+- description/tags;
+- input schema reference;
 - existing owner;
 - risk class;
 - required evidence surface.
 
-Skills must map to existing typed code paths. They are not arbitrary prompt fragments, shell commands, downloaded plugins, or a second agent runtime.
+`invoke_skill` resolves the capability id to an existing reviewed typed owner and validates parameters/risk/evidence requirements. Registry content may not contain Python/PowerShell/LISP/shell script bodies or arbitrary argument vectors.
 
-Prefer deterministic keyword/metadata discovery first. Embeddings or a skill database are not justified until scale proves simple discovery inadequate.
+Start with deterministic lexical/tag discovery. Embeddings/vector search are not justified until real scale demonstrates that simple deterministic discovery is inadequate.
 
-### Phase 3 — Mechanical CAD Intelligence
+### Exit oracle
 
-Goal: grow useful Mechanical capability in value order rather than attempting complete AutoCAD Mechanical coverage.
+`VERTICAL_SLICE_PASS` when the pilot intent deterministically resolves to the required existing typed capability and invokes the existing owner through its reviewed contract without introducing arbitrary execution or a new authority owner.
 
-#### 3A. Core geometry
+## 8. Phase 3 — Minimum Mechanical capability for the pilot
 
-Prioritize common, composable features:
+### Goal
+
+Implement only the 2-3 Mechanical capabilities the first real vertical slice requires. Expand later from observed pilot gaps.
+
+A likely first cluster for a deliberately simple shaft drawing is:
 
 - shaft / stepped shaft;
-- hole / counterbore / countersink;
-- keyway / slot;
-- pattern;
-- fillet / chamfer.
+- keyway;
+- the exact hole family present in the selected source.
 
-Reuse `semantic_ir_lib` and `dxf_builder_lib`. Python orchestration must not become a second geometry truth engine.
+Reuse `semantic_ir_lib`, `dxf_builder_lib`, existing dimension/contracts and the existing AutoCAD boundary. Orchestration must not become a second solver, geometry/DXF engine, annotation authority or Mechanical database.
 
-#### 3B. Standard components
-
-Add only when pilots need them:
-
-- bolts, nuts, washers;
-- bearings;
-- keys;
-- retaining elements.
-
-Preference order is exact component reuse -> reviewed template -> parametric generation.
-
-#### 3C. Drawing intelligence
-
-Then expand into:
-
-- dimensions and tolerances;
-- GD&T;
-- surface finish;
-- center marks and hole callouts;
-- section/detail views;
-- BOM and hole tables.
-
-Reuse existing dimension/contracts and publication composition owners. Do not create a separate annotation authority or Mechanical database.
-
-### Phase 4 — Image / PDF -> Verified Mechanical CAD
-
-Goal: close one end-to-end vertical slice using the existing R1-R8 candidate/evidence/repair backbone.
+Preference for reusable standard content remains:
 
 ```text
-source image/PDF
- -> ROI/source understanding + provenance
- -> exact base/component reuse where possible
- -> semantic interpretation + constraints/solve
- -> candidate CAD revision
- -> AutoCAD Mechanical only where required
- -> GLOBAL + REGION + deterministic evidence
- -> bounded repair through the existing repair path
- -> fresh verification
- -> verified candidate
+exact existing component -> reviewed template -> bounded parametric generation
 ```
 
-The product target is not “looks similar.” Verification should combine the applicable geometry, dimensions, constraints, source provenance, native/editability, save/reopen, and visual evidence gates.
+A new Mechanical capability needs evidence from the pilot, a failure/acceptance gap, or a concrete user use case. Catalog completeness is not a requirement.
 
-The architectural differentiator is:
+### Exit oracle
+
+`VERTICAL_SLICE_PASS` when the selected pilot's minimum feature set is represented through existing semantic/geometry owners and survives candidate generation/read-back with the expected editability semantics.
+
+## 9. Phase 4 — Real image/PDF -> verified Mechanical CAD vertical slice
+
+### Goal
+
+Prove useful product value as early as possible with one deliberately narrow real Mechanical source.
+
+Example first pilot: a simple shaft drawing using only the minimum supported shaft/keyway/hole features.
+
+```text
+real image/PDF
+ -> source/ROI understanding + provenance
+ -> exact base/component reuse where possible
+ -> Phase 1 bounded current-state read
+ -> Phase 2 typed capability discovery
+ -> Phase 3 minimum Mechanical capability
+ -> candidate revision
+ -> AutoCAD Mechanical only where genuinely required
+ -> read-back
+ -> GLOBAL + REGION + deterministic evidence
+ -> bounded existing repair path if required
+ -> fresh verification
+```
+
+The target is not `image -> draw` but:
 
 ```text
 image -> reason -> solve -> draw -> read-back -> verify -> repair -> verify
 ```
 
-rather than stopping at image -> draw.
+Verification uses the applicable existing geometry, dimension, constraint, provenance, native/editability, save/reopen and visual evidence gates. It must never call visual similarity alone a product PASS.
 
-### Phase 5 — Self-Improving Process / Production Hardening
+### Exit oracle
 
-Phase 5 begins during Phase 0 and runs continuously.
+`ACCEPTED` when one real Mechanical source produces a provenance-bound editable candidate whose applicable approved acceptance gates pass on the accepted candidate identity.
 
-Every important solved incident should move toward:
+## 10. Phase 5 — Reviewed learning and production hardening
+
+Phase 5 runs continuously and contains two separate knowledge classes. There is no automatic authority transfer between them.
+
+### 10.1 Development Failure Memory
+
+Examples:
+
+- PID/foreground ownership;
+- FILEDIA RPC behavior;
+- File-IPC bootstrap/readiness;
+- controller races;
+- terminal/artifact emission.
+
+Flow:
 
 ```text
-failure signature
- -> causal family
+engineering failure
+ -> signature/family
  -> reviewed probe/oracle
- -> regression eval
- -> safe repair or escalation boundary
+ -> regression test/eval
+ -> safe repair/escalation boundary
 ```
 
-This phase also accumulates production confidence through pilot-derived evals, currentness checks, evidence reuse, native/read-back gates and failure containment. It does not mean uncontrolled self-modifying production code.
+This improves development/execution reliability only. It does not automatically change CAD Agent runtime/product behavior.
 
-## 5. Five rails across every phase
+### 10.2 Product Learning
 
-### Rail A — Currentness
+Examples:
 
-Fresh GitHub evidence -> deterministic derived snapshot -> decision. Never the reverse.
+- source patterns that reliably imply a shaft/keyway feature;
+- a typed capability that performs well on a defined pilot class;
+- a reviewed repair that improves a product-level constraint failure.
 
-### Rail B — Routing
+Product observations become runtime behavior only through the normal design, TDD, evidence, review and authority gates. Product learning is measured by pilot/eval evidence, not uncontrolled online self-modification.
 
-- Web-capable reasoning/research/review: SOL/Web.
-- Unpushed local/Windows/AutoCAD/COM/ROT/UI/NETLOAD/live File-IPC evidence: single Local Executor.
-- Real owner decision, private secret, or irreversible approval: Human.
+### Exit oracle
 
-Preferred executor cannot override the required evidence surface.
+`HARDENING` when materially repeated development failures are caught by reviewed probes/evals and product improvements are promoted only through explicit reviewed changes with measurable pilot evidence.
 
-### Rail C — Mission
+## 11. Phase status vocabulary
 
-Use bounded causal missions with goal, scope, accepted evidence, causal budget, acceptance oracle, cleanup and hard handoff conditions. Do not normalize command-by-command SOL↔Luna relay.
+Do not use percentages or progress bars.
 
-### Rail D — Evidence
+Where a delivery Issue needs a phase status, use only:
 
-Reuse exact satisfying evidence absent identity drift. Current exact-head evidence overrides stale/reused evidence. Conflicts fail closed.
+```text
+NOT_STARTED
+FOUNDATION_EXISTS
+ACTIVE
+VERTICAL_SLICE_PASS
+ACCEPTED
+HARDENING
+```
 
-### Rail E — Failure learning
+The active delivery Issue/PR owns its current capability and next unsatisfied gate. The Master Roadmap stores only the phase definition, exit oracle and pointer to the active delivery owner.
 
-Known failure -> known probe. Unknown failure -> root-cause work -> new reviewed family/eval if material.
-
-## 6. CADmind-derived ideas accepted and rejected
+## 12. CADmind-derived ideas retained
 
 CADmind is an architectural learning input, not a competing product blueprint.
 
-Accepted patterns:
+Retain only the patterns that fit existing CAD Agent owners:
 
 1. summary-first/query-oriented CAD reading;
-2. `search_skills -> invoke_skill` instead of exposing a large raw schema surface;
+2. skill discovery followed by typed capability invocation instead of a large raw schema surface;
 3. image -> reasoning -> CAD execution -> snapshot/read-back loop.
 
-CAD Agent extends the third pattern with provenance, semantic/constraint solving, candidate revisions, independent evidence, repair and verification gates.
+CAD Agent deliberately extends the third pattern with source provenance, semantic/constraint solving, candidate revisions, independent evidence, bounded repair and verification.
 
-Do not import as architecture merely because CADmind has it:
+Do not import merely because another product has it:
 
-- a second MCP/AutoCAD transport;
-- a second geometry/solver truth owner;
-- a broad shared-skill dump;
-- early embeddings/vector storage;
-- a Mechanical shadow database;
-- Electrical/Structural expansion before the Mechanical vertical slice proves value;
-- any path that bypasses candidate/evidence/publication authority.
+- second MCP/AutoCAD transport;
+- second geometry/solver truth owner;
+- broad shared-skill dump;
+- early embedding/vector stack;
+- Mechanical shadow database;
+- Electrical/Structural scope before Mechanical vertical value is proven;
+- paths bypassing candidate/evidence/publication authority.
 
-Any direct external-code reuse still requires the repository’s normal revision/license/reuse dossier.
+Any direct external-code reuse still requires the repository's normal revision/license/reuse dossier.
 
-## 7. Anti-bloat guardrails
+## 13. Anti-bloat guardrails
 
-The following are explicitly out by default:
+Default rule:
 
-- second control plane or authority store;
-- second Local Executor, AutoCAD transport or dispatcher;
+> **Existing owner + thin adapter beats new subsystem.**
+
+A proposed new architecture component must answer:
+
+1. which existing owner/API was inspected;
+2. why a thin adapter cannot solve the concrete gap;
+3. which real pilot/failure requires it now;
+4. what its authority boundary and rollback are.
+
+Out by default:
+
+- second control plane/currentness/authority store;
+- second Local Executor/AutoCAD transport/dispatcher;
 - arbitrary shell/PowerShell execution surface;
-- new database/message bus/daemon merely for orchestration;
+- orchestration database/message bus/daemon;
 - second OCR/solver/DXF/geometry/repair/publisher owner;
-- plugin marketplace or large raw tool catalogue;
-- dashboard/project board that only mirrors Issue #291;
+- plugin marketplace or broad raw-tool catalogue;
+- project board/dashboard that only mirrors Issue #291;
 - auto-merge until governance explicitly reopens that decision.
 
-A proposed architecture addition must answer: “Which existing owner was inspected, why can a thin adapter not solve it, and what concrete pilot requires this now?”
+## 14. Relationship to existing backbone
 
-## 8. Relationship to existing backbone
+R0-R8 remains implementation/history vocabulary, not a competing roadmap. Existing accepted package/contract boundaries remain authoritative for their domains.
 
-R0-R8 remains useful delivery/history language only:
+New delivery issues link to the relevant Master Roadmap phase while reusing existing R0-R8/backbone terminology where technically useful. No accepted owner is renamed or moved merely to fit this roadmap.
 
-- Phase 0 -> governance/runtime/control-plane enforcement;
-- Phase 1 -> source/current-CAD read surfaces;
-- Phase 2 -> `agent_lib`/orchestration discovery and typed invocation;
-- Phase 3 -> semantic IR, DXF, dimension/annotation owners;
-- Phase 4 -> R1-R8 end-to-end candidate/evidence/repair/publication backbone;
-- Phase 5 -> verification/failure/eval/production hardening.
+## 15. Roadmap state rule
 
-No existing accepted owner is renamed or moved merely to fit the roadmap.
+> **Issue/PR is where current delivery state lives. Master Roadmap must never become a second state database.**
 
-## 9. Priority order
+When a phase becomes active, update only its active delivery link in Issue #291. Do not copy runtime SHA, CONTROL_SEQ, baton, CI verdict, reviewer status, terminal details or first-unsatisfied-gate into the roadmap/spec.
 
-Do not parallelize the whole roadmap. The preferred sequence is:
-
-```text
-stabilize Phase 0 foundation
- -> one thin Phase 1 query vertical slice
- -> minimal Phase 2 skill discovery/invocation
- -> one high-value Phase 3 Mechanical cluster
- -> one Phase 4 image-to-verified vertical slice
-```
-
-Phase 5 evidence/failure learning operates throughout.
-
-This ordering intentionally favors 90% of the value with minimum architecture.
-
-## 10. Current staged foundation at design time
-
-Reference only; fresh-read before any mutable decision:
-
-- `main`: `1263db2f54f505209ba6837b86181af8646b5a58`;
-- PR #286: A-D verified/DRAFT-HOLD at `729f005b5c1cad6f88245bb134b524be644c4855`;
-- PR #289: E1 hosted-green/DRAFT-HOLD at `06ca138a47e854798a22a6671adab81c3b50723b`;
-- Issue #290: independent E1 review packet;
-- Issue #131: sole mutable runtime authority; newest numbered control at design creation was SEQ292.
-
-These are not roadmap-owned state and may change independently.
-
-## 11. Program Definition of Done
+## 16. Program Definition of Done
 
 A fresh SOL session, without Human recap, can:
 
-1. determine current authority, main/PR state and first unsatisfied gate;
-2. route work to SOL, local, AutoCAD or Human correctly;
-3. compile/use bounded long-horizon missions;
-4. reuse valid exact evidence instead of rerunning closed gates;
-5. recognize known failures and select reviewed probes;
-6. prepare N+1/N+2 and independent review packets without manual relay;
-7. call AutoCAD/live only for boundaries that require real machine evidence.
+1. determine current authority and first delivery gate from fresh canonical evidence;
+2. route work correctly to SOL, local/AutoCAD or Human;
+3. use bounded long-horizon missions rather than routine manual relay;
+4. reuse valid evidence instead of rerunning closed gates;
+5. recognize known development failures and select reviewed probes;
+6. prepare successor/review packets without Human copy-paste relay;
+7. reserve expensive/live AutoCAD epochs for genuine machine boundaries.
 
 The product can then:
 
-8. read bounded CAD state with provenance;
-9. discover and invoke typed skills;
-10. perform useful Mechanical geometry/drawing operations through existing owners;
-11. take an image/PDF through candidate creation, read-back, evidence, bounded repair and fresh verification to a verified Mechanical CAD candidate.
-
-## 12. Next decision after spec approval
-
-After the Owner reviews and approves this written spec, create one implementation plan focused first on **Phase 0 stabilization and Phase 1 query-façade vertical slice**. Do not create implementation plans for all six phases at once.
+8. read the exact current CAD/source state through a bounded provenance-bound façade;
+9. discover and invoke typed existing capabilities without a new authority/executor layer;
+10. perform only the Mechanical operations required by the evidence-driven pilot;
+11. take a real image/PDF through candidate creation, read-back, evidence, bounded repair and fresh verification to an editable verified Mechanical CAD candidate.
