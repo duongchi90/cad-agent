@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from cad_agent.control_snapshot import ControlSnapshotError, validate_control_snapshot
+from cad_agent.work_routing import WORK_ROUTING_SCHEMA_VERSION
 
 
 MISSION_SCHEMA_VERSION = "cad-local-mission-1.0"
@@ -222,6 +223,8 @@ def _routing_fields(routing: Mapping[str, object]) -> tuple[str, str, str]:
     }
     if set(routing) != required:
         _fail("routing must be the closed work-routing result shape")
+    if routing["schema_version"] != WORK_ROUTING_SCHEMA_VERSION:
+        _fail(f"routing.schema_version must be {WORK_ROUTING_SCHEMA_VERSION!r}")
     classification = _text(routing["classification"], field="routing.classification")
     if classification == "WEB_CAPABLE":
         _fail("WEB_CAPABLE work must remain with SOL/Web and cannot compile to Luna")
