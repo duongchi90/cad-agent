@@ -105,6 +105,17 @@ def test_local_executor_emits_non_authoritative_terminal_and_fixed_verify_path()
     assert "publication_authority" in executor
 
 
+def test_terminal_emission_failure_forces_mission_failure() -> None:
+    _, executor = _texts()
+
+    marker = 'Write-Host "Artifact/terminal emission failed:'
+    assert marker in executor
+    start = executor.index(marker)
+    catch_tail = executor[start : start + 500]
+    assert 'ARTIFACT_TERMINAL_EMISSION_FAILED' in catch_tail
+    assert '$result = "FAIL"' in catch_tail
+
+
 def test_local_executor_parses_in_windows_powershell() -> None:
     if os.name != "nt":
         pytest.skip("Windows PowerShell is the supported executor surface")
