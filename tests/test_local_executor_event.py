@@ -161,6 +161,40 @@ class LocalExecutorEventTests(unittest.TestCase):
             )
         )
 
+    def test_untrusted_terminal_marker_cannot_suppress_watchdog(self) -> None:
+        comments = [
+            {
+                "id": 200,
+                "body": dispatch_body(seq=400),
+                "created_at": "2026-08-27T14:00:00Z",
+                "user": {"login": OWNER},
+            },
+            {
+                "id": 201,
+                "body": "\n".join(
+                    [
+                        "LOCAL_EXECUTOR_TERMINAL_V1",
+                        "LOCAL_DISPATCH_COMMENT_ID=200",
+                        "CONTROL_SEQ=400",
+                        "RESULT=success",
+                    ]
+                ),
+                "created_at": "2026-08-27T14:01:00Z",
+                "user": {"login": "untrusted-commenter"},
+            },
+        ]
+        alert = find_watchdog_alert(
+            comments,
+            now=datetime(2026, 8, 27, 14, 13, 0, tzinfo=timezone.utc),
+            issue_number=131,
+            repository_owner=OWNER,
+            threshold_seconds=720,
+        )
+        self.assertIsNotNone(alert)
+        assert alert is not None
+        self.assertEqual(alert["dispatch_comment_id"], "200")
+        self.assertEqual(alert["state"], "NO_ACK")
+
     def test_issue_comment_event_yields_dispatch_outputs(self) -> None:
         event = {
             "issue": {"number": 131},
