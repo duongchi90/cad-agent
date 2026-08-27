@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import hashlib
+import math
 import pymupdf
 import re
 
@@ -12,7 +13,9 @@ import re
 SCHEMA_VERSION = "derived-raster-evidence-1.0"
 _MAX_PDF_BYTES = 8 * 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_A4_MEDIA_BOX = (595.2756, 841.8898)
+_A4_SIZE_MM = (210.0, 297.0)
+_A4_TOLERANCE_MM = 0.10
+_MM_PER_POINT = 25.4 / 72.0
 _BINDING_FIELDS = frozenset(
     {
         "pdf_artifact_sha256",
@@ -98,6 +101,8 @@ def _number_pair(value: str, context: str) -> tuple[float, float, float, float]:
         raise DerivedRasterEvidenceError(f"{context} is not numeric") from exc
     if len(numbers) != 4:
         _error(f"{context} must contain four numbers")
+    if not all(math.isfinite(number) for number in numbers):
+        _error(f"{context} must contain finite numbers")
     return numbers  # type: ignore[return-value]
 
 
@@ -111,14 +116,36 @@ def _pdf_geometry(pdf_bytes: bytes) -> None:
     media = re.search(rb"/MediaBox\s*\[([^]]+)\]", pdf_bytes)
     crop = re.search(rb"/CropBox\s*\[([^]]+)\]", pdf_bytes)
     user_unit = re.search(rb"/UserUnit\s+([^\s]+)", pdf_bytes)
-    if not media or not crop or not user_unit:
-        _error("PDF requires MediaBox, CropBox, and UserUnit")
+    if not media:
+        _error("PDF requires MediaBox")
     media_values = _number_pair(media.group(1).decode(), "MediaBox")
-    crop_values = _number_pair(crop.group(1).decode(), "CropBox")
-    if media_values != crop_values or user_unit.group(1) != b"1.0":
-        _error("PDF geometry must use aligned A4 MediaBox/CropBox and UserUnit 1.0")
-    if tuple(round(media_values[index + 2] - media_values[index], 4) for index in (0, 1)) != _A4_MEDIA_BOX:
-        _error("PDF MediaBox is not exact A4")
+    if any(media_values[index + 2] <= media_values[index] for index in (0, 1)):
+        _error("PDF MediaBox must have positive dimensions")
+    crop_values = media_values if crop is None else _number_pair(
+        crop.group(1).decode(), "CropBox"
+    )
+    if crop_values != media_values:
+        _error("PDF effective CropBox must align with MediaBox")
+    if user_unit is None:
+        user_unit_value = 1.0
+    else:
+        try:
+            user_unit_value = float(user_unit.group(1).decode())
+        except ValueError as exc:
+            raise DerivedRasterEvidenceError("UserUnit is not numeric") from exc
+        if not math.isfinite(user_unit_value) or user_unit_value <= 0:
+            _error("PDF UserUnit must be finite and positive")
+    physical_dimensions = tuple(
+        (media_values[index + 2] - media_values[index])
+        * user_unit_value
+        * _MM_PER_POINT
+        for index in (0, 1)
+    )
+    if not all(
+        abs(dimension - target) <= _A4_TOLERANCE_MM
+        for dimension, target in zip(sorted(physical_dimensions), _A4_SIZE_MM)
+    ):
+        _error("PDF physical MediaBox is not A4 within tolerance")
 
 
 def _derived_png(pdf_bytes: bytes) -> bytes:
@@ -143,10 +170,10 @@ def _derived_png(pdf_bytes: bytes) -> bytes:
         raise DerivedRasterEvidenceError("PDF page is not renderable") from exc
 
 
-def derive_raster_evidence(
+def derive_raster_evidence_with_png(
     *, pdf_bytes: bytes, native_binding: Mapping[str, object], page_number: int
-) -> dict[str, object]:
-    """Derive deterministic opaque A4 raster evidence without filesystem or live CAD access."""
+) -> tuple[bytes, dict[str, object]]:
+    """Return the deterministic PNG bytes and its closed evidence in one bounded pass."""
     if type(pdf_bytes) is not bytes or not pdf_bytes or len(pdf_bytes) > _MAX_PDF_BYTES:
         _error("pdf_bytes exceed the bounded in-memory resource contract")
     if type(page_number) is not int or page_number != 1:
@@ -178,7 +205,24 @@ def derive_raster_evidence(
         "dbmod_before": binding["dbmod_before"],
         "dbmod_after": binding["dbmod_after"],
     }
-    return deepcopy(result)
+    return png_bytes, deepcopy(result)
 
 
-__all__ = ["DerivedRasterEvidenceError", "SCHEMA_VERSION", "derive_raster_evidence"]
+def derive_raster_evidence(
+    *, pdf_bytes: bytes, native_binding: Mapping[str, object], page_number: int
+) -> dict[str, object]:
+    """Preserve the metadata-only PR #160 public API."""
+    _, evidence = derive_raster_evidence_with_png(
+        pdf_bytes=pdf_bytes,
+        native_binding=native_binding,
+        page_number=page_number,
+    )
+    return evidence
+
+
+__all__ = [
+    "DerivedRasterEvidenceError",
+    "SCHEMA_VERSION",
+    "derive_raster_evidence",
+    "derive_raster_evidence_with_png",
+]

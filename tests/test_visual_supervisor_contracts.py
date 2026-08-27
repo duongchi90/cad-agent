@@ -215,6 +215,8 @@ def test_supported_visual_contract_registry_is_exact() -> None:
         "region_verification_register",
         "auto_publish_authorization",
         "visual_review_scope",
+        "visual_capture_plan",
+        "visual_capture_receipt",
     }
 
 
@@ -393,3 +395,449 @@ def test_visual_review_scope_rejects_non_string_root_key_fail_closed() -> None:
     payload[1] = "unexpected"
     with pytest.raises(VisualContractError, match="properties"):
         _validate_visual_review_scope(payload)
+
+
+def _valid_visual_capture_plan() -> dict[str, object]:
+    return {
+        "schema_version": "visual-capture-plan-1.0",
+        "plan_id": "camera-plan-r5-001",
+        "run_id": "run-r5-001",
+        "scope_id": "scope-r5-001",
+        "registry_snapshot_sha256": "a" * 64,
+        "candidate_revision_sha256": "b" * 64,
+        "candidate_state_sha256": "c" * 64,
+        "latest_mutation_sha256": "d" * 64,
+        "captures": [
+            {
+                "capture_id": "global-front",
+                "capture_class": "GLOBAL",
+                "parent_region_id": None,
+                "region_id": None,
+                "view_id": "view-front",
+                "sheet_id": "sheet-a",
+                "layout_id": "layout-a",
+                "zoom_mode": "EXTENTS",
+                "wcs_bbox": None,
+                "margin_ratio": 0.05,
+                "view_direction": "TOP",
+                "ucs": "WORLD",
+                "visual_style": "2D_WIREFRAME",
+            },
+            {
+                "capture_id": "global-side",
+                "capture_class": "GLOBAL",
+                "parent_region_id": None,
+                "region_id": None,
+                "view_id": "view-side",
+                "sheet_id": "sheet-b",
+                "layout_id": "layout-b",
+                "zoom_mode": "EXTENTS",
+                "wcs_bbox": None,
+                "margin_ratio": 0.05,
+                "view_direction": "TOP",
+                "ucs": "WORLD",
+                "visual_style": "2D_WIREFRAME",
+            },
+            {
+                "capture_id": "region-critical",
+                "capture_class": "REGION",
+                "parent_region_id": None,
+                "region_id": "region-critical",
+                "view_id": "view-front",
+                "sheet_id": "sheet-a",
+                "layout_id": "layout-a",
+                "zoom_mode": "WINDOW",
+                "wcs_bbox": [0.0, 0.0, 100.0, 50.0],
+                "margin_ratio": 0.10,
+                "view_direction": "TOP",
+                "ucs": "WORLD",
+                "visual_style": "2D_WIREFRAME",
+            },
+            {
+                "capture_id": "region-normal",
+                "capture_class": "REGION",
+                "parent_region_id": None,
+                "region_id": "region-normal",
+                "view_id": "view-side",
+                "sheet_id": "sheet-b",
+                "layout_id": "layout-b",
+                "zoom_mode": "WINDOW",
+                "wcs_bbox": [150.0, 25.0, 210.0, 85.0],
+                "margin_ratio": 0.10,
+                "view_direction": "TOP",
+                "ucs": "WORLD",
+                "visual_style": "2D_WIREFRAME",
+            },
+        ],
+    }
+
+
+def _validate_visual_capture_plan(
+    payload: dict[str, object],
+    *,
+    server_scope: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return validate_visual_contract(
+        payload,
+        contract="visual_capture_plan",
+        server_scope=server_scope or _valid_visual_review_scope(),
+    )
+
+
+def _valid_visual_capture_receipt(
+    plan: dict[str, object] | None = None,
+) -> dict[str, object]:
+    accepted_plan = plan or _valid_visual_capture_plan()
+    return {
+        "schema_version": "visual-capture-receipt-1.0",
+        "receipt_id": "receipt-region-critical-001",
+        "capture_id": "region-critical",
+        "run_id": "run-r5-001",
+        "scope_id": "scope-r5-001",
+        "region_id": "region-critical",
+        "view_id": "view-front",
+        "sheet_id": "sheet-a",
+        "layout_id": "layout-a",
+        "candidate_revision_sha256": "b" * 64,
+        "candidate_state_sha256": "c" * 64,
+        "latest_mutation_sha256": "d" * 64,
+        "visual_capture_plan_sha256": canonical_json_sha256(accepted_plan),
+        "capture_class": "REGION",
+        "zoom_mode": "WINDOW",
+        "requested_wcs_bbox": [0.0, 0.0, 100.0, 50.0],
+        "observed_wcs_bbox": [0.0, 0.0, 100.0, 50.0],
+        "view_center": [50.0, 25.0],
+        "view_width": 120.0,
+        "view_height": 60.0,
+        "view_direction": "TOP",
+        "ucs": "WORLD",
+        "visual_style": "2D_WIREFRAME",
+        "artifact_sha256": "e" * 64,
+        "artifact_width": 1920,
+        "artifact_height": 1080,
+        "captured_at_utc": "2026-08-14T03:45:00Z",
+        "transient_state_restored": True,
+    }
+
+
+def _validate_visual_capture_receipt(
+    payload: dict[str, object],
+    *,
+    server_plan: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return validate_visual_contract(
+        payload,
+        contract="visual_capture_receipt",
+        server_scope=server_plan or _valid_visual_capture_plan(),
+    )
+
+
+def test_visual_capture_plan_validates_against_server_owned_scope() -> None:
+    payload = _valid_visual_capture_plan()
+    assert _validate_visual_capture_plan(payload) == payload
+
+
+def test_visual_capture_plan_requires_server_owned_scope_context() -> None:
+    with pytest.raises(VisualContractError, match="server_scope"):
+        validate_visual_contract(_valid_visual_capture_plan(), contract="visual_capture_plan")
+
+
+def test_visual_capture_plan_requires_one_global_per_scope_view_tuple() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"] = [
+        item for item in payload["captures"] if item["capture_id"] != "global-front"
+    ]
+    with pytest.raises(VisualContractError, match="GLOBAL"):
+        _validate_visual_capture_plan(payload)
+
+    duplicate = _valid_visual_capture_plan()
+    extra = dict(duplicate["captures"][0])
+    extra["capture_id"] = "global-front-duplicate"
+    duplicate["captures"].append(extra)
+    with pytest.raises(VisualContractError, match="GLOBAL"):
+        _validate_visual_capture_plan(duplicate)
+
+
+def test_visual_capture_plan_requires_one_region_per_required_region() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"] = [
+        item for item in payload["captures"] if item["capture_id"] != "region-critical"
+    ]
+    with pytest.raises(VisualContractError, match="REGION"):
+        _validate_visual_capture_plan(payload)
+
+    duplicate = _valid_visual_capture_plan()
+    extra = dict(duplicate["captures"][2])
+    extra["capture_id"] = "region-critical-duplicate"
+    duplicate["captures"].append(extra)
+    with pytest.raises(VisualContractError, match="REGION"):
+        _validate_visual_capture_plan(duplicate)
+
+
+def test_visual_capture_plan_rejects_global_window_or_bbox() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"][0]["zoom_mode"] = "WINDOW"
+    payload["captures"][0]["wcs_bbox"] = [0.0, 0.0, 10.0, 10.0]
+    with pytest.raises(VisualContractError, match="GLOBAL"):
+        _validate_visual_capture_plan(payload)
+
+
+def test_visual_capture_plan_rejects_region_without_bbox() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"][2]["wcs_bbox"] = None
+    with pytest.raises(VisualContractError, match="bbox"):
+        _validate_visual_capture_plan(payload)
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    (
+        [0.0, 0.0, 0.0, 10.0],
+        [0.0, 0.0, 10.0, 0.0],
+        [0.0, 0.0, float("nan"), 10.0],
+        [0.0, 0.0, float("inf"), 10.0],
+    ),
+)
+def test_visual_capture_plan_rejects_degenerate_or_non_finite_bbox(bbox: list[float]) -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"][2]["wcs_bbox"] = bbox
+    with pytest.raises(VisualContractError, match="bbox|finite"):
+        _validate_visual_capture_plan(payload)
+
+
+@pytest.mark.parametrize(
+    ("capture_index", "margin"),
+    ((0, 0.10), (2, 0.05), (2, -0.1), (2, float("inf"))),
+)
+def test_visual_capture_plan_rejects_noncanonical_margin(
+    capture_index: int, margin: float
+) -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"][capture_index]["margin_ratio"] = margin
+    with pytest.raises(VisualContractError, match="margin_ratio"):
+        _validate_visual_capture_plan(payload)
+
+
+def test_visual_capture_plan_rejects_detail_without_valid_parent() -> None:
+    for parent in (None, "foreign-region"):
+        payload = _valid_visual_capture_plan()
+        payload["captures"].append(
+            {
+                "capture_id": "detail-critical-hole",
+                "capture_class": "DETAIL",
+                "parent_region_id": parent,
+                "region_id": "region-critical",
+                "view_id": "view-front",
+                "sheet_id": "sheet-a",
+                "layout_id": "layout-a",
+                "zoom_mode": "WINDOW",
+                "wcs_bbox": [40.0, 15.0, 60.0, 35.0],
+                "margin_ratio": 0.05,
+                "view_direction": "TOP",
+                "ucs": "WORLD",
+                "visual_style": "2D_WIREFRAME",
+            }
+        )
+        with pytest.raises(VisualContractError, match="parent_region_id"):
+            _validate_visual_capture_plan(payload)
+
+
+def test_visual_capture_plan_accepts_bounded_detail_with_required_parent() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"].append(
+        {
+            "capture_id": "detail-critical-hole",
+            "capture_class": "DETAIL",
+            "parent_region_id": "region-critical",
+            "region_id": "region-critical",
+            "view_id": "view-front",
+            "sheet_id": "sheet-a",
+            "layout_id": "layout-a",
+            "zoom_mode": "WINDOW",
+            "wcs_bbox": [40.0, 15.0, 60.0, 35.0],
+            "margin_ratio": 0.05,
+            "view_direction": "TOP",
+            "ucs": "WORLD",
+            "visual_style": "2D_WIREFRAME",
+        }
+    )
+    assert _validate_visual_capture_plan(payload) == payload
+
+
+def test_visual_capture_plan_rejects_server_scope_substitution() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["candidate_revision_sha256"] = "f" * 64
+    with pytest.raises(VisualContractError, match="server-owned|candidate_revision"):
+        _validate_visual_capture_plan(payload)
+
+    foreign_capture = _valid_visual_capture_plan()
+    foreign_capture["captures"][2]["view_id"] = "view-foreign"
+    with pytest.raises(VisualContractError, match="server-owned|view_id"):
+        _validate_visual_capture_plan(foreign_capture)
+
+
+def test_visual_capture_plan_rejects_unknown_capture_property() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"][2]["provider_zoom_hint"] = "closer"
+    with pytest.raises(VisualContractError, match="Unexpected properties"):
+        _validate_visual_capture_plan(payload)
+
+
+def test_visual_capture_receipt_validates_against_server_owned_plan() -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    assert _validate_visual_capture_receipt(payload, server_plan=plan) == payload
+
+
+def test_visual_capture_receipt_requires_server_owned_plan_context() -> None:
+    with pytest.raises(VisualContractError, match="server_scope"):
+        validate_visual_contract(
+            _valid_visual_capture_receipt(),
+            contract="visual_capture_receipt",
+        )
+
+
+def test_visual_capture_receipt_rejects_plan_sha_mismatch() -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload["visual_capture_plan_sha256"] = "f" * 64
+    with pytest.raises(VisualContractError, match="plan|sha"):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+@pytest.mark.parametrize(
+    ("field", "foreign"),
+    (
+        ("run_id", "run-foreign"),
+        ("scope_id", "scope-foreign"),
+        ("candidate_revision_sha256", "1" * 64),
+        ("candidate_state_sha256", "2" * 64),
+        ("latest_mutation_sha256", "3" * 64),
+        ("region_id", "region-normal"),
+        ("view_id", "view-side"),
+        ("sheet_id", "sheet-b"),
+        ("layout_id", "layout-b"),
+        ("capture_class", "GLOBAL"),
+        ("zoom_mode", "EXTENTS"),
+        ("view_direction", "BOTTOM"),
+        ("ucs", "LOCAL"),
+        ("visual_style", "REALISTIC"),
+    ),
+)
+def test_visual_capture_receipt_rejects_foreign_identity_or_camera_policy(
+    field: str, foreign: str
+) -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload[field] = foreign
+    with pytest.raises(VisualContractError, match=field):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_receipt_rejects_requested_window_mismatch() -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload["requested_wcs_bbox"] = [0.0, 0.0, 101.0, 50.0]
+    with pytest.raises(VisualContractError, match="requested_wcs_bbox"):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_receipt_rejects_observed_window_outside_tolerance() -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload["observed_wcs_bbox"] = [0.0, 0.0, 105.0, 50.0]
+    with pytest.raises(VisualContractError, match="observed_wcs_bbox"):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+@pytest.mark.parametrize(("field", "value"), (("artifact_width", 0), ("artifact_height", -1)))
+def test_visual_capture_receipt_rejects_invalid_artifact_dimensions(
+    field: str, value: int
+) -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload[field] = value
+    with pytest.raises(VisualContractError, match=field):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_receipt_rejects_non_finite_or_non_positive_view_size() -> None:
+    plan = _valid_visual_capture_plan()
+    for field, value in (("view_width", 0.0), ("view_height", float("nan"))):
+        payload = _valid_visual_capture_receipt(plan)
+        payload[field] = value
+        with pytest.raises(VisualContractError, match=field):
+            _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_receipt_requires_rfc3339_utc_timestamp() -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload["captured_at_utc"] = "2026-08-14 03:45"
+    with pytest.raises(VisualContractError, match="captured_at_utc"):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_receipt_requires_transient_state_restored() -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload["transient_state_restored"] = False
+    with pytest.raises(VisualContractError, match="transient_state_restored"):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_receipt_rejects_unknown_property() -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload["provider_confidence"] = 1.0
+    with pytest.raises(VisualContractError, match="Unexpected properties"):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
+
+
+def test_visual_capture_plan_requires_global_before_local_capture_in_each_group() -> None:
+    payload = _valid_visual_capture_plan()
+    region = payload["captures"].pop(2)
+    payload["captures"].insert(0, region)
+    with pytest.raises(VisualContractError, match="GLOBAL|first|before"):
+        _validate_visual_capture_plan(payload)
+
+
+def test_visual_capture_plan_rejects_detail_bbox_outside_parent_region() -> None:
+    payload = _valid_visual_capture_plan()
+    payload["captures"].append(
+        {
+            "capture_id": "detail-critical-outside",
+            "capture_class": "DETAIL",
+            "parent_region_id": "region-critical",
+            "region_id": "region-critical",
+            "view_id": "view-front",
+            "sheet_id": "sheet-a",
+            "layout_id": "layout-a",
+            "zoom_mode": "WINDOW",
+            "wcs_bbox": [-1.0, 10.0, 20.0, 20.0],
+            "margin_ratio": 0.05,
+            "view_direction": "TOP",
+            "ucs": "WORLD",
+            "visual_style": "2D_WIREFRAME",
+        }
+    )
+    with pytest.raises(VisualContractError, match="DETAIL|bbox|parent"):
+        _validate_visual_capture_plan(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("view_center", [51.0, 25.0]),
+        ("view_width", 119.0),
+        ("view_height", 61.0),
+    ),
+)
+def test_visual_capture_receipt_rejects_incoherent_window_camera_geometry(
+    field: str, value: object
+) -> None:
+    plan = _valid_visual_capture_plan()
+    payload = _valid_visual_capture_receipt(plan)
+    payload[field] = value
+    with pytest.raises(VisualContractError, match=field):
+        _validate_visual_capture_receipt(payload, server_plan=plan)
