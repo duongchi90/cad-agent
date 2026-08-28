@@ -106,21 +106,86 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
 
     def trigger() -> None:
         user32 = _get_user32()
-        mdi_clients: list[int] = []
+
+        def set_native_signature(function: Any, argtypes: list[Any], restype: Any) -> None:
+            try:
+                function.argtypes = argtypes
+                function.restype = restype
+            except (AttributeError, TypeError):
+                # Test doubles expose the same callable surface without ctypes metadata.
+                pass
+
+        get_window_thread_process_id = user32.GetWindowThreadProcessId
+        get_class_name = user32.GetClassNameW
+        enum_child_windows = user32.EnumChildWindows
+        get_foreground_window = user32.GetForegroundWindow
+        post_message = user32.PostMessageW
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        set_native_signature(
+            get_window_thread_process_id,
+            [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)],
+            wintypes.DWORD,
+        )
+        set_native_signature(
+            get_class_name,
+            [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int],
+            ctypes.c_int,
+        )
+        set_native_signature(
+            enum_child_windows,
+            [wintypes.HWND, callback_type, wintypes.LPARAM],
+            wintypes.BOOL,
+        )
+        set_native_signature(get_foreground_window, [], wintypes.HWND)
+        set_native_signature(
+            post_message,
+            [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
+            wintypes.BOOL,
+        )
+
+        def window_pid(window: int) -> int:
+            pid = wintypes.DWORD()
+            if not get_window_thread_process_id(window, ctypes.byref(pid)) or not pid.value:
+                raise DotNetIPCError("WINDOW_IDENTITY_INVALID")
+            return int(pid.value)
+
+        owner_pid = window_pid(hwnd)
+        mdi_clients: list[int] = []
+        callback_error: str | None = None
 
         def callback(child: int, _lparam: int) -> bool:
+            nonlocal callback_error
             name = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(child, name, len(name))
+            if not get_class_name(child, name, len(name)):
+                callback_error = "WINDOW_CLASS_INVALID"
+                return False
             if name.value == "MDIClient":
                 mdi_clients.append(child)
-                return False
             return True
 
-        user32.EnumChildWindows(hwnd, callback_type(callback), 0)
-        target = mdi_clients[0] if mdi_clients else hwnd
+        enum_result = enum_child_windows(hwnd, callback_type(callback), 0)
+        if callback_error is not None:
+            raise DotNetIPCError(callback_error)
+        if enum_result is not None and not enum_result:
+            raise DotNetIPCError("WINDOW_ENUMERATION_FAILED")
+
+        owned_mdi_clients = [child for child in mdi_clients if window_pid(child) == owner_pid]
+        if len(owned_mdi_clients) != 1:
+            raise DotNetIPCError("WINDOW_RECEIVER_AMBIGUOUS")
+        target = owned_mdi_clients[0]
+
+        if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
+            raise DotNetIPCError("WINDOW_IDENTITY_CHANGED")
+        if get_foreground_window() != hwnd:
+            raise DotNetIPCError("WINDOW_FOREGROUND_INVALID")
+
         for character in _DOTNET_DISPATCH_COMMAND:
-            user32.PostMessageW(target, _WM_CHAR, ord(character), 0)
+            if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
+                raise DotNetIPCError("WINDOW_IDENTITY_CHANGED")
+            if get_foreground_window() != hwnd:
+                raise DotNetIPCError("WINDOW_FOREGROUND_INVALID")
+            if not post_message(target, _WM_CHAR, ord(character), 0):
+                raise DotNetIPCError("WINDOW_DELIVERY_FAILED")
 
     return trigger
 

@@ -48,7 +48,11 @@ class RecordingUser32:
         post_returns: list[bool] | None = None,
     ) -> None:
         self.top_pid = top_pid
-        self.child_specs = child_specs or [(101, "Palette"), (202, "MDIClient"), (303, "Other")]
+        self.child_specs = (
+            [(101, "Palette"), (202, "MDIClient"), (303, "Other")]
+            if child_specs is None
+            else child_specs
+        )
         self.child_pids = child_pids or {}
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
