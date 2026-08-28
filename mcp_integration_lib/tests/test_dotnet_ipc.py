@@ -19,6 +19,7 @@ from mcp_integration_lib.dotnet_ipc import (
     REQUEST_PREFIX,
     RESULT_PREFIX,
     DotNetIPCClient,
+    DotNetIPCError,
     DotNetIPCProtocolError,
     DotNetIPCResultError,
     DotNetIPCTimeoutError,
@@ -35,14 +36,34 @@ from mcp_integration_lib.dotnet_ipc import (
 
 
 class RecordingUser32:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        top_pid: int = 4242,
+        child_specs: list[tuple[int, str]] | None = None,
+        child_pids: dict[int, int] | None = None,
+        pid_sequences: dict[int, list[int]] | None = None,
+        foreground_hwnd: int = 9001,
+        foreground_sequence: list[int] | None = None,
+        post_returns: list[bool] | None = None,
+    ) -> None:
+        self.top_pid = top_pid
+        self.child_specs = child_specs or [(101, "Palette"), (202, "MDIClient"), (303, "Other")]
+        self.child_pids = child_pids or {}
+        self.pid_sequences = pid_sequences or {}
+        self.foreground_hwnd = foreground_hwnd
+        self.foreground_sequence = foreground_sequence or []
+        self.post_returns = post_returns or []
+        self.pid_calls: list[int] = []
         self.class_names: dict[int, str] = {}
         self.enum_calls: list[tuple[int, int]] = []
         self.post_calls: list[tuple[int, int, int, int]] = []
+        self.post_results: list[bool] = []
+        self.foreground_calls = 0
 
     def EnumChildWindows(self, hwnd, callback, lparam):
         self.enum_calls.append((hwnd, lparam))
-        for child, class_name in ((101, "Palette"), (202, "MDIClient"), (303, "Other")):
+        for child, class_name in self.child_specs:
             self.class_names[child] = class_name
             if not callback(child, lparam):
                 break
@@ -51,9 +72,31 @@ class RecordingUser32:
         buffer.value = self.class_names[child]
         return len(buffer.value)
 
+    def GetWindowThreadProcessId(self, hwnd, pid_out):
+        self.pid_calls.append(hwnd)
+        sequence = self.pid_sequences.get(hwnd)
+        if sequence:
+            pid = sequence.pop(0)
+        elif hwnd == 9001:
+            pid = self.top_pid
+        else:
+            pid = self.child_pids.get(hwnd, 4242)
+        if not pid:
+            return 0
+        pid_out._obj.value = pid
+        return 1
+
+    def GetForegroundWindow(self):
+        self.foreground_calls += 1
+        if self.foreground_sequence:
+            return self.foreground_sequence.pop(0)
+        return self.foreground_hwnd
+
     def PostMessageW(self, target, message, wparam, lparam):
         self.post_calls.append((target, message, wparam, lparam))
-        return True
+        result = self.post_returns.pop(0) if self.post_returns else True
+        self.post_results.append(result)
+        return result
 
 
 class WindowsDotNetTriggerTests(unittest.TestCase):
@@ -85,6 +128,85 @@ class WindowsDotNetTriggerTests(unittest.TestCase):
             [(202, 0x0102, ord(character), 0) for character in command],
             user32.post_calls,
         )
+        self.assertTrue(all(user32.post_results))
+
+    def test_requires_exact_owned_top_level_and_mdi_receiver_before_delivery(self) -> None:
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+        cases = {
+            "zero_top_pid": RecordingUser32(top_pid=0),
+            "zero_receivers": RecordingUser32(child_specs=[]),
+            "multiple_owned_receivers": RecordingUser32(
+                child_specs=[(202, "MDIClient"), (404, "MDIClient")],
+            ),
+            "foreign_receiver": RecordingUser32(
+                child_pids={202: 9999},
+            ),
+        }
+
+        for name, user32 in cases.items():
+            with self.subTest(name=name):
+                with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+                    trigger = factory(9001)
+                    with self.assertRaises(DotNetIPCError):
+                        trigger()
+                self.assertEqual([], user32.post_calls)
+
+    def test_rejects_stale_top_level_or_receiver_identity_before_delivery(self) -> None:
+        user32 = RecordingUser32(
+            pid_sequences={9001: [4242, 9999]},
+        )
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            trigger = factory(9001)
+            with self.assertRaises(DotNetIPCError):
+                trigger()
+
+        self.assertEqual([], user32.post_calls)
+
+    def test_requires_exact_foreground_readback_before_delivery(self) -> None:
+        user32 = RecordingUser32(foreground_hwnd=7777)
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            trigger = factory(9001)
+            with self.assertRaises(DotNetIPCError):
+                trigger()
+
+        self.assertGreaterEqual(user32.foreground_calls, 1)
+        self.assertEqual([], user32.post_calls)
+
+    def test_postmessage_failure_stops_at_first_failed_enqueue(self) -> None:
+        command = "\x1b\x1bCADAGENT_DISPATCH\r"
+        user32 = RecordingUser32(post_returns=[True] * 3 + [False] + [True] * len(command))
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            trigger = factory(9001)
+            with self.assertRaises(DotNetIPCError):
+                trigger()
+
+        self.assertEqual(4, len(user32.post_calls))
+        self.assertEqual([True, True, True, False], user32.post_results)
+
+    def test_postmessage_true_is_enqueue_only_without_a_semantic_result(self) -> None:
+        user32 = RecordingUser32()
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with TemporaryDirectory() as temporary:
+            client = DotNetIPCClient(
+                ipc_dir=temporary,
+                trigger=factory(9001),
+                timeout_s=0.05,
+                poll_interval_s=0.01,
+                request_id_factory=lambda: "enqueue-only-001",
+            )
+            with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+                with self.assertRaises(DotNetIPCTimeoutError):
+                    client.health()
+
+        self.assertTrue(user32.post_results)
+        self.assertTrue(all(user32.post_results))
 
 
 def _result(request: dict[str, object], payload: dict[str, object] | None = None) -> dict[str, object]:
