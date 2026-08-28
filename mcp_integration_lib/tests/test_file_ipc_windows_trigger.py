@@ -145,6 +145,15 @@ class ForegroundChurningUser32(RecordingUser32):
         return 0
 
 
+class ReacquiringUser32(RecordingUser32):
+    """Model the allowed reacquisition path succeeding before delivery."""
+
+    def SetForegroundWindow(self, hwnd):
+        result = super().SetForegroundWindow(hwnd)
+        self.foreground_hwnd = hwnd
+        return result
+
+
 class WindowsTriggerExecutionRedTests(unittest.TestCase):
     def _run_current_trigger(self, user32: RecordingUser32, text: str = EXPRESSION):
         with (
@@ -224,6 +233,20 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         user32 = ForegroundChurningUser32()
         self._run_current_trigger(user32)
         self.assertEqual(user32.focus_calls, [])
+        self.assertEqual(
+            [call[0] for call in user32.send_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
+
+    def test_not_foreground_reacquires_then_delivers(self) -> None:
+        """A non-foreground exact owner may reacquire once, then deliver."""
+        user32 = ReacquiringUser32(foreground_hwnd=FOREIGN_HWND)
+        self._run_current_trigger(user32)
+        self.assertEqual(
+            user32.focus_calls,
+            [("ShowWindow", OWNED_HWND), ("SetForegroundWindow", OWNED_HWND)],
+        )
+        self.assertEqual(user32.foreground_hwnd, OWNED_HWND)
         self.assertEqual(
             [call[0] for call in user32.send_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
