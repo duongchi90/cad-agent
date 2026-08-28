@@ -759,8 +759,9 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
 
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise MCPToolError("WINDOW_IDENTITY_CHANGED")
-        show_window(hwnd, 9)
-        set_foreground_window(hwnd)
+        if get_foreground_window() != hwnd:
+            show_window(hwnd, 9)
+            set_foreground_window(hwnd)
         if get_foreground_window() != hwnd:
             raise MCPToolError("WINDOW_FOREGROUND_INVALID")
 

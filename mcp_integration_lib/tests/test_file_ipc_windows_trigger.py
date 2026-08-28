@@ -132,6 +132,19 @@ class RecordingUser32:
         return self.send_returns[min(call_index, len(self.send_returns) - 1)]
 
 
+class ForegroundChurningUser32(RecordingUser32):
+    """Model an already-foreground window losing focus when reacquired."""
+
+    def ShowWindow(self, hwnd, command):
+        result = super().ShowWindow(hwnd, command)
+        self.foreground_hwnd = FOREIGN_HWND
+        return result
+
+    def SetForegroundWindow(self, hwnd):
+        super().SetForegroundWindow(hwnd)
+        return 0
+
+
 class WindowsTriggerExecutionRedTests(unittest.TestCase):
     def _run_current_trigger(self, user32: RecordingUser32, text: str = EXPRESSION):
         with (
@@ -205,6 +218,16 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         with self.assertRaises(MCPToolError):
             self._run_current_trigger(user32)
         self.assertEqual(user32.post_calls, [])
+
+    def test_exact_foreground_does_not_reacquire_before_delivery(self) -> None:
+        """The exact foreground precondition must avoid a destructive reacquisition."""
+        user32 = ForegroundChurningUser32()
+        self._run_current_trigger(user32)
+        self.assertEqual(user32.focus_calls, [])
+        self.assertEqual(
+            [call[0] for call in user32.send_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
 
     def test_set_foreground_return_zero_with_exact_readback_still_delivers(self) -> None:
         user32 = RecordingUser32(set_foreground_result=0)
