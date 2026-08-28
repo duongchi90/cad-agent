@@ -62,6 +62,7 @@ class RecordingUser32:
         foreground_hwnd: int = OWNED_HWND,
         set_foreground_result: int = 1,
         post_returns: list[int] | None = None,
+        receiver_consumption: list[bool] | None = None,
         send_returns: list[int] | None = None,
         send_errors: list[int] | None = None,
         send_result: int = 1,
@@ -73,6 +74,7 @@ class RecordingUser32:
         self.foreground_hwnd = foreground_hwnd
         self.set_foreground_result = set_foreground_result
         self.post_returns = post_returns or [1]
+        self.receiver_consumption = receiver_consumption or [False]
         self.send_returns = send_returns or [1]
         self.send_errors = send_errors or [0]
         self.send_result = send_result
@@ -82,8 +84,11 @@ class RecordingUser32:
         self._pid_call_counts: dict[int, int] = {}
         self.focus_calls: list[tuple[str, int]] = []
         self.post_calls: list[tuple[int, int, int, int]] = []
+        self.post_results: list[int] = []
         self.send_calls: list[tuple[int, int, int, int, int, int]] = []
         self.message_calls: list[tuple[str, int, int, int, int]] = []
+        self.receiver_queue: list[tuple[int, int, int, int]] = []
+        self.receiver_acknowledgements: list[bool] = []
         self.class_names = {child: name for child, name, _pid in self.children}
         self.child_pids = {child: pid for child, _name, pid in self.children}
 
@@ -119,9 +124,22 @@ class RecordingUser32:
     def PostMessageW(self, target, message, wparam, lparam):
         call = (target, message, wparam, lparam)
         self.post_calls.append(call)
+        # PostMessageW admits work to the native queue; it does not run the
+        # receiver handler.  Consumption is modeled separately below.
+        self.receiver_queue.append(call)
         self.message_calls.append(("PostMessageW", target, message, wparam, lparam))
         call_index = len(self.post_calls) - 1
-        return self.post_returns[min(call_index, len(self.post_returns) - 1)]
+        result = self.post_returns[min(call_index, len(self.post_returns) - 1)]
+        self.post_results.append(result)
+        return result
+
+    def drain_receiver_queue(self) -> list[bool]:
+        """Model receiver/handler consumption independently of enqueue return."""
+        self.receiver_acknowledgements = [
+            self.receiver_consumption[min(index, len(self.receiver_consumption) - 1)]
+            for index, _call in enumerate(self.receiver_queue)
+        ]
+        return list(self.receiver_acknowledgements)
 
     def SendMessageTimeoutW(self, target, message, wparam, lparam, flags, timeout, result_pointer):
         self.send_calls.append((target, message, wparam, lparam, flags, timeout))
@@ -297,6 +315,42 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self._run_current_trigger(user32)
         self.assertEqual(user32.send_calls, [])
         self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
+
+    def test_enqueue_true_without_receiver_consumption_is_causal_red(self) -> None:
+        """The current trigger returns after enqueue without a handler ACK."""
+        user32 = RecordingUser32(
+            post_returns=[1] * len(EXPECTED_FRAMED_TEXT),
+            receiver_consumption=[False] * len(EXPECTED_FRAMED_TEXT),
+        )
+
+        result = self._run_current_trigger(user32)
+        acknowledgements = user32.drain_receiver_queue()
+
+        self.assertIsNone(result)
+        self.assertEqual(
+            [call[1] for call in user32.post_calls],
+            [0x0102] * len(EXPECTED_FRAMED_TEXT),
+        )
+        self.assertTrue(all(result == 1 for result in user32.post_results))
+        self.assertTrue(
+            acknowledgements and all(acknowledged for acknowledged in acknowledgements),
+            "PostMessageW TRUE must not stand in for receiver/handler consumption ACK",
+        )
+
+    def test_receiver_consumption_ack_is_a_distinct_positive_oracle_path(self) -> None:
+        """A positive modeled handler ACK is distinct from native enqueue TRUE."""
+        user32 = RecordingUser32(
+            post_returns=[1] * len(EXPECTED_FRAMED_TEXT),
+            receiver_consumption=[True] * len(EXPECTED_FRAMED_TEXT),
+        )
+
+        self._run_current_trigger(user32)
+
+        self.assertTrue(all(result == 1 for result in user32.post_results))
+        self.assertEqual(
+            user32.drain_receiver_queue(),
+            [True] * len(EXPECTED_FRAMED_TEXT),
+        )
 
     def test_bounded_native_delivery_uses_postmessage_enqueue(self) -> None:
         user32 = RecordingUser32(post_returns=[1] * len(EXPECTED_FRAMED_TEXT))
