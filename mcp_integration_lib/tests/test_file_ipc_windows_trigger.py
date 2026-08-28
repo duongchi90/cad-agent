@@ -16,7 +16,6 @@ from unittest.mock import patch
 from mcp_integration_lib import mcp_client
 from mcp_integration_lib.mcp_client import (
     MCPToolError,
-    MCPTimeoutError,
     make_windows_dispatch_trigger,
     make_windows_lisp_trigger,
 )
@@ -62,6 +61,7 @@ class RecordingUser32:
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = OWNED_HWND,
         set_foreground_result: int = 1,
+        post_returns: list[int] | None = None,
         send_returns: list[int] | None = None,
         send_errors: list[int] | None = None,
         send_result: int = 1,
@@ -72,6 +72,7 @@ class RecordingUser32:
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
         self.set_foreground_result = set_foreground_result
+        self.post_returns = post_returns or [1]
         self.send_returns = send_returns or [1]
         self.send_errors = send_errors or [0]
         self.send_result = send_result
@@ -119,7 +120,8 @@ class RecordingUser32:
         call = (target, message, wparam, lparam)
         self.post_calls.append(call)
         self.message_calls.append(("PostMessageW", target, message, wparam, lparam))
-        return 1
+        call_index = len(self.post_calls) - 1
+        return self.post_returns[min(call_index, len(self.post_returns) - 1)]
 
     def SendMessageTimeoutW(self, target, message, wparam, lparam, flags, timeout, result_pointer):
         self.send_calls.append((target, message, wparam, lparam, flags, timeout))
@@ -205,10 +207,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         )
         self._run_current_trigger(user32)
         self.assertEqual(
-            [call[0] for call in user32.send_calls],
+            [call[0] for call in user32.post_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
-        self.assertEqual(user32.post_calls, [])
+        self.assertEqual(user32.send_calls, [])
 
     def test_receiver_pid_drift_at_delivery_boundary_is_rejected(self) -> None:
         user32 = RecordingUser32(
@@ -234,7 +236,7 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self._run_current_trigger(user32)
         self.assertEqual(user32.focus_calls, [])
         self.assertEqual(
-            [call[0] for call in user32.send_calls],
+            [call[0] for call in user32.post_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
 
@@ -248,22 +250,22 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         )
         self.assertEqual(user32.foreground_hwnd, OWNED_HWND)
         self.assertEqual(
-            [call[0] for call in user32.send_calls],
+            [call[0] for call in user32.post_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
 
     def test_set_foreground_return_zero_with_exact_readback_still_delivers(self) -> None:
         user32 = RecordingUser32(set_foreground_result=0)
         self._run_current_trigger(user32)
-        self.assertEqual(user32.post_calls, [])
         self.assertEqual(
-            [call[0] for call in user32.send_calls],
+            [call[0] for call in user32.post_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
         self.assertEqual(
-            [call[1] for call in user32.send_calls],
+            [call[1] for call in user32.post_calls],
             [0x0102] * len(EXPECTED_FRAMED_TEXT),
         )
+        self.assertEqual(user32.send_calls, [])
 
     def test_set_foreground_return_zero_with_foreign_readback_fails_closed(self) -> None:
         user32 = RecordingUser32(
@@ -275,49 +277,52 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self.assertEqual(user32.send_calls, [])
         self.assertEqual(user32.post_calls, [])
 
-    def test_bounded_native_delivery_uses_sendmessage_timeout(self) -> None:
-        user32 = RecordingUser32(send_returns=[1] * len(EXPECTED_FRAMED_TEXT))
+    def test_async_enqueue_does_not_depend_on_sync_timeout_completion(self) -> None:
+        """A valid owner/foreground must survive a synchronous target timeout."""
+        user32 = RecordingUser32(
+            post_returns=[1] * len(EXPECTED_FRAMED_TEXT),
+            send_returns=[0],
+            send_errors=[1460],
+        )
         self._run_current_trigger(user32)
-        self.assertEqual(user32.post_calls, [])
+        self.assertEqual(user32.send_calls, [])
         self.assertEqual(
-            [call[0] for call in user32.send_calls],
+            user32.post_calls,
+            [(RECEIVER_HWND, 0x0102, ord(char), 0) for char in EXPECTED_FRAMED_TEXT],
+        )
+
+    def test_postmessage_success_is_enqueue_only_not_execution_ack(self) -> None:
+        """Enqueue success has no semantic execution/result meaning by itself."""
+        user32 = RecordingUser32(post_returns=[1] * len(EXPECTED_FRAMED_TEXT))
+        self._run_current_trigger(user32)
+        self.assertEqual(user32.send_calls, [])
+        self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
+
+    def test_bounded_native_delivery_uses_postmessage_enqueue(self) -> None:
+        user32 = RecordingUser32(post_returns=[1] * len(EXPECTED_FRAMED_TEXT))
+        self._run_current_trigger(user32)
+        self.assertEqual(
+            [call[0] for call in user32.post_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
         self.assertEqual(
-            [call[1] for call in user32.send_calls],
+            [call[1] for call in user32.post_calls],
             [0x0102] * len(EXPECTED_FRAMED_TEXT),
         )
-        self.assertEqual(
-            [call[4] for call in user32.send_calls],
-            [0x0022] * len(EXPECTED_FRAMED_TEXT),
-        )
-        self.assertEqual(
-            [call[5] for call in user32.send_calls],
-            [1000] * len(EXPECTED_FRAMED_TEXT),
-        )
-        self.assertEqual(user32.kernel32.set_calls, [0] * len(EXPECTED_FRAMED_TEXT))
+        self.assertEqual(user32.send_calls, [])
+        self.assertEqual(user32.kernel32.set_calls, [])
         self.assertEqual(user32.kernel32.get_calls, [])
 
-    def test_bounded_native_zero_timeout_and_error_fail_closed(self) -> None:
-        cases = {
-            "zero": (0, 0, MCPToolError),
-            "timeout": (0, 1460, MCPTimeoutError),
-            "native-error": (0, 5, MCPToolError),
-            "destroyed-receiver": (0, 1400, MCPToolError),
-        }
-        for case, (send_return, last_error, expected_error) in cases.items():
-            with self.subTest(case=case):
-                user32 = RecordingUser32(
-                    send_returns=[send_return],
-                    send_errors=[last_error],
-                )
-                with self.assertRaises(expected_error) as raised:
-                    self._run_current_trigger(user32)
-                self.assertEqual(len(user32.send_calls), 1)
-                self.assertEqual(user32.post_calls, [])
-                self.assertEqual(user32.kernel32.set_calls, [0])
-                self.assertEqual(user32.kernel32.get_calls, [last_error])
-                self.assertNotIn(EXPRESSION, str(raised.exception))
+    def test_postmessage_zero_fails_closed_before_later_code_unit(self) -> None:
+        """Native enqueue failure is terminal for the current framed trigger."""
+        user32 = RecordingUser32(post_returns=[0] + [1] * len(EXPECTED_FRAMED_TEXT))
+        with self.assertRaises(MCPToolError) as raised:
+            self._run_current_trigger(user32)
+        self.assertEqual(str(raised.exception), "WINDOW_DELIVERY_FAILED")
+        self.assertEqual(len(user32.post_calls), 1)
+        self.assertEqual(user32.send_calls, [])
+        self.assertEqual(user32.kernel32.set_calls, [])
+        self.assertEqual(user32.kernel32.get_calls, [])
 
     def test_expression_framing_is_exact_and_bounded(self) -> None:
         user32 = RecordingUser32()
@@ -344,10 +349,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self._run_current_trigger(user32)
         self.assertEqual(user32.enum_calls, [(OWNED_HWND, 0)])
         self.assertIn(RECEIVER_HWND, user32.window_pid_calls)
-        self.assertEqual(len(user32.send_calls), len(EXPECTED_FRAMED_TEXT))
-        self.assertTrue(user32.send_calls)
-        self.assertTrue(all(target == RECEIVER_HWND for target, *_ in user32.send_calls))
-        self.assertEqual(user32.post_calls, [])
+        self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
+        self.assertTrue(user32.post_calls)
+        self.assertTrue(all(target == RECEIVER_HWND for target, *_ in user32.post_calls))
+        self.assertEqual(user32.send_calls, [])
 
     def test_trigger_owner_separation_oracle_and_native_route(self) -> None:
         """The native text owner has no FileIPC lifecycle or persistence dependency."""
@@ -392,10 +397,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         user32 = RecordingUser32()
         self._run_current_trigger(user32)
         self.assertEqual(
-            [call[0] for call in user32.send_calls],
+            [call[0] for call in user32.post_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
-        self.assertEqual(user32.post_calls, [])
+        self.assertEqual(user32.send_calls, [])
 
 
 if __name__ == "__main__":

@@ -669,7 +669,6 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
     """Return a bounded, exact-owner trigger for AutoCAD's command boundary."""
     def trigger(text: str) -> None:
         user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
 
         def set_native_signature(function: Any, argtypes: list[Any], restype: Any) -> None:
             try:
@@ -685,9 +684,7 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         show_window = user32.ShowWindow
         set_foreground_window = user32.SetForegroundWindow
         get_foreground_window = user32.GetForegroundWindow
-        send_message_timeout = user32.SendMessageTimeoutW
-        set_last_error = kernel32.SetLastError
-        get_last_error = kernel32.GetLastError
+        post_message = user32.PostMessageW
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         set_native_signature(
             get_window_thread_process_id,
@@ -708,20 +705,10 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         set_native_signature(set_foreground_window, [wintypes.HWND], wintypes.BOOL)
         set_native_signature(get_foreground_window, [], wintypes.HWND)
         set_native_signature(
-            send_message_timeout,
-            [
-                wintypes.HWND,
-                wintypes.UINT,
-                wintypes.WPARAM,
-                wintypes.LPARAM,
-                wintypes.UINT,
-                wintypes.UINT,
-                ctypes.POINTER(ctypes.c_size_t),
-            ],
-            ctypes.c_ssize_t,
+            post_message,
+            [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
+            wintypes.BOOL,
         )
-        set_native_signature(set_last_error, [wintypes.DWORD], None)
-        set_native_signature(get_last_error, [], wintypes.DWORD)
 
         def window_pid(window: int) -> int:
             pid = wintypes.DWORD()
@@ -772,14 +759,7 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
             if get_foreground_window() != hwnd:
                 raise MCPToolError("WINDOW_FOREGROUND_INVALID")
             code_unit = int.from_bytes(framed_text[offset:offset + 2], "little")
-            set_last_error(0)
-            result = ctypes.c_size_t()
-            if not send_message_timeout(
-                target, 0x0102, code_unit, 0, 0x0022, 1000, ctypes.byref(result)
-            ):
-                error = get_last_error()
-                if error == 1460:
-                    raise MCPTimeoutError("WINDOW_DELIVERY_TIMEOUT")
+            if not post_message(target, 0x0102, code_unit, 0):
                 raise MCPToolError("WINDOW_DELIVERY_FAILED")
     return trigger
 
