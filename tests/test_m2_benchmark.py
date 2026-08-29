@@ -43,7 +43,11 @@ from mcp_integration_lib.tests.test_m2_mechanical_benchmark_live import (
     _transport_counters,
     _transport_records,
 )
-from mcp_integration_lib.dotnet_ipc import DotNetIPCResultError
+from mcp_integration_lib.dotnet_ipc import (
+    DotNetIPCProtocolError,
+    DotNetIPCResultError,
+    DotNetIPCTimeoutError,
+)
 from mcp_integration_lib.dotnet_ipc import request_path, result_path
 from mcp_integration_lib.mcp_client import MCPTimeoutError, MCPToolError
 from mcp_integration_lib.reviewer2 import LiveReviewResult
@@ -77,6 +81,9 @@ def _review(status: str = "PASS", degraded: bool = False) -> dict[str, object]:
             "dimension": _counts(),
         },
         "degraded": degraded,
+        "geometry_checked": 1,
+        "mismatches": [],
+        "warnings": [],
     }
 
 
@@ -93,9 +100,14 @@ def _epoch(
     headless: dict[str, object] | None = None,
     live: dict[str, object] | None = None,
     hashes: dict[str, str] | None = None,
+    source_hashes: dict[str, str] | None = None,
+    staged_hashes: dict[str, str] | None = None,
     negative_probes: list[dict[str, object]] | None = None,
     cleanup: dict[str, object] | None = None,
     mutation: dict[str, object] | None = None,
+    human_captured: bool = True,
+    environment: dict[str, object] | None = None,
+    failure: dict[str, str] | None = None,
 ) -> dict[str, object]:
     return {
         "session_id": session_id,
@@ -110,6 +122,7 @@ def _epoch(
         "human": {
             "events": [_event("NETLOAD", 1)],
             "count": 1,
+            "captured": human_captured,
         },
         "headless": headless or _review(),
         "live": live or _review(),
@@ -118,10 +131,26 @@ def _epoch(
             {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0},
         ],
         "negative_probes": negative_probes or [
-            {"kind": "stale_evidence", "count": 1, "captured": True},
-            {"kind": "wrong_target", "count": 1, "captured": True},
+            {
+                "kind": "stale_evidence",
+                "count": 1,
+                "captured": True,
+                "operation": "load_build_evidence",
+                "category": "stale_evidence",
+                "detail": "stale evidence was rejected",
+            },
+            {
+                "kind": "wrong_target",
+                "count": 1,
+                "captured": True,
+                "operation": "health",
+                "category": "dotnet_result",
+                "detail": "active drawing identity was rejected",
+            },
         ],
-        "hashes": hashes or {"before": _SHA_A, "after": _SHA_A},
+        "hashes": hashes or {"before": _SHA_C, "after": _SHA_C},
+        "source_hashes": source_hashes or {"before": _SHA_B, "after": _SHA_B},
+        "staged_hashes": staged_hashes or {"before": _SHA_C, "after": _SHA_C},
         "mutation": mutation or {"save_attempts": 0, "repair_attempts": 0},
         "cleanup": cleanup or {
             "closed_without_save": True,
@@ -129,6 +158,14 @@ def _epoch(
             "staged_unchanged": True,
             "release_verified": True,
         },
+        "environment": environment or {
+            "captured": True,
+            "autocad_product": "AutoCAD Mechanical 2027",
+            "plugin_version": "1.0.0",
+            "python_version": "3.11.9",
+            "ipc_root_id": "ipc-root-001",
+        },
+        "failure": failure,
         "accepted_comparable": accepted_comparable,
         "success": success,
     }
@@ -191,7 +228,7 @@ def test_validate_accepts_closed_record() -> None:
         (lambda payload: payload["epochs"][0].__setitem__("wall_clock_seconds", -1), "non-negative"),
         (
             lambda payload: payload["epochs"][0]["headless"]["counts"]["dimension"].__setitem__("checked", 0),
-            "positive checked counts",
+            "positive geometry and checked counts",
         ),
     ],
 )
@@ -213,12 +250,25 @@ def test_validate_rejects_closed_record_drift(mutator, message) -> None:
         ("transport", [{"name": "fileipc", "attempts": False, "successes": 0, "failures": 0}], "non-negative integer"),
         ("accepted_comparable", "yes", "boolean"),
         ("hashes", {"before": _SHA_A, "after": _SHA_B}, "unchanged hashes"),
-        ("negative_probes", [{"kind": "stale_evidence", "count": 1, "captured": False}], "both negative probes"),
+        ("source_hashes", {"before": _SHA_B, "after": _SHA_D}, "source hashes binding"),
+        ("staged_hashes", {"before": _SHA_C, "after": _SHA_D}, "staged hashes binding"),
+        (
+            "negative_probes",
+            [{
+                "kind": "stale_evidence",
+                "count": 1,
+                "captured": False,
+                "operation": "load_build_evidence",
+                "category": "not_run",
+                "detail": "not run",
+            }],
+            "both negative probes",
+        ),
         ("negative_probes", [], "non-empty list"),
-        ("human", {"events": [_event("NETLOAD", 2)], "count": 1}, "sum of event counts"),
+        ("human", {"events": [_event("NETLOAD", 2)], "count": 1, "captured": True}, "sum of event counts"),
         ("cleanup", {"closed_without_save": False, "source_unchanged": True, "staged_unchanged": True, "release_verified": True}, "cleanup integrity"),
         ("mutation", {"save_attempts": 1, "repair_attempts": 0}, "forbids save or repair"),
-        ("headless", _review(status="NOT_CAPTURED"), "NOT_CAPTURED"),
+        ("headless", _review(status="NOT_CAPTURED"), "non-comparable status"),
         ("headless", _review(status="NOT_RUN"), "non-comparable status"),
         ("live", _review(status="SKIP"), "accepted_comparable"),
     ],
@@ -233,8 +283,95 @@ def test_epoch_oracle_rejects_required_false_green_cases(field, value, message) 
 def test_epoch_rejects_dimension_zero() -> None:
     payload = _epoch()
     payload["headless"]["counts"]["dimension"]["checked"] = 0
-    with pytest.raises(M2BenchmarkError, match="positive checked counts"):
+    with pytest.raises(M2BenchmarkError, match="positive geometry and checked counts"):
         validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_requires_explicit_human_capture() -> None:
+    payload = _epoch(human_captured=False)
+    with pytest.raises(M2BenchmarkError, match="human capture"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_requires_live_geometry_measurement() -> None:
+    payload = _epoch()
+    payload["live"]["geometry_checked"] = 0
+    with pytest.raises(M2BenchmarkError, match="geometry"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("source_hashes", {"before": _SHA_D, "after": _SHA_D}, "source hashes binding"),
+        ("staged_hashes", {"before": _SHA_D, "after": _SHA_D}, "staged hashes binding"),
+    ],
+)
+def test_accepted_epoch_requires_hash_pairs_to_match_fixture_binding(
+    field: str,
+    value: dict[str, str],
+    message: str,
+) -> None:
+    payload = _epoch()
+    payload[field] = value
+    with pytest.raises(M2BenchmarkError, match=message):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_non_comparable_not_captured_epoch_is_retained_for_diagnosis() -> None:
+    record = new_m2_record(
+        benchmark_id="m2-mechanical",
+        main_sha=_SHA_A,
+        profile_id=M2_MECHANICAL_BENCHMARK_PROFILE_ID,
+        profile_revision=M2_MECHANICAL_BENCHMARK_PROFILE_REVISION,
+        fixture_id="fixture-1",
+        fixture_input_sha256=_SHA_B,
+        staged_dxf_sha256=_SHA_C,
+    )
+    epoch = _epoch(accepted_comparable=False, success=False, human_captured=False)
+    epoch["headless"]["status"] = "NOT_CAPTURED"
+    epoch["live"]["status"] = "NOT_CAPTURED"
+    epoch["negative_probes"] = [
+        {
+            "kind": "stale_evidence",
+            "count": 0,
+            "captured": False,
+            "operation": "load_build_evidence",
+            "category": "not_run",
+            "detail": "not run",
+        },
+        {
+            "kind": "wrong_target",
+            "count": 0,
+            "captured": False,
+            "operation": "health",
+            "category": "not_run",
+            "detail": "not run",
+        },
+    ]
+    validated = validate_m2_record({
+        **record,
+        "aggregate": {
+            "comparable_epochs": 0,
+            "successful_epochs": 0,
+            "success_rate": None,
+            "representative": False,
+            "status": "BASELINE_ONLY",
+        },
+        "epochs": [epoch],
+    })
+    assert validated["epochs"][0]["accepted_comparable"] is False
+
+
+def test_failure_outcome_is_persisted_on_epoch() -> None:
+    payload = _epoch()
+    detail = _apply_failure_outcome(
+        payload,
+        MCPToolError("mechanical_bom failed"),
+        operation="mechanical_bom",
+        human_capture_observed=True,
+    )
+    assert payload["failure"] == detail
 
 
 def test_append_enforces_binding_and_pure_copy() -> None:
@@ -339,7 +476,21 @@ def test_aggregate_oracle_supports_baseline_non_representative_and_representativ
 
 
 def test_no_comparable_success_rate_is_none() -> None:
-    result = aggregate_m2_epochs([_epoch(accepted_comparable=False, success=False, headless=_review(status="SKIP"), live=_review(status="SKIP"), negative_probes=[{"kind": "stale_evidence", "count": 1, "captured": False}], cleanup={"closed_without_save": True, "source_unchanged": True, "staged_unchanged": True, "release_verified": True})])
+    result = aggregate_m2_epochs([_epoch(
+        accepted_comparable=False,
+        success=False,
+        headless=_review(status="SKIP"),
+        live=_review(status="SKIP"),
+        negative_probes=[{
+            "kind": "stale_evidence",
+            "count": 1,
+            "captured": False,
+            "operation": "load_build_evidence",
+            "category": "not_run",
+            "detail": "not run",
+        }],
+        cleanup={"closed_without_save": True, "source_unchanged": True, "staged_unchanged": True, "release_verified": True},
+    )])
     assert result["comparable_epochs"] == 0
     assert result["success_rate"] is None
 
@@ -414,6 +565,7 @@ def test_m2_fixture_build_evidence_round_trips_and_refuses_stale_dxf(tmp_path: P
 
 def test_cleanup_uses_distinct_source_and_staged_hashes(tmp_path: Path) -> None:
     fixture = build_m2_fixture(tmp_path / "fixture")
+    fixture_root = tmp_path / "fixture"
     drawing_root = tmp_path / "drawing-root"
     probe_root = tmp_path / "probe-root"
     drawing_root.mkdir()
@@ -448,6 +600,7 @@ def test_cleanup_uses_distinct_source_and_staged_hashes(tmp_path: Path) -> None:
         request_ids=(),
         drawing_root=drawing_root,
         probe_root=probe_root,
+        fixture_root=fixture_root,
         ipc_dir=ipc_dir,
         close_request_id="close-id",
     )
@@ -473,6 +626,7 @@ def test_cleanup_refuses_false_truth_when_input_or_staged_hashes_do_not_match(
     expected_staged: bool,
 ) -> None:
     fixture = build_m2_fixture(tmp_path / "fixture")
+    fixture_root = tmp_path / "fixture"
     drawing_root = tmp_path / "drawing-root"
     probe_root = tmp_path / "probe-root"
     drawing_root.mkdir()
@@ -511,6 +665,7 @@ def test_cleanup_refuses_false_truth_when_input_or_staged_hashes_do_not_match(
         request_ids=(),
         drawing_root=drawing_root,
         probe_root=probe_root,
+        fixture_root=fixture_root,
         ipc_dir=ipc_dir,
         close_request_id="close-id",
     )
@@ -525,8 +680,7 @@ def test_m2_human_events_json_parses_and_rejects_invalid_payloads() -> None:
 
     with pytest.raises(ValueError, match="human events"):
         _parse_human_events_json("")
-    with pytest.raises(ValueError, match="human events"):
-        _parse_human_events_json("[]")
+    assert _parse_human_events_json("[]") == []
     with pytest.raises(ValueError, match="human events"):
         _parse_human_events_json('[{"kind":"NETLOAD","count":0}]')
 
@@ -544,11 +698,29 @@ def test_m2_missing_capture_is_non_comparable_not_zero() -> None:
     epoch = _record()["epochs"][0]
     epoch["human"]["events"] = []
     epoch["human"]["count"] = 0
+    epoch["human"]["captured"] = False
     epoch["accepted_comparable"] = False
     epoch["success"] = False
     epoch["headless"]["status"] = "NOT_RUN"
     epoch["live"]["status"] = "NOT_RUN"
-    epoch["negative_probes"] = []
+    epoch["negative_probes"] = [
+        {
+            "kind": "stale_evidence",
+            "count": 0,
+            "captured": False,
+            "operation": "load_build_evidence",
+            "category": "not_run",
+            "detail": "not run",
+        },
+        {
+            "kind": "wrong_target",
+            "count": 0,
+            "captured": False,
+            "operation": "health",
+            "category": "not_run",
+            "detail": "not run",
+        },
+    ]
     epoch["cleanup"] = {
         "closed_without_save": True,
         "source_unchanged": True,
@@ -556,8 +728,18 @@ def test_m2_missing_capture_is_non_comparable_not_zero() -> None:
         "release_verified": True,
     }
 
-    with pytest.raises(M2BenchmarkError, match="non-empty list"):
-        validate_m2_record({**record, "epochs": [epoch]})
+    validated = validate_m2_record({
+        **record,
+        "aggregate": {
+            "comparable_epochs": 0,
+            "successful_epochs": 0,
+            "success_rate": None,
+            "representative": False,
+            "status": "BASELINE_ONLY",
+        },
+        "epochs": [epoch],
+    })
+    assert validated["epochs"][0]["human"]["captured"] is False
 
 
 def test_m2_live_prerequisites_do_not_hide_missing_record_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -589,14 +771,35 @@ def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_ep
     first["headless"] = _review()
     first["live"] = _review()
     first["negative_probes"] = [
-        {"kind": "stale_evidence", "count": 1, "captured": True},
-        {"kind": "wrong_target", "count": 1, "captured": True},
+        {
+            "kind": "stale_evidence",
+            "count": 1,
+            "captured": True,
+            "operation": "load_build_evidence",
+            "category": "stale_evidence",
+            "detail": "stale evidence was rejected",
+        },
+        {
+            "kind": "wrong_target",
+            "count": 1,
+            "captured": True,
+            "operation": "health",
+            "category": "dotnet_result",
+            "detail": "wrong target was rejected",
+        },
     ]
     first["cleanup"] = {
         "closed_without_save": True,
         "source_unchanged": True,
         "staged_unchanged": True,
         "release_verified": True,
+    }
+    first["environment"] = {
+        "captured": True,
+        "autocad_product": "AutoCAD Mechanical 2027",
+        "plugin_version": "1.0.0",
+        "python_version": "3.11.9",
+        "ipc_root_id": "ipc-root-001",
     }
     first["accepted_comparable"] = True
     first["success"] = True
@@ -637,6 +840,8 @@ def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_ep
             ),
             "dotnet_result",
         ),
+        (DotNetIPCTimeoutError("dotnet timed out"), "dotnet_timeout"),
+        (DotNetIPCProtocolError("invalid result identity"), "dotnet_protocol"),
     ],
 )
 def test_failure_after_human_capture_clears_false_green_and_retains_category(
@@ -668,6 +873,7 @@ def test_failure_after_human_capture_clears_false_green_and_retains_category(
     }
     assert epoch["accepted_comparable"] is False
     assert epoch["success"] is False
+    assert epoch["failure"] == detail
 
 
 def test_stale_evidence_probe_uses_real_refusal_and_observed_counter(tmp_path: Path) -> None:
@@ -862,13 +1068,23 @@ def test_missing_record_path_reports_skip_instead_of_false_green(
         _record_path_from_env()
 
 
+def test_relative_record_path_is_rejected_before_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(M2_MECHANICAL_BENCHMARK_RECORD_PATH_ENV, "relative-m2-record.json")
+    with pytest.raises(ValueError, match="absolute"):
+        _record_path_from_env()
+
+
 def test_cleanup_reports_observed_truth_and_removes_exact_directories(
     tmp_path: Path,
 ) -> None:
     drawing_root = tmp_path / "drawing-root"
     probe_root = tmp_path / "probe-root"
+    fixture_root = tmp_path / "fixture-root"
     drawing_root.mkdir()
     probe_root.mkdir()
+    fixture_root.mkdir()
     input_path = tmp_path / "input.json"
     input_path.write_text("fixture", encoding="utf-8")
     drawing_path = drawing_root / "staged.dxf"
@@ -912,6 +1128,7 @@ def test_cleanup_reports_observed_truth_and_removes_exact_directories(
         request_ids=("close-id",),
         drawing_root=drawing_root,
         probe_root=probe_root,
+        fixture_root=fixture_root,
         ipc_dir=ipc_dir,
         close_request_id="close-id",
     )
@@ -925,6 +1142,7 @@ def test_cleanup_reports_observed_truth_and_removes_exact_directories(
     assert close_calls == [(r"C:\temp\staged.dxf", True, False, "close-id")]
     assert not drawing_root.exists()
     assert not probe_root.exists()
+    assert not fixture_root.exists()
 
 
 def test_transport_helpers_preserve_observed_attempts() -> None:
@@ -982,4 +1200,7 @@ def test_copy_review_result_maps_live_review_metrics_without_inventing_counts() 
             "dimension": {"checked": 1, "mismatches": 0},
         },
         "degraded": False,
+        "geometry_checked": 2,
+        "mismatches": [],
+        "warnings": [],
     }

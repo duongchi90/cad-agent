@@ -134,6 +134,15 @@ class VerificationContractTests(unittest.TestCase):
         )
         self.assertGreater(script.index('AutoCAD live marker: NOT RUN'), live_gate)
 
+    def test_m2_opt_in_gate_is_separate_from_generic_autocad_live_gate(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('"m2_mechanical:', project)
+        self.assertIn("autocad_mechanical and not m2_mechanical", script)
+        self.assertIn('CAD_AGENT_M2_RECORD_PATH', script)
+        self.assertIn('CAD_AGENT_M2_SESSION_ID', script)
+        self.assertIn('CAD_AGENT_M2_HUMAN_EVENTS_JSON', script)
+
     def test_live_unavailability_is_not_reported_as_a_pass(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
         not_run = script.index('AutoCAD live marker: NOT RUN')

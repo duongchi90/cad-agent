@@ -23,6 +23,7 @@ addopts = ["--strict-markers", "-ra"]
 markers = [
   "real_data: requires an approved private CAD image or PDF outside Git",
   "autocad_mechanical: requires a running local AutoCAD Mechanical 2027 File IPC session",
+  "m2_mechanical: opt-in M2 Mechanical benchmark live epoch",
   "causal_red: intentional negative oracle that must fail independently of ordinary verification",
 ]
 filterwarnings = ["error"]

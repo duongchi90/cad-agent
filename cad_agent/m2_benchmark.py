@@ -110,7 +110,7 @@ def _validate_count_report(value: object, *, path: str) -> dict[str, Any]:
 
 def _validate_review_result(value: object, *, path: str) -> dict[str, Any]:
     item = _object(value, path=path)
-    _keys(item, path=path, required={"status", "counts", "degraded"})
+    _keys(item, path=path, required={"status", "counts", "degraded", "geometry_checked", "mismatches", "warnings"})
     if item["status"] not in _STATUS:
         _fail(f"{path}.status must be a recognized status")
     counts = _object(item["counts"], path=f"{path}.counts")
@@ -119,12 +119,17 @@ def _validate_review_result(value: object, *, path: str) -> dict[str, Any]:
     _validate_count_report(counts["component"], path=f"{path}.counts.component")
     _validate_count_report(counts["dimension"], path=f"{path}.counts.dimension")
     _bool(item["degraded"], path=f"{path}.degraded")
+    _non_negative_int(item["geometry_checked"], path=f"{path}.geometry_checked")
+    for field in ("mismatches", "warnings"):
+        values = item[field]
+        if not isinstance(values, list) or any(not isinstance(entry, str) for entry in values):
+            _fail(f"{path}.{field} must be a list of strings")
     return item
 
 
 def _validate_human(value: object, *, path: str) -> dict[str, Any]:
     item = _object(value, path=path)
-    _keys(item, path=path, required={"events", "count"})
+    _keys(item, path=path, required={"events", "count", "captured"})
     events = item["events"]
     if not isinstance(events, list):
         _fail(f"{path}.events must be a list")
@@ -139,16 +144,50 @@ def _validate_human(value: object, *, path: str) -> dict[str, Any]:
     count = _non_negative_int(item["count"], path=f"{path}.count")
     if count != total:
         _fail(f"{path}.count must equal the sum of event counts")
+    _bool(item["captured"], path=f"{path}.captured")
     return item
 
 
 def _validate_negative_probe(value: object, *, path: str) -> dict[str, Any]:
     item = _object(value, path=path)
-    _keys(item, path=path, required={"kind", "count", "captured"})
+    _keys(item, path=path, required={"kind", "count", "captured", "operation", "category", "detail"})
     if item["kind"] not in {"stale_evidence", "wrong_target"}:
         _fail(f"{path}.kind must be a negative probe kind")
     _non_negative_int(item["count"], path=f"{path}.count")
     _bool(item["captured"], path=f"{path}.captured")
+    _identifier(item["operation"], path=f"{path}.operation")
+    _identifier(item["category"], path=f"{path}.category")
+    if not isinstance(item["detail"], str):
+        _fail(f"{path}.detail must be a string")
+    return item
+
+
+def _validate_failure(value: object, *, path: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    item = _object(value, path=path)
+    _keys(item, path=path, required={"operation", "category", "message"})
+    _identifier(item["operation"], path=f"{path}.operation")
+    _identifier(item["category"], path=f"{path}.category")
+    if not isinstance(item["message"], str):
+        _fail(f"{path}.message must be a string")
+    return item
+
+
+def _validate_environment(value: object, *, path: str) -> dict[str, Any]:
+    item = _object(value, path=path)
+    _keys(
+        item,
+        path=path,
+        required={"captured", "autocad_product", "plugin_version", "python_version", "ipc_root_id"},
+    )
+    captured = _bool(item["captured"], path=f"{path}.captured")
+    for field in ("autocad_product", "plugin_version", "python_version", "ipc_root_id"):
+        value = item[field]
+        if value is not None and (not isinstance(value, str) or not value):
+            _fail(f"{path}.{field} must be a non-empty string or null")
+        if captured and value is None:
+            _fail(f"{path}.{field} is required when environment is captured")
     return item
 
 
@@ -192,6 +231,8 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
             "fixture_id",
             "fixture_input_sha256",
             "staged_dxf_sha256",
+            "source_hashes",
+            "staged_hashes",
             "started_at",
             "finished_at",
             "wall_clock_seconds",
@@ -201,6 +242,8 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
             "transport",
             "negative_probes",
             "hashes",
+            "environment",
+            "failure",
             "mutation",
             "cleanup",
             "accepted_comparable",
@@ -235,16 +278,20 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
     _keys(hashes, path=f"{path}.hashes", required={"before", "after"})
     before = _sha256(hashes["before"], path=f"{path}.hashes.before")
     after = _sha256(hashes["after"], path=f"{path}.hashes.after")
+    source_hashes = _object(item["source_hashes"], path=f"{path}.source_hashes")
+    _keys(source_hashes, path=f"{path}.source_hashes", required={"before", "after"})
+    source_before = _sha256(source_hashes["before"], path=f"{path}.source_hashes.before")
+    source_after = _sha256(source_hashes["after"], path=f"{path}.source_hashes.after")
+    staged_hashes = _object(item["staged_hashes"], path=f"{path}.staged_hashes")
+    _keys(staged_hashes, path=f"{path}.staged_hashes", required={"before", "after"})
+    staged_before = _sha256(staged_hashes["before"], path=f"{path}.staged_hashes.before")
+    staged_after = _sha256(staged_hashes["after"], path=f"{path}.staged_hashes.after")
+    environment = _validate_environment(item["environment"], path=f"{path}.environment")
+    failure = _validate_failure(item["failure"], path=f"{path}.failure")
     mutation = _validate_mutation(item["mutation"], path=f"{path}.mutation")
     cleanup = _validate_cleanup(item["cleanup"], path=f"{path}.cleanup")
     accepted = _bool(item["accepted_comparable"], path=f"{path}.accepted_comparable")
     success = _bool(item["success"], path=f"{path}.success")
-    if item["negative_probes"] == [] and accepted:
-        _fail(f"{path} accepted_comparable requires negative probes")
-    if item["negative_probes"] == [] and not accepted:
-        _fail(f"{path}.negative_probes must not be empty")
-    if item["headless"]["status"] == "NOT_CAPTURED" or item["live"]["status"] == "NOT_CAPTURED":
-        _fail(f"{path} comparable epoch cannot contain NOT_CAPTURED")
     if any(entry["status"] in {"NOT_CAPTURED", "SKIP", "NOT_RUN"} for entry in (item["headless"], item["live"])):
         if accepted:
             _fail(f"{path} accepted_comparable cannot be true for non-comparable status")
@@ -259,11 +306,11 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
             _fail(f"{path} accepted_comparable requires cleanup integrity")
     if success and not accepted:
         _fail(f"{path} success cannot be true when epoch is not accepted_comparable")
-    if success:
-        if not accepted:
-            _fail(f"{path} success requires accepted_comparable")
+    if accepted:
+        if not human["captured"]:
+            _fail(f"{path} accepted_comparable requires human capture")
         if headless["status"] != "PASS" or live["status"] != "PASS":
-            _fail(f"{path} success requires PASS reviews")
+            _fail(f"{path} accepted_comparable requires PASS reviews")
         if any(
             report["checked"] <= 0
             for report in (
@@ -274,8 +321,8 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
                 live["counts"]["component"],
                 live["counts"]["dimension"],
             )
-        ):
-            _fail(f"{path} success requires positive checked counts")
+        ) or live["geometry_checked"] <= 0:
+            _fail(f"{path} accepted_comparable requires positive geometry and checked counts")
         if any(report["mismatches"] != 0 for report in (
             headless["counts"]["primitive"],
             headless["counts"]["component"],
@@ -283,20 +330,38 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
             live["counts"]["primitive"],
             live["counts"]["component"],
             live["counts"]["dimension"],
-        )):
-            _fail(f"{path} success requires zero mismatches")
+        )) or headless["mismatches"] or live["mismatches"]:
+            _fail(f"{path} accepted_comparable requires zero mismatches")
         if live["degraded"]:
-            _fail(f"{path} success requires non-degraded live review")
+            _fail(f"{path} accepted_comparable requires non-degraded live review")
+        if failure is not None:
+            _fail(f"{path} accepted_comparable cannot contain failure evidence")
         if before != after:
-            _fail(f"{path} success requires unchanged hashes")
+            _fail(f"{path} accepted_comparable requires unchanged hashes")
+        if before != item["staged_dxf_sha256"] or after != item["staged_dxf_sha256"]:
+            _fail(f"{path} active drawing hashes binding does not match staged DXF")
+        if source_before != item["fixture_input_sha256"] or source_after != item["fixture_input_sha256"]:
+            _fail(f"{path} source hashes binding does not match fixture input")
+        if staged_before != item["staged_dxf_sha256"] or staged_after != item["staged_dxf_sha256"]:
+            _fail(f"{path} staged hashes binding does not match staged DXF")
+        if source_before != source_after:
+            _fail(f"{path} accepted_comparable requires unchanged source hashes")
+        if staged_before != staged_after:
+            _fail(f"{path} accepted_comparable requires unchanged staged hashes")
         if mutation["save_attempts"] or mutation["repair_attempts"]:
-            _fail(f"{path} success forbids save or repair attempts")
+            _fail(f"{path} accepted_comparable forbids save or repair attempts")
         if not cleanup["source_unchanged"] or not cleanup["staged_unchanged"] or not cleanup["release_verified"]:
-            _fail(f"{path} success requires cleanup integrity")
+            _fail(f"{path} accepted_comparable requires cleanup integrity")
         if captured <= 0:
-            _fail(f"{path} success requires negative probe capture")
+            _fail(f"{path} accepted_comparable requires negative probe capture")
         if kinds != {"stale_evidence", "wrong_target"}:
-            _fail(f"{path} success requires both negative probe kinds")
+            _fail(f"{path} accepted_comparable requires both negative probe kinds")
+        if any(probe["captured"] is False for probe in negative_probes):
+            _fail(f"{path} accepted_comparable requires negative probe capture")
+        if not environment["captured"]:
+            _fail(f"{path} accepted_comparable requires environment capture")
+    if success and not accepted:
+        _fail(f"{path} success requires accepted_comparable")
     return item
 
 

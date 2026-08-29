@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import platform
 import re
 import subprocess
 import shutil
@@ -21,7 +23,10 @@ from cad_agent.manifest import sha256_file
 from cad_agent.m2_benchmark import append_m2_epoch, new_m2_record, validate_m2_record
 from mcp_integration_lib.dotnet_ipc import (
     DotNetIPCClient,
+    DotNetIPCError,
+    DotNetIPCProtocolError,
     DotNetIPCResultError,
+    DotNetIPCTimeoutError,
     make_windows_dotnet_dispatch_trigger,
     normalize_windows_absolute_path,
     request_path,
@@ -88,9 +93,10 @@ def _record_path_from_env() -> Path:
         raise unittest.SkipTest(
             f"{M2_MECHANICAL_BENCHMARK_RECORD_PATH_ENV} is required for the opt-in M2 record path"
         )
-    path = Path(raw).expanduser().resolve()
+    path = Path(raw)
     if not path.is_absolute():
         raise ValueError("M2 record path must be absolute")
+    path = path.resolve()
     if path.is_relative_to(_REPO_ROOT):
         raise ValueError("M2 record path must be outside the repository")
     return path
@@ -103,8 +109,8 @@ def _parse_human_events_json(raw: str | None) -> list[dict[str, object]]:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ValueError("human events JSON is invalid") from exc
-    if not isinstance(payload, list) or not payload:
-        raise ValueError("human events JSON must be a non-empty list")
+    if not isinstance(payload, list):
+        raise ValueError("human events JSON must be a list")
     events: list[dict[str, object]] = []
     for index, entry in enumerate(payload):
         if not isinstance(entry, dict):
@@ -201,6 +207,9 @@ def _copy_review_result(
             },
         },
         "degraded": review.geometry_degraded,
+        "geometry_checked": review.geometry_checked,
+        "mismatches": list(review.mismatches),
+        "warnings": list(review.warnings),
     }
 
 
@@ -223,6 +232,9 @@ def _headless_epoch_result(fixture) -> dict[str, object]:
             },
         },
         "degraded": False,
+        "geometry_checked": int(metrics["primitive_checked_count"]),
+        "mismatches": [],
+        "warnings": [],
     }
 
 
@@ -232,6 +244,7 @@ def _initial_epoch(
     main_sha: str,
     fixture,
     human_events: list[dict[str, object]],
+    human_capture_observed: bool = True,
 ) -> dict[str, object]:
     return {
         "session_id": session_id,
@@ -246,6 +259,7 @@ def _initial_epoch(
         "human": {
             "events": human_events,
             "count": sum(int(event["count"]) for event in human_events),
+            "captured": human_capture_observed,
         },
         "headless": {
             "status": "NOT_RUN",
@@ -255,6 +269,9 @@ def _initial_epoch(
                 "dimension": {"checked": 0, "mismatches": 0},
             },
             "degraded": False,
+            "geometry_checked": 0,
+            "mismatches": [],
+            "warnings": [],
         },
         "live": {
             "status": "NOT_RUN",
@@ -264,16 +281,49 @@ def _initial_epoch(
                 "dimension": {"checked": 0, "mismatches": 0},
             },
             "degraded": False,
+            "geometry_checked": 0,
+            "mismatches": [],
+            "warnings": [],
         },
         "transport": [],
         "negative_probes": [
-            {"kind": "stale_evidence", "count": 0, "captured": False},
-            {"kind": "wrong_target", "count": 0, "captured": False},
+            {
+                "kind": "stale_evidence",
+                "count": 0,
+                "captured": False,
+                "operation": "load_build_evidence",
+                "category": "not_run",
+                "detail": "not run",
+            },
+            {
+                "kind": "wrong_target",
+                "count": 0,
+                "captured": False,
+                "operation": "health",
+                "category": "not_run",
+                "detail": "not run",
+            },
         ],
         "hashes": {
             "before": fixture.staged_dxf_sha256,
             "after": fixture.staged_dxf_sha256,
         },
+        "source_hashes": {
+            "before": fixture.input_sha256,
+            "after": fixture.input_sha256,
+        },
+        "staged_hashes": {
+            "before": fixture.staged_dxf_sha256,
+            "after": fixture.staged_dxf_sha256,
+        },
+        "environment": {
+            "captured": False,
+            "autocad_product": None,
+            "plugin_version": None,
+            "python_version": None,
+            "ipc_root_id": None,
+        },
+        "failure": None,
         "mutation": {"save_attempts": 0, "repair_attempts": 0},
         "cleanup": {
             "closed_without_save": False,
@@ -291,8 +341,14 @@ def _failure_category(error: Exception) -> str:
         return "timeout"
     if isinstance(error, MCPToolError):
         return "tool"
+    if isinstance(error, DotNetIPCTimeoutError):
+        return "dotnet_timeout"
+    if isinstance(error, DotNetIPCProtocolError):
+        return "dotnet_protocol"
     if isinstance(error, DotNetIPCResultError):
         return "dotnet_result"
+    if isinstance(error, AssertionError):
+        return "assertion"
     return "unknown"
 
 
@@ -306,11 +362,13 @@ def _apply_failure_outcome(
     _ = human_capture_observed
     epoch["accepted_comparable"] = False
     epoch["success"] = False
-    return {
+    detail = {
         "operation": operation,
         "category": _failure_category(error),
         "message": str(error),
     }
+    epoch["failure"] = detail
+    return detail
 
 
 def _exercise_stale_evidence_rejection(fixture, probe_root: Path) -> dict[str, object]:
@@ -326,12 +384,16 @@ def _exercise_stale_evidence_rejection(fixture, probe_root: Path) -> dict[str, o
             "kind": "stale_evidence",
             "count": 1,
             "captured": True,
+            "operation": "load_build_evidence",
+            "category": "stale_evidence",
             "detail": str(exc),
         }
     return {
         "kind": "stale_evidence",
         "count": 0,
         "captured": False,
+        "operation": "load_build_evidence",
+        "category": "missing_refusal",
         "detail": "stale evidence was not rejected",
     }
 
@@ -348,7 +410,7 @@ def _exercise_wrong_target_rejection(
     legacy_client.drawing_open(str(second_drawing_path))
     try:
         dotnet_client.health(intended_full_path, request_id=request_id)
-    except (MCPTimeoutError, MCPToolError, DotNetIPCResultError) as exc:
+    except (MCPTimeoutError, MCPToolError, DotNetIPCError) as exc:
         result = getattr(exc, "result", None)
         operation = str(result.get("operation", "health")) if isinstance(result, dict) else "health"
         return {
@@ -430,12 +492,14 @@ def _cleanup_epoch_artifacts(
     request_ids: tuple[str, ...],
     drawing_root: Path,
     probe_root: Path,
+    fixture_root: Path,
     ipc_dir: Path,
     close_request_id: str,
 ) -> dict[str, bool]:
     closed_without_save = False
     release_waited = False
     request_cleanup_ok = False
+    fixture_root_removed = False
     try:
         close = dotnet_client.close_disposable(
             expected_full_path,
@@ -472,6 +536,13 @@ def _cleanup_epoch_artifacts(
         pass
     except OSError:
         release_waited = False
+    try:
+        shutil.rmtree(fixture_root)
+        fixture_root_removed = True
+    except FileNotFoundError:
+        fixture_root_removed = True
+    except OSError:
+        release_waited = False
     release_verified = (
         closed_without_save
         and source_unchanged
@@ -480,6 +551,8 @@ def _cleanup_epoch_artifacts(
         and release_waited
         and not drawing_root.exists()
         and not probe_root.exists()
+        and fixture_root_removed
+        and not fixture_root.exists()
     )
     return {
         "closed_without_save": closed_without_save,
@@ -515,6 +588,7 @@ def _current_main_sha() -> str:
     "CAD_AGENT_AUTOCAD_HWND, and CAD_AGENT_AUTOCAD_LISP_PATH",
 )
 @pytest.mark.autocad_mechanical
+@pytest.mark.m2_mechanical
 class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
     def test_opt_in_m2_mechanical_epoch_is_read_only_and_reported(self) -> None:
         record_path = _record_path_from_env()
@@ -540,6 +614,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             main_sha=main_sha,
             fixture=fixture,
             human_events=human_events,
+            human_capture_observed=human_capture_observed,
         )
         epoch["headless"] = _headless_epoch_result(fixture)
 
@@ -603,6 +678,18 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             self.assertFalse(health["changed"])
             self.assertEqual(expected_full_path, health["drawing_full_path"])
             self.assertEqual([], health["errors"])
+            plugin_version = health.get("payload", {}).get("plugin_version")
+            self.assertIsInstance(plugin_version, str)
+            epoch["environment"] = {
+                "captured": True,
+                "autocad_product": "AutoCAD Mechanical 2027",
+                "plugin_version": plugin_version,
+                "python_version": platform.python_version(),
+                "ipc_root_id": "ipc-root-"
+                + hashlib.sha256(
+                    str(Path(dotnet_client.ipc_dir).resolve()).casefold().encode("utf-8")
+                ).hexdigest()[:16],
+            }
 
             bom_request_id = f"m2-bom-{time.time_ns()}"
             request_ids.append(bom_request_id)
@@ -660,11 +747,17 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                     "kind": str(stale_probe["kind"]),
                     "count": int(stale_probe["count"]),
                     "captured": bool(stale_probe["captured"]),
+                    "operation": str(stale_probe["operation"]),
+                    "category": str(stale_probe["category"]),
+                    "detail": str(stale_probe["detail"]),
                 },
                 {
                     "kind": str(wrong_target_probe["kind"]),
                     "count": int(wrong_target_probe["count"]),
                     "captured": bool(wrong_target_probe["captured"]),
+                    "operation": str(wrong_target_probe["operation"]),
+                    "category": str(wrong_target_probe["category"]),
+                    "detail": str(wrong_target_probe["detail"]),
                 },
             ]
 
@@ -673,7 +766,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             self.assertEqual(before_sha, sha256_file(drawing_path))
             self.assertEqual(fixture.input_sha256, sha256_file(fixture.input_path))
             self.assertEqual(fixture.staged_dxf_sha256, sha256_file(fixture.staged_dxf))
-        except (MCPTimeoutError, MCPToolError, DotNetIPCResultError) as exc:
+        except (MCPTimeoutError, MCPToolError, DotNetIPCError, AssertionError) as exc:
             operation = "m2-live"
             result = getattr(exc, "result", None)
             if isinstance(result, dict) and isinstance(result.get("operation"), str):
@@ -694,6 +787,16 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             epoch["finished_at"] = _timestamp()
             epoch["wall_clock_seconds"] = max(0.0, time.monotonic() - monotonic_started)
             epoch["hashes"]["after"] = sha256_file(drawing_path) if drawing_path.is_file() else before_sha
+            epoch["source_hashes"]["after"] = (
+                sha256_file(fixture.input_path)
+                if fixture.input_path.is_file()
+                else epoch["source_hashes"]["before"]
+            )
+            epoch["staged_hashes"]["after"] = (
+                sha256_file(fixture.staged_dxf)
+                if fixture.staged_dxf.is_file()
+                else epoch["staged_hashes"]["before"]
+            )
             cleanup = _cleanup_epoch_artifacts(
                 dotnet_client=locals().get("dotnet_client"),
                 input_path=fixture.input_path,
@@ -704,6 +807,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 request_ids=tuple(request_ids),
                 drawing_root=drawing_root,
                 probe_root=probe_root,
+                fixture_root=fixture_root,
                 ipc_dir=Path(os.environ["CAD_AGENT_DOTNET_IPC_DIR"]),
                 close_request_id=close_request_id,
             )

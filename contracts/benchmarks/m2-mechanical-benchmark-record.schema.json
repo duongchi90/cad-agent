@@ -79,11 +79,24 @@
     "negative_probe": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "count", "captured"],
+      "required": ["kind", "count", "captured", "operation", "category", "detail"],
       "properties": {
         "kind": {"type": "string", "enum": ["stale_evidence", "wrong_target"]},
         "count": {"$ref": "#/$defs/non_negative_integer"},
-        "captured": {"type": "boolean"}
+        "captured": {"type": "boolean"},
+        "operation": {"$ref": "#/$defs/identifier"},
+        "category": {"$ref": "#/$defs/identifier"},
+        "detail": {"type": "string"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "category", "message"],
+      "properties": {
+        "operation": {"$ref": "#/$defs/identifier"},
+        "category": {"$ref": "#/$defs/identifier"},
+        "message": {"type": "string"}
       }
     },
     "mutation": {
@@ -130,23 +143,39 @@
     "review_result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "counts", "degraded"],
+      "required": ["status", "counts", "degraded", "geometry_checked", "mismatches", "warnings"],
       "properties": {
         "status": {"$ref": "#/$defs/epoch_status"},
         "counts": {"$ref": "#/$defs/review_counts"},
-        "degraded": {"type": "boolean"}
+        "degraded": {"type": "boolean"},
+        "geometry_checked": {"$ref": "#/$defs/non_negative_integer"},
+        "mismatches": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}}
       }
     },
     "human": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["events", "count"],
+      "required": ["events", "count", "captured"],
       "properties": {
         "events": {
           "type": "array",
           "items": {"$ref": "#/$defs/event"}
         },
-        "count": {"$ref": "#/$defs/non_negative_integer"}
+        "count": {"$ref": "#/$defs/non_negative_integer"},
+        "captured": {"type": "boolean"}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["captured", "autocad_product", "plugin_version", "python_version", "ipc_root_id"],
+      "properties": {
+        "captured": {"type": "boolean"},
+        "autocad_product": {"type": ["string", "null"]},
+        "plugin_version": {"type": ["string", "null"]},
+        "python_version": {"type": ["string", "null"]},
+        "ipc_root_id": {"type": ["string", "null"]}
       }
     },
     "fixture": {
@@ -178,6 +207,8 @@
         "fixture_id",
         "fixture_input_sha256",
         "staged_dxf_sha256",
+        "source_hashes",
+        "staged_hashes",
         "started_at",
         "finished_at",
         "wall_clock_seconds",
@@ -187,6 +218,8 @@
         "transport",
         "negative_probes",
         "hashes",
+        "environment",
+        "failure",
         "mutation",
         "cleanup",
         "accepted_comparable",
@@ -199,6 +232,8 @@
         "fixture_id": {"$ref": "#/$defs/identifier"},
         "fixture_input_sha256": {"$ref": "#/$defs/sha256"},
         "staged_dxf_sha256": {"$ref": "#/$defs/sha256"},
+        "source_hashes": {"$ref": "#/$defs/hash_pair"},
+        "staged_hashes": {"$ref": "#/$defs/hash_pair"},
         "started_at": {"$ref": "#/$defs/timestamp"},
         "finished_at": {"$ref": "#/$defs/timestamp"},
         "wall_clock_seconds": {"$ref": "#/$defs/non_negative_number"},
@@ -214,6 +249,8 @@
           "items": {"$ref": "#/$defs/negative_probe"}
         },
         "hashes": {"$ref": "#/$defs/hash_pair"},
+        "environment": {"$ref": "#/$defs/environment"},
+        "failure": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/failure"}]},
         "mutation": {"$ref": "#/$defs/mutation"},
         "cleanup": {"$ref": "#/$defs/cleanup"},
         "accepted_comparable": {"type": "boolean"},
