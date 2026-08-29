@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -353,6 +354,17 @@ def test_m2_fixture_support_builds_deterministic_fixture(tmp_path: Path) -> None
         "dimension_mismatch_count": 0,
         "status": "PASS",
     }
+
+
+def test_m2_fixture_support_is_reproducible_across_fresh_roots(tmp_path: Path) -> None:
+    first = build_m2_fixture(tmp_path / "first")
+    second = build_m2_fixture(tmp_path / "second")
+
+    assert first.input_sha256 == second.input_sha256
+    assert first.staged_dxf_sha256 == second.staged_dxf_sha256
+    assert first.staged_dxf.read_bytes() == second.staged_dxf.read_bytes()
+    assert hashlib.sha256(first.staged_dxf.read_bytes()).hexdigest() == first.staged_dxf_sha256
+    assert hashlib.sha256(second.staged_dxf.read_bytes()).hexdigest() == second.staged_dxf_sha256
 
 
 def test_m2_fixture_build_evidence_round_trips_and_refuses_stale_dxf(tmp_path: Path) -> None:

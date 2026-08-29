@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,12 @@ from primitive_ir_lib.models import (
     TextData,
 )
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
+
+
+_FIXED_GUID = "{00000000-0000-0000-0000-000000000000}"
+_FIXED_EZDXF_BANNER = "1.4.4 @ 1970-01-01T00:00:00+00:00"
+_GUID_VALUE = re.compile(rb"\{[0-9A-Fa-f-]{36}\}")
+_EZDXF_BANNER = re.compile(rb"1\.4\.4 @ [^\r\n]+")
 
 
 @dataclass(frozen=True)
@@ -121,6 +128,11 @@ def _semantic_document() -> SemanticIRDocument:
     )
 
 
+def _normalize_staged_dxf_bytes(data: bytes) -> bytes:
+    normalized = _GUID_VALUE.sub(_FIXED_GUID.encode("ascii"), data)
+    return _EZDXF_BANNER.sub(_FIXED_EZDXF_BANNER.encode("ascii"), normalized)
+
+
 def headless_metrics(fixture: M2Fixture) -> dict[str, object]:
     review = fixture.headless
     return {
@@ -150,6 +162,7 @@ def build_m2_fixture(root: Path) -> M2Fixture:
     )
     headless = review_dxf(build)
     build_evidence = root / "build-evidence.json"
+    staged_dxf.write_bytes(_normalize_staged_dxf_bytes(staged_dxf.read_bytes()))
     write_build_evidence(build_evidence, build)
     loaded = load_build_evidence(build_evidence, staged_dxf)
     if loaded != build:
