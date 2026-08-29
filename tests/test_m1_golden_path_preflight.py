@@ -9,13 +9,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import cv2
-import numpy as np
-
 import cad_agent.cli as cad_cli
 from cad_agent.live import load_build_evidence
 from cad_agent.manifest import sha256_file
-from mcp_integration_lib.mcp_client import FakeMCPClient
+from tests.test_cad_agent_cli import _drawing as _write_synthetic_drawing
+from tests.test_cad_agent_live import FakeMCPClient
 
 
 _DXF_TYPE = {
@@ -57,13 +55,6 @@ class _ReadOnlyMechanicalClient(FakeMCPClient):
     def entity_erase(self, entity_id: str) -> None:
         self.mutation_calls += 1
         super().entity_erase(entity_id)
-
-
-def _write_synthetic_drawing(path: Path) -> None:
-    image = np.full((160, 240, 3), 255, dtype=np.uint8)
-    cv2.line(image, (20, 40), (220, 40), (0, 0, 0), 2)
-    cv2.circle(image, (120, 100), 18, (0, 0, 0), 2)
-    assert cv2.imwrite(str(path), image)
 
 
 def _preload_exact_build(client: FakeMCPClient, build: object) -> None:
