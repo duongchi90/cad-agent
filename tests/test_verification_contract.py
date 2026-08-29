@@ -67,10 +67,23 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("not real_data and not autocad_mechanical", script)
         self.assertIn("real-data-unavailable.xml", script)
         self.assertIn("autocad-mechanical-unavailable.xml", script)
+        self.assertIn("causal_red", script)
+        self.assertIn("causal-red.xml", script)
         self.assertIn("check_environment.py", script)
         self.assertIn("Get-FileHash", script)
         self.assertIn("ls-files", script)
         self.assertIn('Write-Host "Tesseract: $tesseractPath ($tesseractVersion)"', script)
+
+    def test_causal_red_is_an_independent_expected_failure_gate(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        self.assertIn("Invoke-CausalRedGate", script)
+        self.assertIn('-m "causal_red"', script)
+        self.assertIn('$causalRedExitCode -ne 1', script)
+        self.assertIn("Failures -ne 1", script)
+        self.assertIn(
+            '"not real_data and not autocad_mechanical and not causal_red"',
+            script,
+        )
 
     def test_verify_owns_release_x64_dotnet_solution_gates(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")

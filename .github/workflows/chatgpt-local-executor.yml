@@ -32,13 +32,14 @@ jobs:
   gate:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issue_comment' && github.event.issue.number == 131)
+      github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       should_run: ${{ steps.parse.outputs.should_run }}
       dispatch_comment_id: ${{ steps.parse.outputs.dispatch_comment_id }}
+      control_issue_number: ${{ steps.parse.outputs.control_issue_number }}
       control_seq: ${{ steps.parse.outputs.control_seq }}
       action: ${{ steps.parse.outputs.action }}
       expected_branch: ${{ steps.parse.outputs.expected_branch }}
@@ -86,6 +87,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       DISPATCH_COMMENT_ID: ${{ needs.gate.outputs.dispatch_comment_id }}
+      CONTROL_ISSUE_NUMBER: ${{ needs.gate.outputs.control_issue_number }}
       CONTROL_SEQ: ${{ needs.gate.outputs.control_seq }}
       LOCAL_ACTION: ${{ needs.gate.outputs.action }}
     steps:
@@ -101,7 +103,7 @@ jobs:
           RUN_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           EOF
           )
-          gh api "repos/${GITHUB_REPOSITORY}/issues/131/comments" -f body="$body" >/dev/null
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${CONTROL_ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
 
   execute-local:
     needs: [gate, acknowledge]
@@ -155,6 +157,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       DISPATCH_COMMENT_ID: ${{ needs.gate.outputs.dispatch_comment_id }}
+      CONTROL_ISSUE_NUMBER: ${{ needs.gate.outputs.control_issue_number }}
       CONTROL_SEQ: ${{ needs.gate.outputs.control_seq }}
       LOCAL_ACTION: ${{ needs.gate.outputs.action }}
       LOCAL_RESULT: ${{ needs.execute-local.result }}
@@ -174,4 +177,4 @@ jobs:
           NEXT_OWNER=SOL
           EOF
           )
-          gh api "repos/${GITHUB_REPOSITORY}/issues/131/comments" -f body="$body" >/dev/null
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${CONTROL_ISSUE_NUMBER}/comments" -f body="$body" >/dev/null

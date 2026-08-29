@@ -195,6 +195,25 @@ function Invoke-PytestGate {
     Write-Host "$Name JUnit: tests=$($totals.Tests) failures=$($totals.Failures) errors=$($totals.Errors) skipped=$($totals.Skipped)"
 }
 
+function Invoke-CausalRedGate {
+    param(
+        [string]$Name,
+        [string[]]$Targets,
+        [string]$JUnitPath
+    )
+    & $PythonExe -m pytest @Targets -q -m "causal_red" -p no:cacheprovider `
+        "--junitxml=$JUnitPath"
+    $causalRedExitCode = $LASTEXITCODE
+    if ($causalRedExitCode -ne 1) {
+        throw "$Name must fail with pytest exit code 1; found $causalRedExitCode."
+    }
+    $totals = Get-JUnitTotals -Path $JUnitPath
+    if ($totals.Tests -ne 1 -or $totals.Failures -ne 1 -or $totals.Errors -ne 0 -or $totals.Skipped -ne 0) {
+        throw "$Name produced invalid expected-RED JUnit totals: $($totals | Out-String)"
+    }
+    Write-Host "$Name JUnit: tests=$($totals.Tests) failures=$($totals.Failures) errors=$($totals.Errors) skipped=$($totals.Skipped)"
+}
+
 $snapshotBefore = Get-RepositorySnapshot
 $artifactDir = Join-Path $repoRoot ".artifacts\test-results"
 $junitPath = Join-Path $artifactDir "junit.xml"
@@ -202,6 +221,7 @@ $dotnetIpcJunitPath = Join-Path $artifactDir "dotnet-ipc.xml"
 $realDataJunitPath = Join-Path $artifactDir "real-data-unavailable.xml"
 $autocadJunitPath = Join-Path $artifactDir "autocad-mechanical-unavailable.xml"
 $autocadLiveJunitPath = Join-Path $artifactDir "autocad-mechanical-live.xml"
+$causalRedJunitPath = Join-Path $artifactDir "causal-red.xml"
 New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
 $tesseractDir = Split-Path -Parent $tesseractPath
@@ -231,9 +251,14 @@ try {
     Invoke-PytestGate `
         -Name "offline" `
         -Targets $testTargets `
-        -MarkerExpression "not real_data and not autocad_mechanical" `
+        -MarkerExpression "not real_data and not autocad_mechanical and not causal_red" `
         -JUnitPath $junitPath `
         -ExpectedState "offline"
+
+    Invoke-CausalRedGate `
+        -Name "causal RED negative oracle" `
+        -Targets @("mcp_integration_lib/tests/test_file_ipc_windows_trigger.py") `
+        -JUnitPath $causalRedJunitPath
 
     $specializedVariables = @(
         "CAD_AGENT_REAL_IMAGE",

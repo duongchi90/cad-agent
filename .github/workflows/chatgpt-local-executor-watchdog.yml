@@ -29,9 +29,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           since=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/issues/131/comments?per_page=100&since=${since}" \
-            | jq -s 'add' > "$RUNNER_TEMP/local-executor-comments.json"
+          for issue_number in 131 294; do
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100&since=${since}" \
+              | jq -s 'add' > "$RUNNER_TEMP/local-executor-comments-${issue_number}.json"
+          done
 
       - name: Evaluate 12-minute watchdog
         id: evaluate
@@ -47,17 +49,28 @@ jobs:
 
           from scripts.local_executor_event import find_watchdog_alert
 
-          comments = json.loads(
-              Path(os.environ["RUNNER_TEMP"], "local-executor-comments.json").read_text(
-                  encoding="utf-8"
+          runner_temp = Path(os.environ["RUNNER_TEMP"])
+          alerts = []
+          for issue_number in (131, 294):
+              comments = json.loads(
+                  runner_temp.joinpath(
+                      f"local-executor-comments-{issue_number}.json"
+                  ).read_text(encoding="utf-8")
               )
-          )
-          alert = find_watchdog_alert(
-              comments,
-              now=datetime.now(timezone.utc),
-              issue_number=131,
-              repository_owner=os.environ["REPOSITORY_OWNER"],
-              threshold_seconds=720,
+              alert = find_watchdog_alert(
+                  comments,
+                  now=datetime.now(timezone.utc),
+                  issue_number=issue_number,
+                  repository_owner=os.environ["REPOSITORY_OWNER"],
+                  threshold_seconds=720,
+              )
+              if alert is not None:
+                  alert["control_issue_number"] = issue_number
+                  alerts.append(alert)
+          alert = max(
+              alerts,
+              key=lambda item: int(str(item["dispatch_comment_id"])),
+              default=None,
           )
           print(json.dumps(alert or {}, sort_keys=True))
           PY
@@ -69,6 +82,7 @@ jobs:
           fi
           echo "should_alert=true" >> "$GITHUB_OUTPUT"
           echo "dispatch_comment_id=$dispatch_id" >> "$GITHUB_OUTPUT"
+          echo "control_issue_number=$(jq -r '.control_issue_number' "$RUNNER_TEMP/watchdog-result.json")" >> "$GITHUB_OUTPUT"
           echo "control_seq=$(jq -r '.control_seq' "$RUNNER_TEMP/watchdog-result.json")" >> "$GITHUB_OUTPUT"
           echo "state=$(jq -r '.state' "$RUNNER_TEMP/watchdog-result.json")" >> "$GITHUB_OUTPUT"
           echo "age_seconds=$(jq -r '.age_seconds' "$RUNNER_TEMP/watchdog-result.json")" >> "$GITHUB_OUTPUT"
@@ -79,6 +93,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DISPATCH_COMMENT_ID: ${{ steps.evaluate.outputs.dispatch_comment_id }}
+          CONTROL_ISSUE_NUMBER: ${{ steps.evaluate.outputs.control_issue_number }}
           CONTROL_SEQ: ${{ steps.evaluate.outputs.control_seq }}
           WATCHDOG_STATE: ${{ steps.evaluate.outputs.state }}
           AGE_SECONDS: ${{ steps.evaluate.outputs.age_seconds }}
@@ -96,4 +111,4 @@ jobs:
           NEXT_OWNER=SOL
           EOF
           )
-          gh api "repos/${GITHUB_REPOSITORY}/issues/131/comments" -f body="$body" >/dev/null
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${CONTROL_ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
