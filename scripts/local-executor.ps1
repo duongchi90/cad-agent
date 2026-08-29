@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param (
     [Parameter(Mandatory = $true)]
-    [ValidateSet("STATE_CHECK", "VERIFY")]
+    [ValidateSet("STATE_CHECK", "VERIFY", "SYNC_MAIN_STATE_CHECK")]
     [string]$Action,
 
     [Parameter(Mandatory = $true)]
@@ -39,7 +39,7 @@ $currentSha = (& git rev-parse HEAD | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $currentSha -notmatch '^[0-9a-f]{40}$') {
     throw "LOCAL_SHA_UNRESOLVED"
 }
-if ($currentSha -cne $ExpectedSha) {
+if ($Action -ne "SYNC_MAIN_STATE_CHECK" -and $currentSha -cne $ExpectedSha) {
     throw "LOCAL_SHA_MISMATCH"
 }
 
@@ -51,6 +51,61 @@ $resolvedArtifacts = (Resolve-Path -LiteralPath $ArtifactsDir).Path
 $status = @(& git -c core.quotepath=false status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0) {
     throw "LOCAL_GIT_STATUS_FAILED"
+}
+
+if ($Action -eq "SYNC_MAIN_STATE_CHECK") {
+    if ($ExpectedBranch -cne "main") {
+        throw "SYNC_MAIN_BRANCH_REQUIRED"
+    }
+    if ($status.Count -gt 0) {
+        throw "LOCAL_WORKTREE_DIRTY"
+    }
+
+    $originUrl = (& git config --get remote.origin.url | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($originUrl)) {
+        throw "ORIGIN_URL_UNRESOLVED"
+    }
+    if (
+        $originUrl -cne "https://github.com/duongchi90/cad-agent" -and
+        $originUrl -cne "https://github.com/duongchi90/cad-agent.git"
+    ) {
+        throw "ORIGIN_URL_MISMATCH"
+    }
+
+    $fetchOutput = @(& git fetch --no-tags origin main 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "FETCH_FAILED"
+    }
+
+    $remoteMainSha = (& git rev-parse refs/remotes/origin/main | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $remoteMainSha -cne $ExpectedSha) {
+        throw "REMOTE_MAIN_SHA_MISMATCH"
+    }
+
+    & git merge-base --is-ancestor $currentSha $ExpectedSha 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "LOCAL_HEAD_NOT_ANCESTOR_OF_REMOTE_MAIN"
+    }
+
+    if ($currentSha -cne $ExpectedSha) {
+        $mergeOutput = @(& git merge --ff-only origin/main 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw "FAST_FORWARD_FAILED"
+        }
+        $currentSha = (& git rev-parse HEAD | Out-String).Trim()
+    }
+
+    if ($currentSha -cne $ExpectedSha) {
+        throw "FINAL_HEAD_MISMATCH"
+    }
+
+    $status = @(& git -c core.quotepath=false status --porcelain=v1 --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) {
+        throw "LOCAL_GIT_STATUS_FAILED"
+    }
+    if ($status.Count -gt 0) {
+        throw "LOCAL_WORKTREE_DIRTY"
+    }
 }
 
 $acadProcesses = @(Get-Process -Name acad -ErrorAction SilentlyContinue)
@@ -75,7 +130,7 @@ $statePath = Join-Path $resolvedArtifacts "local-state.txt"
 $stateLines | Out-File -LiteralPath $statePath -Encoding utf8
 $stateLines | ForEach-Object { Write-Host $_ }
 
-if ($Action -eq "STATE_CHECK") {
+if ($Action -eq "STATE_CHECK" -or $Action -eq "SYNC_MAIN_STATE_CHECK") {
     Write-Host "LOCAL_EXECUTOR_RESULT=PASS"
     exit 0
 }

@@ -14,6 +14,7 @@ on:
         options:
           - STATE_CHECK
           - VERIFY
+          - SYNC_MAIN_STATE_CHECK
       expected_branch:
         description: 'Exact branch required on PC05 working repository'
         required: true
@@ -174,7 +175,7 @@ jobs:
           RUN_ID=${GITHUB_RUN_ID}
           RUN_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           ARTIFACT_NAME=local-state-${GITHUB_RUN_ID}
-          NEXT_OWNER=SOL
+          NEXT_OWNER=SOL_POOL
           EOF
           )
           gh api "repos/${GITHUB_REPOSITORY}/issues/${CONTROL_ISSUE_NUMBER}/comments" -f body="$body" >/dev/null

@@ -11,6 +11,7 @@ SHA = "1" * 40
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_EXECUTOR_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "chatgpt-local-executor.yml"
 WATCHDOG_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "chatgpt-local-executor-watchdog.yml"
+SYNC_ACTION = "SYNC_MAIN_STATE_CHECK"
 
 
 def dispatch_body(
@@ -73,6 +74,42 @@ class LocalExecutorEventTests(unittest.TestCase):
         )
         self.assertEqual(outputs["should_run"], "true")
         self.assertEqual(outputs["control_issue_number"], "294")
+
+    def test_accepts_typed_sync_main_action_on_active_ledger(self) -> None:
+        body = dispatch_body(
+            seq=344,
+            action=SYNC_ACTION,
+            branch="main",
+            sha=SHA,
+        )
+        request = parse_dispatch_comment(
+            body,
+            issue_number=294,
+            author_login=OWNER,
+            repository_owner=OWNER,
+        )
+        self.assertIsNotNone(request)
+        assert request is not None
+        self.assertEqual(request.control_issue_number, 294)
+        self.assertEqual(request.action, SYNC_ACTION)
+
+        outputs = gate_event(
+            "issue_comment",
+            {
+                "issue": {"number": 294},
+                "comment": {
+                    "id": 3440,
+                    "body": body,
+                    "user": {"login": OWNER},
+                },
+            },
+            repository_owner=OWNER,
+            run_id="344",
+        )
+        self.assertEqual(outputs["should_run"], "true")
+        self.assertEqual(outputs["control_issue_number"], "294")
+        self.assertEqual(outputs["control_seq"], "344")
+        self.assertEqual(outputs["action"], SYNC_ACTION)
 
     def test_rejects_foreign_stale_or_wrong_issue_dispatches(self) -> None:
         cases = [
@@ -281,6 +318,12 @@ class LocalExecutorEventTests(unittest.TestCase):
         self.assertIn("issues/${issue_number}/comments", watchdog_workflow)
         self.assertIn("control_issue_number", watchdog_workflow)
         self.assertNotIn("issues/131/comments", watchdog_workflow)
+
+    def test_workflow_allowlists_typed_sync_and_pool_terminal_owner(self) -> None:
+        executor_workflow = LOCAL_EXECUTOR_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("- SYNC_MAIN_STATE_CHECK", executor_workflow)
+        self.assertIn("NEXT_OWNER=SOL_POOL", executor_workflow)
+        self.assertNotIn("NEXT_OWNER=SOL\n", executor_workflow)
 
     def test_issue_comment_event_yields_dispatch_outputs(self) -> None:
         event = {
