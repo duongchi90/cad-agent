@@ -145,8 +145,9 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md` and
   the execution record is
   `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md`.
-- Current implementation head: `4ea3c09b82c34b90704029cbccdd3956e7d1cf05` on
-  `codex/m2-mechanical-benchmark`. Fresh-read `origin/main` on 2026-08-30
+- Current branch/evidence head: `f9b8f450f9bba0a98e6aee8da7438b0c1b6e425f` on
+  `codex/m2-mechanical-benchmark`; implementation commits through
+  `4ea3c09b82c34b90704029cbccdd3956e7d1cf05`. Fresh-read `origin/main` on 2026-08-30
   remains `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
 - Implemented scope on the current branch: the closed
   `m2-mechanical-benchmark-record-1.0` oracle, deterministic staged-DXF fixture
@@ -166,13 +167,15 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   -> exit `0`; the lock contract passed (`40` pinned distributions), the
   environment contract passed, Python 3.11 was selected, and the required
   Tesseract executable was present.
-- Fresh authoritative verifier attempt on this status task:
-  `.\scripts\verify.ps1` -> exit `1` before test gates because the tree was not
-  clean. The verifier named two untracked paths:
-  `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md` and
-  `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md`.
-  Therefore no fresh offline, dotnet, `real_data`, or `autocad_mechanical`
-  JUnit counts were produced by the authoritative verifier in this step.
+- Fresh authoritative verifier after the design/plan and boundary-baseline
+  commits: `.\scripts\verify.ps1` -> exit `0`. It reported offline JUnit
+  `tests=3024, failures=0, errors=0, skipped=0`, dotnet IPC JUnit
+  `tests=117, failures=0, errors=0, skipped=0`, .NET managed tests
+  `194 passed, 0 skipped`, real-data unavailable-state `2 skipped`, and
+  AutoCAD Mechanical unavailable-state `15 skipped`. The causal RED negative
+  oracle reported its expected one failing test and did not fail the verifier;
+  the final verifier result was `All checks passed` and the AutoCAD live marker
+  remained `NOT RUN`.
 - Benchmark record state: no benchmark record exists in evidence on this branch,
   so no record path or record hash is recorded here. Comparable epochs:
   `0`; successful comparable epochs: `0`; success rate: not recorded.
