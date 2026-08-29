@@ -138,6 +138,58 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   gate is `NOT RUN`. No hosted or contract-only result is a substitute for
   operator-controlled AutoCAD Mechanical evidence.
 
+## M2 Mechanical benchmark
+
+- State: **Partially verified; representative live acceptance NOT RUN**. The
+  approved design is
+  `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md` and
+  the execution record is
+  `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md`.
+- Current implementation head: `4ea3c09b82c34b90704029cbccdd3956e7d1cf05` on
+  `codex/m2-mechanical-benchmark`. Fresh-read `origin/main` on 2026-08-30
+  remains `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
+- Implemented scope on the current branch: the closed
+  `m2-mechanical-benchmark-record-1.0` oracle, deterministic staged-DXF fixture
+  normalization, and the opt-in read-only Mechanical benchmark harness. This
+  status step changed no implementation or schema.
+- Fresh focused verification on the implementation head:
+  `tests/test_m2_benchmark.py` plus
+  `mcp_integration_lib/tests/test_m2_mechanical_benchmark_live.py` ->
+  `70 passed, 1 skipped`; Ruff passed; `git diff --check` exited `0`. The one
+  skip is the explicit unavailable-state live prerequisite skip and is not live
+  acceptance evidence.
+- Fresh documentation check on this status task:
+  `pytest tests/test_documentation_contract.py -q -p no:cacheprovider` ->
+  exit `0`, `13 passed in 0.35s`.
+- Fresh bootstrap on this status task:
+  `.\scripts\bootstrap.ps1 -PythonExe C:\Program Files\Python311\python.exe`
+  -> exit `0`; the lock contract passed (`40` pinned distributions), the
+  environment contract passed, Python 3.11 was selected, and the required
+  Tesseract executable was present.
+- Fresh authoritative verifier attempt on this status task:
+  `.\scripts\verify.ps1` -> exit `1` before test gates because the tree was not
+  clean. The verifier named two untracked paths:
+  `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md` and
+  `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md`.
+  Therefore no fresh offline, dotnet, `real_data`, or `autocad_mechanical`
+  JUnit counts were produced by the authoritative verifier in this step.
+- Benchmark record state: no benchmark record exists in evidence on this branch,
+  so no record path or record hash is recorded here. Comparable epochs:
+  `0`; successful comparable epochs: `0`; success rate: not recorded.
+- Profile/setup state: `DRAFT_REFERENCE`; the benchmark records a
+  non-authoritative Mechanical review profile and does not create
+  `SETUP_VERIFIED` evidence.
+- Human-event, headless/live epoch, transport/result-identity, stale-evidence,
+  wrong-target, close-without-save, source-unchanged, staged-DXF-unchanged, and
+  request/result cleanup states remain **NOT RUN** at the benchmark-record level
+  because no live epoch was executed and no record was persisted on this branch.
+- Explicit gate states on this branch: benchmark `autocad_mechanical` live
+  acceptance **NOT RUN**; benchmark `real_data` **NOT RUN**; authoritative
+  release **NOT RUN** and still ineligible beyond `DRAFT_REFERENCE`.
+- MECH-1 boundary: **NOT RUN**. The measurement sidecar is absent because no
+  live benchmark epoch ran, so there is no measured payload/context evidence to
+  justify `observe_drawing` or `query_entities`.
+
 ## Personal Lean Pilot — Gate A Setup Lite
 
 - State: **Partially verified; Gate A remains open**. The personal-project
