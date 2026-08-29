@@ -41,6 +41,7 @@ class RecordingUser32:
         *,
         top_pid: int = 4242,
         child_specs: list[tuple[int, str]] | None = None,
+        visible_children: set[int] | None = None,
         child_pids: dict[int, int] | None = None,
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = 9001,
@@ -52,6 +53,11 @@ class RecordingUser32:
             [(101, "Palette"), (202, "MDIClient"), (303, "Other")]
             if child_specs is None
             else child_specs
+        )
+        self.visible_children = (
+            {child for child, _class_name in self.child_specs}
+            if visible_children is None
+            else visible_children
         )
         self.child_pids = child_pids or {}
         self.pid_sequences = pid_sequences or {}
@@ -75,6 +81,9 @@ class RecordingUser32:
     def GetClassNameW(self, child, buffer, _length):
         buffer.value = self.class_names[child]
         return len(buffer.value)
+
+    def IsWindowVisible(self, child):
+        return child in self.visible_children
 
     def GetWindowThreadProcessId(self, hwnd, pid_out):
         self.pid_calls.append(hwnd)
@@ -133,6 +142,22 @@ class WindowsDotNetTriggerTests(unittest.TestCase):
             user32.post_calls,
         )
         self.assertTrue(all(user32.post_results))
+
+    def test_selects_visible_owned_mdi_when_autoCAD_exposes_hidden_mdi_client(self) -> None:
+        user32 = RecordingUser32(
+            child_specs=[(404, "MDIClient"), (202, "MDIClient")],
+            visible_children={202},
+        )
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            factory(9001)()
+
+        command = "\x1b\x1bCADAGENT_DISPATCH\r"
+        self.assertEqual(
+            [(202, 0x0102, ord(character), 0) for character in command],
+            user32.post_calls,
+        )
 
     def test_requires_exact_owned_top_level_and_mdi_receiver_before_delivery(self) -> None:
         factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)

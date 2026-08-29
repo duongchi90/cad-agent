@@ -118,6 +118,7 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
         get_window_thread_process_id = user32.GetWindowThreadProcessId
         get_class_name = user32.GetClassNameW
         enum_child_windows = user32.EnumChildWindows
+        is_window_visible = user32.IsWindowVisible
         get_foreground_window = user32.GetForegroundWindow
         post_message = user32.PostMessageW
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -136,6 +137,7 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
             [wintypes.HWND, callback_type, wintypes.LPARAM],
             wintypes.BOOL,
         )
+        set_native_signature(is_window_visible, [wintypes.HWND], wintypes.BOOL)
         set_native_signature(get_foreground_window, [], wintypes.HWND)
         set_native_signature(
             post_message,
@@ -170,9 +172,10 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
             raise DotNetIPCError("WINDOW_ENUMERATION_FAILED")
 
         owned_mdi_clients = [child for child in mdi_clients if window_pid(child) == owner_pid]
-        if len(owned_mdi_clients) != 1:
+        visible_owned_mdi_clients = [child for child in owned_mdi_clients if is_window_visible(child)]
+        if len(visible_owned_mdi_clients) != 1:
             raise DotNetIPCError("WINDOW_RECEIVER_AMBIGUOUS")
-        target = owned_mdi_clients[0]
+        target = visible_owned_mdi_clients[0]
 
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise DotNetIPCError("WINDOW_IDENTITY_CHANGED")
