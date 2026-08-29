@@ -137,9 +137,13 @@ def test_validate_accepts_closed_record() -> None:
             profile_id="M2_MECHANICAL_REVIEW_V1",
             profile_revision="r1",
             fixture_id="fixture-1",
+            fixture_input_sha256=_SHA_B,
+            staged_dxf_sha256=_SHA_C,
         )
     )
     assert validated["schema_version"] == M2_BENCHMARK_SCHEMA_VERSION
+    assert validated["fixture_input_sha256"] == _SHA_B
+    assert validated["staged_dxf_sha256"] == _SHA_C
 
 
 @pytest.mark.parametrize(
@@ -228,6 +232,49 @@ def test_append_rejects_binding_mismatch() -> None:
 )
 def test_append_rejects_each_binding_mismatch(field: str, value: object) -> None:
     record = _record()
+    epoch = _epoch(**{field: value})
+    with pytest.raises(M2BenchmarkError, match="binding"):
+        append_m2_epoch(record, epoch)
+
+
+def test_new_record_with_real_hashes_appends_matching_epoch() -> None:
+    record = new_m2_record(
+        benchmark_id="m2-mechanical",
+        main_sha=_SHA_A,
+        profile_id="M2_MECHANICAL_REVIEW_V1",
+        profile_revision="r1",
+        fixture_id="fixture-1",
+        fixture_input_sha256=_SHA_B,
+        staged_dxf_sha256=_SHA_C,
+    )
+    epoch = _epoch(fixture_input_sha256=_SHA_B, staged_dxf_sha256=_SHA_C)
+    appended = append_m2_epoch(record, epoch)
+    assert appended["fixture_input_sha256"] == _SHA_B
+    assert appended["staged_dxf_sha256"] == _SHA_C
+    assert appended["epochs"][0]["fixture_input_sha256"] == _SHA_B
+    assert appended["epochs"][0]["staged_dxf_sha256"] == _SHA_C
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("main_sha", _SHA_D),
+        ("profile_revision", "r2"),
+        ("fixture_id", "fixture-2"),
+        ("fixture_input_sha256", _SHA_D),
+        ("staged_dxf_sha256", _SHA_D),
+    ],
+)
+def test_new_record_with_real_hashes_rejects_epoch_mismatches(field: str, value: object) -> None:
+    record = new_m2_record(
+        benchmark_id="m2-mechanical",
+        main_sha=_SHA_A,
+        profile_id="M2_MECHANICAL_REVIEW_V1",
+        profile_revision="r1",
+        fixture_id="fixture-1",
+        fixture_input_sha256=_SHA_B,
+        staged_dxf_sha256=_SHA_C,
+    )
     epoch = _epoch(**{field: value})
     with pytest.raises(M2BenchmarkError, match="binding"):
         append_m2_epoch(record, epoch)

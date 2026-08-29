@@ -385,7 +385,7 @@ def validate_m2_record(record: Mapping[str, object]) -> dict[str, object]:
     return payload
 
 
-def new_m2_record(*, benchmark_id: str, main_sha: str, profile_id: str, profile_revision: str, fixture_id: str) -> dict[str, object]:
+def new_m2_record(*, benchmark_id: str, main_sha: str, profile_id: str, profile_revision: str, fixture_id: str, fixture_input_sha256: str, staged_dxf_sha256: str) -> dict[str, object]:
     record = {
         "schema_version": M2_BENCHMARK_SCHEMA_VERSION,
         "benchmark_id": benchmark_id,
@@ -393,8 +393,8 @@ def new_m2_record(*, benchmark_id: str, main_sha: str, profile_id: str, profile_
         "profile_id": profile_id,
         "profile_revision": profile_revision,
         "fixture_id": fixture_id,
-        "fixture_input_sha256": "b" * 64,
-        "staged_dxf_sha256": "c" * 64,
+        "fixture_input_sha256": fixture_input_sha256,
+        "staged_dxf_sha256": staged_dxf_sha256,
         "aggregate": {
             "comparable_epochs": 0,
             "successful_epochs": 0,
