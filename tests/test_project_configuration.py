@@ -25,7 +25,10 @@ class ProjectConfigurationTests(unittest.TestCase):
     def test_pytest_registers_specialized_gates_and_errors_on_warnings(self) -> None:
         pytest_config = self.config["tool"]["pytest"]["ini_options"]
         marker_names = {entry.split(":", 1)[0] for entry in pytest_config["markers"]}
-        self.assertEqual({"real_data", "autocad_mechanical", "causal_red"}, marker_names)
+        self.assertEqual(
+            {"real_data", "autocad_mechanical", "m2_mechanical", "causal_red"},
+            marker_names,
+        )
         self.assertIn("--strict-markers", pytest_config["addopts"])
         self.assertEqual(["error"], pytest_config["filterwarnings"])
 
