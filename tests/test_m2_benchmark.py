@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import hashlib
+import unittest
 from pathlib import Path
 
 import pytest
@@ -20,10 +21,29 @@ from cad_agent.m2_benchmark import (
 from mcp_integration_lib.tests.test_m2_mechanical_benchmark_live import (
     M2_MECHANICAL_BENCHMARK_PROFILE_ID,
     M2_MECHANICAL_BENCHMARK_PROFILE_REVISION,
+    M2_MECHANICAL_BENCHMARK_HUMAN_EVENTS_ENV,
+    M2_MECHANICAL_BENCHMARK_RECORD_PATH_ENV,
+    M2_MECHANICAL_BENCHMARK_SESSION_ID_ENV,
+    _apply_failure_outcome,
+    _cleanup_epoch_artifacts,
+    _copy_review_result,
+    _exercise_stale_evidence_rejection,
+    _exercise_wrong_target_rejection,
+    _initial_epoch,
     _load_existing_m2_record,
+    _missing_m2_opt_in_inputs,
+    _persist_epoch_record,
     _m2_live_prerequisites_available,
     _parse_human_events_json,
+    _record_path_from_env,
+    _request_artifacts_removed,
+    _transport_counters,
+    _transport_records,
 )
+from mcp_integration_lib.dotnet_ipc import DotNetIPCResultError
+from mcp_integration_lib.dotnet_ipc import request_path, result_path
+from mcp_integration_lib.mcp_client import MCPTimeoutError, MCPToolError
+from mcp_integration_lib.reviewer2 import LiveReviewResult
 from tests.m2_benchmark_support import build_m2_fixture, headless_metrics
 
 
@@ -443,3 +463,299 @@ def test_m2_existing_record_from_other_main_sha_is_refused(tmp_path: Path) -> No
     record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="main SHA"):
         _load_existing_m2_record(record_path, main_sha=_SHA_D)
+
+
+def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_epochs(
+    tmp_path: Path,
+) -> None:
+    fixture = build_m2_fixture(tmp_path / "fixture")
+    record_path = tmp_path / "m2-record.json"
+    first = _initial_epoch(
+        session_id="session-a",
+        main_sha=_SHA_A,
+        fixture=fixture,
+        human_events=[_event("NETLOAD", 1)],
+    )
+    first["headless"] = _review()
+    first["live"] = _review()
+    first["negative_probes"] = [
+        {"kind": "stale_evidence", "count": 1, "captured": True},
+        {"kind": "wrong_target", "count": 1, "captured": True},
+    ]
+    first["cleanup"] = {
+        "closed_without_save": True,
+        "source_unchanged": True,
+        "staged_unchanged": True,
+        "release_verified": True,
+    }
+    first["accepted_comparable"] = True
+    first["success"] = True
+
+    persisted = _persist_epoch_record(
+        record_path,
+        main_sha=_SHA_A,
+        fixture=fixture,
+        epoch=first,
+    )
+    assert validate_m2_record(persisted) == persisted
+    assert json.loads(record_path.read_text(encoding="utf-8")) == persisted
+
+    second = copy.deepcopy(first)
+    second["session_id"] = "session-b"
+    second["started_at"] = "2026-08-30T10:06:00Z"
+    second["finished_at"] = "2026-08-30T10:07:00Z"
+    appended = _persist_epoch_record(
+        record_path,
+        main_sha=_SHA_A,
+        fixture=fixture,
+        epoch=second,
+    )
+    assert len(appended["epochs"]) == 2
+    assert appended["epochs"][0]["session_id"] == "session-a"
+    assert appended["epochs"][1]["session_id"] == "session-b"
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        (MCPTimeoutError("timed out"), "timeout"),
+        (MCPToolError("mechanical_bom failed"), "tool"),
+        (
+            DotNetIPCResultError(
+                "wrong target",
+                result={"operation": "mechanical_bom", "errors": ["WRONG_TARGET"]},
+            ),
+            "dotnet_result",
+        ),
+    ],
+)
+def test_failure_after_human_capture_clears_false_green_and_retains_category(
+    tmp_path: Path,
+    error: Exception,
+    category: str,
+) -> None:
+    fixture = build_m2_fixture(tmp_path / "fixture")
+    epoch = _initial_epoch(
+        session_id="session-a",
+        main_sha=_SHA_A,
+        fixture=fixture,
+        human_events=[_event("NETLOAD", 1)],
+    )
+    epoch["accepted_comparable"] = True
+    epoch["success"] = True
+
+    detail = _apply_failure_outcome(
+        epoch,
+        error,
+        operation="mechanical_bom",
+        human_capture_observed=True,
+    )
+
+    assert detail == {
+        "operation": "mechanical_bom",
+        "category": category,
+        "message": str(error),
+    }
+    assert epoch["accepted_comparable"] is False
+    assert epoch["success"] is False
+
+
+def test_stale_evidence_probe_uses_real_refusal_and_observed_counter(tmp_path: Path) -> None:
+    fixture = build_m2_fixture(tmp_path / "fixture")
+    probe = _exercise_stale_evidence_rejection(fixture, tmp_path / "probe")
+
+    assert probe["kind"] == "stale_evidence"
+    assert probe["captured"] is True
+    assert probe["count"] == 1
+    assert "SHA-256" in probe["detail"]
+
+
+def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: Path) -> None:
+    observed_paths: list[str] = []
+
+    class FakeLegacyClient:
+        def drawing_open(self, drawing_path: str) -> None:
+            observed_paths.append(drawing_path)
+
+    class FakeDotNetClient:
+        def health(self, drawing_full_path: str, *, request_id: str) -> dict[str, object]:
+            raise DotNetIPCResultError(
+                "wrong target identity",
+                result={
+                    "operation": "health",
+                    "drawing_full_path": drawing_full_path,
+                    "request_id": request_id,
+                    "errors": ["WRONG_TARGET_IDENTITY"],
+                },
+            )
+
+    intended = tmp_path / "intended.dxf"
+    wrong = tmp_path / "wrong.dxf"
+    intended.write_text("intended", encoding="utf-8")
+    wrong.write_text("wrong", encoding="utf-8")
+
+    probe = _exercise_wrong_target_rejection(
+        legacy_client=FakeLegacyClient(),
+        dotnet_client=FakeDotNetClient(),
+        intended_full_path=r"C:\temp\intended.dxf",
+        second_drawing_path=wrong,
+        reopen_drawing_path=intended,
+        request_id="wrong-target-probe",
+    )
+
+    assert probe["kind"] == "wrong_target"
+    assert probe["captured"] is True
+    assert probe["count"] == 1
+    assert probe["operation"] == "health"
+    assert probe["category"] == "dotnet_result"
+    assert observed_paths == [str(wrong), str(intended)]
+
+
+def test_missing_opt_in_inputs_are_reported_explicitly_without_false_green(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    record_path = tmp_path / "m2-record.json"
+    monkeypatch.setenv(M2_MECHANICAL_BENCHMARK_RECORD_PATH_ENV, str(record_path))
+    monkeypatch.delenv(M2_MECHANICAL_BENCHMARK_SESSION_ID_ENV, raising=False)
+    monkeypatch.delenv(M2_MECHANICAL_BENCHMARK_HUMAN_EVENTS_ENV, raising=False)
+
+    missing = _missing_m2_opt_in_inputs()
+
+    assert missing == [
+        M2_MECHANICAL_BENCHMARK_SESSION_ID_ENV,
+        M2_MECHANICAL_BENCHMARK_HUMAN_EVENTS_ENV,
+    ]
+
+
+def test_missing_record_path_reports_skip_instead_of_false_green(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(M2_MECHANICAL_BENCHMARK_RECORD_PATH_ENV, raising=False)
+    monkeypatch.setenv(M2_MECHANICAL_BENCHMARK_SESSION_ID_ENV, "session-a")
+    monkeypatch.setenv(
+        M2_MECHANICAL_BENCHMARK_HUMAN_EVENTS_ENV,
+        '[{"kind":"NETLOAD","count":1}]',
+    )
+
+    with pytest.raises(unittest.SkipTest, match="record path"):
+        _record_path_from_env()
+
+
+def test_cleanup_reports_observed_truth_and_removes_exact_directories(
+    tmp_path: Path,
+) -> None:
+    drawing_root = tmp_path / "drawing-root"
+    probe_root = tmp_path / "probe-root"
+    drawing_root.mkdir()
+    probe_root.mkdir()
+    drawing_path = drawing_root / "staged.dxf"
+    drawing_path.write_text("fixture", encoding="utf-8")
+    drawing_sha = sha256_file(drawing_path)
+
+    ipc_dir = tmp_path / "ipc"
+    ipc_dir.mkdir()
+    for request_id in ("close-id",):
+        (ipc_dir / request_path(ipc_dir, request_id).name).write_text("req", encoding="utf-8")
+        (ipc_dir / result_path(ipc_dir, request_id).name).write_text("res", encoding="utf-8")
+
+    close_calls: list[tuple[str, bool, bool, str]] = []
+
+    class FakeDotNetClient:
+        def close_disposable(
+            self,
+            drawing_full_path: str,
+            *,
+            disposable: bool,
+            save_changes: bool,
+            request_id: str,
+        ) -> dict[str, object]:
+            close_calls.append((drawing_full_path, disposable, save_changes, request_id))
+            request_path(ipc_dir, request_id).unlink(missing_ok=True)
+            result_path(ipc_dir, request_id).unlink(missing_ok=True)
+            return {
+                "success": True,
+                "changed": False,
+                "payload": {"closed_without_saving": True},
+            }
+
+    cleanup = _cleanup_epoch_artifacts(
+        dotnet_client=FakeDotNetClient(),
+        drawing_path=drawing_path,
+        expected_full_path=r"C:\temp\staged.dxf",
+        before_source_sha256=drawing_sha,
+        before_staged_sha256=drawing_sha,
+        request_ids=("close-id",),
+        drawing_root=drawing_root,
+        probe_root=probe_root,
+        ipc_dir=ipc_dir,
+        close_request_id="close-id",
+    )
+
+    assert cleanup == {
+        "closed_without_save": True,
+        "source_unchanged": True,
+        "staged_unchanged": True,
+        "release_verified": True,
+    }
+    assert close_calls == [(r"C:\temp\staged.dxf", True, False, "close-id")]
+    assert not drawing_root.exists()
+    assert not probe_root.exists()
+
+
+def test_transport_helpers_preserve_observed_attempts() -> None:
+    counters = _transport_counters()
+    counters["fileipc"]["attempts"] += 1
+    counters["fileipc"]["successes"] += 1
+    counters["dotnetipc"]["attempts"] += 2
+    counters["dotnetipc"]["failures"] += 1
+    counters["live_review"]["attempts"] += 1
+    counters["live_review"]["successes"] += 1
+
+    assert _transport_records(counters) == [
+        {"name": "fileipc", "attempts": 1, "successes": 1, "failures": 0},
+        {"name": "dotnetipc", "attempts": 2, "successes": 0, "failures": 1},
+        {"name": "live_review", "attempts": 1, "successes": 1, "failures": 0},
+    ]
+
+
+def test_request_artifacts_removed_requires_every_request_and_result(tmp_path: Path) -> None:
+    ipc_dir = tmp_path / "ipc"
+    ipc_dir.mkdir()
+    request_ids = ("one", "two")
+    for request_id in request_ids:
+        request_path(ipc_dir, request_id).write_text("req", encoding="utf-8")
+        result_path(ipc_dir, request_id).write_text("res", encoding="utf-8")
+
+    assert _request_artifacts_removed(ipc_dir, request_ids) is False
+
+    for request_id in request_ids:
+        request_path(ipc_dir, request_id).unlink()
+        result_path(ipc_dir, request_id).unlink()
+
+    assert _request_artifacts_removed(ipc_dir, request_ids) is True
+
+
+def test_copy_review_result_maps_live_review_metrics_without_inventing_counts() -> None:
+    live = LiveReviewResult(
+        passed=True,
+        structural_checked=3,
+        geometry_checked=2,
+        dimension_checked=1,
+        geometry_degraded=False,
+        mismatches=[],
+        warnings=[],
+    )
+    bom = {"payload": {"component_count": 1}}
+
+    copied = _copy_review_result(live, component_checked=1, component_mismatches=0)
+
+    assert copied == {
+        "status": "PASS",
+        "counts": {
+            "primitive": {"checked": 3, "mismatches": 0},
+            "component": {"checked": 1, "mismatches": 0},
+            "dimension": {"checked": 1, "mismatches": 0},
+        },
+        "degraded": False,
+    }
