@@ -17,6 +17,13 @@ from cad_agent.m2_benchmark import (
     new_m2_record,
     validate_m2_record,
 )
+from mcp_integration_lib.tests.test_m2_mechanical_benchmark_live import (
+    M2_MECHANICAL_BENCHMARK_PROFILE_ID,
+    M2_MECHANICAL_BENCHMARK_PROFILE_REVISION,
+    _load_existing_m2_record,
+    _m2_live_prerequisites_available,
+    _parse_human_events_json,
+)
 from tests.m2_benchmark_support import build_m2_fixture, headless_metrics
 
 
@@ -380,3 +387,59 @@ def test_m2_fixture_build_evidence_round_trips_and_refuses_stale_dxf(tmp_path: P
         load_build_evidence(fixture.build_evidence, copied)
 
     assert fixture.build_evidence.read_text(encoding="utf-8").strip().startswith("{")
+
+
+def test_m2_human_events_json_parses_and_rejects_invalid_payloads() -> None:
+    events = _parse_human_events_json('[{"kind":"NETLOAD","count":1,"detail":"manual"}]')
+    assert events == [{"kind": "NETLOAD", "count": 1, "detail": "manual"}]
+
+    with pytest.raises(ValueError, match="human events"):
+        _parse_human_events_json("")
+    with pytest.raises(ValueError, match="human events"):
+        _parse_human_events_json("[]")
+    with pytest.raises(ValueError, match="human events"):
+        _parse_human_events_json('[{"kind":"NETLOAD","count":0}]')
+
+
+def test_m2_missing_capture_is_non_comparable_not_zero() -> None:
+    record = new_m2_record(
+        benchmark_id="m2-mechanical",
+        main_sha=_SHA_A,
+        profile_id=M2_MECHANICAL_BENCHMARK_PROFILE_ID,
+        profile_revision=M2_MECHANICAL_BENCHMARK_PROFILE_REVISION,
+        fixture_id="fixture-1",
+        fixture_input_sha256=_SHA_B,
+        staged_dxf_sha256=_SHA_C,
+    )
+    epoch = _record()["epochs"][0]
+    epoch["human"]["events"] = []
+    epoch["human"]["count"] = 0
+    epoch["accepted_comparable"] = False
+    epoch["success"] = False
+    epoch["headless"]["status"] = "NOT_RUN"
+    epoch["live"]["status"] = "NOT_RUN"
+    epoch["negative_probes"] = []
+    epoch["cleanup"] = {
+        "closed_without_save": True,
+        "source_unchanged": True,
+        "staged_unchanged": True,
+        "release_verified": True,
+    }
+
+    with pytest.raises(M2BenchmarkError, match="non-empty list"):
+        validate_m2_record({**record, "epochs": [epoch]})
+
+
+def test_m2_live_prerequisites_do_not_hide_missing_record_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CAD_AGENT_M2_RECORD_PATH", raising=False)
+    monkeypatch.delenv("CAD_AGENT_M2_SESSION_ID", raising=False)
+    monkeypatch.delenv("CAD_AGENT_M2_HUMAN_EVENTS_JSON", raising=False)
+    assert _m2_live_prerequisites_available() is False
+
+
+def test_m2_existing_record_from_other_main_sha_is_refused(tmp_path: Path) -> None:
+    record_path = tmp_path / "m2-record.json"
+    record = _record()
+    record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    with pytest.raises(ValueError, match="main SHA"):
+        _load_existing_m2_record(record_path, main_sha=_SHA_D)
