@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +16,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_EXECUTOR_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "chatgpt-local-executor.yml"
 WATCHDOG_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "chatgpt-local-executor-watchdog.yml"
 SYNC_ACTION = "SYNC_MAIN_STATE_CHECK"
+
+
+def workflow_step_script(workflow_path: Path, step_name: str) -> str:
+    workflow = workflow_path.read_text(encoding="utf-8")
+    step_marker = f"      - name: {step_name}\n"
+    run_marker = "        run: |\n"
+    _, step_body = workflow.split(step_marker, maxsplit=1)
+    _, script_body = step_body.split(run_marker, maxsplit=1)
+    script_lines = []
+    for line in script_body.splitlines():
+        if not line.startswith("          "):
+            break
+        script_lines.append(line[10:])
+    return "\n".join(script_lines)
 
 
 def dispatch_body(
@@ -324,6 +342,82 @@ class LocalExecutorEventTests(unittest.TestCase):
         self.assertIn("- SYNC_MAIN_STATE_CHECK", executor_workflow)
         self.assertIn("NEXT_OWNER=SOL_POOL", executor_workflow)
         self.assertNotIn("NEXT_OWNER=SOL\n", executor_workflow)
+
+    def test_workflow_invokes_executor_with_managed_repository(self) -> None:
+        script = workflow_step_script(
+            LOCAL_EXECUTOR_WORKFLOW,
+            "Execute allowlisted local action",
+        )
+        with tempfile.TemporaryDirectory(prefix="cad-agent-workflow-route-") as tmp:
+            working_directory = Path(tmp)
+            scripts_directory = working_directory / "scripts"
+            scripts_directory.mkdir()
+            capture_path = working_directory / "invocation.json"
+            (scripts_directory / "local-executor.ps1").write_text(
+                """[CmdletBinding()]
+param (
+    [string]$Action,
+    [string]$RepoPath,
+    [string]$ExpectedBranch,
+    [string]$ExpectedSha,
+    [string]$ArtifactsDir
+)
+[pscustomobject]@{
+    Action = $Action
+    RepoPath = $RepoPath
+    ExpectedBranch = $ExpectedBranch
+    ExpectedSha = $ExpectedSha
+    ArtifactsDir = $ArtifactsDir
+    GitConfigCount = $env:GIT_CONFIG_COUNT
+    GitConfigKey = $env:GIT_CONFIG_KEY_0
+    GitConfigValue = $env:GIT_CONFIG_VALUE_0
+} | ConvertTo-Json | Set-Content -LiteralPath $env:CAPTURE_PATH -Encoding utf8
+""",
+                encoding="utf-8",
+            )
+            persistent_config = working_directory / "git-global-config"
+            environment = {
+                **{
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith("GIT_CONFIG_")
+                },
+                "CAPTURE_PATH": str(capture_path),
+                "EXPECTED_BRANCH": "main",
+                "EXPECTED_SHA": SHA,
+                "GIT_CONFIG_GLOBAL": str(persistent_config),
+                "GITHUB_RUN_ID": "351",
+                "LOCAL_ACTION": "STATE_CHECK",
+                "RUNNER_TEMP": str(working_directory),
+            }
+
+            completed = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    script,
+                ],
+                cwd=working_directory,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            invocation = json.loads(capture_path.read_text(encoding="utf-8-sig"))
+            self.assertEqual(r"C:\cad-agent-managed\repo", invocation["RepoPath"])
+            self.assertEqual("1", invocation["GitConfigCount"])
+            self.assertEqual("safe.directory", invocation["GitConfigKey"])
+            self.assertEqual(
+                "C:/cad-agent-managed/repo",
+                invocation["GitConfigValue"],
+            )
+            self.assertNotEqual("*", invocation["GitConfigValue"])
+            self.assertFalse(persistent_config.exists())
 
     def test_issue_comment_event_yields_dispatch_outputs(self) -> None:
         event = {
