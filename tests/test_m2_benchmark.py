@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from cad_agent.live import LiveSafetyError, load_build_evidence
+from cad_agent.manifest import sha256_file
 from cad_agent.m2_benchmark import (
     M2_BENCHMARK_SCHEMA_VERSION,
     M2BenchmarkError,
@@ -14,6 +16,7 @@ from cad_agent.m2_benchmark import (
     new_m2_record,
     validate_m2_record,
 )
+from tests.m2_benchmark_support import build_m2_fixture, headless_metrics
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -308,3 +311,60 @@ def test_no_comparable_success_rate_is_none() -> None:
     result = aggregate_m2_epochs([_epoch(accepted_comparable=False, success=False, headless=_review(status="SKIP"), live=_review(status="SKIP"), negative_probes=[{"kind": "stale_evidence", "count": 1, "captured": False}], cleanup={"closed_without_save": True, "source_unchanged": True, "staged_unchanged": True, "release_verified": True})])
     assert result["comparable_epochs"] == 0
     assert result["success_rate"] is None
+
+
+def test_m2_fixture_support_builds_deterministic_fixture(tmp_path: Path) -> None:
+    fixture = build_m2_fixture(tmp_path)
+
+    assert fixture.input_path.exists()
+    assert fixture.staged_dxf.exists()
+    assert fixture.build_evidence.exists()
+    assert fixture.input_sha256 == sha256_file(fixture.input_path)
+    assert fixture.staged_dxf_sha256 == sha256_file(fixture.staged_dxf)
+    assert b"timestamp" not in fixture.source_bytes.lower()
+    assert b"uuid" not in fixture.source_bytes.lower()
+    assert b"random" not in fixture.source_bytes.lower()
+    assert b"absolute" not in fixture.source_bytes.lower()
+    assert fixture.source_json["primitives"][0]["id"] == "line-001"
+    assert fixture.source_json["primitives"][1]["id"] == "circle-001"
+    assert fixture.source_json["primitives"][2]["id"] == "text-001"
+    assert set(fixture.build.handle_by_primitive_id) == {"line-001", "circle-001", "text-001"}
+    assert len(set(fixture.build.handle_by_primitive_id.values())) == 3
+    assert fixture.build.entity_count == 3
+    assert fixture.build.dimension_count == 1
+    assert fixture.build.component_count == 1
+    assert fixture.build.skipped_primitive_ids == []
+    assert fixture.build.component_type_by_part_id["part-001"] == "frame_beam"
+    assert fixture.build.component_handle_by_part_id["part-001"]
+    assert fixture.build.written_dimension_by_cross_validation_id["cv-001"][
+        "approved_value_mm"
+    ] is None
+    assert fixture.headless.passed is True
+    assert fixture.headless.checked_count == 3
+    assert fixture.headless.component_checked_count == 1
+    assert fixture.headless.dimension_checked_count == 1
+    metrics = headless_metrics(fixture)
+    assert metrics == {
+        "primitive_checked_count": 3,
+        "primitive_mismatch_count": 0,
+        "component_checked_count": 1,
+        "component_mismatch_count": 0,
+        "dimension_checked_count": 1,
+        "dimension_mismatch_count": 0,
+        "status": "PASS",
+    }
+
+
+def test_m2_fixture_build_evidence_round_trips_and_refuses_stale_dxf(tmp_path: Path) -> None:
+    fixture = build_m2_fixture(tmp_path)
+    loaded = load_build_evidence(fixture.build_evidence, fixture.staged_dxf)
+
+    assert loaded.handle_by_primitive_id == fixture.build.handle_by_primitive_id
+    assert loaded.written_geometry_by_primitive_id == fixture.build.written_geometry_by_primitive_id
+
+    copied = tmp_path / "copied-staged.dxf"
+    copied.write_bytes(fixture.staged_dxf.read_bytes() + b"\nchanged")
+    with pytest.raises(LiveSafetyError, match="SHA-256"):
+        load_build_evidence(fixture.build_evidence, copied)
+
+    assert fixture.build_evidence.read_text(encoding="utf-8").strip().startswith("{")
