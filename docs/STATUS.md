@@ -145,8 +145,9 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md` and
   the execution record is
   `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md`.
-- Current branch head: `639456da426fee2493e3b334bbdc964e849314af` on
-  `codex/m2-mechanical-benchmark`; authoritative code/evidence head is
+- Current branch: `codex/m2-mechanical-benchmark`; the current GitHub head is
+  tracked by draft PR `#309`. The authoritative code/evidence head verified by
+  `scripts/verify.ps1` is
   `eed11ea0b2d8d4d81c0b127e44337253d3e01eb1`; implementation commits through
   `15d506c2ca0f0c0167a66988ffbcf1e8b6f66ef5`. Fresh-read `origin/main` on 2026-08-30
   remains `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
@@ -186,9 +187,10 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   independent follow-up review was available after the reviewer usage limit,
   so this branch relies on the recorded fallback audit plus fresh verification.
   The branch remains a verified baseline, not representative live acceptance.
-- GitHub PR state: draft PR `#309` is open from this branch; reuse-declaration
-  run `33279624741` passed and both hosted offline-tests runs
-  `33279573861` and `33279569986` passed. The PR remains unmergeable for the
+- GitHub PR state: draft PR `#309` is open from this branch; the latest
+  completed required-check checkpoint on the branch passed reuse-declaration
+  and both hosted offline-tests runs (`33279711296`, `33279709890`, and
+  `33279711276`). The PR remains unmergeable for the
   product boundary because representative AutoCAD Mechanical live evidence is
   still absent, despite GitHub reporting merge state `CLEAN`.
 - Benchmark record state: no benchmark record exists in evidence on this branch,
