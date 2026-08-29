@@ -11,6 +11,8 @@
     "profile_id",
     "profile_revision",
     "fixture_id",
+    "fixture_input_sha256",
+    "staged_dxf_sha256",
     "aggregate",
     "epochs"
   ],
@@ -21,6 +23,8 @@
     "profile_id": {"$ref": "#/$defs/identifier"},
     "profile_revision": {"$ref": "#/$defs/identifier"},
     "fixture_id": {"$ref": "#/$defs/identifier"},
+    "fixture_input_sha256": {"$ref": "#/$defs/sha256"},
+    "staged_dxf_sha256": {"$ref": "#/$defs/sha256"},
     "aggregate": {"$ref": "#/$defs/aggregate"},
     "epochs": {
       "type": "array",

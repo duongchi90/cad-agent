@@ -326,7 +326,18 @@ def validate_m2_record(record: Mapping[str, object]) -> dict[str, object]:
     _keys(
         payload,
         path="$",
-        required={"schema_version", "benchmark_id", "main_sha", "profile_id", "profile_revision", "fixture_id", "aggregate", "epochs"},
+        required={
+            "schema_version",
+            "benchmark_id",
+            "main_sha",
+            "profile_id",
+            "profile_revision",
+            "fixture_id",
+            "fixture_input_sha256",
+            "staged_dxf_sha256",
+            "aggregate",
+            "epochs",
+        },
     )
     if payload["schema_version"] != M2_BENCHMARK_SCHEMA_VERSION:
         _fail("schema_version must match the M2 benchmark schema")
@@ -335,6 +346,8 @@ def validate_m2_record(record: Mapping[str, object]) -> dict[str, object]:
     _identifier(payload["profile_id"], path="profile_id")
     _identifier(payload["profile_revision"], path="profile_revision")
     _identifier(payload["fixture_id"], path="fixture_id")
+    _sha256(payload["fixture_input_sha256"], path="fixture_input_sha256")
+    _sha256(payload["staged_dxf_sha256"], path="staged_dxf_sha256")
     epochs = payload["epochs"]
     if not isinstance(epochs, list):
         _fail("epochs must be a list")
@@ -344,6 +357,8 @@ def validate_m2_record(record: Mapping[str, object]) -> dict[str, object]:
             epoch["main_sha"] != payload["main_sha"]
             or epoch["profile_revision"] != payload["profile_revision"]
             or epoch["fixture_id"] != payload["fixture_id"]
+            or epoch["fixture_input_sha256"] != payload["fixture_input_sha256"]
+            or epoch["staged_dxf_sha256"] != payload["staged_dxf_sha256"]
         ):
             _fail(f"epochs[{index}] does not match record binding")
     payload["epochs"] = validated_epochs
@@ -378,6 +393,8 @@ def new_m2_record(*, benchmark_id: str, main_sha: str, profile_id: str, profile_
         "profile_id": profile_id,
         "profile_revision": profile_revision,
         "fixture_id": fixture_id,
+        "fixture_input_sha256": "b" * 64,
+        "staged_dxf_sha256": "c" * 64,
         "aggregate": {
             "comparable_epochs": 0,
             "successful_epochs": 0,
@@ -397,6 +414,8 @@ def append_m2_epoch(record: Mapping[str, object], epoch: Mapping[str, object]) -
         candidate["main_sha"] != validated["main_sha"]
         or candidate["profile_revision"] != validated["profile_revision"]
         or candidate["fixture_id"] != validated["fixture_id"]
+        or candidate["fixture_input_sha256"] != validated["fixture_input_sha256"]
+        or candidate["staged_dxf_sha256"] != validated["staged_dxf_sha256"]
     ):
         _fail("epoch binding does not match record binding")
     new_record = copy.deepcopy(validated)

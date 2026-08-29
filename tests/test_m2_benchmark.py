@@ -108,6 +108,8 @@ def _record(**overrides: object) -> dict[str, object]:
         "profile_id": "M2_MECHANICAL_REVIEW_V1",
         "profile_revision": "r1",
         "fixture_id": "fixture-1",
+        "fixture_input_sha256": _SHA_B,
+        "staged_dxf_sha256": _SHA_C,
         "aggregate": {
             "comparable_epochs": 1,
             "successful_epochs": 1,
@@ -146,15 +148,12 @@ def test_validate_accepts_closed_record() -> None:
         (lambda payload: payload.__setitem__("unknown", True), "unexpected properties"),
         (lambda payload: payload.__setitem__("main_sha", "A" * 64), "lowercase SHA-256"),
         (lambda payload: payload.__setitem__("profile_revision", "bad rev"), "identifier"),
+        (lambda payload: payload.__setitem__("fixture_input_sha256", "g" * 64), "lowercase SHA-256"),
         (lambda payload: payload["epochs"][0].__setitem__("started_at", "2026-08-30 10:00:00"), "RFC3339"),
         (lambda payload: payload["epochs"][0].__setitem__("wall_clock_seconds", -1), "non-negative"),
         (
             lambda payload: payload["epochs"][0]["headless"]["counts"]["dimension"].__setitem__("checked", 0),
             "positive checked counts",
-        ),
-        (
-            lambda payload: payload["epochs"][0].__setitem__("fixture_input_sha256", "g" * 64),
-            "lowercase SHA-256",
         ),
     ],
 )
@@ -168,6 +167,11 @@ def test_validate_rejects_closed_record_drift(mutator, message) -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
+        ("main_sha", _SHA_D, "binding"),
+        ("profile_revision", "r2", "binding"),
+        ("fixture_id", "fixture-2", "binding"),
+        ("fixture_input_sha256", _SHA_D, "binding"),
+        ("staged_dxf_sha256", _SHA_D, "binding"),
         ("transport", [{"name": "fileipc", "attempts": False, "successes": 0, "failures": 0}], "non-negative integer"),
         ("accepted_comparable", "yes", "boolean"),
         ("hashes", {"before": _SHA_A, "after": _SHA_B}, "unchanged hashes"),
@@ -208,6 +212,23 @@ def test_append_enforces_binding_and_pure_copy() -> None:
 def test_append_rejects_binding_mismatch() -> None:
     record = _record()
     epoch = _epoch(main_sha=_SHA_D)
+    with pytest.raises(M2BenchmarkError, match="binding"):
+        append_m2_epoch(record, epoch)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("main_sha", _SHA_D),
+        ("profile_revision", "r2"),
+        ("fixture_id", "fixture-2"),
+        ("fixture_input_sha256", _SHA_D),
+        ("staged_dxf_sha256", _SHA_D),
+    ],
+)
+def test_append_rejects_each_binding_mismatch(field: str, value: object) -> None:
+    record = _record()
+    epoch = _epoch(**{field: value})
     with pytest.raises(M2BenchmarkError, match="binding"):
         append_m2_epoch(record, epoch)
 
