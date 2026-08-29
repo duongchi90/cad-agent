@@ -440,9 +440,10 @@ def test_cleanup_uses_distinct_source_and_staged_hashes(tmp_path: Path) -> None:
 
     cleanup = _cleanup_epoch_artifacts(
         dotnet_client=FakeDotNetClient(),
+        input_path=fixture.input_path,
         drawing_path=drawing_path,
         expected_full_path=r"C:\temp\staged.dxf",
-        before_source_sha256=fixture.input_sha256,
+        before_input_sha256=fixture.input_sha256,
         before_staged_sha256=fixture.staged_dxf_sha256,
         request_ids=(),
         drawing_root=drawing_root,
@@ -451,8 +452,71 @@ def test_cleanup_uses_distinct_source_and_staged_hashes(tmp_path: Path) -> None:
         close_request_id="close-id",
     )
 
-    assert cleanup["source_unchanged"] is False
+    assert cleanup["source_unchanged"] is True
     assert cleanup["staged_unchanged"] is True
+
+
+@pytest.mark.parametrize(
+    ("mutate_input", "before_input_sha256", "before_staged_sha256", "expected_source", "expected_staged"),
+    [
+        (True, None, None, False, True),
+        (False, "0" * 64, None, False, True),
+        (False, None, "0" * 64, True, False),
+    ],
+)
+def test_cleanup_refuses_false_truth_when_input_or_staged_hashes_do_not_match(
+    tmp_path: Path,
+    mutate_input: bool,
+    before_input_sha256: str | None,
+    before_staged_sha256: str | None,
+    expected_source: bool,
+    expected_staged: bool,
+) -> None:
+    fixture = build_m2_fixture(tmp_path / "fixture")
+    drawing_root = tmp_path / "drawing-root"
+    probe_root = tmp_path / "probe-root"
+    drawing_root.mkdir()
+    probe_root.mkdir()
+    input_copy = tmp_path / "input.json"
+    input_copy.write_bytes(fixture.input_path.read_bytes())
+    drawing_path = drawing_root / "staged.dxf"
+    drawing_path.write_bytes(fixture.staged_dxf.read_bytes())
+    if mutate_input:
+        input_copy.write_bytes(input_copy.read_bytes() + b"\nchanged")
+    ipc_dir = tmp_path / "ipc"
+    ipc_dir.mkdir()
+
+    class FakeDotNetClient:
+        def close_disposable(
+            self,
+            drawing_full_path: str,
+            *,
+            disposable: bool,
+            save_changes: bool,
+            request_id: str,
+        ) -> dict[str, object]:
+            return {
+                "success": True,
+                "changed": False,
+                "payload": {"closed_without_saving": True},
+            }
+
+    cleanup = _cleanup_epoch_artifacts(
+        dotnet_client=FakeDotNetClient(),
+        input_path=input_copy,
+        drawing_path=drawing_path,
+        expected_full_path=r"C:\temp\staged.dxf",
+        before_input_sha256=before_input_sha256 or fixture.input_sha256,
+        before_staged_sha256=before_staged_sha256 or fixture.staged_dxf_sha256,
+        request_ids=(),
+        drawing_root=drawing_root,
+        probe_root=probe_root,
+        ipc_dir=ipc_dir,
+        close_request_id="close-id",
+    )
+
+    assert cleanup["source_unchanged"] is expected_source
+    assert cleanup["staged_unchanged"] is expected_staged
 
 
 def test_m2_human_events_json_parses_and_rejects_invalid_payloads() -> None:
@@ -635,10 +699,56 @@ def test_persist_m2_measurements_artifact_writes_sidecar_json(tmp_path: Path) ->
     }
 
 
+def test_measurements_sidecar_writes_outside_repo_and_survives_failure(tmp_path: Path) -> None:
+    record_path = tmp_path / "records" / "m2-record.json"
+    record_path.parent.mkdir(parents=True)
+
+    artifact = _persist_m2_measurements_artifact(
+        record_path,
+        main_sha=_SHA_A,
+        measurements={"request_result_bytes": 0, "entity_query_count": 0},
+    )
+
+    assert artifact.parent == record_path.parent
+    assert artifact.suffix == ".json"
+    assert artifact.name.endswith(".measurements.json")
+    assert not artifact.is_relative_to(Path(__file__).resolve().parents[1])
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["kind"] == "m2_mechanical_measurements"
+    assert "secret" not in json.dumps(payload)
+
+    second = _persist_m2_measurements_artifact(
+        record_path,
+        main_sha=_SHA_A,
+        measurements={"request_result_bytes": 7, "entity_query_count": 3},
+    )
+    assert second == artifact
+    assert json.loads(second.read_text(encoding="utf-8"))["measurements"] == {
+        "request_result_bytes": 7,
+        "entity_query_count": 3,
+    }
+
+
 def test_current_main_sha_prefers_github_sha_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_SHA", _SHA_B)
 
     assert _current_main_sha() == _SHA_B
+
+
+def test_current_main_sha_rejects_invalid_github_sha_and_falls_back_to_local_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_SHA", "A" * 64)
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, stdout=f"{_SHA_C}\n", stderr="")
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.tests.test_m2_mechanical_benchmark_live.subprocess.run",
+        fake_run,
+    )
+
+    assert _current_main_sha() == _SHA_C
 
 
 def test_current_main_sha_resolves_local_main_ref_when_github_sha_missing(
@@ -759,9 +869,12 @@ def test_cleanup_reports_observed_truth_and_removes_exact_directories(
     probe_root = tmp_path / "probe-root"
     drawing_root.mkdir()
     probe_root.mkdir()
+    input_path = tmp_path / "input.json"
+    input_path.write_text("fixture", encoding="utf-8")
     drawing_path = drawing_root / "staged.dxf"
     drawing_path.write_text("fixture", encoding="utf-8")
     drawing_sha = sha256_file(drawing_path)
+    input_sha = sha256_file(input_path)
 
     ipc_dir = tmp_path / "ipc"
     ipc_dir.mkdir()
@@ -791,9 +904,10 @@ def test_cleanup_reports_observed_truth_and_removes_exact_directories(
 
     cleanup = _cleanup_epoch_artifacts(
         dotnet_client=FakeDotNetClient(),
+        input_path=input_path,
         drawing_path=drawing_path,
         expected_full_path=r"C:\temp\staged.dxf",
-        before_source_sha256=drawing_sha,
+        before_input_sha256=input_sha,
         before_staged_sha256=drawing_sha,
         request_ids=("close-id",),
         drawing_root=drawing_root,

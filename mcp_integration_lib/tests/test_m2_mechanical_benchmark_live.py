@@ -422,9 +422,10 @@ def _persist_m2_measurements_artifact(
 def _cleanup_epoch_artifacts(
     *,
     dotnet_client: Any,
+    input_path: Path,
     drawing_path: Path,
     expected_full_path: str,
-    before_source_sha256: str,
+    before_input_sha256: str,
     before_staged_sha256: str,
     request_ids: tuple[str, ...],
     drawing_root: Path,
@@ -449,7 +450,7 @@ def _cleanup_epoch_artifacts(
         )
     except Exception:
         closed_without_save = False
-    source_unchanged = drawing_path.is_file() and sha256_file(drawing_path) == before_source_sha256
+    source_unchanged = input_path.is_file() and sha256_file(input_path) == before_input_sha256
     staged_unchanged = drawing_path.is_file() and sha256_file(drawing_path) == before_staged_sha256
     request_cleanup_ok = _request_artifacts_removed(ipc_dir, request_ids)
     try:
@@ -489,7 +490,7 @@ def _cleanup_epoch_artifacts(
 
 
 def _current_main_sha() -> str:
-    github_sha = (os.environ.get("GITHUB_SHA") or "").strip().lower()
+    github_sha = (os.environ.get("GITHUB_SHA") or "").strip()
     if _SHA256_LOWER.fullmatch(github_sha):
         return github_sha
     try:
@@ -502,7 +503,7 @@ def _current_main_sha() -> str:
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("Unable to resolve the local main SHA") from exc
-    main_sha = completed.stdout.strip().lower()
+    main_sha = completed.stdout.strip()
     if not _SHA256_LOWER.fullmatch(main_sha):
         raise RuntimeError("Resolved local main SHA is invalid")
     return main_sha
@@ -695,9 +696,10 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             epoch["hashes"]["after"] = sha256_file(drawing_path) if drawing_path.is_file() else before_sha
             cleanup = _cleanup_epoch_artifacts(
                 dotnet_client=locals().get("dotnet_client"),
+                input_path=fixture.input_path,
                 drawing_path=drawing_path,
                 expected_full_path=expected_full_path,
-                before_source_sha256=before_sha,
+                before_input_sha256=fixture.input_sha256,
                 before_staged_sha256=before_sha,
                 request_ids=tuple(request_ids),
                 drawing_root=drawing_root,
