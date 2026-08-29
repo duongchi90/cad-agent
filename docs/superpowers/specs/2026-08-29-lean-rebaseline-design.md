@@ -8,13 +8,75 @@ Branch: `governance/lean-rebaseline-2026-08-29`.
 
 ## 1. Decision
 
-CAD Agent keeps its existing deterministic CAD engine and its fail-closed safety invariants, but simplifies the program around a small number of product milestones and measured failures.
+CAD Agent keeps its existing deterministic CAD engine, fail-closed safety invariants, and established Human Owner → SOL_POOL → Luna/Codex Desktop operating model. The only intended simplification is product sequencing and abstraction admission: build fewer speculative subsystems, reach a verified end-to-end product loop earlier, and let measured failures justify later architecture.
 
-The rebaseline is forward-looking. It does not delete accepted contracts, erase evidence, rewrite history, or invalidate completed tests. Existing R*, P*, VS-T*, M*, S* and related labels remain historical traceability and may be reactivated only by a fresh current Issue or valid control authority.
+The rebaseline is forward-looking. It does not delete accepted contracts, erase evidence, rewrite history, invalidate completed tests, or replace standing governance. Existing R*, P*, VS-T*, M*, S* and related labels remain historical traceability and may be reactivated only by a fresh current Issue or valid control authority.
 
-The five active SOL schedules are explicitly retained. Their purpose is low-latency autonomous governance when the Human Owner is away from the machine. This rebaseline does not reduce their cadence, roles, writer-lease rules, control-ledger protocol, or SOL↔Luna handoff safety.
+## 2. Non-negotiable operating-model preservation
 
-## 2. Product objective
+The following standing GitHub contracts remain authoritative and are not superseded by this design:
+
+- standing operating model: Issue #131 comment `5396800691`;
+- cross-chat persistence/long-horizon invariants: comment `5419064061`;
+- `PRE_ISSUANCE_GATE_V1`: comment `5442771213`;
+- five-SOL writer eligibility / fail-closed lease: comment `5443060158`;
+- #131 historical + #294 successor-ledger rollover contract.
+
+Lean Rebaseline simplifies **what the project chooses to build**, not **how the parties are required to work when building it**.
+
+### Human Owner
+
+- remains the highest product and engineering authority;
+- supplies or approves real engineering truth, private inputs, measurements, fixtures, and Human-only decisions;
+- is not a routine relay hop between SOL and Luna;
+- is asked only for genuine HUMAN_ONLY, product, secret/account-consent, safety, or irreversible decisions.
+
+### Five SOL / Web control plane
+
+The five active roles remain enabled at their existing staggered cadence:
+
+- CONTROL_GOVERNANCE;
+- ARCHITECTURE_REUSE;
+- INTEGRATION_CI;
+- SECURITY_REDTEAM;
+- EVIDENCE_ACCEPTANCE.
+
+All five remain writer-eligible, but never concurrently for one target sequence. Exactly one valid writer lease may mint the next numbered authority; all other cells are advisory `CONTROL_SEQ=NONE` for that sequence.
+
+Every SOL governance/runtime action continues to require fresh GitHub state. `SOL_WRITER_CLAIM_V1`, lowest-valid-comment-ID arbitration, exact readback, anti-race checks, terminal single-consumption, current main/PR tuple verification, and `PRE_ISSUANCE_GATE_V1` remain mandatory.
+
+While Luna executes N, SOLs should prepare N+1 and N+2 to the dependency limit: causal risks, reuse/owner map, RED/GREEN, write-set, security, evidence, acceptance, and pre-execution closure. Accepted PASS evidence is reused absent concrete drift.
+
+SOL/Web continues to own broad reasoning, architecture/reuse/security/root-cause/source-contract analysis, CI/evidence interpretation, acceptance, reconciliation, merge/publication decisions, and successor issuance.
+
+### Luna / Codex Desktop — sole Local Solo Executor
+
+Exactly one Local Solo Executor remains: Luna / Codex Desktop. No second machine writer/executor is introduced.
+
+Within an explicitly issued numbered mission, exact branch/write-set, and granted live scope, Luna should continue autonomously through the complete same-layer causal family rather than returning baton after every small defect. This includes, when authorized:
+
+- fresh-read and exact tuple verification;
+- local source/reuse/root-cause inspection;
+- temp-only probes and harnesses;
+- RED-first TDD for executable behavior;
+- minimal GREEN;
+- focused and nearest relevant regressions;
+- build/static checks, cleanup, normal commits and push;
+- authorized AutoCAD/COM/ROT/File-IPC/.NET-live execution and same-epoch follow-through.
+
+Small parser/script/helper/telemetry/serialization/import/test-harness defects are not automatic handoff boundaries when safely repairable within the issued scope and causal budget.
+
+Hard handoff remains limited to the established boundaries: required architecture/interface/dependency/workflow/schema/write-set expansion; security/authority/trust/privacy ambiguity; genuine new cross-layer defect; exhausted causal budget; unprovable cleanup/parity/custody; Human-only action; mission completion requiring acceptance/merge/publication governance; or superseding numbered authority.
+
+Repo write authority never implies merge. No amend/rebase/squash/force-push unless separately authorized.
+
+### Pre-execution closure
+
+Before expensive, stateful, live, mutating, publishing, provider, or pilot execution, the controller/orchestration path must be proved offline/synthetically as far as technically possible. Live execution should target a genuinely new business/evidence boundary, not discover controller defects that can reasonably be closed offline.
+
+`SKIP` and `NOT RUN` remain non-PASS.
+
+## 3. Product objective
 
 The shortest useful product loop is:
 
@@ -29,7 +91,7 @@ approved inputs
 
 The first priority is a reproducible Golden Path that works end to end on one disposable drawing, then on a small benchmark set. New abstraction is justified by measured failure, not by hypothetical future complexity.
 
-## 3. Architecture retained
+## 4. Architecture retained
 
 The authoritative execution engine remains:
 
@@ -56,20 +118,6 @@ The following invariants remain mandatory:
 - explicit approval before risky production mutation;
 - verified backup, reopen, post-operation verification, and rollback where production mutation is allowed;
 - no fabricated private-data, AutoCAD-live, engineering, or Human approval evidence.
-
-## 4. Five SOL control model retained
-
-The five active SOL roles remain enabled at their existing staggered hourly cadence:
-
-- CONTROL_GOVERNANCE;
-- ARCHITECTURE_REUSE;
-- INTEGRATION_CI;
-- SECURITY_REDTEAM;
-- EVIDENCE_ACCEPTANCE.
-
-This is an intentional responsiveness design, not a product subsystem. The existing writer-lease and control-ledger rules remain the collision-prevention mechanism. A valid active Luna authority is not interrupted by a competing SOL authority.
-
-The rebaseline simplifies what the SOLs ask Luna to build; it does not reduce SOL availability.
 
 ## 5. Active operational roadmap
 
@@ -101,6 +149,8 @@ Required outcome:
 - no source or accepted drawing overwritten.
 
 No generic publisher, registry expansion, revision framework, or autonomous repair platform is a prerequisite unless the Golden Path exposes a concrete missing capability.
+
+Every newly built capability required by M1 still follows the full standing operating model and exact numbered authority process above.
 
 ### M2 — Benchmark
 
@@ -142,19 +192,19 @@ Includes only evidence-justified work such as:
 - production save/reopen/rollback evidence;
 - verified publication/promotion if actually required;
 - multi-job recovery and operational diagnostics;
-- stronger audit/security only where real production risk justifies it.
+- stronger audit/security where real production risk justifies it.
 
 ## 6. Historical roadmap treatment
 
 P0-P10, R1-R8, VS-T*, M*, S* and prior plans remain valid evidence records for what was designed, tested, accepted, rejected, or left `NOT RUN`.
 
-They no longer act as the default daily execution queue after this rebaseline. A historical slice becomes active again only when:
+They no longer act as the default daily product queue after this rebaseline. A historical slice becomes active again only when:
 
 1. a current milestone needs it;
 2. a measured failure or dependency identifies it as the smallest correct owner;
 3. a fresh Issue/authority names the exact scope and evidence gate.
 
-This prevents roadmap labels from becoming automatic implementation authority.
+This changes prioritization only. It does not waive any standing execution/governance contract when that slice is reactivated.
 
 ## 7. Anti-overengineering rule
 
@@ -190,55 +240,11 @@ VerificationEvidence
   - approval/rollback references
 ```
 
-This is a conceptual consolidation target only. It does not authorize schema migration or deletion of existing accepted contracts. Existing types remain until a measured simplification task proves a safe migration is worthwhile.
+This is a conceptual consolidation target only. It does not authorize schema migration or deletion of existing accepted contracts. Existing types remain until a separately authorized, measured simplification task proves a safe migration is worthwhile.
 
-## 9. Risk-tiered governance
+## 9. Success metrics
 
-### Tier A — full governance required
-
-Use the full design/reuse/security/write-set/review process for:
-
-- new production behavior or mutation authority;
-- security/trust boundary changes;
-- new transport/protocol/executor/dispatcher/result store;
-- schema or authoritative state-store changes;
-- AutoCAD mutation or save behavior;
-- private/customer data handling;
-- publisher/release/promotion behavior;
-- new dependency or external component;
-- irreversible or difficult-to-rollback changes.
-
-Tier A requires a current design or explicit equivalent Issue specification, internal/external reuse analysis where relevant, causal TDD, exact write-set, focused and nearest regressions, hosted verification, independent review, migration/rollback, and truthful live/private gates.
-
-### Tier B — bounded engineering
-
-Use for same-owner bug fixes, test-harness/classification defects, small adapters, and non-authority tooling changes that do not create a new subsystem or trust boundary.
-
-Required minimum:
-
-- current Issue/authority;
-- exact base/head and write-set;
-- causal RED where behavior changes;
-- minimal GREEN;
-- focused + nearest relevant regressions;
-- hosted CI/reuse when repository behavior is affected;
-- no external-reuse survey unless a new dependency/capability is proposed.
-
-### Tier C — documentation/evidence maintenance
-
-Use for docs-only status, handoff, roadmap, wording, or evidence-index changes with no runtime behavior.
-
-Required minimum:
-
-- bounded Issue or Human Owner instruction;
-- exact write-set;
-- source-of-truth fresh-read;
-- diff/readback verification;
-- normal PR/integration path when canonical docs change.
-
-## 10. Acceptance and success metrics
-
-The rebaseline is successful if it reduces engineering coordination cost without weakening product evidence.
+The rebaseline is successful if it reduces architecture and coordination waste without weakening evidence or the standing operating model.
 
 Track:
 
@@ -250,22 +256,24 @@ Track:
 - number of new top-level abstractions added per measured failure;
 - duplicate-owner/transport findings;
 - regressions escaping focused tests;
-- number of stale roadmap/status claims discovered during session start.
+- stale roadmap/status claims discovered during fresh-read startup.
 
-The desired direction is fewer abstractions and fewer governance hops per accepted capability, while exact safety failures remain fail-closed.
+The desired direction is fewer speculative abstractions and fewer unnecessary roadmap hops per accepted capability, while long-horizon mission execution and fail-closed safety remain intact.
 
-## 11. Explicit non-goals
+## 10. Explicit non-goals
 
 This rebaseline does not:
 
-- change the five SOL schedules;
+- change or reduce the five SOL schedules;
+- replace or weaken comments `5396800691`, `5419064061`, `5442771213`, or `5443060158`;
 - change the #131/#294 control protocol;
+- create a new risk-tier or substitute governance model;
 - supersede the active Luna authority or PR #285 lane;
 - change runtime code, tests, workflows, schemas, dependencies, File IPC, .NET, AutoCAD, or provider behavior;
 - merge or close existing runtime Issues/PRs;
 - claim any `NOT RUN` live/private gate is now passed;
 - authorize production publication or private drawing mutation.
 
-## 12. Rollback
+## 11. Rollback
 
-Because this rebaseline is documentation/governance only, rollback is a normal revert of its documentation commits/merge. Accepted runtime evidence and historical plans remain intact either way.
+Because this rebaseline is documentation/governance only, rollback is a normal revert of its documentation commits/merge. Accepted runtime evidence, standing governance comments, and historical plans remain intact either way.
