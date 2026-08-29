@@ -145,10 +145,32 @@ def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp
     dispatcher = tmp_path / "mcp_dispatch.lsp"
     dispatcher.write_text("", encoding="utf-8")
     monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(tmp_path))
 
     client = _live_client(42, dispatcher, timeout_s=60.0)
 
     assert isinstance(client, _Client)
+    assert captured["ipc_dir"] == str(tmp_path)
     assert captured["timeout_s"] == 60.0
     with pytest.raises(CommandError, match="timeout"):
         _live_client(42, dispatcher, timeout_s=0.0)
+
+
+@pytest.mark.parametrize("ipc_dir", ["", "   "])
+def test_live_client_defaults_blank_ipc_root(monkeypatch, tmp_path: Path, ipc_dir: str) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", ipc_dir)
+
+    _live_client(42, dispatcher)
+
+    assert captured["ipc_dir"] == r"C:\temp"
