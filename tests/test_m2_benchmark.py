@@ -49,6 +49,11 @@ def _review(status: str = "PASS", degraded: bool = False) -> dict[str, object]:
 def _epoch(
     *,
     session_id: str = "session-a",
+    main_sha: str = _SHA_A,
+    profile_revision: str = "r1",
+    fixture_id: str = "fixture-1",
+    fixture_input_sha256: str = _SHA_B,
+    staged_dxf_sha256: str = _SHA_C,
     accepted_comparable: bool = True,
     success: bool = True,
     headless: dict[str, object] | None = None,
@@ -60,6 +65,11 @@ def _epoch(
 ) -> dict[str, object]:
     return {
         "session_id": session_id,
+        "main_sha": main_sha,
+        "profile_revision": profile_revision,
+        "fixture_id": fixture_id,
+        "fixture_input_sha256": fixture_input_sha256,
+        "staged_dxf_sha256": staged_dxf_sha256,
         "started_at": "2026-08-30T10:00:00Z",
         "finished_at": "2026-08-30T10:05:00Z",
         "wall_clock_seconds": 300.0,
@@ -142,6 +152,10 @@ def test_validate_accepts_closed_record() -> None:
             lambda payload: payload["epochs"][0]["headless"]["counts"]["dimension"].__setitem__("checked", 0),
             "positive checked counts",
         ),
+        (
+            lambda payload: payload["epochs"][0].__setitem__("fixture_input_sha256", "g" * 64),
+            "lowercase SHA-256",
+        ),
     ],
 )
 def test_validate_rejects_closed_record_drift(mutator, message) -> None:
@@ -157,11 +171,13 @@ def test_validate_rejects_closed_record_drift(mutator, message) -> None:
         ("transport", [{"name": "fileipc", "attempts": False, "successes": 0, "failures": 0}], "non-negative integer"),
         ("accepted_comparable", "yes", "boolean"),
         ("hashes", {"before": _SHA_A, "after": _SHA_B}, "unchanged hashes"),
-        ("negative_probes", [{"kind": "stale_evidence", "count": 1, "captured": False}], "negative probe capture"),
+        ("negative_probes", [{"kind": "stale_evidence", "count": 1, "captured": False}], "both negative probes"),
+        ("negative_probes", [], "non-empty list"),
         ("human", {"events": [_event("NETLOAD", 2)], "count": 1}, "sum of event counts"),
-        ("cleanup", {"closed_without_save": False, "source_unchanged": True, "staged_unchanged": True, "release_verified": True}, "closed_without_save"),
+        ("cleanup", {"closed_without_save": False, "source_unchanged": True, "staged_unchanged": True, "release_verified": True}, "cleanup integrity"),
         ("mutation", {"save_attempts": 1, "repair_attempts": 0}, "forbids save or repair"),
         ("headless", _review(status="NOT_CAPTURED"), "NOT_CAPTURED"),
+        ("headless", _review(status="NOT_RUN"), "non-comparable status"),
         ("live", _review(status="SKIP"), "accepted_comparable"),
     ],
 )
@@ -190,9 +206,10 @@ def test_append_enforces_binding_and_pure_copy() -> None:
 
 
 def test_append_rejects_binding_mismatch() -> None:
-    record = _record(profile_revision="bad rev")
-    with pytest.raises(M2BenchmarkError, match="identifier"):
-        append_m2_epoch(record, _epoch())
+    record = _record()
+    epoch = _epoch(main_sha=_SHA_D)
+    with pytest.raises(M2BenchmarkError, match="binding"):
+        append_m2_epoch(record, epoch)
 
 
 def test_aggregate_oracle_supports_baseline_non_representative_and_representative() -> None:

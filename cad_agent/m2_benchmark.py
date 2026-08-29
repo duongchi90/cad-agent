@@ -187,6 +187,11 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
         path=path,
         required={
             "session_id",
+            "main_sha",
+            "profile_revision",
+            "fixture_id",
+            "fixture_input_sha256",
+            "staged_dxf_sha256",
             "started_at",
             "finished_at",
             "wall_clock_seconds",
@@ -203,6 +208,11 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
         },
     )
     _identifier(item["session_id"], path=f"{path}.session_id")
+    _sha256(item["main_sha"], path=f"{path}.main_sha")
+    _identifier(item["profile_revision"], path=f"{path}.profile_revision")
+    _identifier(item["fixture_id"], path=f"{path}.fixture_id")
+    _sha256(item["fixture_input_sha256"], path=f"{path}.fixture_input_sha256")
+    _sha256(item["staged_dxf_sha256"], path=f"{path}.staged_dxf_sha256")
     _timestamp(item["started_at"], path=f"{path}.started_at")
     _timestamp(item["finished_at"], path=f"{path}.finished_at")
     _finite_non_negative_number(item["wall_clock_seconds"], path=f"{path}.wall_clock_seconds")
@@ -229,20 +239,29 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
     cleanup = _validate_cleanup(item["cleanup"], path=f"{path}.cleanup")
     accepted = _bool(item["accepted_comparable"], path=f"{path}.accepted_comparable")
     success = _bool(item["success"], path=f"{path}.success")
+    if item["negative_probes"] == [] and accepted:
+        _fail(f"{path} accepted_comparable requires negative probes")
+    if item["negative_probes"] == [] and not accepted:
+        _fail(f"{path}.negative_probes must not be empty")
     if item["headless"]["status"] == "NOT_CAPTURED" or item["live"]["status"] == "NOT_CAPTURED":
         _fail(f"{path} comparable epoch cannot contain NOT_CAPTURED")
     if any(entry["status"] in {"NOT_CAPTURED", "SKIP", "NOT_RUN"} for entry in (item["headless"], item["live"])):
         if accepted:
             _fail(f"{path} accepted_comparable cannot be true for non-comparable status")
+    kinds = {probe["kind"] for probe in negative_probes}
+    if accepted and kinds != {"stale_evidence", "wrong_target"}:
+        _fail(f"{path} accepted_comparable requires both negative probes")
     if any(probe["captured"] is False for probe in negative_probes):
         if accepted:
             _fail(f"{path} accepted_comparable requires negative probe capture")
-    if cleanup["closed_without_save"] is not True:
+    if not cleanup["closed_without_save"] or not cleanup["source_unchanged"] or not cleanup["staged_unchanged"] or not cleanup["release_verified"]:
         if accepted:
-            _fail(f"{path} accepted_comparable requires closed_without_save")
+            _fail(f"{path} accepted_comparable requires cleanup integrity")
     if success and not accepted:
         _fail(f"{path} success cannot be true when epoch is not accepted_comparable")
     if success:
+        if not accepted:
+            _fail(f"{path} success requires accepted_comparable")
         if headless["status"] != "PASS" or live["status"] != "PASS":
             _fail(f"{path} success requires PASS reviews")
         if any(
@@ -272,10 +291,12 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
             _fail(f"{path} success requires unchanged hashes")
         if mutation["save_attempts"] or mutation["repair_attempts"]:
             _fail(f"{path} success forbids save or repair attempts")
-        if not cleanup["source_unchanged"] or not cleanup["staged_unchanged"]:
-            _fail(f"{path} success requires unchanged source and staged artifacts")
+        if not cleanup["source_unchanged"] or not cleanup["staged_unchanged"] or not cleanup["release_verified"]:
+            _fail(f"{path} success requires cleanup integrity")
         if captured <= 0:
             _fail(f"{path} success requires negative probe capture")
+        if kinds != {"stale_evidence", "wrong_target"}:
+            _fail(f"{path} success requires both negative probe kinds")
     return item
 
 
@@ -318,6 +339,13 @@ def validate_m2_record(record: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(epochs, list):
         _fail("epochs must be a list")
     validated_epochs = [_validate_epoch(epoch, path=f"epochs[{index}]") for index, epoch in enumerate(epochs)]
+    for index, epoch in enumerate(validated_epochs):
+        if (
+            epoch["main_sha"] != payload["main_sha"]
+            or epoch["profile_revision"] != payload["profile_revision"]
+            or epoch["fixture_id"] != payload["fixture_id"]
+        ):
+            _fail(f"epochs[{index}] does not match record binding")
     payload["epochs"] = validated_epochs
     payload["aggregate"] = _validate_aggregate(payload["aggregate"], path="aggregate")
     comparable_epochs = [epoch for epoch in validated_epochs if epoch["accepted_comparable"]]
@@ -365,6 +393,12 @@ def new_m2_record(*, benchmark_id: str, main_sha: str, profile_id: str, profile_
 def append_m2_epoch(record: Mapping[str, object], epoch: Mapping[str, object]) -> dict[str, object]:
     validated = validate_m2_record(record)
     candidate = _validate_epoch(epoch, path="epoch")
+    if (
+        candidate["main_sha"] != validated["main_sha"]
+        or candidate["profile_revision"] != validated["profile_revision"]
+        or candidate["fixture_id"] != validated["fixture_id"]
+    ):
+        _fail("epoch binding does not match record binding")
     new_record = copy.deepcopy(validated)
     new_record["epochs"].append(candidate)
     return validate_m2_record({

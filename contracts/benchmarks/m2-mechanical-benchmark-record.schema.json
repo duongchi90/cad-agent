@@ -169,6 +169,11 @@
       "additionalProperties": false,
       "required": [
         "session_id",
+        "main_sha",
+        "profile_revision",
+        "fixture_id",
+        "fixture_input_sha256",
+        "staged_dxf_sha256",
         "started_at",
         "finished_at",
         "wall_clock_seconds",
@@ -185,6 +190,11 @@
       ],
       "properties": {
         "session_id": {"$ref": "#/$defs/identifier"},
+        "main_sha": {"$ref": "#/$defs/sha256"},
+        "profile_revision": {"$ref": "#/$defs/identifier"},
+        "fixture_id": {"$ref": "#/$defs/identifier"},
+        "fixture_input_sha256": {"$ref": "#/$defs/sha256"},
+        "staged_dxf_sha256": {"$ref": "#/$defs/sha256"},
         "started_at": {"$ref": "#/$defs/timestamp"},
         "finished_at": {"$ref": "#/$defs/timestamp"},
         "wall_clock_seconds": {"$ref": "#/$defs/non_negative_number"},
