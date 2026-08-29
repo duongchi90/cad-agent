@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import shutil
 import tempfile
 import time
@@ -50,6 +52,7 @@ M2_MECHANICAL_BENCHMARK_MISSING_CAPTURE_KIND = "human_events_missing"
 M2_MECHANICAL_BENCHMARK_MISSING_SESSION_KIND = "session_id_missing"
 M2_MECHANICAL_BENCHMARK_FIXTURE_ID = "fixture-1"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_SHA256_LOWER = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _timestamp() -> str:
@@ -396,6 +399,26 @@ def _persist_epoch_record(
     return validated
 
 
+def _persist_m2_measurements_artifact(
+    record_path: Path,
+    *,
+    main_sha: str,
+    measurements: dict[str, object],
+) -> Path:
+    artifact_path = record_path.with_name(f"{record_path.stem}.measurements.json")
+    write_live_report(
+        artifact_path,
+        {
+            "kind": "m2_mechanical_measurements",
+            "record_path": str(record_path),
+            "main_sha": main_sha,
+            "reference_decision": "Task 4 should consume this sidecar because the closed M2 record cannot accept extra fields.",
+            "measurements": measurements,
+        },
+    )
+    return artifact_path
+
+
 def _cleanup_epoch_artifacts(
     *,
     dotnet_client: Any,
@@ -466,9 +489,22 @@ def _cleanup_epoch_artifacts(
 
 
 def _current_main_sha() -> str:
-    main_sha = (os.environ.get("GITHUB_SHA") or "0" * 64).strip().lower()
-    if len(main_sha) != 64:
-        return "0" * 64
+    github_sha = (os.environ.get("GITHUB_SHA") or "").strip().lower()
+    if _SHA256_LOWER.fullmatch(github_sha):
+        return github_sha
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/heads/main^{commit}"],
+            cwd=_REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("Unable to resolve the local main SHA") from exc
+    main_sha = completed.stdout.strip().lower()
+    if not _SHA256_LOWER.fullmatch(main_sha):
+        raise RuntimeError("Resolved local main SHA is invalid")
     return main_sha
 
 
@@ -565,6 +601,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             self.assertTrue(health["success"])
             self.assertFalse(health["changed"])
             self.assertEqual(expected_full_path, health["drawing_full_path"])
+            self.assertEqual([], health["errors"])
 
             bom_request_id = f"m2-bom-{time.time_ns()}"
             request_ids.append(bom_request_id)
@@ -578,12 +615,25 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             self.assertEqual([], bom["errors"])
             component_count = int(bom["payload"]["component_count"])
             self.assertGreaterEqual(component_count, 1)
+            components = bom["payload"]["components"]
+            frame_component = next(
+                component for component in components if component["block_name"] == "COMP_FRAME"
+            )
+            self.assertEqual(
+                [{"tag": "PART_ID", "value": "FRAME-001"}],
+                frame_component["attributes"],
+            )
+            self.assertIn(
+                "COMP_EMPTY",
+                [component["block_name"] for component in components],
+            )
 
             transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
             review = review_dxf_live(fixture.build, legacy_client, open_drawing=False)
             transport["live_review"]["successes"] = int(transport["live_review"]["successes"]) + 1
             request_result_bytes += _json_size(review.__dict__)
             entity_query_count += 1
+            self.assertGreater(entity_query_count, 0)
             epoch["live"] = _copy_review_result(
                 review,
                 component_checked=component_count,
@@ -620,6 +670,8 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             after_state = legacy_client.drawing_get_variables(["DBMOD", "DWGPREFIX", "DWGNAME"])
             self.assertEqual(before_state, after_state)
             self.assertEqual(before_sha, sha256_file(drawing_path))
+            self.assertEqual(fixture.input_sha256, sha256_file(fixture.input_path))
+            self.assertEqual(fixture.staged_dxf_sha256, sha256_file(fixture.staged_dxf))
         except (MCPTimeoutError, MCPToolError, DotNetIPCResultError) as exc:
             operation = "m2-live"
             result = getattr(exc, "result", None)
@@ -655,6 +707,16 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             )
             epoch["cleanup"] = cleanup
             epoch["transport"] = _transport_records(transport)
+            measurements = {
+                "request_result_bytes": request_result_bytes,
+                "entity_query_count": entity_query_count,
+            }
+            measurements_path = _persist_m2_measurements_artifact(
+                record_path,
+                main_sha=main_sha,
+                measurements=measurements,
+            )
+            self.assertTrue(measurements_path.is_file())
 
             accepted_comparable = (
                 not missing_opt_ins

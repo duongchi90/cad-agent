@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import hashlib
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -29,10 +30,12 @@ from mcp_integration_lib.tests.test_m2_mechanical_benchmark_live import (
     _copy_review_result,
     _exercise_stale_evidence_rejection,
     _exercise_wrong_target_rejection,
+    _current_main_sha,
     _initial_epoch,
     _load_existing_m2_record,
     _missing_m2_opt_in_inputs,
     _persist_epoch_record,
+    _persist_m2_measurements_artifact,
     _m2_live_prerequisites_available,
     _parse_human_events_json,
     _record_path_from_env,
@@ -409,6 +412,49 @@ def test_m2_fixture_build_evidence_round_trips_and_refuses_stale_dxf(tmp_path: P
     assert fixture.build_evidence.read_text(encoding="utf-8").strip().startswith("{")
 
 
+def test_cleanup_uses_distinct_source_and_staged_hashes(tmp_path: Path) -> None:
+    fixture = build_m2_fixture(tmp_path / "fixture")
+    drawing_root = tmp_path / "drawing-root"
+    probe_root = tmp_path / "probe-root"
+    drawing_root.mkdir()
+    probe_root.mkdir()
+    drawing_path = drawing_root / "staged.dxf"
+    drawing_path.write_bytes(fixture.staged_dxf.read_bytes())
+    ipc_dir = tmp_path / "ipc"
+    ipc_dir.mkdir()
+
+    class FakeDotNetClient:
+        def close_disposable(
+            self,
+            drawing_full_path: str,
+            *,
+            disposable: bool,
+            save_changes: bool,
+            request_id: str,
+        ) -> dict[str, object]:
+            return {
+                "success": True,
+                "changed": False,
+                "payload": {"closed_without_saving": True},
+            }
+
+    cleanup = _cleanup_epoch_artifacts(
+        dotnet_client=FakeDotNetClient(),
+        drawing_path=drawing_path,
+        expected_full_path=r"C:\temp\staged.dxf",
+        before_source_sha256=fixture.input_sha256,
+        before_staged_sha256=fixture.staged_dxf_sha256,
+        request_ids=(),
+        drawing_root=drawing_root,
+        probe_root=probe_root,
+        ipc_dir=ipc_dir,
+        close_request_id="close-id",
+    )
+
+    assert cleanup["source_unchanged"] is False
+    assert cleanup["staged_unchanged"] is True
+
+
 def test_m2_human_events_json_parses_and_rejects_invalid_payloads() -> None:
     events = _parse_human_events_json('[{"kind":"NETLOAD","count":1,"detail":"manual"}]')
     assert events == [{"kind": "NETLOAD", "count": 1, "detail": "manual"}]
@@ -568,6 +614,70 @@ def test_stale_evidence_probe_uses_real_refusal_and_observed_counter(tmp_path: P
     assert probe["captured"] is True
     assert probe["count"] == 1
     assert "SHA-256" in probe["detail"]
+
+
+def test_persist_m2_measurements_artifact_writes_sidecar_json(tmp_path: Path) -> None:
+    record_path = tmp_path / "m2-record.json"
+
+    artifact = _persist_m2_measurements_artifact(
+        record_path,
+        main_sha=_SHA_A,
+        measurements={"request_result_bytes": 123, "entity_query_count": 2},
+    )
+
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload == {
+        "kind": "m2_mechanical_measurements",
+        "record_path": str(record_path),
+        "main_sha": _SHA_A,
+        "reference_decision": "Task 4 should consume this sidecar because the closed M2 record cannot accept extra fields.",
+        "measurements": {"request_result_bytes": 123, "entity_query_count": 2},
+    }
+
+
+def test_current_main_sha_prefers_github_sha_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_SHA", _SHA_B)
+
+    assert _current_main_sha() == _SHA_B
+
+
+def test_current_main_sha_resolves_local_main_ref_when_github_sha_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    def fake_run(*args, **kwargs):
+        assert args[0] == [
+            "git",
+            "rev-parse",
+            "--verify",
+            "refs/heads/main^{commit}",
+        ]
+        return subprocess.CompletedProcess(args[0], 0, stdout=f"{_SHA_C}\n", stderr="")
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.tests.test_m2_mechanical_benchmark_live.subprocess.run",
+        fake_run,
+    )
+
+    assert _current_main_sha() == _SHA_C
+
+
+def test_current_main_sha_fails_closed_when_local_main_ref_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, args[0], stderr="fatal: Needed a single revision")
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.tests.test_m2_mechanical_benchmark_live.subprocess.run",
+        fake_run,
+    )
+
+    with pytest.raises(RuntimeError, match="local main SHA"):
+        _current_main_sha()
 
 
 def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: Path) -> None:
