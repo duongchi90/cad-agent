@@ -30,8 +30,8 @@ class LocalExecutorSyncMainTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.powershell = (
             os.environ.get("CAD_AGENT_POWERSHELL")
-            or shutil.which("pwsh")
             or shutil.which("powershell")
+            or shutil.which("pwsh")
             or r"C:\Program Files\PowerShell\7\pwsh.exe"
         )
         if not Path(cls.powershell).exists() and shutil.which(cls.powershell) is None:
@@ -82,6 +82,14 @@ class LocalExecutorSyncMainTests(unittest.TestCase):
         return git("rev-parse", "HEAD", cwd=self.seed)
 
     def run_sync(self, managed: Path, expected_sha: str) -> subprocess.CompletedProcess[str]:
+        return self.run_sync_with_env(managed, expected_sha)
+
+    def run_sync_with_env(
+        self,
+        managed: Path,
+        expected_sha: str,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         artifacts = self.root / "artifacts" / managed.name
         artifacts.mkdir(parents=True, exist_ok=True)
         return subprocess.run(
@@ -105,9 +113,25 @@ class LocalExecutorSyncMainTests(unittest.TestCase):
                 str(artifacts),
             ],
             cwd=REPO_ROOT,
+            env=env,
             capture_output=True,
             text=True,
         )
+
+    def git_stderr_shim(self) -> Path:
+        shim_dir = self.root / "git-shim"
+        shim_dir.mkdir()
+        real_git = shutil.which("git.exe") or shutil.which("git")
+        if real_git is None:
+            raise AssertionError("Git is required for the PowerShell stderr shim test")
+        (shim_dir / "git.cmd").write_text(
+            "@echo off\r\n"
+            'if /I "%~1"=="fetch" echo diagnostic stderr from git shim 1>&2\r\n'
+            f'"{real_git}" %*\r\n'
+            "exit /b %ERRORLEVEL%\r\n",
+            encoding="utf-8",
+        )
+        return shim_dir
 
     @staticmethod
     def output(result: subprocess.CompletedProcess[str]) -> str:
@@ -122,6 +146,21 @@ class LocalExecutorSyncMainTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, self.output(result))
         self.assertEqual(git("rev-parse", "HEAD", cwd=managed), expected_sha)
         self.assertIn("LOCAL_EXECUTOR_RESULT=PASS", self.output(result))
+
+    def test_fetch_diagnostic_stderr_does_not_fail_sync(self) -> None:
+        managed = self.clone_managed_repo()
+        expected_sha = self.advance_remote("remote\n")
+        shim_dir = self.git_stderr_shim()
+        env = os.environ.copy()
+        env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
+
+        result = self.run_sync_with_env(managed, expected_sha, env)
+
+        self.assertEqual(result.returncode, 0, self.output(result))
+        self.assertEqual(git("rev-parse", "HEAD", cwd=managed), expected_sha)
+        self.assertIn("LOCAL_EXECUTOR_RESULT=PASS", self.output(result))
+        self.assertIn("diagnostic stderr from git shim", result.stderr)
+        self.assertNotIn("diagnostic stderr from git shim", result.stdout)
 
     def test_already_current_remote_main_is_a_noop(self) -> None:
         managed = self.clone_managed_repo()

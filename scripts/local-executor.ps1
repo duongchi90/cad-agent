@@ -72,7 +72,7 @@ if ($Action -eq "SYNC_MAIN_STATE_CHECK") {
         throw "ORIGIN_URL_MISMATCH"
     }
 
-    $fetchOutput = @(& git fetch --no-tags origin main 2>&1)
+    $fetchOutput = @(& git fetch --no-tags origin main)
     if ($LASTEXITCODE -ne 0) {
         throw "FETCH_FAILED"
     }
