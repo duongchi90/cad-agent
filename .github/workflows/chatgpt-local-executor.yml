@@ -130,7 +130,7 @@ jobs:
       - name: Execute allowlisted local action
         shell: powershell
         run: |
-          $repoPath = "C:\Users\dkv\Downloads\cad-agent-merge"
+          $repoPath = "C:\cad-agent-managed\repo"
           $tempArtifacts = Join-Path $env:RUNNER_TEMP "local-executor-$env:GITHUB_RUN_ID"
           .\scripts\local-executor.ps1 `
             -RepoPath $repoPath `
