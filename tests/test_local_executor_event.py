@@ -368,15 +368,24 @@ param (
     ExpectedBranch = $ExpectedBranch
     ExpectedSha = $ExpectedSha
     ArtifactsDir = $ArtifactsDir
+    GitConfigCount = $env:GIT_CONFIG_COUNT
+    GitConfigKey = $env:GIT_CONFIG_KEY_0
+    GitConfigValue = $env:GIT_CONFIG_VALUE_0
 } | ConvertTo-Json | Set-Content -LiteralPath $env:CAPTURE_PATH -Encoding utf8
 """,
                 encoding="utf-8",
             )
+            persistent_config = working_directory / "git-global-config"
             environment = {
-                **os.environ,
+                **{
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith("GIT_CONFIG_")
+                },
                 "CAPTURE_PATH": str(capture_path),
                 "EXPECTED_BRANCH": "main",
                 "EXPECTED_SHA": SHA,
+                "GIT_CONFIG_GLOBAL": str(persistent_config),
                 "GITHUB_RUN_ID": "351",
                 "LOCAL_ACTION": "STATE_CHECK",
                 "RUNNER_TEMP": str(working_directory),
@@ -401,6 +410,14 @@ param (
             self.assertEqual(0, completed.returncode, completed.stderr)
             invocation = json.loads(capture_path.read_text(encoding="utf-8-sig"))
             self.assertEqual(r"C:\cad-agent-managed\repo", invocation["RepoPath"])
+            self.assertEqual("1", invocation["GitConfigCount"])
+            self.assertEqual("safe.directory", invocation["GitConfigKey"])
+            self.assertEqual(
+                "C:/cad-agent-managed/repo",
+                invocation["GitConfigValue"],
+            )
+            self.assertNotEqual("*", invocation["GitConfigValue"])
+            self.assertFalse(persistent_config.exists())
 
     def test_issue_comment_event_yields_dispatch_outputs(self) -> None:
         event = {
