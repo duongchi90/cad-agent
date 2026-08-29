@@ -747,8 +747,11 @@ def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
         raise CommandError("--timeout-s must be positive.")
     if not dispatcher.is_file():
         raise CommandError(f"AutoCAD dispatcher does not exist: {dispatcher}")
+    ipc_dir = os.environ.get("CAD_AGENT_FILE_IPC_DIR")
+    if not ipc_dir or not ipc_dir.strip():
+        ipc_dir = r"C:\temp"
     return FileIPCLiveMCPClient(
-        ipc_dir=os.environ.get("CAD_AGENT_FILE_IPC_DIR", r"C:\temp"),
+        ipc_dir=ipc_dir,
         trigger=make_windows_dispatch_trigger(hwnd),
         raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
         bootstrap_lisp_path=str(dispatcher),
