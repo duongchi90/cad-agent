@@ -159,6 +159,8 @@ class LocalExecutorSyncMainTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, self.output(result))
         self.assertEqual(git("rev-parse", "HEAD", cwd=managed), expected_sha)
         self.assertIn("LOCAL_EXECUTOR_RESULT=PASS", self.output(result))
+        self.assertIn("diagnostic stderr from git shim", result.stderr)
+        self.assertNotIn("diagnostic stderr from git shim", result.stdout)
 
     def test_already_current_remote_main_is_a_noop(self) -> None:
         managed = self.clone_managed_repo()
