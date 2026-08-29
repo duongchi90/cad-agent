@@ -14,11 +14,11 @@
 
 **Base SHA:** ffde4673be48f85a7fd4c0a10b9b35000c710e16
 
-**Evidence Head SHA:** e442db9323ad4fe2ab16d00471caff0b05c39a39
+**Evidence Head SHA:** eed11ea0b2d8d4d81c0b127e44337253d3e01eb1
 
 **Verification command:** powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 
-**Verification result:** `scripts/verify.ps1` exit `0` on the evidence head; offline, .NET managed, and dotnet IPC suites passed; real_data and AutoCAD live prerequisites remain explicit SKIP/NOT RUN.
+**Verification result:** `scripts/verify.ps1` exit `0` on the evidence head; offline, .NET managed, and dotnet IPC suites passed; real_data and AutoCAD live prerequisites remain explicit SKIP/NOT RUN. The evidence oracle also records human/environment/failure details, distinct source/staged hash pairs, and a separate M2 opt-in verifier marker.
 
 **Required gates:** autocad_mechanical live benchmark is required for representative acceptance; real_data remains NOT RUN unless an approved private input is explicitly in scope. Missing prerequisites are recorded as SKIP or NOT RUN, never as pass.
 

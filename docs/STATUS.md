@@ -145,18 +145,20 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md` and
   the execution record is
   `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md`.
-- Current branch/evidence head: `e442db9323ad4fe2ab16d00471caff0b05c39a39` on
+- Current branch/evidence head: `eed11ea0b2d8d4d81c0b127e44337253d3e01eb1` on
   `codex/m2-mechanical-benchmark`; implementation commits through
-  `4ea3c09b82c34b90704029cbccdd3956e7d1cf05`. Fresh-read `origin/main` on 2026-08-30
+  `15d506c2ca0f0c0167a66988ffbcf1e8b6f66ef5`. Fresh-read `origin/main` on 2026-08-30
   remains `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
 - Implemented scope on the current branch: the closed
   `m2-mechanical-benchmark-record-1.0` oracle, deterministic staged-DXF fixture
-  normalization, and the opt-in read-only Mechanical benchmark harness. This
-  status step changed no implementation or schema.
+  normalization, and the opt-in read-only Mechanical benchmark harness. The
+  evidence contract now also preserves captured human/environment/failure and
+  review details, distinct source/staged hash pairs, and the separate M2
+  opt-in verifier marker. The status-only edits changed no production behavior.
 - Fresh focused verification on the implementation head:
   `tests/test_m2_benchmark.py` plus
   `mcp_integration_lib/tests/test_m2_mechanical_benchmark_live.py` ->
-  `70 passed, 1 skipped`; Ruff passed; `git diff --check` exited `0`. The one
+  `81 passed, 1 skipped`; Ruff passed; `git diff --check` exited `0`. The one
   skip is the explicit unavailable-state live prerequisite skip and is not live
   acceptance evidence.
 - Fresh documentation check on this status task:
@@ -167,15 +169,22 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   -> exit `0`; the lock contract passed (`40` pinned distributions), the
   environment contract passed, Python 3.11 was selected, and the required
   Tesseract executable was present.
-- Fresh authoritative verifier after the design/plan, boundary-baseline, and
-  status-evidence commits: `.\scripts\verify.ps1` -> exit `0`. It reported offline JUnit
-  `tests=3024, failures=0, errors=0, skipped=0`, dotnet IPC JUnit
+- Fresh authoritative verifier on the current branch/evidence head after the
+  evidence-hardening and opt-in-gate commits: `.\scripts\verify.ps1` -> exit
+  `0`. It reported offline JUnit
+  `tests=3036, failures=0, errors=0, skipped=0`, dotnet IPC JUnit
   `tests=117, failures=0, errors=0, skipped=0`, .NET managed tests
   `194 passed, 0 skipped`, real-data unavailable-state `2 skipped`, and
-  AutoCAD Mechanical unavailable-state `15 skipped`. The causal RED negative
+  AutoCAD Mechanical unavailable-state `14 skipped`. The causal RED negative
   oracle reported its expected one failing test and did not fail the verifier;
-  the final verifier result was `All checks passed` and the AutoCAD live marker
-  remained `NOT RUN`.
+  the generic AutoCAD live marker remained `NOT RUN` and the separate M2
+  benchmark marker also remained `NOT RUN` because the operator opt-in was
+  incomplete. The final verifier result was `All checks passed`.
+- Review outcome: final independent review found no Critical issues. Its Important
+  evidence findings were fixed and covered by focused RED/GREEN tests; no
+  independent follow-up review was available after the reviewer usage limit,
+  so this branch relies on the recorded fallback audit plus fresh verification.
+  The branch remains a verified baseline, not representative live acceptance.
 - Benchmark record state: no benchmark record exists in evidence on this branch,
   so no record path or record hash is recorded here. Comparable epochs:
   `0`; successful comparable epochs: `0`; success rate: not recorded.
