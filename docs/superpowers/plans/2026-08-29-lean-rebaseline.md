@@ -4,7 +4,7 @@
 
 **Goal:** Make the owner-approved lean product roadmap canonical while preserving the complete established Human Owner → SOL_POOL → Luna/Codex Desktop operating model, five SOL schedules, accepted CAD engine, active PR #285 lane, and all safety/evidence invariants.
 
-**Architecture:** This is a documentation/governance-only rebaseline. It changes product prioritization and abstraction admission, not the execution/governance protocol. It routes future product work through M0-M4 and leaves prior R/P/VS/M/S records as historical evidence rather than the automatic daily queue.
+**Architecture:** This is a documentation/governance-only rebaseline. It changes product prioritization and abstraction admission, not the execution/governance protocol. It routes future product work through M0-M4 and leaves prior R/P/VS/M/S records as historical evidence rather than the automatic daily queue. `docs/STATUS.md` remains byte-unchanged as the long evidence history; live operational navigation is updated in `docs/HANDOFF.md`.
 
 **Tech Stack:** Markdown governance documents, GitHub Issues/PRs, existing repository verification and hosted checks.
 
@@ -21,6 +21,7 @@
 - No runtime code, tests, workflows, schemas, dependencies, AutoCAD, File IPC, .NET, provider, private-data, or machine mutation.
 - Do not interrupt, supersede, or modify the active #294 / Issue #284 / PR #285 Luna lane.
 - Preserve accepted evidence and historical plans; do not delete or rewrite them.
+- Keep `docs/STATUS.md` byte-unchanged.
 - The new active product milestones are M0 Stabilize the Pipe, M1 Golden Path, M2 Benchmark, M3 Repair Loop, and M4 Production Hardening.
 - New top-level abstractions require measured failure and reuse-first proof.
 - `SKIP` and `NOT RUN` remain non-PASS.
@@ -128,30 +129,17 @@ Expected: the document points to and preserves the GitHub standing contracts; it
 
 ---
 
-### Task 4: Repoint STATUS and HANDOFF to the lean product roadmap without corrupting live control state
+### Task 4: Repoint HANDOFF to the lean product roadmap without rewriting the evidence history
 
 **Files:**
-- Modify: `docs/STATUS.md`
 - Modify: `docs/HANDOFF.md`
+- Preserve byte-identical: `docs/STATUS.md`
 
 **Interfaces:**
 - Consumes: current main, #131/#294 ledger contract, Issue #295, active #284/#285 lane, and lean design.
-- Produces: canonical navigation that distinguishes stable product roadmap from rapidly changing control state.
+- Produces: current session-start navigation while leaving the long verification ledger untouched.
 
-- [ ] **Step 1: Prepend a Lean Rebaseline section to `docs/STATUS.md`**
-
-Record:
-
-- Human Owner approval and Issue #295;
-- five SOL and all four standing contracts preserved;
-- M0-M4 as the active forward product roadmap once this branch merges;
-- old labels retained as historical evidence;
-- no runtime capability promoted by this docs change;
-- current live state must be read from #131 + #294 and the active Issue/PR rather than cached in STATUS.
-
-Do not rewrite historical verification evidence.
-
-- [ ] **Step 2: Prepend a Lean Rebaseline operational section to `docs/HANDOFF.md`**
+- [ ] **Step 1: Update `docs/HANDOFF.md`**
 
 Make session startup explicit:
 
@@ -162,18 +150,22 @@ Make session startup explicit:
 5. do not reactivate an old R/P/VS/M/S slice merely because it exists in history;
 6. preserve current Luna authority if active and use the five-SOL lease protocol at the next hard handoff.
 
-Keep the existing historical handoff content below as evidence, clearly marked historical where appropriate.
+Preserve the former 2026-08-06 handoff as clearly labeled historical evidence rather than deleting its accepted implementation facts.
 
-- [ ] **Step 3: Read back both files**
+- [ ] **Step 2: Prove `docs/STATUS.md` is unchanged**
 
-Expected: the docs do not cache a new numbered sequence or claim current Luna completion; control ledger remains canonical.
+Compare the branch blob to exact base `1b8b5cd2...` and require byte identity.
+
+- [ ] **Step 3: Read back HANDOFF**
+
+Expected: it does not cache a new numbered sequence or claim current Luna completion; control ledger remains canonical.
 
 ---
 
 ### Task 5: Verify scope and open the docs-only PR
 
 **Files:**
-- Verify all seven Issue #295 allowlisted paths.
+- Verify all six Issue #295 changed paths.
 
 **Interfaces:**
 - Consumes: Tasks 1-4.
@@ -187,13 +179,12 @@ Expected changed paths are exactly:
 docs/PROJECT.md
 docs/ARCHITECTURE.md
 docs/AI_OPERATING_MODEL.md
-docs/STATUS.md
 docs/HANDOFF.md
 docs/superpowers/specs/2026-08-29-lean-rebaseline-design.md
 docs/superpowers/plans/2026-08-29-lean-rebaseline.md
 ```
 
-No eighth path is permitted.
+No seventh path is permitted. `docs/STATUS.md` must remain byte-identical to base.
 
 - [ ] **Step 2: Inspect the cumulative diff**
 
