@@ -213,8 +213,16 @@ They do not authorize implementation by themselves.
 ## Lean Rebaseline — active forward architecture
 
 The Human Owner approved the Lean Rebaseline under Issue #295. It changes
-forward prioritization and governance, not the accepted runtime engine or
-safety evidence.
+forward product prioritization and abstraction admission only. It does not
+replace the accepted runtime engine, safety evidence, or standing Human/SOL/Luna
+operating model.
+
+The standing governance references remain Issue #131 comments `5396800691`,
+`5419064061`, `5442771213`, `5443060158`, with #131 as historical control
+ledger and #294 as the active successor. Every new capability built under this
+architecture still requires the existing fresh-read, valid writer lease,
+`PRE_ISSUANCE_GATE_V1`, long-horizon Luna mission, reuse-first/TDD/evidence,
+review, live/private and acceptance rules.
 
 ### One engine, one AutoCAD route
 
@@ -222,8 +230,9 @@ The five package owners above remain authoritative. Future work must compose
 those owners before creating a new subsystem. AutoCAD Mechanical execution must
 continue through one canonical repository-owned request/result route. A second
 executor, transport, dispatcher, ACK protocol, IPC root/store, or parallel
-result authority is prohibited unless a fresh Tier-A architecture decision
-proves the existing owner cannot satisfy a measured requirement.
+result authority is prohibited unless a fresh current architecture decision,
+issued through the standing control model, proves the existing owner cannot
+satisfy a measured requirement.
 
 ### Abstraction admission rule
 
@@ -238,6 +247,10 @@ store, publisher, long-lived evidence type, or orchestration subsystem:
 
 Without that evidence, freeze/defer the proposed abstraction rather than
 building it speculatively.
+
+This admission rule does not relax engineering process. Once a new capability
+is justified, it is still implemented under the full existing Human/SOL/Luna
+working principles.
 
 ### Conceptual evidence consolidation
 
@@ -257,8 +270,8 @@ VerificationEvidence
 
 This is a conceptual simplification target only. It does not authorize deleting,
 merging, migrating, or weakening accepted schemas/contracts. Existing accepted
-types remain until a separate measured simplification task proves migration is
-safer and cheaper than retaining them.
+types remain until a separately authorized measured simplification task proves
+migration is safer and cheaper than retaining them.
 
 ### Active product order
 
