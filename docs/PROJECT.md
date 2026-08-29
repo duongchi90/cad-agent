@@ -31,6 +31,36 @@ evidence for this project.
 - New architecture must answer a measured failure or operational bottleneck;
   hypothetical future complexity alone is not implementation authority.
 
+## Standing working model for all new capabilities
+
+The Lean Rebaseline does not create a new engineering process. Every newly
+built runtime/product capability continues under the existing GitHub standing
+contracts:
+
+- Human Owner > SOL_POOL > Luna / Codex Desktop;
+- one Local Solo Executor only;
+- five SOL cells remain active and writer-eligible, with one valid writer lease
+  per numbered sequence and other cells advisory for that sequence;
+- fresh-read GitHub, exact authority/terminal/main/PR tuple, anti-race and
+  single terminal consumption;
+- mandatory `PRE_ISSUANCE_GATE_V1`, including CURRENT, N+1, N+2, reused PASS
+  evidence, pre-execution closure and first unsatisfied gate;
+- SOL owns broad reasoning/reuse/architecture/security/evidence/acceptance and
+  successor preparation;
+- Luna executes the complete authorized same-layer causal family with RED-first
+  TDD, minimal GREEN, focused/nearest regressions, cleanup and normal push,
+  rather than micro-handoff on every small defect;
+- local/live actions require exact authority and local safety locks remain
+  non-overridable;
+- local write authority never implies merge;
+- `SKIP` / `NOT RUN` never count as PASS;
+- Human Owner is not used as a routine SOL↔Luna relay.
+
+Canonical standing references are Issue #131 comments `5396800691`,
+`5419064061`, `5442771213`, `5443060158`, with #131 as historical ledger and
+#294 as its active successor. A fresh valid numbered authority controls its
+exact mission scope over stale documentation or chat memory.
+
 ## First product milestone
 
 One approved real image or PDF runs through Primitive IR, Semantic IR, optional
@@ -69,13 +99,16 @@ it to the active milestone and exact first unsatisfied gate.
    verified promotion/publication, recovery, and stronger audit/security only
    when disposable reliability and production risk justify them.
 
+M0-M4 changes product priority only. It does not waive or narrow the standing
+working model for any new capability built inside those milestones.
+
 ## Five-SOL responsiveness
 
 The five staggered SOL control roles remain intentionally enabled. Their purpose
 is low-latency autonomous governance and SOL↔Luna progression when the Human
 Owner is away from the machine. The writer-lease/control-ledger protocol remains
 the collision-prevention mechanism; this product simplification does not reduce
-SOL cadence or safety.
+SOL cadence, writer eligibility, long-horizon preparation, or safety.
 
 ## Drawing Initialization Gate
 
@@ -103,13 +136,14 @@ when an accepted existing owner can enforce the same invariant safely.
   publication truth store.
 - No big-bang migration merely to make accepted evidence structures look
   smaller; freeze/defer is preferred over churn.
+- No replacement risk-tier or substitute governance process.
 
 ## Canonical references
 
 - Current architecture: `docs/ARCHITECTURE.md`
 - Verified status/evidence history: `docs/STATUS.md`
 - Current operational handoff: `docs/HANDOFF.md`
-- AI roles and risk-tiered governance: `docs/AI_OPERATING_MODEL.md`
+- AI roles and standing operating model navigation: `docs/AI_OPERATING_MODEL.md`
 - Quality and release gates: `docs/QUALITY.md`
 - Design/plan record policy: `docs/superpowers/README.md`
 - Active Lean Rebaseline design:
