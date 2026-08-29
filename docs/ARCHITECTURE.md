@@ -207,7 +207,73 @@ visual truth. When final fidelity depends on display or plot behavior,
 AutoCAD-native render/plot evidence remains behind the existing File IPC
 boundary.
 
-The names R1-R8 describe a locked dependency queue only. They do not authorize
-implementation. Each future task requires a fresh plan against the then-current
-integrated `main`, a complete Reuse Declaration, tests, review, and its own
-acceptance gates.
+The names R1-R8 describe a historical dependency map and prior locking model.
+They do not authorize implementation by themselves.
+
+## Lean Rebaseline — active forward architecture
+
+The Human Owner approved the Lean Rebaseline under Issue #295. It changes
+forward prioritization and governance, not the accepted runtime engine or
+safety evidence.
+
+### One engine, one AutoCAD route
+
+The five package owners above remain authoritative. Future work must compose
+those owners before creating a new subsystem. AutoCAD Mechanical execution must
+continue through one canonical repository-owned request/result route. A second
+executor, transport, dispatcher, ACK protocol, IPC root/store, or parallel
+result authority is prohibited unless a fresh Tier-A architecture decision
+proves the existing owner cannot satisfy a measured requirement.
+
+### Abstraction admission rule
+
+Before creating a new top-level contract, registry, state machine, authority
+store, publisher, long-lived evidence type, or orchestration subsystem:
+
+1. first try to enforce the invariant in the existing owner;
+2. then try a thin adapter or validator;
+3. require a deterministic failing test, benchmark case, or measured
+   operational bottleneck showing why those options are insufficient;
+4. require the new abstraction to remove more complexity than it adds.
+
+Without that evidence, freeze/defer the proposed abstraction rather than
+building it speculatively.
+
+### Conceptual evidence consolidation
+
+For product reasoning, prefer three conceptual durable groups:
+
+```text
+JobManifest
+  -> input/source identities, approved engineering inputs, configuration, run state
+
+CandidateArtifact
+  -> candidate identity/path/hash/revision, provenance, changed scope
+
+VerificationEvidence
+  -> deterministic checks, AutoCAD evidence, visual/engineering findings,
+     approval and rollback references
+```
+
+This is a conceptual simplification target only. It does not authorize deleting,
+merging, migrating, or weakening accepted schemas/contracts. Existing accepted
+types remain until a separate measured simplification task proves migration is
+safer and cheaper than retaining them.
+
+### Active product order
+
+Forward architecture work is justified by the active milestones in
+`docs/PROJECT.md`:
+
+M0 Stabilize the Pipe -> M1 Golden Path -> M2 Benchmark -> M3 Repair Loop ->
+M4 Production Hardening.
+
+Earlier R/P/VS/M/S plans remain historical evidence. They may be reused when a
+current milestone and fresh Issue/authority identify them as the smallest
+correct owner, but their existence alone no longer creates sequencing pressure
+or implementation authority.
+
+The approved Lean Rebaseline design is
+`docs/superpowers/specs/2026-08-29-lean-rebaseline-design.md` and its bounded
+execution plan is
+`docs/superpowers/plans/2026-08-29-lean-rebaseline.md`.
