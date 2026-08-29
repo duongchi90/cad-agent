@@ -681,6 +681,7 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         get_window_thread_process_id = user32.GetWindowThreadProcessId
         get_class_name = user32.GetClassNameW
         enum_child_windows = user32.EnumChildWindows
+        is_window_visible = user32.IsWindowVisible
         show_window = user32.ShowWindow
         set_foreground_window = user32.SetForegroundWindow
         get_foreground_window = user32.GetForegroundWindow
@@ -701,6 +702,7 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
             [wintypes.HWND, callback_type, wintypes.LPARAM],
             wintypes.BOOL,
         )
+        set_native_signature(is_window_visible, [wintypes.HWND], wintypes.BOOL)
         set_native_signature(show_window, [wintypes.HWND, ctypes.c_int], wintypes.BOOL)
         set_native_signature(set_foreground_window, [wintypes.HWND], wintypes.BOOL)
         set_native_signature(get_foreground_window, [], wintypes.HWND)
@@ -740,9 +742,12 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         owned_mdi_clients = [
             child for child in mdi_clients if window_pid(child) == owner_pid
         ]
-        if len(owned_mdi_clients) != 1:
+        visible_owned_mdi_clients = [
+            child for child in owned_mdi_clients if is_window_visible(child)
+        ]
+        if len(visible_owned_mdi_clients) != 1:
             raise MCPToolError("WINDOW_RECEIVER_AMBIGUOUS")
-        target = owned_mdi_clients[0]
+        target = visible_owned_mdi_clients[0]
 
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise MCPToolError("WINDOW_IDENTITY_CHANGED")

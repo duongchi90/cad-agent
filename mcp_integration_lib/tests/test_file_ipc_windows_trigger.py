@@ -60,6 +60,7 @@ class RecordingUser32:
         self,
         *,
         children: list[tuple[int, str, int]] | None = None,
+        visible_children: set[int] | None = None,
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = OWNED_HWND,
         set_foreground_result: int = 1,
@@ -72,6 +73,11 @@ class RecordingUser32:
         self.children = children if children is not None else [
             (RECEIVER_HWND, "MDIClient", OWNED_PID)
         ]
+        self.visible_children = (
+            {child for child, _name, _pid in self.children}
+            if visible_children is None
+            else visible_children
+        )
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
         self.set_foreground_result = set_foreground_result
@@ -103,6 +109,9 @@ class RecordingUser32:
     def GetClassNameW(self, child, buffer, _length):
         buffer.value = self.class_names.get(child, "Other")
         return len(buffer.value)
+
+    def IsWindowVisible(self, child):
+        return child in self.visible_children
 
     def GetWindowThreadProcessId(self, hwnd, pid_pointer):
         self.window_pid_calls.append(hwnd)
@@ -231,6 +240,20 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
         self.assertEqual(user32.send_calls, [])
+
+    def test_selects_visible_owned_mdi_when_autoCAD_exposes_hidden_mdi_client(self) -> None:
+        user32 = RecordingUser32(
+            children=[
+                (0x1102, "MDIClient", OWNED_PID),
+                (RECEIVER_HWND, "MDIClient", OWNED_PID),
+            ],
+            visible_children={RECEIVER_HWND},
+        )
+        self._run_current_trigger(user32)
+        self.assertEqual(
+            [call[0] for call in user32.post_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
 
     def test_receiver_pid_drift_at_delivery_boundary_is_rejected(self) -> None:
         user32 = RecordingUser32(
