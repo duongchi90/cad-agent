@@ -9,7 +9,11 @@ DISPATCH_MARKER = "LOCAL_EXECUTOR_DISPATCH_V1"
 ACK_MARKER = "LOCAL_EXECUTOR_ACK_V1"
 TERMINAL_MARKER = "LOCAL_EXECUTOR_TERMINAL_V1"
 WATCHDOG_MARKER = "LOCAL_EXECUTOR_WATCHDOG_V1"
-CONTROL_ISSUE_NUMBER = 131
+LEGACY_CONTROL_ISSUE_NUMBER = 131
+ACTIVE_CONTROL_ISSUE_NUMBER = 294
+ALLOWED_CONTROL_ISSUE_NUMBERS = frozenset(
+    {LEGACY_CONTROL_ISSUE_NUMBER, ACTIVE_CONTROL_ISSUE_NUMBER}
+)
 ALLOWED_ACTIONS = frozenset({"STATE_CHECK", "VERIFY"})
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -17,6 +21,7 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 @dataclass(frozen=True)
 class DispatchRequest:
+    control_issue_number: int
     control_seq: int
     action: str
     expected_branch: str
@@ -67,9 +72,15 @@ def parse_dispatch_comment(
     author_login: str,
     repository_owner: str,
 ) -> DispatchRequest | None:
-    if issue_number != CONTROL_ISSUE_NUMBER or author_login != repository_owner:
+    if (
+        issue_number not in ALLOWED_CONTROL_ISSUE_NUMBERS
+        or author_login != repository_owner
+    ):
         return None
+    lines = {line.strip() for line in body.splitlines()}
     if sum(1 for line in body.splitlines() if line.strip() == DISPATCH_MARKER) != 1:
+        return None
+    if lines & {ACK_MARKER, TERMINAL_MARKER, WATCHDOG_MARKER}:
         return None
 
     seq_text = _single_field(body, "CONTROL_SEQ")
@@ -94,6 +105,7 @@ def parse_dispatch_comment(
         return None
 
     return DispatchRequest(
+        control_issue_number=issue_number,
         control_seq=int(seq_text),
         action=action,
         expected_branch=branch,
@@ -111,6 +123,7 @@ def gate_event(
     ignored = {
         "should_run": "false",
         "dispatch_comment_id": "",
+        "control_issue_number": "",
         "control_seq": "",
         "action": "",
         "expected_branch": "",
@@ -141,6 +154,7 @@ def gate_event(
         return {
             "should_run": "true",
             "dispatch_comment_id": str(comment_id),
+            "control_issue_number": str(request.control_issue_number),
             "control_seq": str(request.control_seq),
             "action": request.action,
             "expected_branch": request.expected_branch,
@@ -166,6 +180,7 @@ def gate_event(
         return {
             "should_run": "true",
             "dispatch_comment_id": f"manual-{run_id}",
+            "control_issue_number": str(LEGACY_CONTROL_ISSUE_NUMBER),
             "control_seq": seq_text,
             "action": action,
             "expected_branch": branch,
@@ -201,7 +216,7 @@ def find_watchdog_alert(
     repository_owner: str,
     threshold_seconds: int = 720,
 ) -> dict[str, object] | None:
-    if issue_number != CONTROL_ISSUE_NUMBER or threshold_seconds <= 0:
+    if issue_number not in ALLOWED_CONTROL_ISSUE_NUMBERS or threshold_seconds <= 0:
         return None
 
     normalized_now = now.astimezone(timezone.utc)
