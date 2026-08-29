@@ -145,10 +145,12 @@ def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp
     dispatcher = tmp_path / "mcp_dispatch.lsp"
     dispatcher.write_text("", encoding="utf-8")
     monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(tmp_path))
 
     client = _live_client(42, dispatcher, timeout_s=60.0)
 
     assert isinstance(client, _Client)
+    assert captured["ipc_dir"] == str(tmp_path)
     assert captured["timeout_s"] == 60.0
     with pytest.raises(CommandError, match="timeout"):
         _live_client(42, dispatcher, timeout_s=0.0)
