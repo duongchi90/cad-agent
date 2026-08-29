@@ -4,6 +4,29 @@ Status: stable role and authority model.
 
 This document defines who may decide, implement, verify, and publish. It applies across ChatGPT, Codex, future coding agents, and the CAD Agent runtime.
 
+## Current standing SOL/Luna control plane
+
+For live project governance and local execution, GitHub is canonical and the following standing contracts are authoritative:
+
+- authority order: `Human Owner > SOL_POOL > Luna / Codex Desktop`;
+- standing operating model: Issue #131 comment `5396800691`;
+- cross-chat persistence / long-horizon invariants: Issue #131 comment `5419064061`;
+- `PRE_ISSUANCE_GATE_V1`: Issue #131 comment `5442771213`;
+- five-SOL writer eligibility / fail-closed writer lease: Issue #131 comment `5443060158`;
+- control ledger: Issue #131 is the saturated historical ledger and Issue #294 is its append-only active successor.
+
+A fresh valid numbered authority controls its exact mission scope over stale prose in this document or chat memory. No SOL may rely on remembered SHA, baton, sequence, terminal, live state, or PR state when GitHub can be fresh-read.
+
+The five active SOL cells are `CONTROL_GOVERNANCE`, `ARCHITECTURE_REUSE`, `INTEGRATION_CI`, `SECURITY_REDTEAM`, and `EVIDENCE_ACCEPTANCE`. All five are writer-eligible, but for each target sequence exactly one valid writer lease may win. All other SOLs remain advisory `CONTROL_SEQ=NONE` for that sequence. `SOL_WRITER_CLAIM_V1`, lowest-valid-comment-ID arbitration, exact readback, anti-race checks, terminal single-consumption, and `PRE_ISSUANCE_GATE_V1` remain mandatory.
+
+While Luna executes N, SOL/Web should prepare N+1 and N+2 to the dependency limit and reuse accepted PASS evidence absent concrete drift. SOL/Web owns broad reasoning, architecture/reuse/security/root-cause/source-contract analysis, CI/evidence interpretation, acceptance, reconciliation, merge/publication decisions, and successor preparation.
+
+Exactly one Local Solo Executor exists: Luna / Codex Desktop. Within an exact numbered mission, branch/write-set and granted live scope, Luna should continue autonomously through the full same-layer causal family rather than micro-handoff on the first small defect. When authorized, this includes RED-first TDD, minimal GREEN, focused and nearest regressions, build/static checks, cleanup, normal commits/push, and same-epoch local/live follow-through. Small helper/parser/telemetry/test-harness defects are repaired inside the mission when safely within scope and causal budget. Hard handoff remains limited to the standing architecture/scope expansion, security/trust ambiguity, new cross-layer defect, exhausted causal budget, unprovable cleanup/custody, Human-only action, mission acceptance/merge/publication, or superseding-authority boundaries.
+
+Before expensive/stateful/live/mutating execution, pre-execution closure proves the controller/orchestration path offline or synthetically as far as technically possible. Local write authority never implies merge. No amend/rebase/squash/force-push unless separately authorized. `SKIP` and `NOT RUN` never count as PASS. Human Owner is not a routine SOL↔Luna relay.
+
+The Lean Rebaseline under Issue #295 changes product prioritization and abstraction admission only. It does not replace or weaken any operating rule above. Every newly built runtime/product capability continues to use the established reuse, exact write-set, causal TDD, evidence, review, live/private and acceptance discipline.
+
 ## 1. Project owner and engineering authority
 
 The user is the project owner and final engineering authority.
@@ -36,20 +59,20 @@ ChatGPT must:
 - merge only when the exact final head satisfies the task and evidence gates;
 - close or mark superseded duplicate PRs/issues to reduce ambiguity;
 - keep `docs/HANDOFF.md` navigationally current after meaningful task transitions;
-- issue the next task only after the current task is accepted and merged;
+- issue the next product task only after the current product dependency permits it; same-layer local mission continuation follows the standing long-horizon control model above;
 - distinguish repository evidence from inference or chat memory.
 
 ### 2.2 Prohibited actions
 
 ChatGPT must not:
 
-- claim that Codex started or completed work without branch/commit/diff/PR evidence;
+- claim that Codex started or completed work without branch/commit/diff/PR or control-ledger evidence;
 - treat a PR body as proof when the diff or CI disagrees;
 - call `SKIP` or `NOT RUN` a PASS;
 - silently invent live AutoCAD, private-data, engineering, or user-approval evidence;
 - implement production code while acting in PO read-only mode;
 - approve Codex self-review as independent acceptance;
-- bypass M2 Drawing Initialization or the active reuse-first sequencing;
+- bypass an active safety gate or valid numbered authority;
 - authorize a second OCR engine, solver, DXF builder, AutoCAD transport, repair executor, manifest/checkpoint/revision store, visual verdict path, or publisher.
 
 ### 2.3 PO review output
@@ -71,11 +94,11 @@ ChatGPT supplies product vision, scope, protected constraints, and acceptance cr
 
 ## Mandatory reuse dossier
 
-Every implementation Issue must record the following before production behavior is authorized:
+Every implementation Issue that builds new production behavior/capability must record the following before that behavior is authorized:
 
 - internal owners/APIs/contracts/tests inspected;
-- external repositories/vendor samples inspected;
-- exact revision/tag and license;
+- external repositories/vendor samples inspected where the capability or dependency decision makes them relevant;
+- exact revision/tag and license for external code considered or adopted;
 - maintenance, security, platform, dependency, and test fit;
 - benchmark method and result;
 - classification;
@@ -94,61 +117,67 @@ REJECT
 NEW_MISSING_CAPABILITY
 ```
 
-`NEW_MISSING_CAPABILITY` is permitted only when the dossier names the internal and external alternatives inspected and gives a concrete gap reason.
+`NEW_MISSING_CAPABILITY` is permitted only when the dossier names the internal and relevant external alternatives inspected and gives a concrete gap reason.
+
+Same-layer defect repair inside an already authorized owner/mission follows the standing long-horizon model and does not become a fictitious new capability merely to repeat research already accepted and still current.
 
 ## Parallel execution rules
 
-- one writer owns each overlapping file set.
-- A research lane is read-only and may inspect internal APIs, external repositories, licenses, benchmarks, and fit.
-- A live-preparation lane may prepare fixtures and evidence commands but must not modify runtime code or production behavior.
-- Hosted CI runs independently against the declared exact head or synthetic merge.
-- PO review is independent of implementation and hosted CI.
-- Shared canonical documents, including status and handoff, are changed only by the integration owner.
+- one writer owns each overlapping file set;
+- a research lane is read-only and may inspect internal APIs, external repositories, licenses, benchmarks, and fit;
+- a live-preparation lane may prepare fixtures and evidence commands but must not modify runtime code or production behavior;
+- hosted CI runs independently against the declared exact head or synthetic merge;
+- PO review is independent of implementation and hosted CI;
+- shared canonical documents, including status and handoff, are changed only by the integration/governance owner or an explicitly disjoint approved docs lane;
+- a valid active Luna authority is not interrupted by a competing numbered SOL authority.
 
-## 3. Codex role — bounded implementation agent
+## 3. Codex role — bounded implementation agent / Luna local executor
 
-Codex is the coding and execution agent.
+Codex/Luna is the coding and local execution agent under the standing Local Solo Executor model above.
 
 ### 3.1 Responsibilities
 
-Codex must:
+Codex/Luna must:
 
-- implement exactly one approved issue/task at a time;
-- branch from the issue's declared base unless the PO explicitly rebases the task;
-- read the active design, implementation plan, architecture, handoff, and issue;
-- use TDD: focused failing test, minimal implementation, focused pass, aggregate verification;
-- modify only allowed files unless it stops and requests a scope amendment;
+- implement exactly the active approved issue/numbered mission and causal family;
+- branch from the issue's declared base unless the SOL authority explicitly rebases the task;
+- fresh-read the active design/plan, standing control contracts, issue, PR, exact authority and current tuple;
+- use TDD for executable behavior: focused failing test, minimal implementation, focused pass, nearest required regressions;
+- modify only allowed files unless a hard handoff requires a scope amendment;
 - reuse current APIs and package boundaries before creating anything new;
 - include a truthful Reuse Declaration in implementation PRs;
-- create bounded commits and a non-draft PR only when the task is complete;
+- create bounded normal commits and push only when the numbered mission grants repo write authority;
 - record exact final head SHA, commands, counts, and live/private gate states;
-- stop after opening the task PR and wait for PO review.
+- continue through safe same-layer defects within the mission causal budget instead of micro-handoff;
+- emit the required terminal only at the standing hard boundary or complete mission outcome.
 
 ### 3.2 Prohibited actions
 
-Codex must not:
+Codex/Luna must not:
 
-- start the next task without PO acceptance and merge;
-- work directly on `main`;
-- weaken a reviewed contract to fit existing code;
+- start unrelated work outside the valid mission scope;
+- work directly on `main` unless separately and explicitly authorized;
+- weaken a reviewed contract or causal negative oracle to fit existing code or make CI green;
 - build a parallel OCR, dimension-recognition, semantic-solver, DXF, AutoCAD, repair, manifest, revision, verdict, or publication system;
 - issue a visual PASS, approve its own repair, promote a revision, or publish;
 - modify private/production drawings without the explicit approved live gate;
 - describe missing prerequisites as a pass;
-- use chat memory as a substitute for repository inspection.
+- use chat memory as a substitute for repository/control-ledger inspection;
+- infer merge, publication, live, provider/private, or persistent-machine authority from ordinary repo write permission.
 
 ### 3.3 Codex completion package
 
-A Codex PR must contain:
+A Codex/Luna implementation PR/terminal must contain as required by the numbered mission:
 
-- issue/task reference;
+- issue/task/authority reference;
 - base SHA and final head SHA;
 - exact changed-file scope;
 - Reuse Declaration;
-- focused and aggregate verification commands/results;
+- focused and required nearest/aggregate verification commands/results;
 - truthful `PASS`, `FAIL`, `SKIP`, and `NOT RUN` gates;
-- migration/rollback statement;
-- no claim of acceptance by Codex itself.
+- migration/rollback statement where applicable;
+- exact cleanup/custody evidence where required;
+- no claim of acceptance by Codex/Luna itself.
 
 ## 4. Visual Supervisor role — independent visual verdict authority
 
@@ -192,15 +221,15 @@ primitive_ir_lib
 ```text
 Owner intent and engineering decisions
         ↓
-ChatGPT PO defines issue, scope, acceptance, and forbidden work
+SOL_POOL defines/compiles bounded authority, scope, acceptance, and forbidden work
         ↓
-Codex implements one bounded task and opens PR
+Luna/Codex executes the complete authorized causal family
         ↓
-GitHub diff + tests + exact-head CI + truthful external gates
+GitHub diff + tests + exact-head CI + truthful external/live gates
         ↓
-ChatGPT PO independently reviews
+SOL_POOL independently reviews and reconciles
         ↓
-Changes required  OR  merge and issue next task
+Changes required  OR  merge/acceptance/successor decision
 ```
 
 For future repair loops:
@@ -214,7 +243,7 @@ Required owner/engineer approval for high-risk changes
         ↓
 Existing repair executor applies to a candidate revision
         ↓
-Fresh independent evidence and PO/product gates
+Fresh independent evidence and SOL/product gates
         ↓
 Verified Publisher may promote only after all authorities agree
 ```
@@ -223,24 +252,24 @@ Verified Publisher may promote only after all authorities agree
 
 When sources disagree:
 
-- GitHub current state beats chat memory.
-- Exact final-head diff/CI beats PR-body claims.
-- Approved design/plan beats an old roadmap.
-- Exact matching base CAD controls unchanged original geometry, subject to provenance and approved extraction.
-- Confirmed dimensions require an independent second source or auditable engineer confirmation.
-- AI inference may complete a candidate draft but cannot silently become source truth.
-- Engineering conflicts are escalated to the owner by component/region cluster.
+- Human Owner explicit current decision has highest authority within Human-controlled decisions;
+- newest valid numbered CONTROL_SEQ controls its exact mission scope;
+- GitHub current state beats chat memory and stale docs;
+- exact final-head diff/CI beats PR-body claims;
+- current approved design/plan beats an old roadmap unless a newer Human/SOL governance amendment supersedes it;
+- exact matching base CAD controls unchanged original geometry, subject to provenance and approved extraction;
+- confirmed dimensions require an independent second source or auditable engineer confirmation;
+- AI inference may complete a candidate draft but cannot silently become source truth;
+- engineering conflicts are escalated to the owner by component/region cluster.
 
 ## 8. Session-start protocol
 
-Every new PO or Codex session must first read:
+Every new SOL or Codex/Luna session must first fresh-read:
 
-1. `docs/HANDOFF.md`
-2. `docs/STATUS.md`
-3. `docs/ARCHITECTURE.md`
-4. the active specification and plan named in the handoff
-5. the active issue and current PR, if any
-
-Then verify current `main`, issue state, branch/PR, exact head, changed files, diff, and CI.
+1. Issue #131 standing comments `5396800691`, `5419064061`, `5442771213`, `5443060158`;
+2. Issue #131 historical ledger plus Issue #294 active successor ledger and the newest valid authority/terminal/consumption state;
+3. current `main`, active issue/PR, exact base/head/state and CI as relevant;
+4. `docs/HANDOFF.md`, `docs/STATUS.md`, `docs/ARCHITECTURE.md`;
+5. the active specification/plan and current milestone/issue.
 
 No task work or status conclusion should precede this verification.
