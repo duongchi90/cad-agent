@@ -13,6 +13,8 @@ import textwrap
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 from mcp_integration_lib import mcp_client
 from mcp_integration_lib.mcp_client import (
     MCPToolError,
@@ -316,6 +318,7 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self.assertEqual(user32.send_calls, [])
         self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
 
+    @pytest.mark.causal_red
     def test_enqueue_true_without_receiver_consumption_is_causal_red(self) -> None:
         """The current trigger returns after enqueue without a handler ACK."""
         user32 = RecordingUser32(
