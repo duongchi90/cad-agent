@@ -149,9 +149,10 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 - Draft PR `#309` remains the benchmark integration point at its exact
   GitHub-observed head `738dac0b11231a71f91376ebb5ef22b6c709461d`. The
   bounded C# health-owner successor is branch `codex/m2-plugin-identity`,
-  based on that head; current PR #310 head is
-  `5c556b352f401bc084d4ee3f162c77d5df239378`. Fresh `origin/main` remains
-  `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
+  based on that head. The final live implementation/harness evidence ran at
+  `5c556b352f401bc084d4ee3f162c77d5df239378`; this acceptance-record update
+  is committed at `38c640e4402dfc7868c67197b6d9a5bd4c0baa39`. Fresh
+  `origin/main` remains `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
 - Implemented scope: the closed `m2-mechanical-benchmark-record-1.0` oracle,
   cross-process deterministic staged-DXF fixture normalization with
   class-order semantic-invariance guards and post-normalization review,
