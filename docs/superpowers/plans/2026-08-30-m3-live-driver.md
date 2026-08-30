@@ -12,6 +12,8 @@
 
 **Status:** executing
 
+**Implementation head:** `910643227299c36ed96c846b6edaf2b2eb4320e9`
+
 ## Global Constraints
 
 - Use only the existing R4/R5/R6/R7/FileIPC/.NET/provider owners; the new code is an evidence contract and integration composition seam.
@@ -86,11 +88,11 @@
 **Interfaces:**
 - Documentation records the exact merged main/head, record schema/driver paths, contract-only non-live behavior, and the next manual gate only after the driver is independently verified.
 
-- [ ] **Step 1: Record the observed offline driver state**
+- [x] **Step 1: Record the observed offline driver state**
 
   Add the implementation head, focused test result, and explicit `LIVE_REPAIR_ACCEPTANCE=NOT_RUN`. State that the driver is opt-in and callback-injected; it does not itself perform NETLOAD or AutoCAD mutation.
 
-- [ ] **Step 2: Run documentation and nearest regression tests**
+- [x] **Step 2: Run documentation and nearest regression tests**
 
   Run:
 
@@ -99,11 +101,11 @@
   git diff --check
   ```
 
-- [ ] **Step 3: Run the canonical offline verifier**
+- [x] **Step 3: Run the canonical offline verifier**
 
   Run `.\scripts\verify.ps1 -SkipAutoCADDotNet` from a clean worktree. Accept only exit 0; real-data and AutoCAD unavailable states remain `SKIP`/`NOT RUN`, never PASS.
 
-- [ ] **Step 4: Commit the bounded implementation and evidence**
+- [x] **Step 4: Commit the bounded implementation and evidence**
 
   Commit production contract, integration harness, tests, plan, packet, and status in scoped normal commits; do not amend, rebase, squash, or force-push.
 

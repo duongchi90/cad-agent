@@ -4,14 +4,17 @@
 
 - Packet state: **PREPARED / LIVE NOT RUN**.
 - Packet basis: GitHub `main` at
-  `81a92a74639965c801a14679052d70a25180503f` after PR #314 merged.
+  `d71cf60c7e9809aca9d9c0dbeef13f066b261f23` after PR #315 merged.
 - Contract-only evidence is complete in
   `mcp_integration_lib/tests/test_m3_disposable_repair_acceptance.py` and is
   not live/provider evidence.
-- The current main branch has no M3 live composition test or canonical M3
-  record writer. Therefore no live command is invented or presented as ready.
-  The next autonomous boundary is a RED-first, opt-in test-only live
-  composition driver over the existing R4/R5/R6/R7/FileIPC owners.
+- Candidate head `910643227299c36ed96c846b6edaf2b2eb4320e9` now supplies the
+  RED-first, opt-in callback composition seam and canonical fail-closed record
+  oracle at `mcp_integration_lib/m3_live_harness.py` and
+  `cad_agent/m3_live_record.py`. Offline contract verification is complete;
+  no live command is invented or presented as ready until this candidate is
+  hosted-reviewed and a provider-backed AutoCAD epoch is deliberately
+  scheduled.
 
 ## Frozen implementation and plugin identity
 
@@ -63,9 +66,9 @@ $env:CAD_AGENT_AUTOCAD_HWND = '<observed fresh AutoCAD frame HWND; never caller-
 
 The future driver must allocate one unique directory below `C:\temp`, create
 or stage one disposable candidate-only LINE fixture, and record the exact
-source/candidate/staged-DXF/build identities. No canonical M3 record path or
-live harness exists in current `main`; adding that test-only bounded seam is
-the remaining autonomous implementation step.
+source/candidate/staged-DXF/build identities. The offline seam now exists, but
+it remains callback-injected and non-live; wiring real providers and entering
+the exclusive AutoCAD lane are the remaining boundaries.
 
 ## Required live owner sequence
 
@@ -102,9 +105,10 @@ The only current M3 command is the already-accepted contract-only check:
 & 'C:\Users\dkv\Downloads\cad-agent-merge\.venv-py311\Scripts\python.exe' -m pytest 'mcp_integration_lib\tests\test_m3_disposable_repair_acceptance.py' -q -p no:cacheprovider
 ```
 
-That command must not be relabelled as live. A future live command may be
-published only with the RED-first live driver, its record schema, its exact
-current main/head binding, and an explicit `autocad_mechanical` opt-in gate.
+That command must not be relabelled as live. The new seam is verified offline
+through injected callbacks only; a future live command may be published only
+with real provider bindings, its exact current main/head/plugin binding, and
+an explicit `autocad_mechanical` opt-in gate.
 Until then: `M3_CONTRACT_COMPOSITION=PASS`,
 `LIVE_REPAIR_ACCEPTANCE=NOT_RUN`, and `M3_MILESTONE=NOT_CLOSED`.
 
