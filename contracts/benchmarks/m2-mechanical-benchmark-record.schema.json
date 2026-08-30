@@ -19,7 +19,7 @@
   "properties": {
     "schema_version": {"const": "m2-mechanical-benchmark-record-1.0"},
     "benchmark_id": {"$ref": "#/$defs/identifier"},
-    "main_sha": {"$ref": "#/$defs/sha256"},
+    "main_sha": {"$ref": "#/$defs/git_commit_sha"},
     "profile_id": {"$ref": "#/$defs/identifier"},
     "profile_revision": {"$ref": "#/$defs/identifier"},
     "fixture_id": {"$ref": "#/$defs/identifier"},
@@ -33,6 +33,7 @@
   },
   "$defs": {
     "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "git_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "timestamp": {
       "type": "string",
@@ -227,7 +228,7 @@
       ],
       "properties": {
         "session_id": {"$ref": "#/$defs/identifier"},
-        "main_sha": {"$ref": "#/$defs/sha256"},
+        "main_sha": {"$ref": "#/$defs/git_commit_sha"},
         "profile_revision": {"$ref": "#/$defs/identifier"},
         "fixture_id": {"$ref": "#/$defs/identifier"},
         "fixture_input_sha256": {"$ref": "#/$defs/sha256"},

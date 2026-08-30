@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 import pytest
+import mcp_integration_lib.tests.test_m2_mechanical_benchmark_live as m2_live
 
 from cad_agent.live import LiveSafetyError, load_build_evidence
 from cad_agent.manifest import sha256_file
@@ -61,6 +62,10 @@ _SHA_A = "a" * 64
 _SHA_B = "b" * 64
 _SHA_C = "c" * 64
 _SHA_D = "d" * 64
+_GIT_SHA_A = "a" * 40
+_GIT_SHA_B = "b" * 40
+_GIT_SHA_C = "c" * 40
+_GIT_SHA_D = "d" * 40
 
 
 def _git_output(repo: Path, *args: str) -> str:
@@ -99,7 +104,7 @@ def _review(status: str = "PASS", degraded: bool = False) -> dict[str, object]:
 def _epoch(
     *,
     session_id: str = "session-a",
-    main_sha: str = _SHA_A,
+    main_sha: str = _GIT_SHA_A,
     profile_revision: str = "r1",
     fixture_id: str = "fixture-1",
     fixture_input_sha256: str = _SHA_B,
@@ -184,7 +189,7 @@ def _record(**overrides: object) -> dict[str, object]:
     record = {
         "schema_version": M2_BENCHMARK_SCHEMA_VERSION,
         "benchmark_id": "m2-mechanical",
-        "main_sha": _SHA_A,
+        "main_sha": _GIT_SHA_A,
         "profile_id": "M2_MECHANICAL_REVIEW_V1",
         "profile_revision": "r1",
         "fixture_id": "fixture-1",
@@ -209,11 +214,37 @@ def test_schema_is_closed_json() -> None:
     assert payload["properties"]["schema_version"]["const"] == M2_BENCHMARK_SCHEMA_VERSION
 
 
+def test_schema_separates_git_commit_identity_from_sha256_hashes() -> None:
+    payload = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+    assert payload["properties"]["main_sha"] == {"$ref": "#/$defs/git_commit_sha"}
+    assert payload["$defs"]["git_commit_sha"]["pattern"] == "^[0-9a-f]{40}$"
+    assert payload["properties"]["fixture_input_sha256"] == {"$ref": "#/$defs/sha256"}
+    assert payload["properties"]["staged_dxf_sha256"] == {"$ref": "#/$defs/sha256"}
+    assert payload["$defs"]["epoch"]["properties"]["main_sha"] == {
+        "$ref": "#/$defs/git_commit_sha"
+    }
+
+
+def test_validate_accepts_exact_current_main_git_identity() -> None:
+    record = new_m2_record(
+        benchmark_id="m2-mechanical",
+        main_sha=_GIT_SHA_A,
+        profile_id="M2_MECHANICAL_REVIEW_V1",
+        profile_revision="r1",
+        fixture_id="fixture-1",
+        fixture_input_sha256=_SHA_B,
+        staged_dxf_sha256=_SHA_C,
+    )
+
+    assert record["main_sha"] == _GIT_SHA_A
+
+
 def test_validate_accepts_closed_record() -> None:
     validated = validate_m2_record(
         new_m2_record(
             benchmark_id="m2-mechanical",
-            main_sha=_SHA_A,
+            main_sha=_GIT_SHA_A,
             profile_id="M2_MECHANICAL_REVIEW_V1",
             profile_revision="r1",
             fixture_id="fixture-1",
@@ -230,7 +261,7 @@ def test_validate_accepts_closed_record() -> None:
     ("mutator", "message"),
     [
         (lambda payload: payload.__setitem__("unknown", True), "unexpected properties"),
-        (lambda payload: payload.__setitem__("main_sha", "A" * 64), "lowercase SHA-256"),
+        (lambda payload: payload.__setitem__("main_sha", "A" * 40), "lowercase Git commit SHA"),
         (lambda payload: payload.__setitem__("profile_revision", "bad rev"), "identifier"),
         (lambda payload: payload.__setitem__("fixture_input_sha256", "g" * 64), "lowercase SHA-256"),
         (lambda payload: payload["epochs"][0].__setitem__("started_at", "2026-08-30 10:00:00"), "RFC3339"),
@@ -251,7 +282,7 @@ def test_validate_rejects_closed_record_drift(mutator, message) -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("main_sha", _SHA_D, "binding"),
+        ("main_sha", _GIT_SHA_D, "binding"),
         ("profile_revision", "r2", "binding"),
         ("fixture_id", "fixture-2", "binding"),
         ("fixture_input_sha256", _SHA_D, "binding"),
@@ -330,7 +361,7 @@ def test_accepted_epoch_requires_hash_pairs_to_match_fixture_binding(
 def test_non_comparable_not_captured_epoch_is_retained_for_diagnosis() -> None:
     record = new_m2_record(
         benchmark_id="m2-mechanical",
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         profile_id=M2_MECHANICAL_BENCHMARK_PROFILE_ID,
         profile_revision=M2_MECHANICAL_BENCHMARK_PROFILE_REVISION,
         fixture_id="fixture-1",
@@ -395,7 +426,7 @@ def test_append_enforces_binding_and_pure_copy() -> None:
 
 def test_append_rejects_binding_mismatch() -> None:
     record = _record()
-    epoch = _epoch(main_sha=_SHA_D)
+    epoch = _epoch(main_sha=_GIT_SHA_D)
     with pytest.raises(M2BenchmarkError, match="binding"):
         append_m2_epoch(record, epoch)
 
@@ -403,7 +434,7 @@ def test_append_rejects_binding_mismatch() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("main_sha", _SHA_D),
+        ("main_sha", _GIT_SHA_D),
         ("profile_revision", "r2"),
         ("fixture_id", "fixture-2"),
         ("fixture_input_sha256", _SHA_D),
@@ -420,7 +451,7 @@ def test_append_rejects_each_binding_mismatch(field: str, value: object) -> None
 def test_new_record_with_real_hashes_appends_matching_epoch() -> None:
     record = new_m2_record(
         benchmark_id="m2-mechanical",
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         profile_id="M2_MECHANICAL_REVIEW_V1",
         profile_revision="r1",
         fixture_id="fixture-1",
@@ -438,7 +469,7 @@ def test_new_record_with_real_hashes_appends_matching_epoch() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("main_sha", _SHA_D),
+        ("main_sha", _GIT_SHA_D),
         ("profile_revision", "r2"),
         ("fixture_id", "fixture-2"),
         ("fixture_input_sha256", _SHA_D),
@@ -448,7 +479,7 @@ def test_new_record_with_real_hashes_appends_matching_epoch() -> None:
 def test_new_record_with_real_hashes_rejects_epoch_mismatches(field: str, value: object) -> None:
     record = new_m2_record(
         benchmark_id="m2-mechanical",
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         profile_id="M2_MECHANICAL_REVIEW_V1",
         profile_revision="r1",
         fixture_id="fixture-1",
@@ -544,6 +575,21 @@ def test_m2_fixture_support_builds_deterministic_fixture(tmp_path: Path) -> None
         "dimension_mismatch_count": 0,
         "status": "PASS",
     }
+
+
+def test_m2_live_component_expectations_follow_written_builder_truth(tmp_path: Path) -> None:
+    fixture = build_m2_fixture(tmp_path)
+
+    assert m2_live._expected_component_bom(fixture) == [
+        {
+            "block_name": "COMP_FRAME_BEAM",
+            "attributes": [
+                {"tag": "PART_ID", "value": "part-001"},
+                {"tag": "LENGTH_MM", "value": "100.00"},
+                {"tag": "PROFILE", "value": "unknown"},
+            ],
+        }
+    ]
 
 
 def test_m2_fixture_support_is_reproducible_across_fresh_roots(tmp_path: Path) -> None:
@@ -697,7 +743,7 @@ def test_m2_human_events_json_parses_and_rejects_invalid_payloads() -> None:
 def test_m2_missing_capture_is_non_comparable_not_zero() -> None:
     record = new_m2_record(
         benchmark_id="m2-mechanical",
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         profile_id=M2_MECHANICAL_BENCHMARK_PROFILE_ID,
         profile_revision=M2_MECHANICAL_BENCHMARK_PROFILE_REVISION,
         fixture_id="fixture-1",
@@ -763,7 +809,7 @@ def test_m2_existing_record_from_other_main_sha_is_refused(tmp_path: Path) -> No
     record = _record()
     record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="main SHA"):
-        _load_existing_m2_record(record_path, main_sha=_SHA_D)
+        _load_existing_m2_record(record_path, main_sha=_GIT_SHA_D)
 
 
 def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_epochs(
@@ -773,7 +819,7 @@ def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_ep
     record_path = tmp_path / "m2-record.json"
     first = _initial_epoch(
         session_id="session-a",
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         fixture=fixture,
         human_events=[_event("NETLOAD", 1)],
     )
@@ -815,7 +861,7 @@ def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_ep
 
     persisted = _persist_epoch_record(
         record_path,
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         fixture=fixture,
         epoch=first,
     )
@@ -828,7 +874,7 @@ def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_ep
     second["finished_at"] = "2026-08-30T10:07:00Z"
     appended = _persist_epoch_record(
         record_path,
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         fixture=fixture,
         epoch=second,
     )
@@ -861,7 +907,7 @@ def test_failure_after_human_capture_clears_false_green_and_retains_category(
     fixture = build_m2_fixture(tmp_path / "fixture")
     epoch = _initial_epoch(
         session_id="session-a",
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         fixture=fixture,
         human_events=[_event("NETLOAD", 1)],
     )
@@ -900,7 +946,7 @@ def test_persist_m2_measurements_artifact_writes_sidecar_json(tmp_path: Path) ->
 
     artifact = _persist_m2_measurements_artifact(
         record_path,
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         measurements={"request_result_bytes": 123, "entity_query_count": 2},
     )
 
@@ -908,7 +954,7 @@ def test_persist_m2_measurements_artifact_writes_sidecar_json(tmp_path: Path) ->
     assert payload == {
         "kind": "m2_mechanical_measurements",
         "record_path": str(record_path),
-        "main_sha": _SHA_A,
+        "main_sha": _GIT_SHA_A,
         "reference_decision": "Task 4 should consume this sidecar because the closed M2 record cannot accept extra fields.",
         "measurements": {"request_result_bytes": 123, "entity_query_count": 2},
     }
@@ -920,7 +966,7 @@ def test_measurements_sidecar_writes_outside_repo_and_survives_failure(tmp_path:
 
     artifact = _persist_m2_measurements_artifact(
         record_path,
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         measurements={"request_result_bytes": 0, "entity_query_count": 0},
     )
 
@@ -934,7 +980,7 @@ def test_measurements_sidecar_writes_outside_repo_and_survives_failure(tmp_path:
 
     second = _persist_m2_measurements_artifact(
         record_path,
-        main_sha=_SHA_A,
+        main_sha=_GIT_SHA_A,
         measurements={"request_result_bytes": 7, "entity_query_count": 3},
     )
     assert second == artifact

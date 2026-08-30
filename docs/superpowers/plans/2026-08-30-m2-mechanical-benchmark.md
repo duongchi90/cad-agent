@@ -30,6 +30,9 @@
 - Reuse build_dxf, review_dxf, review_dxf_live, FileIPCLiveMCPClient, DotNetIPCClient, write_build_evidence, load_build_evidence, and existing cleanup helpers.
 - No customer drawing, including BVTL.dwg, enters Git or the fixture; all live files are disposable under C:\temp.
 - Live actions are read-only health/review/BOM plus open and close-without-save; no repair, save, NETLOAD automation, SECURELOAD change, or production mutation.
+- `main_sha` is the exact current-main lowercase 40-character Git commit SHA;
+  fixture, source, staged-DXF, and file hash fields remain lowercase
+  64-character SHA-256 values.
 - NOT_CAPTURED, SKIP, and NOT_RUN are explicit non-success states; dimension_checked=0 and missing human-event capture cannot satisfy a comparable epoch.
 - Success rate is successful_comparable_epochs / comparable_epochs, never an inference from enqueue/submission.
 - REPRESENTATIVE requires at least three successful comparable epochs across at least two explicit AutoCAD session ids.

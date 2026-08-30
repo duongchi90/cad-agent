@@ -238,6 +238,20 @@ def _headless_epoch_result(fixture) -> dict[str, object]:
     }
 
 
+def _expected_component_bom(fixture) -> list[dict[str, object]]:
+    """Project builder-written component truth into the BOM response shape."""
+    return [
+        {
+            "block_name": written["block_name"],
+            "attributes": [
+                {"tag": tag, "value": value}
+                for tag, value in written["attribs"].items()
+            ],
+        }
+        for written in fixture.build.written_component_by_part_id.values()
+    ]
+
+
 def _initial_epoch(
     *,
     session_id: str,
@@ -698,20 +712,22 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             self.assertFalse(bom["changed"])
             self.assertEqual(expected_full_path, bom["drawing_full_path"])
             self.assertEqual([], bom["errors"])
+            expected_components = _expected_component_bom(fixture)
             component_count = int(bom["payload"]["component_count"])
-            self.assertGreaterEqual(component_count, 1)
+            self.assertEqual(len(expected_components), component_count)
             components = bom["payload"]["components"]
-            frame_component = next(
-                component for component in components if component["block_name"] == "COMP_FRAME"
-            )
-            self.assertEqual(
-                [{"tag": "PART_ID", "value": "FRAME-001"}],
-                frame_component["attributes"],
-            )
-            self.assertIn(
-                "COMP_EMPTY",
+            self.assertCountEqual(
+                [component["block_name"] for component in expected_components],
                 [component["block_name"] for component in components],
             )
+            for expected in expected_components:
+                matching = [
+                    component
+                    for component in components
+                    if component["block_name"] == expected["block_name"]
+                ]
+                self.assertEqual(1, len(matching))
+                self.assertEqual(expected["attributes"], matching[0]["attributes"])
 
             transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
             review = review_dxf_live(fixture.build, legacy_client, open_drawing=False)

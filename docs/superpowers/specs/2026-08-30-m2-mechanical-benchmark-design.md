@@ -70,13 +70,14 @@ The repository owns the closed contract
 `m2-mechanical-benchmark-record-1.0`. The artifact is written outside the
 repository and contains:
 
-- benchmark id, current-main SHA, profile identity, fixture identity, and
-  environment facts;
+- benchmark id, the exact current-main Git commit identity as a lowercase
+  40-character SHA, profile identity, fixture identity, and environment facts;
 - one `epoch` object per disposable run with UTC start/end and wall-clock
   seconds;
 - `human_interventions` as an integer plus an event list. Manual NETLOAD is an
   explicit event; missing capture is invalid for a comparable epoch;
-- exact source/input and staged-DXF SHA-256 values before and after the run;
+- exact source/input and staged-DXF lowercase 64-character SHA-256 values
+  before and after the run;
 - headless status and primitive/component/dimension checked and defect counts;
 - live status and structural/geometry/dimension checked and defect counts;
 - `geometry_degraded`, warning/mismatch details, and categorical transport or

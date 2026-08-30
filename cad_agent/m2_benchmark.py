@@ -12,6 +12,7 @@ from typing import Any
 M2_BENCHMARK_SCHEMA_VERSION = "m2-mechanical-benchmark-record-1.0"
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_GIT_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 _STATUS = {"PASS", "FAIL", "SKIP", "NOT_RUN", "NOT_CAPTURED"}
@@ -59,6 +60,13 @@ def _sha256(value: object, *, path: str) -> str:
     text = _string(value, path=path)
     if not _SHA256.fullmatch(text):
         _fail(f"{path} must be a lowercase SHA-256")
+    return text
+
+
+def _git_commit_sha(value: object, *, path: str) -> str:
+    text = _string(value, path=path)
+    if not _GIT_COMMIT_SHA.fullmatch(text):
+        _fail(f"{path} must be a lowercase Git commit SHA")
     return text
 
 
@@ -251,7 +259,7 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
         },
     )
     _identifier(item["session_id"], path=f"{path}.session_id")
-    _sha256(item["main_sha"], path=f"{path}.main_sha")
+    _git_commit_sha(item["main_sha"], path=f"{path}.main_sha")
     _identifier(item["profile_revision"], path=f"{path}.profile_revision")
     _identifier(item["fixture_id"], path=f"{path}.fixture_id")
     _sha256(item["fixture_input_sha256"], path=f"{path}.fixture_input_sha256")
@@ -407,7 +415,7 @@ def validate_m2_record(record: Mapping[str, object]) -> dict[str, object]:
     if payload["schema_version"] != M2_BENCHMARK_SCHEMA_VERSION:
         _fail("schema_version must match the M2 benchmark schema")
     _identifier(payload["benchmark_id"], path="benchmark_id")
-    _sha256(payload["main_sha"], path="main_sha")
+    _git_commit_sha(payload["main_sha"], path="main_sha")
     _identifier(payload["profile_id"], path="profile_id")
     _identifier(payload["profile_revision"], path="profile_revision")
     _identifier(payload["fixture_id"], path="fixture_id")
