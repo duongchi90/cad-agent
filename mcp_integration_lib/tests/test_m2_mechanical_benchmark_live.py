@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
 import hashlib
 import json
 import os
 import platform
 import re
-import subprocess
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -58,6 +60,16 @@ M2_MECHANICAL_BENCHMARK_MISSING_SESSION_KIND = "session_id_missing"
 M2_MECHANICAL_BENCHMARK_FIXTURE_ID = "fixture-1"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GIT_SHA_LOWER = re.compile(r"^[0-9a-f]{40}$")
+_PLUGIN_DLL_PATH = (
+    _REPO_ROOT
+    / "autocad_plugin"
+    / "CadAgent.AutoCAD2027"
+    / "bin"
+    / "x64"
+    / "Release"
+    / "net10.0-windows"
+    / "CadAgent.AutoCAD2027.dll"
+)
 
 
 def _timestamp() -> str:
@@ -170,11 +182,52 @@ def _transport_records(
 
 
 def _transport_for_operation(operation: str) -> str:
-    if operation in {"m2-live", "drawing_open"}:
+    if operation in {"m2-live", "drawing_open", "drawing_get_variables"}:
         return "fileipc"
     if operation in {"health", "mechanical_bom"}:
         return "dotnetipc"
     return "live_review"
+
+
+def _runtime_identity_from_pid_hwnd(pid: int, hwnd: int) -> str:
+    if type(pid) is not int or pid <= 0:
+        raise ValueError("pid must be a positive integer")
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+    return f"acad-pid-{pid}-hwnd-{hwnd}"
+
+
+def _observed_runtime_identity(hwnd: int) -> str:
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+    pid = wintypes.DWORD()
+    if not ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)) or not pid.value:
+        raise MCPToolError("AutoCAD runtime identity could not be observed from HWND")
+    return _runtime_identity_from_pid_hwnd(int(pid.value), hwnd)
+
+
+def _current_implementation_sha() -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            cwd=_REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise MCPToolError("Unable to resolve the implementation/harness Git head") from exc
+    implementation_sha = completed.stdout.strip()
+    if not _GIT_SHA_LOWER.fullmatch(implementation_sha):
+        raise MCPToolError("Resolved implementation/harness Git head is invalid")
+    return implementation_sha
+
+
+def _plugin_binary_sha256() -> str:
+    plugin_path = _PLUGIN_DLL_PATH.resolve()
+    if not plugin_path.is_file():
+        raise MCPToolError(f"AutoCAD plugin build identity is missing: {plugin_path}")
+    return sha256_file(plugin_path)
 
 
 def _request_artifacts_removed(
@@ -321,7 +374,7 @@ def _initial_epoch(
                 "kind": "wrong_target",
                 "count": 0,
                 "captured": False,
-                "operation": "health",
+                "operation": "wrong_target",
                 "category": "not_run",
                 "detail": "not run",
             },
@@ -344,6 +397,11 @@ def _initial_epoch(
             "plugin_version": None,
             "python_version": None,
             "ipc_root_id": None,
+            "runtime_identity": None,
+            "implementation_sha": None,
+            "pr_head_sha": None,
+            "harness_sha": None,
+            "plugin_binary_sha256": None,
         },
         "failure": None,
         "mutation": {"save_attempts": 0, "repair_attempts": 0},
@@ -389,6 +447,9 @@ def _apply_failure_outcome(
         "category": _failure_category(error),
         "message": str(error),
     }
+    existing = epoch.get("failure")
+    if isinstance(existing, dict):
+        return {str(key): str(value) for key, value in existing.items()}
     epoch["failure"] = detail
     return detail
 
@@ -458,13 +519,11 @@ def _exercise_wrong_target_rejection(
     try:
         dotnet_client.health(intended_full_path, request_id=request_id)
     except (MCPTimeoutError, MCPToolError, DotNetIPCError) as exc:
-        result = getattr(exc, "result", None)
-        operation = str(result.get("operation", "health")) if isinstance(result, dict) else "health"
         return {
             "kind": "wrong_target",
             "count": 1,
             "captured": True,
-            "operation": operation,
+            "operation": "wrong_target",
             "category": _failure_category(exc),
             "detail": str(exc),
         }
@@ -474,7 +533,7 @@ def _exercise_wrong_target_rejection(
         "kind": "wrong_target",
         "count": 0,
         "captured": False,
-        "operation": "health",
+        "operation": "wrong_target",
         "category": "missing_refusal",
         "detail": "wrong target identity was not rejected",
     }
@@ -693,6 +752,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                     "category": "missing_opt_in",
                     "message": ",".join(missing_opt_ins),
                 }
+                epoch["failure"] = failure_detail
                 raise AssertionError("missing opt-in inputs")
 
             hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
@@ -707,13 +767,19 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 trigger=make_windows_dotnet_dispatch_trigger(hwnd),
                 timeout_s=20.0,
             )
+            observed_runtime_identity = _observed_runtime_identity(hwnd)
+            implementation_sha = _current_implementation_sha()
+            plugin_binary_sha256 = _plugin_binary_sha256()
+            epoch["session_id"] = observed_runtime_identity
 
             current_operation = "drawing_open"
             transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
             legacy_client.drawing_open(str(drawing_path))
             transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
-            current_operation = "drawing_open"
+            current_operation = "drawing_get_variables"
+            transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
             before_state = legacy_client.drawing_get_variables(["DBMOD", "DWGPREFIX", "DWGNAME"])
+            transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
 
             health_request_id = f"m2-health-{time.time_ns()}"
             request_ids.append(health_request_id)
@@ -737,6 +803,11 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 + hashlib.sha256(
                     str(Path(dotnet_client.ipc_dir).resolve()).casefold().encode("utf-8")
                 ).hexdigest()[:16],
+                "runtime_identity": observed_runtime_identity,
+                "implementation_sha": implementation_sha,
+                "pr_head_sha": implementation_sha,
+                "harness_sha": implementation_sha,
+                "plugin_binary_sha256": plugin_binary_sha256,
             }
 
             bom_request_id = f"m2-bom-{time.time_ns()}"
@@ -783,7 +854,8 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             stale_probe = _exercise_stale_evidence_rejection(fixture, probe_root)
             wrong_target_request_id = f"m2-wrong-target-{time.time_ns()}"
             request_ids.append(wrong_target_request_id)
-            transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
+            current_operation = "wrong_target"
+            transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
             wrong_target_probe = _exercise_wrong_target_rejection(
                 legacy_client=legacy_client,
                 dotnet_client=dotnet_client,
@@ -793,7 +865,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 request_id=wrong_target_request_id,
             )
             if wrong_target_probe["captured"]:
-                transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
+                transport["live_review"]["failures"] = int(transport["live_review"]["failures"]) + 1
             epoch["negative_probes"] = [
                 {
                     "kind": str(stale_probe["kind"]),
@@ -813,7 +885,10 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 },
             ]
 
+            current_operation = "drawing_get_variables"
+            transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
             after_state = legacy_client.drawing_get_variables(["DBMOD", "DWGPREFIX", "DWGNAME"])
+            transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
             self.assertEqual(before_state, after_state)
             self.assertEqual(before_sha, sha256_file(drawing_path))
             self.assertEqual(fixture.input_sha256, sha256_file(fixture.input_path))
@@ -869,6 +944,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
 
             accepted_comparable = (
                 not missing_opt_ins
+                and epoch["failure"] is None
                 and human_capture_observed
                 and epoch["headless"]["status"] == "PASS"
                 and epoch["live"]["status"] == "PASS"
@@ -885,7 +961,13 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 epoch=epoch,
             )
             if not epoch["success"]:
-                detail = failure_detail["message"] if failure_detail else "live benchmark evidence is non-comparable"
+                detail = (
+                    failure_detail["message"]
+                    if failure_detail
+                    else epoch["failure"]["message"]
+                    if isinstance(epoch.get("failure"), dict)
+                    else "live benchmark evidence is non-comparable"
+                )
                 raise AssertionError(
                     f"M2 live epoch is not successful: {detail}; comparable={persisted['aggregate']['comparable_epochs']}"
                 )

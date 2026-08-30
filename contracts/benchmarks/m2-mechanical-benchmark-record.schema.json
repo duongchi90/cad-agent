@@ -170,13 +170,37 @@
     "environment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["captured", "autocad_product", "plugin_version", "python_version", "ipc_root_id"],
+      "required": [
+        "captured",
+        "autocad_product",
+        "plugin_version",
+        "python_version",
+        "ipc_root_id",
+        "runtime_identity",
+        "implementation_sha",
+        "pr_head_sha",
+        "harness_sha",
+        "plugin_binary_sha256"
+      ],
       "properties": {
         "captured": {"type": "boolean"},
         "autocad_product": {"type": ["string", "null"]},
         "plugin_version": {"type": ["string", "null"]},
         "python_version": {"type": ["string", "null"]},
-        "ipc_root_id": {"type": ["string", "null"]}
+        "ipc_root_id": {"type": ["string", "null"]},
+        "runtime_identity": {"type": ["string", "null"]},
+        "implementation_sha": {
+          "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+        },
+        "pr_head_sha": {
+          "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+        },
+        "harness_sha": {
+          "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+        },
+        "plugin_binary_sha256": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        }
       }
     },
     "fixture": {

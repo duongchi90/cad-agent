@@ -187,7 +187,18 @@ def _validate_environment(value: object, *, path: str) -> dict[str, Any]:
     _keys(
         item,
         path=path,
-        required={"captured", "autocad_product", "plugin_version", "python_version", "ipc_root_id"},
+        required={
+            "captured",
+            "autocad_product",
+            "plugin_version",
+            "python_version",
+            "ipc_root_id",
+            "runtime_identity",
+            "implementation_sha",
+            "pr_head_sha",
+            "harness_sha",
+            "plugin_binary_sha256",
+        },
     )
     captured = _bool(item["captured"], path=f"{path}.captured")
     for field in ("autocad_product", "plugin_version", "python_version", "ipc_root_id"):
@@ -196,6 +207,32 @@ def _validate_environment(value: object, *, path: str) -> dict[str, Any]:
             _fail(f"{path}.{field} must be a non-empty string or null")
         if captured and value is None:
             _fail(f"{path}.{field} is required when environment is captured")
+    runtime_identity = item["runtime_identity"]
+    if runtime_identity is not None:
+        _identifier(runtime_identity, path=f"{path}.runtime_identity")
+    implementation_sha = item["implementation_sha"]
+    pr_head_sha = item["pr_head_sha"]
+    harness_sha = item["harness_sha"]
+    for field, identity in (
+        ("implementation_sha", implementation_sha),
+        ("pr_head_sha", pr_head_sha),
+        ("harness_sha", harness_sha),
+    ):
+        if identity is not None:
+            _git_commit_sha(identity, path=f"{path}.{field}")
+    plugin_binary_sha256 = item["plugin_binary_sha256"]
+    if plugin_binary_sha256 is not None:
+        _sha256(plugin_binary_sha256, path=f"{path}.plugin_binary_sha256")
+    if captured:
+        for field in (
+            "runtime_identity",
+            "implementation_sha",
+            "pr_head_sha",
+            "harness_sha",
+            "plugin_binary_sha256",
+        ):
+            if item[field] is None:
+                _fail(f"{path}.{field} is required when environment is captured")
     return item
 
 
@@ -300,6 +337,15 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
     cleanup = _validate_cleanup(item["cleanup"], path=f"{path}.cleanup")
     accepted = _bool(item["accepted_comparable"], path=f"{path}.accepted_comparable")
     success = _bool(item["success"], path=f"{path}.success")
+    if accepted:
+        transport_names = {entry["name"] for entry in transport}
+        if transport_names != {"fileipc", "dotnetipc", "live_review"}:
+            _fail(f"{path} accepted_comparable requires complete transport accounting")
+        if any(
+            entry["successes"] + entry["failures"] != entry["attempts"]
+            for entry in transport
+        ):
+            _fail(f"{path} accepted_comparable requires complete transport accounting")
     if any(entry["status"] in {"NOT_CAPTURED", "SKIP", "NOT_RUN"} for entry in (item["headless"], item["live"])):
         if accepted:
             _fail(f"{path} accepted_comparable cannot be true for non-comparable status")
@@ -309,12 +355,34 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
     if any(probe["captured"] is False for probe in negative_probes):
         if accepted:
             _fail(f"{path} accepted_comparable requires negative probe capture")
+    if any(probe["captured"] and probe["count"] <= 0 for probe in negative_probes):
+        if accepted:
+            _fail(f"{path} accepted_comparable requires positive negative probe capture")
     if not cleanup["closed_without_save"] or not cleanup["source_unchanged"] or not cleanup["staged_unchanged"] or not cleanup["release_verified"]:
         if accepted:
             _fail(f"{path} accepted_comparable requires cleanup integrity")
     if success and not accepted:
         _fail(f"{path} success cannot be true when epoch is not accepted_comparable")
     if accepted:
+        if any(
+            item["environment"][field] is None
+            for field in (
+                "runtime_identity",
+                "implementation_sha",
+                "pr_head_sha",
+                "harness_sha",
+                "plugin_binary_sha256",
+            )
+        ):
+            _fail(f"{path} accepted_comparable requires decision-grade identity")
+        if len(
+            {
+                item["environment"]["implementation_sha"],
+                item["environment"]["pr_head_sha"],
+                item["environment"]["harness_sha"],
+            }
+        ) != 1:
+            _fail(f"{path} accepted_comparable requires identity binding")
         if not human["captured"]:
             _fail(f"{path} accepted_comparable requires human capture")
         if headless["status"] != "PASS" or live["status"] != "PASS":
@@ -360,8 +428,8 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
             _fail(f"{path} accepted_comparable forbids save or repair attempts")
         if not cleanup["source_unchanged"] or not cleanup["staged_unchanged"] or not cleanup["release_verified"]:
             _fail(f"{path} accepted_comparable requires cleanup integrity")
-        if captured <= 0:
-            _fail(f"{path} accepted_comparable requires negative probe capture")
+        if any(probe["count"] <= 0 for probe in negative_probes):
+            _fail(f"{path} accepted_comparable requires positive negative probe capture")
         if kinds != {"stale_evidence", "wrong_target"}:
             _fail(f"{path} accepted_comparable requires both negative probe kinds")
         if any(probe["captured"] is False for probe in negative_probes):
@@ -449,7 +517,16 @@ def validate_m2_record(record: Mapping[str, object]) -> dict[str, object]:
         expected = len(successful_epochs) / len(comparable_epochs) if comparable_epochs else None
         if expected is None or not math.isclose(payload["aggregate"]["success_rate"], expected, rel_tol=0, abs_tol=1e-12):
             _fail("aggregate.success_rate does not match comparable epochs")
-    representative = len(successful_epochs) >= 3 and len({epoch["session_id"] for epoch in successful_epochs}) >= 2
+    representative = (
+        len(successful_epochs) >= 3
+        and len(
+            {
+                epoch["environment"].get("runtime_identity", epoch["session_id"])
+                for epoch in successful_epochs
+            }
+        )
+        >= 2
+    )
     if payload["aggregate"]["representative"] != representative:
         _fail("aggregate.representative does not match successful epoch distribution")
     status = "REPRESENTATIVE" if representative else ("NOT_REPRESENTATIVE" if comparable_epochs else "BASELINE_ONLY")
@@ -511,7 +588,16 @@ def aggregate_m2_epochs(epochs: Sequence[Mapping[str, object]]) -> dict[str, obj
     success_rate = None
     if comparable:
         success_rate = len(successful) / len(comparable)
-    representative = len(successful) >= 3 and len({epoch["session_id"] for epoch in successful}) >= 2
+    representative = (
+        len(successful) >= 3
+        and len(
+            {
+                epoch["environment"].get("runtime_identity", epoch["session_id"])
+                for epoch in successful
+            }
+        )
+        >= 2
+    )
     status = "REPRESENTATIVE" if representative else ("NOT_REPRESENTATIVE" if comparable else "BASELINE_ONLY")
     return {
         "comparable_epochs": len(comparable),

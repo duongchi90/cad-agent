@@ -144,6 +144,7 @@ def _epoch(
         "transport": [
             {"name": "fileipc", "attempts": 1, "successes": 1, "failures": 0},
             {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0},
+            {"name": "live_review", "attempts": 1, "successes": 1, "failures": 0},
         ],
         "negative_probes": negative_probes or [
             {
@@ -158,7 +159,7 @@ def _epoch(
                 "kind": "wrong_target",
                 "count": 1,
                 "captured": True,
-                "operation": "health",
+                "operation": "wrong_target",
                 "category": "dotnet_result",
                 "detail": "active drawing identity was rejected",
             },
@@ -179,6 +180,11 @@ def _epoch(
             "plugin_version": "1.0.0",
             "python_version": "3.11.9",
             "ipc_root_id": "ipc-root-001",
+            "runtime_identity": f"acad-{session_id}",
+            "implementation_sha": _GIT_SHA_A,
+            "pr_head_sha": _GIT_SHA_A,
+            "harness_sha": _GIT_SHA_A,
+            "plugin_binary_sha256": _SHA_D,
         },
         "failure": failure,
         "accepted_comparable": accepted_comparable,
@@ -224,6 +230,33 @@ def test_schema_separates_git_commit_identity_from_sha256_hashes() -> None:
     assert payload["properties"]["staged_dxf_sha256"] == {"$ref": "#/$defs/sha256"}
     assert payload["$defs"]["epoch"]["properties"]["main_sha"] == {
         "$ref": "#/$defs/git_commit_sha"
+    }
+
+
+def test_schema_environment_binds_runtime_and_build_identity() -> None:
+    payload = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    environment = payload["$defs"]["environment"]
+
+    identity_fields = {
+        "runtime_identity",
+        "implementation_sha",
+        "pr_head_sha",
+        "harness_sha",
+        "plugin_binary_sha256",
+    }
+    assert identity_fields <= set(environment["required"])
+    assert environment["properties"]["runtime_identity"] == {"type": ["string", "null"]}
+    assert environment["properties"]["implementation_sha"] == {
+        "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+    }
+    assert environment["properties"]["pr_head_sha"] == {
+        "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+    }
+    assert environment["properties"]["harness_sha"] == {
+        "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+    }
+    assert environment["properties"]["plugin_binary_sha256"] == {
+        "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
     }
 
 
@@ -278,6 +311,66 @@ def test_validate_rejects_closed_record_drift(mutator, message) -> None:
     mutator(payload)
     with pytest.raises(M2BenchmarkError, match=message):
         validate_m2_record(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "runtime_identity",
+        "implementation_sha",
+        "pr_head_sha",
+        "harness_sha",
+        "plugin_binary_sha256",
+    ],
+)
+def test_accepted_epoch_requires_decision_grade_identity(field: str) -> None:
+    payload = _epoch()
+    payload["environment"].pop(field)
+
+    with pytest.raises(M2BenchmarkError, match="environment"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_requires_matching_implementation_and_harness_heads() -> None:
+    payload = _epoch()
+    payload["environment"]["harness_sha"] = _GIT_SHA_D
+
+    with pytest.raises(M2BenchmarkError, match="identity binding"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_aggregate_uses_observed_runtime_identity_not_caller_labels() -> None:
+    epochs = [
+        _epoch(session_id="caller-label-a"),
+        _epoch(session_id="caller-label-b"),
+        _epoch(session_id="caller-label-c"),
+    ]
+    for epoch in epochs:
+        epoch["environment"]["runtime_identity"] = "acad-pid-100-hwnd-200"
+
+    aggregate = aggregate_m2_epochs(epochs)
+
+    assert aggregate["representative"] is False
+    assert aggregate["status"] == "NOT_REPRESENTATIVE"
+
+
+def test_accepted_epoch_requires_complete_transport_accounting() -> None:
+    payload = _epoch()
+    payload["transport"] = [
+        {"name": "fileipc", "attempts": 1, "successes": 1, "failures": 0},
+        {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0},
+    ]
+
+    with pytest.raises(M2BenchmarkError, match="transport accounting"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_requires_positive_capture_count_for_each_negative_probe() -> None:
+    payload = _epoch()
+    payload["negative_probes"][1]["count"] = 0
+
+    with pytest.raises(M2BenchmarkError, match="positive negative probe capture"):
+        validate_m2_record(_record(epochs=[payload]))
 
 
 @pytest.mark.parametrize(
@@ -869,7 +962,17 @@ def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_ep
         "plugin_version": "1.0.0",
         "python_version": "3.11.9",
         "ipc_root_id": "ipc-root-001",
+        "runtime_identity": "acad-pid-100-hwnd-200",
+        "implementation_sha": _GIT_SHA_A,
+        "pr_head_sha": _GIT_SHA_A,
+        "harness_sha": _GIT_SHA_A,
+        "plugin_binary_sha256": _SHA_D,
     }
+    first["transport"] = [
+        {"name": "fileipc", "attempts": 1, "successes": 1, "failures": 0},
+        {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0},
+        {"name": "live_review", "attempts": 1, "successes": 1, "failures": 0},
+    ]
     first["accepted_comparable"] = True
     first["success"] = True
 
@@ -943,6 +1046,27 @@ def test_failure_after_human_capture_clears_false_green_and_retains_category(
     assert epoch["accepted_comparable"] is False
     assert epoch["success"] is False
     assert epoch["failure"] == detail
+
+
+def test_late_failure_does_not_overwrite_existing_causal_detail() -> None:
+    epoch = _epoch(accepted_comparable=True, success=True)
+    causal_detail = {
+        "operation": "configuration",
+        "category": "missing_opt_in",
+        "message": "CAD_AGENT_M2_RECORD_PATH",
+    }
+    epoch["failure"] = causal_detail
+
+    _apply_failure_outcome(
+        epoch,
+        AssertionError("late comparability failure"),
+        operation="m2-live",
+        human_capture_observed=True,
+    )
+
+    assert epoch["accepted_comparable"] is False
+    assert epoch["success"] is False
+    assert epoch["failure"] == causal_detail
 
 
 def test_stale_evidence_probe_uses_real_refusal_and_observed_counter(tmp_path: Path) -> None:
@@ -1112,7 +1236,7 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     assert probe["kind"] == "wrong_target"
     assert probe["captured"] is True
     assert probe["count"] == 1
-    assert probe["operation"] == "health"
+    assert probe["operation"] == "wrong_target"
     assert probe["category"] == "dotnet_result"
     assert observed_paths == [str(wrong), str(intended)]
 
@@ -1245,8 +1369,17 @@ def test_transport_helpers_preserve_observed_attempts() -> None:
     ("operation", "expected_transport", "error"),
     [
         ("drawing_open", "fileipc", MCPTimeoutError("drawing open timed out")),
+        ("drawing_get_variables", "fileipc", MCPTimeoutError("drawing variables timed out")),
         ("health", "dotnetipc", MCPToolError("health failed")),
         ("mechanical_bom", "dotnetipc", DotNetIPCTimeoutError("BOM timed out")),
+        (
+            "wrong_target",
+            "live_review",
+            DotNetIPCResultError(
+                "wrong target",
+                result={"operation": "wrong_target", "errors": ["WRONG_TARGET"]},
+            ),
+        ),
         ("review", "live_review", DotNetIPCProtocolError("review protocol failed")),
     ],
 )
@@ -1285,8 +1418,10 @@ def test_metadata_free_live_failure_retains_operation_through_counter_path(
     [
         ("m2-live", "fileipc"),
         ("drawing_open", "fileipc"),
+        ("drawing_get_variables", "fileipc"),
         ("health", "dotnetipc"),
         ("mechanical_bom", "dotnetipc"),
+        ("wrong_target", "live_review"),
         ("review", "live_review"),
         ("load_build_evidence", "live_review"),
     ],
