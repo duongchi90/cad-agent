@@ -7,7 +7,7 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
 - Repository: `duongchi90/cad-agent`
 - Branch: `codex/m2-plugin-identity`
 - Runtime-bearing implementation/build head: `e8a42a575b7bf0c8b5561ee84ec78388093a8c05`
-- Current clean successor source head: `78e06e58d9cf03130bc5b97a6a2688fc3103b80c`
+- Current clean successor source head: `538b4871dafb523a5ff2dfcc9ae88675700fbbb8`
 - Live execution requires this branch to be clean and the exact current GitHub
   PR head to be read immediately before running. The live harness records that
   observed HEAD as `implementation_sha`, `pr_head_sha`, and `harness_sha`.
@@ -27,11 +27,15 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
 
 ## Current one Human action
 
-The previous security modal was dismissed with **Load Once**, but that load and
-the subsequent verifier left an older artifact resident in AutoCAD. A later
+The previous security modal was dismissed with **Load Once**, and the current
+AutoCAD process still has the older main-worktree artifact resident. A later
 live invocation also exposed and closed a cross-process fixture binding defect;
-that defect is now repaired offline. Physically NETLOAD the exact final
-successor DLL below once; Luna will not click it or synthesize that consent.
+that defect is now repaired offline. The attempted NETLOAD of the exact final
+successor DLL did not replace the resident assembly: observed process modules
+still report the main-worktree DLL (SHA-256
+`407704fa3aee750d0f4e2daeabe864456a9b96f126f3f62cb0449fd708966dd2c`), while
+the successor artifact is `f7d3467a57ccb186b78d515ffe737afba08d3d3c691e0518e020a16ddfcbf40c`.
+Luna will not click, synthesize consent, or control the process.
 
 For a future fresh session where the modal is absent, the original load command
 is:
@@ -41,11 +45,13 @@ NETLOAD
 C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll
 ```
 
-This is the only manual action for the current state. Do not close/restart AutoCAD, save `BVTL.dwg`,
-replace the normal Release DLL, or load a different binary. After this action,
-Luna runs the prepared harness using observed PID/HWND and validates the health
-payload's exact loaded-binary hash; a successful NETLOAD by itself is never a
-PASS.
+This action is available only from a genuinely fresh AutoCAD Mechanical 2027
+process, because the current process already has the old assembly resident and
+the repository provides no safe in-process unload/reload owner. Do not save
+`BVTL.dwg`, replace the normal Release DLL, or load a different binary. After a
+fresh process loads this exact artifact, Luna runs the prepared harness using
+observed PID/HWND and validates the health payload's exact loaded-binary hash; a
+successful NETLOAD by itself is never a PASS.
 
 ## Exact post-NETLOAD run configuration
 
@@ -58,7 +64,7 @@ $env:CAD_AGENT_FILE_IPC_DIR = 'C:\temp'
 $env:CAD_AGENT_DOTNET_IPC_DIR = 'C:\temp'
 $env:CAD_AGENT_AUTOCAD_HWND = '3606504' # observed now; re-observe if the window changes
 $env:CAD_AGENT_AUTOCAD_LISP_PATH = 'C:\temp\cad-agent-m2-plugin-identity\mcp_integration_lib\mcp_dispatch.lsp'
-$env:CAD_AGENT_M2_RECORD_PATH = 'C:\temp\cad-agent-m2-record.json'
+$env:CAD_AGENT_M2_RECORD_PATH = 'C:\temp\cad-agent-m2-record-r2.json'
 $env:CAD_AGENT_M2_SESSION_ID = 'observed-by-harness'
 $env:CAD_AGENT_M2_HUMAN_EVENTS_JSON = '[{"kind":"NETLOAD","count":1,"detail":"manual operator load"}]'
 ```
@@ -75,8 +81,10 @@ From the clean successor worktree, the exact command is:
 
 The harness creates disposable fixture/drawing/probe roots under `C:\temp`,
 uses the existing FileIPC and .NET IPC owners, and appends to
-`C:\temp\cad-agent-m2-record.json`; its sidecar is
-`C:\temp\cad-agent-m2-record.measurements.json`.
+`C:\temp\cad-agent-m2-record-r2.json`; its sidecar is
+`C:\temp\cad-agent-m2-record-r2.measurements.json`. The existing
+`C:\temp\cad-agent-m2-record.json` remains historical append-only evidence and
+must not be overwritten.
 
 ## Acceptance oracle
 
