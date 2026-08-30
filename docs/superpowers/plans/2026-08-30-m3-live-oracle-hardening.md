@@ -10,6 +10,8 @@
 
 **Status:** executing
 
+**Implementation head:** `4d15a6e7830961f68200b7098a8a15c802e829ea`
+
 ## Constraints
 
 - No provider adapter, repair engine, retry manager, transport, database, telemetry, NETLOAD, UI automation, process control, or live AutoCAD mutation.
@@ -30,4 +32,7 @@
 - Focused hardening suite: `18 passed`.
 - Nearest M3/R4/R5/R6/R7 regression: `230 passed`.
 - Ruff and `git diff --check`: passed.
+- Canonical offline verifier: exit `0`; offline JUnit `3116/0/0/0`; dotnet
+  IPC `117/0/0/0`; causal RED `1 accepted`; real-data `2 skipped`; AutoCAD
+  `14 skipped`.
 - Live/provider/AutoCAD: `NOT RUN` by policy.

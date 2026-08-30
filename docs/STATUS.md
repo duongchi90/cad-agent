@@ -319,7 +319,9 @@ Human-only action is required for M2 acceptance.
   after the seam was merged: reconciled transport failures/retries, reduced
   caller-made R5/R6 mappings, missing repair-executor cross-binding, and an
   unnecessarily non-empty Human-event requirement.
-- Candidate hardening is on `codex/m3-oracle-hardening` from main
+- Candidate hardening is commit
+  `4d15a6e7830961f68200b7098a8a15c802e829ea` on
+  `codex/m3-oracle-hardening`, based on main
   `ad1ac402b83b88780c7392e36f9f609fea5650b9`. It remains offline and does not
   perform provider calls, NETLOAD, UI automation, process control, or AutoCAD
   mutation.
@@ -330,7 +332,11 @@ Human-only action is required for M2 acceptance.
   R6 attempt, and accepts `human_intervention={captured: true, events: []}`.
 - RED/GREEN evidence on the candidate: focused hardening suite `18 passed`;
   nearest M3/R4/R5/R6/R7 regression `230 passed`; Ruff and
-  `git diff --check` passed. `LIVE_REPAIR_ACCEPTANCE=NOT_RUN` remains true.
+  `git diff --check` passed. Canonical verifier on the clean exact commit
+  recorded offline JUnit `tests=3116, failures=0, errors=0, skipped=0`,
+  dotnet IPC `117/0/0/0`, causal RED `1 accepted`, real-data `2 skipped`,
+  AutoCAD `14 skipped`, and exit `0`. `LIVE_REPAIR_ACCEPTANCE=NOT_RUN`
+  remains true.
 - The critical advisory is actionable, not stale; merge/live decisions remain
   blocked on this exact-head hardening candidate until hosted checks pass.
 
