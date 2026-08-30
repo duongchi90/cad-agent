@@ -661,6 +661,31 @@ def _exercise_wrong_target_rejection(
             transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
             raise
         transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
+        # Closing the wrong active document makes AutoCAD restore the intended
+        # document, but Mechanical may mark that restored document DBMOD=1 as
+        # part of the MDI transition. Reset the disposable candidate through
+        # the existing close-without-save owner before reopening it so the
+        # read-only epoch compares a fresh, stable document state.
+        reset_request_id = f"{request_id}-candidate-reset-close"
+        transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
+        try:
+            reset = dotnet_client.close_disposable(
+                normalize_windows_absolute_path(intended_full_path),
+                disposable=True,
+                save_changes=False,
+                request_id=reset_request_id,
+            )
+            if not (
+                isinstance(reset, dict)
+                and reset.get("success") is True
+                and reset.get("changed") is False
+                and reset.get("payload", {}).get("closed_without_saving") is True
+            ):
+                raise MCPToolError("intended disposable reset close was not confirmed")
+        except Exception:
+            transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
+            raise
+        transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
         transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
         try:
             legacy_client.drawing_open(str(reopen_drawing_path))

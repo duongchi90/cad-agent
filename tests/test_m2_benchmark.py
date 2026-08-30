@@ -1614,7 +1614,7 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     assert observed_paths == [str(wrong), str(intended)]
     assert _transport_records(transport) == [
         {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
-        {"name": "dotnetipc", "attempts": 2, "successes": 2, "failures": 0},
+        {"name": "dotnetipc", "attempts": 3, "successes": 3, "failures": 0},
     ]
 
 
@@ -1670,7 +1670,7 @@ def test_wrong_target_probe_does_not_treat_timeout_as_semantic_refusal(tmp_path:
     assert probe["category"] == "dotnet_timeout"
     assert _transport_records(transport) == [
         {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
-        {"name": "dotnetipc", "attempts": 2, "successes": 1, "failures": 1},
+        {"name": "dotnetipc", "attempts": 3, "successes": 2, "failures": 1},
     ]
 
 
