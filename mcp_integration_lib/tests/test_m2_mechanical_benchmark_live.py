@@ -643,6 +643,13 @@ def _exercise_wrong_target_rejection(
     finally:
         transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
         try:
+            legacy_client.drawing_close(save_changes=False)
+        except Exception:
+            transport["fileipc"]["failures"] = int(transport["fileipc"]["failures"]) + 1
+            raise
+        transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
+        transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
+        try:
             legacy_client.drawing_open(str(reopen_drawing_path))
         except Exception:
             transport["fileipc"]["failures"] = int(transport["fileipc"]["failures"]) + 1

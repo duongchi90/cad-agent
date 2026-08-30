@@ -1556,6 +1556,9 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
         def drawing_open(self, drawing_path: str) -> None:
             observed_paths.append(drawing_path)
 
+        def drawing_close(self, save_changes: bool = False) -> None:
+            assert save_changes is False
+
     class FakeDotNetClient:
         def health(self, drawing_full_path: str, *, request_id: str) -> dict[str, object]:
             raise DotNetIPCResultError(
@@ -1593,7 +1596,7 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     assert probe["category"] == "dotnet_result"
     assert observed_paths == [str(wrong), str(intended)]
     assert _transport_records(transport) == [
-        {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
+        {"name": "fileipc", "attempts": 3, "successes": 3, "failures": 0},
         {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0},
     ]
 
@@ -1604,6 +1607,9 @@ def test_wrong_target_probe_does_not_treat_timeout_as_semantic_refusal(tmp_path:
     class FakeLegacyClient:
         def drawing_open(self, _drawing_path: str) -> None:
             return None
+
+        def drawing_close(self, save_changes: bool = False) -> None:
+            assert save_changes is False
 
     class FakeDotNetClient:
         def health(self, _drawing_full_path: str, *, request_id: str) -> dict[str, object]:
@@ -1629,7 +1635,7 @@ def test_wrong_target_probe_does_not_treat_timeout_as_semantic_refusal(tmp_path:
     assert probe["count"] == 0
     assert probe["category"] == "dotnet_timeout"
     assert _transport_records(transport) == [
-        {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
+        {"name": "fileipc", "attempts": 3, "successes": 3, "failures": 0},
         {"name": "dotnetipc", "attempts": 1, "successes": 0, "failures": 1},
     ]
 

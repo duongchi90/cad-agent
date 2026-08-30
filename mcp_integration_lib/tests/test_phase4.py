@@ -91,6 +91,7 @@ class FileIPCClientTests(unittest.TestCase):
     def test_entity_get_reads_dimension_measurement_through_raw_lisp(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
+            expressions = []
 
             def trigger():
                 command = json.loads(
@@ -111,7 +112,8 @@ class FileIPCClientTests(unittest.TestCase):
                     })
                 )
 
-            def raw_lisp_trigger(_expression):
+            def raw_lisp_trigger(expression):
+                expressions.append(expression)
                 measurement = next(
                     ipc_dir.glob("autocad_mcp_dimension_measurement_*.txt")
                 )
@@ -125,6 +127,9 @@ class FileIPCClientTests(unittest.TestCase):
                 raw_lisp_trigger=raw_lisp_trigger,
             )
             self.assertEqual(client.entity_get("20")["measurement"], 80.0)
+            self.assertEqual(len(expressions), 1)
+            self.assertIn("(assoc 42 (entget mcp-dim-ent))", expressions[0])
+            self.assertNotIn("vla-get-Measurement", expressions[0])
 
     def test_maps_drawing_save(self):
         with tempfile.TemporaryDirectory() as tmp:
