@@ -33,6 +33,11 @@ _EZDXF_BANNER = re.compile(rb"1\.4\.4 @ [^\r\n]+")
 _DXF_HEADER_DATE = re.compile(
     rb"(  9\r\n\$(?:TDCREATE|TDUCREATE|TDUPDATE|TDUUPDATE)\r\n 40\r\n)[^\r\n]+"
 )
+_DXF_CLASSES_SECTION = re.compile(
+    rb"(  0\r\nSECTION\r\n  2\r\nCLASSES\r\n)(.*?)(  0\r\nENDSEC\r\n)",
+    re.DOTALL,
+)
+_DXF_CLASS_RECORD = b"  0\r\nCLASS\r\n"
 
 
 @dataclass(frozen=True)
@@ -132,12 +137,30 @@ def _semantic_document() -> SemanticIRDocument:
     )
 
 
+def _canonicalize_dxf_class_section(data: bytes) -> bytes:
+    match = _DXF_CLASSES_SECTION.search(data)
+    if match is None:
+        return data
+
+    body = match.group(2)
+    records = body.split(_DXF_CLASS_RECORD)
+    if len(records) <= 2 or records[0]:
+        return data
+
+    ordered_records = b"".join(
+        _DXF_CLASS_RECORD + record for record in sorted(records[1:])
+    )
+    replacement = match.group(1) + ordered_records + match.group(3)
+    return data[: match.start()] + replacement + data[match.end() :]
+
+
 def _normalize_staged_dxf_bytes(data: bytes) -> bytes:
     normalized = _GUID_VALUE.sub(_FIXED_GUID.encode("ascii"), data)
     normalized = _EZDXF_BANNER.sub(_FIXED_EZDXF_BANNER.encode("ascii"), normalized)
-    return _DXF_HEADER_DATE.sub(
+    normalized = _DXF_HEADER_DATE.sub(
         rb"\g<1>" + _FIXED_DXF_HEADER_DATE.encode("ascii"), normalized
     )
+    return _canonicalize_dxf_class_section(normalized)
 
 
 def headless_metrics(fixture: M2Fixture) -> dict[str, object]:

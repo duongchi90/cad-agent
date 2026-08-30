@@ -3,7 +3,9 @@ from __future__ import annotations
 import copy
 import json
 import hashlib
+import os
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -979,6 +981,30 @@ def test_m2_fixture_support_is_reproducible_across_fresh_roots(tmp_path: Path) -
     assert first.staged_dxf.read_bytes() == second.staged_dxf.read_bytes()
     assert hashlib.sha256(first.staged_dxf.read_bytes()).hexdigest() == first.staged_dxf_sha256
     assert hashlib.sha256(second.staged_dxf.read_bytes()).hexdigest() == second.staged_dxf_sha256
+
+
+def test_m2_fixture_support_is_stable_across_python_hash_seeds(tmp_path: Path) -> None:
+    hashes: list[str] = []
+    for seed in ("0", "4"):
+        root = tmp_path / f"seed-{seed}"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from pathlib import Path; "
+                    "from tests.m2_benchmark_support import build_m2_fixture; "
+                    f"print(build_m2_fixture(Path(r'{root}')).staged_dxf_sha256)"
+                ),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        hashes.append(result.stdout.strip().splitlines()[-1])
+
+    assert hashes[0] == hashes[1]
 
 
 def test_m2_fixture_support_freezes_known_dynamic_header_values(tmp_path: Path) -> None:
