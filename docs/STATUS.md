@@ -239,6 +239,44 @@ The exact future operator packet is tracked at
 exact artifact, observed runtime identities, and final oracle. No remaining
 Human-only action is required for M2 acceptance.
 
+## M3 disposable LINE acceptance — contract-only boundary
+
+- State: **Contract-only composition PASS; live AutoCAD M3 NOT RUN**.
+  This is one bounded acceptance epoch over existing R4/R5/R6 owners, not M3
+  milestone closure and not production drawing mutation.
+- Implementation head: `9fd370120a1cd88f5b94955500d3fa38b8d3123f` on
+  `codex/m3-disposable-acceptance`; plan:
+  `docs/superpowers/plans/2026-08-30-m3-disposable-line-acceptance.md`.
+- Contract-only epoch evidence: one v1.1 `ROOT_PRE_REPAIR` candidate produced
+  an owner-validated R5 `FAIL`, one `REPAIR_DXF_PRIMITIVE` `LINE` operation was
+  planned and authorized once, the existing `DotNetIPCClient` disposable
+  workspace closed with `save_changes=false` and `zero_survivors`, and a new
+  v1.1 `POST_REPAIR` candidate received an independently bound R5 `PASS`.
+  The executor observed exactly one erase and one LINE create; replay and
+  stale/rebound R5 paths were refused before a second mutation.
+- Integrity/evidence: source, base, and accepted sentinel files remained
+  byte-identical; candidate pre/post hashes and DARA/R3 correspondence were
+  refreshed. Human-intervention events were empty because this was explicitly
+  `CONTRACT_ONLY`; no AutoCAD process, `BVTL.dwg`, NETLOAD, save, or live visual
+  provider was used.
+- Causal owner repair: R6 now derives a canonical latest-mutation identity
+  only for an owner-validated `candidate-revision-1.1` `ROOT_PRE_REPAIR` record
+  whose closed mutation evidence has no legacy latest-mutation field. Legacy
+  candidates retain the explicit field requirement; no second identity or
+  repair subsystem was added.
+- Verification on the exact head: focused M3/R4/R5/R6/R7 suite `300 passed`;
+  Ruff passed; `scripts/verify.ps1 -SkipAutoCADDotNet` exited `0` in a clean
+  worktree with offline JUnit `tests=3098, failures=0, errors=0, skipped=0`
+  and dotnet IPC JUnit `tests=117, failures=0, errors=0, skipped=0`.
+  The real-data unavailable probe recorded `2 skipped`, the AutoCAD unavailable
+  probe recorded `14 skipped`, and the existing intentional causal RED gate
+  failed as expected and was accepted by the verifier.
+- Remaining M3 boundary: one real disposable candidate-only LINE epoch with a
+  genuinely observed current R5 `FAIL`, live R6 mutation, cleanup, refreshed
+  R4 lineage, and a fresh live R5 `PASS`. The current R8-D driver remains
+  acceptance-only/read-only, so no live M3 PASS is claimed. MECH-1 remains
+  **NOT JUSTIFIED**.
+
 ## Personal Lean Pilot — Gate A Setup Lite
 
 - State: **Partially verified; Gate A remains open**. The personal-project
