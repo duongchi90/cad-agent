@@ -342,17 +342,25 @@ def _validate_repair(value: object, *, pre_candidate: str, pre_r5: dict[str, Any
     return item
 
 
-def _validate_transport(value: object, *, repair_attempts: int) -> dict[str, Any]:
+def _validate_transport(
+    value: object,
+    *,
+    repair_attempts: int,
+    task6_turn_ids: tuple[str, str],
+) -> dict[str, Any]:
     item = _object(value, path="transport")
     expected = {"fileipc", "dotnetipc", "task6_provider", "repair_executor"}
     if set(item) != expected:
         _fail("transport", "must contain exactly fileipc, dotnetipc, task6_provider, and repair_executor")
     for name, report in item.items():
         entry = _object(report, path=f"transport.{name}")
+        required_fields = {"attempts", "successes", "failures", "retries"}
+        if name == "task6_provider":
+            required_fields.add("turn_ids")
         _keys(
             entry,
             path=f"transport.{name}",
-            required={"attempts", "successes", "failures", "retries"},
+            required=required_fields,
         )
         attempts = _positive_int(entry["attempts"], path=f"transport.{name}.attempts")
         successes = entry["successes"]
@@ -373,6 +381,24 @@ def _validate_transport(value: object, *, repair_attempts: int) -> dict[str, Any
                 "transport.repair_executor",
                 "executor attempts must equal the single R6 repair attempt",
             )
+        if name == "task6_provider":
+            if attempts != 2 or successes != 2:
+                _fail(
+                    "transport.task6_provider",
+                    "must account for exactly the pre-R5 and post-R5 Task6 turns",
+                )
+            turn_ids = entry["turn_ids"]
+            if (
+                type(turn_ids) is not list
+                or len(turn_ids) != 2
+                or turn_ids != list(task6_turn_ids)
+            ):
+                _fail(
+                    "transport.task6_provider.turn_ids",
+                    "must exactly bind the distinct pre-R5 and post-R5 Task6 turns",
+                )
+            for index, turn_id in enumerate(turn_ids):
+                _identifier(turn_id, path=f"transport.task6_provider.turn_ids[{index}]")
     return item
 
 
@@ -490,7 +516,11 @@ def validate_m3_live_record(
     repair = _validate_repair(
         item["repair"], pre_candidate=candidate["pre_revision_sha256"], pre_r5=pre_r5
     )
-    _validate_transport(item["transport"], repair_attempts=repair["attempts"])
+    _validate_transport(
+        item["transport"],
+        repair_attempts=repair["attempts"],
+        task6_turn_ids=(pre_r5["task6_turn_id"], post_r5["task6_turn_id"]),
+    )
     _validate_integrity(item["integrity"])
     _validate_cleanup(item["cleanup"])
     _validate_human(item["human_intervention"])

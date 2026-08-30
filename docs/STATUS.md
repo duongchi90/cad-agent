@@ -340,6 +340,22 @@ Human-only action is required for M2 acceptance.
 - The critical advisory is actionable, not stale; merge/live decisions remain
   blocked on this exact-head hardening candidate until hosted checks pass.
 
+## M3 Task6 provider accounting correction — follow-up
+
+- Advisory `#301` critical source `#311` comment `5468458694` identified a
+  remaining contradiction: the record requires distinct canonical pre/post
+  Task6 turns while `transport.task6_provider` could claim only one attempt.
+- Candidate: `codex/m3-task6-accounting` from main
+  `14ad95bd038f23c4d6e22808762b3a6a7ea49fe3`. The bounded validator now
+  requires `task6_provider` attempts `2`, successes `2`, failures `0`, retries
+  `0`, and exact ordered `turn_ids=[pre_r5.turn_id, post_r5.turn_id]`.
+  Attempts `1`, `>2`, or turn identity drift fail closed; no other transport
+  cardinality is generalized.
+- Verification: focused Task6/M3 suite `21 passed`; nearest R5/R6/M3
+  regression `214 passed`; Ruff and `git diff --check` passed. Provider/live
+  AutoCAD acceptance remains `NOT_RUN` and `R5_MODE=contract-only` remains
+  unchanged.
+
 ## Personal Lean Pilot — Gate A Setup Lite
 
 - State: **Partially verified; Gate A remains open**. The personal-project

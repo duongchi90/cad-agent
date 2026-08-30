@@ -96,6 +96,9 @@ The future opt-in live test is accepted only if it composes this exact chain:
    native/provider evidence; never reuse the pre-repair R5 verdict.
 8. Require a new official Task6 turn and a fresh provider-backed R5 `PASS` with
    no new applicable defects.
+   The record must account for both canonical provider turns exactly:
+   `task6_provider.attempts=2`, `successes=2`, `failures=0`, `retries=0`, and
+   ordered `turn_ids` equal to the pre-R5 and post-R5 Task6 turn IDs.
 9. Verify source/base/accepted hashes, close the disposable document without
    save, remove only disposable artifacts, and record cleanup as observed.
 

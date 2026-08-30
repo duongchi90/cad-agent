@@ -204,7 +204,13 @@ def _valid_payload() -> dict[str, object]:
         "transport": {
             "fileipc": {"attempts": 1, "successes": 1, "failures": 0, "retries": 0},
             "dotnetipc": {"attempts": 1, "successes": 1, "failures": 0, "retries": 0},
-            "task6_provider": {"attempts": 1, "successes": 1, "failures": 0, "retries": 0},
+            "task6_provider": {
+                "attempts": 2,
+                "successes": 2,
+                "failures": 0,
+                "retries": 0,
+                "turn_ids": ["turn-m3-live-pre", "turn-m3-live-post"],
+            },
             "repair_executor": {"attempts": 1, "successes": 1, "failures": 0, "retries": 0},
         },
         "integrity": {
@@ -343,4 +349,34 @@ def test_live_record_rejects_repair_executor_retry_even_when_reconciled() -> Non
     }
 
     with pytest.raises(M3LiveRecordError, match="transport|repair"):
+        seal_m3_live_record(payload)
+
+
+@pytest.mark.parametrize("attempts", [1, 3])
+def test_live_record_rejects_undercounted_or_overcounted_task6_transport(
+    attempts: int,
+) -> None:
+    payload = _valid_payload()
+    payload["transport"]["task6_provider"] = {
+        "attempts": attempts,
+        "successes": attempts,
+        "failures": 0,
+        "retries": 0,
+        "turn_ids": ["turn-m3-live-pre", "turn-m3-live-post"]
+        if attempts == 1
+        else ["turn-m3-live-pre", "turn-m3-live-post", "turn-m3-live-extra"],
+    }
+
+    with pytest.raises(M3LiveRecordError, match="task6_provider|Task6|transport"):
+        seal_m3_live_record(payload)
+
+
+def test_live_record_rejects_task6_transport_turn_identity_drift() -> None:
+    payload = _valid_payload()
+    payload["transport"]["task6_provider"]["turn_ids"] = [
+        "turn-m3-live-pre",
+        "turn-m3-live-other",
+    ]
+
+    with pytest.raises(M3LiveRecordError, match="task6_provider|turn"):
         seal_m3_live_record(payload)
