@@ -1,0 +1,512 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/benchmarks/m2-mechanical-benchmark-record.schema.json",
+  "title": "M2 Mechanical Benchmark Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "benchmark_id",
+    "main_sha",
+    "profile_id",
+    "profile_revision",
+    "fixture_id",
+    "fixture_input_sha256",
+    "staged_dxf_sha256",
+    "aggregate",
+    "epochs"
+  ],
+  "properties": {
+    "schema_version": {"const": "m2-mechanical-benchmark-record-1.0"},
+    "benchmark_id": {"$ref": "#/$defs/identifier"},
+    "main_sha": {"$ref": "#/$defs/git_commit_sha"},
+    "profile_id": {"$ref": "#/$defs/identifier"},
+    "profile_revision": {"$ref": "#/$defs/identifier"},
+    "fixture_id": {"$ref": "#/$defs/identifier"},
+    "fixture_input_sha256": {"$ref": "#/$defs/sha256"},
+    "staged_dxf_sha256": {"$ref": "#/$defs/sha256"},
+    "aggregate": {"$ref": "#/$defs/aggregate"},
+    "epochs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/epoch"}
+    }
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "git_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "non_negative_number": {"type": "number", "minimum": 0},
+    "non_negative_integer": {"type": "integer", "minimum": 0},
+    "status": {
+      "type": "string",
+      "enum": ["NOT_RUN", "BASELINE_ONLY", "NOT_REPRESENTATIVE", "REPRESENTATIVE"]
+    },
+    "epoch_status": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "SKIP", "NOT_RUN", "NOT_CAPTURED"]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "count"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/identifier"},
+        "count": {"$ref": "#/$defs/non_negative_integer"},
+        "detail": {"type": "string"}
+      }
+    },
+    "hash_pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after"],
+      "properties": {
+        "before": {"$ref": "#/$defs/sha256"},
+        "after": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "count_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked", "mismatches"],
+      "properties": {
+        "checked": {"$ref": "#/$defs/non_negative_integer"},
+        "mismatches": {"$ref": "#/$defs/non_negative_integer"}
+      }
+    },
+    "negative_probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "count", "captured", "operation", "category", "detail"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["stale_evidence", "wrong_target"]},
+        "count": {"$ref": "#/$defs/non_negative_integer"},
+        "captured": {"type": "boolean"},
+        "operation": {"$ref": "#/$defs/identifier"},
+        "category": {"$ref": "#/$defs/identifier"},
+        "detail": {"type": "string"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "category", "message"],
+      "properties": {
+        "operation": {"$ref": "#/$defs/identifier"},
+        "category": {"$ref": "#/$defs/identifier"},
+        "message": {"type": "string"}
+      }
+    },
+    "mutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["save_attempts", "repair_attempts"],
+      "properties": {
+        "save_attempts": {"$ref": "#/$defs/non_negative_integer"},
+        "repair_attempts": {"$ref": "#/$defs/non_negative_integer"}
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["closed_without_save", "source_unchanged", "staged_unchanged", "release_verified"],
+      "properties": {
+        "closed_without_save": {"type": "boolean"},
+        "source_unchanged": {"type": "boolean"},
+        "staged_unchanged": {"type": "boolean"},
+        "release_verified": {"type": "boolean"}
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "attempts", "successes", "failures"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "attempts": {"$ref": "#/$defs/non_negative_integer"},
+        "successes": {"$ref": "#/$defs/non_negative_integer"},
+        "failures": {"$ref": "#/$defs/non_negative_integer"}
+      }
+    },
+    "accepted_transport_entry": {
+      "allOf": [
+        {"$ref": "#/$defs/transport"},
+        {
+          "type": "object",
+          "properties": {
+            "attempts": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
+    },
+    "review_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primitive", "component", "dimension"],
+      "properties": {
+        "primitive": {"$ref": "#/$defs/count_report"},
+        "component": {"$ref": "#/$defs/count_report"},
+        "dimension": {"$ref": "#/$defs/count_report"}
+      }
+    },
+    "review_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "counts", "degraded", "geometry_checked", "mismatches", "warnings"],
+      "properties": {
+        "status": {"$ref": "#/$defs/epoch_status"},
+        "counts": {"$ref": "#/$defs/review_counts"},
+        "degraded": {"type": "boolean"},
+        "geometry_checked": {"$ref": "#/$defs/non_negative_integer"},
+        "mismatches": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "human": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "count", "captured"],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/event"}
+        },
+        "count": {"$ref": "#/$defs/non_negative_integer"},
+        "captured": {"type": "boolean"}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "captured",
+        "autocad_product",
+        "plugin_version",
+        "python_version",
+        "ipc_root_id"
+      ],
+      "properties": {
+        "captured": {"type": "boolean"},
+        "autocad_product": {"type": ["string", "null"]},
+        "plugin_version": {"type": ["string", "null"]},
+        "python_version": {"type": ["string", "null"]},
+        "ipc_root_id": {"type": ["string", "null"]},
+        "runtime_identity": {"type": ["string", "null"]},
+        "implementation_sha": {
+          "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+        },
+        "pr_head_sha": {
+          "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+        },
+        "harness_sha": {
+          "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
+        },
+        "plugin_binary_sha256": {
+          "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        }
+      }
+    },
+    "accepted_environment": {
+      "allOf": [
+        {"$ref": "#/$defs/environment"},
+        {
+          "type": "object",
+          "required": [
+            "captured",
+            "autocad_product",
+            "plugin_version",
+            "python_version",
+            "ipc_root_id",
+            "runtime_identity",
+            "implementation_sha",
+            "pr_head_sha",
+            "harness_sha",
+            "plugin_binary_sha256"
+          ],
+          "properties": {
+            "captured": {"const": true},
+            "autocad_product": {"type": "string", "minLength": 1},
+            "plugin_version": {"type": "string", "minLength": 1},
+            "python_version": {"type": "string", "minLength": 1},
+            "ipc_root_id": {"type": "string", "minLength": 1},
+            "runtime_identity": {"$ref": "#/$defs/identifier"},
+            "implementation_sha": {"$ref": "#/$defs/git_commit_sha"},
+            "pr_head_sha": {"$ref": "#/$defs/git_commit_sha"},
+            "harness_sha": {"$ref": "#/$defs/git_commit_sha"},
+            "plugin_binary_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "accepted_count_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked", "mismatches"],
+      "properties": {
+        "checked": {"type": "integer", "minimum": 1},
+        "mismatches": {"const": 0}
+      }
+    },
+    "accepted_review_result": {
+      "allOf": [
+        {"$ref": "#/$defs/review_result"},
+        {
+          "type": "object",
+          "properties": {
+            "status": {"const": "PASS"},
+            "degraded": {"const": false},
+            "geometry_checked": {"type": "integer", "minimum": 1},
+            "counts": {
+              "type": "object",
+              "properties": {
+                "primitive": {"$ref": "#/$defs/accepted_count_report"},
+                "component": {"$ref": "#/$defs/accepted_count_report"},
+                "dimension": {"$ref": "#/$defs/accepted_count_report"}
+              }
+            },
+            "mismatches": {"maxItems": 0}
+          }
+        }
+      ]
+    },
+    "accepted_transport": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/accepted_transport_entry"},
+      "allOf": [
+        {
+          "contains": {"properties": {"name": {"const": "fileipc"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"name": {"const": "dotnetipc"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"name": {"const": "live_review"}}},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "accepted_negative_probe": {
+      "allOf": [
+        {"$ref": "#/$defs/negative_probe"},
+        {
+          "type": "object",
+          "required": ["kind", "count", "captured", "category"],
+          "properties": {
+            "count": {"type": "integer", "minimum": 1},
+            "captured": {"const": true}
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {"const": "stale_evidence"},
+                "operation": {"const": "load_build_evidence"},
+                "category": {"const": "stale_evidence"}
+              }
+            },
+            {
+              "properties": {
+                "kind": {"const": "wrong_target"},
+                "operation": {"const": "wrong_target"},
+                "category": {
+                  "enum": [
+                    "dotnet_result",
+                    "dotnet_timeout",
+                    "dotnet_protocol",
+                    "tool",
+                    "timeout"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "accepted_negative_probes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/accepted_negative_probe"},
+      "allOf": [
+        {
+          "contains": {"properties": {"kind": {"const": "stale_evidence"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"kind": {"const": "wrong_target"}}},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture_id", "input_sha256", "staged_sha256"],
+      "properties": {
+        "fixture_id": {"$ref": "#/$defs/identifier"},
+        "input_sha256": {"$ref": "#/$defs/sha256"},
+        "staged_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "profile_revision"],
+      "properties": {
+        "profile_id": {"$ref": "#/$defs/identifier"},
+        "profile_revision": {"$ref": "#/$defs/identifier"}
+      }
+    },
+    "epoch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "main_sha",
+        "profile_revision",
+        "fixture_id",
+        "fixture_input_sha256",
+        "staged_dxf_sha256",
+        "source_hashes",
+        "staged_hashes",
+        "started_at",
+        "finished_at",
+        "wall_clock_seconds",
+        "human",
+        "headless",
+        "live",
+        "transport",
+        "negative_probes",
+        "hashes",
+        "environment",
+        "failure",
+        "mutation",
+        "cleanup",
+        "accepted_comparable",
+        "success"
+      ],
+      "properties": {
+        "session_id": {"$ref": "#/$defs/identifier"},
+        "main_sha": {"$ref": "#/$defs/git_commit_sha"},
+        "profile_revision": {"$ref": "#/$defs/identifier"},
+        "fixture_id": {"$ref": "#/$defs/identifier"},
+        "fixture_input_sha256": {"$ref": "#/$defs/sha256"},
+        "staged_dxf_sha256": {"$ref": "#/$defs/sha256"},
+        "source_hashes": {"$ref": "#/$defs/hash_pair"},
+        "staged_hashes": {"$ref": "#/$defs/hash_pair"},
+        "started_at": {"$ref": "#/$defs/timestamp"},
+        "finished_at": {"$ref": "#/$defs/timestamp"},
+        "wall_clock_seconds": {"$ref": "#/$defs/non_negative_number"},
+        "human": {"$ref": "#/$defs/human"},
+        "headless": {"$ref": "#/$defs/review_result"},
+        "live": {"$ref": "#/$defs/review_result"},
+        "transport": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/transport"}
+        },
+        "negative_probes": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/negative_probe"}
+        },
+        "hashes": {"$ref": "#/$defs/hash_pair"},
+        "environment": {"$ref": "#/$defs/environment"},
+        "failure": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/failure"}]},
+        "mutation": {"$ref": "#/$defs/mutation"},
+        "cleanup": {"$ref": "#/$defs/cleanup"},
+        "accepted_comparable": {"type": "boolean"},
+        "success": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"accepted_comparable": {"const": true}}
+          },
+          "then": {
+            "required": [
+              "human",
+              "headless",
+              "live",
+              "transport",
+              "negative_probes",
+              "environment",
+              "failure",
+              "mutation",
+              "cleanup",
+              "success"
+            ],
+            "properties": {
+              "human": {
+                "allOf": [
+                  {"$ref": "#/$defs/human"},
+                  {"properties": {"captured": {"const": true}}}
+                ]
+              },
+              "headless": {"$ref": "#/$defs/accepted_review_result"},
+              "live": {"$ref": "#/$defs/accepted_review_result"},
+              "transport": {"$ref": "#/$defs/accepted_transport"},
+              "negative_probes": {"$ref": "#/$defs/accepted_negative_probes"},
+              "environment": {"$ref": "#/$defs/accepted_environment"},
+              "failure": {"type": "null"},
+              "mutation": {
+                "allOf": [
+                  {"$ref": "#/$defs/mutation"},
+                  {
+                    "properties": {
+                      "save_attempts": {"const": 0},
+                      "repair_attempts": {"const": 0}
+                    }
+                  }
+                ]
+              },
+              "cleanup": {
+                "allOf": [
+                  {"$ref": "#/$defs/cleanup"},
+                  {
+                    "properties": {
+                      "closed_without_save": {"const": true},
+                      "source_unchanged": {"const": true},
+                      "staged_unchanged": {"const": true},
+                      "release_verified": {"const": true}
+                    }
+                  }
+                ]
+              },
+              "success": {"const": true}
+            }
+          }
+        }
+      ]
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comparable_epochs",
+        "successful_epochs",
+        "success_rate",
+        "representative",
+        "status"
+      ],
+      "properties": {
+        "comparable_epochs": {"$ref": "#/$defs/non_negative_integer"},
+        "successful_epochs": {"$ref": "#/$defs/non_negative_integer"},
+        "success_rate": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]},
+        "representative": {"type": "boolean"},
+        "status": {"$ref": "#/$defs/status"}
+      }
+    }
+  }
+}

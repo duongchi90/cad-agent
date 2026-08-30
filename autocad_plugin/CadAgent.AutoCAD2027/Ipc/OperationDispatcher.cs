@@ -87,11 +87,21 @@ public sealed class OperationDispatcher
 
     private IpcResult DispatchHealth(IpcRequest request, DateTimeOffset startedAt)
     {
-        var activePath = NormalizePathOrNull(_context.DrawingGateway.ActiveDocumentFullPath);
+        string? activePath;
+        if (request.DrawingFullPath is not null
+            && !TryMatchActiveDocument(request.DrawingFullPath, out activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        activePath = NormalizePathOrNull(_context.DrawingGateway.ActiveDocumentFullPath);
+        var pluginIdentity = LoadedPluginIdentity.Capture(typeof(OperationDispatcher).Assembly);
         var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
         {
             ["host"] = JsonSerializer.SerializeToElement("AutoCAD Mechanical 2027"),
             ["plugin_version"] = JsonSerializer.SerializeToElement(PluginVersion),
+            ["plugin_binary_path"] = JsonSerializer.SerializeToElement(pluginIdentity.BinaryPath),
+            ["plugin_binary_sha256"] = JsonSerializer.SerializeToElement(pluginIdentity.Sha256),
             ["active_document"] = JsonSerializer.SerializeToElement(activePath is not null),
             ["ipc_directory"] = JsonSerializer.SerializeToElement(_context.Store.IpcDirectory),
             ["ipc_readable"] = JsonSerializer.SerializeToElement(true),

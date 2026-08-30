@@ -264,7 +264,10 @@ try {
         "CAD_AGENT_REAL_IMAGE",
         "CAD_AGENT_FILE_IPC",
         "CAD_AGENT_AUTOCAD_HWND",
-        "CAD_AGENT_AUTOCAD_LISP_PATH"
+        "CAD_AGENT_AUTOCAD_LISP_PATH",
+        "CAD_AGENT_M2_RECORD_PATH",
+        "CAD_AGENT_M2_SESSION_ID",
+        "CAD_AGENT_M2_HUMAN_EVENTS_JSON"
     )
     $savedEnvironment = @{}
     foreach ($name in $specializedVariables) {
@@ -284,7 +287,7 @@ try {
         Invoke-PytestGate `
             -Name "autocad_mechanical unavailable-state probe" `
             -Targets $testTargets `
-            -MarkerExpression "autocad_mechanical" `
+            -MarkerExpression "autocad_mechanical and not m2_mechanical" `
             -JUnitPath $autocadJunitPath `
             -ExpectedState "all-skipped"
     } finally {
@@ -307,11 +310,28 @@ try {
         Invoke-PytestGate `
             -Name "autocad_mechanical live gate" `
             -Targets $testTargets `
-            -MarkerExpression "autocad_mechanical" `
+            -MarkerExpression "autocad_mechanical and not m2_mechanical" `
             -JUnitPath $autocadLiveJunitPath `
             -ExpectedState "live"
     } else {
         Write-Host "AutoCAD live marker: NOT RUN (no AutoCAD Mechanical session with File IPC prerequisites)."
+    }
+
+    $m2LiveSessionReady = (
+        $liveSessionReady -and
+        -not [string]::IsNullOrWhiteSpace($env:CAD_AGENT_M2_RECORD_PATH) -and
+        -not [string]::IsNullOrWhiteSpace($env:CAD_AGENT_M2_SESSION_ID) -and
+        -not [string]::IsNullOrWhiteSpace($env:CAD_AGENT_M2_HUMAN_EVENTS_JSON)
+    )
+    if ($m2LiveSessionReady) {
+        Invoke-PytestGate `
+            -Name "M2 Mechanical benchmark live gate" `
+            -Targets $testTargets `
+            -MarkerExpression "m2_mechanical" `
+            -JUnitPath $autocadLiveJunitPath `
+            -ExpectedState "live"
+    } else {
+        Write-Host "M2 Mechanical benchmark marker: NOT RUN (M2 record/session/human-event opt-in is incomplete)."
     }
 
     $lintTargets = @(

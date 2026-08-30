@@ -138,6 +138,107 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   gate is `NOT RUN`. No hosted or contract-only result is a substitute for
   operator-controlled AutoCAD Mechanical evidence.
 
+## M2 Mechanical benchmark
+
+- State: **Representative live acceptance PASS**.
+  Four comparable live epochs pass across two genuinely distinct observed
+  AutoCAD runtime identities. The approved design is
+  `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md` and
+  the execution record is
+  `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md`.
+- Draft PR `#309` remains the benchmark integration point at its exact
+  GitHub-observed head `738dac0b11231a71f91376ebb5ef22b6c709461d`. The
+  bounded C# health-owner successor is branch `codex/m2-plugin-identity`,
+  based on that head. The final live implementation/harness evidence ran at
+  `5c556b352f401bc084d4ee3f162c77d5df239378`; this acceptance-record update
+  is committed at `38c640e4402dfc7868c67197b6d9a5bd4c0baa39`. Fresh
+  `origin/main` remains `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
+- Implemented scope: the closed `m2-mechanical-benchmark-record-1.0` oracle,
+  cross-process deterministic staged-DXF fixture normalization with
+  class-order semantic-invariance guards and post-normalization review,
+  opt-in
+  read-only Mechanical harness, and fail-closed runtime/implementation/PR/
+  harness/plugin identity, transport, semantic wrong-target and stale-probe,
+  failure-context, and cleanup accounting. No new transport, database,
+  telemetry, or MECH-1 façade was added.
+- Focused M2 verification before the final harness-only repairs passed `136`
+  Python tests; the full C# suite passed `198`; Ruff and `git diff --check`
+  passed. The final successor adds only the existing Python/FileIPC harness
+  owner repairs described below; the canonical offline verifier is rerun
+  separately before release integration.
+- Authoritative full verifier on successor head `e8a42a5` exited `0`: C#
+  `198` tests passed; offline JUnit `tests=3089, failures=0, errors=0,
+  skipped=0`; dotnet IPC JUnit `tests=117, failures=0, errors=0, skipped=0`;
+  real-data `2 skipped`; AutoCAD unavailable-state `14 skipped`; generic and
+  M2 live markers **NOT RUN**; causal RED checks for fixture
+  reproducibility, loaded identity, and semantic wrong-target refusal were
+  accepted.
+- Canonical offline verifier `scripts/verify.ps1 -SkipAutoCADDotNet` on
+  successor head `78e06e5` exited `0`: offline JUnit `tests=3090`, dotnet IPC
+  JUnit `tests=117`, with no failures/errors; the previously verified C# owner
+  is unchanged. The final fixture proof includes no proxy/class-indexed entity
+  invariant and equality of headless semantic review before/after
+  normalization.
+- A historical exact full-gate attempt at
+  `4ee5e879214531b3d52c82a989de53e5541fbfd2` stopped in the .NET build with
+  `MSB3027/MSB3021` because the Release plugin DLL was locked by AutoCAD PID
+  `27168`; no process was launched or stopped to work around the lock.
+- Current persisted record `C:\temp\cad-agent-m2-record.json` is SHA-256
+  `360dd99c9ca88d9f09ef27af942cf2d52f545b7e6a4d58c888ae5d359d2c3ee0`.
+  It contains four failed non-comparable epochs, aggregate `0/0`, status
+  `BASELINE_ONLY`; after the modal was dismissed with Load Once, the current
+  clean-head harness recorded a health/tool failure because the active plugin
+  still omits the binary identity fields. That epoch also proved
+  `closed_without_save`, source/staged unchanged, and release verified. Its
+  sidecar is
+  `C:\temp\cad-agent-m2-record.measurements.json`, SHA-256
+  `b0e5d8e94bdc4b44d8f3acc58c3d873bb971400a2318b8944855d401d0eb301a`, with
+  `0` measurements and `0` entity queries. The record is append-only evidence
+  and is not promoted to acceptance.
+- After the final artifact was loaded into the fresh runtime PID/HWND
+  `27812/10881220`, the append-only
+  `C:\temp\cad-agent-m2-record-r2.json` contains twelve total epochs, of
+  which four are successful comparable epochs. The current record SHA-256 is
+  `bbbdc33756b735e32acd7206d02a43f903f5ae944b72917d704260a096044c70`;
+  its aggregate is `comparable=4`, `successful=4`, `success_rate=1.0`,
+  `representative=true`, `status=REPRESENTATIVE`. The successful epochs
+  observe the two distinct identities `acad-pid-1720-hwnd-1378378` and
+  `acad-pid-27812-hwnd-10881220`; earlier non-comparable epochs remain
+  recorded and are not backfilled. The successful epochs prove live geometry
+  `3/3`, component `1/1`, dimension `1/1`, positive stale/wrong-target
+  refusals, complete transport accounting, unchanged source/staged/candidate
+  hashes, and close-without-save cleanup. No process control or blind retry
+  was used.
+- The current live harness binds runtime identity to the observed `acad.exe`
+  PID/HWND, exact clean implementation and harness heads, and the exact
+  Release DLL hash. The successor C# health owner now reports the executing
+  assembly path and lowercase SHA-256, and the harness compares that observed
+  value with the exact isolated Release artifact. Focused C# verification
+  passed `198` tests; the final isolated x64 Release artifact is
+  `C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll`
+  with SHA-256
+  `f7d3467a57ccb186b78d515ffe737afba08d3d3c691e0518e020a16ddfcbf40c`.
+  The normal main-worktree Release DLL stayed locked/unchanged by AutoCAD;
+  no process-control workaround was used. The DIMENSION read owner now uses
+  DXF group 13/14 endpoint distance when AutoCAD reports the generated
+  dimension's group 42 sentinel `-1.0`; the live evidence proves the fallback
+  returns the expected 100 mm without COM write access. The harness also resets
+  the disposable candidate after the wrong-target close and waits for the MDI
+  transition to settle, preserving DBMOD/read-only evidence.
+- Explicit gates: benchmark `autocad_mechanical` representative live
+  acceptance is **PASS** with four successful comparable epochs across two
+  observed runtime identities, exact loaded-plugin SHA attestation, semantic
+  geometry/dimension, transport, stale/wrong-target, identity, and cleanup
+  evidence. Benchmark `real_data` is **NOT RUN**; no repair or save attempts
+  were made.
+- MECH-1 remains **NOT JUSTIFIED**: no measured sidecar evidence shows that
+  read-only CAD introspection materially improves coverage or context cost.
+
+The exact future operator packet is tracked at
+`docs/superpowers/plans/2026-08-30-m2-live-packet.md`. The packet records the
+exact artifact, observed runtime identities, and final oracle. No remaining
+Human-only action is required for M2 acceptance.
+
 ## Personal Lean Pilot — Gate A Setup Lite
 
 - State: **Partially verified; Gate A remains open**. The personal-project
