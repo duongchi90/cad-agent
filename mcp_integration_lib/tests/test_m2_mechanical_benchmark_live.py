@@ -568,15 +568,24 @@ def _exercise_wrong_target_rejection(
     *,
     legacy_client: Any,
     dotnet_client: Any,
+    transport: dict[str, dict[str, int | str]],
     intended_full_path: str,
     second_drawing_path: Path,
     reopen_drawing_path: Path,
     request_id: str,
 ) -> dict[str, object]:
-    legacy_client.drawing_open(str(second_drawing_path))
+    transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
     try:
+        legacy_client.drawing_open(str(second_drawing_path))
+    except Exception:
+        transport["fileipc"]["failures"] = int(transport["fileipc"]["failures"]) + 1
+        raise
+    transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
+    try:
+        transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
         dotnet_client.health(intended_full_path, request_id=request_id)
     except (MCPTimeoutError, MCPToolError, DotNetIPCError) as exc:
+        transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
         return {
             "kind": "wrong_target",
             "count": 1,
@@ -585,8 +594,16 @@ def _exercise_wrong_target_rejection(
             "category": _failure_category(exc),
             "detail": str(exc),
         }
+    else:
+        transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
     finally:
-        legacy_client.drawing_open(str(reopen_drawing_path))
+        transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
+        try:
+            legacy_client.drawing_open(str(reopen_drawing_path))
+        except Exception:
+            transport["fileipc"]["failures"] = int(transport["fileipc"]["failures"]) + 1
+            raise
+        transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
     return {
         "kind": "wrong_target",
         "count": 0,
@@ -917,17 +934,15 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             wrong_target_request_id = f"m2-wrong-target-{time.time_ns()}"
             request_ids.append(wrong_target_request_id)
             current_operation = "wrong_target"
-            transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
             wrong_target_probe = _exercise_wrong_target_rejection(
                 legacy_client=legacy_client,
                 dotnet_client=dotnet_client,
+                transport=transport,
                 intended_full_path=expected_full_path,
                 second_drawing_path=second_drawing_path,
                 reopen_drawing_path=drawing_path,
                 request_id=wrong_target_request_id,
             )
-            if wrong_target_probe["captured"]:
-                transport["live_review"]["failures"] = int(transport["live_review"]["failures"]) + 1
             epoch["negative_probes"] = [
                 {
                     "kind": str(stale_probe["kind"]),

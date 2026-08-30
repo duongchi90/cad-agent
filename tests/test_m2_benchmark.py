@@ -1466,6 +1466,7 @@ def test_current_main_sha_fails_closed_when_origin_main_output_is_invalid(
 
 def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: Path) -> None:
     observed_paths: list[str] = []
+    transport = _transport_counters()
 
     class FakeLegacyClient:
         def drawing_open(self, drawing_path: str) -> None:
@@ -1491,6 +1492,7 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     probe = _exercise_wrong_target_rejection(
         legacy_client=FakeLegacyClient(),
         dotnet_client=FakeDotNetClient(),
+        transport=transport,
         intended_full_path=r"C:\temp\intended.dxf",
         second_drawing_path=wrong,
         reopen_drawing_path=intended,
@@ -1503,6 +1505,10 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     assert probe["operation"] == "wrong_target"
     assert probe["category"] == "dotnet_result"
     assert observed_paths == [str(wrong), str(intended)]
+    assert _transport_records(transport) == [
+        {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
+        {"name": "dotnetipc", "attempts": 1, "successes": 0, "failures": 1},
+    ]
 
 
 def test_missing_opt_in_inputs_are_reported_explicitly_without_false_green(
