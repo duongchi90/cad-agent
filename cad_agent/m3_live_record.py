@@ -8,7 +8,9 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from cad_agent.approved_repair_adapter import validate_approved_repair_result
 from cad_agent.drawing_contracts import canonical_json_sha256
+from cad_agent.visual_supervisor_adapter import validate_visual_verdict_result
 
 M3_LIVE_RECORD_SCHEMA_VERSION = "m3-live-repair-record-1.0"
 
@@ -200,6 +202,7 @@ def _validate_r5(value: object, *, path: str, expected_verdict: str, expected_ca
             "latest_mutation_sha256",
             "task6_thread_id",
             "task6_turn_id",
+            "canonical_result",
         },
     )
     if item["verdict"] != expected_verdict:
@@ -219,6 +222,30 @@ def _validate_r5(value: object, *, path: str, expected_verdict: str, expected_ca
         _fail(path, "candidate revision binding is stale or foreign")
     if item["candidate_state_sha256"] != expected_state:
         _fail(path, "candidate state binding is stale or foreign")
+    try:
+        canonical = validate_visual_verdict_result(
+            item["canonical_result"],
+            expected_request_sha256=item["request_sha256"],
+            expected_candidate_revision_sha256=expected_candidate,
+            expected_candidate_state_sha256=expected_state,
+            expected_latest_mutation_sha256=item["latest_mutation_sha256"],
+        )
+    except Exception:
+        _fail(path, "canonical R5 owner result is invalid")
+    for field in (
+        "request_sha256",
+        "observation_sha256",
+        "verdict_sha256",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "latest_mutation_sha256",
+        "task6_thread_id",
+        "task6_turn_id",
+    ):
+        if item[field] != canonical[field]:
+            _fail(path, f"summary does not match canonical R5 owner result.{field}")
+    if canonical["verdict"] != expected_verdict:
+        _fail(path, "canonical R5 owner result verdict is not decision-grade")
     _identifier(item["task6_thread_id"], path=f"{path}.task6_thread_id")
     _identifier(item["task6_turn_id"], path=f"{path}.task6_turn_id")
     return item
@@ -231,28 +258,42 @@ def _validate_repair(value: object, *, pre_candidate: str, pre_r5: dict[str, Any
         path="repair",
         required={
             "authorization_sha256",
+            "authorization_id",
             "authorization_consumed",
             "candidate_revision_sha256",
+            "r5_failure_id",
             "r5_failure_sha256",
+            "repair_plan_id",
             "repair_plan_sha256",
+            "repair_plan_version",
+            "repair_operation_contract_version",
             "operation_kind",
             "capability",
             "operation_fingerprint_sha256",
             "r6_result_sha256",
             "outcome",
             "attempts",
+            "canonical_result",
         },
     )
     _sha(item["authorization_sha256"], path="repair.authorization_sha256")
+    _identifier(item["authorization_id"], path="repair.authorization_id")
     if _bool(item["authorization_consumed"], path="repair.authorization_consumed") is not True:
         _fail("repair.authorization_consumed", "must be true before mutation")
     _sha(item["candidate_revision_sha256"], path="repair.candidate_revision_sha256")
     if item["candidate_revision_sha256"] != pre_candidate:
         _fail("repair.candidate_revision_sha256", "authorization is bound to a stale or foreign candidate")
+    _identifier(item["r5_failure_id"], path="repair.r5_failure_id")
     _sha(item["r5_failure_sha256"], path="repair.r5_failure_sha256")
     if item["r5_failure_sha256"] != pre_r5["verdict_sha256"]:
         _fail("repair.r5_failure_sha256", "authorization is bound to a stale or foreign R5 failure")
     _sha(item["repair_plan_sha256"], path="repair.repair_plan_sha256")
+    _identifier(item["repair_plan_id"], path="repair.repair_plan_id")
+    _string(item["repair_plan_version"], path="repair.repair_plan_version")
+    _string(
+        item["repair_operation_contract_version"],
+        path="repair.repair_operation_contract_version",
+    )
     if item["operation_kind"] != "REPAIR_DXF_PRIMITIVE":
         _fail("repair.operation_kind", "must be REPAIR_DXF_PRIMITIVE")
     if item["capability"] != "LINE":
@@ -263,26 +304,75 @@ def _validate_repair(value: object, *, pre_candidate: str, pre_r5: dict[str, Any
         _fail("repair.outcome", "must be SUCCESS for live acceptance")
     if item["attempts"] != 1:
         _fail("repair.attempts", "must be exactly one")
+    try:
+        canonical = validate_approved_repair_result(
+            item["canonical_result"],
+            expected_candidate_revision_sha256=pre_candidate,
+            expected_r5_failure_id=item["r5_failure_id"],
+            expected_r5_failure_sha256=item["r5_failure_sha256"],
+            expected_repair_plan_id=item["repair_plan_id"],
+            expected_repair_plan_sha256=item["repair_plan_sha256"],
+            expected_repair_plan_version=item["repair_plan_version"],
+            expected_repair_operation_contract_version=item[
+                "repair_operation_contract_version"
+            ],
+            expected_repair_operation_contract_fingerprint=item[
+                "operation_fingerprint_sha256"
+            ],
+        )
+    except Exception:
+        _fail("repair", "canonical R6 owner result is invalid")
+    for field, canonical_field in (
+        ("authorization_id", "authorization_id"),
+        ("r5_failure_id", "r5_failure_id"),
+        ("r5_failure_sha256", "r5_failure_sha256"),
+        ("repair_plan_id", "repair_plan_id"),
+        ("repair_plan_sha256", "repair_plan_sha256"),
+        ("repair_plan_version", "repair_plan_version"),
+        ("repair_operation_contract_version", "repair_operation_contract_version"),
+        ("operation_fingerprint_sha256", "repair_operation_contract_fingerprint"),
+        ("r6_result_sha256", "result_sha256"),
+    ):
+        if item[field] != canonical[canonical_field]:
+            _fail(f"repair.{field}", "does not match canonical R6 owner result")
+    if canonical["executor_capability"] != item["capability"]:
+        _fail("repair.capability", "does not match canonical R6 owner result")
+    if canonical["mutation_outcome"] != item["outcome"]:
+        _fail("repair.outcome", "does not match canonical R6 owner result")
     return item
 
 
-def _validate_transport(value: object) -> dict[str, Any]:
+def _validate_transport(value: object, *, repair_attempts: int) -> dict[str, Any]:
     item = _object(value, path="transport")
     expected = {"fileipc", "dotnetipc", "task6_provider", "repair_executor"}
     if set(item) != expected:
         _fail("transport", "must contain exactly fileipc, dotnetipc, task6_provider, and repair_executor")
     for name, report in item.items():
         entry = _object(report, path=f"transport.{name}")
-        _keys(entry, path=f"transport.{name}", required={"attempts", "successes", "failures"})
+        _keys(
+            entry,
+            path=f"transport.{name}",
+            required={"attempts", "successes", "failures", "retries"},
+        )
         attempts = _positive_int(entry["attempts"], path=f"transport.{name}.attempts")
         successes = entry["successes"]
         failures = entry["failures"]
+        retries = entry["retries"]
         if isinstance(successes, bool) or not isinstance(successes, int) or successes < 0:
             _fail(f"transport.{name}.successes", "must be a non-negative integer")
         if isinstance(failures, bool) or not isinstance(failures, int) or failures < 0:
             _fail(f"transport.{name}.failures", "must be a non-negative integer")
+        if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+            _fail(f"transport.{name}.retries", "must be a non-negative integer")
         if successes + failures != attempts:
             _fail(f"transport.{name}", "successes plus failures must equal attempts")
+        if failures != 0 or retries != 0:
+            _fail(f"transport.{name}", "accepted live epochs cannot contain failures or retries")
+        if name == "repair_executor" and attempts != repair_attempts:
+            _fail(
+                "transport.repair_executor",
+                "executor attempts must equal the single R6 repair attempt",
+            )
     return item
 
 
@@ -330,8 +420,8 @@ def _validate_human(value: object) -> dict[str, Any]:
     if _bool(item["captured"], path="human_intervention.captured") is not True:
         _fail("human_intervention.captured", "must be true")
     events = item["events"]
-    if not isinstance(events, list) or not events:
-        _fail("human_intervention.events", "must record the bounded load action")
+    if not isinstance(events, list):
+        _fail("human_intervention.events", "must be a list")
     for index, event in enumerate(events):
         entry = _object(event, path=f"human_intervention.events[{index}]")
         _keys(entry, path=f"human_intervention.events[{index}]", required={"kind", "count"})
@@ -397,8 +487,10 @@ def validate_m3_live_record(
     )
     if pre_r5["task6_turn_id"] == post_r5["task6_turn_id"]:
         _fail("post_r5", "must use a fresh Task6 turn")
-    _validate_repair(item["repair"], pre_candidate=candidate["pre_revision_sha256"], pre_r5=pre_r5)
-    _validate_transport(item["transport"])
+    repair = _validate_repair(
+        item["repair"], pre_candidate=candidate["pre_revision_sha256"], pre_r5=pre_r5
+    )
+    _validate_transport(item["transport"], repair_attempts=repair["attempts"])
     _validate_integrity(item["integrity"])
     _validate_cleanup(item["cleanup"])
     _validate_human(item["human_intervention"])

@@ -28,6 +28,7 @@ def _callbacks():
         assert pre_r5["verdict"] == "FAIL"
         return {
             "authorization_sha256": payload["repair"]["authorization_sha256"],
+            "authorization_id": payload["repair"]["authorization_id"],
             "authorization_consumed": True,
             "candidate_revision_sha256": payload["repair"]["candidate_revision_sha256"],
             "r5_failure_sha256": payload["repair"]["r5_failure_sha256"],
@@ -147,7 +148,7 @@ def test_driver_rejects_pre_repair_pass_before_mutation() -> None:
 
     callbacks["collect_pre_r5"] = pre_pass
 
-    with pytest.raises(Exception, match="pre-repair|FAIL"):
+    with pytest.raises(Exception, match="pre-repair|FAIL|canonical"):
         compose_m3_live_epoch(
             mode="LIVE_PROVIDER_BACKED",
             epoch_id="m3-line-live-002",

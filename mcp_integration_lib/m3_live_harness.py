@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cad_agent.approved_repair_adapter import validate_approved_repair_result
 from cad_agent.m3_live_record import seal_m3_live_record
+from cad_agent.visual_supervisor_adapter import validate_visual_verdict_result
 
 
 class M3LiveEpochNotRun(ValueError):
@@ -20,6 +22,80 @@ def _mapping(value: object, *, name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise M3LiveEpochError(f"{name} must return a mapping")
     return dict(value)
+
+
+def _validated_r5(value: object, *, expected_verdict: str, name: str) -> dict[str, Any]:
+    item = _mapping(value, name=name)
+    if item.get("provider_backed") is not True:
+        raise M3LiveEpochError(f"{name} must be provider-backed")
+    try:
+        canonical = validate_visual_verdict_result(
+            item["canonical_result"],
+            expected_request_sha256=item["request_sha256"],
+            expected_candidate_revision_sha256=item["candidate_revision_sha256"],
+            expected_candidate_state_sha256=item["candidate_state_sha256"],
+            expected_latest_mutation_sha256=item["latest_mutation_sha256"],
+        )
+    except Exception as exc:
+        raise M3LiveEpochError(f"{name} canonical owner result is invalid") from exc
+    if canonical["verdict"] != expected_verdict:
+        raise M3LiveEpochError(f"{name} canonical verdict must be {expected_verdict}")
+    if item.get("verdict") != canonical["verdict"]:
+        raise M3LiveEpochError(f"{name} summary verdict is not canonical")
+    for field in (
+        "request_sha256",
+        "observation_sha256",
+        "verdict_sha256",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "latest_mutation_sha256",
+        "task6_thread_id",
+        "task6_turn_id",
+    ):
+        if item.get(field) != canonical[field]:
+            raise M3LiveEpochError(f"{name} summary is not bound to canonical owner result")
+    return item
+
+
+def _validated_r6(value: object, *, authorization: Mapping[str, object]) -> dict[str, Any]:
+    item = _mapping(value, name="execute_repair")
+    try:
+        canonical = validate_approved_repair_result(
+            item["canonical_result"],
+            expected_candidate_revision_sha256=item["candidate_revision_sha256"],
+            expected_r5_failure_id=item["r5_failure_id"],
+            expected_r5_failure_sha256=item["r5_failure_sha256"],
+            expected_repair_plan_id=item["repair_plan_id"],
+            expected_repair_plan_sha256=item["repair_plan_sha256"],
+            expected_repair_plan_version=item["repair_plan_version"],
+            expected_repair_operation_contract_version=item[
+                "repair_operation_contract_version"
+            ],
+            expected_repair_operation_contract_fingerprint=item[
+                "operation_fingerprint_sha256"
+            ],
+        )
+    except Exception as exc:
+        raise M3LiveEpochError("execute_repair canonical owner result is invalid") from exc
+    for field, canonical_field in (
+        ("authorization_id", "authorization_id"),
+        ("candidate_revision_sha256", "candidate_revision_sha256"),
+        ("r5_failure_id", "r5_failure_id"),
+        ("r5_failure_sha256", "r5_failure_sha256"),
+        ("repair_plan_id", "repair_plan_id"),
+        ("repair_plan_sha256", "repair_plan_sha256"),
+        ("repair_plan_version", "repair_plan_version"),
+        ("repair_operation_contract_version", "repair_operation_contract_version"),
+        ("operation_fingerprint_sha256", "repair_operation_contract_fingerprint"),
+        ("r6_result_sha256", "result_sha256"),
+    ):
+        if item.get(field) != canonical[canonical_field]:
+            raise M3LiveEpochError("execute_repair summary is not bound to canonical owner result")
+    if item.get("authorization_id") != authorization.get("authorization_id"):
+        raise M3LiveEpochError("execute_repair authorization identity is not bound")
+    if canonical["executor_capability"] != item.get("capability"):
+        raise M3LiveEpochError("execute_repair capability is not canonical")
+    return item
 
 
 def compose_m3_live_epoch(
@@ -59,9 +135,9 @@ def compose_m3_live_epoch(
         raise M3LiveEpochError("mode must be LIVE_PROVIDER_BACKED")
 
     runtime = _mapping(observe_runtime(), name="observe_runtime")
-    pre_r5 = _mapping(collect_pre_r5(runtime), name="collect_pre_r5")
-    if pre_r5.get("verdict") != "FAIL" or pre_r5.get("provider_backed") is not True:
-        raise M3LiveEpochError("pre-repair R5 must be a provider-backed FAIL")
+    pre_r5 = _validated_r5(
+        collect_pre_r5(runtime), expected_verdict="FAIL", name="collect_pre_r5"
+    )
 
     authorization = _mapping(authorize_repair(pre_r5), name="authorize_repair")
     if authorization.get("authorization_consumed") is not True:
@@ -76,7 +152,7 @@ def compose_m3_live_epoch(
         raise M3LiveEpochError("authorization operation kind is not bounded")
     if authorization.get("capability") != "LINE":
         raise M3LiveEpochError("authorization capability is not LINE")
-    repair = _mapping(execute_repair(authorization), name="execute_repair")
+    repair = _validated_r6(execute_repair(authorization), authorization=authorization)
     for key in (
         "authorization_sha256",
         "candidate_revision_sha256",
@@ -92,7 +168,9 @@ def compose_m3_live_epoch(
     post_candidate = _mapping(
         collect_post_candidate(runtime, repair), name="collect_post_candidate"
     )
-    post_r5 = _mapping(collect_post_r5(post_candidate), name="collect_post_r5")
+    post_r5 = _validated_r5(
+        collect_post_r5(post_candidate), expected_verdict="PASS", name="collect_post_r5"
+    )
     transport = _mapping(collect_transport(), name="collect_transport")
     integrity = _mapping(collect_integrity(), name="collect_integrity")
     cleanup = _mapping(collect_cleanup(), name="collect_cleanup")

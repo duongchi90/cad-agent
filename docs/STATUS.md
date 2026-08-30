@@ -313,6 +313,27 @@ Human-only action is required for M2 acceptance.
   candidate, R5, repair, transport, integrity, and cleanup evidence. No live
   command or Human action is requested while the mode remains contract-only.
 
+## M3 live oracle hardening — red-team correction
+
+- Advisory `#301` comment `5468292161` identified a critical false-PASS risk
+  after the seam was merged: reconciled transport failures/retries, reduced
+  caller-made R5/R6 mappings, missing repair-executor cross-binding, and an
+  unnecessarily non-empty Human-event requirement.
+- Candidate hardening is on `codex/m3-oracle-hardening` from main
+  `ad1ac402b83b88780c7392e36f9f609fea5650b9`. It remains offline and does not
+  perform provider calls, NETLOAD, UI automation, process control, or AutoCAD
+  mutation.
+- `cad_agent/m3_live_record.py` now validates the exact current-main
+  `validate_visual_verdict_result` and `validate_approved_repair_result`
+  payloads, binds their sealed identities to the reduced record, rejects any
+  transport failure/retry, cross-binds `repair_executor` attempts to the one
+  R6 attempt, and accepts `human_intervention={captured: true, events: []}`.
+- RED/GREEN evidence on the candidate: focused hardening suite `18 passed`;
+  nearest M3/R4/R5/R6/R7 regression `230 passed`; Ruff and
+  `git diff --check` passed. `LIVE_REPAIR_ACCEPTANCE=NOT_RUN` remains true.
+- The critical advisory is actionable, not stale; merge/live decisions remain
+  blocked on this exact-head hardening candidate until hosted checks pass.
+
 ## Personal Lean Pilot — Gate A Setup Lite
 
 - State: **Partially verified; Gate A remains open**. The personal-project
