@@ -603,6 +603,19 @@ def test_m2_fixture_support_is_reproducible_across_fresh_roots(tmp_path: Path) -
     assert hashlib.sha256(second.staged_dxf.read_bytes()).hexdigest() == second.staged_dxf_sha256
 
 
+def test_m2_fixture_support_freezes_known_dynamic_header_values(tmp_path: Path) -> None:
+    fixture = build_m2_fixture(tmp_path)
+    data = fixture.staged_dxf.read_bytes()
+
+    for variable in (b"$TDCREATE", b"$TDUCREATE", b"$TDUPDATE", b"$TDUUPDATE"):
+        assert b"  9\r\n" + variable + b"\r\n 40\r\n2451544.5\r\n" in data
+
+    assert b"  9\r\n$TDINDWG\r\n 40\r\n0.0\r\n" in data
+    assert b"\r\nLINE\r\n" in data
+    assert b"COMP_FRAME_BEAM" in data
+    assert b"\r\nDIMENSION\r\n" in data
+
+
 def test_m2_fixture_build_evidence_round_trips_and_refuses_stale_dxf(tmp_path: Path) -> None:
     fixture = build_m2_fixture(tmp_path)
     loaded = load_build_evidence(fixture.build_evidence, fixture.staged_dxf)

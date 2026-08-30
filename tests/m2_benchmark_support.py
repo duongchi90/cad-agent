@@ -27,8 +27,12 @@ from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticP
 
 _FIXED_GUID = "{00000000-0000-0000-0000-000000000000}"
 _FIXED_EZDXF_BANNER = "1.4.4 @ 1970-01-01T00:00:00+00:00"
+_FIXED_DXF_HEADER_DATE = "2451544.5"
 _GUID_VALUE = re.compile(rb"\{[0-9A-Fa-f-]{36}\}")
 _EZDXF_BANNER = re.compile(rb"1\.4\.4 @ [^\r\n]+")
+_DXF_HEADER_DATE = re.compile(
+    rb"(  9\r\n\$(?:TDCREATE|TDUCREATE|TDUPDATE|TDUUPDATE)\r\n 40\r\n)[^\r\n]+"
+)
 
 
 @dataclass(frozen=True)
@@ -130,7 +134,10 @@ def _semantic_document() -> SemanticIRDocument:
 
 def _normalize_staged_dxf_bytes(data: bytes) -> bytes:
     normalized = _GUID_VALUE.sub(_FIXED_GUID.encode("ascii"), data)
-    return _EZDXF_BANNER.sub(_FIXED_EZDXF_BANNER.encode("ascii"), normalized)
+    normalized = _EZDXF_BANNER.sub(_FIXED_EZDXF_BANNER.encode("ascii"), normalized)
+    return _DXF_HEADER_DATE.sub(
+        rb"\g<1>" + _FIXED_DXF_HEADER_DATE.encode("ascii"), normalized
+    )
 
 
 def headless_metrics(fixture: M2Fixture) -> dict[str, object]:
