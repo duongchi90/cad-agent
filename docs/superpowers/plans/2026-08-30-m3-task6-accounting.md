@@ -10,6 +10,8 @@
 
 **Status:** executing
 
+**Implementation head:** `8b4c5acfb48d791d11aa28fc42bf7ad5a0b8736d`
+
 ## Constraints
 
 - `R5_MODE=contract-only` remains non-live; no provider/AutoCAD/NETLOAD/process action.
@@ -21,11 +23,14 @@
 - [x] Write causal REDs for Task6 attempts `1` and `3`, plus turn-ID drift.
 - [x] Require exact two successful Task6 attempts and ordered pre/post turn IDs.
 - [x] Run focused and nearest regressions, Ruff, and diff hygiene.
-- [ ] Run canonical verifier on the clean exact candidate head.
+- [x] Run canonical verifier on the clean exact candidate head.
 - [ ] Push, hosted-verify, and merge only the bounded correction.
 
 ## Evidence
 
 - Focused M3/Task6 suite: `21 passed`.
 - Nearest M3/R5/R6 regression: `214 passed`.
+- Canonical verifier: exit `0`; offline JUnit `3119/0/0/0`; dotnet IPC
+  `117/0/0/0`; causal RED `1 accepted`; real-data `2 skipped`; AutoCAD
+  `14 skipped`.
 - Live/provider/AutoCAD: `NOT RUN` by policy.

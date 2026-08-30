@@ -345,16 +345,20 @@ Human-only action is required for M2 acceptance.
 - Advisory `#301` critical source `#311` comment `5468458694` identified a
   remaining contradiction: the record requires distinct canonical pre/post
   Task6 turns while `transport.task6_provider` could claim only one attempt.
-- Candidate: `codex/m3-task6-accounting` from main
+- Candidate commit `8b4c5acfb48d791d11aa28fc42bf7ad5a0b8736d` on
+  `codex/m3-task6-accounting`, based on main
   `14ad95bd038f23c4d6e22808762b3a6a7ea49fe3`. The bounded validator now
   requires `task6_provider` attempts `2`, successes `2`, failures `0`, retries
   `0`, and exact ordered `turn_ids=[pre_r5.turn_id, post_r5.turn_id]`.
   Attempts `1`, `>2`, or turn identity drift fail closed; no other transport
   cardinality is generalized.
 - Verification: focused Task6/M3 suite `21 passed`; nearest R5/R6/M3
-  regression `214 passed`; Ruff and `git diff --check` passed. Provider/live
-  AutoCAD acceptance remains `NOT_RUN` and `R5_MODE=contract-only` remains
-  unchanged.
+  regression `214 passed`; docs contract `34 passed`; Ruff and
+  `git diff --check` passed. Canonical verifier on the clean exact commit
+  exited `0` with offline JUnit `tests=3119, failures=0, errors=0, skipped=0`,
+  dotnet IPC `117/0/0/0`, causal RED `1 accepted`, real-data `2 skipped`, and
+  AutoCAD `14 skipped`. Provider/live AutoCAD acceptance remains `NOT_RUN`
+  and `R5_MODE=contract-only` remains unchanged.
 
 ## Personal Lean Pilot — Gate A Setup Lite
 
