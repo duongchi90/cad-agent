@@ -1242,6 +1242,45 @@ def test_transport_helpers_preserve_observed_attempts() -> None:
 
 
 @pytest.mark.parametrize(
+    ("operation", "expected_transport", "error"),
+    [
+        ("drawing_open", "fileipc", MCPTimeoutError("drawing open timed out")),
+        ("health", "dotnetipc", MCPToolError("health failed")),
+        ("mechanical_bom", "dotnetipc", DotNetIPCTimeoutError("BOM timed out")),
+        ("review", "live_review", DotNetIPCProtocolError("review protocol failed")),
+    ],
+)
+def test_metadata_free_live_failure_retains_operation_through_counter_path(
+    operation: str,
+    expected_transport: str,
+    error: Exception,
+) -> None:
+    epoch = _epoch(accepted_comparable=True, success=True)
+    transport = _transport_counters()
+    transport[expected_transport]["attempts"] = 1
+
+    detail = m2_live._record_m2_failure(
+        epoch,
+        transport,
+        error,
+        current_operation=operation,
+        human_capture_observed=True,
+    )
+
+    assert detail["operation"] == operation
+    assert epoch["accepted_comparable"] is False
+    assert epoch["success"] is False
+    assert _transport_records(transport) == [
+        {
+            "name": expected_transport,
+            "attempts": 1,
+            "successes": 0,
+            "failures": 1,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
     ("operation", "expected_transport"),
     [
         ("m2-live", "fileipc"),

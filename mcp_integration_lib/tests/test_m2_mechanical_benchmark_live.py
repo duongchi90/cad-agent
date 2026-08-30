@@ -393,6 +393,31 @@ def _apply_failure_outcome(
     return detail
 
 
+def _record_m2_failure(
+    epoch: dict[str, object],
+    transport: dict[str, dict[str, int | str]],
+    error: Exception,
+    *,
+    current_operation: str,
+    human_capture_observed: bool,
+) -> dict[str, str]:
+    operation = current_operation
+    result = getattr(error, "result", None)
+    if isinstance(result, dict) and isinstance(result.get("operation"), str):
+        operation = result["operation"]
+    failure_detail = _apply_failure_outcome(
+        epoch,
+        error,
+        operation=operation,
+        human_capture_observed=human_capture_observed,
+    )
+    transport_name = _transport_for_operation(operation)
+    transport[transport_name]["failures"] = (
+        int(transport[transport_name]["failures"]) + 1
+    )
+    return failure_detail
+
+
 def _exercise_stale_evidence_rejection(fixture, probe_root: Path) -> dict[str, object]:
     probe_root.mkdir(parents=True, exist_ok=True)
     copied_evidence = probe_root / fixture.build_evidence.name
@@ -657,6 +682,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
         epoch["hashes"]["before"] = before_sha
         monotonic_started = time.monotonic()
         expected_full_path = normalize_windows_absolute_path(str(drawing_path))
+        current_operation = "m2-live"
 
         close_request_id = f"m2-close-{time.time_ns()}"
         request_ids.append(close_request_id)
@@ -682,13 +708,16 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 timeout_s=20.0,
             )
 
+            current_operation = "drawing_open"
             transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
             legacy_client.drawing_open(str(drawing_path))
             transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
+            current_operation = "drawing_open"
             before_state = legacy_client.drawing_get_variables(["DBMOD", "DWGPREFIX", "DWGNAME"])
 
             health_request_id = f"m2-health-{time.time_ns()}"
             request_ids.append(health_request_id)
+            current_operation = "health"
             transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
             health = dotnet_client.health(expected_full_path, request_id=health_request_id)
             transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
@@ -712,6 +741,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
 
             bom_request_id = f"m2-bom-{time.time_ns()}"
             request_ids.append(bom_request_id)
+            current_operation = "mechanical_bom"
             transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
             bom = dotnet_client.mechanical_bom(expected_full_path, request_id=bom_request_id)
             transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
@@ -737,6 +767,7 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 self.assertEqual(1, len(matching))
                 self.assertEqual(expected["attributes"], matching[0]["attributes"])
 
+            current_operation = "review"
             transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
             review = review_dxf_live(fixture.build, legacy_client, open_drawing=False)
             transport["live_review"]["successes"] = int(transport["live_review"]["successes"]) + 1
@@ -788,19 +819,12 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             self.assertEqual(fixture.input_sha256, sha256_file(fixture.input_path))
             self.assertEqual(fixture.staged_dxf_sha256, sha256_file(fixture.staged_dxf))
         except (MCPTimeoutError, MCPToolError, DotNetIPCError, AssertionError) as exc:
-            operation = "m2-live"
-            result = getattr(exc, "result", None)
-            if isinstance(result, dict) and isinstance(result.get("operation"), str):
-                operation = result["operation"]
-            failure_detail = _apply_failure_outcome(
+            failure_detail = _record_m2_failure(
                 epoch,
+                transport,
                 exc,
-                operation=operation,
+                current_operation=current_operation,
                 human_capture_observed=human_capture_observed,
-            )
-            transport_name = _transport_for_operation(operation)
-            transport[transport_name]["failures"] = (
-                int(transport[transport_name]["failures"]) + 1
             )
         finally:
             epoch["finished_at"] = _timestamp()
