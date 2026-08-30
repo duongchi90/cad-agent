@@ -383,10 +383,6 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
                 _fail(f"{path}.negative_probes[{index}].category must be stale_evidence")
             if probe["kind"] == "wrong_target" and probe["category"] not in {
                 "dotnet_result",
-                "dotnet_timeout",
-                "dotnet_protocol",
-                "tool",
-                "timeout",
             }:
                 _fail(f"{path}.negative_probes[{index}].category is invalid for wrong_target")
     if not cleanup["closed_without_save"] or not cleanup["source_unchanged"] or not cleanup["staged_unchanged"] or not cleanup["release_verified"]:

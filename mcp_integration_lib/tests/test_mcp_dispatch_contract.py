@@ -175,6 +175,12 @@ def test_dispatcher_source_is_deterministic_hashable_and_defines_public_command(
         assert nondeterministic_marker not in lowered
 
 
+def test_entity_get_source_exposes_text_height_and_rotation() -> None:
+    source = _dispatcher_source()
+    assert '(cons "height" (cdr (assoc 40 data)))' in source
+    assert '(cons "rotation_deg" (mcp-angle-degrees (cdr (assoc 50 data))))' in source
+
+
 def test_file_ipc_constructor_requires_an_explicit_root() -> None:
     with pytest.raises(TypeError):
         FileIPCLiveMCPClient()

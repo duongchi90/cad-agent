@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.DrawingSetup;
@@ -203,6 +204,90 @@ public sealed class OperationDispatcherTests
         Assert.Equal("1.0.0", result.Payload!["plugin_version"].GetString());
         Assert.True(result.Payload["ipc_readable"].GetBoolean());
         Assert.True(result.Payload["ipc_writable"].GetBoolean());
+    }
+
+    [Fact]
+    public void HealthRejectsARequestedPathThatIsNotTheActiveDocument()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\sample.dwg"
+        };
+        var dispatcher = CreateDispatcher(gateway);
+
+        var result = dispatcher.Dispatch(Request(
+            "health",
+            "health-wrong-target-request",
+            @"C:\drawings\other.dwg",
+            Parameters()));
+
+        Assert.False(result.Success);
+        Assert.Equal("health-wrong-target-request", result.RequestId);
+        Assert.Equal("health", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Contains(
+            result.Errors!,
+            error => error.Contains("active document", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void HealthReturnsTheExactExecutingPluginBinaryIdentity()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\sample.dwg"
+        };
+        var dispatcherAssemblyPath = typeof(OperationDispatcher).Assembly.Location;
+        var expectedSha256 = Convert.ToHexString(
+            SHA256.HashData(File.ReadAllBytes(dispatcherAssemblyPath)))
+            .ToLowerInvariant();
+
+        var result = CreateDispatcher(gateway).Dispatch(
+            Request("health", "health-identity-request", null, Parameters()));
+
+        Assert.True(result.Success);
+        Assert.Equal(
+            Path.GetFullPath(dispatcherAssemblyPath),
+            result.Payload!["plugin_binary_path"].GetString());
+        Assert.Equal(expectedSha256, result.Payload["plugin_binary_sha256"].GetString());
+    }
+
+    [Fact]
+    public void HealthDoesNotAcceptCallerSuppliedPluginHash()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\sample.dwg"
+        };
+        var callerSuppliedHash = new string('0', 64);
+
+        var result = CreateDispatcher(gateway).Dispatch(
+            Request(
+                "health",
+                "health-spoof-request",
+                null,
+                Parameters((
+                    "plugin_binary_sha256",
+                    JsonSerializer.SerializeToElement(callerSuppliedHash)))));
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            result.Errors!,
+            error => error.Contains("health parameters must be an empty object", StringComparison.Ordinal));
+        Assert.False(result.Payload!.ContainsKey("plugin_binary_sha256"));
+    }
+
+    [Fact]
+    public void LoadedPluginIdentityRejectsMissingBinary()
+    {
+        var missingPath = Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-missing-plugin-" + Guid.NewGuid().ToString("N") + ".dll");
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => LoadedPluginIdentity.CaptureBinary(missingPath));
+
+        Assert.Contains("does not exist", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

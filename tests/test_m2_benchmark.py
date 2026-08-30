@@ -3,13 +3,16 @@ from __future__ import annotations
 import copy
 import json
 import hashlib
+import os
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import mcp_integration_lib.tests.test_m2_mechanical_benchmark_live as m2_live
+import tests.m2_benchmark_support as m2_fixture_support
 
 from cad_agent.live import LiveSafetyError, load_build_evidence
 from cad_agent.manifest import sha256_file
@@ -572,6 +575,26 @@ def test_failure_accounting_uses_tracked_operation_over_result_metadata() -> Non
     ]
 
 
+def test_semantic_failure_after_successful_transport_does_not_double_count() -> None:
+    epoch = _epoch(accepted_comparable=True, success=True)
+    transport = _transport_counters()
+    transport["dotnetipc"]["attempts"] = 1
+    transport["dotnetipc"]["successes"] = 1
+
+    detail = m2_live._record_m2_failure(
+        epoch,
+        transport,
+        MCPToolError("plugin identity did not match build identity"),
+        current_operation="health",
+        human_capture_observed=True,
+    )
+
+    assert detail["operation"] == "health"
+    assert _transport_records(transport) == [
+        {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0}
+    ]
+
+
 @pytest.mark.parametrize(
     ("process_path", "accepted"),
     [
@@ -950,6 +973,17 @@ def test_m2_live_component_expectations_follow_written_builder_truth(tmp_path: P
     ]
 
 
+def test_m2_live_bom_attribute_order_is_not_semantic() -> None:
+    expected = [
+        {"tag": "PART_ID", "value": "part-001"},
+        {"tag": "LENGTH_MM", "value": "100.00"},
+        {"tag": "PROFILE", "value": "unknown"},
+    ]
+    observed = [expected[1], expected[0], expected[2]]
+
+    assert m2_live._bom_attributes_equal(expected, observed)
+
+
 def test_m2_fixture_support_is_reproducible_across_fresh_roots(tmp_path: Path) -> None:
     first = build_m2_fixture(tmp_path / "first")
     second = build_m2_fixture(tmp_path / "second")
@@ -959,6 +993,47 @@ def test_m2_fixture_support_is_reproducible_across_fresh_roots(tmp_path: Path) -
     assert first.staged_dxf.read_bytes() == second.staged_dxf.read_bytes()
     assert hashlib.sha256(first.staged_dxf.read_bytes()).hexdigest() == first.staged_dxf_sha256
     assert hashlib.sha256(second.staged_dxf.read_bytes()).hexdigest() == second.staged_dxf_sha256
+
+
+def test_m2_fixture_support_is_stable_across_python_hash_seeds(tmp_path: Path) -> None:
+    hashes: list[str] = []
+    for seed in ("0", "4"):
+        root = tmp_path / f"seed-{seed}"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from pathlib import Path; "
+                    "from tests.m2_benchmark_support import build_m2_fixture; "
+                    f"print(build_m2_fixture(Path(r'{root}')).staged_dxf_sha256)"
+                ),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        hashes.append(result.stdout.strip().splitlines()[-1])
+
+    assert hashes[0] == hashes[1]
+
+
+def test_m2_fixture_reviews_the_final_normalized_dxf(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    reviewed_bytes: list[bytes] = []
+    original_review = m2_fixture_support.review_dxf
+
+    def review_and_capture(build: object):
+        reviewed_bytes.append(Path(build.output_path).read_bytes())
+        return original_review(build)
+
+    monkeypatch.setattr(m2_fixture_support, "review_dxf", review_and_capture)
+    fixture = build_m2_fixture(tmp_path)
+
+    assert len(reviewed_bytes) == 2
+    assert reviewed_bytes[-1] == fixture.staged_dxf.read_bytes()
 
 
 def test_m2_fixture_support_freezes_known_dynamic_header_values(tmp_path: Path) -> None:
@@ -1166,6 +1241,15 @@ def test_m2_missing_capture_is_non_comparable_not_zero() -> None:
         "epochs": [epoch],
     })
     assert validated["epochs"][0]["human"]["captured"] is False
+
+
+@pytest.mark.parametrize("category", ["dotnet_timeout", "dotnet_protocol", "tool", "timeout"])
+def test_m2_accepted_wrong_target_requires_semantic_refusal(category: str) -> None:
+    record = _record()
+    record["epochs"][0]["negative_probes"][1]["category"] = category
+
+    with pytest.raises(ValueError, match="category"):
+        validate_m2_record(record)
 
 
 def test_m2_live_prerequisites_do_not_hide_missing_record_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1466,10 +1550,14 @@ def test_current_main_sha_fails_closed_when_origin_main_output_is_invalid(
 
 def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: Path) -> None:
     observed_paths: list[str] = []
+    transport = _transport_counters()
 
     class FakeLegacyClient:
         def drawing_open(self, drawing_path: str) -> None:
             observed_paths.append(drawing_path)
+
+        def drawing_close(self, save_changes: bool = False) -> None:
+            assert save_changes is False
 
     class FakeDotNetClient:
         def health(self, drawing_full_path: str, *, request_id: str) -> dict[str, object]:
@@ -1479,9 +1567,29 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
                     "operation": "health",
                     "drawing_full_path": drawing_full_path,
                     "request_id": request_id,
-                    "errors": ["WRONG_TARGET_IDENTITY"],
+                    "success": False,
+                    "errors": [
+                        "The requested drawing_full_path does not match the active document full path."
+                    ],
                 },
             )
+
+        def close_disposable(
+            self,
+            _drawing_full_path: str,
+            *,
+            disposable: bool,
+            save_changes: bool,
+            request_id: str,
+        ) -> dict[str, object]:
+            assert disposable is True
+            assert save_changes is False
+            assert request_id.endswith("-close")
+            return {
+                "success": True,
+                "changed": False,
+                "payload": {"closed_without_saving": True},
+            }
 
     intended = tmp_path / "intended.dxf"
     wrong = tmp_path / "wrong.dxf"
@@ -1491,6 +1599,7 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     probe = _exercise_wrong_target_rejection(
         legacy_client=FakeLegacyClient(),
         dotnet_client=FakeDotNetClient(),
+        transport=transport,
         intended_full_path=r"C:\temp\intended.dxf",
         second_drawing_path=wrong,
         reopen_drawing_path=intended,
@@ -1503,6 +1612,66 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     assert probe["operation"] == "wrong_target"
     assert probe["category"] == "dotnet_result"
     assert observed_paths == [str(wrong), str(intended)]
+    assert _transport_records(transport) == [
+        {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
+        {"name": "dotnetipc", "attempts": 3, "successes": 3, "failures": 0},
+    ]
+
+
+def test_wrong_target_probe_does_not_treat_timeout_as_semantic_refusal(tmp_path: Path) -> None:
+    transport = _transport_counters()
+
+    class FakeLegacyClient:
+        def drawing_open(self, _drawing_path: str) -> None:
+            return None
+
+        def drawing_close(self, save_changes: bool = False) -> None:
+            assert save_changes is False
+
+    class FakeDotNetClient:
+        def health(self, _drawing_full_path: str, *, request_id: str) -> dict[str, object]:
+            _ = request_id
+            raise DotNetIPCTimeoutError("health timed out")
+
+        def close_disposable(
+            self,
+            _drawing_full_path: str,
+            *,
+            disposable: bool,
+            save_changes: bool,
+            request_id: str,
+        ) -> dict[str, object]:
+            assert disposable is True
+            assert save_changes is False
+            assert request_id.endswith("-close")
+            return {
+                "success": True,
+                "changed": False,
+                "payload": {"closed_without_saving": True},
+            }
+
+    intended = tmp_path / "intended.dxf"
+    wrong = tmp_path / "wrong.dxf"
+    intended.write_text("intended", encoding="utf-8")
+    wrong.write_text("wrong", encoding="utf-8")
+
+    probe = _exercise_wrong_target_rejection(
+        legacy_client=FakeLegacyClient(),
+        dotnet_client=FakeDotNetClient(),
+        transport=transport,
+        intended_full_path=r"C:\temp\intended.dxf",
+        second_drawing_path=wrong,
+        reopen_drawing_path=intended,
+        request_id="wrong-target-timeout",
+    )
+
+    assert probe["captured"] is False
+    assert probe["count"] == 0
+    assert probe["category"] == "dotnet_timeout"
+    assert _transport_records(transport) == [
+        {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
+        {"name": "dotnetipc", "attempts": 3, "successes": 2, "failures": 1},
+    ]
 
 
 def test_missing_opt_in_inputs_are_reported_explicitly_without_false_green(

@@ -1014,7 +1014,10 @@
 )
 
 (defun mcp-angle-degrees (value)
-  (* value (/ 180.0 pi))
+  (if (numberp value)
+    (* value (/ 180.0 pi))
+    0.0
+  )
 )
 
 (defun mcp-op-entity-get (params / ename data entity-type pairs)
@@ -1069,6 +1072,8 @@
               (list
                 (cons "insert" (mcp-array (cdr (assoc 10 data))))
                 (cons "content" (cdr (assoc 1 data)))
+                (cons "height" (cdr (assoc 40 data)))
+                (cons "rotation_deg" (mcp-angle-degrees (cdr (assoc 50 data))))
               )
             )
           )

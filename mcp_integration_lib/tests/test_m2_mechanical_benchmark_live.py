@@ -374,6 +374,17 @@ def _expected_component_bom(fixture) -> list[dict[str, object]]:
     ]
 
 
+def _bom_attributes_equal(
+    expected: list[dict[str, object]], observed: list[dict[str, object]]
+) -> bool:
+    """Compare BOM attribute content without depending on AutoCAD enumeration order."""
+    canonical = lambda attributes: sorted(
+        json.dumps(attribute, sort_keys=True, separators=(",", ":"))
+        for attribute in attributes
+    )
+    return canonical(expected) == canonical(observed)
+
+
 def _initial_epoch(
     *,
     session_id: str,
@@ -531,9 +542,9 @@ def _record_m2_failure(
         human_capture_observed=human_capture_observed,
     )
     transport_name = _transport_for_operation(operation)
-    transport[transport_name]["failures"] = (
-        int(transport[transport_name]["failures"]) + 1
-    )
+    channel = transport[transport_name]
+    if int(channel["successes"]) + int(channel["failures"]) < int(channel["attempts"]):
+        channel["failures"] = int(channel["failures"]) + 1
     return failure_detail
 
 
@@ -568,25 +579,125 @@ def _exercise_wrong_target_rejection(
     *,
     legacy_client: Any,
     dotnet_client: Any,
+    transport: dict[str, dict[str, int | str]],
     intended_full_path: str,
     second_drawing_path: Path,
     reopen_drawing_path: Path,
     request_id: str,
 ) -> dict[str, object]:
-    legacy_client.drawing_open(str(second_drawing_path))
+    transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
     try:
+        legacy_client.drawing_open(str(second_drawing_path))
+    except Exception:
+        transport["fileipc"]["failures"] = int(transport["fileipc"]["failures"]) + 1
+        raise
+    transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
+    try:
+        transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
         dotnet_client.health(intended_full_path, request_id=request_id)
-    except (MCPTimeoutError, MCPToolError, DotNetIPCError) as exc:
+    except DotNetIPCResultError as exc:
+        result = exc.result
+        errors = result.get("errors") if isinstance(result, dict) else None
+        semantic_refusal = (
+            isinstance(result, dict)
+            and result.get("success") is False
+            and result.get("operation") == "health"
+            and isinstance(errors, list)
+            and any(
+                isinstance(error, str)
+                and "requested drawing_full_path does not match the active document" in error.casefold()
+                for error in errors
+            )
+        )
+        if semantic_refusal:
+            transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
+            return {
+                "kind": "wrong_target",
+                "count": 1,
+                "captured": True,
+                "operation": "wrong_target",
+                "category": "dotnet_result",
+                "detail": str(exc),
+            }
+        transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
         return {
             "kind": "wrong_target",
-            "count": 1,
-            "captured": True,
+            "count": 0,
+            "captured": False,
+            "operation": "wrong_target",
+            "category": "dotnet_result",
+            "detail": str(exc),
+        }
+    except (MCPTimeoutError, MCPToolError, DotNetIPCError) as exc:
+        transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
+        return {
+            "kind": "wrong_target",
+            "count": 0,
+            "captured": False,
             "operation": "wrong_target",
             "category": _failure_category(exc),
             "detail": str(exc),
         }
+    else:
+        transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
     finally:
-        legacy_client.drawing_open(str(reopen_drawing_path))
+        close_request_id = f"{request_id}-close"
+        transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
+        try:
+            close = dotnet_client.close_disposable(
+                normalize_windows_absolute_path(str(second_drawing_path)),
+                disposable=True,
+                save_changes=False,
+                request_id=close_request_id,
+            )
+            if not (
+                isinstance(close, dict)
+                and close.get("success") is True
+                and close.get("changed") is False
+                and close.get("payload", {}).get("closed_without_saving") is True
+            ):
+                raise MCPToolError("wrong-target disposable close was not confirmed")
+        except Exception:
+            transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
+            raise
+        transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
+        # AutoCAD exposes a transient second MDI receiver while the closed
+        # document is being removed. Let that transition settle before the
+        # exact candidate reset request below.
+        time.sleep(2.0)
+        # Closing the wrong active document makes AutoCAD restore the intended
+        # document, but Mechanical may mark that restored document DBMOD=1 as
+        # part of the MDI transition. Reset the disposable candidate through
+        # the existing close-without-save owner before reopening it so the
+        # read-only epoch compares a fresh, stable document state.
+        reset_request_id = f"{request_id}-candidate-reset-close"
+        transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
+        try:
+            reset = dotnet_client.close_disposable(
+                normalize_windows_absolute_path(intended_full_path),
+                disposable=True,
+                save_changes=False,
+                request_id=reset_request_id,
+            )
+            if not (
+                isinstance(reset, dict)
+                and reset.get("success") is True
+                and reset.get("changed") is False
+                and reset.get("payload", {}).get("closed_without_saving") is True
+            ):
+                raise MCPToolError("intended disposable reset close was not confirmed")
+        except Exception:
+            transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
+            raise
+        transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
+        time.sleep(2.0)
+        transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
+        try:
+            legacy_client.drawing_open(str(reopen_drawing_path))
+        except Exception:
+            transport["fileipc"]["failures"] = int(transport["fileipc"]["failures"]) + 1
+            raise
+        transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
     return {
         "kind": "wrong_target",
         "count": 0,
@@ -898,7 +1009,10 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                     if component["block_name"] == expected["block_name"]
                 ]
                 self.assertEqual(1, len(matching))
-                self.assertEqual(expected["attributes"], matching[0]["attributes"])
+                self.assertTrue(
+                    _bom_attributes_equal(expected["attributes"], matching[0]["attributes"]),
+                    f"BOM attributes differ for {expected['block_name']}",
+                )
 
             current_operation = "review"
             transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
@@ -917,17 +1031,15 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             wrong_target_request_id = f"m2-wrong-target-{time.time_ns()}"
             request_ids.append(wrong_target_request_id)
             current_operation = "wrong_target"
-            transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
             wrong_target_probe = _exercise_wrong_target_rejection(
                 legacy_client=legacy_client,
                 dotnet_client=dotnet_client,
+                transport=transport,
                 intended_full_path=expected_full_path,
                 second_drawing_path=second_drawing_path,
                 reopen_drawing_path=drawing_path,
                 request_id=wrong_target_request_id,
             )
-            if wrong_target_probe["captured"]:
-                transport["live_review"]["failures"] = int(transport["live_review"]["failures"]) + 1
             epoch["negative_probes"] = [
                 {
                     "kind": str(stale_probe["kind"]),
