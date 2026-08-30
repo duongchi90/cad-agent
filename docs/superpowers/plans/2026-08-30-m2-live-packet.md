@@ -14,18 +14,18 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
 - Exact NETLOAD target:
   `C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll`
 - Expected plugin SHA-256:
-  `5abff97be23b842893cc9b6d0b595d2df7c254e4e274b7bc88644c2f58954647`
+  `1ba41145741a41c1e2a8eb50ac9de750cc3688ecb6e85bbb90dcc4f9cf203901`
 - The normal main-worktree Release DLL remains locked/unchanged by AutoCAD;
-  do not overwrite it. The artifact above was produced in an isolated output
-  worktree and reproduced with the same SHA on a second build.
+  do not overwrite it. The hash above was captured from the final isolated
+  Release build; treat that artifact as immutable and do not rebuild it before
+  the live run.
 
 ## Current one Human action
 
-The NETLOAD command was submitted, but current machine inspection found the
-AutoCAD security modal `Security - Unsigned Executable File` still open and
-blocking the main window. Physically choose **Load Once** in that existing
-dialog for the exact successor DLL. Its observed button is the `Load Once`
-button; Luna will not click it or synthesize that consent.
+The previous security modal was dismissed with **Load Once**, but a read-only
+health probe still returned the older plugin contract without
+`plugin_binary_path`/`plugin_binary_sha256`. Physically NETLOAD the exact
+successor DLL below once; Luna will not click it or synthesize that consent.
 
 For a future fresh session where the modal is absent, the original load command
 is:

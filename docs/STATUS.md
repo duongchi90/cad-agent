@@ -156,49 +156,49 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   harness, and fail-closed runtime/implementation/PR/harness/plugin identity,
   transport, negative-probe, failure-context, and cleanup accounting. No new
   transport, database, telemetry, or MECH-1 façade was added.
-- Focused verification on `94cb8b7`: M2 contract/live tests ->
-  `127 passed, 1 skipped`; Ruff and `git diff --check` passed. The skip is the
-  explicit unavailable-state live prerequisite skip, not acceptance evidence.
-- Authoritative offline verifier
-  `.\scripts\verify.ps1 -SkipAutoCADDotNet` on `94cb8b7` exited `0`: offline
-  JUnit `tests=3082, failures=0, errors=0, skipped=0`; dotnet IPC JUnit
-  `tests=117, failures=0, errors=0, skipped=0`; real-data `2 skipped`;
-  AutoCAD unavailable-state `14 skipped`; generic and M2 live markers
-  **NOT RUN**; the designed causal-RED one-failure check was accepted.
-- The full verifier is **NOT PASS**: the earlier exact full-gate attempt at
+- Focused M2 verification after the accounting repairs passed `128` unit
+  tests; `git diff --check` passed. The live harness remains a separately gated
+  opt-in test.
+- Authoritative full verifier on successor head `43387f8` exited `0`: C#
+  `197` tests passed; offline JUnit `tests=3083, failures=0, errors=0,
+  skipped=0`; dotnet IPC JUnit `tests=117, failures=0, errors=0, skipped=0`;
+  real-data `2 skipped`; AutoCAD unavailable-state `14 skipped`; generic and
+  M2 live markers **NOT RUN**; the designed causal-RED one-failure check was
+  accepted.
+- A historical exact full-gate attempt at
   `4ee5e879214531b3d52c82a989de53e5541fbfd2` stopped in the .NET build with
   `MSB3027/MSB3021` because the Release plugin DLL was locked by AutoCAD PID
   `27168`; no process was launched or stopped to work around the lock.
 - Current persisted record `C:\temp\cad-agent-m2-record.json` is SHA-256
-  `55b126a08f049610365163dcf46bb49c6bce54365ca6b1562aa131d6e67e1bb6`.
-  It contains one failed non-comparable epoch: headless PASS with primitive
-  `3`, component `1`, dimension `1`, live **NOT RUN**, dispatcher timeout,
-  aggregate `0/0`, status `BASELINE_ONLY`, and all cleanup/source/staged
-  integrity flags true. Its sidecar is
+  `cf50e0fd4e16cd5c84a8b5ccbb21b0954e0387f4e6a3acd3f01420961269dbe0`.
+  It contains three failed non-comparable epochs, aggregate `0/0`, status
+  `BASELINE_ONLY`; after the modal was dismissed with Load Once, a read-only
+  health probe confirmed that the currently loaded plugin still omits the
+  binary identity fields, and no live success epoch was accepted. Its sidecar is
   `C:\temp\cad-agent-m2-record.measurements.json`, SHA-256
   `5fae6ba93027956704e9b88aab22528160168c92977a2c41ed54d49b9f7ae041`, with
-  `0` measurements and `0` entity queries. The record predates the final
-  accounting hardening and is not rewritten or promoted.
+  `0` measurements and `0` entity queries. The record is append-only evidence
+  and is not promoted to acceptance.
 - The current live harness binds runtime identity to the observed `acad.exe`
   PID/HWND, exact clean implementation and harness heads, and the exact
   Release DLL hash. The successor C# health owner now reports the executing
   assembly path and lowercase SHA-256, and the harness compares that observed
   value with the exact isolated Release artifact. Focused C# verification
-  passed `197` tests; the deterministic x64 Release artifact is
+  passed `197` tests; the final isolated x64 Release artifact is
   `C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll`
   with SHA-256
-  `5abff97be23b842893cc9b6d0b595d2df7c254e4e274b7bc88644c2f58954647`.
+  `1ba41145741a41c1e2a8eb50ac9de750cc3688ecb6e85bbb90dcc4f9cf203901`.
   The normal main-worktree Release DLL stayed locked/unchanged by AutoCAD;
   no process-control workaround was used.
 - Explicit gates: benchmark `autocad_mechanical` live acceptance is **NOT
-  ACCEPTED** after one attempted non-comparable epoch at successor head
-  `032c980b30eb7ea2be8087c0ec4cec1a27f36500`; it timed out at `drawing_open`
-  because AutoCAD had a blocking `Security - Unsigned Executable File` modal
-  (HWND `1640776`) and its main window was disabled. The persisted epoch has
-  `accepted_comparable=false`, source/staged hashes unchanged, and no repair or
-  save attempts. The disposable epoch directory remains pending safe cleanup
-  after that modal is dismissed. Benchmark `real_data` is **NOT RUN**; the
-  full AutoCAD/.NET release gate is **NOT RUN/PASS**. The first objective M2
+  ACCEPTED**. The first attempt timed out at `drawing_open` because AutoCAD
+  had a blocking `Security - Unsigned Executable File` modal (HWND `1640776`)
+  and its main window was disabled. After that modal was dismissed with Load
+  Once, the active health response still came from an older plugin contract and
+  lacked `plugin_binary_path`/`plugin_binary_sha256`, so the identity oracle
+  refused acceptance. All persisted epochs have `accepted_comparable=false`;
+  no repair or save attempts were made. Benchmark `real_data` is **NOT RUN**.
+  The first objective M2
   acceptance gate remains at least three successful comparable epochs across
   at least two observed runtime identities, with semantic geometry/dimension,
   transport, stale / wrong-target, identity, and cleanup evidence.
@@ -208,7 +208,7 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 The exact future operator packet is tracked at
 `docs/superpowers/plans/2026-08-30-m2-live-packet.md`. It leaves only one
 Human-only action: manual NETLOAD of the isolated artifact above. Live M2
-acceptance remains **NOT RUN** until that action makes the candidate plugin
+acceptance remains **NOT ACCEPTED** until that action makes the candidate plugin
 available in the running AutoCAD session.
 
 ## Personal Lean Pilot — Gate A Setup Lite
