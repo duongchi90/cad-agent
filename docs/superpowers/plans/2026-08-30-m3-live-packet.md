@@ -15,6 +15,12 @@
   no live command is invented or presented as ready until this candidate is
   hosted-reviewed and a provider-backed AutoCAD epoch is deliberately
   scheduled.
+- A subsequent red-team audit (`#301` comment `5468292161`) found and blocked
+  four false-PASS paths. The hardening candidate now requires exact canonical
+  R5/R6 owner results, zero transport failures/retries, one repair-executor
+  attempt bound to the one R6 attempt, and permits an explicitly captured
+  zero-Human event list. The hardening itself is still offline/provider-
+  callback only and is not live acceptance evidence.
 
 ## Frozen implementation and plugin identity
 
