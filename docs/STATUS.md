@@ -149,15 +149,17 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   GitHub-observed head `738dac0b11231a71f91376ebb5ef22b6c709461d`. The
   bounded C# health-owner successor is branch `codex/m2-plugin-identity`,
   based on that head; current PR #310 head is
-  `e8a42a575b7bf0c8b5561ee84ec78388093a8c05`. Fresh `origin/main` remains
+  `78e06e58d9cf03130bc5b97a6a2688fc3103b80c`. Fresh `origin/main` remains
   `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
 - Implemented scope: the closed `m2-mechanical-benchmark-record-1.0` oracle,
-  cross-process deterministic staged-DXF fixture normalization, opt-in
+  cross-process deterministic staged-DXF fixture normalization with
+  class-order semantic-invariance guards and post-normalization review,
+  opt-in
   read-only Mechanical harness, and fail-closed runtime/implementation/PR/
   harness/plugin identity, transport, semantic wrong-target and stale-probe,
   failure-context, and cleanup accounting. No new transport, database,
   telemetry, or MECH-1 façade was added.
-- Focused M2 verification on the final successor passed `134` Python tests;
+- Focused M2 verification on the final successor passed `135` Python tests;
   the full C# suite passed `198`; Ruff and `git diff --check` passed. The live
   harness remains a separately gated opt-in test.
 - Authoritative full verifier on successor head `e8a42a5` exited `0`: C#
@@ -167,6 +169,12 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   M2 live markers **NOT RUN**; causal RED checks for fixture
   reproducibility, loaded identity, and semantic wrong-target refusal were
   accepted.
+- Canonical offline verifier `scripts/verify.ps1 -SkipAutoCADDotNet` on
+  successor head `78e06e5` exited `0`: offline JUnit `tests=3090`, dotnet IPC
+  JUnit `tests=117`, with no failures/errors; the previously verified C# owner
+  is unchanged. The final fixture proof now includes no proxy/class-indexed
+  entity invariant and equality of headless semantic review before/after
+  normalization.
 - A historical exact full-gate attempt at
   `4ee5e879214531b3d52c82a989de53e5541fbfd2` stopped in the .NET build with
   `MSB3027/MSB3021` because the Release plugin DLL was locked by AutoCAD PID
