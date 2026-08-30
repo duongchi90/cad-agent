@@ -145,70 +145,51 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md` and
   the execution record is
   `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md`.
-- Current branch: `codex/m2-mechanical-benchmark`; the current GitHub head is
-  tracked by draft PR `#309`. The authoritative code/evidence head verified by
-  `scripts/verify.ps1` is
-  `eed11ea0b2d8d4d81c0b127e44337253d3e01eb1`; implementation commits through
-  `15d506c2ca0f0c0167a66988ffbcf1e8b6f66ef5`. Fresh-read `origin/main` on 2026-08-30
-  remains `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
-- Implemented scope on the current branch: the closed
-  `m2-mechanical-benchmark-record-1.0` oracle, deterministic staged-DXF fixture
-  normalization, and the opt-in read-only Mechanical benchmark harness. The
-  evidence contract now also preserves captured human/environment/failure and
-  review details, distinct source/staged hash pairs, and the separate M2
-  opt-in verifier marker. The status-only edits changed no production behavior.
-- Fresh focused verification on the implementation head:
-  `tests/test_m2_benchmark.py` plus
-  `mcp_integration_lib/tests/test_m2_mechanical_benchmark_live.py` ->
-  `81 passed, 1 skipped`; Ruff passed; `git diff --check` exited `0`. The one
-  skip is the explicit unavailable-state live prerequisite skip and is not live
-  acceptance evidence.
-- Fresh documentation check on this status task:
-  `pytest tests/test_documentation_contract.py -q -p no:cacheprovider` ->
-  exit `0`, `13 passed in 0.35s`.
-- Fresh bootstrap on this status task:
-  `.\scripts\bootstrap.ps1 -PythonExe C:\Program Files\Python311\python.exe`
-  -> exit `0`; the lock contract passed (`40` pinned distributions), the
-  environment contract passed, Python 3.11 was selected, and the required
-  Tesseract executable was present.
-- Fresh authoritative verifier on the current branch/evidence head after the
-  evidence-hardening and opt-in-gate commits: `.\scripts\verify.ps1` -> exit
-  `0`. It reported offline JUnit
-  `tests=3036, failures=0, errors=0, skipped=0`, dotnet IPC JUnit
-  `tests=117, failures=0, errors=0, skipped=0`, .NET managed tests
-  `194 passed, 0 skipped`, real-data unavailable-state `2 skipped`, and
-  AutoCAD Mechanical unavailable-state `14 skipped`. The causal RED negative
-  oracle reported its expected one failing test and did not fail the verifier;
-  the generic AutoCAD live marker remained `NOT RUN` and the separate M2
-  benchmark marker also remained `NOT RUN` because the operator opt-in was
-  incomplete. The final verifier result was `All checks passed`.
-- Review outcome: final independent review found no Critical issues. Its Important
-  evidence findings were fixed and covered by focused RED/GREEN tests; no
-  independent follow-up review was available after the reviewer usage limit,
-  so this branch relies on the recorded fallback audit plus fresh verification.
-  The branch remains a verified baseline, not representative live acceptance.
-- GitHub PR state: draft PR `#309` is open from this branch; the latest
-  completed required-check checkpoint on the branch passed reuse-declaration
-  and both hosted offline-tests runs (`33279711296`, `33279709890`, and
-  `33279711276`). The PR remains unmergeable for the
-  product boundary because representative AutoCAD Mechanical live evidence is
-  still absent, despite GitHub reporting merge state `CLEAN`.
-- Benchmark record state: no benchmark record exists in evidence on this branch,
-  so no record path or record hash is recorded here. Comparable epochs:
-  `0`; successful comparable epochs: `0`; success rate: not recorded.
-- Profile/setup state: `DRAFT_REFERENCE`; the benchmark records a
-  non-authoritative Mechanical review profile and does not create
-  `SETUP_VERIFIED` evidence.
-- Human-event, headless/live epoch, transport/result-identity, stale-evidence,
-  wrong-target, close-without-save, source-unchanged, staged-DXF-unchanged, and
-  request/result cleanup states remain **NOT RUN** at the benchmark-record level
-  because no live epoch was executed and no record was persisted on this branch.
-- Explicit gate states on this branch: benchmark `autocad_mechanical` live
-  acceptance **NOT RUN**; benchmark `real_data` **NOT RUN**; authoritative
-  release **NOT RUN** and still ineligible beyond `DRAFT_REFERENCE`.
-- MECH-1 boundary: **NOT RUN**. The measurement sidecar is absent because no
-  live benchmark epoch ran, so there is no measured payload/context evidence to
-  justify `observe_drawing` or `query_entities`.
+- Current branch: `codex/m2-mechanical-benchmark`; draft PR `#309` is the
+  current GitHub integration point. The current implementation/evidence head
+  is `94cb8b7558e41ee3194484aabcab00d53b2d0258`; fresh `origin/main` remains
+  `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
+- Implemented scope: the closed `m2-mechanical-benchmark-record-1.0` oracle,
+  deterministic staged-DXF fixture normalization, opt-in read-only Mechanical
+  harness, and fail-closed runtime/implementation/PR/harness/plugin identity,
+  transport, negative-probe, failure-context, and cleanup accounting. No new
+  transport, database, telemetry, or MECH-1 façade was added.
+- Focused verification on `94cb8b7`: M2 contract/live tests ->
+  `127 passed, 1 skipped`; Ruff and `git diff --check` passed. The skip is the
+  explicit unavailable-state live prerequisite skip, not acceptance evidence.
+- Authoritative offline verifier
+  `.\scripts\verify.ps1 -SkipAutoCADDotNet` on `94cb8b7` exited `0`: offline
+  JUnit `tests=3082, failures=0, errors=0, skipped=0`; dotnet IPC JUnit
+  `tests=117, failures=0, errors=0, skipped=0`; real-data `2 skipped`;
+  AutoCAD unavailable-state `14 skipped`; generic and M2 live markers
+  **NOT RUN**; the designed causal-RED one-failure check was accepted.
+- The full verifier is **NOT PASS**: the earlier exact full-gate attempt at
+  `4ee5e879214531b3d52c82a989de53e5541fbfd2` stopped in the .NET build with
+  `MSB3027/MSB3021` because the Release plugin DLL was locked by AutoCAD PID
+  `27168`; no process was launched or stopped to work around the lock.
+- Current persisted record `C:\temp\cad-agent-m2-record.json` is SHA-256
+  `55b126a08f049610365163dcf46bb49c6bce54365ca6b1562aa131d6e67e1bb6`.
+  It contains one failed non-comparable epoch: headless PASS with primitive
+  `3`, component `1`, dimension `1`, live **NOT RUN**, dispatcher timeout,
+  aggregate `0/0`, status `BASELINE_ONLY`, and all cleanup/source/staged
+  integrity flags true. Its sidecar is
+  `C:\temp\cad-agent-m2-record.measurements.json`, SHA-256
+  `5fae6ba93027956704e9b88aab22528160168c92977a2c41ed54d49b9f7ae041`, with
+  `0` measurements and `0` entity queries. The record predates the final
+  accounting hardening and is not rewritten or promoted.
+- The current live harness binds runtime identity to the observed `acad.exe`
+  PID/HWND, exact clean implementation and harness heads, and the exact
+  Release DLL hash. Acceptance also requires the health payload to echo that
+  plugin hash; the current C# health payload does not provide it, so live
+  acceptance remains fail-closed even after dispatcher readiness is restored.
+- Explicit gates: benchmark `autocad_mechanical` live acceptance **NOT RUN**;
+  benchmark `real_data` **NOT RUN**; full AutoCAD/.NET release gate **NOT
+  RUN/PASS**; no comparable epoch exists. The first objective M2 gate remains
+  at least three successful comparable epochs across at least two observed
+  runtime identities, with semantic geometry/dimension, transport, stale /
+  wrong-target, identity, and cleanup evidence.
+- MECH-1 remains **NOT JUSTIFIED**: no measured sidecar evidence shows that
+  read-only CAD introspection materially improves coverage or context cost.
 
 ## Personal Lean Pilot — Gate A Setup Lite
 
