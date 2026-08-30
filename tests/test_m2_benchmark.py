@@ -63,6 +63,15 @@ _SHA_C = "c" * 64
 _SHA_D = "d" * 64
 
 
+def _git_output(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def _event(kind: str, count: int, detail: str = "manual operator load") -> dict[str, object]:
     payload = {"kind": kind, "count": count, "detail": detail}
     return payload
@@ -935,39 +944,66 @@ def test_measurements_sidecar_writes_outside_repo_and_survives_failure(tmp_path:
     }
 
 
-def test_current_main_sha_prefers_github_sha_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GITHUB_SHA", _SHA_B)
-
-    assert _current_main_sha() == _SHA_B
-
-
-def test_current_main_sha_rejects_invalid_github_sha_and_falls_back_to_local_main(
+def test_current_main_sha_uses_origin_main_from_a_feature_branch(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("GITHUB_SHA", "A" * 64)
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(args[0], 0, stdout=f"{_SHA_C}\n", stderr="")
-
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git_output(repo, "init", "-b", "main")
+    _git_output(repo, "config", "user.email", "tests@example.invalid")
+    _git_output(repo, "config", "user.name", "M2 benchmark tests")
+    (repo / "state.txt").write_text("main\n", encoding="utf-8")
+    _git_output(repo, "add", "state.txt")
+    _git_output(repo, "commit", "-m", "main base")
+    main_sha = _git_output(repo, "rev-parse", "HEAD")
+    _git_output(repo, "switch", "-c", "codex/m2-mechanical-benchmark")
+    (repo / "state.txt").write_text("feature\n", encoding="utf-8")
+    _git_output(repo, "add", "state.txt")
+    _git_output(repo, "commit", "-m", "feature change")
+    feature_sha = _git_output(repo, "rev-parse", "HEAD")
+    _git_output(repo, "branch", "-D", "main")
+    _git_output(repo, "update-ref", "refs/remotes/origin/main", main_sha)
     monkeypatch.setattr(
-        "mcp_integration_lib.tests.test_m2_mechanical_benchmark_live.subprocess.run",
-        fake_run,
+        "mcp_integration_lib.tests.test_m2_mechanical_benchmark_live._REPO_ROOT",
+        repo,
     )
+    monkeypatch.setenv("GITHUB_SHA", feature_sha)
 
-    assert _current_main_sha() == _SHA_C
+    assert len(main_sha) == 40
+    assert len(feature_sha) == 40
+    assert _current_main_sha() == main_sha
+    assert _current_main_sha() != feature_sha
 
 
-def test_current_main_sha_resolves_local_main_ref_when_github_sha_missing(
+def test_current_main_sha_fails_closed_when_origin_main_ref_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git_output(repo, "init", "-b", "codex/m2-mechanical-benchmark")
+    monkeypatch.setattr(
+        "mcp_integration_lib.tests.test_m2_mechanical_benchmark_live._REPO_ROOT",
+        repo,
+    )
+    monkeypatch.setenv("GITHUB_SHA", "2" * 40)
+
+    with pytest.raises(RuntimeError, match="current main SHA"):
+        _current_main_sha()
+
+
+def test_current_main_sha_fails_closed_when_origin_main_output_is_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setenv("GITHUB_SHA", "2" * 40)
 
     def fake_run(*args, **kwargs):
         assert args[0] == [
             "git",
             "rev-parse",
             "--verify",
-            "refs/heads/main^{commit}",
+            "origin/main^{commit}",
         ]
         return subprocess.CompletedProcess(args[0], 0, stdout=f"{_SHA_C}\n", stderr="")
 
@@ -976,23 +1012,7 @@ def test_current_main_sha_resolves_local_main_ref_when_github_sha_missing(
         fake_run,
     )
 
-    assert _current_main_sha() == _SHA_C
-
-
-def test_current_main_sha_fails_closed_when_local_main_ref_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-
-    def fake_run(*args, **kwargs):
-        raise subprocess.CalledProcessError(128, args[0], stderr="fatal: Needed a single revision")
-
-    monkeypatch.setattr(
-        "mcp_integration_lib.tests.test_m2_mechanical_benchmark_live.subprocess.run",
-        fake_run,
-    )
-
-    with pytest.raises(RuntimeError, match="local main SHA"):
+    with pytest.raises(RuntimeError, match="current main SHA"):
         _current_main_sha()
 
 

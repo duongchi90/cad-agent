@@ -57,7 +57,7 @@ M2_MECHANICAL_BENCHMARK_MISSING_CAPTURE_KIND = "human_events_missing"
 M2_MECHANICAL_BENCHMARK_MISSING_SESSION_KIND = "session_id_missing"
 M2_MECHANICAL_BENCHMARK_FIXTURE_ID = "fixture-1"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_SHA256_LOWER = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA_LOWER = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _timestamp() -> str:
@@ -563,22 +563,19 @@ def _cleanup_epoch_artifacts(
 
 
 def _current_main_sha() -> str:
-    github_sha = (os.environ.get("GITHUB_SHA") or "").strip()
-    if _SHA256_LOWER.fullmatch(github_sha):
-        return github_sha
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "--verify", "refs/heads/main^{commit}"],
+            ["git", "rev-parse", "--verify", "origin/main^{commit}"],
             cwd=_REPO_ROOT,
             check=True,
             capture_output=True,
             text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError("Unable to resolve the local main SHA") from exc
+        raise RuntimeError("Unable to resolve the current main SHA") from exc
     main_sha = completed.stdout.strip()
-    if not _SHA256_LOWER.fullmatch(main_sha):
-        raise RuntimeError("Resolved local main SHA is invalid")
+    if not _GIT_SHA_LOWER.fullmatch(main_sha):
+        raise RuntimeError("Resolved current main SHA is invalid")
     return main_sha
 
 
