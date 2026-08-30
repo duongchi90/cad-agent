@@ -10,6 +10,7 @@ request heads, and superseded evidence snapshots are not supported release lines
 
 Do not post exploit details, secrets, private/customer CAD data, authentication material,
 or a sensitive reproduction in a public Issue, pull request, discussion, or log.
+Do not place sensitive values in issue titles, URLs, filenames, or screenshots.
 
 Use GitHub Private Vulnerability Reporting when that private repository channel is
 available. If it is not available, contact the repository owner `@duongchi90` without
