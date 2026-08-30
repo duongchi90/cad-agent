@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 import mcp_integration_lib.tests.test_m2_mechanical_benchmark_live as m2_live
+import tests.m2_benchmark_support as m2_fixture_support
 
 from cad_agent.live import LiveSafetyError, load_build_evidence
 from cad_agent.manifest import sha256_file
@@ -1005,6 +1006,23 @@ def test_m2_fixture_support_is_stable_across_python_hash_seeds(tmp_path: Path) -
         hashes.append(result.stdout.strip().splitlines()[-1])
 
     assert hashes[0] == hashes[1]
+
+
+def test_m2_fixture_reviews_the_final_normalized_dxf(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    reviewed_bytes: list[bytes] = []
+    original_review = m2_fixture_support.review_dxf
+
+    def review_and_capture(build: object):
+        reviewed_bytes.append(Path(build.output_path).read_bytes())
+        return original_review(build)
+
+    monkeypatch.setattr(m2_fixture_support, "review_dxf", review_and_capture)
+    fixture = build_m2_fixture(tmp_path)
+
+    assert len(reviewed_bytes) == 2
+    assert reviewed_bytes[-1] == fixture.staged_dxf.read_bytes()
 
 
 def test_m2_fixture_support_freezes_known_dynamic_header_values(tmp_path: Path) -> None:

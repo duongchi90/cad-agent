@@ -38,6 +38,10 @@ _DXF_CLASSES_SECTION = re.compile(
     re.DOTALL,
 )
 _DXF_CLASS_RECORD = b"  0\r\nCLASS\r\n"
+_DXF_ENTITIES_SECTION = re.compile(
+    rb"  0\r\nSECTION\r\n  2\r\nENTITIES\r\n(.*?)(  0\r\nENDSEC\r\n)",
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -163,6 +167,18 @@ def _normalize_staged_dxf_bytes(data: bytes) -> bytes:
     return _canonicalize_dxf_class_section(normalized)
 
 
+def _assert_m2_fixture_class_order_is_semantically_safe(data: bytes) -> None:
+    upper = data.upper()
+    if b"ACAD_PROXY_ENTITY" in upper or b"ACAD_PROXY_OBJECT" in upper:
+        raise ValueError("M2 fixture cannot canonicalize DXF class order with proxy records")
+
+    entities = _DXF_ENTITIES_SECTION.search(data)
+    if entities is not None and b"\r\n 91\r\n" in entities.group(1):
+        raise ValueError(
+            "M2 fixture cannot canonicalize DXF class order with entity class-index references"
+        )
+
+
 def headless_metrics(fixture: M2Fixture) -> dict[str, object]:
     review = fixture.headless
     return {
@@ -190,9 +206,14 @@ def build_m2_fixture(root: Path) -> M2Fixture:
         build_components=True,
         build_dimensions=True,
     )
-    headless = review_dxf(build)
+    headless_before_normalization = review_dxf(build)
     build_evidence = root / "build-evidence.json"
-    staged_dxf.write_bytes(_normalize_staged_dxf_bytes(staged_dxf.read_bytes()))
+    normalized_bytes = _normalize_staged_dxf_bytes(staged_dxf.read_bytes())
+    _assert_m2_fixture_class_order_is_semantically_safe(normalized_bytes)
+    staged_dxf.write_bytes(normalized_bytes)
+    headless = review_dxf(build)
+    if headless != headless_before_normalization:
+        raise ValueError("M2 fixture normalization changed headless semantic review")
     write_build_evidence(build_evidence, build)
     loaded = load_build_evidence(build_evidence, staged_dxf)
     if loaded != build:
