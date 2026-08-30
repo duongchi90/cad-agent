@@ -6,7 +6,7 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
 
 - Repository: `duongchi90/cad-agent`
 - Branch: `codex/m2-plugin-identity`
-- Binary-bearing implementation commit: `50fc0d8a03c2fae12b4363a95ff4369e75645a90`
+- Exact implementation/build head: `e8a42a575b7bf0c8b5561ee84ec78388093a8c05`
 - Live execution requires this branch to be clean and the exact current GitHub
   PR head to be read immediately before running. The live harness records that
   observed HEAD as `implementation_sha`, `pr_head_sha`, and `harness_sha`.
@@ -14,7 +14,7 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
 - Exact NETLOAD target:
   `C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll`
 - Expected plugin SHA-256:
-  `1ba41145741a41c1e2a8eb50ac9de750cc3688ecb6e85bbb90dcc4f9cf203901`
+  `f7d3467a57ccb186b78d515ffe737afba08d3d3c691e0518e020a16ddfcbf40c`
 - The normal main-worktree Release DLL remains locked/unchanged by AutoCAD;
   do not overwrite it. The hash above was captured from the final isolated
   Release build; treat that artifact as immutable and do not rebuild it before
@@ -22,9 +22,10 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
 
 ## Current one Human action
 
-The previous security modal was dismissed with **Load Once**, but a read-only
-health probe still returned the older plugin contract without
-`plugin_binary_path`/`plugin_binary_sha256`. Physically NETLOAD the exact
+The previous security modal was dismissed with **Load Once**, but that load and
+the subsequent verifier left an older artifact resident in AutoCAD. A later
+live invocation also exposed and closed a cross-process fixture binding defect;
+that defect is now repaired offline. Physically NETLOAD the exact final
 successor DLL below once; Luna will not click it or synthesize that consent.
 
 For a future fresh session where the modal is absent, the original load command

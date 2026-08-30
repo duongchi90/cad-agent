@@ -148,22 +148,24 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
 - Draft PR `#309` remains the benchmark integration point at its exact
   GitHub-observed head `738dac0b11231a71f91376ebb5ef22b6c709461d`. The
   bounded C# health-owner successor is branch `codex/m2-plugin-identity`,
-  based on that head; its binary-bearing implementation commit is
-  `50fc0d8a03c2fae12b4363a95ff4369e75645a90`. Fresh `origin/main` remains
+  based on that head; current PR #310 head is
+  `e8a42a575b7bf0c8b5561ee84ec78388093a8c05`. Fresh `origin/main` remains
   `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
 - Implemented scope: the closed `m2-mechanical-benchmark-record-1.0` oracle,
-  deterministic staged-DXF fixture normalization, opt-in read-only Mechanical
-  harness, and fail-closed runtime/implementation/PR/harness/plugin identity,
-  transport, negative-probe, failure-context, and cleanup accounting. No new
-  transport, database, telemetry, or MECH-1 façade was added.
-- Focused M2 verification after the accounting repairs passed `128` unit
-  tests; `git diff --check` passed. The live harness remains a separately gated
-  opt-in test.
-- Authoritative full verifier on successor head `43387f8` exited `0`: C#
-  `197` tests passed; offline JUnit `tests=3083, failures=0, errors=0,
+  cross-process deterministic staged-DXF fixture normalization, opt-in
+  read-only Mechanical harness, and fail-closed runtime/implementation/PR/
+  harness/plugin identity, transport, semantic wrong-target and stale-probe,
+  failure-context, and cleanup accounting. No new transport, database,
+  telemetry, or MECH-1 façade was added.
+- Focused M2 verification on the final successor passed `134` Python tests;
+  the full C# suite passed `198`; Ruff and `git diff --check` passed. The live
+  harness remains a separately gated opt-in test.
+- Authoritative full verifier on successor head `e8a42a5` exited `0`: C#
+  `198` tests passed; offline JUnit `tests=3089, failures=0, errors=0,
   skipped=0`; dotnet IPC JUnit `tests=117, failures=0, errors=0, skipped=0`;
   real-data `2 skipped`; AutoCAD unavailable-state `14 skipped`; generic and
-  M2 live markers **NOT RUN**; the designed causal-RED one-failure check was
+  M2 live markers **NOT RUN**; causal RED checks for fixture
+  reproducibility, loaded identity, and semantic wrong-target refusal were
   accepted.
 - A historical exact full-gate attempt at
   `4ee5e879214531b3d52c82a989de53e5541fbfd2` stopped in the .NET build with
@@ -189,16 +191,19 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   passed `197` tests; the final isolated x64 Release artifact is
   `C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll`
   with SHA-256
-  `1ba41145741a41c1e2a8eb50ac9de750cc3688ecb6e85bbb90dcc4f9cf203901`.
+  `f7d3467a57ccb186b78d515ffe737afba08d3d3c691e0518e020a16ddfcbf40c`.
   The normal main-worktree Release DLL stayed locked/unchanged by AutoCAD;
   no process-control workaround was used.
 - Explicit gates: benchmark `autocad_mechanical` live acceptance is **NOT
   ACCEPTED**. The first attempt timed out at `drawing_open` because AutoCAD
   had a blocking `Security - Unsigned Executable File` modal (HWND `1640776`)
   and its main window was disabled. After that modal was dismissed with Load
-  Once, the active health response still came from an older plugin contract and
-  lacked `plugin_binary_path`/`plugin_binary_sha256`, so the identity oracle
-  refused acceptance. All persisted epochs have `accepted_comparable=false`;
+  Once, an active health response from the older loaded artifact lacked
+  `plugin_binary_path`/`plugin_binary_sha256`, so the identity oracle refused
+  acceptance. A later live invocation progressed past plugin identity and
+  failed closed on a cross-process staged-DXF binding mismatch; it did not
+  persist a new epoch. The fixture and semantic wrong-target repairs are now
+  verified offline. All persisted epochs have `accepted_comparable=false`;
   no repair or save attempts were made. Benchmark `real_data` is **NOT RUN**.
   The first objective M2
   acceptance gate remains at least three successful comparable epochs across
