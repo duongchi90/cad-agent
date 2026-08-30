@@ -7,7 +7,7 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
 - Repository: `duongchi90/cad-agent`
 - Branch: `codex/m2-plugin-identity`
 - Runtime-bearing implementation/build head: `e8a42a575b7bf0c8b5561ee84ec78388093a8c05`
-- Current clean successor source head: `88dcf0d72cbd43f8a73e1791430f28b81f4a804a`
+- Current clean successor source head: `f24e0de0e0d09e1f41647b995936b7d066a24c91`
 - Live execution requires this branch to be clean and the exact current GitHub
   PR head to be read immediately before running. The live harness records that
   observed HEAD as `implementation_sha`, `pr_head_sha`, and `harness_sha`.

@@ -150,7 +150,7 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   GitHub-observed head `738dac0b11231a71f91376ebb5ef22b6c709461d`. The
   bounded C# health-owner successor is branch `codex/m2-plugin-identity`,
   based on that head; current PR #310 head is
-  `88dcf0d72cbd43f8a73e1791430f28b81f4a804a`. Fresh `origin/main` remains
+  `f24e0de0e0d09e1f41647b995936b7d066a24c91`. Fresh `origin/main` remains
   `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
 - Implemented scope: the closed `m2-mechanical-benchmark-record-1.0` oracle,
   cross-process deterministic staged-DXF fixture normalization with
