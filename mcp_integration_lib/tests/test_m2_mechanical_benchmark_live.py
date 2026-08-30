@@ -197,17 +197,61 @@ def _runtime_identity_from_pid_hwnd(pid: int, hwnd: int) -> str:
     return f"acad-pid-{pid}-hwnd-{hwnd}"
 
 
-def _observed_runtime_identity(hwnd: int) -> str:
+def _validate_autocad_process_path(process_path: Path) -> Path:
+    if process_path.name.casefold() != "acad.exe":
+        raise MCPToolError(
+            f"AutoCAD runtime identity requires acad.exe, got: {process_path}"
+        )
+    return process_path
+
+
+def _process_path_for_pid(pid: int) -> Path:
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+    if not handle:
+        raise MCPToolError("AutoCAD runtime process could not be opened for identity")
+    try:
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buffer))
+        if not kernel32.QueryFullProcessImageNameW(
+            handle, 0, buffer, ctypes.byref(size)
+        ):
+            raise MCPToolError("AutoCAD runtime executable path could not be observed")
+        return Path(buffer.value[: size.value])
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _observed_runtime_identity(
+    hwnd: int,
+    *,
+    process_path_resolver=None,
+) -> str:
     if type(hwnd) is not int or hwnd <= 0:
         raise ValueError("hwnd must be a positive integer")
     pid = wintypes.DWORD()
     if not ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)) or not pid.value:
         raise MCPToolError("AutoCAD runtime identity could not be observed from HWND")
+    process_path = (
+        process_path_resolver(int(pid.value))
+        if process_path_resolver is not None
+        else _process_path_for_pid(int(pid.value))
+    )
+    _validate_autocad_process_path(Path(process_path))
     return _runtime_identity_from_pid_hwnd(int(pid.value), hwnd)
 
 
 def _current_implementation_sha() -> str:
     try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=_REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if status.stdout.strip():
+            raise MCPToolError("Implementation/harness Git tree must be clean")
         completed = subprocess.run(
             ["git", "rev-parse", "--verify", "HEAD^{commit}"],
             cwd=_REPO_ROOT,
@@ -228,6 +272,23 @@ def _plugin_binary_sha256() -> str:
     if not plugin_path.is_file():
         raise MCPToolError(f"AutoCAD plugin build identity is missing: {plugin_path}")
     return sha256_file(plugin_path)
+
+
+def _validated_health_plugin_identity(
+    health: dict[str, object],
+    *,
+    expected_sha256: str,
+) -> str:
+    payload = health.get("payload")
+    if not isinstance(payload, dict):
+        raise MCPToolError("AutoCAD health did not capture plugin identity")
+    plugin_version = payload.get("plugin_version")
+    observed_sha256 = payload.get("plugin_binary_sha256")
+    if not isinstance(plugin_version, str) or not plugin_version:
+        raise MCPToolError("AutoCAD health did not capture plugin version")
+    if observed_sha256 != expected_sha256:
+        raise MCPToolError("AutoCAD health plugin identity does not match build plugin identity")
+    return plugin_version
 
 
 def _request_artifacts_removed(
@@ -463,9 +524,6 @@ def _record_m2_failure(
     human_capture_observed: bool,
 ) -> dict[str, str]:
     operation = current_operation
-    result = getattr(error, "result", None)
-    if isinstance(result, dict) and isinstance(result.get("operation"), str):
-        operation = result["operation"]
     failure_detail = _apply_failure_outcome(
         epoch,
         error,
@@ -792,11 +850,15 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
             self.assertFalse(health["changed"])
             self.assertEqual(expected_full_path, health["drawing_full_path"])
             self.assertEqual([], health["errors"])
-            plugin_version = health.get("payload", {}).get("plugin_version")
-            self.assertIsInstance(plugin_version, str)
+            plugin_version = _validated_health_plugin_identity(
+                health,
+                expected_sha256=plugin_binary_sha256,
+            )
+            autocad_product = health.get("payload", {}).get("host")
+            self.assertEqual("AutoCAD Mechanical 2027", autocad_product)
             epoch["environment"] = {
                 "captured": True,
-                "autocad_product": "AutoCAD Mechanical 2027",
+                "autocad_product": autocad_product,
                 "plugin_version": plugin_version,
                 "python_version": platform.python_version(),
                 "ipc_root_id": "ipc-root-"

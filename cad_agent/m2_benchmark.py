@@ -161,12 +161,23 @@ def _validate_negative_probe(value: object, *, path: str) -> dict[str, Any]:
     _keys(item, path=path, required={"kind", "count", "captured", "operation", "category", "detail"})
     if item["kind"] not in {"stale_evidence", "wrong_target"}:
         _fail(f"{path}.kind must be a negative probe kind")
+    expected_operation = {
+        "stale_evidence": "load_build_evidence",
+        "wrong_target": "wrong_target",
+    }[item["kind"]]
     _non_negative_int(item["count"], path=f"{path}.count")
     _bool(item["captured"], path=f"{path}.captured")
     _identifier(item["operation"], path=f"{path}.operation")
     _identifier(item["category"], path=f"{path}.category")
     if not isinstance(item["detail"], str):
         _fail(f"{path}.detail must be a string")
+    legacy_not_run = (
+        item["count"] == 0
+        and item["captured"] is False
+        and item["category"] == "not_run"
+    )
+    if item["operation"] != expected_operation and not legacy_not_run:
+        _fail(f"{path}.operation must be {expected_operation} for {item['kind']}")
     return item
 
 
@@ -193,6 +204,8 @@ def _validate_environment(value: object, *, path: str) -> dict[str, Any]:
             "plugin_version",
             "python_version",
             "ipc_root_id",
+        },
+        optional={
             "runtime_identity",
             "implementation_sha",
             "pr_head_sha",
@@ -207,12 +220,12 @@ def _validate_environment(value: object, *, path: str) -> dict[str, Any]:
             _fail(f"{path}.{field} must be a non-empty string or null")
         if captured and value is None:
             _fail(f"{path}.{field} is required when environment is captured")
-    runtime_identity = item["runtime_identity"]
+    runtime_identity = item.get("runtime_identity")
     if runtime_identity is not None:
         _identifier(runtime_identity, path=f"{path}.runtime_identity")
-    implementation_sha = item["implementation_sha"]
-    pr_head_sha = item["pr_head_sha"]
-    harness_sha = item["harness_sha"]
+    implementation_sha = item.get("implementation_sha")
+    pr_head_sha = item.get("pr_head_sha")
+    harness_sha = item.get("harness_sha")
     for field, identity in (
         ("implementation_sha", implementation_sha),
         ("pr_head_sha", pr_head_sha),
@@ -220,7 +233,7 @@ def _validate_environment(value: object, *, path: str) -> dict[str, Any]:
     ):
         if identity is not None:
             _git_commit_sha(identity, path=f"{path}.{field}")
-    plugin_binary_sha256 = item["plugin_binary_sha256"]
+    plugin_binary_sha256 = item.get("plugin_binary_sha256")
     if plugin_binary_sha256 is not None:
         _sha256(plugin_binary_sha256, path=f"{path}.plugin_binary_sha256")
     if captured:
@@ -231,7 +244,7 @@ def _validate_environment(value: object, *, path: str) -> dict[str, Any]:
             "harness_sha",
             "plugin_binary_sha256",
         ):
-            if item[field] is None:
+            if item.get(field) is None:
                 _fail(f"{path}.{field} is required when environment is captured")
     return item
 
@@ -338,9 +351,15 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
     accepted = _bool(item["accepted_comparable"], path=f"{path}.accepted_comparable")
     success = _bool(item["success"], path=f"{path}.success")
     if accepted:
-        transport_names = {entry["name"] for entry in transport}
-        if transport_names != {"fileipc", "dotnetipc", "live_review"}:
+        transport_names = [entry["name"] for entry in transport]
+        if len(transport_names) != 3 or len(set(transport_names)) != 3 or set(transport_names) != {
+            "fileipc",
+            "dotnetipc",
+            "live_review",
+        }:
             _fail(f"{path} accepted_comparable requires complete transport accounting")
+        if any(entry["attempts"] <= 0 for entry in transport):
+            _fail(f"{path} accepted_comparable requires transport accounting attempts")
         if any(
             entry["successes"] + entry["failures"] != entry["attempts"]
             for entry in transport
@@ -358,6 +377,18 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
     if any(probe["captured"] and probe["count"] <= 0 for probe in negative_probes):
         if accepted:
             _fail(f"{path} accepted_comparable requires positive negative probe capture")
+    if accepted:
+        for index, probe in enumerate(negative_probes):
+            if probe["kind"] == "stale_evidence" and probe["category"] != "stale_evidence":
+                _fail(f"{path}.negative_probes[{index}].category must be stale_evidence")
+            if probe["kind"] == "wrong_target" and probe["category"] not in {
+                "dotnet_result",
+                "dotnet_timeout",
+                "dotnet_protocol",
+                "tool",
+                "timeout",
+            }:
+                _fail(f"{path}.negative_probes[{index}].category is invalid for wrong_target")
     if not cleanup["closed_without_save"] or not cleanup["source_unchanged"] or not cleanup["staged_unchanged"] or not cleanup["release_verified"]:
         if accepted:
             _fail(f"{path} accepted_comparable requires cleanup integrity")
@@ -365,7 +396,7 @@ def _validate_epoch(value: object, *, path: str) -> dict[str, Any]:
         _fail(f"{path} success cannot be true when epoch is not accepted_comparable")
     if accepted:
         if any(
-            item["environment"][field] is None
+                item["environment"].get(field) is None
             for field in (
                 "runtime_identity",
                 "implementation_sha",

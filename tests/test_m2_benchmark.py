@@ -6,6 +6,7 @@ import hashlib
 import subprocess
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import mcp_integration_lib.tests.test_m2_mechanical_benchmark_live as m2_live
@@ -244,7 +245,14 @@ def test_schema_environment_binds_runtime_and_build_identity() -> None:
         "harness_sha",
         "plugin_binary_sha256",
     }
-    assert identity_fields <= set(environment["required"])
+    assert set(environment["required"]) == {
+        "captured",
+        "autocad_product",
+        "plugin_version",
+        "python_version",
+        "ipc_root_id",
+    }
+    assert identity_fields <= set(payload["$defs"]["accepted_environment"]["allOf"][1]["required"])
     assert environment["properties"]["runtime_identity"] == {"type": ["string", "null"]}
     assert environment["properties"]["implementation_sha"] == {
         "anyOf": [{"$ref": "#/$defs/git_commit_sha"}, {"type": "null"}]
@@ -258,6 +266,88 @@ def test_schema_environment_binds_runtime_and_build_identity() -> None:
     assert environment["properties"]["plugin_binary_sha256"] == {
         "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
     }
+
+
+def test_schema_has_accepted_epoch_constraints_for_identity_transport_and_probes() -> None:
+    payload = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    epoch = payload["$defs"]["epoch"]
+    accepted = next(
+        clause["then"]
+        for clause in epoch["allOf"]
+        if clause["if"]["properties"]["accepted_comparable"]["const"] is True
+    )
+    assert accepted["properties"]["environment"]["$ref"] == "#/$defs/accepted_environment"
+    transport = payload["$defs"]["accepted_transport"]
+    assert transport["minItems"] == 3
+    assert transport["maxItems"] == 3
+    assert transport["uniqueItems"] is True
+    assert transport["items"] == {"$ref": "#/$defs/accepted_transport_entry"}
+    probes = payload["$defs"]["accepted_negative_probes"]
+    assert probes["minItems"] == 2
+    assert probes["maxItems"] == 2
+    assert probes["items"] == {"$ref": "#/$defs/accepted_negative_probe"}
+    accepted_probe = payload["$defs"]["accepted_negative_probe"]
+    assert accepted_probe["allOf"][1]["properties"]["count"] == {
+        "type": "integer",
+        "minimum": 1,
+    }
+    assert accepted_probe["allOf"][1]["properties"]["captured"] == {"const": True}
+
+
+def test_schema_negative_probe_binds_kind_to_operation() -> None:
+    payload = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    probe = payload["$defs"]["accepted_negative_probe"]["allOf"][1]
+
+    assert "oneOf" not in payload["$defs"]["negative_probe"]
+    assert probe["oneOf"] == [
+        {
+            "properties": {
+                "kind": {"const": "stale_evidence"},
+                "operation": {"const": "load_build_evidence"},
+                "category": {"const": "stale_evidence"},
+            }
+        },
+        {
+            "properties": {
+                "kind": {"const": "wrong_target"},
+                "operation": {"const": "wrong_target"},
+                "category": {
+                    "enum": [
+                        "dotnet_result",
+                        "dotnet_timeout",
+                        "dotnet_protocol",
+                        "tool",
+                        "timeout",
+                    ]
+                },
+            }
+        },
+    ]
+
+
+def test_schema_preserves_legacy_non_authoritative_probe_shape() -> None:
+    payload = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    base_probe = payload["$defs"]["negative_probe"]
+    accepted_probe = payload["$defs"]["accepted_negative_probe"]
+
+    assert "oneOf" not in base_probe
+    assert accepted_probe["allOf"][1]["properties"]["captured"] == {"const": True}
+    assert accepted_probe["allOf"][1]["properties"]["count"] == {
+        "type": "integer",
+        "minimum": 1,
+    }
+
+
+def test_schema_legacy_probe_can_use_old_operation_but_accepted_cannot() -> None:
+    payload = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    base_probe = payload["$defs"]["negative_probe"]
+    accepted_variants = payload["$defs"]["accepted_negative_probe"]["allOf"][1]["oneOf"]
+
+    assert base_probe["properties"]["operation"] == {"$ref": "#/$defs/identifier"}
+    assert all(
+        variant["properties"]["operation"].get("const") != "health"
+        for variant in accepted_variants
+    )
 
 
 def test_validate_accepts_exact_current_main_git_identity() -> None:
@@ -363,6 +453,180 @@ def test_accepted_epoch_requires_complete_transport_accounting() -> None:
 
     with pytest.raises(M2BenchmarkError, match="transport accounting"):
         validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_rejects_duplicate_transport_channel_names() -> None:
+    payload = _epoch()
+    payload["transport"].append(copy.deepcopy(payload["transport"][0]))
+
+    with pytest.raises(M2BenchmarkError, match="transport accounting"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_requires_negative_probe_operation_semantics() -> None:
+    payload = _epoch()
+    payload["negative_probes"][0]["operation"] = "health"
+
+    with pytest.raises(M2BenchmarkError, match="operation"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_requires_wrong_target_probe_operation() -> None:
+    payload = _epoch()
+    payload["negative_probes"][1]["operation"] = "health"
+
+    with pytest.raises(M2BenchmarkError, match="operation"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_legacy_non_authoritative_probe_metadata_remains_loadable() -> None:
+    payload = _epoch(accepted_comparable=False, success=False, human_captured=False)
+    payload["headless"]["status"] = "NOT_RUN"
+    payload["live"]["status"] = "NOT_RUN"
+    payload["negative_probes"][1] = {
+        "kind": "wrong_target",
+        "count": 0,
+        "captured": False,
+        "operation": "health",
+        "category": "not_run",
+        "detail": "not run",
+    }
+    validated = validate_m2_record(
+        _record(
+            epochs=[payload],
+            aggregate={
+                "comparable_epochs": 0,
+                "successful_epochs": 0,
+                "success_rate": None,
+                "representative": False,
+                "status": "BASELINE_ONLY",
+            },
+        )
+    )
+    assert validated["epochs"][0] == payload
+
+
+def test_legacy_non_captured_environment_without_identity_remains_loadable() -> None:
+    payload = _epoch(accepted_comparable=False, success=False, human_captured=False)
+    payload["headless"]["status"] = "NOT_RUN"
+    payload["live"]["status"] = "NOT_RUN"
+    payload["environment"] = {
+        "captured": False,
+        "autocad_product": None,
+        "plugin_version": None,
+        "python_version": None,
+        "ipc_root_id": None,
+    }
+    validated = validate_m2_record(
+        _record(
+            epochs=[payload],
+            aggregate={
+                "comparable_epochs": 0,
+                "successful_epochs": 0,
+                "success_rate": None,
+                "representative": False,
+                "status": "BASELINE_ONLY",
+            },
+        )
+    )
+    assert validated["epochs"][0]["environment"] == payload["environment"]
+
+
+def test_accepted_epoch_requires_expected_negative_probe_category() -> None:
+    payload = _epoch()
+    payload["negative_probes"][0]["category"] = "wrong_target"
+
+    with pytest.raises(M2BenchmarkError, match="category"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_accepted_epoch_requires_each_transport_channel_attempt() -> None:
+    payload = _epoch()
+    payload["transport"][0]["attempts"] = 0
+    payload["transport"][0]["successes"] = 0
+
+    with pytest.raises(M2BenchmarkError, match="transport accounting"):
+        validate_m2_record(_record(epochs=[payload]))
+
+
+def test_failure_accounting_uses_tracked_operation_over_result_metadata() -> None:
+    epoch = _epoch(accepted_comparable=True, success=True)
+    transport = _transport_counters()
+    transport["fileipc"]["attempts"] = 1
+    error = DotNetIPCResultError(
+        "variables failed",
+        result={"operation": "health", "errors": ["WRONG_OPERATION"]},
+    )
+
+    detail = m2_live._record_m2_failure(
+        epoch,
+        transport,
+        error,
+        current_operation="drawing_get_variables",
+        human_capture_observed=True,
+    )
+
+    assert detail["operation"] == "drawing_get_variables"
+    assert _transport_records(transport) == [
+        {"name": "fileipc", "attempts": 1, "successes": 0, "failures": 1}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("process_path", "accepted"),
+    [
+        (Path(r"C:\Program Files\Autodesk\AutoCAD 2027\acad.exe"), True),
+        (Path(r"C:\Windows\System32\notepad.exe"), False),
+    ],
+)
+def test_runtime_identity_process_guard_is_autocad_only(
+    process_path: Path,
+    accepted: bool,
+) -> None:
+    if accepted:
+        assert m2_live._validate_autocad_process_path(process_path) == process_path
+    else:
+        with pytest.raises(MCPToolError, match="acad.exe"):
+            m2_live._validate_autocad_process_path(process_path)
+
+
+def test_current_implementation_sha_rejects_dirty_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(args, **kwargs):
+        if args[1] == "status":
+            return SimpleNamespace(stdout=" M tests/test_m2_benchmark.py\n")
+        return SimpleNamespace(stdout=_GIT_SHA_A)
+
+    monkeypatch.setattr(m2_live.subprocess, "run", fake_run)
+
+    with pytest.raises(MCPToolError, match="clean"):
+        m2_live._current_implementation_sha()
+
+
+@pytest.mark.parametrize(
+    "health_payload",
+    [
+        {"plugin_version": "1.0.0", "plugin_binary_sha256": _SHA_C},
+        {"plugin_version": "1.0.0"},
+    ],
+)
+def test_health_identity_requires_loaded_plugin_hash_match(
+    health_payload: dict[str, str],
+) -> None:
+    with pytest.raises(MCPToolError, match="plugin identity"):
+        m2_live._validated_health_plugin_identity(
+            {"payload": health_payload},
+            expected_sha256=_SHA_D,
+        )
+
+
+def test_plugin_binary_identity_requires_existing_release_dll(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(m2_live, "_PLUGIN_DLL_PATH", tmp_path / "missing.dll")
+
+    with pytest.raises(MCPToolError, match="missing"):
+        m2_live._plugin_binary_sha256()
 
 
 def test_accepted_epoch_requires_positive_capture_count_for_each_negative_probe() -> None:
@@ -945,7 +1209,7 @@ def test_persist_epoch_record_writes_schema_valid_record_and_appends_existing_ep
             "kind": "wrong_target",
             "count": 1,
             "captured": True,
-            "operation": "health",
+            "operation": "wrong_target",
             "category": "dotnet_result",
             "detail": "wrong target was rejected",
         },

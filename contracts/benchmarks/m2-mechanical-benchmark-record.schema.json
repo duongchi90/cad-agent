@@ -131,6 +131,17 @@
         "failures": {"$ref": "#/$defs/non_negative_integer"}
       }
     },
+    "accepted_transport_entry": {
+      "allOf": [
+        {"$ref": "#/$defs/transport"},
+        {
+          "type": "object",
+          "properties": {
+            "attempts": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
+    },
     "review_counts": {
       "type": "object",
       "additionalProperties": false,
@@ -175,12 +186,7 @@
         "autocad_product",
         "plugin_version",
         "python_version",
-        "ipc_root_id",
-        "runtime_identity",
-        "implementation_sha",
-        "pr_head_sha",
-        "harness_sha",
-        "plugin_binary_sha256"
+        "ipc_root_id"
       ],
       "properties": {
         "captured": {"type": "boolean"},
@@ -202,6 +208,148 @@
           "anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
         }
       }
+    },
+    "accepted_environment": {
+      "allOf": [
+        {"$ref": "#/$defs/environment"},
+        {
+          "type": "object",
+          "required": [
+            "captured",
+            "autocad_product",
+            "plugin_version",
+            "python_version",
+            "ipc_root_id",
+            "runtime_identity",
+            "implementation_sha",
+            "pr_head_sha",
+            "harness_sha",
+            "plugin_binary_sha256"
+          ],
+          "properties": {
+            "captured": {"const": true},
+            "autocad_product": {"type": "string", "minLength": 1},
+            "plugin_version": {"type": "string", "minLength": 1},
+            "python_version": {"type": "string", "minLength": 1},
+            "ipc_root_id": {"type": "string", "minLength": 1},
+            "runtime_identity": {"$ref": "#/$defs/identifier"},
+            "implementation_sha": {"$ref": "#/$defs/git_commit_sha"},
+            "pr_head_sha": {"$ref": "#/$defs/git_commit_sha"},
+            "harness_sha": {"$ref": "#/$defs/git_commit_sha"},
+            "plugin_binary_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "accepted_count_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked", "mismatches"],
+      "properties": {
+        "checked": {"type": "integer", "minimum": 1},
+        "mismatches": {"const": 0}
+      }
+    },
+    "accepted_review_result": {
+      "allOf": [
+        {"$ref": "#/$defs/review_result"},
+        {
+          "type": "object",
+          "properties": {
+            "status": {"const": "PASS"},
+            "degraded": {"const": false},
+            "geometry_checked": {"type": "integer", "minimum": 1},
+            "counts": {
+              "type": "object",
+              "properties": {
+                "primitive": {"$ref": "#/$defs/accepted_count_report"},
+                "component": {"$ref": "#/$defs/accepted_count_report"},
+                "dimension": {"$ref": "#/$defs/accepted_count_report"}
+              }
+            },
+            "mismatches": {"maxItems": 0}
+          }
+        }
+      ]
+    },
+    "accepted_transport": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/accepted_transport_entry"},
+      "allOf": [
+        {
+          "contains": {"properties": {"name": {"const": "fileipc"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"name": {"const": "dotnetipc"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"name": {"const": "live_review"}}},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "accepted_negative_probe": {
+      "allOf": [
+        {"$ref": "#/$defs/negative_probe"},
+        {
+          "type": "object",
+          "required": ["kind", "count", "captured", "category"],
+          "properties": {
+            "count": {"type": "integer", "minimum": 1},
+            "captured": {"const": true}
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {"const": "stale_evidence"},
+                "operation": {"const": "load_build_evidence"},
+                "category": {"const": "stale_evidence"}
+              }
+            },
+            {
+              "properties": {
+                "kind": {"const": "wrong_target"},
+                "operation": {"const": "wrong_target"},
+                "category": {
+                  "enum": [
+                    "dotnet_result",
+                    "dotnet_timeout",
+                    "dotnet_protocol",
+                    "tool",
+                    "timeout"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "accepted_negative_probes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/accepted_negative_probe"},
+      "allOf": [
+        {
+          "contains": {"properties": {"kind": {"const": "stale_evidence"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"kind": {"const": "wrong_target"}}},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
     },
     "fixture": {
       "type": "object",
@@ -280,7 +428,67 @@
         "cleanup": {"$ref": "#/$defs/cleanup"},
         "accepted_comparable": {"type": "boolean"},
         "success": {"type": "boolean"}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"accepted_comparable": {"const": true}}
+          },
+          "then": {
+            "required": [
+              "human",
+              "headless",
+              "live",
+              "transport",
+              "negative_probes",
+              "environment",
+              "failure",
+              "mutation",
+              "cleanup",
+              "success"
+            ],
+            "properties": {
+              "human": {
+                "allOf": [
+                  {"$ref": "#/$defs/human"},
+                  {"properties": {"captured": {"const": true}}}
+                ]
+              },
+              "headless": {"$ref": "#/$defs/accepted_review_result"},
+              "live": {"$ref": "#/$defs/accepted_review_result"},
+              "transport": {"$ref": "#/$defs/accepted_transport"},
+              "negative_probes": {"$ref": "#/$defs/accepted_negative_probes"},
+              "environment": {"$ref": "#/$defs/accepted_environment"},
+              "failure": {"type": "null"},
+              "mutation": {
+                "allOf": [
+                  {"$ref": "#/$defs/mutation"},
+                  {
+                    "properties": {
+                      "save_attempts": {"const": 0},
+                      "repair_attempts": {"const": 0}
+                    }
+                  }
+                ]
+              },
+              "cleanup": {
+                "allOf": [
+                  {"$ref": "#/$defs/cleanup"},
+                  {
+                    "properties": {
+                      "closed_without_save": {"const": true},
+                      "source_unchanged": {"const": true},
+                      "staged_unchanged": {"const": true},
+                      "release_verified": {"const": true}
+                    }
+                  }
+                ]
+              },
+              "success": {"const": true}
+            }
+          }
+        }
+      ]
     },
     "aggregate": {
       "type": "object",
