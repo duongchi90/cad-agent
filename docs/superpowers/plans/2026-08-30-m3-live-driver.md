@@ -10,9 +10,11 @@
 
 **Spec:** GitHub Issues #305, #301, and current M3 lookahead #311; advisory `5468137092`.
 
-**Status:** executing
+**Status:** completed
 
 **Implementation head:** `910643227299c36ed96c846b6edaf2b2eb4320e9`
+
+**Completion head:** `39fd5bc5b0525db675d1bca154e73cb0c508b4a9`
 
 ## Global Constraints
 
@@ -117,14 +119,14 @@
 **Interfaces:**
 - The PR must bind exact base/head, list no live result, and preserve the existing `R5_MODE=contract-only` boundary.
 
-- [ ] **Step 1: Fresh-read GitHub and advisory state before push/PR**
+- [x] **Step 1: Fresh-read GitHub and advisory state before push/PR**
 
   Verify current `main`, current #301/#311 advisory, active PR overlap, clean worktree, and exact branch head. Do not overlap maintenance #312.
 
-- [ ] **Step 2: Push, run hosted checks, and inspect exact head**
+- [x] **Step 2: Push, run hosted checks, and inspect exact head**
 
   Hosted checks must pass on the exact PR head. Any failure is diagnosed at the first causal boundary and fixed with a new normal commit.
 
-- [ ] **Step 3: Fresh-read before merge and merge normally if clean**
+- [x] **Step 3: Fresh-read before merge and merge normally if clean**
 
   Merge only when current main, exact head, checks, advisory disposition, and write-set are clean. After merge, fresh-read main and record `LIVE_REPAIR_ACCEPTANCE=NOT_RUN`.
