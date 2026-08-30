@@ -1,153 +1,98 @@
 # CAD Agent — Current Operational Handoff
 
-Status: current operational handoff for PO and coding agents.
+Status: navigation-first current handoff. Exact mutable state must be read fresh from GitHub.
 
-Updated: 2026-08-06
+Updated: 2026-08-31.
 
-Live GitHub state, exact commits, diffs, CI logs, approved specifications, plans,
-`docs/STATUS.md`, and `docs/ARCHITECTURE.md` remain the sources of truth.
+This file intentionally does **not** cache current PR heads, CI runs, AutoCAD PID/HWND, plugin SHA, provider turn IDs, or numbered control sequence. Those values become stale quickly.
 
-## 1. Current accepted implementation state
+## 1. Read these first
 
-- Repository: `duongchi90/cad-agent`.
-- Latest accepted implementation merge:
-  `a9968480258e01fda9d4dfbf01a27958b67747bc`.
-- Latest merged PR: #65 — S3B exact-base Xref inspection and approved
-  extraction.
-- Previous accepted implementation merges:
-  - `365cb2df47cc3d0232a4b5df1901f55dbe46b22c` — PR #61 S2C actual
-    read-only AutoCAD-native layout capture;
-  - `ff6d199ef6cd401ccf5d06bace1135e4e55f1216` — PR #59 R1B;
-  - `589d708a69f5c710c0a4c25e52a5b17db9749764` — PR #57 R1A;
-  - `a8a962281b2d7480c9444eb8e1b56c6795c108aa` — PR #54 S3A.
-- Runtime promotion: no source-fusion, repair, verdict, or publication runtime
-  is promoted.
+For every new work session:
 
-The accepted S2C implementation head is
-`365cb2df47cc3d0232a4b5df1901f55dbe46b22c`. Later docs-only commits are not
-implementation bases.
+1. read Issue #305 for the persistent Luna/SOL operating contract and its newest current-lookahead pointer;
+2. read Issue #301 for unconsumed decision-changing advisories/no-miss findings;
+3. read the current lookahead issue named by #305;
+4. read current `main`, active PRs, exact heads/diffs, and hosted CI;
+5. read `docs/STATUS.md` and `docs/ARCHITECTURE.md` for durable evidence/architecture context;
+6. use Issue #294 only when the active task mechanically requires numbered control;
+7. treat Issue #131 as historical evidence, not the active daily ledger.
 
-## 2. Accepted S2B boundary
+Prompt-carried or chat-memory state never overrides fresher GitHub evidence.
 
-S2B provides the closed `native_render_evidence` File IPC request/result
-contract, Python client adapter, C# validator, and dispatcher registration.
-The accepted seam still returns `NATIVE_RENDER_NOT_IMPLEMENTED` before drawing
-access. Its mandatory .NET gate passed with 113 C# tests and hosted sequential
-integration passed. AutoCAD Mechanical live/native capture remained `NOT RUN`.
-
-S2C may replace only that unsupported dispatcher path through the existing
-drawing gateway. It may not add a second transport, queue, dispatcher, protocol,
-renderer fallback, verdict, approval, repair, or publication path.
-
-## 3. Accepted S2C — Issue #60
-
-S2C is accepted at merge commit
-`365cb2df47cc3d0232a4b5df1901f55dbe46b22c` (PR #61) for the bounded
-read-only AutoCAD-native layout capture scope. The branch and plan references
-below are the historical implementation record.
-
-Issue: #60 — actual read-only AutoCAD-native layout capture.
-
-Historical implementation branch: `task/s2c-autocad-native-render`.
-
-Exact implementation base:
-`3d0aa999904f384efa4eb42a81637e4270591859`.
-
-Approved design on the branch:
-`docs/superpowers/specs/2026-08-05-autocad-native-render-s2c-design.md`.
-
-Approved implementation plan on the branch:
-`docs/superpowers/plans/2026-08-05-autocad-native-render-s2c.md`.
-
-The branch was prepared with two PO docs-only commits:
-
-- design commit: `091f189bacf21f4d67c228672ff0137ac0af8f84`;
-- plan head: `2febca49526f560cd0daaa631aecc262936e8695`.
-
-Those commits were preparation only; the accepted implementation is the S2C
-merge recorded above.
-
-### Locked S2C profile
-
-- named paper-space layout only;
-- A4;
-- white background;
-- 300 DPI;
-- fit-to-paper enabled;
-- `monochrome.ctb`;
-- PNG or one-page PDF;
-- fixed approved PDF and PNG PC3 devices on AutoCAD Mechanical 2027;
-- no device/media/style fallback.
-
-### Locked artifact boundary
+## 2. Operating ownership
 
 ```text
-<CAD_AGENT_DOTNET_IPC_DIR>/native-render/<request_id>/artifact.png
-<CAD_AGENT_DOTNET_IPC_DIR>/native-render/<request_id>/artifact.pdf
+Human Owner
+   │ final authority / genuine physical-provider-admin gates
+   │
+   ├── Luna Max Solo
+   │    primary product PO/executor and local Windows/AutoCAD engine
+   │
+   └── SOL Web
+        governance, architecture/reuse, integration/CI,
+        security red-team, evidence/acceptance, lookahead
 ```
 
-`artifact.relative_path` is relative to the IPC root. No request output path or
-`artifact_directory` field is permitted. Request ownership, safe canonical
-containment, exclusive collision handling, temporary byte validation, and
-no-overwrite atomic publication are mandatory.
+Luna and SOL communicate through GitHub. The Human Owner is not a routine relay hop.
 
-### Read-only gate
+Luna may continue autonomously across bounded work, causal RED/GREEN repair, tests, commits, PRs, live preparation, and safe local execution. SOL works ahead, reviews exact heads, closes false-PASS/evidence gaps, and handles disjoint maintenance/docs work without racing Luna's active write-set.
 
-Success requires unchanged DBMOD, unchanged on-disk DWG SHA-256, restored
-session state/current layout, `changed=false`, and `entity_handles=[]`. Failed
-restoration or any invariant produces a failure with `payload={}` and no final
-artifact publication.
+## 3. Product roadmap
 
-### Contract and allowlist gate
+The current product roadmap is:
 
-S2A/S2B schemas and Python production validators remain frozen. Exactly the 20
-Issue #60 allowlisted paths may change. If another existing `IDrawingGateway`
-implementation or test double requires a change, Codex stops and reports the
-exact path instead of expanding scope.
+```text
+M0 Stabilize Pipe
+  -> M1 Golden Path
+  -> M2 Benchmark
+  -> M3 Repair Loop
+  -> M4 Production Hardening
+```
 
-## 4. Accepted S3B boundary
+As of this handoff update, M0/M1/M2 have accepted evidence and the product frontier is M3 until fresh GitHub evidence says otherwise. Do not use this sentence as an exact-state substitute: always fresh-read GitHub for whether M3 has moved or closed.
 
-S3B is accepted on PR #65 and merge
-`a9968480258e01fda9d4dfbf01a27958b67747bc` for exact-base Xref inspection and
-approved extraction. The accepted boundary is:
+Historical R/P/VS/S/Wave/older phase labels remain evidence and reuse vocabulary, not the automatic daily queue.
 
-- source Xrefs and accepted DWGs are read-only and remain immutable;
-- inspection is server-built and extraction performs fresh live preflight
-  immediately before mutation;
-- extraction creates only new disposable candidates;
-- allowed local transforms are translation, rotation, and positive uniform
-  scale only;
-- evidence preserves source handle, layer, block, source revision, source hash,
-  and `REUSED_FROM_BASE_CAD` provenance;
-- AutoCAD Mechanical live acceptance remains `NOT RUN`;
-- private drawing/source-data acceptance remains `NOT RUN`.
+## 4. Current M3 semantics
 
-Runtime verification head: `9f5dc302643fdfae77cbda65dd6cdc0c8deccc59`.
-Record-only final head: `67c3496da313245fc9ceeee26814e099b32f2c87`.
+M3 reuses the existing R4/R5/R6/R7 chain rather than building a new repair engine.
 
-## 5. Future-slice selection gate
+The intended first repair proof is a disposable candidate-only LINE epoch:
 
-No next runtime slice is selected or authorized by this handoff. Any future
-runtime work requires a separate Issue, exact base, branch, allowlist,
-verification gates, live/private-data gate decisions, and explicit PO
-authorization before repository changes begin.
+```text
+exact current candidate
+      ↓
+genuine fresh R5 FAIL
+      ↓
+exact repair plan + single-use authorization
+      ↓
+exactly one approved repair attempt
+      ↓
+distinct POST_REPAIR candidate/evidence
+      ↓
+fresh independent R5 PASS|FAIL
+      ↓
+integrity + cleanup evidence
+```
 
-## 6. Locked work
+Contract-only composition evidence may prove wiring, validation, replay rejection, and candidate transition, but it does not equal genuine provider-backed/live acceptance.
 
-Until a future-slice selection gate is separately accepted, keep locked:
+For live acceptance, use only current canonical R5/R6 owner results and the current M3 record/oracle on `main`. `SKIP`, `NOT_RUN`, timeout, retry, ambiguous cleanup, stale identity, or caller-made summaries that are not bound to canonical owner results are non-PASS.
 
-- S3C repair/publication;
-- R1C SourceBundle byte-integrity audit or source-fusion runtime;
-- component/view registry;
-- dimension-authority expansion;
-- candidate revision orchestration;
-- repair-loop integration;
-- visual verdict or publication;
-- duplicate OCR, solver, DXF builder, File IPC transport/dispatcher,
-  manifest/checkpoint/revision store, repair executor, verdict path, or
-  publisher.
+## 5. Reuse-first architecture
 
-## 7. Authoritative ownership
+Always use this order:
+
+```text
+existing owner
+  -> smallest repair
+  -> thin adapter/validator/composition seam
+  -> measured insufficiency
+  -> new subsystem only if unavoidable
+```
+
+Current package authorities remain:
 
 ```text
 primitive_ir_lib
@@ -157,36 +102,81 @@ primitive_ir_lib
   -> mcp_integration_lib
 ```
 
-- recognition/OCR remains in `primitive_ir_lib`;
-- semantic solving remains in `semantic_ir_lib`;
-- proposal/apply separation remains in `agent_lib`;
-- native entity generation/review remains in `dxf_builder_lib`;
-- AutoCAD access remains in the existing File IPC/.NET drawing-gateway boundary;
-- `cad_agent` remains thin orchestration and the sole manifest/checkpoint owner.
+`cad_agent` remains thin orchestration/composition. Do not create duplicate OCR, solver, DXF builder, AutoCAD transport, repair executor, truth store, retry daemon, telemetry/database, visual verdict path, publisher, or control plane without measured evidence that the current owner cannot close the boundary.
 
-## 8. Next action
+CADmind-style `observe_drawing` / `query_entities` work remains evidence-driven: do not build MECH-1 merely because it appears useful. Require a measured CAD-context/query bottleneck first.
 
-Issue #68 / PR #69 is the accelerated reuse-first program planning record.
-This program remains planning/governance only; GitHub is the live source of PR
-state, and this handoff must not cache whether PR #69 is open, draft, merged, or
-closed.
+## 6. Evidence reuse and retest
 
-- Program design: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md`.
-- Program plan: `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`.
-- Planning branch: `planning/accelerated-reuse-first-program`.
-- Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.
-- Before PR #69 merges, complete the PO review and merge gate.
-- After PR #69 merges, verify fresh `main` at the program merge SHA, then create
-  three separate Wave 1 Issues: official vision handoff, R1C source
-  integrity/fusion, and S2C/S3B live readiness.
-- PR #65 / `a9968480258e01fda9d4dfbf01a27958b67747bc` is the latest accepted
-  runtime implementation record; this program does not promote runtime.
-- PR #67 / `d00b24e4853d2bfa6bd94873d3014e37575e2718` is the accepted governance
-  base for this program; after PR #69 merges, its merge SHA becomes the program
-  governance head.
-- No runtime is automatically authorized by this program or its merge. Each
-  Wave 1 Issue still requires its own scope, exact base, allowlist, reuse
-  dossier, verification gates, and PO authorization.
+Accepted evidence is reused when the owning implementation and decision-relevant bytes have not changed.
 
-Do not begin S3C, R1C implementation, registry, revision, repair, verdict,
-publication, or OCR work from this handoff.
+Do not rerun expensive AutoCAD/provider gates solely because:
+
+- documentation changed;
+- commit topology changed while the relevant tree/artifact is equivalent;
+- a disjoint security/docs PR merged;
+- a previously accepted owner remains byte-identical and no contradictory runtime evidence exists.
+
+Retest only when a touched owner, artifact identity, runtime contract, or new contradictory machine truth makes the old evidence non-applicable.
+
+## 7. AutoCAD/live safety
+
+For live work:
+
+- bind the exact identities required by the active contract;
+- mutate only disposable candidate/fixture drawings;
+- never save over source/customer/accepted drawings during tests;
+- no automated security/consent dialog clicking;
+- no kill/restart merely to force progress;
+- no blind retry after uncertain mutation/execution;
+- no ambiguous/hidden receiver accepted as the target;
+- cleanup/save state must be explicit evidence, not assumption.
+
+A valid existing AutoCAD/plugin session may be reused across a batch when exact runtime/plugin/drawing identity proves it remains safe. A fresh NETLOAD/restart must not be demanded merely for reassurance.
+
+## 8. Human-away mode
+
+When the Human Owner is not at the machine:
+
+1. continue every useful GitHub/offline/test/review/preparation task;
+2. prepare exact DLL/artifact paths and hashes, provider requirements, runtime expectations, commands, record paths, and cleanup oracle;
+3. batch live work into one session when safe;
+4. do not ask for intermediate confirmations;
+5. request one exact consolidated `HUMAN_ACTION` only when no safe non-Human work remains.
+
+`HUMAN ACTION = NONE` is correct whenever the remaining work is still executable by Luna/SOL without physical/provider/admin consent.
+
+## 9. Maintenance lanes
+
+Disjoint maintenance may proceed while the product live lane is blocked, provided it does not move `main` during an exact-main-sensitive epoch.
+
+Current maintenance principles:
+
+- forward-port still-useful security/docs ideas onto fresh current main;
+- close stale governance PRs rather than mass-rebasing them;
+- keep Dependabot/CodeQL/SECURITY.md additive and separate from runtime owners;
+- reconcile stale canonical docs through small current-main successors;
+- prefer GitHub-native branch protection/rulesets over custom governance bots.
+
+Main protection is a repository setting, not a reason to build another control subsystem.
+
+## 10. Completion package
+
+A meaningful Luna terminal should report:
+
+- RESULT;
+- DONE;
+- exact evidence and current main/head/PR state;
+- relevant milestone state;
+- consumed advisory/ACK when applicable;
+- FIRST UNSATISFIED BOUNDARY;
+- NEXT work that can still proceed autonomously;
+- exactly one HUMAN ACTION only if genuinely irreducible.
+
+`NEXT=NONE` should mean no safe product, maintenance, review, or preparation work remains in the current delegated scope — not merely that one live mode is disabled.
+
+## 11. Core rule
+
+Keep the system moving toward a verified editable Mechanical CAD product, not toward more governance ceremony.
+
+Fresh GitHub evidence wins. Reuse accepted owners and evidence. Fail closed. Minimize Human gates. Do not manufacture PASS.
