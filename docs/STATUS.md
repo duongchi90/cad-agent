@@ -279,10 +279,39 @@ Human-only action is required for M2 acceptance.
 - Live follow-up packet: `docs/superpowers/plans/2026-08-30-m3-live-packet.md`.
   It freezes the current main/plugin artifact identity, the existing
   NETLOAD/APPLOAD prerequisite, transport variables, owner sequence, safety
-  invariants, and the exact reason no live command is published yet: main has
-  no M3 live composition test or canonical live record writer. The next safe
-  autonomous step is a RED-first opt-in test-only driver; current
-  `R5_MODE=contract-only` remains unchanged.
+  invariants, and the exact reason no live command is published yet: the
+  merged main branch had no M3 live composition test or canonical live record
+  writer. The bounded RED-first implementation is now on candidate head
+  `910643227299c36ed96c846b6edaf2b2eb4320e9` in
+  `codex/m3-live-driver`; it remains offline/provider-callback only until
+  hosted review is complete and is not a live acceptance result.
+
+## M3 provider-backed live seam — offline boundary
+
+- State: **Offline contract PASS; provider-backed live acceptance NOT RUN**.
+  `R5_MODE=contract-only` remains unchanged and cannot create a live PASS.
+- Candidate implementation: `cad_agent/m3_live_record.py` is the pure,
+  closed-key canonical record oracle; `mcp_integration_lib/m3_live_harness.py`
+  is the opt-in fixed-order callback composition seam. It performs no
+  NETLOAD, UI automation, process control, or AutoCAD mutation.
+- Fail-closed bindings require observed PID/HWND/document identity, current
+  main and exact loaded-plugin SHA-256 equality, provider-backed pre-repair
+  R5 `FAIL`, one consumed candidate/R5/operation-bound authorization, exactly
+  one semantic R6 mutation, a distinct post-repair candidate, fresh provider
+  R5 `PASS`, reconciled FileIPC/.NET/Task6/R6 transport counts, protected-file
+  integrity, captured Human-intervention events, and observed zero-survivor
+  cleanup. Caller labels, stale/rebound evidence, contract-only results,
+  `SKIP`/`NOT_RUN`, retries, and ambiguous outcomes fail closed.
+- Verification on candidate head: focused new contract suite `13 passed`,
+  nearest M3/R4/R5/R6/R7 regression `225 passed`, Ruff and `git diff --check`
+  passed. The canonical offline verifier recorded JUnit
+  `tests=3111, failures=0, errors=0, skipped=0`, dotnet IPC
+  `tests=117, failures=0, errors=0, skipped=0`, accepted causal RED `1`,
+  real-data `2 skipped`, and AutoCAD `14 skipped`.
+- Remaining boundary: hosted verification of this bounded seam, then a
+  genuine provider-backed disposable AutoCAD epoch with fresh runtime,
+  candidate, R5, repair, transport, integrity, and cleanup evidence. No live
+  command or Human action is requested while the mode remains contract-only.
 
 ## Personal Lean Pilot — Gate A Setup Lite
 
