@@ -128,7 +128,10 @@ class FileIPCClientTests(unittest.TestCase):
             )
             self.assertEqual(client.entity_get("20")["measurement"], 80.0)
             self.assertEqual(len(expressions), 1)
-            self.assertIn("(assoc 42 (entget mcp-dim-ent))", expressions[0])
+            self.assertIn("(assoc 42 mcp-dim-data)", expressions[0])
+            self.assertIn("(assoc 13 mcp-dim-data)", expressions[0])
+            self.assertIn("(assoc 14 mcp-dim-data)", expressions[0])
+            self.assertIn("(distance", expressions[0])
             self.assertNotIn("vla-get-Measurement", expressions[0])
 
     def test_maps_drawing_save(self):
