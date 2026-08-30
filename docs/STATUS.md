@@ -276,6 +276,13 @@ Human-only action is required for M2 acceptance.
   R4 lineage, and a fresh live R5 `PASS`. The current R8-D driver remains
   acceptance-only/read-only, so no live M3 PASS is claimed. MECH-1 remains
   **NOT JUSTIFIED**.
+- Live follow-up packet: `docs/superpowers/plans/2026-08-30-m3-live-packet.md`.
+  It freezes the current main/plugin artifact identity, the existing
+  NETLOAD/APPLOAD prerequisite, transport variables, owner sequence, safety
+  invariants, and the exact reason no live command is published yet: main has
+  no M3 live composition test or canonical live record writer. The next safe
+  autonomous step is a RED-first opt-in test-only driver; current
+  `R5_MODE=contract-only` remains unchanged.
 
 ## Personal Lean Pilot — Gate A Setup Lite
 
