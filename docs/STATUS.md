@@ -170,13 +170,15 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   `MSB3027/MSB3021` because the Release plugin DLL was locked by AutoCAD PID
   `27168`; no process was launched or stopped to work around the lock.
 - Current persisted record `C:\temp\cad-agent-m2-record.json` is SHA-256
-  `cf50e0fd4e16cd5c84a8b5ccbb21b0954e0387f4e6a3acd3f01420961269dbe0`.
-  It contains three failed non-comparable epochs, aggregate `0/0`, status
-  `BASELINE_ONLY`; after the modal was dismissed with Load Once, a read-only
-  health probe confirmed that the currently loaded plugin still omits the
-  binary identity fields, and no live success epoch was accepted. Its sidecar is
+  `360dd99c9ca88d9f09ef27af942cf2d52f545b7e6a4d58c888ae5d359d2c3ee0`.
+  It contains four failed non-comparable epochs, aggregate `0/0`, status
+  `BASELINE_ONLY`; after the modal was dismissed with Load Once, the current
+  clean-head harness recorded a health/tool failure because the active plugin
+  still omits the binary identity fields. That epoch also proved
+  `closed_without_save`, source/staged unchanged, and release verified. Its
+  sidecar is
   `C:\temp\cad-agent-m2-record.measurements.json`, SHA-256
-  `5fae6ba93027956704e9b88aab22528160168c92977a2c41ed54d49b9f7ae041`, with
+  `b0e5d8e94bdc4b44d8f3acc58c3d873bb971400a2318b8944855d401d0eb301a`, with
   `0` measurements and `0` entity queries. The record is append-only evidence
   and is not promoted to acceptance.
 - The current live harness binds runtime identity to the observed `acad.exe`
