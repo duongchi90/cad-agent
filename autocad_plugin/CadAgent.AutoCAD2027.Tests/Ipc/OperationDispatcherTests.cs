@@ -207,6 +207,30 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void HealthRejectsARequestedPathThatIsNotTheActiveDocument()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\sample.dwg"
+        };
+        var dispatcher = CreateDispatcher(gateway);
+
+        var result = dispatcher.Dispatch(Request(
+            "health",
+            "health-wrong-target-request",
+            @"C:\drawings\other.dwg",
+            Parameters()));
+
+        Assert.False(result.Success);
+        Assert.Equal("health-wrong-target-request", result.RequestId);
+        Assert.Equal("health", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Contains(
+            result.Errors!,
+            error => error.Contains("active document", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void HealthReturnsTheExactExecutingPluginBinaryIdentity()
     {
         var gateway = new StubDrawingGateway

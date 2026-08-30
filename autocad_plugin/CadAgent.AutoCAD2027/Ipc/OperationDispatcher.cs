@@ -87,7 +87,14 @@ public sealed class OperationDispatcher
 
     private IpcResult DispatchHealth(IpcRequest request, DateTimeOffset startedAt)
     {
-        var activePath = NormalizePathOrNull(_context.DrawingGateway.ActiveDocumentFullPath);
+        string? activePath;
+        if (request.DrawingFullPath is not null
+            && !TryMatchActiveDocument(request.DrawingFullPath, out activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        activePath = NormalizePathOrNull(_context.DrawingGateway.ActiveDocumentFullPath);
         var pluginIdentity = LoadedPluginIdentity.Capture(typeof(OperationDispatcher).Assembly);
         var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
         {

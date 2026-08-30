@@ -1214,6 +1214,15 @@ def test_m2_missing_capture_is_non_comparable_not_zero() -> None:
     assert validated["epochs"][0]["human"]["captured"] is False
 
 
+@pytest.mark.parametrize("category", ["dotnet_timeout", "dotnet_protocol", "tool", "timeout"])
+def test_m2_accepted_wrong_target_requires_semantic_refusal(category: str) -> None:
+    record = _record()
+    record["epochs"][0]["negative_probes"][1]["category"] = category
+
+    with pytest.raises(ValueError, match="category"):
+        validate_m2_record(record)
+
+
 def test_m2_live_prerequisites_do_not_hide_missing_record_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CAD_AGENT_M2_RECORD_PATH", raising=False)
     monkeypatch.delenv("CAD_AGENT_M2_SESSION_ID", raising=False)
@@ -1526,7 +1535,10 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
                     "operation": "health",
                     "drawing_full_path": drawing_full_path,
                     "request_id": request_id,
-                    "errors": ["WRONG_TARGET_IDENTITY"],
+                    "success": False,
+                    "errors": [
+                        "The requested drawing_full_path does not match the active document full path."
+                    ],
                 },
             )
 
@@ -1551,6 +1563,42 @@ def test_wrong_target_probe_uses_second_drawing_and_observed_refusal(tmp_path: P
     assert probe["operation"] == "wrong_target"
     assert probe["category"] == "dotnet_result"
     assert observed_paths == [str(wrong), str(intended)]
+    assert _transport_records(transport) == [
+        {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
+        {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0},
+    ]
+
+
+def test_wrong_target_probe_does_not_treat_timeout_as_semantic_refusal(tmp_path: Path) -> None:
+    transport = _transport_counters()
+
+    class FakeLegacyClient:
+        def drawing_open(self, _drawing_path: str) -> None:
+            return None
+
+    class FakeDotNetClient:
+        def health(self, _drawing_full_path: str, *, request_id: str) -> dict[str, object]:
+            _ = request_id
+            raise DotNetIPCTimeoutError("health timed out")
+
+    intended = tmp_path / "intended.dxf"
+    wrong = tmp_path / "wrong.dxf"
+    intended.write_text("intended", encoding="utf-8")
+    wrong.write_text("wrong", encoding="utf-8")
+
+    probe = _exercise_wrong_target_rejection(
+        legacy_client=FakeLegacyClient(),
+        dotnet_client=FakeDotNetClient(),
+        transport=transport,
+        intended_full_path=r"C:\temp\intended.dxf",
+        second_drawing_path=wrong,
+        reopen_drawing_path=intended,
+        request_id="wrong-target-timeout",
+    )
+
+    assert probe["captured"] is False
+    assert probe["count"] == 0
+    assert probe["category"] == "dotnet_timeout"
     assert _transport_records(transport) == [
         {"name": "fileipc", "attempts": 2, "successes": 2, "failures": 0},
         {"name": "dotnetipc", "attempts": 1, "successes": 0, "failures": 1},

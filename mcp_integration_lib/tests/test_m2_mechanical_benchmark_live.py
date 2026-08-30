@@ -584,12 +584,45 @@ def _exercise_wrong_target_rejection(
     try:
         transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
         dotnet_client.health(intended_full_path, request_id=request_id)
+    except DotNetIPCResultError as exc:
+        result = exc.result
+        errors = result.get("errors") if isinstance(result, dict) else None
+        semantic_refusal = (
+            isinstance(result, dict)
+            and result.get("success") is False
+            and result.get("operation") == "health"
+            and isinstance(errors, list)
+            and any(
+                isinstance(error, str)
+                and "requested drawing_full_path does not match the active document" in error.casefold()
+                for error in errors
+            )
+        )
+        if semantic_refusal:
+            transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
+            return {
+                "kind": "wrong_target",
+                "count": 1,
+                "captured": True,
+                "operation": "wrong_target",
+                "category": "dotnet_result",
+                "detail": str(exc),
+            }
+        transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
+        return {
+            "kind": "wrong_target",
+            "count": 0,
+            "captured": False,
+            "operation": "wrong_target",
+            "category": "dotnet_result",
+            "detail": str(exc),
+        }
     except (MCPTimeoutError, MCPToolError, DotNetIPCError) as exc:
         transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
         return {
             "kind": "wrong_target",
-            "count": 1,
-            "captured": True,
+            "count": 0,
+            "captured": False,
             "operation": "wrong_target",
             "category": _failure_category(exc),
             "detail": str(exc),
