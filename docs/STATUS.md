@@ -145,9 +145,11 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   `docs/superpowers/specs/2026-08-30-m2-mechanical-benchmark-design.md` and
   the execution record is
   `docs/superpowers/plans/2026-08-30-m2-mechanical-benchmark.md`.
-- Current branch: `codex/m2-mechanical-benchmark`; draft PR `#309` is the
-  current GitHub integration point. The current implementation/evidence head
-  is `94cb8b7558e41ee3194484aabcab00d53b2d0258`; fresh `origin/main` remains
+- Draft PR `#309` remains the benchmark integration point at its exact
+  GitHub-observed head `738dac0b11231a71f91376ebb5ef22b6c709461d`. The
+  bounded C# health-owner successor is branch `codex/m2-plugin-identity`,
+  based on that head; its binary-bearing implementation commit is
+  `50fc0d8a03c2fae12b4363a95ff4369e75645a90`. Fresh `origin/main` remains
   `ffde4673be48f85a7fd4c0a10b9b35000c710e16`.
 - Implemented scope: the closed `m2-mechanical-benchmark-record-1.0` oracle,
   deterministic staged-DXF fixture normalization, opt-in read-only Mechanical
@@ -179,9 +181,15 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   accounting hardening and is not rewritten or promoted.
 - The current live harness binds runtime identity to the observed `acad.exe`
   PID/HWND, exact clean implementation and harness heads, and the exact
-  Release DLL hash. Acceptance also requires the health payload to echo that
-  plugin hash; the current C# health payload does not provide it, so live
-  acceptance remains fail-closed even after dispatcher readiness is restored.
+  Release DLL hash. The successor C# health owner now reports the executing
+  assembly path and lowercase SHA-256, and the harness compares that observed
+  value with the exact isolated Release artifact. Focused C# verification
+  passed `197` tests; the deterministic x64 Release artifact is
+  `C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll`
+  with SHA-256
+  `5abff97be23b842893cc9b6d0b595d2df7c254e4e274b7bc88644c2f58954647`.
+  The normal main-worktree Release DLL stayed locked/unchanged by AutoCAD;
+  no process-control workaround was used.
 - Explicit gates: benchmark `autocad_mechanical` live acceptance **NOT RUN**;
   benchmark `real_data` **NOT RUN**; full AutoCAD/.NET release gate **NOT
   RUN/PASS**; no comparable epoch exists. The first objective M2 gate remains
@@ -190,6 +198,12 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   wrong-target, identity, and cleanup evidence.
 - MECH-1 remains **NOT JUSTIFIED**: no measured sidecar evidence shows that
   read-only CAD introspection materially improves coverage or context cost.
+
+The exact future operator packet is tracked at
+`docs/superpowers/plans/2026-08-30-m2-live-packet.md`. It leaves only one
+Human-only action: manual NETLOAD of the isolated artifact above. Live M2
+acceptance remains **NOT RUN** until that action makes the candidate plugin
+available in the running AutoCAD session.
 
 ## Personal Lean Pilot — Gate A Setup Lite
 

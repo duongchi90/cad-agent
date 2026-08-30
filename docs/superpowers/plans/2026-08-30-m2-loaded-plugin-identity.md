@@ -30,11 +30,11 @@
 **Interfaces:**
 - Produces internal `LoadedPluginIdentitySnapshot Capture(Assembly assembly)` and `CaptureBinary(string binaryPath)` helpers for the existing dispatcher and its tests.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Add tests that expect the health result to include `plugin_binary_path` and an exact lowercase SHA-256 for `typeof(OperationDispatcher).Assembly`, that a request parameter named `plugin_binary_sha256` cannot override the reported value, and that `CaptureBinary` rejects a missing path.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -55,11 +55,11 @@ Expected: the new assertions fail because health has no plugin binary identity a
 - `LoadedPluginIdentitySnapshot Capture(Assembly assembly)` returns `BinaryPath` and `Sha256`.
 - `LoadedPluginIdentitySnapshot CaptureBinary(string binaryPath)` opens the exact path read-only and computes SHA-256.
 
-- [ ] **Step 1: Implement the smallest helper**
+- [x] **Step 1: Implement the smallest helper**
 
 Use `typeof(OperationDispatcher).Assembly` at the call site. Reject blank `Assembly.Location`, normalize it with `Path.GetFullPath`, require a regular file, open with `FileAccess.Read`, and return `Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant()`.
 
-- [ ] **Step 2: Add the health fields**
+- [x] **Step 2: Add the health fields**
 
 In `DispatchHealth`, capture the executing dispatcher assembly and add:
 
@@ -70,7 +70,7 @@ In `DispatchHealth`, capture the executing dispatcher assembly and add:
 
 Do not read plugin identity from `request.Parameters` or any caller value.
 
-- [ ] **Step 3: Run focused GREEN**
+- [x] **Step 3: Run focused GREEN**
 
 Run the Task 1 command and assert all focused tests pass, including missing-file failure and caller-hash non-authority.
 
@@ -80,22 +80,22 @@ Run the Task 1 command and assert all focused tests pass, including missing-file
 - Modify: `autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/ContractTests.cs` only if the existing result round-trip contract needs an explicit health identity assertion.
 - Modify: `docs/STATUS.md` with exact evidence after verification.
 
-- [ ] **Step 1: Run nearest regressions**
+- [x] **Step 1: Run nearest regressions**
 
 ```powershell
 dotnet test autocad_plugin\CadAgent.AutoCAD2027.Tests\CadAgent.AutoCAD2027.Tests.csproj --no-restore
 .\.venv-py311\Scripts\python.exe -m pytest tests\test_m2_benchmark.py mcp_integration_lib\tests\test_m2_mechanical_benchmark_live.py -q -p no:cacheprovider
 ```
 
-- [ ] **Step 2: Verify build without touching the locked Release DLL**
+- [x] **Step 2: Verify build without touching the locked Release DLL**
 
 If `bin\x64\Release` is locked by AutoCAD, use an isolated output root such as `C:\temp\cad-agent-m2-plugin-identity-build\` with the existing SDK project and record the exact command/output. Never kill AutoCAD or copy over its DLL.
 
-- [ ] **Step 3: Run canonical offline verifier and checks**
+- [x] **Step 3: Run canonical offline verifier and checks**
 
 Run `.\scripts\verify.ps1 -SkipAutoCADDotNet`, `git diff --check`, and the documentation contract. Record skipped/not-run live gates explicitly.
 
-- [ ] **Step 4: Commit and push bounded successor**
+- [x] **Step 4: Commit and push bounded successor**
 
 ```powershell
 git add autocad_plugin docs\superpowers\specs\2026-08-30-m2-loaded-plugin-identity-design.md docs\superpowers\plans\2026-08-30-m2-loaded-plugin-identity.md docs\STATUS.md
@@ -107,8 +107,10 @@ Open a successor PR that depends on PR #309; do not merge either PR until live M
 
 ## Completion State
 
-Status: executing.
+Status: offline implementation complete; live acceptance pending the operator NETLOAD boundary.
 
-Completion Head SHA: pending fresh verification.
+Completion Head SHA: `50fc0d8a03c2fae12b4363a95ff4369e75645a90` (binary-bearing
+implementation/evidence commit; subsequent docs packet commits are lifecycle
+documentation only).
 
 Required live gate: AutoCAD Mechanical/FileIPC M2 live acceptance remains `NOT RUN` until the Human-only NETLOAD/session boundary is available.
