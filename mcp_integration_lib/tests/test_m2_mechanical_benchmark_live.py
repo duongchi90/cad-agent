@@ -641,13 +641,26 @@ def _exercise_wrong_target_rejection(
     else:
         transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
     finally:
-        transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
+        close_request_id = f"{request_id}-close"
+        transport["dotnetipc"]["attempts"] = int(transport["dotnetipc"]["attempts"]) + 1
         try:
-            legacy_client.drawing_close(save_changes=False)
+            close = dotnet_client.close_disposable(
+                normalize_windows_absolute_path(str(second_drawing_path)),
+                disposable=True,
+                save_changes=False,
+                request_id=close_request_id,
+            )
+            if not (
+                isinstance(close, dict)
+                and close.get("success") is True
+                and close.get("changed") is False
+                and close.get("payload", {}).get("closed_without_saving") is True
+            ):
+                raise MCPToolError("wrong-target disposable close was not confirmed")
         except Exception:
-            transport["fileipc"]["failures"] = int(transport["fileipc"]["failures"]) + 1
+            transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
             raise
-        transport["fileipc"]["successes"] = int(transport["fileipc"]["successes"]) + 1
+        transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
         transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
         try:
             legacy_client.drawing_open(str(reopen_drawing_path))
