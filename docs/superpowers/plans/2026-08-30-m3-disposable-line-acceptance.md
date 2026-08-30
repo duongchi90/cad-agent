@@ -2,6 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** executing
+
+**Base SHA:** `aaa90e6aeaa31feec0b9e9e6eec42f0051ee0d80`
+
+**Completion Head SHA:** pending until the implementation and evidence commits are complete.
+
 **Goal:** Add one explicit contract-only M3 acceptance epoch that composes the existing R4/R5/R6 owners for a candidate-only LINE repair and records a fresh post-repair R5 PASS without claiming live AutoCAD evidence.
 
 **Architecture:** Reuse all existing production owners and add one acceptance test module that imports the existing R4 fixture builders, mints an owner-validated R5 FAIL bound to a disposable candidate, calls the existing repair planner, authorization, `DotNetIPCClient` disposable-workspace owner, and `execute_approved_repair`, then builds a real POST_REPAIR R4 child and independently validates a new R5 PASS. A causal RED exposed that the existing R6 planner could not consume an owner-valid v1.1 root because that root intentionally has no legacy latest-mutation field; the only production change is a fail-closed owner-derived fallback in the existing R6 adapter for `ROOT_PRE_REPAIR`. The test records only bounded evidence in memory and asserts source/base/accepted files remain byte-identical.
