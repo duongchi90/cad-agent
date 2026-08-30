@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** executing
+**Status:** completed
 
 **Base SHA:** `aaa90e6aeaa31feec0b9e9e6eec42f0051ee0d80`
 
-**Completion Head SHA:** pending until the implementation and evidence commits are complete.
+**Completion Head SHA:** `3c60460baa998651008758702c1f6dc5bde06e59`
 
 **Goal:** Add one explicit contract-only M3 acceptance epoch that composes the existing R4/R5/R6 owners for a candidate-only LINE repair and records a fresh post-repair R5 PASS without claiming live AutoCAD evidence.
 
@@ -36,11 +36,11 @@
 - Consumes: `cad_agent.candidate_revision`, `cad_agent.visual_supervisor_adapter`, `cad_agent.approved_repair_adapter`, `cad_agent.repair_authorization`, `cad_agent.repair_operation_contract`, `cad_agent.drawing_artifact_reference`, and the existing test-only offline workspace/executor seams.
 - Produces: `run_contract_only_line_epoch(tmp_path) -> dict[str, object]` local acceptance composition with explicit `acceptance_mode`, `pre_repair_r5`, `r6_result`, `post_repair_candidate`, `post_repair_r5`, `repair_attempts`, and integrity/cleanup evidence.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
   Add one test named `test_m3_contract_only_line_epoch_composes_fresh_r5_after_one_r6_mutation` that imports the existing accepted R4 fixture builder, constructs a root candidate and source/base/accepted sentinels, and calls the wished-for `run_contract_only_line_epoch(tmp_path)`. Assert the returned record contains `acceptance_mode == "CONTRACT_ONLY"`, `pre_repair_r5["verdict"] == "FAIL"`, `r6_result["mutation_outcome"] == "SUCCESS"`, `r6_result["requires_new_r5_cycle"] is True`, `post_repair_r5["verdict"] == "PASS"`, `repair_attempts == 1`, `executor_calls == 2` for one erase plus one LINE create, `closure.cleanup_outcome == "zero_survivors"`, `closure.save_changes is False`, and all three protected sentinel hashes are unchanged.
 
-- [ ] **Step 2: Run the new test to verify the causal RED**
+- [x] **Step 2: Run the new test to verify the causal RED**
 
   Run:
 
@@ -50,7 +50,7 @@
 
   Expected: FAIL because the new acceptance composition function does not exist; no existing live or production owner is altered.
 
-- [ ] **Step 3: Implement the smallest owner repair and test-only composition**
+- [x] **Step 3: Implement the smallest owner repair and test-only composition**
 
   Implement the helper in the same test module. It must:
 
@@ -68,13 +68,13 @@
 
   The helper must not call `finalize_visual_verdict` because this mode has no real visual provider; the contract-only R5 FAIL is explicitly owner-validated contract evidence and the returned record must never be labelled live or representative.
 
-- [ ] **Step 4: Run the focused GREEN test**
+- [x] **Step 4: Run the focused GREEN test**
 
   Run the same pytest command from Step 2.
 
   Expected: one passing contract-only acceptance test with no AutoCAD marker and no skipped test.
 
-- [ ] **Step 5: Add focused negative assertions and run them**
+- [x] **Step 5: Add focused negative assertions and run them**
 
   Add assertions in the same test module that a pre-repair R5 PASS cannot be passed to `prepare_repair_plan`, that mutating the R5 candidate SHA causes R6 refusal before executor calls, that replaying the consumed authorization fails, and that changing the post-repair R5 candidate/state binding is rejected. Run:
 
@@ -84,7 +84,7 @@
 
   Expected: all focused tests pass and the negative assertions prove fail-closed behavior without mutation on rejected paths.
 
-- [ ] **Step 6: Commit the bounded slice before canonical verification**
+- [x] **Step 6: Commit the bounded slice before canonical verification**
 
   The repository verifier requires a clean worktree before it starts, so commit the already-verified bounded slice first:
 
@@ -93,7 +93,7 @@
   git commit -m "test: compose contract-only M3 line repair acceptance"
   ```
 
-- [ ] **Step 7: Run canonical verification and inspect the clean tree**
+- [x] **Step 7: Run canonical verification and inspect the clean tree**
 
   Run:
 
@@ -114,11 +114,11 @@
 - Consumes: the committed contract-only test result and canonical verifier output from Task 1.
 - Produces: a status entry that distinguishes contract-only M3 composition from live AutoCAD M3 acceptance and records the exact commit/commands.
 
-- [ ] **Step 1: Write the status assertion first**
+- [x] **Step 1: Write the status assertion first**
 
   Add a documentation-contract assertion only if the existing status contract lacks a stable M3 section; otherwise keep the change documentation-only and assert through the existing documentation tests that the text includes `CONTRACT_ONLY`, `live AutoCAD M3: NOT RUN`, one repair attempt, and the exact verification command.
 
-- [ ] **Step 2: Run the documentation-focused test and update the status**
+- [x] **Step 2: Run the documentation-focused test and update the status**
 
   Run:
 
@@ -128,7 +128,7 @@
 
   Update `docs/STATUS.md` only with observed facts. Do not claim live R5, live R6, production mutation, or M3 milestone closure.
 
-- [ ] **Step 3: Re-run the canonical verifier and commit**
+- [x] **Step 3: Re-run the canonical verifier and commit**
 
   ```powershell
   .\scripts\verify.ps1 -SkipAutoCADDotNet
