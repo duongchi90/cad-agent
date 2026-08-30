@@ -973,6 +973,17 @@ def test_m2_live_component_expectations_follow_written_builder_truth(tmp_path: P
     ]
 
 
+def test_m2_live_bom_attribute_order_is_not_semantic() -> None:
+    expected = [
+        {"tag": "PART_ID", "value": "part-001"},
+        {"tag": "LENGTH_MM", "value": "100.00"},
+        {"tag": "PROFILE", "value": "unknown"},
+    ]
+    observed = [expected[1], expected[0], expected[2]]
+
+    assert m2_live._bom_attributes_equal(expected, observed)
+
+
 def test_m2_fixture_support_is_reproducible_across_fresh_roots(tmp_path: Path) -> None:
     first = build_m2_fixture(tmp_path / "first")
     second = build_m2_fixture(tmp_path / "second")

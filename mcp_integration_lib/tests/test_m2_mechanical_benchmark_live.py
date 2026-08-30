@@ -374,6 +374,17 @@ def _expected_component_bom(fixture) -> list[dict[str, object]]:
     ]
 
 
+def _bom_attributes_equal(
+    expected: list[dict[str, object]], observed: list[dict[str, object]]
+) -> bool:
+    """Compare BOM attribute content without depending on AutoCAD enumeration order."""
+    canonical = lambda attributes: sorted(
+        json.dumps(attribute, sort_keys=True, separators=(",", ":"))
+        for attribute in attributes
+    )
+    return canonical(expected) == canonical(observed)
+
+
 def _initial_epoch(
     *,
     session_id: str,
@@ -948,7 +959,10 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                     if component["block_name"] == expected["block_name"]
                 ]
                 self.assertEqual(1, len(matching))
-                self.assertEqual(expected["attributes"], matching[0]["attributes"])
+                self.assertTrue(
+                    _bom_attributes_equal(expected["attributes"], matching[0]["attributes"]),
+                    f"BOM attributes differ for {expected['block_name']}",
+                )
 
             current_operation = "review"
             transport["live_review"]["attempts"] = int(transport["live_review"]["attempts"]) + 1
