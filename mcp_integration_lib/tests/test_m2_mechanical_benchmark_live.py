@@ -169,6 +169,14 @@ def _transport_records(
     ]
 
 
+def _transport_for_operation(operation: str) -> str:
+    if operation in {"m2-live", "drawing_open"}:
+        return "fileipc"
+    if operation in {"health", "mechanical_bom"}:
+        return "dotnetipc"
+    return "live_review"
+
+
 def _request_artifacts_removed(
     ipc_dir: str | os.PathLike[str] | None,
     request_ids: tuple[str, ...],
@@ -790,12 +798,10 @@ class M2MechanicalBenchmarkLiveTests(unittest.TestCase):
                 operation=operation,
                 human_capture_observed=human_capture_observed,
             )
-            if operation == "health":
-                transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
-            elif operation == "mechanical_bom":
-                transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
-            else:
-                transport["live_review"]["failures"] = int(transport["live_review"]["failures"]) + 1
+            transport_name = _transport_for_operation(operation)
+            transport[transport_name]["failures"] = (
+                int(transport[transport_name]["failures"]) + 1
+            )
         finally:
             epoch["finished_at"] = _timestamp()
             epoch["wall_clock_seconds"] = max(0.0, time.monotonic() - monotonic_started)

@@ -41,6 +41,7 @@ from mcp_integration_lib.tests.test_m2_mechanical_benchmark_live import (
     _parse_human_events_json,
     _record_path_from_env,
     _request_artifacts_removed,
+    _transport_for_operation,
     _transport_counters,
     _transport_records,
 )
@@ -1238,6 +1239,24 @@ def test_transport_helpers_preserve_observed_attempts() -> None:
         {"name": "dotnetipc", "attempts": 2, "successes": 0, "failures": 1},
         {"name": "live_review", "attempts": 1, "successes": 1, "failures": 0},
     ]
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_transport"),
+    [
+        ("m2-live", "fileipc"),
+        ("drawing_open", "fileipc"),
+        ("health", "dotnetipc"),
+        ("mechanical_bom", "dotnetipc"),
+        ("review", "live_review"),
+        ("load_build_evidence", "live_review"),
+    ],
+)
+def test_m2_failure_operation_maps_to_transport(
+    operation: str,
+    expected_transport: str,
+) -> None:
+    assert _transport_for_operation(operation) == expected_transport
 
 
 def test_request_artifacts_removed_requires_every_request_and_result(tmp_path: Path) -> None:
