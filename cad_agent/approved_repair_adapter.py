@@ -11,7 +11,11 @@ from collections.abc import Mapping
 from copy import deepcopy
 from importlib import import_module
 
-from cad_agent.candidate_revision import validate_candidate_revision_state
+from cad_agent.candidate_revision import (
+    CANDIDATE_REVISION_ROOT_KIND,
+    CANDIDATE_REVISION_V11_SCHEMA_VERSION,
+    validate_candidate_revision_state,
+)
 from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.repair_authorization import RepairAuthorization, consume_repair_authorization
 from cad_agent.repair_operation_contract import (
@@ -218,6 +222,23 @@ def _planner_fail(message: str) -> None:
     raise VisualSupervisorAdapterError(message)
 
 
+def _latest_mutation_sha256(current_candidate: Mapping[str, object]) -> str | None:
+    """Return the owner-derived latest mutation identity for one candidate."""
+
+    mutation = current_candidate.get("mutation_evidence")
+    if type(mutation) is not dict:
+        return None
+    explicit = mutation.get("latest_mutation_evidence_sha256")
+    if explicit is not None:
+        return explicit if type(explicit) is str else None
+    if (
+        current_candidate.get("schema_version") == CANDIDATE_REVISION_V11_SCHEMA_VERSION
+        and current_candidate.get("candidate_kind") == CANDIDATE_REVISION_ROOT_KIND
+    ):
+        return canonical_json_sha256(mutation)
+    return None
+
+
 def _planner_context(value: object) -> dict[str, object]:
     required = {
         "run_id",
@@ -313,8 +334,8 @@ def _sealed_r5_failure(
         "registry_snapshot_sha256"
     ):
         _planner_fail("R5 registry binding is stale or foreign")
-    if validated["latest_mutation_sha256"] != mutation_evidence.get(
-        "latest_mutation_evidence_sha256"
+    if validated["latest_mutation_sha256"] != _latest_mutation_sha256(
+        current_candidate
     ):
         _planner_fail("R5 mutation binding is stale or foreign")
     return validated
