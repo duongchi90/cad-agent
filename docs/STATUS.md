@@ -190,12 +190,18 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   `5abff97be23b842893cc9b6d0b595d2df7c254e4e274b7bc88644c2f58954647`.
   The normal main-worktree Release DLL stayed locked/unchanged by AutoCAD;
   no process-control workaround was used.
-- Explicit gates: benchmark `autocad_mechanical` live acceptance **NOT RUN**;
-  benchmark `real_data` **NOT RUN**; full AutoCAD/.NET release gate **NOT
-  RUN/PASS**; no comparable epoch exists. The first objective M2 gate remains
-  at least three successful comparable epochs across at least two observed
-  runtime identities, with semantic geometry/dimension, transport, stale /
-  wrong-target, identity, and cleanup evidence.
+- Explicit gates: benchmark `autocad_mechanical` live acceptance is **NOT
+  ACCEPTED** after one attempted non-comparable epoch at successor head
+  `032c980b30eb7ea2be8087c0ec4cec1a27f36500`; it timed out at `drawing_open`
+  because AutoCAD had a blocking `Security - Unsigned Executable File` modal
+  (HWND `1640776`) and its main window was disabled. The persisted epoch has
+  `accepted_comparable=false`, source/staged hashes unchanged, and no repair or
+  save attempts. The disposable epoch directory remains pending safe cleanup
+  after that modal is dismissed. Benchmark `real_data` is **NOT RUN**; the
+  full AutoCAD/.NET release gate is **NOT RUN/PASS**. The first objective M2
+  acceptance gate remains at least three successful comparable epochs across
+  at least two observed runtime identities, with semantic geometry/dimension,
+  transport, stale / wrong-target, identity, and cleanup evidence.
 - MECH-1 remains **NOT JUSTIFIED**: no measured sidecar evidence shows that
   read-only CAD introspection materially improves coverage or context cost.
 

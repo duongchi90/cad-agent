@@ -19,16 +19,23 @@ Prepared on 2026-08-30 for the bounded successor to PR #309.
   do not overwrite it. The artifact above was produced in an isolated output
   worktree and reproduced with the same SHA on a second build.
 
-## One Human action
+## Current one Human action
 
-In the already-running AutoCAD Mechanical 2027 window, run exactly:
+The NETLOAD command was submitted, but current machine inspection found the
+AutoCAD security modal `Security - Unsigned Executable File` still open and
+blocking the main window. Physically choose **Load Once** in that existing
+dialog for the exact successor DLL. Its observed button is the `Load Once`
+button; Luna will not click it or synthesize that consent.
+
+For a future fresh session where the modal is absent, the original load command
+is:
 
 ```text
 NETLOAD
 C:\temp\cad-agent-m2-plugin-identity\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows\CadAgent.AutoCAD2027.dll
 ```
 
-This is the only manual action. Do not close/restart AutoCAD, save `BVTL.dwg`,
+This is the only manual action for the current state. Do not close/restart AutoCAD, save `BVTL.dwg`,
 replace the normal Release DLL, or load a different binary. After this action,
 Luna runs the prepared harness using observed PID/HWND and validates the health
 payload's exact loaded-binary hash; a successful NETLOAD by itself is never a
