@@ -661,6 +661,10 @@ def _exercise_wrong_target_rejection(
             transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
             raise
         transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
+        # AutoCAD exposes a transient second MDI receiver while the closed
+        # document is being removed. Let that transition settle before the
+        # exact candidate reset request below.
+        time.sleep(2.0)
         # Closing the wrong active document makes AutoCAD restore the intended
         # document, but Mechanical may mark that restored document DBMOD=1 as
         # part of the MDI transition. Reset the disposable candidate through
@@ -686,6 +690,7 @@ def _exercise_wrong_target_rejection(
             transport["dotnetipc"]["failures"] = int(transport["dotnetipc"]["failures"]) + 1
             raise
         transport["dotnetipc"]["successes"] = int(transport["dotnetipc"]["successes"]) + 1
+        time.sleep(2.0)
         transport["fileipc"]["attempts"] = int(transport["fileipc"]["attempts"]) + 1
         try:
             legacy_client.drawing_open(str(reopen_drawing_path))
