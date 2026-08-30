@@ -572,6 +572,26 @@ def test_failure_accounting_uses_tracked_operation_over_result_metadata() -> Non
     ]
 
 
+def test_semantic_failure_after_successful_transport_does_not_double_count() -> None:
+    epoch = _epoch(accepted_comparable=True, success=True)
+    transport = _transport_counters()
+    transport["dotnetipc"]["attempts"] = 1
+    transport["dotnetipc"]["successes"] = 1
+
+    detail = m2_live._record_m2_failure(
+        epoch,
+        transport,
+        MCPToolError("plugin identity did not match build identity"),
+        current_operation="health",
+        human_capture_observed=True,
+    )
+
+    assert detail["operation"] == "health"
+    assert _transport_records(transport) == [
+        {"name": "dotnetipc", "attempts": 1, "successes": 1, "failures": 0}
+    ]
+
+
 @pytest.mark.parametrize(
     ("process_path", "accepted"),
     [

@@ -531,9 +531,9 @@ def _record_m2_failure(
         human_capture_observed=human_capture_observed,
     )
     transport_name = _transport_for_operation(operation)
-    transport[transport_name]["failures"] = (
-        int(transport[transport_name]["failures"]) + 1
-    )
+    channel = transport[transport_name]
+    if int(channel["successes"]) + int(channel["failures"]) < int(channel["attempts"]):
+        channel["failures"] = int(channel["failures"]) + 1
     return failure_detail
 
 
