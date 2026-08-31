@@ -1587,16 +1587,23 @@ class CodexWorkerSession:
             code = "WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_AUTHORITY_MISMATCH"
             return self._cleanup_failure(operation, code)
         try:
+            attestation_kwargs = {
+                "binding": self._binding,
+                "authority_context": self._authority_context,
+                "worker_context": self._worker_context,
+                "deadline": deadline,
+            }
+            start_context = getattr(self, "_start_context", None)
+            if start_context is not None:
+                attestation_kwargs.update(
+                    handoff=self._handoff,
+                    start_context=start_context,
+                )
             _attest_provider_boundary(
                 self._process_boundary,
                 self._process_handle,
                 request,
-                binding=self._binding,
-                authority_context=self._authority_context,
-                worker_context=self._worker_context,
-                handoff=self._handoff,
-                start_context=self._start_context,
-                deadline=deadline,
+                **attestation_kwargs,
             )
         except CodexWorkerError as exc:
             code = (
