@@ -61,6 +61,44 @@
   close-without-save evidence can be produced now. M2 remains accepted and is
   not retested; MECH-1 remains **NOT JUSTIFIED**.
 
+## M3 Task3 authenticated CODEX_HOME custody — executing successor
+
+- State: **Offline custody contract PASS; provider-backed pre-R5 NOT RUN**.
+  Issue #336 owns the first unsatisfied boundary after the merged official
+  START/BIND adapter. No M2 retest, NETLOAD, AutoCAD mutation, or R5/R6 work
+  was performed for this successor.
+- Exact base: current `main` `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`;
+  branch `codex/task3-auth-custody-gap`; current implementation head
+  `799260177ba3b3f0449f4982968b9136daca093f`.
+- Measurement-first official login used the exact executable
+  `C:\temp\cad-agent-m3-provider-venv-20260831\Lib\site-packages\codex_cli_bin\bin\codex.exe`,
+  `codex-cli 0.144.4`, SHA-256
+  `51398051c2332b6afe08dc3b9dbb4056085c197f35ca57a307ee303d450cada5`, and
+  exact server-created home
+  `C:\temp\cad-agent-m3-auth-custody-20260831-01\codex-home`. Same-home
+  `codex login status` returned exit `0` using ChatGPT.
+- Privacy-safe post-login inventory contained `9` entries, `5` files, `4244`
+  bytes, manifest SHA-256
+  `4057de9b9b8041f90773903ec10bff968b4c00895560ff64d11b3a256ba3f982`, and
+  no `config.toml`, `.env`, AGENTS/instruction/prompt file,
+  plugin/marketplace, MCP configuration, or reparse/symlink entry. Credential
+  contents were not read, copied, transmitted, or recorded.
+- Implemented custody lifecycle: server-issued environment identity;
+  immutable home entry manifest; exact executable hash/version and observed
+  login-status binding; canonical Task3 authenticated start; one-shot custody
+  consumption; fail-closed home/executable/ambient/reparse/manifest drift;
+  exact-home purge coupled to zero-survivor cleanup. The existing sanitized
+  environment and control wire carry no credential bytes.
+- Evidence: focused custody/worker/policy suite `176 passed`; canonical
+  `scripts/verify.ps1 -SkipAutoCADDotNet` on `7992601` passed offline with
+  `3066 passed, 18 deselected, 72 subtests`, dotnet IPC `117/0/0`, real-data
+  `2 skipped`, and AutoCAD unavailable `14 skipped`. The verifier's causal RED
+  probe failed as intentionally expected; verifier completed exit `0`.
+- Remaining boundary: canonical Task3 must continue with the exact authenticated
+  home to a genuine provider-backed pre-R5 turn. After that attempt, purge the
+  home and do not reuse it; only then can the existing M3 LINE live packet
+  proceed.
+
 ## Accelerated reuse-first program: PLANNING/GOVERNANCE ONLY
 
 - Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.

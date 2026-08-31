@@ -127,6 +127,33 @@ an explicit `autocad_mechanical` opt-in gate.
 Until then: `M3_CONTRACT_COMPOSITION=PASS`,
 `LIVE_REPAIR_ACCEPTANCE=NOT_RUN`, and `M3_MILESTONE=NOT_CLOSED`.
 
+## Task3 authenticated provider-home custody packet
+
+- Current successor boundary: Issue #336, based on current `main`
+  `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`, branch
+  `codex/task3-auth-custody-gap`, implementation head
+  `799260177ba3b3f0449f4982968b9136daca093f`.
+- Official runtime identity: `C:\temp\cad-agent-m3-provider-venv-20260831\Lib\site-packages\codex_cli_bin\bin\codex.exe`,
+  `codex-cli 0.144.4`, SHA-256
+  `51398051c2332b6afe08dc3b9dbb4056085c197f35ca57a307ee303d450cada5`.
+- The exact server-created home prepared for the current auth gate is
+  `C:\temp\cad-agent-m3-auth-custody-20260831-01\codex-home`. Same-home
+  `codex login status` returned exit `0` and `Logged in using ChatGPT`.
+  Post-login privacy-safe inventory: `9` entries, `5` files, `4244` bytes,
+  manifest SHA-256
+  `4057de9b9b8041f90773903ec10bff968b4c00895560ff64d11b3a256ba3f982`;
+  no behavior-changing ambient config/instruction/plugin/MCP/reparse state.
+  No credential contents were read, copied, transmitted, or put in evidence.
+- The canonical continuation must launch with the exact same home and the
+  server-owned authenticated custody attestation. It must fail closed on home,
+  executable, manifest, auth-mode, or policy drift, and cleanup must purge the
+  exact home after zero-survivor process cleanup. The official command runner
+  is an injected boundary fact; the process owner adds no second supervisor or
+  transport.
+- Current live state: `LIVE_PROVIDER_BACKED=NOT_RUN`; no AutoCAD/M2/NETLOAD
+  action is needed for this custody repair. After the genuine provider pre-R5
+  boundary is proven, continue the existing two-turn LINE packet sequence.
+
 ## Safety invariants
 
 - No automated NETLOAD, UI automation, AutoCAD restart/kill, COM/process

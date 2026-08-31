@@ -82,3 +82,36 @@ up; it was not reused for a later candidate or epoch.
   verification. After integration, the next boundary is one fresh disposable
   provider-backed M3 LINE epoch with a new provider thread. The current
   machine has no running AutoCAD/FileIPC receiver, so that epoch is not run.
+
+## Task3 authenticated CODEX_HOME custody successor
+
+- Status: **Executing** under Issue #336, successor to the closed adapter
+  boundary. Exact base is current `main` `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`;
+  implementation branch is `codex/task3-auth-custody-gap`.
+- Measurement-first result: the existing `prepare_worker_environment` owner
+  created a fresh root
+  `C:\temp\cad-agent-m3-auth-custody-20260831-01` with exact home
+  `...\codex-home`. Official `codex-cli 0.144.4` login status returned exit
+  `0` using ChatGPT. The privacy-safe post-login home inventory contained
+  `9` entries, `5` files, `4244` bytes, manifest SHA-256
+  `4057de9b9b8041f90773903ec10bff968b4c00895560ff64d11b3a256ba3f982`, and
+  no `config.toml`, `.env`, instruction/AGENTS file, plugin/marketplace,
+  MCP configuration, or reparse/symlink entry. Credential contents were not
+  read or recorded.
+- The bounded repair is on commits `9b73656dcc805bae6df837b11bc7f3536596662f`,
+  `ff4ebb3ed60cc41b1eeeebcc75366513a91a030f`, and
+  `799260177ba3b3f0449f4982968b9136daca093f`. It adds a server-issued,
+  immutable privacy-safe home manifest, exact executable hash/version and
+  observed official login-status binding, canonical Task3 authenticated start,
+  one-shot consumption, fail-closed path/ambient/reparse/drift checks, and
+  exact-home credential-state purge coupled to zero-survivor cleanup. No
+  credential bytes enter environment, control frames, handoff, or evidence.
+- Focused custody/worker/policy verification passed `176` tests. The final
+  canonical verifier on `7992601` passed the offline gate with `3066 passed`,
+  `18 deselected`, `72 subtests`, dotnet IPC `117/0/0`, real-data `2 skipped`,
+  and AutoCAD unavailable `14 skipped`; the intentional causal RED probe was
+  recorded as expected failure. `M2_RETEST=NO` and `NETLOAD_REQUIRED=NO`.
+- Remaining boundary: use the same exact authenticated home through canonical
+  Task3 start and obtain genuine pre-R5 provider-backed evidence before any
+  M3 mutation. A fresh authenticated home is required for any later epoch;
+  this home must be purged and never reused after the attempt.
