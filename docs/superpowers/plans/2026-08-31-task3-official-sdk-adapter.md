@@ -115,3 +115,21 @@ up; it was not reused for a later candidate or epoch.
   Task3 start and obtain genuine pre-R5 provider-backed evidence before any
   M3 mutation. A fresh authenticated home is required for any later epoch;
   this home must be purged and never reused after the attempt.
+
+## Follow-up execution note (2026-08-31)
+
+PR #337 is hosted-green at exact head
+`4df15664cfdcbe40ab378b2ca92976e3a08fe65a` but remains DRAFT/unmerged until
+the same-home provider-backed pre-R5 boundary is genuine. The first canonical
+continuation was rejected before provider acceptance with
+`WORKER_AUTHORITY_MISMATCH` because the disposable handoff root used by the
+probe did not equal the root in the issued environment; it is explicitly
+non-evidence. The exact disposable root was purged, and the direct SDK
+diagnostic that followed was also excluded from acceptance evidence.
+
+The prepared packet `C:\temp\prepare_and_run_m3_auth.py` corrects the setup by
+issuing the exact path with `cwd == disposable_root`, keeping the auth
+attestation in the same process across official login/status and canonical
+Task3 START plus one provider turn. The home is currently empty. No
+credential bytes were copied, read, or emitted; `M2_RETEST=NO` and
+`NETLOAD_REQUIRED=NO`.

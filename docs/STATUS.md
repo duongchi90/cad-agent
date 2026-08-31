@@ -99,6 +99,24 @@
   home and do not reuse it; only then can the existing M3 LINE live packet
   proceed.
 
+### Auth-custody execution update (2026-08-31)
+
+- PR #337 hosted checks are green at exact head
+  `4df15664cfdcbe40ab378b2ca92976e3a08fe65a`, but the PR remains DRAFT and
+  unmerged because no canonical provider-backed pre-R5 PASS exists.
+- The first canonical continuation was correctly refused with
+  `WORKER_AUTHORITY_MISMATCH` before provider acceptance: its disposable
+  handoff expected a nested workspace root while the issued environment used
+  the parent disposable root with that workspace as cwd. It is non-evidence.
+  The exact disposable root was subsequently purged; a later direct SDK
+  diagnostic was also excluded from acceptance evidence.
+- The next one-action packet is
+  `C:\temp\prepare_and_run_m3_auth.py`. It prepares the same exact path with
+  `cwd == disposable_root`, launches official `codex-cli 0.144.4` login in
+  that environment, retains the attestation in-process, and then attempts the
+  canonical Task3 START plus one provider turn. The home is currently empty;
+  no credential was copied or read. `M2_RETEST=NO`; `NETLOAD_REQUIRED=NO`.
+
 ## Accelerated reuse-first program: PLANNING/GOVERNANCE ONLY
 
 - Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.

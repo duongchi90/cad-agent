@@ -154,6 +154,23 @@ Until then: `M3_CONTRACT_COMPOSITION=PASS`,
   action is needed for this custody repair. After the genuine provider pre-R5
   boundary is proven, continue the existing two-turn LINE packet sequence.
 
+## Auth-custody continuation result
+
+- PR #337 hosted checks are green at exact head
+  `4df15664cfdcbe40ab378b2ca92976e3a08fe65a`, but no merge or live PASS is
+  claimed.
+- The first canonical continuation attempt was non-evidence: the disposable
+  handoff root did not equal the issued environment root, so the existing
+  owner returned `WORKER_AUTHORITY_MISMATCH` before provider acceptance. The
+  exact disposable root was then purged; a separate direct SDK diagnostic was
+  excluded from the acceptance record.
+- `C:\temp\prepare_and_run_m3_auth.py` is the prepared one-action packet. It
+  issues the exact path with `cwd == disposable_root`, runs the official login
+  and status in that isolated environment, retains custody in-process, then
+  attempts canonical Task3 START and one provider turn. The current home is
+  empty and requires that one login action. `M2_RETEST=NO` and
+  `NETLOAD_REQUIRED=NO`.
+
 ## Safety invariants
 
 - No automated NETLOAD, UI automation, AutoCAD restart/kill, COM/process
