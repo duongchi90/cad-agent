@@ -73,10 +73,12 @@ up; it was not reused for a later candidate or epoch.
 - Base: current `main` at `b06e533bbcbe7221e7c3ad9234e8497f9b422ec8`.
 - Implementation branch: `runtime/m3-task3-two-phase-start`.
 - PR #332 remains DRAFT and unmerged; this plan does not add code to it.
-- Candidate implementation head before the documentation commit:
-  `96479e1c08df3d7ccf3c39a8b9f7ded563b44261`.
-- The canonical verifier must pass on the final exact head, followed by
-  hosted checks/reuse and a fresh governance read before merge.
+- PR #334 merged normally at `cac069c45ea44ae09bd1c2062476b0febb4a37cb`.
+  Its exact implementation head was
+  `42bdf11e256c7b68018962fbcab9142e3798074c`.
+- Hosted checks/reuse and the canonical verifier passed before merge. PR #332
+  remains OPEN/DRAFT/evidence-only and was not changed or merged.
 - No live AutoCAD, NETLOAD, M2 replay, or R5/R6 mutation is part of Task3
   verification. After integration, the next boundary is one fresh disposable
-  provider-backed M3 LINE epoch with a new provider thread.
+  provider-backed M3 LINE epoch with a new provider thread. The current
+  machine has no running AutoCAD/FileIPC receiver, so that epoch is not run.
