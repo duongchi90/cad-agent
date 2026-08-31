@@ -140,10 +140,10 @@ Until then: `M3_CONTRACT_COMPOSITION=PASS`,
   `C:\temp\cad-agent-m3-auth-custody-20260831-01\codex-home`. Same-home
   `codex login status` returned exit `0` and `Logged in using ChatGPT`.
   Post-login privacy-safe inventory: `9` entries, `5` files, `4244` bytes,
-  manifest SHA-256
-  `4057de9b9b8041f90773903ec10bff968b4c00895560ff64d11b3a256ba3f982`;
   no behavior-changing ambient config/instruction/plugin/MCP/reparse state.
-  No credential contents were read, copied, transmitted, or put in evidence.
+  No credential contents or credential-derived content hashes were read,
+  copied, transmitted, or put in public evidence; private in-memory hashes are
+  used only for pre-launch drift detection.
 - The canonical continuation must launch with the exact same home and the
   server-owned authenticated custody attestation. It must fail closed on home,
   executable, manifest, auth-mode, or policy drift, and cleanup must purge the

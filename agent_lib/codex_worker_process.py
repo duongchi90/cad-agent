@@ -21,7 +21,7 @@ import time
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import BinaryIO, Protocol
@@ -112,7 +112,7 @@ class WorkerAuthFileObservation:
     relative_path: str
     entry_type: str
     byte_count: int
-    sha256: str | None
+    sha256: str | None = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -124,8 +124,8 @@ class WorkerAuthenticationAttestation:
     executable_sha256: str
     executable_version: str
     auth_mode: str
-    home_manifest_sha256: str
-    home_entries: tuple[WorkerAuthFileObservation, ...]
+    home_manifest_sha256: str = field(repr=False)
+    home_entries: tuple[WorkerAuthFileObservation, ...] = field(repr=False)
     state: str = _AUTHENTICATED_STATE
 
     def __post_init__(self) -> None:

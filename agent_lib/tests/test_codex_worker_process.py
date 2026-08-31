@@ -296,6 +296,9 @@ def test_authenticated_attestation_is_observed_and_privacy_safe(tmp_path: Path) 
     assert attestation.executable_sha256 == _file_sha256(Path(sys.executable).resolve())
     assert any(entry.relative_path == "auth.json" for entry in attestation.home_entries)
     assert all("opaque credential state" not in repr(entry) for entry in attestation.home_entries)
+    rendered = repr(attestation)
+    assert attestation.home_manifest_sha256 not in rendered
+    assert all(entry.sha256 not in rendered for entry in attestation.home_entries)
 
 
 def test_authenticated_attestation_rejects_claimed_status_and_stale_binary_identity(

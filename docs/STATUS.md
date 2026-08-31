@@ -78,11 +78,11 @@
   `C:\temp\cad-agent-m3-auth-custody-20260831-01\codex-home`. Same-home
   `codex login status` returned exit `0` using ChatGPT.
 - Privacy-safe post-login inventory contained `9` entries, `5` files, `4244`
-  bytes, manifest SHA-256
-  `4057de9b9b8041f90773903ec10bff968b4c00895560ff64d11b3a256ba3f982`, and
-  no `config.toml`, `.env`, AGENTS/instruction/prompt file,
+  bytes, and no `config.toml`, `.env`, AGENTS/instruction/prompt file,
   plugin/marketplace, MCP configuration, or reparse/symlink entry. Credential
-  contents were not read, copied, transmitted, or recorded.
+  contents and credential-derived content hashes were not read, copied,
+  transmitted, or recorded in public evidence; private in-memory hashes are
+  used only for pre-launch drift detection.
 - Implemented custody lifecycle: server-issued environment identity;
   immutable home entry manifest; exact executable hash/version and observed
   login-status binding; canonical Task3 authenticated start; one-shot custody

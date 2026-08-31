@@ -93,11 +93,11 @@ up; it was not reused for a later candidate or epoch.
   `C:\temp\cad-agent-m3-auth-custody-20260831-01` with exact home
   `...\codex-home`. Official `codex-cli 0.144.4` login status returned exit
   `0` using ChatGPT. The privacy-safe post-login home inventory contained
-  `9` entries, `5` files, `4244` bytes, manifest SHA-256
-  `4057de9b9b8041f90773903ec10bff968b4c00895560ff64d11b3a256ba3f982`, and
-  no `config.toml`, `.env`, instruction/AGENTS file, plugin/marketplace,
-  MCP configuration, or reparse/symlink entry. Credential contents were not
-  read or recorded.
+  `9` entries, `5` files, `4244` bytes, and no `config.toml`, `.env`,
+  instruction/AGENTS file, plugin/marketplace, MCP configuration, or
+  reparse/symlink entry. Credential contents and credential-derived content
+  hashes were not read or recorded in public evidence; private in-memory
+  hashes are used only for pre-launch drift detection.
 - The bounded repair is on commits `9b73656dcc805bae6df837b11bc7f3536596662f`,
   `ff4ebb3ed60cc41b1eeeebcc75366513a91a030f`, and
   `799260177ba3b3f0449f4982968b9136daca093f`, plus repair
