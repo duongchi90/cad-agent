@@ -366,6 +366,31 @@ def test_authenticated_launch_refuses_ambient_drift_and_other_issued_home(
     assert foreign.value.code == "WORKER_DISPOSABLE_ROOT_UNSAFE"
 
 
+def test_authenticated_launch_revalidates_provider_binary_separately_from_child_launcher(
+    tmp_path: Path,
+) -> None:
+    prepared, attestation, _calls = _authenticated(tmp_path)
+    child_launcher = tmp_path / "child-launcher.exe"
+    child_launcher.write_bytes(b"disposable child launcher")
+    api = _FakeProcessApi()
+    api.query_results = [(4101,), ()]
+
+    handle = process_owner.launch_authenticated_worker_process(
+        custody=attestation,
+        expected_disposable_root=prepared.disposable_root,
+        expected_cwd=prepared.cwd,
+        executable=child_launcher,
+        argv=("-c", "pass"),
+        cleanup_deadline_seconds=1.0,
+        max_processes=4,
+        _process_api=api,
+    )
+
+    result = cleanup_worker_process(handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None)
+    assert result.success is True
+    assert result.auth_state_purged is True
+
+
 def test_authenticated_cleanup_purges_exact_home_and_prevents_reuse(tmp_path: Path) -> None:
     prepared, attestation, _calls = _authenticated(tmp_path)
     api = _FakeProcessApi()

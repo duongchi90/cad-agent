@@ -845,7 +845,7 @@ def _validate_authenticated_custody(
     *,
     expected_disposable_root: Path,
     expected_cwd: Path,
-    executable: Path,
+    launcher_executable: Path,
 ) -> tuple[Path, _AuthenticationCustodyState]:
     state = _require_authentication_attestation(custody)
     if state.consumed or state.purged or custody.state != _AUTHENTICATED_STATE:
@@ -859,11 +859,12 @@ def _validate_authenticated_custody(
         require_empty=False,
     )
     _validate_attestation_environment(environment)
-    runtime = _validate_executable(executable)
-    if runtime != custody.executable:
+    provider_runtime = _validate_executable(custody.executable)
+    if provider_runtime != custody.executable:
         _fail("WORKER_EXECUTABLE_IDENTITY_MISMATCH")
-    if _sha256_file(runtime).casefold() != custody.executable_sha256.casefold():
+    if _sha256_file(provider_runtime).casefold() != custody.executable_sha256.casefold():
         _fail("WORKER_EXECUTABLE_IDENTITY_MISMATCH")
+    _validate_executable(launcher_executable)
     entries, manifest = _auth_inventory(environment.codex_home)
     _validate_auth_entry_policy(entries)
     if manifest != custody.home_manifest_sha256 or entries != custody.home_entries:
@@ -1108,7 +1109,7 @@ def launch_authenticated_worker_process(
             custody,
             expected_disposable_root=expected_disposable_root,
             expected_cwd=expected_cwd,
-            executable=executable,
+            launcher_executable=executable,
         )
         state.consumed = True
         return _launch_worker_process(
