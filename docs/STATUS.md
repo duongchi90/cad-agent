@@ -69,7 +69,7 @@
   was performed for this successor.
 - Exact base: current `main` `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`;
   branch `codex/task3-auth-custody-gap`; current implementation head
-  `799260177ba3b3f0449f4982968b9136daca093f`.
+  `f7f1038f7ad81c5ef3758dc6251df817a536cd13`.
 - Measurement-first official login used the exact executable
   `C:\temp\cad-agent-m3-provider-venv-20260831\Lib\site-packages\codex_cli_bin\bin\codex.exe`,
   `codex-cli 0.144.4`, SHA-256
@@ -89,9 +89,9 @@
   consumption; fail-closed home/executable/ambient/reparse/manifest drift;
   exact-home purge coupled to zero-survivor cleanup. The existing sanitized
   environment and control wire carry no credential bytes.
-- Evidence: focused custody/worker/policy suite `176 passed`; canonical
-  `scripts/verify.ps1 -SkipAutoCADDotNet` on `7992601` passed offline with
-  `3066 passed, 18 deselected, 72 subtests`, dotnet IPC `117/0/0`, real-data
+- Evidence: focused custody/worker/policy suite `177 passed`; canonical
+  `scripts/verify.ps1 -SkipAutoCADDotNet` on `f7f1038` passed offline with
+  `3067 passed, 18 deselected, 72 subtests`, dotnet IPC `117/0/0`, real-data
   `2 skipped`, and AutoCAD unavailable `14 skipped`. The verifier's causal RED
   probe failed as intentionally expected; verifier completed exit `0`.
 - Remaining boundary: canonical Task3 must continue with the exact authenticated
@@ -104,18 +104,22 @@
 - PR #337 hosted checks are green at exact head
   `4df15664cfdcbe40ab378b2ca92976e3a08fe65a`, but the PR remains DRAFT and
   unmerged because no canonical provider-backed pre-R5 PASS exists.
-- The first canonical continuation was correctly refused with
-  `WORKER_AUTHORITY_MISMATCH` before provider acceptance: its disposable
-  handoff expected a nested workspace root while the issued environment used
-  the parent disposable root with that workspace as cwd. It is non-evidence.
-  The exact disposable root was subsequently purged; a later direct SDK
-  diagnostic was also excluded from acceptance evidence.
-- The next one-action packet is
-  `C:\temp\prepare_and_run_m3_auth.py`. It prepares the same exact path with
-  `cwd == disposable_root`, launches official `codex-cli 0.144.4` login in
-  that environment, retains the attestation in-process, and then attempts the
-  canonical Task3 START plus one provider turn. The home is currently empty;
-  no credential was copied or read. `M2_RETEST=NO`; `NETLOAD_REQUIRED=NO`.
+- The first canonical continuation reached the exact same-home login but was
+  refused before child creation with `WORKER_AUTHORITY_MISMATCH`. Root cause
+  was an executable-role mismatch: authenticated custody correctly attested
+  the official `codex.exe`, while the canonical Task3 child is launched by the
+  trusted Python worker launcher. The old validator compared those distinct
+  roles. This attempt is non-evidence; no provider thread or pre-R5 result was
+  created. The exact authenticated root was then purged and verified clean.
+- Commit `f7f1038f7ad81c5ef3758dc6251df817a536cd13` revalidates the attested
+  official provider binary and hash independently, while validating the child
+  launcher through the existing process owner. A regression with distinct
+  provider/launcher files is GREEN; no identity or custody check was weakened.
+- After exact-head hosted gates, the packet
+  `C:\temp\prepare_and_run_m3_auth.py` must create a NEW home and obtain one
+  new direct official login before canonical Task3 START plus one provider
+  turn. The prior authenticated home is not reusable. `M2_RETEST=NO`;
+  `NETLOAD_REQUIRED=NO`.
 
 ## Accelerated reuse-first program: PLANNING/GOVERNANCE ONLY
 

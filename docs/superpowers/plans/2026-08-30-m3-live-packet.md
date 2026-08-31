@@ -132,7 +132,7 @@ Until then: `M3_CONTRACT_COMPOSITION=PASS`,
 - Current successor boundary: Issue #336, based on current `main`
   `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`, branch
   `codex/task3-auth-custody-gap`, implementation head
-  `799260177ba3b3f0449f4982968b9136daca093f`.
+  `f7f1038f7ad81c5ef3758dc6251df817a536cd13`.
 - Official runtime identity: `C:\temp\cad-agent-m3-provider-venv-20260831\Lib\site-packages\codex_cli_bin\bin\codex.exe`,
   `codex-cli 0.144.4`, SHA-256
   `51398051c2332b6afe08dc3b9dbb4056085c197f35ca57a307ee303d450cada5`.
@@ -154,22 +154,35 @@ Until then: `M3_CONTRACT_COMPOSITION=PASS`,
   action is needed for this custody repair. After the genuine provider pre-R5
   boundary is proven, continue the existing two-turn LINE packet sequence.
 
+## Authenticated attempt executable-role repair
+
+- The first fresh same-home login succeeded, but canonical Task3 START stopped
+  before child creation with `WORKER_AUTHORITY_MISMATCH`. Custody attested the
+  official `codex.exe`; the trusted Task3 child is launched by Python. The old
+  validator compared these distinct roles, so the attempt is non-evidence.
+- Commit `f7f1038f7ad81c5ef3758dc6251df817a536cd13` keeps exact official
+  provider path/hash revalidation and separately validates the child launcher.
+  RED/GREEN focused coverage passed `177` tests; canonical verifier exit `0`.
+- The authenticated root was purged and verified clean. A NEW exact home and
+  one new official login are required after hosted exact-head GREEN; the prior
+  home cannot be reused.
+
 ## Auth-custody continuation result
 
-- PR #337 hosted checks are green at exact head
-  `4df15664cfdcbe40ab378b2ca92976e3a08fe65a`, but no merge or live PASS is
+- PR #337 hosted checks are green at the previous exact head
+  `4df15664cfdcbe40ab378b2ca92976e3a08fe65a`; the new repair head
+  `f7f1038` requires fresh hosted checks before merge. No merge or live PASS is
   claimed.
-- The first canonical continuation attempt was non-evidence: the disposable
-  handoff root did not equal the issued environment root, so the existing
-  owner returned `WORKER_AUTHORITY_MISMATCH` before provider acceptance. The
-  exact disposable root was then purged; a separate direct SDK diagnostic was
-  excluded from the acceptance record.
-- `C:\temp\prepare_and_run_m3_auth.py` is the prepared one-action packet. It
-  issues the exact path with `cwd == disposable_root`, runs the official login
+- The latest authenticated continuation reached same-home login but stopped
+  before child creation with `WORKER_AUTHORITY_MISMATCH`: the custody official
+  binary and trusted Python child launcher were incorrectly compared as one
+  executable role. This is non-evidence; the exact authenticated root was
+  purged. A distinct provider/launcher RED test now guards the repair.
+- `C:\temp\prepare_and_run_m3_auth.py` remains the one-action packet. It
+  issues a NEW exact path with `cwd == disposable_root`, runs official login
   and status in that isolated environment, retains custody in-process, then
-  attempts canonical Task3 START and one provider turn. The current home is
-  empty and requires that one login action. `M2_RETEST=NO` and
-  `NETLOAD_REQUIRED=NO`.
+  attempts canonical Task3 START and one provider turn. The prior home cannot
+  be reused. `M2_RETEST=NO` and `NETLOAD_REQUIRED=NO`.
 
 ## Safety invariants
 
