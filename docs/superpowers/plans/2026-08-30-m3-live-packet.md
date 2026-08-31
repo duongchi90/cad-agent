@@ -3,13 +3,14 @@
 ## Status and boundary
 
 - Packet state: **PREPARED / LIVE NOT RUN**.
-- Task3 successor state: the bounded official provider start adapter is now
-  implemented on a separate candidate branch and has passed focused/offline
-  verification plus one isolated low-level official-SDK START/BIND. This does
-  not promote the packet to live acceptance and does not reuse the measured
-  provider thread for a future epoch.
+- Task3 successor state: PR #334 is merged at main
+  `cac069c45ea44ae09bd1c2062476b0febb4a37cb`. The bounded official provider
+  start adapter passed focused/offline verification plus one isolated
+  low-level official-SDK START/BIND. This does not promote the packet to live
+  acceptance and does not reuse the measured provider thread for a future
+  epoch.
 - Packet basis: GitHub `main` at
-  `d71cf60c7e9809aca9d9c0dbeef13f066b261f23` after PR #315 merged.
+  `cac069c45ea44ae09bd1c2062476b0febb4a37cb` after PR #334 merged.
 - Contract-only evidence is complete in
   `mcp_integration_lib/tests/test_m3_disposable_repair_acceptance.py` and is
   not live/provider evidence.
