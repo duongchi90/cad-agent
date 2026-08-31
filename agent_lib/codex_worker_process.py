@@ -756,26 +756,6 @@ def _validate_auth_entry_policy(
         _fail("WORKER_AUTH_NOT_AUTHENTICATED")
 
 
-def _default_auth_command_runner(
-    command: Sequence[str],
-    *,
-    cwd: Path,
-    environment: Mapping[str, str],
-) -> object:
-    try:
-        return subprocess.run(
-            tuple(command),
-            cwd=str(cwd),
-            env=dict(environment),
-            capture_output=True,
-            text=True,
-            timeout=30.0,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError, ValueError):
-        _fail("WORKER_AUTH_COMMAND_FAILED")
-
-
 def _command_output(result: object) -> tuple[int, str]:
     return_code = getattr(result, "returncode", None)
     stdout = getattr(result, "stdout", "")
@@ -796,7 +776,7 @@ def attest_authenticated_worker_environment(
     executable: Path,
     expected_executable_sha256: str,
     expected_executable_version: str,
-    _command_runner: Callable[..., object] = _default_auth_command_runner,
+    _command_runner: Callable[..., object],
 ) -> WorkerAuthenticationAttestation:
     """Observe official login state and bind it to one issued disposable home."""
 

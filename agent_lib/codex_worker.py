@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -34,6 +35,7 @@ from agent_lib.codex_worker_process import (
     WorkerAuthenticationAttestation,
     WorkerEnvironmentAttestation,
     WorkerProcessError,
+    attest_authenticated_worker_environment as _attest_authenticated_worker_environment,
     cleanup_worker_process,
     exchange_worker_control,
     launch_worker_process,
@@ -574,6 +576,47 @@ class Task3ProcessBoundary:
 
 _TASK3_CANONICAL_START = Task3ProcessBoundary.start
 _TASK3_CANONICAL_AUTHENTICATED_START = Task3ProcessBoundary.start_authenticated
+
+
+def _run_official_auth_command(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+) -> object:
+    try:
+        return subprocess.run(
+            tuple(command),
+            cwd=str(cwd),
+            env=dict(environment),
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        _fail("WORKER_AUTH_COMMAND_FAILED")
+
+
+def attest_authenticated_worker_environment(
+    *,
+    environment: WorkerEnvironmentAttestation,
+    executable: Path,
+    expected_executable_sha256: str,
+    expected_executable_version: str,
+) -> WorkerAuthenticationAttestation:
+    """Observe official CLI login through the existing worker owner."""
+
+    try:
+        return _attest_authenticated_worker_environment(
+            environment=environment,
+            executable=executable,
+            expected_executable_sha256=expected_executable_sha256,
+            expected_executable_version=expected_executable_version,
+            _command_runner=_run_official_auth_command,
+        )
+    except WorkerProcessError as exc:
+        _fail(exc.code)
 
 
 class LazyOfficialSdkAdapter:
@@ -2440,6 +2483,7 @@ def fork_codex_worker(
 
 __all__ = [
     "AdapterRequest",
+    "attest_authenticated_worker_environment",
     "CodexWorkerError",
     "CodexWorkerEvent",
     "CodexWorkerResult",
