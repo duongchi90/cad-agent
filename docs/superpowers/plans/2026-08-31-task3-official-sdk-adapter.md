@@ -26,31 +26,64 @@ The failure occurs in the child before a provider result can reach the Task 6
 issuance owner. No caller-created result or non-canonical process boundary was
 accepted.
 
-## SDK 0.144.4 evidence
+## Low-level refinement measurement
 
-The installed official package was inspected from the disposable venv:
+The official low-level `CodexClient.thread_start()` seam was exercised from
+the exact 0.144.4 disposable venv with a fresh `CODEX_HOME`, no
+`OPENAI_API_KEY`, and no copied account files. It returned a typed and
+serialized `ThreadStartResponse`:
 
-- `Codex.thread_start(...)` has no server-supplied `thread_id` parameter and
-  returns a provider-generated `Thread.id`.
-- `thread_resume` can validate an already-known ID, but the existing canonical
-  `start` path binds its expected identity before the child request.
-- `ThreadReadResponse` exposes only a thread record. The public `Thread` and
-  `ThreadReadResponse` models do not expose the effective approval policy,
-  sandbox roots/write policy, config identity, or server instruction-source
-  identities required by `validate_provider_effective_attestation`.
-- The existing `AdapterRequest` has no source-thread identity for a truthful
-  `thread_fork` operation.
+```text
+approvalPolicy=never
+approvalsReviewer=user
+cwd=C:\temp\cad-agent-live-b06e
+instructionSources=[C:\temp\cad-agent-live-b06e\AGENTS.md]
+model=gpt-5
+modelProvider=openai
+sandbox={networkAccess:false,type:readOnly}
+thread.id=01a05534-7493-7e42-97a2-fb15e778691b
+thread.cliVersion=0.144.4
+thread.ephemeral=true
+```
 
-These are mandatory current Task 3/Task 5 invariants, not optional metadata.
-Returning request fields as observed attestation would manufacture provider
-evidence and violate #311's explicit no-echo rule.
+The reported instruction path canonicalized to the same file and its actual
+bytes hashed to
+`80dd3987983e13b4b296ad9fbbc170e816e7ba4432850378f21bcdc72d40363d`
+(`4490` bytes). This proves the low-level seam exposes provider-observed
+instruction paths and enough typed policy/model/cwd/thread fields to measure
+them; the earlier high-level-only conclusion was superseded.
+
+The exact remaining repository gaps are:
+
+1. The observed path/hash has no provider-returned `source_id` or `role`, and
+   the current authority expects ordered `{source_id, role, sha256}` entries.
+   No canonical path-to-authority mapping exists, so matching `AGENTS.md` to
+   `system`/`project` by caller claim would be fabricated.
+2. The response contains no `config_sha256`; #311 requires that value to stay
+   server/request-owned and explicitly forbids experimental `config/read`.
+3. The provider generates `thread.id` after `thread_start`, while the repo
+   binds `observed_thread_id` before the child request. A disposable
+   `thread_resume` against the ephemeral start returned `no rollout found`,
+   confirming that start/resume cannot silently bridge this lifecycle.
+4. The low-level fork API accepts a source thread ID, but the existing
+   `AdapterRequest` carries no source-thread identity for a truthful fork.
+
+The outbound request explicitly serialized `approvalPolicy=never` and
+`sandbox=workspace-write`, while the provider response observed
+`approvalsReviewer=user` and `sandbox.type=readOnly`; this effective-policy
+delta also cannot be treated as a PASS for the existing disposable-write
+binding.
 
 ## Decision
 
-`SDK_CONTRACT_GAP`: no production adapter was written and no contract was
-weakened. The existing `LazyOfficialSdkAdapter`, Task 3 process custody,
-request/result validators, Task 6 issuance, and all AutoCAD/FileIPC/R5/R6
-owners remain unchanged. M2 is not retested; NETLOAD is not required.
+`EXACT_REMAINING_GAP`: the official low-level seam is proven, but the first
+repo acceptance boundary remains an exact fail-closed mapping of provider
+instruction paths to authority identities plus a provider-observed config
+identity and post-generation thread binding. No production adapter was
+written and no contract was weakened. The existing `LazyOfficialSdkAdapter`,
+Task 3 process custody, request/result validators, Task 6 issuance, and all
+AutoCAD/FileIPC/R5/R6 owners remain unchanged. M2 is not retested; NETLOAD is
+not required.
 
 The next implementation boundary is a separately measured official SDK or
 existing-owner seam that can bind the provider-generated thread identity and

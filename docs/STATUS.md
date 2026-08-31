@@ -313,9 +313,9 @@ Human-only action is required for M2 acceptance.
   candidate, R5, repair, transport, integrity, and cleanup evidence. No live
   command or Human action is requested while the mode remains contract-only.
 
-## M3 Task 3 official SDK adapter — measured contract gap
+## M3 Task 3 official SDK adapter — low-level refinement measurement
 
-- State: **BLOCKED — SDK_CONTRACT_GAP** on fresh `main`
+- State: **EXACT_REMAINING_GAP** on fresh `main`
   `b06e533bbcbe7221e7c3ad9234e8497f9b422ec8`. The bounded write authorization
   was consumed from #311 comment `5471766748` and #301 advisory
   `5471768285`; M2 remains satisfied and was not retested.
@@ -324,22 +324,30 @@ Human-only action is required for M2 acceptance.
   current `_child_main` factory returned `WORKER_SDK_INCOMPATIBLE` before any
   provider result could reach Task 6. A direct official SDK compatibility
   probe had already passed, so this isolates missing canonical adapter wiring.
-- SDK contract audit: public `thread_start` has no server-bound thread-ID
-  input and returns a provider-generated ID. Public thread-read models do not
-  expose effective approval, sandbox, config, or instruction-source identity;
-  the existing request also lacks a source-thread ID for truthful fork
-  binding. These fields are required by the current provider attestation
-  validator. Echoing request claims would be fabricated provider evidence.
-- Decision: no production adapter, fallback transport, credential copy, or
-  contract relaxation was added. `LazyOfficialSdkAdapter`, Task 3 process
+- Low-level refinement: exact official `CodexClient.thread_start()` returned
+  typed/serialized `ThreadStartResponse` fields
+  `approvalPolicy=never`, `approvalsReviewer=user`, model `gpt-5`, provider
+  `openai`, cwd, instruction source path, sandbox, and provider-generated
+  thread ID. The observed `AGENTS.md` path hashed to
+  `80dd3987983e13b4b296ad9fbbc170e816e7ba4432850378f21bcdc72d40363d`
+  (`4490` bytes).
+- Exact remaining gaps: provider returns path/hash but no authority `source_id`
+  or `role`, and no canonical mapping exists; response has no provider-observed
+  `config_sha256`; provider generates thread ID after repo pre-binding; and
+  `AdapterRequest` has no source-thread identity for truthful fork. The
+  outbound `sandbox=workspace-write` was observed as `sandbox.type=readOnly`,
+  so effective sandbox binding is also not a PASS. A disposable resume of the
+  ephemeral start returned `no rollout found`.
+- Decision: official low-level seam proven, but no production adapter, fallback
+  transport, credential copy, or contract relaxation was added.
+  `LazyOfficialSdkAdapter`, Task 3 process
   custody, Task 5/6 validators, AutoCAD/FileIPC/plugin, R5, and R6 remain
   unchanged. The exact dossier is
   `docs/superpowers/plans/2026-08-31-task3-official-sdk-adapter.md`.
 - Live state: **NOT RUN**. No R5, authorization, R6, post-R5, Task 6, or new
   candidate evidence exists; AutoCAD was not disturbed. NETLOAD is not
-  required. The first unfinished boundary is an official/existing-owner seam
-  that can truthfully prove all required thread/currentness and effective
-  policy/attestation fields.
+  required. The first unfinished boundary is the repo-side fail-closed mapping
+  and lifecycle/config binding above.
 
 ## M3 live oracle hardening — red-team correction
 
