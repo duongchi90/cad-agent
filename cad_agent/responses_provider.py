@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import re
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -35,6 +36,42 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "incomplete", "cancelled"})
 _NON_TERMINAL_STATUSES = frozenset({"queued", "in_progress"})
+_DIAGNOSTIC_SUBTYPES = frozenset(
+    {
+        "unspecified",
+        "http_provider_rejection",
+        "transport_timeout",
+        "transport_network",
+        "response_non_json",
+        "response_invalid_shape",
+    }
+)
+_HTTP_STATUS_CLASSES = frozenset({"1xx", "2xx", "3xx", "4xx", "5xx", "401", "403", "429"})
+_PROVIDER_ERROR_TYPES = frozenset(
+    {
+        "api_error",
+        "authentication_error",
+        "invalid_request_error",
+        "permission_error",
+        "rate_limit_error",
+        "server_error",
+    }
+)
+_PROVIDER_ERROR_CODES = frozenset(
+    {
+        "context_length_exceeded",
+        "image_parse_error",
+        "insufficient_quota",
+        "invalid_api_key",
+        "invalid_request",
+        "invalid_value",
+        "model_not_found",
+        "rate_limit_exceeded",
+        "server_error",
+        "unsupported_value",
+    }
+)
+_MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
 _SCHEMA_KEYS = frozenset(
     {
         "type",
@@ -53,13 +90,122 @@ _SCHEMA_KEYS = frozenset(
 class ResponsesProviderError(ValueError):
     """Fail-closed error from the bounded Responses provider seam."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        causal_subtype: str = "unspecified",
+        http_status: int | None = None,
+        http_status_class: str | None = None,
+        provider_error_type: str | None = None,
+        provider_error_code: str | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
+        self.causal_subtype = (
+            causal_subtype
+            if type(causal_subtype) is str and causal_subtype in _DIAGNOSTIC_SUBTYPES
+            else "unspecified"
+        )
+        self.http_status = (
+            http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        )
+        self.http_status_class = (
+            http_status_class
+            if type(http_status_class) is str and http_status_class in _HTTP_STATUS_CLASSES
+            else None
+        )
+        self.provider_error_type = (
+            provider_error_type
+            if type(provider_error_type) is str and provider_error_type in _PROVIDER_ERROR_TYPES
+            else None
+        )
+        self.provider_error_code = (
+            provider_error_code
+            if type(provider_error_code) is str and provider_error_code in _PROVIDER_ERROR_CODES
+            else None
+        )
+
+    def __str__(self) -> str:
+        fields = [self.code, self.causal_subtype]
+        if self.http_status is not None:
+            fields.append(f"http_status={self.http_status}")
+        if self.http_status_class is not None:
+            fields.append(f"http_status_class={self.http_status_class}")
+        if self.provider_error_type is not None:
+            fields.append(f"provider_error_type={self.provider_error_type}")
+        if self.provider_error_code is not None:
+            fields.append(f"provider_error_code={self.provider_error_code}")
+        return " ".join(fields)
+
+    def __repr__(self) -> str:
+        return f"ResponsesProviderError({str(self)!r})"
+
+    def to_evidence(self) -> dict[str, object]:
+        """Return only bounded diagnostic fields; never return upstream details."""
+
+        evidence: dict[str, object] = {
+            "code": self.code,
+            "causal_subtype": self.causal_subtype,
+        }
+        if self.http_status is not None:
+            evidence["http_status"] = self.http_status
+        if self.http_status_class is not None:
+            evidence["http_status_class"] = self.http_status_class
+        if self.provider_error_type is not None:
+            evidence["provider_error_type"] = self.provider_error_type
+        if self.provider_error_code is not None:
+            evidence["provider_error_code"] = self.provider_error_code
+        return evidence
 
 
 def _fail(code: str) -> None:
     raise ResponsesProviderError(code)
+
+
+def _is_timeout_error(error: BaseException) -> bool:
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return True
+    reason = getattr(error, "reason", None)
+    return isinstance(reason, (TimeoutError, socket.timeout))
+
+
+def _http_status_class(status: object) -> str | None:
+    if type(status) is not int or not 100 <= status <= 599:
+        return None
+    if status in {401, 403, 429}:
+        return str(status)
+    return f"{status // 100}xx"
+
+
+def _safe_provider_error_metadata(
+    error: urllib.error.HTTPError,
+) -> tuple[str | None, str | None]:
+    try:
+        body = error.read(_MAX_PROVIDER_ERROR_BODY_BYTES + 1)
+    except (OSError, TypeError, ValueError):
+        return None, None
+    if not isinstance(body, (bytes, bytearray)) or len(body) > _MAX_PROVIDER_ERROR_BODY_BYTES:
+        return None, None
+    try:
+        decoded = json.loads(bytes(body).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None, None
+    if not isinstance(decoded, Mapping):
+        return None, None
+    provider_error = decoded.get("error")
+    if not isinstance(provider_error, Mapping):
+        return None, None
+    error_type = provider_error.get("type")
+    error_code = provider_error.get("code")
+    return (
+        error_type
+        if type(error_type) is str and error_type in _PROVIDER_ERROR_TYPES
+        else None,
+        error_code
+        if type(error_code) is str and error_code in _PROVIDER_ERROR_CODES
+        else None,
+    )
 
 
 def _freeze(value: object) -> object:
@@ -389,11 +535,55 @@ class ResponsesHttpClient:
         )
         try:
             with self._urlopen(request, timeout=60) as response:
-                decoded = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, urllib.error.HTTPError, ValueError):
-            _fail("RESPONSES_PROVIDER_ERROR")
+                try:
+                    body = response.read()
+                    text = body.decode("utf-8")
+                except (AttributeError, TypeError, UnicodeDecodeError):
+                    raise ResponsesProviderError(
+                        "RESPONSES_PROVIDER_ERROR",
+                        causal_subtype="response_non_json",
+                    ) from None
+                try:
+                    decoded = json.loads(text)
+                except (TypeError, ValueError):
+                    raise ResponsesProviderError(
+                        "RESPONSES_PROVIDER_ERROR",
+                        causal_subtype="response_non_json",
+                    ) from None
+        except urllib.error.HTTPError as error:
+            provider_error_type, provider_error_code = _safe_provider_error_metadata(error)
+            raise ResponsesProviderError(
+                "RESPONSES_PROVIDER_ERROR",
+                causal_subtype="http_provider_rejection",
+                http_status=error.code,
+                http_status_class=_http_status_class(error.code),
+                provider_error_type=provider_error_type,
+                provider_error_code=provider_error_code,
+            ) from None
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise ResponsesProviderError(
+                "RESPONSES_PROVIDER_ERROR",
+                causal_subtype=(
+                    "transport_timeout" if _is_timeout_error(error) else "transport_network"
+                ),
+            ) from None
+        except OSError:
+            raise ResponsesProviderError(
+                "RESPONSES_PROVIDER_ERROR",
+                causal_subtype="transport_network",
+            ) from None
+        except ResponsesProviderError:
+            raise
+        except ValueError:
+            raise ResponsesProviderError(
+                "RESPONSES_PROVIDER_ERROR",
+                causal_subtype="transport_network",
+            ) from None
         if not isinstance(decoded, Mapping):
-            _fail("RESPONSES_PROVIDER_ERROR")
+            raise ResponsesProviderError(
+                "RESPONSES_PROVIDER_ERROR",
+                causal_subtype="response_invalid_shape",
+            ) from None
         return decoded
 
     def create(self, payload: dict[str, object]) -> Mapping[str, object]:

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import inspect
 import json
+import socket
+import traceback
+import urllib.error
 from dataclasses import replace
 
 import pytest
@@ -376,3 +380,198 @@ def test_http_client_uses_official_methods_and_explicit_credential_header() -> N
     client.create({"model": RESPONSES_MODEL})
     assert [request.get_method() for request in requests] == ["POST"]
     assert all(request.get_header("Authorization") == f"Bearer {SENTINEL}" for request in requests)
+
+
+@pytest.mark.parametrize(
+    ("status", "status_class"),
+    [(401, "401"), (403, "403"), (429, "429"), (418, "4xx"), (503, "5xx")],
+)
+def test_http_error_is_classified_with_safe_status_and_no_retry(
+    status: int, status_class: str
+) -> None:
+    calls = 0
+    secret_url = "https://api.openai.com/v1/responses?secret-url"
+    secret_reason = "provider message SECRET_REASON"
+    secret_header = "SECRET_HEADER"
+    secret_body = "SECRET_BODY"
+
+    def urlopen(request: object, *, timeout: float) -> object:
+        nonlocal calls
+        del request, timeout
+        calls += 1
+        raise urllib.error.HTTPError(
+            secret_url,
+            status,
+            secret_reason,
+            {"X-Leak": secret_header},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "error": {
+                            "type": "authentication_error",
+                            "code": "invalid_api_key",
+                            "message": secret_body,
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+    with pytest.raises(ResponsesProviderError) as raised:
+        ResponsesHttpClient(api_key=SENTINEL, urlopen=urlopen).create(
+            {"model": RESPONSES_MODEL}
+        )
+
+    error = raised.value
+    assert calls == 1
+    assert error.code == "RESPONSES_PROVIDER_ERROR"
+    assert error.causal_subtype == "http_provider_rejection"
+    assert error.http_status == status
+    assert error.http_status_class == status_class
+    assert error.provider_error_type == "authentication_error"
+    assert error.provider_error_code == "invalid_api_key"
+    public = "\n".join(
+        [
+            str(error),
+            repr(error),
+            json.dumps(error.to_evidence(), sort_keys=True),
+            "".join(traceback.format_exception(error)),
+        ]
+    )
+    for secret in (SENTINEL, secret_url, secret_reason, secret_header, secret_body):
+        assert secret not in public
+
+
+def test_http_error_omits_unallowlisted_provider_metadata() -> None:
+    secret_value = "SECRET_PROVIDER_VALUE"
+
+    def urlopen(request: object, *, timeout: float) -> object:
+        del request, timeout
+        raise urllib.error.HTTPError(
+            "https://api.openai.com/v1/responses",
+            400,
+            "SECRET_HTTP_REASON",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "error": {
+                            "type": {"secret": secret_value},
+                            "code": [secret_value],
+                            "message": secret_value,
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+    with pytest.raises(ResponsesProviderError) as raised:
+        ResponsesHttpClient(api_key=SENTINEL, urlopen=urlopen).create(
+            {"model": RESPONSES_MODEL}
+        )
+
+    error = raised.value
+    assert error.provider_error_type is None
+    assert error.provider_error_code is None
+    assert secret_value not in repr(error)
+    assert secret_value not in json.dumps(error.to_evidence(), sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TimeoutError("SECRET_TIMEOUT"),
+        socket.timeout("SECRET_SOCKET_TIMEOUT"),
+        urllib.error.URLError(TimeoutError("SECRET_URL_TIMEOUT")),
+    ],
+)
+def test_transport_timeout_is_classified_without_exception_details(failure: BaseException) -> None:
+    calls = 0
+
+    def urlopen(request: object, *, timeout: float) -> object:
+        nonlocal calls
+        del request, timeout
+        calls += 1
+        raise failure
+
+    with pytest.raises(ResponsesProviderError) as raised:
+        ResponsesHttpClient(api_key=SENTINEL, urlopen=urlopen).create(
+            {"model": RESPONSES_MODEL}
+        )
+
+    error = raised.value
+    assert calls == 1
+    assert error.causal_subtype == "transport_timeout"
+    public = "\n".join([str(error), repr(error), json.dumps(error.to_evidence(), sort_keys=True)])
+    assert "SECRET_" not in public
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        urllib.error.URLError("SECRET_NETWORK"),
+        OSError("SECRET_OS"),
+        ValueError("SECRET_VALUE"),
+    ],
+)
+def test_network_transport_is_classified_without_exception_details(failure: BaseException) -> None:
+    calls = 0
+
+    def urlopen(request: object, *, timeout: float) -> object:
+        nonlocal calls
+        del request, timeout
+        calls += 1
+        raise failure
+
+    with pytest.raises(ResponsesProviderError) as raised:
+        ResponsesHttpClient(api_key=SENTINEL, urlopen=urlopen).create(
+            {"model": RESPONSES_MODEL}
+        )
+
+    error = raised.value
+    assert calls == 1
+    assert error.causal_subtype == "transport_network"
+    public = "\n".join([str(error), repr(error), json.dumps(error.to_evidence(), sort_keys=True)])
+    assert "SECRET_" not in public
+
+
+class _BytesResponse:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "_BytesResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+
+    def read(self) -> bytes:
+        return self.body
+
+
+@pytest.mark.parametrize(
+    ("body", "causal_subtype"),
+    [(b"not-json-SECRET_BODY", "response_non_json"), (b"\xff", "response_non_json"), (b"[]", "response_invalid_shape")],
+)
+def test_invalid_provider_response_is_classified_without_body_leak(
+    body: bytes, causal_subtype: str
+) -> None:
+    calls = 0
+
+    def urlopen(request: object, *, timeout: float) -> _BytesResponse:
+        nonlocal calls
+        del request, timeout
+        calls += 1
+        return _BytesResponse(body)
+
+    with pytest.raises(ResponsesProviderError) as raised:
+        ResponsesHttpClient(api_key=SENTINEL, urlopen=urlopen).create(
+            {"model": RESPONSES_MODEL}
+        )
+
+    error = raised.value
+    assert calls == 1
+    assert error.causal_subtype == causal_subtype
+    public = "\n".join([str(error), repr(error), json.dumps(error.to_evidence(), sort_keys=True)])
+    assert "SECRET_BODY" not in public
+    assert SENTINEL not in public
