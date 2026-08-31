@@ -45,6 +45,18 @@ _ALLOWED_WORKER_ENVIRONMENT = frozenset(
 
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+_AUTHENTICATED_STATE = "HUMAN_AUTHENTICATED_ATTESTED"
+_SUPPORTED_AUTH_MODE = "chatgpt"
+_AUTH_ENTRY_MANIFEST_VERSION = "worker-auth-entry-manifest-1"
+_AUTH_FILE_NAME = "auth.json"
+_BLOCKED_AUTH_BASENAMES = frozenset(
+    {
+        "agents.md",
+        "config.toml",
+        "instructions.md",
+        "prompt.md",
+    }
+)
 _CREATE_SUSPENDED = 0x00000004
 _CREATE_UNICODE_ENVIRONMENT = 0x00000400
 _CREATE_NO_WINDOW = 0x08000000
@@ -94,6 +106,45 @@ class WorkerEnvironmentAttestation:
 
 
 @dataclass(frozen=True)
+class WorkerAuthFileObservation:
+    """Privacy-safe authenticated-home entry metadata; never file contents."""
+
+    relative_path: str
+    entry_type: str
+    byte_count: int
+    sha256: str | None
+
+
+@dataclass(frozen=True)
+class WorkerAuthenticationAttestation:
+    """One-shot server-owned proof for an authenticated disposable home."""
+
+    environment: WorkerEnvironmentAttestation
+    executable: Path
+    executable_sha256: str
+    executable_version: str
+    auth_mode: str
+    home_manifest_sha256: str
+    home_entries: tuple[WorkerAuthFileObservation, ...]
+    state: str = _AUTHENTICATED_STATE
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "home_entries", tuple(self.home_entries))
+
+
+@dataclass(frozen=True)
+class WorkerAuthPurgeResult:
+    """Sanitized proof that an authenticated home no longer retains state."""
+
+    status: str
+    success: bool
+    deleted_file_count: int
+    deleted_bytes: int
+    survivor_count: int
+    error_code: str | None
+
+
+@dataclass(frozen=True)
 class ProcessTreeIdentity:
     """Sanitized Job Object membership proof."""
 
@@ -113,6 +164,7 @@ class WorkerCleanupResult:
     survivor_pids: tuple[int, ...]
     survivor_count: int
     error_code: str | None
+    auth_state_purged: bool = False
 
 
 @dataclass(frozen=True)
@@ -150,6 +202,7 @@ class WorkerProcessHandle:
 
     __slots__ = (
         "_api",
+        "_authentication_custody",
         "_cleanup_deadline_seconds",
         "_cleanup_result",
         "_control_read_handle",
@@ -173,10 +226,12 @@ class WorkerProcessHandle:
         environment_attestation: WorkerEnvironmentAttestation,
         cleanup_deadline_seconds: float,
         max_processes: int,
+        authentication_custody: WorkerAuthenticationAttestation | None = None,
         control_read_handle: object | None = None,
         control_write_handle: object | None = None,
     ) -> None:
         self._api = api
+        self._authentication_custody = authentication_custody
         self._job_handle = job_handle
         self._process_handle = process_handle
         self.root_pid = root_pid
@@ -210,6 +265,20 @@ _ISSUED_WORKER_HANDLES: dict[
 ] = {}
 
 
+@dataclass
+class _AuthenticationCustodyState:
+    reference: weakref.ReferenceType[WorkerAuthenticationAttestation]
+    consumed: bool = False
+    purged: bool = False
+    purge_result: WorkerAuthPurgeResult | None = None
+
+
+_ISSUED_ENVIRONMENTS: dict[
+    int, weakref.ReferenceType[WorkerEnvironmentAttestation]
+] = {}
+_ISSUED_AUTHENTICATIONS: dict[int, _AuthenticationCustodyState] = {}
+
+
 def _fail(code: str) -> None:
     raise WorkerProcessError(code)
 
@@ -223,6 +292,45 @@ def _register_issued_handle(handle: WorkerProcessHandle) -> None:
             _ISSUED_WORKER_HANDLES.pop(handle_id, None)
 
     _ISSUED_WORKER_HANDLES[handle_id] = weakref.ref(handle, discard)
+
+
+def _register_issued_environment(environment: WorkerEnvironmentAttestation) -> None:
+    environment_id = id(environment)
+
+    def discard(expired_ref: weakref.ReferenceType[WorkerEnvironmentAttestation]) -> None:
+        current = _ISSUED_ENVIRONMENTS.get(environment_id)
+        if current is expired_ref:
+            _ISSUED_ENVIRONMENTS.pop(environment_id, None)
+
+    _ISSUED_ENVIRONMENTS[environment_id] = weakref.ref(environment, discard)
+
+
+def _require_issued_environment(environment: object) -> WorkerEnvironmentAttestation:
+    if type(environment) is not WorkerEnvironmentAttestation:
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+    reference = _ISSUED_ENVIRONMENTS.get(id(environment))
+    if reference is None or reference() is not environment:
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+    return environment
+
+
+def _register_authentication_attestation(
+    attestation: WorkerAuthenticationAttestation,
+) -> None:
+    _ISSUED_AUTHENTICATIONS[id(attestation)] = _AuthenticationCustodyState(
+        reference=weakref.ref(attestation)
+    )
+
+
+def _require_authentication_attestation(
+    attestation: object,
+) -> _AuthenticationCustodyState:
+    if type(attestation) is not WorkerAuthenticationAttestation:
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+    state = _ISSUED_AUTHENTICATIONS.get(id(attestation))
+    if state is None or state.reference() is not attestation:
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+    return state
 
 
 def _require_issued_handle(handle: object) -> WorkerProcessHandle:
@@ -387,7 +495,7 @@ def prepare_worker_environment(
         {"CODEX_HOME": str(codex_home), "TEMP": str(temp_dir), "TMP": str(temp_dir)}
     )
     ordered = dict(sorted(environment.items(), key=lambda item: item[0].casefold()))
-    return WorkerEnvironmentAttestation(
+    attestation = WorkerEnvironmentAttestation(
         environment=ordered,
         environment_keys=tuple(ordered),
         environment_sha256=_environment_digest(ordered),
@@ -397,6 +505,8 @@ def prepare_worker_environment(
         temp_dir=temp_dir,
         writable_roots=(workdir, codex_home, temp_dir),
     )
+    _register_issued_environment(attestation)
+    return attestation
 
 
 def _validate_limits(*, cleanup_deadline_seconds: float, max_processes: int) -> None:
@@ -419,7 +529,10 @@ def _validate_limits(*, cleanup_deadline_seconds: float, max_processes: int) -> 
 
 def _validate_attestation_filesystem(
     attestation: WorkerEnvironmentAttestation,
-    *, expected_disposable_root: Path, expected_cwd: Path
+    *,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+    require_empty: bool = True,
 ) -> Path:
     approved_root, approved_cwd = _canonical_launch_boundary(
         expected_disposable_root=expected_disposable_root,
@@ -465,11 +578,12 @@ def _validate_attestation_filesystem(
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
     if not _is_contained(approved_root, attested_temp):
         _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-    try:
-        if any(attested_codex_home.iterdir()) or any(attested_temp.iterdir()):
+    if require_empty:
+        try:
+            if any(attested_codex_home.iterdir()) or any(attested_temp.iterdir()):
+                _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
+        except OSError:
             _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
-    except OSError:
-        _fail("WORKER_DISPOSABLE_STATE_UNSAFE")
     return attested_cwd
 
 
@@ -537,6 +651,302 @@ def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except (OSError, ValueError):
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+    return digest.hexdigest()
+
+
+def _auth_manifest(entries: Sequence[WorkerAuthFileObservation]) -> str:
+    payload = {
+        "version": _AUTH_ENTRY_MANIFEST_VERSION,
+        "entries": [
+            {
+                "relative_path": entry.relative_path,
+                "entry_type": entry.entry_type,
+                "byte_count": entry.byte_count,
+                "sha256": entry.sha256,
+            }
+            for entry in entries
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _auth_inventory(
+    codex_home: Path,
+) -> tuple[tuple[WorkerAuthFileObservation, ...], str]:
+    if not codex_home.is_dir() or _path_contains_windows_reparse_point(codex_home):
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+    entries: list[WorkerAuthFileObservation] = []
+
+    def on_error(_error: OSError) -> None:
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+
+    try:
+        for current, directories, files in os.walk(
+            codex_home, topdown=True, followlinks=False, onerror=on_error
+        ):
+            current_path = Path(current)
+            for name in (*directories, *files):
+                path = current_path / name
+                relative = path.relative_to(codex_home).as_posix()
+                if path.is_symlink() or _path_contains_windows_reparse_point(path):
+                    _fail("WORKER_AUTH_STATE_UNSAFE")
+                if path.is_dir():
+                    entries.append(
+                        WorkerAuthFileObservation(
+                            relative_path=relative,
+                            entry_type="dir",
+                            byte_count=0,
+                            sha256=None,
+                        )
+                    )
+                elif path.is_file():
+                    size = path.stat().st_size
+                    entries.append(
+                        WorkerAuthFileObservation(
+                            relative_path=relative,
+                            entry_type="file",
+                            byte_count=size,
+                            sha256=_sha256_file(path),
+                        )
+                    )
+                else:
+                    _fail("WORKER_AUTH_STATE_UNSAFE")
+    except (OSError, RuntimeError, ValueError):
+        _fail("WORKER_AUTH_STATE_UNSAFE")
+    ordered = tuple(sorted(entries, key=lambda entry: entry.relative_path.casefold()))
+    return ordered, _auth_manifest(ordered)
+
+
+def _validate_auth_entry_policy(
+    entries: Sequence[WorkerAuthFileObservation],
+) -> None:
+    auth_file_seen = False
+    for entry in entries:
+        parts = tuple(part.casefold() for part in entry.relative_path.split("/"))
+        basename = parts[-1] if parts else ""
+        if (
+            basename in _BLOCKED_AUTH_BASENAMES
+            or (basename.startswith("agents") and basename.endswith(".md"))
+            or "instruction" in basename
+            or "prompt" in basename
+            or basename.startswith(".env")
+            or any(
+                "mcp" in part or "plugin" in part or "marketplace" in part
+                for part in parts
+            )
+        ):
+            _fail("WORKER_AUTH_AMBIENT_STATE")
+        if parts == (_AUTH_FILE_NAME,):
+            if entry.entry_type != "file":
+                _fail("WORKER_AUTH_STATE_UNSAFE")
+            auth_file_seen = True
+        elif not parts or parts[0] not in {"log", "tmp"}:
+            _fail("WORKER_AUTH_AMBIENT_STATE")
+    if not auth_file_seen:
+        _fail("WORKER_AUTH_NOT_AUTHENTICATED")
+
+
+def _default_auth_command_runner(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+) -> object:
+    try:
+        return subprocess.run(
+            tuple(command),
+            cwd=str(cwd),
+            env=dict(environment),
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        _fail("WORKER_AUTH_COMMAND_FAILED")
+
+
+def _command_output(result: object) -> tuple[int, str]:
+    return_code = getattr(result, "returncode", None)
+    stdout = getattr(result, "stdout", "")
+    stderr = getattr(result, "stderr", "")
+    if (
+        isinstance(return_code, bool)
+        or not isinstance(return_code, int)
+        or not isinstance(stdout, str)
+        or not isinstance(stderr, str)
+    ):
+        _fail("WORKER_AUTH_COMMAND_FAILED")
+    return return_code, f"{stdout}\n{stderr}"
+
+
+def attest_authenticated_worker_environment(
+    *,
+    environment: WorkerEnvironmentAttestation,
+    executable: Path,
+    expected_executable_sha256: str,
+    expected_executable_version: str,
+    _command_runner: Callable[..., object] = _default_auth_command_runner,
+) -> WorkerAuthenticationAttestation:
+    """Observe official login state and bind it to one issued disposable home."""
+
+    _require_issued_environment(environment)
+    _validate_attestation_filesystem(
+        environment,
+        expected_disposable_root=environment.disposable_root,
+        expected_cwd=environment.cwd,
+        require_empty=False,
+    )
+    _validate_attestation_environment(environment)
+    runtime = _validate_executable(executable)
+    if (
+        not isinstance(expected_executable_sha256, str)
+        or len(expected_executable_sha256) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in expected_executable_sha256)
+    ):
+        _fail("WORKER_EXECUTABLE_UNSAFE")
+    if _sha256_file(runtime).casefold() != expected_executable_sha256.casefold():
+        _fail("WORKER_EXECUTABLE_IDENTITY_MISMATCH")
+    if (
+        not isinstance(expected_executable_version, str)
+        or not expected_executable_version.strip()
+        or "\n" in expected_executable_version
+        or "\r" in expected_executable_version
+    ):
+        _fail("WORKER_EXECUTABLE_VERSION_MISMATCH")
+    try:
+        version_result = _command_runner(
+            (str(runtime), "--version"),
+            cwd=environment.cwd,
+            environment=environment.environment,
+        )
+        version_code, version_output = _command_output(version_result)
+        status_result = _command_runner(
+            (str(runtime), "login", "status"),
+            cwd=environment.cwd,
+            environment=environment.environment,
+        )
+        status_code, status_output = _command_output(status_result)
+    except WorkerProcessError:
+        raise
+    except Exception:
+        _fail("WORKER_AUTH_COMMAND_FAILED")
+    if version_code != 0 or expected_executable_version.strip() not in version_output.splitlines():
+        _fail("WORKER_EXECUTABLE_VERSION_MISMATCH")
+    if status_code != 0 or "logged in using chatgpt" not in status_output.casefold():
+        _fail("WORKER_NOT_AUTHENTICATED")
+    entries, manifest = _auth_inventory(environment.codex_home)
+    _validate_auth_entry_policy(entries)
+    attestation = WorkerAuthenticationAttestation(
+        environment=environment,
+        executable=runtime,
+        executable_sha256=expected_executable_sha256.casefold(),
+        executable_version=expected_executable_version.strip(),
+        auth_mode=_SUPPORTED_AUTH_MODE,
+        home_manifest_sha256=manifest,
+        home_entries=entries,
+    )
+    _register_authentication_attestation(attestation)
+    return attestation
+
+
+def _validate_authenticated_custody(
+    custody: WorkerAuthenticationAttestation,
+    *,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+    executable: Path,
+) -> tuple[Path, _AuthenticationCustodyState]:
+    state = _require_authentication_attestation(custody)
+    if state.consumed or state.purged or custody.state != _AUTHENTICATED_STATE:
+        _fail("WORKER_AUTH_STATE_REUSE")
+    environment = custody.environment
+    _require_issued_environment(environment)
+    workdir = _validate_attestation_filesystem(
+        environment,
+        expected_disposable_root=expected_disposable_root,
+        expected_cwd=expected_cwd,
+        require_empty=False,
+    )
+    _validate_attestation_environment(environment)
+    runtime = _validate_executable(executable)
+    if runtime != custody.executable:
+        _fail("WORKER_EXECUTABLE_IDENTITY_MISMATCH")
+    if _sha256_file(runtime).casefold() != custody.executable_sha256.casefold():
+        _fail("WORKER_EXECUTABLE_IDENTITY_MISMATCH")
+    entries, manifest = _auth_inventory(environment.codex_home)
+    _validate_auth_entry_policy(entries)
+    if manifest != custody.home_manifest_sha256 or entries != custody.home_entries:
+        _fail("WORKER_AUTH_STATE_DRIFT")
+    return workdir, state
+
+
+def purge_worker_authentication_state(
+    attestation: WorkerAuthenticationAttestation,
+) -> WorkerAuthPurgeResult:
+    """Delete only the exact issued authenticated-home contents, once."""
+
+    state = _require_authentication_attestation(attestation)
+    environment = attestation.environment
+    if state.purged and state.purge_result is not None:
+        try:
+            if any(environment.codex_home.iterdir()):
+                _fail("WORKER_AUTH_STATE_DRIFT")
+        except WorkerProcessError:
+            raise
+        except (OSError, RuntimeError):
+            _fail("WORKER_AUTH_STATE_DRIFT")
+        return state.purge_result
+    _require_issued_environment(environment)
+    _validate_attestation_filesystem(
+        environment,
+        expected_disposable_root=environment.disposable_root,
+        expected_cwd=environment.cwd,
+        require_empty=False,
+    )
+    entries, _manifest = _auth_inventory(environment.codex_home)
+    deleted_files = 0
+    deleted_bytes = 0
+    try:
+        for entry in sorted(entries, key=lambda item: item.relative_path.count("/"), reverse=True):
+            path = environment.codex_home / Path(entry.relative_path)
+            if entry.entry_type == "file":
+                deleted_bytes += entry.byte_count
+                path.unlink()
+                deleted_files += 1
+            elif entry.entry_type == "dir":
+                path.rmdir()
+            else:
+                _fail("WORKER_AUTH_STATE_UNSAFE")
+        if any(environment.codex_home.iterdir()):
+            _fail("WORKER_AUTH_STATE_PURGE_FAILED")
+    except WorkerProcessError:
+        raise
+    except (OSError, RuntimeError, ValueError):
+        _fail("WORKER_AUTH_STATE_PURGE_FAILED")
+    result = WorkerAuthPurgeResult(
+        status="AUTH_STATE_PURGED",
+        success=True,
+        deleted_file_count=deleted_files,
+        deleted_bytes=deleted_bytes,
+        survivor_count=0,
+        error_code=None,
+    )
+    state.purged = True
+    state.purge_result = result
+    return result
+
+
 def _safe_close(api: _ProcessApi, handle: object | None) -> bool:
     if handle is None:
         return True
@@ -563,7 +973,7 @@ def _safe_terminate_job(api: _ProcessApi, job_handle: object | None) -> None:
             pass
 
 
-def launch_worker_process(
+def _launch_worker_process(
     *,
     environment: WorkerEnvironmentAttestation,
     expected_disposable_root: Path,
@@ -572,6 +982,7 @@ def launch_worker_process(
     argv: Sequence[str],
     cleanup_deadline_seconds: float,
     max_processes: int,
+    custody: WorkerAuthenticationAttestation | None,
     control_channel: bool = False,
     _process_api: _ProcessApi | None = None,
 ) -> WorkerProcessHandle:
@@ -586,6 +997,7 @@ def launch_worker_process(
         environment,
         expected_disposable_root=expected_disposable_root,
         expected_cwd=expected_cwd,
+        require_empty=custody is None,
     )
     _validate_attestation_environment(environment)
     runtime = _validate_executable(Path(executable))
@@ -657,6 +1069,7 @@ def launch_worker_process(
             environment_attestation=environment,
             cleanup_deadline_seconds=float(cleanup_deadline_seconds),
             max_processes=max_processes,
+            authentication_custody=custody,
             control_read_handle=control_read_handle,
             control_write_handle=control_write_handle,
         )
@@ -668,6 +1081,74 @@ def launch_worker_process(
         _safe_close(api, thread_handle)
         _safe_close(api, process_handle)
         _safe_close(api, job_handle)
+        raise
+
+
+def launch_worker_process(
+    *,
+    environment: WorkerEnvironmentAttestation,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+    executable: Path,
+    argv: Sequence[str],
+    cleanup_deadline_seconds: float,
+    max_processes: int,
+    control_channel: bool = False,
+    _process_api: _ProcessApi | None = None,
+) -> WorkerProcessHandle:
+    return _launch_worker_process(
+        environment=environment,
+        expected_disposable_root=expected_disposable_root,
+        expected_cwd=expected_cwd,
+        executable=executable,
+        argv=argv,
+        cleanup_deadline_seconds=cleanup_deadline_seconds,
+        max_processes=max_processes,
+        custody=None,
+        control_channel=control_channel,
+        _process_api=_process_api,
+    )
+
+
+def launch_authenticated_worker_process(
+    *,
+    custody: WorkerAuthenticationAttestation,
+    expected_disposable_root: Path,
+    expected_cwd: Path,
+    executable: Path,
+    argv: Sequence[str],
+    cleanup_deadline_seconds: float,
+    max_processes: int,
+    control_channel: bool = False,
+    _process_api: _ProcessApi | None = None,
+) -> WorkerProcessHandle:
+    state = _require_authentication_attestation(custody)
+    try:
+        _validate_authenticated_custody(
+            custody,
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+            executable=executable,
+        )
+        state.consumed = True
+        return _launch_worker_process(
+            environment=custody.environment,
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+            executable=executable,
+            argv=argv,
+            cleanup_deadline_seconds=cleanup_deadline_seconds,
+            max_processes=max_processes,
+            custody=custody,
+            control_channel=control_channel,
+            _process_api=_process_api,
+        )
+    except WorkerProcessError:
+        state.consumed = True
+        try:
+            purge_worker_authentication_state(custody)
+        except WorkerProcessError:
+            pass
         raise
 
 
@@ -984,6 +1465,15 @@ def cleanup_worker_process(
         result = _cleanup_failure(code="WORKER_CLEANUP_RESOURCE_CLOSE_FAILED")
         handle._cleanup_result = result
         return result
+    auth_state_purged = False
+    if handle._authentication_custody is not None:
+        try:
+            purge_worker_authentication_state(handle._authentication_custody)
+        except WorkerProcessError:
+            result = _cleanup_failure(code="WORKER_AUTH_STATE_PURGE_FAILED")
+            handle._cleanup_result = result
+            return result
+        auth_state_purged = True
     result = WorkerCleanupResult(
         status="CLEANUP_SUCCEEDED",
         success=True,
@@ -991,6 +1481,7 @@ def cleanup_worker_process(
         survivor_pids=(),
         survivor_count=0,
         error_code=None,
+        auth_state_purged=auth_state_purged,
     )
     handle._cleanup_result = result
     return result
@@ -1498,13 +1989,19 @@ class _CtypesWindowsProcessApi:
 __all__ = [
     "MAX_CONTROL_FRAME_BYTES",
     "ProcessTreeIdentity",
+    "WorkerAuthFileObservation",
+    "WorkerAuthPurgeResult",
+    "WorkerAuthenticationAttestation",
     "WorkerCleanupResult",
     "WorkerEnvironmentAttestation",
     "WorkerProcessError",
     "WorkerProcessHandle",
     "cleanup_worker_process",
     "exchange_worker_control",
+    "attest_authenticated_worker_environment",
+    "launch_authenticated_worker_process",
     "launch_worker_process",
+    "purge_worker_authentication_state",
     "prepare_worker_environment",
     "run_worker_control_child",
 ]

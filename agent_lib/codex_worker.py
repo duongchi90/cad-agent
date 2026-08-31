@@ -31,11 +31,13 @@ from agent_lib.codex_worker_process import (
     MAX_CONTROL_FRAME_BYTES,
     ProcessTreeIdentity,
     WorkerCleanupResult,
+    WorkerAuthenticationAttestation,
     WorkerEnvironmentAttestation,
     WorkerProcessError,
     cleanup_worker_process,
     exchange_worker_control,
     launch_worker_process,
+    launch_authenticated_worker_process,
     prepare_worker_environment,
     run_worker_control_child,
 )
@@ -334,6 +336,13 @@ class WorkerProcessBoundary(Protocol):
         expected_disposable_root: Path,
         expected_cwd: Path,
     ) -> tuple[WorkerEnvironmentAttestation, object]: ...
+    def start_authenticated(
+        self,
+        *,
+        custody: WorkerAuthenticationAttestation,
+        expected_disposable_root: Path,
+        expected_cwd: Path,
+    ) -> tuple[WorkerEnvironmentAttestation, object]: ...
     def invoke(self, handle: object, request: AdapterRequest) -> object: ...
     def attest(self, handle: object, request: AdapterRequest) -> object: ...
     def cleanup(self, handle: object) -> object: ...
@@ -494,6 +503,25 @@ class Task3ProcessBoundary:
         )
         return attestation, handle
 
+    def start_authenticated(
+        self,
+        *,
+        custody: WorkerAuthenticationAttestation,
+        expected_disposable_root: Path,
+        expected_cwd: Path,
+    ) -> tuple[WorkerEnvironmentAttestation, object]:
+        handle = launch_authenticated_worker_process(
+            custody=custody,
+            expected_disposable_root=expected_disposable_root,
+            expected_cwd=expected_cwd,
+            executable=self._executable,
+            argv=self._argv,
+            cleanup_deadline_seconds=self._cleanup_deadline_seconds,
+            max_processes=self._max_processes,
+            control_channel=True,
+        )
+        return custody.environment, handle
+
     def _exchange(
         self,
         handle: object,
@@ -545,6 +573,7 @@ class Task3ProcessBoundary:
 
 
 _TASK3_CANONICAL_START = Task3ProcessBoundary.start
+_TASK3_CANONICAL_AUTHENTICATED_START = Task3ProcessBoundary.start_authenticated
 
 
 class LazyOfficialSdkAdapter:
@@ -2166,6 +2195,7 @@ def _open_start_codex_worker(
     process_boundary: WorkerProcessBoundary,
     timeout_seconds: float,
     now: datetime | None,
+    authenticated_environment: WorkerAuthenticationAttestation | None = None,
 ) -> CodexWorkerSession:
     del adapter
     timeout = _validate_timeout(timeout_seconds)
@@ -2195,17 +2225,33 @@ def _open_start_codex_worker(
     ):
         _fail("WORKER_AUTHORITY_MISMATCH")
     try:
+        if authenticated_environment is not None and type(process_boundary) is not Task3ProcessBoundary:
+            _fail("WORKER_AUTHORITY_MISMATCH")
         if type(process_boundary) is Task3ProcessBoundary:
             if (
                 not _task5_round2_is_canonical_boundary(process_boundary)
                 or not _task5_round3_has_canonical_start_dispatch(process_boundary)
+                or (
+                    authenticated_environment is not None
+                    and not _task5_round3_has_canonical_authenticated_start_dispatch(
+                        process_boundary
+                    )
+                )
             ):
                 _fail("WORKER_SDK_ATTESTATION_GAP")
-            attestation, handle = _TASK3_CANONICAL_START(
-                process_boundary,
-                expected_disposable_root=root,
-                expected_cwd=cwd,
-            )
+            if authenticated_environment is None:
+                attestation, handle = _TASK3_CANONICAL_START(
+                    process_boundary,
+                    expected_disposable_root=root,
+                    expected_cwd=cwd,
+                )
+            else:
+                attestation, handle = _TASK3_CANONICAL_AUTHENTICATED_START(
+                    process_boundary,
+                    custody=authenticated_environment,
+                    expected_disposable_root=root,
+                    expected_cwd=cwd,
+                )
         else:
             attestation, handle = process_boundary.start(
                 expected_disposable_root=root,
@@ -2213,6 +2259,12 @@ def _open_start_codex_worker(
             )
     except CodexWorkerError:
         raise
+    except WorkerProcessError:
+        _fail(
+            "WORKER_AUTHORITY_MISMATCH"
+            if authenticated_environment is not None
+            else "WORKER_PROCESS_START_FAILED"
+        )
     except Exception:
         _fail("WORKER_PROCESS_START_FAILED")
     try:
@@ -2304,6 +2356,7 @@ def start_codex_worker(
     process_boundary: WorkerProcessBoundary,
     timeout_seconds: float,
     now: datetime | None = None,
+    authenticated_environment: WorkerAuthenticationAttestation | None = None,
 ) -> CodexWorkerSession:
     return _open_start_codex_worker(
         handoff=handoff,
@@ -2313,6 +2366,7 @@ def start_codex_worker(
         process_boundary=process_boundary,
         timeout_seconds=timeout_seconds,
         now=now,
+        authenticated_environment=authenticated_environment,
     )
 
 
@@ -2393,6 +2447,7 @@ __all__ = [
     "consume_task6_result",
     "LazyOfficialSdkAdapter",
     "ProviderStartObservation",
+    "WorkerAuthenticationAttestation",
     "ServerOwnedWorkerStartContext",
     "Task3ProcessBoundary",
     "WorkerAdapter",
@@ -2557,6 +2612,20 @@ def _task5_round3_has_canonical_start_dispatch(
         callable(start)
         and getattr(start, "__self__", None) is process_boundary
         and getattr(start, "__func__", None) is _TASK3_CANONICAL_START
+    )
+
+
+def _task5_round3_has_canonical_authenticated_start_dispatch(
+    process_boundary: WorkerProcessBoundary,
+) -> bool:
+    if type(process_boundary) is not Task3ProcessBoundary:
+        return False
+    start_authenticated = getattr(process_boundary, "start_authenticated", None)
+    return (
+        callable(start_authenticated)
+        and getattr(start_authenticated, "__self__", None) is process_boundary
+        and getattr(start_authenticated, "__func__", None)
+        is _TASK3_CANONICAL_AUTHENTICATED_START
     )
 
 
