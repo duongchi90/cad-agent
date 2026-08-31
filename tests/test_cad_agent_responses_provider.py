@@ -153,7 +153,7 @@ def test_success_uses_provider_response_id_and_exact_direct_call_profile() -> No
     payload = client.create_payloads[0]
     assert set(payload) == {"model", "background", "store", "input", "text"}
     assert payload["model"] == RESPONSES_MODEL
-    assert payload["background"] is True
+    assert payload["background"] is False
     assert payload["store"] is False
     assert "tools" not in payload
     assert "conversation" not in payload
@@ -183,40 +183,49 @@ def test_missing_provider_response_id_fails_closed() -> None:
         execute_responses_attempt(_request(), client=client)
 
 
-def test_response_id_cannot_change_between_create_and_retrieve() -> None:
+def test_non_terminal_provider_states_fail_without_retrieve_or_cancel() -> None:
     client = _FakeResponsesClient(
         _response(response_id="resp-1", status="in_progress"),
-        _response(response_id="resp-foreign", status="completed"),
+        _response(response_id="resp-1", status="completed"),
     )
-    with pytest.raises(ResponsesProviderError, match="RESPONSE_ID_MISMATCH"):
+    with pytest.raises(ResponsesProviderError, match="NON_COMPLETED"):
         execute_responses_attempt(_request(), client=client)
-    assert client.retrieve_ids == ["resp-1"]
+    assert len(client.create_payloads) == 1
+    assert client.retrieve_ids == []
+    assert client.cancel_ids == []
 
 
 @pytest.mark.parametrize("status", ["queued", "in_progress", "failed", "incomplete", "cancelled"])
 def test_non_completed_provider_terminal_states_never_pass(status: str) -> None:
-    responses = [_response(status=status)]
-    if status in {"queued", "in_progress"}:
-        responses.append(_response(status="failed"))
-    client = _FakeResponsesClient(*responses)
+    client = _FakeResponsesClient(
+        _response(status=status),
+        _response(status="completed"),
+    )
     with pytest.raises(ResponsesProviderError, match="NON_COMPLETED|FAILED|INCOMPLETE|CANCELLED"):
         execute_responses_attempt(_request(), client=client)
+    assert len(client.create_payloads) == 1
+    assert client.retrieve_ids == []
+    assert client.cancel_ids == []
 
 
-def test_timeout_cancels_only_provider_issued_response_and_never_passes() -> None:
-    client = _FakeResponsesClient(
-        _response(status="in_progress"),
-        _response(status="cancelled"),
-    )
-    clock_values = iter([0.0, 10.0])
-    with pytest.raises(ResponsesProviderError, match="TIMEOUT|CANCELLED"):
-        execute_responses_attempt(
-            _request(timeout_seconds=1.0),
-            client=client,
-            monotonic=lambda: next(clock_values),
-            sleep=lambda _: None,
-        )
-    assert client.cancel_ids == ["resp-1"]
+def test_provider_create_failure_is_non_retried_and_fails_closed() -> None:
+    class _CreateFailureClient:
+        def __init__(self) -> None:
+            self.create_calls = 0
+            self.retrieve_ids: list[str] = []
+            self.cancel_ids: list[str] = []
+
+        def create(self, payload: dict[str, object]) -> dict[str, object]:
+            del payload
+            self.create_calls += 1
+            raise OSError("ambiguous transport failure")
+
+    client = _CreateFailureClient()
+    with pytest.raises(ResponsesProviderError, match="RESPONSES_PROVIDER_ERROR"):
+        execute_responses_attempt(_request(), client=client)
+    assert client.create_calls == 1
+    assert client.retrieve_ids == []
+    assert client.cancel_ids == []
 
 
 def test_provider_error_never_becomes_success() -> None:
@@ -362,8 +371,8 @@ def test_http_client_uses_official_methods_and_explicit_credential_header() -> N
         return HttpResponse(_response())
 
     client = ResponsesHttpClient(api_key=SENTINEL, urlopen=urlopen)
+    assert not hasattr(client, "retrieve")
+    assert not hasattr(client, "cancel")
     client.create({"model": RESPONSES_MODEL})
-    client.retrieve("resp_1")
-    client.cancel("resp_1")
-    assert [request.get_method() for request in requests] == ["POST", "GET", "POST"]
+    assert [request.get_method() for request in requests] == ["POST"]
     assert all(request.get_header("Authorization") == f"Bearer {SENTINEL}" for request in requests)

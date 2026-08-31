@@ -12,7 +12,6 @@ import hashlib
 import json
 import math
 import re
-import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -347,10 +346,6 @@ class ResponsesTask6Result:
 class ResponsesClient(Protocol):
     def create(self, payload: dict[str, object]) -> Mapping[str, object]: ...
 
-    def retrieve(self, response_id: str) -> Mapping[str, object]: ...
-
-    def cancel(self, response_id: str) -> Mapping[str, object]: ...
-
 
 class ResponsesHttpClient:
     """Small direct Responses client; the credential never enters a child."""
@@ -404,15 +399,6 @@ class ResponsesHttpClient:
     def create(self, payload: dict[str, object]) -> Mapping[str, object]:
         return self._request("POST", "", payload)
 
-    def retrieve(self, response_id: str) -> Mapping[str, object]:
-        _provider_id(response_id, code="RESPONSE_ID_MISSING")
-        return self._request("GET", f"/{response_id}")
-
-    def cancel(self, response_id: str) -> Mapping[str, object]:
-        _provider_id(response_id, code="RESPONSE_ID_MISSING")
-        return self._request("POST", f"/{response_id}/cancel", {})
-
-
 def _validate_request(request: ResponsesRequest) -> Mapping[str, object]:
     if not isinstance(request, ResponsesRequest):
         _fail("REQUEST_INVALID")
@@ -462,7 +448,7 @@ def _request_payload(request: ResponsesRequest, schema: Mapping[str, object]) ->
     )
     return {
         "model": RESPONSES_MODEL,
-        "background": True,
+        "background": False,
         "store": False,
         "input": input_payload["input"],
         "text": {
@@ -561,14 +547,11 @@ def execute_responses_attempt(
     request: ResponsesRequest,
     *,
     client: ResponsesClient,
-    monotonic: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
 ) -> ResponsesTask6Result:
     """Run one independent Responses call and return only a completed result."""
 
     schema = _validate_request(request)
     payload = _request_payload(request, schema)
-    started = monotonic()
     try:
         raw = client.create(payload)
     except ResponsesProviderError:
@@ -576,54 +559,15 @@ def execute_responses_attempt(
     except Exception as exc:
         raise ResponsesProviderError("RESPONSES_PROVIDER_ERROR") from exc
     observation, _output = _observe(raw, request=request)
-    response_id = observation.response_id
-    status = observation.status
-    error = observation.error
-    incomplete_details = observation.incomplete_details
-    while status in _NON_TERMINAL_STATUSES:
-        if monotonic() >= started + float(request.timeout_seconds):
-            try:
-                cancelled = client.cancel(response_id)
-            except Exception as exc:
-                raise ResponsesProviderError("RESPONSES_CANCEL_ERROR") from exc
-            cancel_observation, _ = _observe(
-                cancelled,
-                request=request,
-                expected_response_id=response_id,
-            )
-            cancel_status = cancel_observation.status
-            cancel_error = cancel_observation.error
-            if cancel_status != "cancelled":
-                _raise_terminal_failure(
-                    status=cancel_status,
-                    error=cancel_error,
-                    incomplete_details=None,
-                )
-            _fail("RESPONSES_TIMEOUT")
-        sleep(min(0.05, max(0.0, started + float(request.timeout_seconds) - monotonic())))
-        try:
-            raw = client.retrieve(response_id)
-        except Exception as exc:
-            raise ResponsesProviderError("RESPONSES_PROVIDER_ERROR") from exc
-        observation, _output = _observe(
-            raw,
-            request=request,
-            expected_response_id=response_id,
-        )
-        response_id = observation.response_id
-        status = observation.status
-        error = observation.error
-        incomplete_details = observation.incomplete_details
-
-    if status != "completed":
+    if observation.status != "completed":
         _raise_terminal_failure(
-            status=status,
-            error=error,
-            incomplete_details=incomplete_details,
+            status=observation.status,
+            error=observation.error,
+            incomplete_details=observation.incomplete_details,
         )
-    if error is not None:
+    if observation.error is not None:
         _fail("RESPONSES_FAILED")
-    if incomplete_details is not None:
+    if observation.incomplete_details is not None:
         _fail("RESPONSES_INCOMPLETE")
     usage = raw.get("usage") if isinstance(raw, Mapping) else None
     if not isinstance(usage, Mapping):
@@ -632,14 +576,14 @@ def execute_responses_attempt(
     result = ResponsesTask6Result(
         operation="turn",
         task6_epoch_id=request.task6_epoch_id,
-        response_id=response_id,
+        response_id=observation.response_id,
         run_id=request.run_id,
         request_id=request.request_id,
         model=request.model,
         provider=RESPONSES_PROVIDER,
-        provider_status=status,
-        error=error,
-        incomplete_details=incomplete_details,
+        provider_status=observation.status,
+        error=observation.error,
+        incomplete_details=observation.incomplete_details,
         status="COMPLETED",
         success=True,
         events=(ResponsesProviderEvent("responses.completed"),),
