@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import hashlib
 import inspect
 from dataclasses import replace
 from datetime import timedelta
@@ -29,6 +30,7 @@ from agent_lib.codex_worker_process import (
 from cad_agent.vision_handoff import (
     BoundWorkerThread,
     ServerOwnedWorkerBindingContext,
+    ServerOwnedWorkerStartContext,
     bind_worker_thread,
 )
 from tests.test_vision_handoff import NOW, _authority_context, _base_payload, _bind, _write_schema
@@ -172,6 +174,7 @@ class _Fixture:
     handoff: object
     authority: object
     worker_context: ServerOwnedWorkerBindingContext
+    start_context: ServerOwnedWorkerStartContext
     binding: BoundWorkerThread
     adapter: _FakeAdapter
     process: _FakeProcessBoundary
@@ -293,7 +296,7 @@ def test_01_start_valid_exact_binding_uses_fake_only_and_returns_session(tmp_pat
 
 def test_02_start_rejects_missing_or_foreign_handoff_and_binding(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
-    for key, value in (("handoff", object()), ("binding", object())):
+    for key, value in (("handoff", object()), ("start_context", object())):
         with pytest.raises(CodexWorkerError) as caught:
             _start(fx, **{key: value})
         assert caught.value.code == "WORKER_AUTHORITY_MISMATCH"
@@ -302,9 +305,9 @@ def test_02_start_rejects_missing_or_foreign_handoff_and_binding(tmp_path: Path)
 
 def test_03_start_rejects_bare_or_caller_selected_thread_identity(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
-    foreign_context = replace(fx.worker_context, observed_thread_id="FOREIGN-THREAD")
+    foreign_context = replace(fx.start_context, adapter_version="foreign-adapter")
     with pytest.raises(CodexWorkerError) as caught:
-        _start(fx, worker_context=foreign_context)
+        _start(fx, start_context=foreign_context)
     assert caught.value.code == "WORKER_AUTHORITY_MISMATCH"
     assert "thread_id" not in inspect.signature(start_codex_worker).parameters
 
@@ -398,12 +401,18 @@ def test_07_resume_rejects_sandbox_cwd_or_writable_root_drift(tmp_path: Path) ->
 
 def test_08_schema_hash_validator_and_toctou_drift_fail_closed(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
-    for binding in (
-        replace(fx.binding, output_schema_sha256="f" * 64),
-        replace(fx.binding, output_validator_version="foreign-validator"),
+    for start_context in (
+        replace(fx.start_context, adapter_version="foreign-adapter"),
+        replace(
+            fx.start_context,
+            sandbox_policy={
+                **fx.start_context.sandbox_policy,
+                "cwd": str(fx.start_context.sandbox_policy["roots"][0]) + "-foreign",
+            },
+        ),
     ):
         with pytest.raises(CodexWorkerError) as caught:
-            _start(fx, binding=binding)
+            _start(fx, start_context=start_context)
         assert caught.value.code == "WORKER_AUTHORITY_MISMATCH"
     session = _start(fx)
     fx.schema_path.write_text('{"type":"object","changed":true}', encoding="utf-8")
@@ -534,11 +543,11 @@ def test_14_every_lifecycle_request_disables_experimental_api(tmp_path: Path) ->
 def test_15_full_access_sandbox_is_rejected_before_provider_work(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     bad = replace(
-        fx.worker_context,
+        fx.start_context,
         sandbox_policy={"roots": ["C:/"], "write_policy": "FULL_ACCESS", "cwd": "C:/"},
     )
     with pytest.raises(CodexWorkerError) as caught:
-        _start(fx, worker_context=bad)
+        _start(fx, start_context=bad)
     assert caught.value.code == "WORKER_AUTHORITY_MISMATCH"
     assert fx.adapter.calls == [] and fx.process.calls == []
 
@@ -550,9 +559,8 @@ def test_16_public_lifecycle_has_no_mutable_caller_selected_schema_path(tmp_path
     with pytest.raises(TypeError):
         start_codex_worker(
             handoff=fx.handoff,
-            binding=fx.binding,
             authority_context=fx.authority,
-            worker_context=fx.worker_context,
+            start_context=fx.start_context,
             adapter=fx.adapter,
             process_boundary=fx.process,
             timeout_seconds=1.0,
@@ -1094,6 +1102,64 @@ def test_remediation_45_no_forbidden_transport_or_real_provider_route_is_added()
         assert token not in process_source
 
 
+def test_official_low_level_start_uses_provider_generated_thread_and_typed_policy() -> None:
+    worker_module = __import__("agent_lib.codex_worker", fromlist=["_OfficialSdkWorkerAdapter"])
+    policy = SimpleNamespace(
+        root=SimpleNamespace(type="readOnly", network_access=False, writable_roots=[])
+    )
+    response = SimpleNamespace(
+        thread=SimpleNamespace(id="provider-thread-001"),
+        model="model-001",
+        model_provider="openai",
+        cwd="C:/disposable/run-001",
+        approval_policy=SimpleNamespace(root=SimpleNamespace(value="never")),
+        approvals_reviewer=SimpleNamespace(root=SimpleNamespace(value="user")),
+        sandbox=policy,
+        instruction_sources=[],
+    )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.params = None
+
+        def thread_start(self, params):
+            self.params = params
+            return response
+
+    adapter = worker_module._OfficialSdkWorkerAdapter(object())
+    client = FakeClient()
+    adapter._client = client
+    request = AdapterRequest(
+        operation="start",
+        thread_id=None,
+        handoff_sha256="a" * 64,
+        run_id="RUN-001",
+        approval_mode="deny_all",
+        experimental_api=False,
+        model_identity="model-001",
+        config_sha256="b" * 64,
+        output_schema_bytes=b"{}",
+        output_schema_sha256="c" * 64,
+        output_validator_version="validator-1",
+        sandbox_roots=("C:/disposable/run-001",),
+        cwd="C:/disposable/run-001",
+        timeout_seconds=1.0,
+    )
+    result = adapter.invoke(request)
+    assert result["thread_id"] == "provider-thread-001"
+    assert result["provider_observation"]["approval_policy"] == "never"
+    assert "config_sha256" not in result["provider_observation"]
+    assert client.params == {
+        "approvalPolicy": "never",
+        "approvalsReviewer": "user",
+        "cwd": "C:/disposable/run-001",
+        "model": "model-001",
+        "modelProvider": "openai",
+        "sandbox": "workspace-write",
+        "ephemeral": True,
+    }
+
+
 # Task-5 test-harness amendment. Successful legacy regressions model the
 # authorized Task-3 child control seam; the original _FakeProcessBoundary stays
 # intentionally untrusted for provenance-adversarial tests.
@@ -1521,10 +1587,61 @@ def _ChildOnlyBoundary() -> object:  # noqa: N802,F811
     return _new_task3_round2_harness_boundary(child_only=True)
 
 
+def _provider_start_response(fx: _Fixture) -> dict[str, object]:
+    authority_sources = {
+        source["source_id"]: source["sha256"]
+        for source in fx.authority.instruction_sources
+    }
+    return {
+        "status": "ready",
+        "thread_id": fx.binding.thread_id,
+        "events": [{"type": "thread.ready"}],
+        "provider_observation": {
+            "thread_id": fx.binding.thread_id,
+            "model": fx.binding.model_config_identity["model_identity"],
+            "model_provider": "openai",
+            "cwd": fx.start_context.sandbox_policy["cwd"],
+            "approval_policy": "never",
+            "approvals_reviewer": "user",
+            "sandbox": {
+                "type": "readOnly",
+                "network_access": False,
+                "writable_roots": [],
+            },
+            "instruction_sources": [
+                {
+                    "path": entry["path"],
+                    "sha256": authority_sources[entry["source_id"]],
+                }
+                for entry in fx.start_context.instruction_source_paths
+            ],
+        },
+    }
+
+
 def _fixture(tmp_path: Path, *, thread_id: str = "THREAD-001") -> _Fixture:  # noqa: F811
     tmp_path.mkdir(parents=True, exist_ok=True)
     schema_path = _write_schema(tmp_path / "schema.json")
-    handoff = _bind(schema_path)
+    workspace = tmp_path / "disposable"
+    workspace.mkdir()
+    source_entries = []
+    source_paths = []
+    for source_id, content in (("system", b"system test authority\n"), ("project", b"project test authority\n")):
+        source_path = workspace / f"{source_id}.md"
+        source_path.write_bytes(content)
+        source_paths.append(source_path)
+        source_entries.append(
+            {
+                "source_id": source_id,
+                "role": source_id,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    payload = _base_payload()
+    payload["workspace"] = {"roots": [str(workspace)], "write_policy": "DISPOSABLE_ONLY"}
+    payload["instruction_sources"] = source_entries
+    authority = _authority_context(payload)
+    handoff = _bind(schema_path, payload, authority_context=authority)
     authority = _authority_context(dict(handoff.payload))
     worker_context = _worker_context(handoff, thread_id=thread_id)
     binding = bind_worker_thread(
@@ -1534,29 +1651,43 @@ def _fixture(tmp_path: Path, *, thread_id: str = "THREAD-001") -> _Fixture:  # n
         worker_context=worker_context,
         now=NOW,
     )
+    start_context = ServerOwnedWorkerStartContext(
+        adapter_version="adapter-1.0",
+        sandbox_policy={
+            "roots": [str(workspace)],
+            "write_policy": "DISPOSABLE_ONLY",
+            "cwd": str(workspace),
+        },
+        instruction_source_paths=tuple(
+            {"source_id": entry["source_id"], "path": str(path)}
+            for entry, path in zip(source_entries, source_paths)
+        ),
+    )
     adapter = _FakeAdapter()
     process = _new_task3_round2_harness_boundary()
     process.adapter = adapter
     process.attestation_factory = lambda _request: _harness_observation(
         authority, binding, worker_context
     )
-    return _Fixture(
+    fixture = _Fixture(
         schema_path=schema_path,
         handoff=handoff,
         authority=authority,
         worker_context=worker_context,
+        start_context=start_context,
         binding=binding,
         adapter=adapter,
         process=process,
     )
+    adapter.responses["start"] = _provider_start_response(fixture)
+    return fixture
 
 
 def _start(fx: _Fixture, **overrides: object) -> CodexWorkerSession:  # noqa: F811
     values = {
         "handoff": fx.handoff,
-        "binding": fx.binding,
         "authority_context": fx.authority,
-        "worker_context": fx.worker_context,
+        "start_context": fx.start_context,
         "adapter": fx.adapter,
         "process_boundary": fx.process,
         "timeout_seconds": 1.0,
@@ -1569,6 +1700,9 @@ def _start(fx: _Fixture, **overrides: object) -> CodexWorkerSession:  # noqa: F8
             boundary.adapter = fx.adapter
         if boundary.attestation_factory is None:
             boundary.attestation_factory = fx.process.attestation_factory
+        boundary.responses["start"] = _provider_start_response(fx)
+    if isinstance(boundary, _FakeProcessBoundary):
+        boundary.adapter.responses["start"] = _provider_start_response(fx)
     return start_codex_worker(**values)
 
 
