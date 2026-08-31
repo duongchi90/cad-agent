@@ -62,6 +62,42 @@ def test_required_schema_binding_metadata_is_present_and_exact(tmp_path: Path) -
         assert field in handoff.payload
 
 
+def test_inference_observation_is_provider_neutral_and_rejects_codex_attestation() -> None:
+    module = _module()
+    observation = module.validate_inference_provider_observation(
+        {
+            "provider": "openai.responses",
+            "response_id": "resp_1",
+            "model": "gpt-5.6-sol",
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        expected_provider="openai.responses",
+        expected_model="gpt-5.6-sol",
+    )
+    assert observation.response_id == "resp_1"
+    assert not hasattr(observation, "thread_id")
+    assert not hasattr(observation, "approval_mode")
+    forged = {
+        "provider": "openai.responses",
+        "response_id": "resp_1",
+        "model": "gpt-5.6-sol",
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "thread_id": "caller-forged",
+    }
+    with pytest.raises(ValueError, match="shape|Codex|observation"):
+        module.validate_inference_provider_observation(
+            forged,
+            expected_provider="openai.responses",
+            expected_model="gpt-5.6-sol",
+        )
+
+
 def test_binding_rejects_changed_provider_schema_bytes(tmp_path: Path) -> None:
     schema_path = _write_schema(tmp_path / "schema.json")
     handoff = _bind(schema_path)
