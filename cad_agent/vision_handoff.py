@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -464,6 +465,37 @@ class ServerOwnedWorkerBindingContext:
     adapter_version: str
     observed_thread_id: str
     sandbox_policy: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            object.__setattr__(self, field_name, _freeze(getattr(self, field_name)))
+
+
+@dataclass(frozen=True)
+class ServerOwnedWorkerStartContext:
+    """Server-owned expectations used before a provider thread exists."""
+
+    adapter_version: str
+    sandbox_policy: Mapping[str, object]
+    instruction_source_paths: Sequence[Mapping[str, object]]
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            object.__setattr__(self, field_name, _freeze(getattr(self, field_name)))
+
+
+@dataclass(frozen=True)
+class ProviderStartObservation:
+    """Typed, provider-returned facts from one official thread/start call."""
+
+    thread_id: str
+    model: str
+    model_provider: str
+    cwd: str
+    approval_policy: str
+    approvals_reviewer: str
+    sandbox: Mapping[str, object]
+    instruction_sources: Sequence[Mapping[str, object]]
 
     def __post_init__(self) -> None:
         for field_name in self.__dataclass_fields__:
@@ -1050,6 +1082,371 @@ def bind_worker_thread(
     )
 
 
+def _path_key(path: Path) -> str:
+    return os.path.normcase(os.path.normpath(str(path)))
+
+
+def _canonical_runtime_file(value: object, *, path: str) -> tuple[Path, str]:
+    candidate_text = _string(value, path=path)
+    candidate = Path(candidate_text)
+    if not candidate.is_absolute():
+        _fail(f"{path} must be an absolute path")
+    if _path_contains_windows_reparse_point(candidate) or candidate.is_symlink():
+        _fail(f"{path} contains a reparse point or symlink")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise VisionHandoffError(f"{path} cannot be resolved") from exc
+    if _path_contains_windows_reparse_point(resolved) or resolved.is_symlink():
+        _fail(f"{path} contains a reparse point or symlink")
+    if _path_key(candidate) != _path_key(resolved):
+        _fail(f"{path} is not canonical")
+    if not resolved.is_file():
+        _fail(f"{path} must be a regular file")
+    try:
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise VisionHandoffError(f"{path} cannot be read") from exc
+    return resolved, digest
+
+
+def _canonical_runtime_path(value: object, *, path: str) -> Path:
+    candidate_text = _string(value, path=path)
+    candidate = Path(candidate_text)
+    if not candidate.is_absolute():
+        _fail(f"{path} must be an absolute path")
+    if _path_contains_windows_reparse_point(candidate) or candidate.is_symlink():
+        _fail(f"{path} contains a reparse point or symlink")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise VisionHandoffError(f"{path} cannot be resolved") from exc
+    if _path_contains_windows_reparse_point(resolved) or resolved.is_symlink():
+        _fail(f"{path} contains a reparse point or symlink")
+    if _path_key(candidate) != _path_key(resolved):
+        _fail(f"{path} is not canonical")
+    return resolved
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _start_sandbox_policy(
+    payload: Mapping[str, object],
+    start_context: ServerOwnedWorkerStartContext,
+) -> tuple[Path, Path, tuple[str, ...], dict[str, object]]:
+    if not isinstance(start_context, ServerOwnedWorkerStartContext):
+        _fail("worker start requires a server-owned start context")
+    if start_context.adapter_version != SERVER_OWNED_ADAPTER_VERSION:
+        _fail("worker start adapter version is not server-owned")
+    observed = _keys(
+        start_context.sandbox_policy,
+        required={"roots", "write_policy", "cwd"},
+        path="worker_start.sandbox_policy",
+    )
+    observed_roots = _non_empty_string_list(
+        observed["roots"], path="worker_start.sandbox_policy.roots", minimum=1
+    )
+    if len(observed_roots) != 1 or observed["write_policy"] != "DISPOSABLE_ONLY":
+        _fail("worker start sandbox policy must be DISPOSABLE_ONLY with one root")
+    if observed["cwd"] != observed_roots[0]:
+        _fail("worker start cwd must equal the disposable root")
+    workspace = _keys(payload["workspace"], required={"roots", "write_policy"}, path="workspace")
+    expected_roots = _non_empty_string_list(workspace["roots"], path="workspace.roots", minimum=1)
+    if (
+        workspace["write_policy"] != "DISPOSABLE_ONLY"
+        or _canonical_bytes(observed_roots) != _canonical_bytes(expected_roots)
+        or observed["cwd"] != expected_roots[0]
+    ):
+        _fail("worker start sandbox policy or cwd mismatch")
+    root = _canonical_runtime_path(observed_roots[0], path="worker_start.sandbox_policy.roots[0]")
+    cwd = _canonical_runtime_path(observed["cwd"], path="worker_start.sandbox_policy.cwd")
+    if root != cwd:
+        _fail("worker start cwd must equal the disposable root")
+    return root, cwd, (str(root),), {
+        "roots": [str(root)],
+        "write_policy": "DISPOSABLE_ONLY",
+        "cwd": str(cwd),
+    }
+
+
+def validate_worker_start_context(
+    handoff: ValidatedVisionHandoff,
+    *,
+    authority_context: ServerOwnedAuthorityContext,
+    start_context: ServerOwnedWorkerStartContext,
+    now: datetime | None = None,
+) -> tuple[Path, Path, tuple[str, ...]]:
+    """Validate server custody before any provider thread/start call."""
+
+    payload, _ = _worker_handoff_payload(
+        handoff,
+        authority_context=authority_context,
+        now=now,
+    )
+    root, cwd, roots, _ = _start_sandbox_policy(payload, start_context)
+    return root, cwd, roots
+
+
+def _expected_start_instruction_sources(
+    authority_context: ServerOwnedAuthorityContext,
+    start_context: ServerOwnedWorkerStartContext,
+) -> tuple[dict[str, object], ...]:
+    authority_sources = _validate_list_object(
+        authority_context.instruction_sources,
+        fields={"source_id", "role", "sha256"},
+        path="authority_context.instruction_sources",
+    )
+    expected_paths = _validate_list_object(
+        start_context.instruction_source_paths,
+        fields={"source_id", "path"},
+        path="worker_start.instruction_source_paths",
+    )
+    authority_ids = [source["source_id"] for source in authority_sources]
+    if len(set(authority_ids)) != len(authority_ids):
+        _fail("authority instruction source identity is ambiguous")
+    expected_hashes = [source["sha256"] for source in authority_sources]
+    if len(set(expected_hashes)) != len(expected_hashes):
+        _fail("authority instruction source hash identity is ambiguous")
+    if len(expected_paths) != len(authority_sources):
+        _fail("worker start instruction source mapping is incomplete")
+    path_by_id: dict[str, tuple[Path, str]] = {}
+    for index, entry in enumerate(expected_paths):
+        source_id = _identifier(
+            entry["source_id"],
+            path=f"worker_start.instruction_source_paths[{index}].source_id",
+        )
+        if source_id in path_by_id:
+            _fail("worker start instruction source mapping is ambiguous")
+        resolved, digest = _canonical_runtime_file(
+            entry["path"], path=f"worker_start.instruction_source_paths[{index}].path"
+        )
+        path_by_id[source_id] = (resolved, digest)
+    if set(path_by_id) != set(authority_ids):
+        _fail("worker start instruction source mapping does not match authority")
+    result: list[dict[str, object]] = []
+    for source in authority_sources:
+        source_id = source["source_id"]
+        resolved, digest = path_by_id[source_id]
+        if digest != source["sha256"]:
+            _fail("worker start instruction source hash drift")
+        result.append({"source_id": source_id, "path": resolved, "sha256": digest})
+    return tuple(result)
+
+
+def _provider_start_observation(value: object) -> ProviderStartObservation:
+    fields = {
+        "thread_id",
+        "model",
+        "model_provider",
+        "cwd",
+        "approval_policy",
+        "approvals_reviewer",
+        "sandbox",
+        "instruction_sources",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        _fail("provider start observation shape mismatch")
+    for key in (
+        "thread_id",
+        "model",
+        "model_provider",
+        "cwd",
+        "approval_policy",
+        "approvals_reviewer",
+    ):
+        _string(value[key], path=f"provider_start_observation.{key}")
+    sandbox = _keys(
+        value["sandbox"],
+        required={"type", "network_access", "writable_roots"},
+        path="provider_start_observation.sandbox",
+    )
+    _string(sandbox["type"], path="provider_start_observation.sandbox.type")
+    _bool(sandbox["network_access"], path="provider_start_observation.sandbox.network_access")
+    writable_roots = sandbox["writable_roots"]
+    if not isinstance(writable_roots, (list, tuple)) or any(
+        not isinstance(item, str) or not item for item in writable_roots
+    ):
+        _fail("provider_start_observation.sandbox.writable_roots is invalid")
+    sources = _validate_list_object(
+        value["instruction_sources"],
+        fields={"path", "sha256"},
+        path="provider_start_observation.instruction_sources",
+    )
+    for index, source in enumerate(sources):
+        _string(source["path"], path=f"provider_start_observation.instruction_sources[{index}].path")
+        _sha256(source["sha256"], path=f"provider_start_observation.instruction_sources[{index}].sha256")
+    return ProviderStartObservation(
+        thread_id=_identifier(value["thread_id"], path="provider_start_observation.thread_id"),
+        model=value["model"],
+        model_provider=value["model_provider"],
+        cwd=value["cwd"],
+        approval_policy=value["approval_policy"],
+        approvals_reviewer=value["approvals_reviewer"],
+        sandbox={
+            "type": sandbox["type"],
+            "network_access": sandbox["network_access"],
+            "writable_roots": tuple(writable_roots),
+        },
+        instruction_sources=tuple(
+            {"path": source["path"], "sha256": source["sha256"]} for source in sources
+        ),
+    )
+
+
+def _validate_provider_start_observation(
+    observation: ProviderStartObservation,
+    *,
+    payload: Mapping[str, object],
+    authority_context: ServerOwnedAuthorityContext,
+    start_context: ServerOwnedWorkerStartContext,
+    expected_paths: tuple[dict[str, object], ...],
+) -> None:
+    policy = _keys(
+        authority_context.provider_policy,
+        required={"approval_mode", "experimental_api", "model_identity", "config_sha256"},
+        path="authority_context.provider_policy",
+    )
+    if (
+        observation.approval_policy != "never"
+        or observation.approvals_reviewer != "user"
+        or observation.model != policy["model_identity"]
+        or observation.model_provider != "openai"
+        or observation.cwd != start_context.sandbox_policy["cwd"]
+    ):
+        _fail("provider start observation policy mismatch")
+    sandbox = observation.sandbox
+    if sandbox["network_access"] is not False:
+        _fail("provider start observation network policy widened")
+    server_root = _canonical_runtime_path(
+        start_context.sandbox_policy["roots"][0],
+        path="worker_start.sandbox_policy.roots[0]",
+    )
+    sandbox_type = sandbox["type"]
+    if sandbox_type == "readOnly":
+        if tuple(sandbox["writable_roots"]) != ():
+            _fail("provider readOnly sandbox cannot expose writable roots")
+    elif sandbox_type == "workspaceWrite":
+        writable = tuple(
+            _canonical_runtime_path(item, path="provider_start_observation.sandbox.writable_roots")
+            for item in sandbox["writable_roots"]
+        )
+        if not writable or any(not _path_within(item, server_root) for item in writable):
+            _fail("provider start observation sandbox widened beyond disposable root")
+    else:
+        _fail("provider start observation sandbox type is not allowed")
+
+    observed_sources = tuple(observation.instruction_sources)
+    if len(observed_sources) != len(expected_paths):
+        _fail("provider start instruction source set mismatch")
+    observed_paths: set[str] = set()
+    observed_hashes: set[str] = set()
+    expected_by_path = {_path_key(item["path"]): item for item in expected_paths}
+    for index, source in enumerate(observed_sources):
+        resolved, digest = _canonical_runtime_file(
+            source["path"], path=f"provider_start_observation.instruction_sources[{index}].path"
+        )
+        path_key = _path_key(resolved)
+        if path_key in observed_paths or source["sha256"] in observed_hashes:
+            _fail("provider start instruction source observation is ambiguous")
+        expected = expected_by_path.get(path_key)
+        if expected is None or expected["sha256"] != source["sha256"] or digest != source["sha256"]:
+            _fail("provider start instruction source observation mismatch")
+        observed_paths.add(path_key)
+        observed_hashes.add(source["sha256"])
+    if observed_paths != set(expected_by_path):
+        _fail("provider start instruction source observation is incomplete")
+
+
+def bind_provider_started_worker_thread(
+    handoff: ValidatedVisionHandoff,
+    *,
+    provider_observation: object,
+    authority_context: ServerOwnedAuthorityContext,
+    start_context: ServerOwnedWorkerStartContext,
+    now: datetime | None = None,
+) -> tuple[ProviderStartObservation, BoundWorkerThread, ServerOwnedWorkerBindingContext]:
+    """Create the immutable worker binding only after official provider start."""
+
+    payload, _ = _worker_handoff_payload(
+        handoff,
+        authority_context=authority_context,
+        now=now,
+    )
+    _start_sandbox_policy(payload, start_context)
+    expected_paths = _expected_start_instruction_sources(authority_context, start_context)
+    observation = _provider_start_observation(provider_observation)
+    _validate_provider_start_observation(
+        observation,
+        payload=payload,
+        authority_context=authority_context,
+        start_context=start_context,
+        expected_paths=expected_paths,
+    )
+    worker_context = ServerOwnedWorkerBindingContext(
+        adapter_version=start_context.adapter_version,
+        observed_thread_id=observation.thread_id,
+        sandbox_policy={
+            "roots": [str(_canonical_runtime_path(start_context.sandbox_policy["roots"][0], path="worker_start.sandbox_policy.roots[0]"))],
+            "write_policy": "DISPOSABLE_ONLY",
+            "cwd": str(_canonical_runtime_path(start_context.sandbox_policy["cwd"], path="worker_start.sandbox_policy.cwd")),
+        },
+    )
+    binding = _make_bound_worker_thread(
+        handoff,
+        thread_id=observation.thread_id,
+        authority_context=authority_context,
+        worker_context=worker_context,
+        now=now,
+    )
+    return observation, binding, worker_context
+
+
+def validate_provider_start_observation(
+    provider_observation: object,
+    *,
+    handoff: ValidatedVisionHandoff,
+    binding: BoundWorkerThread,
+    authority_context: ServerOwnedAuthorityContext,
+    worker_context: ServerOwnedWorkerBindingContext,
+    start_context: ServerOwnedWorkerStartContext,
+    now: datetime | None = None,
+) -> ProviderStartObservation:
+    """Revalidate the same typed provider facts on later operations."""
+
+    if not isinstance(binding, BoundWorkerThread):
+        _fail("provider start observation binding mismatch")
+    if not isinstance(worker_context, ServerOwnedWorkerBindingContext):
+        _fail("provider start observation worker context mismatch")
+    payload, _ = _worker_handoff_payload(
+        handoff,
+        authority_context=authority_context,
+        now=now,
+    )
+    _start_sandbox_policy(payload, start_context)
+    expected_paths = _expected_start_instruction_sources(authority_context, start_context)
+    observation = _provider_start_observation(provider_observation)
+    _validate_provider_start_observation(
+        observation,
+        payload=payload,
+        authority_context=authority_context,
+        start_context=start_context,
+        expected_paths=expected_paths,
+    )
+    if (
+        observation.thread_id != binding.thread_id
+        or worker_context.observed_thread_id != binding.thread_id
+        or binding.adapter_version != start_context.adapter_version
+    ):
+        _fail("provider start observation thread binding mismatch")
+    return observation
+
+
 def resume_worker_thread(
     binding: BoundWorkerThread,
     handoff: ValidatedVisionHandoff,
@@ -1249,8 +1646,10 @@ __all__ = [
     "BoundWorkerThread",
     "DEFAULT_VALIDATOR_VERSION",
     "HANDOFF_SCHEMA_VERSION",
+    "ProviderStartObservation",
     "ServerOwnedAuthorityContext",
     "ServerOwnedWorkerBindingContext",
+    "ServerOwnedWorkerStartContext",
     "SERVER_OWNED_ADAPTER_VERSION",
     "SchemaSnapshot",
     "ValidatedVisionHandoff",
@@ -1261,5 +1660,7 @@ __all__ = [
     "resume_worker_thread",
     "validate_output_schema_binding",
     "validate_provider_effective_attestation",
+    "validate_provider_start_observation",
+    "validate_worker_start_context",
     "validate_vision_handoff",
 ]

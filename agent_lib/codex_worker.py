@@ -9,9 +9,11 @@ output remain untrusted.
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib
 import json
 import math
+import os
 import re
 import sys
 import threading
@@ -39,12 +41,17 @@ from agent_lib.codex_worker_process import (
 )
 from cad_agent.vision_handoff import (
     BoundWorkerThread,
+    ProviderStartObservation,
     ServerOwnedAuthorityContext,
     ServerOwnedWorkerBindingContext,
+    ServerOwnedWorkerStartContext,
     ValidatedVisionHandoff,
     VisionHandoffError,
     fork_worker_thread,
+    bind_provider_started_worker_thread,
     resume_worker_thread,
+    validate_provider_start_observation,
+    validate_worker_start_context,
     validate_provider_effective_attestation,
 )
 
@@ -81,6 +88,18 @@ _PROVIDER_ATTESTATION_FIELDS = frozenset(
         "approval_escalation",
         "transport",
         "alternate_transports",
+    }
+)
+_PROVIDER_START_OBSERVATION_FIELDS = frozenset(
+    {
+        "thread_id",
+        "model",
+        "model_provider",
+        "cwd",
+        "approval_policy",
+        "approvals_reviewer",
+        "sandbox",
+        "instruction_sources",
     }
 )
 _CHILD_ERROR_CODES = frozenset(
@@ -193,7 +212,7 @@ class AdapterRequest:
     """Immutable normalized request for one child-owned adapter operation."""
 
     operation: str
-    thread_id: str
+    thread_id: str | None
     handoff_sha256: str
     run_id: str
     approval_mode: str
@@ -387,7 +406,6 @@ def _request_from_wire(value: Mapping[str, object]) -> AdapterRequest:
     cancelled = value.get("cancelled")
     strings = (
         operation,
-        thread_id,
         handoff_sha256,
         run_id,
         approval_mode,
@@ -398,6 +416,10 @@ def _request_from_wire(value: Mapping[str, object]) -> AdapterRequest:
         cwd,
     )
     if any(not isinstance(item, str) for item in strings):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    if thread_id is not None and not isinstance(thread_id, str):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    if operation != "start" and thread_id is None:
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
     if not isinstance(experimental_api, bool) or not isinstance(cancelled, bool):
         _fail("WORKER_PROVIDER_RESPONSE_INVALID")
@@ -635,12 +657,340 @@ def run_codex_worker_child(
     )
 
 
-def _unsupported_official_adapter_factory(_module: object) -> WorkerAdapter:
-    _fail("WORKER_SDK_INCOMPATIBLE")
+def _sdk_scalar(value: object, *, error_code: str = "WORKER_PROVIDER_RESPONSE_INVALID") -> object:
+    root = getattr(value, "root", value)
+    scalar = getattr(root, "value", root)
+    if isinstance(scalar, str):
+        return scalar
+    _fail(error_code)
+
+
+def _sdk_model_dump(value: object) -> object:
+    dumper = getattr(value, "model_dump", None)
+    if callable(dumper):
+        try:
+            return dumper(by_alias=True, exclude_none=True)
+        except TypeError:
+            return dumper()
+    return value
+
+
+def _sdk_text_from_value(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        for key in ("text", "content", "message", "output"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+            nested = _sdk_text_from_value(candidate)
+            if nested is not None:
+                return nested
+        for candidate in value.values():
+            nested = _sdk_text_from_value(candidate)
+            if nested is not None:
+                return nested
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for candidate in value:
+            nested = _sdk_text_from_value(candidate)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _sdk_candidate_from_turn(turn: object) -> object:
+    items = getattr(turn, "items", None)
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    text: str | None = None
+    for item in items:
+        item_text = getattr(item, "text", None)
+        if not isinstance(item_text, str):
+            item_text = _sdk_text_from_value(_sdk_model_dump(item))
+        if isinstance(item_text, str) and item_text.strip():
+            text = item_text.strip()
+    if text is None:
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1]).strip()
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return text
+
+
+class _OfficialSdkWorkerAdapter:
+    """Small child-only adapter over the pinned official SDK low-level seam."""
+
+    def __init__(self, module: object) -> None:
+        self._module = module
+        self._client: object | None = None
+        self._thread_id: str | None = None
+        self._observation: dict[str, object] | None = None
+        self._active_turn_id: str | None = None
+
+    def ensure_compatible(self) -> None:
+        if self._client is not None:
+            return
+        try:
+            client_module = importlib.import_module("openai_codex.client")
+            client_type = getattr(client_module, "CodexClient", None)
+            config_type = getattr(client_module, "CodexConfig", None)
+            if not callable(client_type) or not callable(config_type):
+                _fail("WORKER_SDK_INCOMPATIBLE")
+            self._client_type = client_type
+            self._config_type = config_type
+        except CodexWorkerError:
+            raise
+        except Exception:
+            _fail("WORKER_SDK_INCOMPATIBLE")
+
+    def _client_for(self, request: AdapterRequest) -> object:
+        self.ensure_compatible()
+        if self._client is None:
+            config_type = getattr(self, "_config_type", None)
+            client_type = getattr(self, "_client_type", None)
+            if not callable(config_type) or not callable(client_type):
+                _fail("WORKER_SDK_INCOMPATIBLE")
+            try:
+                config = config_type(
+                    cwd=request.cwd,
+                    experimental_api=False,
+                )
+                client = client_type(config=config)
+                client.start()
+                client.initialize()
+            except CodexWorkerError:
+                raise
+            except Exception:
+                _fail("WORKER_PROVIDER_FAILED")
+            self._client = client
+        return self._client
+
+    def _instruction_sources(self, response: object) -> tuple[dict[str, str], ...]:
+        raw_sources = getattr(response, "instruction_sources", None)
+        if raw_sources is None:
+            raw_sources = ()
+        if isinstance(raw_sources, (str, bytes)) or not isinstance(raw_sources, Sequence):
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        observed: list[dict[str, str]] = []
+        for raw_path in raw_sources:
+            path_value = getattr(raw_path, "root", raw_path)
+            if not isinstance(path_value, (str, os.PathLike)):
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            try:
+                path_text = os.fspath(path_value)
+            except TypeError:
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            if isinstance(path_text, bytes) or not path_text:
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            candidate = Path(path_text)
+            try:
+                resolved = candidate.resolve(strict=True)
+                digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+            except (OSError, RuntimeError, ValueError):
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            observed.append({"path": str(resolved), "sha256": digest})
+        return tuple(observed)
+
+    def _observation_from_response(self, response: object) -> dict[str, object]:
+        thread = getattr(response, "thread", None)
+        thread_id = getattr(thread, "id", None)
+        if not isinstance(thread_id, str) or not thread_id:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        sandbox = getattr(response, "sandbox", None)
+        sandbox_root = getattr(sandbox, "root", sandbox)
+        sandbox_type = _sdk_scalar(
+            getattr(sandbox_root, "type", None),
+            error_code="WORKER_SDK_ATTESTATION_GAP",
+        )
+        network_access = getattr(sandbox_root, "network_access", False)
+        if not isinstance(network_access, bool):
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        raw_writable_roots = getattr(sandbox_root, "writable_roots", None) or ()
+        if isinstance(raw_writable_roots, (str, bytes)) or not isinstance(raw_writable_roots, Sequence):
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        writable_roots: list[str] = []
+        for raw_root in raw_writable_roots:
+            root_value = getattr(raw_root, "root", raw_root)
+            if not isinstance(root_value, (str, os.PathLike)):
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            try:
+                root_text = os.fspath(root_value)
+            except TypeError:
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            if isinstance(root_text, bytes) or not root_text:
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            writable_roots.append(str(root_text))
+        raw_cwd = getattr(response, "cwd", None)
+        cwd_value = getattr(raw_cwd, "root", raw_cwd)
+        if not isinstance(cwd_value, (str, os.PathLike)):
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        try:
+            cwd_text = os.fspath(cwd_value)
+        except TypeError:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        if isinstance(cwd_text, bytes) or not cwd_text:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        return {
+            "thread_id": thread_id,
+            "model": getattr(response, "model", None),
+            "model_provider": getattr(response, "model_provider", None),
+            "cwd": str(cwd_text),
+            "approval_policy": _sdk_scalar(
+                getattr(response, "approval_policy", None),
+                error_code="WORKER_SDK_ATTESTATION_GAP",
+            ),
+            "approvals_reviewer": _sdk_scalar(
+                getattr(response, "approvals_reviewer", None),
+                error_code="WORKER_SDK_ATTESTATION_GAP",
+            ),
+            "sandbox": {
+                "type": sandbox_type,
+                "network_access": network_access,
+                "writable_roots": tuple(writable_roots),
+            },
+            "instruction_sources": self._instruction_sources(response),
+        }
+
+    def _start(self, request: AdapterRequest) -> Mapping[str, object]:
+        if request.thread_id is not None:
+            _fail("WORKER_AUTHORITY_MISMATCH")
+        client = self._client_for(request)
+        try:
+            response = client.thread_start(
+                {
+                    "approvalPolicy": "never",
+                    "approvalsReviewer": "user",
+                    "cwd": request.cwd,
+                    "model": request.model_identity,
+                    "modelProvider": "openai",
+                    "sandbox": "workspace-write",
+                    "ephemeral": True,
+                }
+            )
+            observation = self._observation_from_response(response)
+        except CodexWorkerError:
+            raise
+        except Exception:
+            _fail("WORKER_PROVIDER_FAILED")
+        self._thread_id = observation["thread_id"]
+        self._observation = dict(observation)
+        return {
+            "status": "ready",
+            "thread_id": self._thread_id,
+            "events": ({"type": "thread.ready"},),
+            "provider_observation": self._observation,
+        }
+
+    def _turn(self, request: AdapterRequest) -> Mapping[str, object]:
+        if request.thread_id is None or request.thread_id != self._thread_id:
+            _fail("WORKER_AUTHORITY_MISMATCH")
+        client = self._client_for(request)
+        payload = _thaw_json_like(request.input_payload)
+        if isinstance(payload, str):
+            input_items: object = payload
+        elif isinstance(payload, Mapping):
+            input_items = payload.get("text") or payload.get("prompt")
+            if not isinstance(input_items, str):
+                input_items = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        else:
+            input_items = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        try:
+            schema = json.loads(request.output_schema_bytes.decode("utf-8"))
+            started = client.turn_start(
+                request.thread_id,
+                input_items,
+                params={"outputSchema": schema},
+            )
+            self._active_turn_id = getattr(started.turn, "id", None)
+            if not isinstance(self._active_turn_id, str) or not self._active_turn_id:
+                _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+            completed = client.wait_for_turn_completed(self._active_turn_id)
+            turn = completed.turn
+            status = _sdk_scalar(
+                getattr(turn, "status", None),
+                error_code="WORKER_PROVIDER_RESPONSE_INVALID",
+            )
+            if status != "completed":
+                return {
+                    "status": "failed",
+                    "thread_id": request.thread_id,
+                    "events": (
+                        {"type": "turn.started"},
+                        {"type": "provider.failed"},
+                    ),
+                }
+            candidate = _sdk_candidate_from_turn(turn)
+            return {
+                "status": "completed",
+                "thread_id": request.thread_id,
+                "turn_id": self._active_turn_id,
+                "candidate_output": candidate,
+                "events": (
+                    {"type": "turn.started"},
+                    {"type": "turn.completed"},
+                ),
+            }
+        except CodexWorkerError:
+            raise
+        except Exception:
+            _fail("WORKER_PROVIDER_FAILED")
+        finally:
+            self._active_turn_id = None
+
+    def invoke(self, request: AdapterRequest) -> object:
+        if request.operation == "start":
+            return self._start(request)
+        if request.operation == "turn":
+            return self._turn(request)
+        if request.operation == "interrupt":
+            if request.thread_id is None or request.thread_id != self._thread_id:
+                _fail("WORKER_AUTHORITY_MISMATCH")
+            if self._active_turn_id is not None:
+                try:
+                    self._client_for(request).turn_interrupt(request.thread_id, self._active_turn_id)
+                except CodexWorkerError:
+                    raise
+                except Exception:
+                    _fail("WORKER_PROVIDER_FAILED")
+            return {
+                "status": "interrupted",
+                "thread_id": request.thread_id,
+                "events": ({"type": "turn.interrupted"},),
+            }
+        if request.operation == "close":
+            if request.thread_id is None or request.thread_id != self._thread_id:
+                _fail("WORKER_AUTHORITY_MISMATCH")
+            try:
+                if self._client is not None:
+                    self._client.close()
+            except CodexWorkerError:
+                raise
+            except Exception:
+                _fail("WORKER_PROVIDER_FAILED")
+            return {
+                "status": "closed",
+                "thread_id": request.thread_id,
+                "events": ({"type": "thread.closed"},),
+            }
+        _fail("WORKER_SDK_INCOMPATIBLE")
+
+    def attest(self, request: AdapterRequest) -> object:
+        if request.thread_id is None or request.thread_id != self._thread_id:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        if self._observation is None:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        return dict(self._observation)
+
+
+def _official_adapter_factory(module: object) -> WorkerAdapter:
+    return _OfficialSdkWorkerAdapter(module)
 
 
 def _child_main() -> int:
-    return run_codex_worker_child(adapter_factory=_unsupported_official_adapter_factory)
+    return run_codex_worker_child(adapter_factory=_official_adapter_factory)
 
 
 def _sandbox_boundary(
@@ -920,6 +1270,34 @@ def _normalize_response(
     return normalized_status, turn_id, events, candidate
 
 
+def _normalize_start_response(
+    value: object, *, deadline: float | None = None
+) -> tuple[str, str, tuple[CodexWorkerEvent, ...], Mapping[str, object]]:
+    _check_deadline(deadline)
+    if not isinstance(value, Mapping) or set(value) != {
+        "status",
+        "thread_id",
+        "events",
+        "provider_observation",
+    }:
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    status = value.get("status")
+    thread_id = value.get("thread_id")
+    if status != "ready" or not isinstance(thread_id, str):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    events = _normalize_events(value.get("events"), deadline=deadline)
+    if not _event_grammar_valid("start", status, tuple(event.kind for event in events)):
+        _fail("WORKER_PROVIDER_RESPONSE_INVALID")
+    observation = value.get("provider_observation")
+    if not isinstance(observation, Mapping):
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    if set(observation) != _PROVIDER_START_OBSERVATION_FIELDS:
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    if observation.get("thread_id") != thread_id:
+        _fail("WORKER_SDK_ATTESTATION_GAP")
+    return status, thread_id, events, observation
+
+
 def _cleanup_evidence(
     process_boundary: WorkerProcessBoundary, handle: object
 ) -> tuple[WorkerCleanupResult | None, str | None]:
@@ -983,6 +1361,8 @@ def _attest_provider_boundary(
     binding: BoundWorkerThread,
     authority_context: ServerOwnedAuthorityContext,
     worker_context: ServerOwnedWorkerBindingContext,
+    handoff: ValidatedVisionHandoff | None = None,
+    start_context: ServerOwnedWorkerStartContext | None = None,
     deadline: float | None = None,
 ) -> None:
     attest = getattr(process_boundary, "attest", None)
@@ -1008,6 +1388,21 @@ def _attest_provider_boundary(
         observed_fields = set(observed)
     except Exception:
         _fail("WORKER_SDK_ATTESTATION_GAP")
+    if observed_fields == _PROVIDER_START_OBSERVATION_FIELDS:
+        if handoff is None or start_context is None:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        try:
+            validate_provider_start_observation(
+                observed,
+                handoff=handoff,
+                binding=binding,
+                authority_context=authority_context,
+                worker_context=worker_context,
+                start_context=start_context,
+            )
+        except VisionHandoffError:
+            _fail("WORKER_AUTHORITY_MISMATCH")
+        return
     if not _PROVIDER_ATTESTATION_FIELDS.issubset(observed_fields):
         _fail("WORKER_SDK_ATTESTATION_GAP")
     try:
@@ -1029,8 +1424,10 @@ class CodexWorkerSession:
         "_environment_attestation",
         "_handoff",
         "_pending_candidate",
+        "_provider_observation",
         "_process_boundary",
         "_process_handle",
+        "_start_context",
         "_status",
         "_terminal_result",
         "_worker_context",
@@ -1046,6 +1443,8 @@ class CodexWorkerSession:
         process_boundary: WorkerProcessBoundary,
         environment_attestation: WorkerEnvironmentAttestation,
         process_handle: object,
+        start_context: ServerOwnedWorkerStartContext | None = None,
+        provider_observation: ProviderStartObservation | None = None,
     ) -> None:
         self._handoff = handoff
         self._binding = binding
@@ -1054,6 +1453,8 @@ class CodexWorkerSession:
         self._process_boundary = process_boundary
         self._environment_attestation = environment_attestation
         self._process_handle = process_handle
+        self._start_context = start_context
+        self._provider_observation = provider_observation
         self._status = "READY"
         self._pending_candidate: object | None = None
         self._cleanup_result: WorkerCleanupResult | None = None
@@ -1186,14 +1587,23 @@ class CodexWorkerSession:
             code = "WORKER_TIMEOUT" if exc.code == "WORKER_TIMEOUT" else "WORKER_AUTHORITY_MISMATCH"
             return self._cleanup_failure(operation, code)
         try:
+            attestation_kwargs = {
+                "binding": self._binding,
+                "authority_context": self._authority_context,
+                "worker_context": self._worker_context,
+                "deadline": deadline,
+            }
+            start_context = getattr(self, "_start_context", None)
+            if start_context is not None:
+                attestation_kwargs.update(
+                    handoff=self._handoff,
+                    start_context=start_context,
+                )
             _attest_provider_boundary(
                 self._process_boundary,
                 self._process_handle,
                 request,
-                binding=self._binding,
-                authority_context=self._authority_context,
-                worker_context=self._worker_context,
-                deadline=deadline,
+                **attestation_kwargs,
             )
         except CodexWorkerError as exc:
             code = (
@@ -1747,23 +2157,158 @@ def _open_codex_worker(
     )
 
 
+def _open_start_codex_worker(
+    *,
+    handoff: ValidatedVisionHandoff,
+    authority_context: ServerOwnedAuthorityContext,
+    start_context: ServerOwnedWorkerStartContext,
+    adapter: WorkerAdapter,
+    process_boundary: WorkerProcessBoundary,
+    timeout_seconds: float,
+    now: datetime | None,
+) -> CodexWorkerSession:
+    del adapter
+    timeout = _validate_timeout(timeout_seconds)
+    deadline = time.monotonic() + timeout
+    try:
+        root, cwd, roots = validate_worker_start_context(
+            handoff,
+            authority_context=authority_context,
+            start_context=start_context,
+            now=now,
+        )
+    except (VisionHandoffError, TypeError, ValueError, AttributeError):
+        _fail("WORKER_AUTHORITY_MISMATCH")
+    _check_deadline(deadline)
+    policy = authority_context.provider_policy
+    if not isinstance(policy, Mapping):
+        _fail("WORKER_AUTHORITY_MISMATCH")
+    approval_mode = policy.get("approval_mode")
+    experimental_api = policy.get("experimental_api")
+    model_identity = policy.get("model_identity")
+    config_sha256 = policy.get("config_sha256")
+    if (
+        approval_mode != "deny_all"
+        or experimental_api is not False
+        or not isinstance(model_identity, str)
+        or not isinstance(config_sha256, str)
+    ):
+        _fail("WORKER_AUTHORITY_MISMATCH")
+    try:
+        if type(process_boundary) is Task3ProcessBoundary:
+            if (
+                not _task5_round2_is_canonical_boundary(process_boundary)
+                or not _task5_round3_has_canonical_start_dispatch(process_boundary)
+            ):
+                _fail("WORKER_SDK_ATTESTATION_GAP")
+            attestation, handle = _TASK3_CANONICAL_START(
+                process_boundary,
+                expected_disposable_root=root,
+                expected_cwd=cwd,
+            )
+        else:
+            attestation, handle = process_boundary.start(
+                expected_disposable_root=root,
+                expected_cwd=cwd,
+            )
+    except CodexWorkerError:
+        raise
+    except Exception:
+        _fail("WORKER_PROCESS_START_FAILED")
+    try:
+        _check_deadline(deadline)
+        _validate_process_evidence(
+            attestation=attestation,
+            handle=handle,
+            expected_root=root,
+            expected_cwd=cwd,
+        )
+    except CodexWorkerError as exc:
+        _raise_open_failure(process_boundary, handle, exc.code)
+    request = AdapterRequest(
+        operation="start",
+        thread_id=None,
+        handoff_sha256=handoff.handoff_sha256,
+        run_id=authority_context.run_id,
+        approval_mode=approval_mode,
+        experimental_api=False,
+        model_identity=model_identity,
+        config_sha256=config_sha256,
+        output_schema_bytes=bytes(handoff.schema_snapshot.raw_bytes),
+        output_schema_sha256=handoff.schema_snapshot.sha256,
+        output_validator_version=handoff.schema_snapshot.validator_version,
+        sandbox_roots=roots,
+        cwd=str(cwd),
+        timeout_seconds=timeout,
+    )
+    try:
+        _check_deadline(deadline)
+        response = _invoke_child(
+            process_boundary,
+            handle,
+            request,
+            deadline=deadline,
+        )
+    except CodexWorkerError as exc:
+        primary = (
+            exc.code
+            if exc.code in _CHILD_ERROR_CODES
+            else "WORKER_PROVIDER_FAILED"
+        )
+        _raise_open_failure(process_boundary, handle, primary)
+    try:
+        _check_deadline(deadline)
+        _status, provider_thread_id, _events, provider_observation = _normalize_start_response(
+            response,
+            deadline=deadline,
+        )
+        if not provider_thread_id:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        observed, binding, worker_context = bind_provider_started_worker_thread(
+            handoff,
+            provider_observation=provider_observation,
+            authority_context=authority_context,
+            start_context=start_context,
+            now=now,
+        )
+    except CodexWorkerError as exc:
+        primary = (
+            "WORKER_TIMEOUT"
+            if exc.code == "WORKER_TIMEOUT"
+            else exc.code
+            if exc.code in {"WORKER_SDK_ATTESTATION_GAP", "WORKER_AUTHORITY_MISMATCH"}
+            else "WORKER_PROVIDER_RESPONSE_INVALID"
+        )
+        _raise_open_failure(process_boundary, handle, primary)
+    except (VisionHandoffError, TypeError, ValueError, AttributeError):
+        _raise_open_failure(process_boundary, handle, "WORKER_AUTHORITY_MISMATCH")
+    return CodexWorkerSession(
+        handoff=handoff,
+        binding=binding,
+        authority_context=authority_context,
+        worker_context=worker_context,
+        process_boundary=process_boundary,
+        environment_attestation=attestation,
+        process_handle=handle,
+        start_context=start_context,
+        provider_observation=observed,
+    )
+
+
 def start_codex_worker(
     *,
     handoff: ValidatedVisionHandoff,
-    binding: BoundWorkerThread,
     authority_context: ServerOwnedAuthorityContext,
-    worker_context: ServerOwnedWorkerBindingContext,
+    start_context: ServerOwnedWorkerStartContext,
     adapter: WorkerAdapter,
     process_boundary: WorkerProcessBoundary,
     timeout_seconds: float,
     now: datetime | None = None,
 ) -> CodexWorkerSession:
-    return _open_codex_worker(
-        operation="start",
+    return _open_start_codex_worker(
         handoff=handoff,
-        binding=binding,
         authority_context=authority_context,
-        worker_context=worker_context,
+        start_context=start_context,
         adapter=adapter,
         process_boundary=process_boundary,
         timeout_seconds=timeout_seconds,
@@ -1847,6 +2392,8 @@ __all__ = [
     "CodexWorkerSession",
     "consume_task6_result",
     "LazyOfficialSdkAdapter",
+    "ProviderStartObservation",
+    "ServerOwnedWorkerStartContext",
     "Task3ProcessBoundary",
     "WorkerAdapter",
     "WorkerProcessBoundary",
@@ -1854,6 +2401,7 @@ __all__ = [
     "resume_codex_worker",
     "run_codex_worker_child",
     "start_codex_worker",
+    "validate_provider_start_observation",
 ]
 
 
@@ -1924,6 +2472,8 @@ def _task5_secure_attest_provider_boundary(
     binding: BoundWorkerThread,
     authority_context: ServerOwnedAuthorityContext,
     worker_context: ServerOwnedWorkerBindingContext,
+    handoff: ValidatedVisionHandoff | None = None,
+    start_context: ServerOwnedWorkerStartContext | None = None,
     deadline: float | None = None,
 ) -> None:
     del process_boundary
@@ -1939,6 +2489,21 @@ def _task5_secure_attest_provider_boundary(
         observed_fields = set(observed)
     except Exception:
         _fail("WORKER_SDK_ATTESTATION_GAP")
+    if observed_fields == _PROVIDER_START_OBSERVATION_FIELDS:
+        if handoff is None or start_context is None:
+            _fail("WORKER_SDK_ATTESTATION_GAP")
+        try:
+            validate_provider_start_observation(
+                observed,
+                handoff=handoff,
+                binding=binding,
+                authority_context=authority_context,
+                worker_context=worker_context,
+                start_context=start_context,
+            )
+        except VisionHandoffError:
+            _fail("WORKER_AUTHORITY_MISMATCH")
+        return
     if not _PROVIDER_ATTESTATION_FIELDS.issubset(observed_fields):
         _fail("WORKER_SDK_ATTESTATION_GAP")
     try:
@@ -2039,6 +2604,8 @@ def _task5_round2_secure_attest_provider_boundary(
     binding: BoundWorkerThread,
     authority_context: ServerOwnedAuthorityContext,
     worker_context: ServerOwnedWorkerBindingContext,
+    handoff: ValidatedVisionHandoff | None = None,
+    start_context: ServerOwnedWorkerStartContext | None = None,
     deadline: float | None = None,
 ) -> None:
     if not _task5_round2_is_canonical_boundary(process_boundary):
@@ -2050,6 +2617,8 @@ def _task5_round2_secure_attest_provider_boundary(
         binding=binding,
         authority_context=authority_context,
         worker_context=worker_context,
+        handoff=handoff,
+        start_context=start_context,
         deadline=deadline,
     )
 

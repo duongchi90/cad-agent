@@ -16,6 +16,50 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## M3 Task3 two-phase official provider start — current candidate
+
+- State: **Offline and isolated official-SDK START verified; live AutoCAD M3
+  epoch NOT RUN**. This candidate is START_ONLY. Resume/fork remain
+  fail-closed and are outside this boundary.
+- Candidate branch: `runtime/m3-task3-two-phase-start`; implementation head
+  before documentation is `96479e1c08df3d7ccf3c39a8b9f7ded563b44261`, based
+  on current `main` `b06e533bbcbe7221e7c3ad9234e8497f9b422ec8`. PR #332 remains
+  DRAFT/evidence-only and is not the implementation branch.
+- The canonical Task3 child now validates server-owned start custody first,
+  calls the existing low-level official `openai-codex` 0.144.4
+  `CodexClient.thread_start`, and only then creates the immutable worker
+  binding from the provider-generated thread ID. No caller-selected or
+  pre-bound provider thread ID is accepted.
+- Provider observation is a reduced typed allowlist: generated thread ID,
+  model/provider, cwd, approval policy/reviewer, effective sandbox, and
+  instruction-source path/hash observations. Server-owned config hash,
+  `experimental_api=false`, schema/hash/validator identity, and authority
+  source IDs/roles remain request/custody fields and are not echoed as
+  provider evidence.
+- Instruction-source binding is fail-closed: canonical observed paths must
+  remain inside the disposable runtime root, be regular non-reparse files,
+  hash to their actual bytes, and match exactly one expected authority source.
+  Missing, extra, duplicate-hash ambiguity, path escape, symlink/reparse, and
+  hash drift are rejected. Provider `readOnly` is accepted only as a stricter
+  effective policy than server maximum `DISPOSABLE_ONLY`; widening access,
+  network, cwd, model, or approval is rejected.
+- Focused Task3 suites passed `128` tests; the nearest full offline suite
+  passed `3059` tests with `18` deselected and `72` subtests. The affected
+  Task6 event suite passed `161` tests after a compatibility repair. The
+  authoritative verifier is rerun on the final documentation head before
+  release integration.
+- Real isolated official SDK START/BIND passed with package `openai-codex`
+  `0.144.4` in a fresh disposable CODEX_HOME and no copied credentials. The
+  typed response supplied provider-generated thread identity, exact model and
+  provider, `approvalPolicy=never`, reviewer `user`, canonical instruction
+  source hash, and effective `readOnly`/no-network sandbox. The bind result
+  used that same provider thread ID; `config_sha256` was absent from provider
+  observation as required. No Task6/R5/R6/AutoCAD mutation was performed.
+- Remaining boundary: hosted exact-head checks and normal integration of this
+  bounded implementation, followed by one NEW disposable provider-backed M3
+  LINE epoch. M2 remains accepted and is not retested; MECH-1 remains
+  **NOT JUSTIFIED**.
+
 ## Accelerated reuse-first program: PLANNING/GOVERNANCE ONLY
 
 - Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.

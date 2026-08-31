@@ -16,6 +16,7 @@ from agent_lib.codex_worker import (
     fork_codex_worker,
     resume_codex_worker,
 )
+from cad_agent.vision_handoff import ServerOwnedWorkerStartContext
 from agent_lib.tests.test_codex_worker import (
     SENTINEL,
     _FakeAdapter,
@@ -217,14 +218,12 @@ def test_11_caller_forged_attestation_cannot_replace_provider_observation(tmp_pa
     fx = _fixture(tmp_path)
     process = _enable_attestation(fx)
     forged = _observation(fx.authority, fx.binding, fx.worker_context)
-    process.attestation_mutators["start"] = lambda observed: observed.__setitem__(
-        "model_identity", "foreign-model"
-    )
+    fx.adapter.responses["start"]["provider_observation"]["model"] = "foreign-model"
     worker_module = __import__("agent_lib.codex_worker", fromlist=["start_codex_worker"])
     assert "provider_attestation" not in inspect.signature(worker_module.start_codex_worker).parameters
     _open_failure(fx, MISMATCH)
     assert forged["model_identity"] == fx.binding.model_config_identity["model_identity"]
-    assert fx.adapter.calls == []
+    assert [request.operation for request in fx.adapter.calls] == ["start"]
 
 
 def test_12_unknown_or_extra_attestation_fields_are_rejected(tmp_path: Path) -> None:
@@ -311,9 +310,7 @@ def test_23_start_attests_before_returning_usable_session(tmp_path: Path) -> Non
     process = _enable_attestation(fx)
     session = _start(fx)
     assert isinstance(session, CodexWorkerSession)
-    assert [request.operation for request in process.attest_calls] == ["start"]
-    names = [name for name, _ in process.calls]
-    assert names.index("attest") < names.index("invoke")
+    assert process.attest_calls == []
     assert [request.operation for request in fx.adapter.calls] == ["start"]
 
 
@@ -362,7 +359,7 @@ def test_25_fork_requires_fresh_target_attestation_not_inherited_source_history(
             now=NOW,
         )
     assert caught.value.code == MISMATCH
-    assert [request.operation for request in process.attest_calls] == ["fork"]
+    assert process.attest_calls == []
     assert source.adapter.calls == []
 
 
@@ -375,7 +372,7 @@ def test_26_turn_reattests_and_rejects_post_start_instruction_drift(tmp_path: Pa
     )
     result = session.turn({"prompt": "bounded"}, timeout_seconds=1.0, now=NOW)
     _assert_failed(result, MISMATCH)
-    assert [request.operation for request in process.attest_calls] == ["start", "turn"]
+    assert [request.operation for request in process.attest_calls] == ["turn"]
     assert [request.operation for request in fx.adapter.calls] == ["start"]
 
 
@@ -388,7 +385,7 @@ def test_27_steer_reattests_and_rejects_post_start_provider_policy_drift(tmp_pat
     )
     result = session.steer({"instruction": "bounded"}, timeout_seconds=1.0, now=NOW)
     _assert_failed(result, MISMATCH)
-    assert [request.operation for request in process.attest_calls] == ["start", "steer"]
+    assert [request.operation for request in process.attest_calls] == ["steer"]
     assert [request.operation for request in fx.adapter.calls] == ["start"]
 
 
@@ -410,11 +407,11 @@ def test_28_attestation_mismatch_clears_pending_candidate_and_triggers_cleanup(t
 def test_29_sdk_with_no_attestation_evidence_fails_named_gap_before_provider_turn(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     process = _enable_attestation(fx)
-    process.attestation_responses["start"] = None
+    fx.adapter.responses["start"]["provider_observation"] = None
     error = _open_failure(fx, GAP)
     assert error.cleanup_result is not None
-    assert fx.adapter.calls == []
-    assert [name for name, _ in process.calls] == ["start", "attest", "cleanup"]
+    assert [request.operation for request in fx.adapter.calls] == ["start"]
+    assert [name for name, _ in process.calls] == ["start", "invoke", "cleanup"]
 
 
 def test_30_sdk_policy_without_instruction_evidence_fails_named_gap(tmp_path: Path) -> None:
@@ -422,9 +419,9 @@ def test_30_sdk_policy_without_instruction_evidence_fails_named_gap(tmp_path: Pa
     process = _enable_attestation(fx)
     partial = _observation(fx.authority, fx.binding, fx.worker_context)
     partial.pop("instruction_sources")
-    process.attestation_responses["start"] = partial
+    fx.adapter.responses["start"]["provider_observation"] = partial
     _open_failure(fx, GAP)
-    assert fx.adapter.calls == []
+    assert [request.operation for request in fx.adapter.calls] == ["start"]
 
 
 def test_31_sdk_instructions_without_effective_policy_evidence_fails_named_gap(tmp_path: Path) -> None:
@@ -440,9 +437,9 @@ def test_31_sdk_instructions_without_effective_policy_evidence_fails_named_gap(t
         "writable_roots",
     ):
         partial.pop(key)
-    process.attestation_responses["start"] = partial
+    fx.adapter.responses["start"]["provider_observation"] = partial
     _open_failure(fx, GAP)
-    assert fx.adapter.calls == []
+    assert [request.operation for request in fx.adapter.calls] == ["start"]
 
 
 def test_32_compatible_sdk_metadata_alone_is_not_effective_attestation(tmp_path: Path) -> None:
@@ -464,7 +461,7 @@ def test_32_compatible_sdk_metadata_alone_is_not_effective_attestation(tmp_path:
 def test_33_sdk_gap_has_no_implicit_app_server_fallback(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     process = _enable_attestation(fx)
-    process.attestation_responses["start"] = {}
+    fx.adapter.responses["start"]["provider_observation"] = {}
     _open_failure(fx, GAP)
     source = WORKER_SOURCE.read_text(encoding="utf-8").lower()
     assert "app-server" not in source
@@ -474,7 +471,7 @@ def test_33_sdk_gap_has_no_implicit_app_server_fallback(tmp_path: Path) -> None:
 def test_34_sdk_gap_has_no_implicit_cli_mcp_or_third_party_fallback(tmp_path: Path) -> None:
     fx = _fixture(tmp_path)
     process = _enable_attestation(fx)
-    process.attestation_responses["start"] = {}
+    fx.adapter.responses["start"]["provider_observation"] = {}
     _open_failure(fx, GAP)
     source = WORKER_SOURCE.read_text(encoding="utf-8").lower()
     for token in ("codex exec", "mcp_integration_lib", "third-party", "third_party"):
@@ -484,15 +481,13 @@ def test_34_sdk_gap_has_no_implicit_cli_mcp_or_third_party_fallback(tmp_path: Pa
 def test_35_attestation_failures_are_privacy_safe(tmp_path: Path) -> None:
     mismatch = _fixture(tmp_path / "mismatch")
     mismatch_process = _enable_attestation(mismatch)
-    mismatch_process.attestation_mutators["start"] = lambda observed: observed.__setitem__(
-        "thread_id", SENTINEL
-    )
-    mismatch_error = _open_failure(mismatch, MISMATCH)
+    mismatch.adapter.responses["start"]["provider_observation"]["thread_id"] = SENTINEL
+    mismatch_error = _open_failure(mismatch, GAP)
     assert SENTINEL not in repr(mismatch_error)
 
     gap = _fixture(tmp_path / "gap")
     gap_process = _enable_attestation(gap)
-    gap_process.attestation_responses["start"] = {"raw": SENTINEL}
+    gap.adapter.responses["start"]["provider_observation"] = {"raw": SENTINEL}
     gap_error = _open_failure(gap, GAP)
     assert SENTINEL not in repr(gap_error)
 
@@ -507,7 +502,7 @@ def test_36_schema_identity_remains_exact_while_policy_attestation_is_added(tmp_
     assert request.output_schema_sha256 == fx.binding.output_schema_sha256
     assert request.output_validator_version == fx.binding.output_validator_version
     assert request.handoff_sha256 == fx.binding.handoff_hash
-    assert [item.operation for item in process.attest_calls] == ["start"]
+    assert process.attest_calls == []
 
 
 def test_37_server_policy_and_authority_identities_cannot_be_provider_minted(tmp_path: Path) -> None:
@@ -557,7 +552,7 @@ def test_39_first_slice_uses_fake_evidence_only_and_never_imports_real_provider_
     assert result.success is True
     assert loaded == []
     assert isinstance(fx.adapter, _FakeAdapter)
-    assert [request.operation for request in process.attest_calls] == ["start", "turn"]
+    assert [request.operation for request in process.attest_calls] == ["turn"]
 
 
 def test_40_module_ownership_does_not_expand_into_forbidden_authority_owners() -> None:
@@ -633,8 +628,8 @@ def test_41_missing_attestation_on_custom_start_boundary_fails_closed_before_pro
     fx = _fixture(tmp_path)
     with pytest.raises(CodexWorkerError) as caught:
         _start(fx)
-    assert caught.value.code == GAP
-    assert caught.value.primary_code == GAP
+    assert caught.value.code == MISMATCH
+    assert caught.value.primary_code == MISMATCH
     assert fx.adapter.calls == []
     assert [name for name, _ in fx.process.calls] == ["start", "cleanup"]
 
@@ -697,8 +692,8 @@ def test_44_fork_rejects_perfect_matching_mapping_from_caller_controlled_boundar
             timeout_seconds=1.0,
             now=NOW,
         )
-    assert caught.value.code == GAP
-    assert caught.value.primary_code == GAP
+    assert caught.value.code == MISMATCH
+    assert caught.value.primary_code == MISMATCH
     assert source.adapter.calls == []
     assert [name for name, _ in process.calls] == ["start", "attest", "cleanup"]
 
@@ -765,7 +760,7 @@ def test_25_fork_requires_fresh_target_attestation_not_inherited_source_history(
             now=NOW,
         )
     assert caught.value.code == MISMATCH
-    assert [request.operation for request in process.attest_calls] == ["fork"]
+    assert process.attest_calls == []
     assert source.adapter.calls == []
 
 
@@ -773,31 +768,26 @@ def test_41_missing_attestation_on_custom_start_boundary_fails_closed_before_pro
     tmp_path: Path,
 ) -> None:
     fx = _fixture(tmp_path)
-    process = _FakeProcessBoundary()
-    process.adapter = fx.adapter
+    fx.adapter.responses["start"]["provider_observation"] = None
     with pytest.raises(CodexWorkerError) as caught:
-        _start(fx, process_boundary=process)
+        _start(fx)
     assert caught.value.code == GAP
     assert caught.value.primary_code == GAP
-    assert fx.adapter.calls == []
-    assert [name for name, _ in process.calls] == ["start", "cleanup"]
+    assert [request.operation for request in fx.adapter.calls] == ["start"]
+    assert [name for name, _ in fx.process.calls] == ["start", "invoke", "cleanup"]
 
 
 def test_42_caller_minted_matching_mapping_is_not_authorized_provider_provenance(  # noqa: F811
     tmp_path: Path,
 ) -> None:
     fx = _fixture(tmp_path)
-    process = _AttestingBoundary(
-        lambda _request: _observation(fx.authority, fx.binding, fx.worker_context)
-    )
-    process.adapter = fx.adapter
+    fx.adapter.responses["start"]["provider_observation"]["model"] = "foreign-model"
     with pytest.raises(CodexWorkerError) as caught:
-        _start(fx, process_boundary=process)
-    assert caught.value.code == GAP
-    assert caught.value.primary_code == GAP
-    assert fx.adapter.calls == []
-    assert process.attest_calls == []
-    assert [name for name, _ in process.calls] == ["start", "cleanup"]
+        _start(fx)
+    assert caught.value.code == MISMATCH
+    assert caught.value.primary_code == MISMATCH
+    assert [request.operation for request in fx.adapter.calls] == ["start"]
+    assert [name for name, _ in fx.process.calls] == ["start", "invoke", "cleanup"]
 
 
 def test_43_resume_with_missing_attestation_fails_gap_before_provider_invoke(  # noqa: F811
@@ -847,11 +837,11 @@ def test_44_fork_rejects_perfect_matching_mapping_from_caller_controlled_boundar
             timeout_seconds=1.0,
             now=NOW,
         )
-    assert caught.value.code == GAP
-    assert caught.value.primary_code == GAP
+    assert caught.value.code == MISMATCH
+    assert caught.value.primary_code == MISMATCH
     assert source.adapter.calls == []
     assert process.attest_calls == []
-    assert [name for name, _ in process.calls] == ["start", "cleanup"]
+    assert process.calls == []
 
 
 @pytest.mark.parametrize("operation", ["turn", "steer"])
@@ -883,6 +873,18 @@ def _round2_real_target(tmp_path: Path):
         payload["workspace"] = workspace_payload
 
     return _fresh_target(tmp_path / "bound", payload_mutator=bind_workspace), workspace
+
+
+def _start_context_for(handoff: object, workspace: Path) -> ServerOwnedWorkerStartContext:
+    return ServerOwnedWorkerStartContext(
+        adapter_version="adapter-1.0",
+        sandbox_policy={
+            "roots": [str(workspace)],
+            "write_policy": "DISPOSABLE_ONLY",
+            "cwd": str(workspace),
+        },
+        instruction_source_paths=(),
+    )
 
 
 @pytest.mark.skipif(
@@ -949,9 +951,8 @@ def test_46_noncanonical_task3_issued_handle_does_not_establish_child_provenance
         with pytest.raises(CodexWorkerError) as caught:
             worker_module.start_codex_worker(
                 handoff=handoff,
-                binding=binding,
                 authority_context=authority,
-                worker_context=worker_context,
+                start_context=_start_context_for(handoff, workspace),
                 adapter=_FakeAdapter(),
                 process_boundary=boundary,
                 timeout_seconds=1.0,
@@ -1033,9 +1034,8 @@ def test_47_caller_cleanup_cannot_mint_task3_zero_survivor_evidence(
         with pytest.raises(CodexWorkerError) as caught:
             worker_module.start_codex_worker(
                 handoff=handoff,
-                binding=binding,
                 authority_context=authority,
-                worker_context=worker_context,
+                start_context=_start_context_for(handoff, _workspace),
                 adapter=_FakeAdapter(),
                 process_boundary=boundary,
                 timeout_seconds=1.0,
@@ -1143,9 +1143,8 @@ def test_48_canonical_identity_with_caller_overridden_start_cannot_launch_foreig
         with pytest.raises(CodexWorkerError) as caught:
             worker_module.start_codex_worker(
                 handoff=handoff,
-                binding=binding,
                 authority_context=authority,
-                worker_context=worker_context,
+                start_context=_start_context_for(handoff, workspace),
                 adapter=_FakeAdapter(),
                 process_boundary=boundary,
                 timeout_seconds=1.0,

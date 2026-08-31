@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from dataclasses import replace
 from datetime import timedelta
+import hashlib
 import inspect
 from pathlib import Path
 
@@ -460,5 +461,151 @@ def test_model_and_instruction_identity_are_not_caller_override_surfaces(tmp_pat
                 "model_identity": "foreign-model",
                 "config_sha256": "f" * 64,
             },
+            now=NOW,
+        )
+
+
+def test_two_phase_provider_start_binding_surface_is_present() -> None:
+    module = _module()
+    assert callable(
+        getattr(module, "bind_provider_started_worker_thread", None)
+    ), "two-phase provider-start binding boundary is missing"
+
+
+def test_start_codex_worker_does_not_accept_a_prebound_provider_thread() -> None:
+    module = importlib.import_module("agent_lib.codex_worker")
+    assert "binding" not in inspect.signature(module.start_codex_worker).parameters
+
+
+def _provider_start_case(tmp_path: Path):
+    module = _module()
+    workspace = tmp_path / "disposable"
+    workspace.mkdir(parents=True)
+    sources = []
+    source_entries = []
+    for source_id, content in (("system", b"system authority\n"), ("project", b"project authority\n")):
+        path = workspace / f"{source_id}.md"
+        path.write_bytes(content)
+        sources.append(path)
+        source_entries.append(
+            {
+                "source_id": source_id,
+                "role": source_id,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    payload = _base_payload()
+    payload["workspace"] = {"roots": [str(workspace)], "write_policy": "DISPOSABLE_ONLY"}
+    payload["instruction_sources"] = source_entries
+    authority_context = _authority_context(payload)
+    schema_path = _write_schema(tmp_path / "schema.json")
+    handoff = _bind(schema_path, payload, authority_context=authority_context)
+    start_context = module.ServerOwnedWorkerStartContext(
+        adapter_version="adapter-1.0",
+        sandbox_policy={
+            "roots": [str(workspace)],
+            "write_policy": "DISPOSABLE_ONLY",
+            "cwd": str(workspace),
+        },
+        instruction_source_paths=tuple(
+            {"source_id": source_id, "path": str(path)}
+            for source_id, path in zip(("system", "project"), sources)
+        ),
+    )
+    observation = {
+        "thread_id": "provider-thread-001",
+        "model": "fake-disposable-model",
+        "model_provider": "openai",
+        "cwd": str(workspace),
+        "approval_policy": "never",
+        "approvals_reviewer": "user",
+        "sandbox": {
+            "type": "readOnly",
+            "network_access": False,
+            "writable_roots": [],
+        },
+        "instruction_sources": [
+            {"path": str(path), "sha256": entry["sha256"]}
+            for path, entry in zip(sources, source_entries)
+        ],
+    }
+    return module, handoff, authority_context, start_context, observation
+
+
+def test_provider_start_binds_only_after_provider_generated_identity(tmp_path: Path) -> None:
+    module, handoff, authority_context, start_context, observation = _provider_start_case(tmp_path)
+    observed, binding, worker_context = module.bind_provider_started_worker_thread(
+        handoff,
+        provider_observation=observation,
+        authority_context=authority_context,
+        start_context=start_context,
+        now=NOW,
+    )
+    assert observed.thread_id == "provider-thread-001"
+    assert binding.thread_id == observed.thread_id
+    assert worker_context.observed_thread_id == observed.thread_id
+    assert set(observation) == {
+        "thread_id",
+        "model",
+        "model_provider",
+        "cwd",
+        "approval_policy",
+        "approvals_reviewer",
+        "sandbox",
+        "instruction_sources",
+    }
+    assert "config_sha256" not in set(observation)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("model", "foreign-model"),
+        ("model_provider", "foreign-provider"),
+        ("approval_policy", "on-request"),
+        ("cwd", "C:/foreign"),
+    ),
+)
+def test_provider_start_policy_mismatch_fails_closed(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    module, handoff, authority_context, start_context, observation = _provider_start_case(tmp_path)
+    observation[field] = value
+    with pytest.raises(ValueError, match="mismatch|policy|cwd"):
+        module.bind_provider_started_worker_thread(
+            handoff,
+            provider_observation=observation,
+            authority_context=authority_context,
+            start_context=start_context,
+            now=NOW,
+        )
+
+
+def test_provider_start_source_hash_drift_and_sandbox_widening_fail_closed(tmp_path: Path) -> None:
+    module, handoff, authority_context, start_context, observation = _provider_start_case(tmp_path)
+    observation["instruction_sources"][0]["sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="instruction source|mismatch|drift"):
+        module.bind_provider_started_worker_thread(
+            handoff,
+            provider_observation=observation,
+            authority_context=authority_context,
+            start_context=start_context,
+            now=NOW,
+        )
+
+    module, handoff, authority_context, start_context, observation = _provider_start_case(
+        tmp_path / "second"
+    )
+    observation["sandbox"] = {
+        "type": "workspaceWrite",
+        "network_access": False,
+        "writable_roots": ["C:/foreign"],
+    }
+    with pytest.raises(ValueError, match="sandbox|widened|disposable"):
+        module.bind_provider_started_worker_thread(
+            handoff,
+            provider_observation=observation,
+            authority_context=authority_context,
+            start_context=start_context,
             now=NOW,
         )
