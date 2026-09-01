@@ -770,7 +770,7 @@ class DotNetIPCClientTests(unittest.TestCase):
 
             self.assertEqual(0, trigger_calls)
 
-    def test_timeout_is_bounded_and_cleans_only_this_request(self) -> None:
+    def test_timeout_is_bounded_and_preserves_only_this_request(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
             old_file = ipc_dir / "autocad_mcp_result_legacy.json"
@@ -790,9 +790,43 @@ class DotNetIPCClientTests(unittest.TestCase):
             elapsed = time.monotonic() - started
 
             self.assertLess(elapsed, 0.5)
-            self.assertFalse(request_path(ipc_dir, request_id).exists())
+            self.assertTrue(request_path(ipc_dir, request_id).exists())
             self.assertFalse(result_path(ipc_dir, request_id).exists())
             self.assertTrue(old_file.exists())
+
+    def test_timeout_preserves_pair_for_receiver_that_finishes_late(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            request_id = "timeout-late-001"
+            late_done = threading.Event()
+
+            def trigger() -> None:
+                request_file = request_path(ipc_dir, request_id)
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+
+                def late_receiver() -> None:
+                    time.sleep(0.20)
+                    atomic_write_json(
+                        result_path(ipc_dir, request_id),
+                        {"request_id": request["request_id"], "late": True},
+                    )
+                    late_done.set()
+
+                threading.Thread(target=late_receiver, daemon=True).start()
+
+            client = DotNetIPCClient(
+                ipc_dir=ipc_dir,
+                trigger=trigger,
+                timeout_s=0.05,
+                poll_interval_s=0.01,
+                request_id_factory=lambda: request_id,
+            )
+            with self.assertRaises(DotNetIPCTimeoutError):
+                client.health()
+
+            self.assertTrue(request_path(ipc_dir, request_id).exists())
+            self.assertTrue(late_done.wait(2))
+            self.assertTrue(result_path(ipc_dir, request_id).exists())
 
     def test_non_success_result_raises_and_cleans_request(self) -> None:
         with TemporaryDirectory() as temporary:
