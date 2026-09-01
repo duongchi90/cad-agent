@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import copy
 import hashlib
 import json
@@ -9,6 +10,7 @@ import os
 import re
 from contextlib import contextmanager
 from collections.abc import Mapping
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +89,19 @@ _DRAFT_REFERENCE_FIELDS: dict[str, object] = {
     "authoritative_release_eligible": False,
     "drawing_setup_evidence": None,
 }
+
+_MANIFEST_LOCK_SCHEMA_VERSION = "manifest-lock-1.0"
+_MANIFEST_LOCK_MAX_BYTES = 1024
+_WINDOWS_CREATE_NEW = 1
+_WINDOWS_FILE_ATTRIBUTE_NORMAL = 0x80
+_WINDOWS_GENERIC_READ = 0x80000000
+_WINDOWS_GENERIC_WRITE = 0x40000000
+_WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WINDOWS_STILL_ACTIVE = 259
+_WINDOWS_ERROR_ACCESS_DENIED = 5
+_WINDOWS_ERROR_INVALID_PARAMETER = 87
+_WINDOWS_ERROR_FILE_EXISTS = 80
+_WINDOWS_ERROR_ALREADY_EXISTS = 183
 
 PUBLICATION_LIFECYCLE_SCHEMA_VERSION = "publication-lifecycle-1.0"
 _PUBLICATION_LIFECYCLE_FIELDS = {
@@ -567,22 +582,219 @@ def _manifest_lock_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + ".lock")
 
 
+def _windows_kernel32() -> Any:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.GetCurrentProcessId.argtypes = []
+    kernel32.GetCurrentProcessId.restype = wintypes.DWORD
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+    ]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.WriteFile.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+    kernel32.WriteFile.restype = wintypes.BOOL
+    kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+    kernel32.FlushFileBuffers.restype = wintypes.BOOL
+    return kernel32
+
+
+def _filetime_value(value: wintypes.FILETIME) -> int:
+    return (value.dwHighDateTime << 32) | value.dwLowDateTime
+
+
+def _current_manifest_lock_identity() -> tuple[int, int] | None:
+    if os.name != "nt":
+        return None
+    try:
+        kernel32 = _windows_kernel32()
+        created = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(
+            kernel32.GetCurrentProcess(),
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return None
+        return int(kernel32.GetCurrentProcessId()), _filetime_value(created)
+    except (AttributeError, OSError):
+        return None
+
+
+def _manifest_lock_owner_state(pid: int, start_filetime: int) -> bool | None:
+    """Return alive/dead, or None when the owner state cannot be proven."""
+    if os.name != "nt":
+        return None
+    try:
+        kernel32 = _windows_kernel32()
+        handle = kernel32.OpenProcess(_WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False if ctypes.get_last_error() == _WINDOWS_ERROR_INVALID_PARAMETER else None
+        try:
+            created = wintypes.FILETIME()
+            exited = wintypes.FILETIME()
+            kernel = wintypes.FILETIME()
+            user = wintypes.FILETIME()
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetProcessTimes(
+                handle,
+                ctypes.byref(created),
+                ctypes.byref(exited),
+                ctypes.byref(kernel),
+                ctypes.byref(user),
+            ):
+                return None
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return None
+            if _filetime_value(created) != start_filetime:
+                return False
+            return int(exit_code.value) == _WINDOWS_STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError):
+        return None
+
+
+def _read_manifest_lock_identity(lock_path: Path) -> tuple[int, int] | None:
+    try:
+        raw = lock_path.read_bytes()
+    except OSError:
+        return None
+    if not raw or len(raw) > _MANIFEST_LOCK_MAX_BYTES:
+        return None
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if (
+        type(payload) is not dict
+        or set(payload) != {"schema_version", "pid", "start_filetime"}
+        or payload["schema_version"] != _MANIFEST_LOCK_SCHEMA_VERSION
+        or type(payload["pid"]) is not int
+        or payload["pid"] <= 0
+        or type(payload["start_filetime"]) is not int
+        or payload["start_filetime"] <= 0
+    ):
+        return None
+    return payload["pid"], payload["start_filetime"]
+
+
+def _reclaim_dead_manifest_lock(lock_path: Path) -> bool:
+    identity = _read_manifest_lock_identity(lock_path)
+    if identity is None or _manifest_lock_owner_state(*identity) is not False:
+        return False
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _open_windows_manifest_lock(lock_path: Path) -> int:
+    kernel32 = _windows_kernel32()
+    handle = kernel32.CreateFileW(
+        str(lock_path),
+        _WINDOWS_GENERIC_READ | _WINDOWS_GENERIC_WRITE,
+        0,
+        None,
+        _WINDOWS_CREATE_NEW,
+        _WINDOWS_FILE_ATTRIBUTE_NORMAL,
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle == invalid_handle:
+        error = ctypes.get_last_error()
+        if error in {_WINDOWS_ERROR_FILE_EXISTS, _WINDOWS_ERROR_ALREADY_EXISTS}:
+            raise FileExistsError(error, "manifest lock already exists", str(lock_path))
+        raise OSError(error, "cannot create manifest lock", str(lock_path))
+    return handle
+
+
+def _write_windows_manifest_lock_identity(handle: int) -> None:
+    identity = _current_manifest_lock_identity()
+    if identity is None:
+        raise _publication_error("PUBLICATION_MANIFEST_LOCK_IDENTITY_UNAVAILABLE")
+    payload = json.dumps(
+        {
+            "schema_version": _MANIFEST_LOCK_SCHEMA_VERSION,
+            "pid": identity[0],
+            "start_filetime": identity[1],
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    buffer = ctypes.create_string_buffer(payload)
+    written = wintypes.DWORD()
+    kernel32 = _windows_kernel32()
+    if not kernel32.WriteFile(handle, buffer, len(payload), ctypes.byref(written), None):
+        raise _publication_error("PUBLICATION_MANIFEST_LOCK_IDENTITY_UNAVAILABLE")
+    if written.value != len(payload) or not kernel32.FlushFileBuffers(handle):
+        raise _publication_error("PUBLICATION_MANIFEST_LOCK_IDENTITY_UNAVAILABLE")
+
+
 @contextmanager
 def _manifest_lock(path: Path):
     lock_path = _manifest_lock_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor: int | None = None
+    acquired = False
     try:
-        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as exc:
-        raise _publication_error("PUBLICATION_MANIFEST_BUSY") from exc
-    try:
-        os.close(descriptor)
+        while True:
+            try:
+                if os.name == "nt":
+                    descriptor = _open_windows_manifest_lock(lock_path)
+                else:
+                    descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                acquired = True
+                if os.name == "nt":
+                    _write_windows_manifest_lock_identity(descriptor)
+                break
+            except FileExistsError as exc:
+                if _reclaim_dead_manifest_lock(lock_path):
+                    continue
+                raise _publication_error("PUBLICATION_MANIFEST_BUSY") from exc
         yield
     finally:
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
+        if acquired and descriptor is not None:
+            if os.name == "nt":
+                _windows_kernel32().CloseHandle(descriptor)
+            else:
+                os.close(descriptor)
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _write_manifest_unlocked(path: Path, manifest: dict[str, Any]) -> None:

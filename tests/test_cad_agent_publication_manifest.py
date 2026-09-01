@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -165,6 +168,84 @@ def test_stale_expected_manifest_refuses_without_disk_mutation(tmp_path: Path) -
     with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_MANIFEST_STALE"):
         _transition(path, "0" * 64)
     assert path.read_bytes() == before
+
+
+def test_crashed_manifest_writer_lock_is_reclaimed_after_exact_owner_exit(tmp_path: Path) -> None:
+    path = tmp_path / "run-manifest.json"
+    expected_manifest = _manifest()
+    _write(path, expected_manifest)
+    before = path.read_bytes()
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    child_code = """
+import os
+import sys
+from pathlib import Path
+from cad_agent.manifest import _manifest_lock
+
+lock = _manifest_lock(Path(sys.argv[1]))
+lock.__enter__()
+os._exit(0)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", child_code, str(path)],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert lock_path.is_file()
+
+    manifest_owner.write_manifest(path, expected_manifest)
+
+    assert not lock_path.exists()
+    assert path.read_bytes() == before
+
+
+def test_manifest_lock_without_owner_identity_remains_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "run-manifest.json"
+    expected_manifest = _manifest()
+    _write(path, expected_manifest)
+    before = path.read_bytes()
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.write_bytes(b"")
+
+    with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_MANIFEST_BUSY"):
+        manifest_owner.write_manifest(path, expected_manifest)
+
+    assert path.read_bytes() == before
+    assert lock_path.is_file()
+
+
+def test_live_manifest_lock_owner_remains_busy_across_processes(tmp_path: Path) -> None:
+    path = tmp_path / "run-manifest.json"
+    expected_manifest = _manifest()
+    _write(path, expected_manifest)
+    ready_path = tmp_path / "owner-ready"
+    child_code = """
+import sys
+import time
+from pathlib import Path
+from cad_agent.manifest import _manifest_lock
+
+path = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+with _manifest_lock(path):
+    ready.write_text("ready", encoding="utf-8")
+    time.sleep(2)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_code, str(path), str(ready_path)],
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert ready_path.is_file()
+        with pytest.raises(manifest_owner.ManifestError, match="PUBLICATION_MANIFEST_BUSY"):
+            manifest_owner.write_manifest(path, expected_manifest)
+    finally:
+        assert child.wait(timeout=5) == 0
 
 
 def test_lock_contention_has_one_transition_success_and_no_lost_update(tmp_path: Path) -> None:
