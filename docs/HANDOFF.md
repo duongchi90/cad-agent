@@ -2,7 +2,7 @@
 
 Status: navigation-first current handoff. Exact mutable state must be read fresh from GitHub.
 
-Updated: 2026-08-31.
+Updated: 2026-09-01.
 
 This file intentionally does **not** cache current PR heads, CI runs, AutoCAD PID/HWND, plugin SHA, provider turn IDs, or numbered control sequence. Those values become stale quickly.
 
@@ -52,6 +52,8 @@ M0 Stabilize Pipe
 
 As of this handoff update, M0/M1/M2 have accepted evidence and the product frontier is M3 until fresh GitHub evidence says otherwise. Do not use this sentence as an exact-state substitute: always fresh-read GitHub for whether M3 has moved or closed.
 
+The current M3 sub-boundary is frozen at **`M3_REAL_PROVIDER = BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`**. PR #340 is still OPEN/DRAFT and unmerged at exact head `714620001e8dbc1c49adbb13b9af4d5821eb6a7d` on `codex/m3-task3-responses-provider`, based on `main` `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`. Its single authorized `gpt-5.6-sol` attempt returned HTTP 429; no response identity, terminal completion, structured result, retry, or second provider call exists. The read-only account/limit inspection classified the failure as credit balance exhausted. This is non-PASS evidence. Do not call the provider, use billing/credentials, run M3 R5/R6 live CAD, rerun M2, or merge PR #340/#337 from this state.
+
 Historical R/P/VS/S/Wave/older phase labels remain evidence and reuse vocabulary, not the automatic daily queue.
 
 ## 4. Current M3 semantics
@@ -77,6 +79,13 @@ integrity + cleanup evidence
 ```
 
 Contract-only composition evidence may prove wiring, validation, replay rejection, and candidate transition, but it does not equal genuine provider-backed/live acceptance.
+
+The provider-backed live sequence is therefore stopped before any new CAD epoch:
+offline/hosted adapter evidence remains reusable, but it cannot replace the
+blocked real-provider boundary. Resume only after the account boundary is
+resolved and a separately authorized fresh provider acceptance produces the
+required provider identity, terminal completion, and validated structured
+result.
 
 For live acceptance, use only current canonical R5/R6 owner results and the current M3 record/oracle on `main`. `SKIP`, `NOT_RUN`, timeout, retry, ambiguous cleanup, stale identity, or caller-made summaries that are not bound to canonical owner results are non-PASS.
 
