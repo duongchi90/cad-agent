@@ -762,6 +762,7 @@ class DotNetIPCClient:
         # A reused id must not consume an old result, but no other request id
         # is touched here or in the finally block below.
         result_file.unlink(missing_ok=True)
+        timed_out = False
         try:
             atomic_write_json(request_file, request, max_bytes=self.max_read_bytes)
             if self.trigger is None:
@@ -773,8 +774,15 @@ class DotNetIPCClient:
                 message = "; ".join(str(error) for error in errors) if errors else "request failed"
                 raise DotNetIPCResultError(message, result=result)
             return result
+        except DotNetIPCTimeoutError:
+            # A timeout does not prove that AutoCAD stopped processing. Keep
+            # this exact pair available for the live owner and prohibit any
+            # implicit retry or cleanup claim for an uncertain operation.
+            timed_out = True
+            raise
         finally:
-            cleanup_request_files(self.ipc_dir, actual_request_id)
+            if not timed_out:
+                cleanup_request_files(self.ipc_dir, actual_request_id)
 
     def health(
         self,
