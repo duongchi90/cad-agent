@@ -19,8 +19,9 @@
 ## Current main / provider-independent hardening (2026-09-01)
 
 - This status update is based on canonical `main`
-  `836c48eafb87444fb611cfceb426a139adbdcff5`, which includes PR #345's
-  preceding currentness reconciliation. The resulting merge commit is the
+  `63eac58d12af934e8a04a009116cef05cecde542`, which includes PR #347's
+  FileIPC timeout repair and the preceding #344–#346 hardening records. The
+  resulting merge commit is the
   exact GitHub source of truth for this record after integration.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
@@ -41,9 +42,21 @@
   no manifest lock survived, and the disposable root was removed. This closes
   the measured staged-pipeline resume boundary only; it does not claim live
   AutoCAD, FileIPC, provider, or M2 acceptance.
-- The next provider-independent hardening audit target is FileIPC/live-state
-  stale/conflict recovery. No additional production-code gap or write set is
-  claimed until a fresh causal measurement proves one.
+- PR #347 (`cae0250f836f2710ba3122406e97ae1fb10355bf`) closed the measured
+  `UNCERTAIN_FILEIPC_COMPLETION_CLEANUP` boundary. On timeout the existing
+  `DotNetIPCClient` now preserves only the exact request/result pair because
+  receiver completion is not disproven; successful and terminal error paths
+  retain their exact-pair cleanup behavior, with no retry or daemon.
+- FileIPC timeout evidence: a delayed receiver wrote a result after the old
+  client had already deleted the pair, leaving an unowned
+  `cadagent_dotnet_result_timeout-late-001.json` survivor. The RED regression
+  then passed after the bounded owner fix. Focused owner/IPC coverage was
+  `71 passed` with `5` live prerequisite skips and `50` subtests; the canonical
+  verifier recorded dotnet IPC `118 passed` and offline `3063 passed`.
+- The next provider-independent hardening audit target is
+  source/accepted-DWG immutability and backup/rollback recovery. No additional
+  production-code gap or write set is claimed until a fresh causal measurement
+  proves one.
 
 ## M3 real-provider/live boundary — frozen non-pass
 
@@ -52,8 +65,8 @@
   `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`, branch
   `codex/m3-task3-responses-provider`, based on its frozen base `main`
   `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`. Current `main` has advanced
-  independently through provider-independent PR #344; no rebase was performed
-  or implied.
+  independently through provider-independent PRs #344–#347; no rebase was
+  performed or implied.
 - Frozen real-provider evidence: exactly one authorized synchronous
   `gpt-5.6-sol` attempt was made; the provider returned HTTP `429`; no
   provider-generated `response.id` or terminal status was observed; strict
