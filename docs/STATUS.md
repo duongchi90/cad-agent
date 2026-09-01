@@ -16,13 +16,35 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## Current main / provider-independent hardening (2026-09-01)
+
+- Current canonical `main` is
+  `7a8ed12ef726875a96db83ffe0d397db09523520`, which merges PR #344.
+- PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
+  abandoned publication-manifest lock boundary. The existing manifest owner
+  now records a bounded Windows PID/process-start identity, retains an
+  exclusive lock handle, reclaims only a provably dead owner, and remains
+  fail-closed for missing, malformed, inaccessible, live, or uncertain locks.
+- Evidence at the merged implementation head: focused publication-manifest
+  tests `32 passed`; broader owner/IPC regression `206 passed` with one
+  intentional causal RED deselected; canonical verifier exit `0` with offline
+  `3062 passed`, dotnet IPC `117 passed`, the one expected causal RED, real-data
+  `2 skipped`, and AutoCAD unavailable `14 skipped`. No provider call, M2
+  retest, live CAD mutation, credential, source drawing, or accepted drawing
+  was involved.
+- The next provider-independent hardening audit target remains
+  crash/restart/resume recovery. No additional production-code gap or write
+  set is claimed until a fresh causal measurement proves one.
+
 ## M3 real-provider/live boundary — frozen non-pass
 
 - Current state: **`M3_REAL_PROVIDER = BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`**.
   PR #340 remains an OPEN/DRAFT, unmerged provider lane at exact head
   `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`, branch
-  `codex/m3-task3-responses-provider`, based on current `main`
-  `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`.
+  `codex/m3-task3-responses-provider`, based on its frozen base `main`
+  `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`. Current `main` has advanced
+  independently through provider-independent PR #344; no rebase was performed
+  or implied.
 - Frozen real-provider evidence: exactly one authorized synchronous
   `gpt-5.6-sol` attempt was made; the provider returned HTTP `429`; no
   provider-generated `response.id` or terminal status was observed; strict
