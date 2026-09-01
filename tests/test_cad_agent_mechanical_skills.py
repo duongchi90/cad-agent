@@ -57,7 +57,9 @@ def test_catalog_copy_is_defensive_and_search_is_deterministic() -> None:
     )
     assert skills.search_skills("shaft") == []
     deferred = skills.search_skills("shaft", include_deferred=True)
-    assert [item["skill_id"] for item in deferred] == ["geometry.shaft_step"]
+    deferred_ids = [item["skill_id"] for item in deferred]
+    assert deferred_ids[0] == "geometry.shaft_step"
+    assert set(deferred_ids) == {"geometry.shaft_step", "geometry.keyway"}
 
 
 @pytest.mark.parametrize("intent", ["", "x" * 257])
@@ -78,7 +80,7 @@ def test_catalog_validator_rejects_tampering_and_unknown_fields() -> None:
 
     tampered = deepcopy(catalog)
     tampered["skills"][0]["title"] = "tampered"
-    with pytest.raises(skills.MechanicalSkillError, match="CATALOG_HASH_MISMATCH"):
+    with pytest.raises(skills.MechanicalSkillError, match="RECORD_HASH_MISMATCH"):
         skills.validate_mechanical_skill_catalog(tampered)
 
     extra = deepcopy(catalog)
@@ -113,13 +115,17 @@ def test_invoke_compiles_one_closed_read_only_plan_bound_to_owner_observation() 
         "plan_sha256",
     }
     assert plan["schema_version"] == "skill-invocation-plan-1.0"
-    assert plan["drawing_binding"] == observation["binding"]
+    expected_binding = {
+        key: value for key, value in observation["binding"].items() if key != "drawing_path"
+    }
+    assert plan["drawing_binding"] == expected_binding
     assert plan["operation_plan"] == {
         "operation": "mechanical_bom",
         "parameters": {},
     }
     assert "drawing_path" not in json.dumps(plan)
-    assert "IPC" not in json.dumps(plan)
+    assert "ipc_root" not in json.dumps(plan)
+    assert "HWND" not in json.dumps(plan)
     assert skills.validate_skill_invocation_plan(plan) == plan
 
 
