@@ -18,8 +18,10 @@
 
 ## Current main / provider-independent hardening (2026-09-01)
 
-- Current canonical `main` is
-  `7a8ed12ef726875a96db83ffe0d397db09523520`, which merges PR #344.
+- This status update is based on canonical `main`
+  `836c48eafb87444fb611cfceb426a139adbdcff5`, which includes PR #345's
+  preceding currentness reconciliation. The resulting merge commit is the
+  exact GitHub source of truth for this record after integration.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
   now records a bounded Windows PID/process-start identity, retains an
@@ -32,9 +34,16 @@
   `2 skipped`, and AutoCAD unavailable `14 skipped`. No provider call, M2
   retest, live CAD mutation, credential, source drawing, or accepted drawing
   was involved.
-- The next provider-independent hardening audit target remains
-  crash/restart/resume recovery. No additional production-code gap or write
-  set is claimed until a fresh causal measurement proves one.
+- A new disposable staged-run crash/restart/resume epoch used the existing
+  `cad_agent` owner: the child exited `17` during Semantic IR, the manifest
+  retained Primitive IR as `completed` and later stages as `pending`, one
+  `resume` completed all stages, the input SHA-256 was unchanged before/after,
+  no manifest lock survived, and the disposable root was removed. This closes
+  the measured staged-pipeline resume boundary only; it does not claim live
+  AutoCAD, FileIPC, provider, or M2 acceptance.
+- The next provider-independent hardening audit target is FileIPC/live-state
+  stale/conflict recovery. No additional production-code gap or write set is
+  claimed until a fresh causal measurement proves one.
 
 ## M3 real-provider/live boundary — frozen non-pass
 
