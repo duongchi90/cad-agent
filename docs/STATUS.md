@@ -16,6 +16,35 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## M3 real-provider/live boundary — frozen non-pass
+
+- Current state: **`M3_REAL_PROVIDER = BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`**.
+  PR #340 remains an OPEN/DRAFT, unmerged provider lane at exact head
+  `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`, branch
+  `codex/m3-task3-responses-provider`, based on current `main`
+  `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`.
+- Frozen real-provider evidence: exactly one authorized synchronous
+  `gpt-5.6-sol` attempt was made; the provider returned HTTP `429`; no
+  provider-generated `response.id` or terminal status was observed; strict
+  structured output was not reached; and no retrieve, cancel, retry, or
+  second provider call occurred. Credential contents were not recorded.
+- The privacy-safe read-only account/limit inspection classified the captured
+  429 as **credit balance exhausted**. This is a non-PASS provider result and
+  does not establish a live R5 verdict or a provider-backed M3 acceptance.
+- Exact-head offline/hosted evidence remains reusable: focused Responses
+  tests `39 passed`, canonical offline `3104 passed` with `18 deselected` and
+  `72` subtests, dotnet IPC `117 passed`, and hosted tests/reuse/CodeQL all
+  passed (`33420238403`, `33420238347`, `33420238411`). These checks do not
+  substitute for real provider acceptance.
+- No M3 R5/R6 live AutoCAD/FileIPC epoch was run, no M2 retest was run, and
+  PR #340 and historical PR #337 were not merged. No provider call, billing,
+  credential use, or CAD mutation is authorized while this boundary is
+  frozen. The provider implementation/evidence in PR #340 is preserved
+  unchanged; this section is documentation-only currentness reconciliation.
+- Next boundary: a future Human-authorized account/entitlement resolution
+  followed by one fresh bounded provider acceptance call. No retry or live
+  M3 work is implied by this documentation update.
+
 ## M3 Task3 two-phase official provider start — merged boundary
 
 - State: **Merged; offline and isolated official-SDK START verified; live
