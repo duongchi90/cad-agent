@@ -35,6 +35,28 @@ _GEOMETRY_FIELDS = frozenset(
     }
 )
 _ALLOWED_PROJECTION_FIELDS = _BASE_FIELDS | _GEOMETRY_FIELDS
+_OBSERVE_RESULT_FIELDS = frozenset(
+    {"schema_version", "operation", "binding", "summary", "query_id", "result_sha256"}
+)
+_OBSERVE_BINDING_FIELDS = frozenset(
+    {
+        "run_id",
+        "project_id",
+        "drawing_id",
+        "drawing_reference_id",
+        "drawing_reference_sha256",
+        "artifact_sha256",
+        "candidate_revision_id",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "drawing_path",
+        "current_observation_id",
+        "current_observation_sha256",
+    }
+)
+_OBSERVE_SUMMARY_FIELDS = frozenset(
+    {"entity_count", "by_type", "by_layer", "sample_entities"}
+)
 
 
 class CadReadFacadeError(ValueError):
@@ -49,6 +71,88 @@ class CadReadClient(Protocol):
     def entity_list(self, layer: str | None = None) -> list[Mapping[str, object]]: ...
 
     def entity_get(self, entity_id: str) -> Mapping[str, object]: ...
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def validate_observe_drawing_result(payload: Mapping[str, object]) -> dict[str, object]:
+    """Validate and copy an observation emitted by this read façade.
+
+    This checks the façade result contract and its canonical integrity hash. It
+    does not establish drawing currentness independently; that remains owned by
+    ``observe_drawing`` and the DARA/candidate inputs it consumes.
+    """
+
+    if not isinstance(payload, Mapping) or set(payload) != _OBSERVE_RESULT_FIELDS:
+        _fail("RESULT_SCHEMA_INVALID")
+    if (
+        payload.get("schema_version") != CAD_READ_FACADE_SCHEMA_VERSION
+        or payload.get("operation") != "observe_drawing"
+    ):
+        _fail("RESULT_SCHEMA_INVALID")
+    binding = payload.get("binding")
+    if not isinstance(binding, Mapping) or set(binding) != _OBSERVE_BINDING_FIELDS:
+        _fail("RESULT_BINDING_INVALID")
+    for field, value in binding.items():
+        if type(value) is not str or not value:
+            _fail("RESULT_BINDING_INVALID")
+        if field.endswith("_sha256") and not _is_sha256(value):
+            _fail("RESULT_BINDING_INVALID")
+
+    summary = payload.get("summary")
+    if not isinstance(summary, Mapping) or set(summary) != _OBSERVE_SUMMARY_FIELDS:
+        _fail("RESULT_SUMMARY_INVALID")
+    entity_count = summary.get("entity_count")
+    if type(entity_count) is not int or entity_count < 0:
+        _fail("RESULT_SUMMARY_INVALID")
+    for field in ("by_type", "by_layer"):
+        counts = summary.get(field)
+        if not isinstance(counts, Mapping):
+            _fail("RESULT_SUMMARY_INVALID")
+        for key, count in counts.items():
+            if type(key) is not str or not key or type(count) is not int or count < 0:
+                _fail("RESULT_SUMMARY_INVALID")
+    samples = summary.get("sample_entities")
+    if (
+        not isinstance(samples, list)
+        or len(samples) > MAX_SUMMARY_SAMPLE_COUNT
+        or any(
+            not isinstance(item, Mapping)
+            or set(item) != {"handle", "type", "layer"}
+            or any(type(item.get(field)) is not str or not item[field] for field in ("handle", "type", "layer"))
+            for item in samples
+        )
+    ):
+        _fail("RESULT_SUMMARY_INVALID")
+
+    result_sha256 = payload.get("result_sha256")
+    query_id = payload.get("query_id")
+    if not _is_sha256(result_sha256):
+        _fail("RESULT_HASH_MISMATCH")
+    hash_payload = {
+        field: deepcopy(payload[field])
+        for field in ("schema_version", "operation", "binding", "summary")
+    }
+    try:
+        expected_sha256 = canonical_json_sha256(hash_payload)
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    except (TypeError, ValueError) as error:
+        raise CadReadFacadeError("RESULT_HASH_MISMATCH") from error
+    if result_sha256 != expected_sha256:
+        _fail("RESULT_HASH_MISMATCH")
+    if query_id != "cad-query-" + result_sha256:
+        _fail("RESULT_ID_MISMATCH")
+    if len(encoded) > MAX_QUERY_RESULT_BYTES:
+        _fail("RESULT_OVERSIZED")
+    return deepcopy(dict(payload))
 
 
 def _fail(code: str) -> None:
@@ -376,4 +480,5 @@ __all__ = [
     "CadReadFacadeError",
     "observe_drawing",
     "query_entities",
+    "validate_observe_drawing_result",
 ]

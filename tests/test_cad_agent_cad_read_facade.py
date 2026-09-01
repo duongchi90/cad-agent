@@ -157,6 +157,66 @@ def test_observe_drawing_returns_exact_bound_identity_and_deterministic_summary(
     assert len(first["result_sha256"]) == 64
 
 
+def test_validate_observe_drawing_result_accepts_owner_output_and_returns_copy() -> None:
+    bound = _bound_kwargs()
+    payload = _facade().observe_drawing(client=_client(), **bound)
+
+    validated = _facade().validate_observe_drawing_result(payload)
+
+    assert validated == payload
+    assert validated is not payload
+    assert validated["binding"] is not payload["binding"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("operation", "query_entities", "RESULT_SCHEMA_INVALID"),
+        ("query_id", "cad-query-wrong", "RESULT_ID_MISMATCH"),
+        ("result_sha256", "0" * 64, "RESULT_HASH_MISMATCH"),
+    ],
+)
+def test_validate_observe_drawing_result_rejects_tampered_owner_output(
+    field: str, value: object, error: str
+) -> None:
+    payload = _facade().observe_drawing(client=_client(), **_bound_kwargs())
+    tampered = deepcopy(payload)
+    tampered[field] = value
+
+    with pytest.raises(_facade().CadReadFacadeError, match=error):
+        _facade().validate_observe_drawing_result(tampered)
+
+
+def test_validate_observe_drawing_result_rejects_extra_root_field() -> None:
+    payload = _facade().observe_drawing(client=_client(), **_bound_kwargs())
+    tampered = deepcopy(payload)
+    tampered["unexpected"] = True
+
+    with pytest.raises(_facade().CadReadFacadeError, match="RESULT_SCHEMA_INVALID"):
+        _facade().validate_observe_drawing_result(tampered)
+
+
+def test_validate_observe_drawing_result_rejects_malformed_binding_sha() -> None:
+    payload = _facade().observe_drawing(client=_client(), **_bound_kwargs())
+    tampered = deepcopy(payload)
+    tampered["binding"]["artifact_sha256"] = "not-a-sha"
+
+    with pytest.raises(_facade().CadReadFacadeError, match="RESULT_BINDING_INVALID"):
+        _facade().validate_observe_drawing_result(tampered)
+
+
+def test_validate_observe_drawing_result_rejects_oversized_summary_sample() -> None:
+    payload = _facade().observe_drawing(client=_client(), **_bound_kwargs())
+    tampered = deepcopy(payload)
+    tampered["summary"]["sample_entities"] = [
+        {"handle": str(index), "type": "LINE", "layer": "SHAFT"}
+        for index in range(21)
+    ]
+
+    with pytest.raises(_facade().CadReadFacadeError, match="RESULT_SUMMARY_INVALID"):
+        _facade().validate_observe_drawing_result(tampered)
+
+
 def test_query_entities_filters_projects_and_bounds_results() -> None:
     bound = _bound_kwargs()
     result = _facade().query_entities(
