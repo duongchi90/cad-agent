@@ -370,6 +370,15 @@ def _finish_result(payload: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def _finish_bound_result(
+    *, client: CadReadClient, expected_path: str, payload: dict[str, object]
+) -> dict[str, object]:
+    """Re-check the active drawing immediately before finalizing a read result."""
+
+    _validate_client_drawing(client, expected_path)
+    return _finish_result(payload)
+
+
 def observe_drawing(
     *,
     client: CadReadClient,
@@ -410,7 +419,11 @@ def observe_drawing(
             "sample_entities": deepcopy(entities[:MAX_SUMMARY_SAMPLE_COUNT]),
         },
     }
-    return _finish_result(payload)
+    return _finish_bound_result(
+        client=client,
+        expected_path=binding["drawing_path"],
+        payload=payload,
+    )
 
 
 def query_entities(
@@ -469,7 +482,11 @@ def query_entities(
             for entity in selected
         ],
     }
-    return _finish_result(payload)
+    return _finish_bound_result(
+        client=client,
+        expected_path=binding["drawing_path"],
+        payload=payload,
+    )
 
 
 __all__ = [
