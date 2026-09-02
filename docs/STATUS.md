@@ -152,15 +152,15 @@
   IPC cleanup left zero survivors. This is a ping-only owner acceptance, not
   a Phase 1A entity-query acceptance or provider-backed M3 PASS.
 - The current next provider-independent boundary is
-  `PHASE1A_LIVE_QUERY_RESULT_ACCEPTANCE`, owned by the bounded
-  `cad_agent.drawing_query.query_entities` adapter plus the existing
-  `FileIPCLiveMCPClient` and provenance/currentness owners. One fresh
-  disposable candidate must produce a claim-bound bounded explicit-handle or
-  component/view query result with exact drawing identity before and after,
-  valid result hash, unchanged source/candidate bytes, and zero owned IPC
-  survivors. If exact live binding is unavailable, record `PRECONDITION_MISSING`;
-  do not guess or promote the ping-only result. Real/private PDF evidence and
-  provider-backed M3 acceptance remain unrun/non-pass.
+  `PHASE3_DISPOSABLE_EXACT_CURRENT_DRAWING_READBACK`, owned by the existing
+  `FileIPCLiveMCPClient` plus the loaded dispatcher and bounded drawing
+  currentness/read owners. Do not repeat the ping. One disposable exact-current
+  drawing-list-open-paths/read-back request must produce a claim-bound semantic
+  terminal result with exact session/drawing identity, unchanged
+  source/candidate bytes, and zero owned IPC survivors. If the exact live
+  binding is unavailable, record `PRECONDITION_MISSING`; do not guess or
+  promote the ping-only result. Real/private PDF evidence and provider-backed
+  M3 acceptance remain unrun/non-pass.
 
 ## M3 real-provider/live boundary — frozen non-pass
 
