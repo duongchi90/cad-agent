@@ -19,15 +19,15 @@
 ## Current main / provider-independent hardening (2026-09-02)
 
 - This status record uses canonical `main` evidence baseline
-  `8d83b771653d225495ec017cf517c1dc13128312` and is published on canonical
-  merge commit `716c0db75209c15522c7ead284a7a13fe36f73f0` by docs-only PR #369.
-  The implementation/evidence below is unchanged by that documentation-only
-  merge and includes the preceding
+  `f23e4db6c2d41a9d56520d65cd864f02a6549878` after bounded Phase 1A PR #371.
+  This docs-only reconciliation records that new evidence without changing
+  any implementation. The implementation/evidence below includes the preceding
   #344–#347 hardening records, the Phase 1/2 facades, the late active-drawing
   currentness repair, canonical rollback restoration, the bounded Phase 3
   pilot, the bounded Phase 4 PDF-to-pilot binding, and the documentation
-  currentness reconciliations in PRs #366–#369. The publication merge commit is
-  the exact GitHub source of truth for this record.
+  currentness reconciliations in PRs #366–#370, plus the bounded Phase 1A
+  query adapter in PR #371. The eventual publication merge commit is the
+  exact GitHub source of truth for this record.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
   now records a bounded Windows PID/process-start identity, retains an
@@ -82,6 +82,18 @@
   `8 passed`, the nearest regression was `296 passed` with one expected
   private-data skip, and the authoritative verifier recorded `3110 passed`,
   `3182` JUnit tests, `.NET 198 passed`, and exact-head hosted checks PASS.
+- PR #371 (`e2a0dc9b690b72db5b57c376759950f5cae35397`) closed the measured
+  Phase 1A bounded-read gap. The new `cad_agent/drawing_query.py` adapter
+  reuses DARA, the R3 component/view registry, R4 candidate state, and the
+  existing typed `drawing_get_variables`/`entity_get` owner. It accepts only
+  closed explicit-handle or exact component/view selectors, resolves at most
+  64 handles before live lookup, and emits tamper-evident observation/query
+  results. It never enumerates the drawing and never owns document lifecycle
+  or mutation. Focused coverage was `13` new tests and `147` related tests;
+  the authoritative verifier recorded `3123` offline tests and `118` .NET
+  IPC tests, with the intentional causal RED and unavailable live markers
+  unchanged. This closes the bounded offline MECH-1A contract only; broad
+  layer/type/bbox discovery remains deferred to the existing transport owner.
 - Disposable Phase 3 live epochs remain **NON_PASS**. Epochs 1–2 stopped at
   the SecureLoad/bootstrap and dispatcher terminal-result boundaries. Fresh
   current-main epochs #05–#07 reused the loaded canonical dispatcher and
@@ -199,7 +211,8 @@
   current machine has no running AutoCAD process or FileIPC/COM/ROT receiver,
   so no live runtime identity, candidate, R5/R6 mutation, Task6 pair, or
   close-without-save evidence can be produced now. M2 remains accepted and is
-  not retested; MECH-1 remains **NOT JUSTIFIED**.
+  not retested; the bounded MECH-1A read/query contract is accepted, while
+  broader unbounded introspection remains deferred.
 
 ## Accelerated reuse-first program: PLANNING/GOVERNANCE ONLY
 
@@ -416,8 +429,10 @@ Mechanical gate that was not separately executed remains `NOT RUN`.
   geometry/dimension, transport, stale/wrong-target, identity, and cleanup
   evidence. Benchmark `real_data` is **NOT RUN**; no repair or save attempts
   were made.
-- MECH-1 remains **NOT JUSTIFIED**: no measured sidecar evidence shows that
-  read-only CAD introspection materially improves coverage or context cost.
+- MECH-1A bounded, provenance-bound read/query is now **ACCEPTED** through
+  PR #371. This does not justify a second reader, whole-drawing scan, or
+  unbounded sidecar; broader discovery remains deferred pending a measured
+  product gap.
 
 The exact future operator packet is tracked at
 `docs/superpowers/plans/2026-08-30-m2-live-packet.md`. The packet records the
@@ -459,8 +474,9 @@ Human-only action is required for M2 acceptance.
 - Remaining M3 boundary: one real disposable candidate-only LINE epoch with a
   genuinely observed current R5 `FAIL`, live R6 mutation, cleanup, refreshed
   R4 lineage, and a fresh live R5 `PASS`. The current R8-D driver remains
-  acceptance-only/read-only, so no live M3 PASS is claimed. MECH-1 remains
-  **NOT JUSTIFIED**.
+  acceptance-only/read-only, so no live M3 PASS is claimed. The bounded
+  MECH-1A read/query contract is accepted, while broader Mechanical
+  introspection remains deferred.
 - Live follow-up packet: `docs/superpowers/plans/2026-08-30-m3-live-packet.md`.
   It freezes the current main/plugin artifact identity, the existing
   NETLOAD/APPLOAD prerequisite, transport variables, owner sequence, safety
