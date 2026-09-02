@@ -16,12 +16,13 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-## Current main / provider-independent hardening (2026-09-01)
+## Current main / provider-independent hardening (2026-09-02)
 
 - This status update is based on canonical `main`
-  `63eac58d12af934e8a04a009116cef05cecde542`, which includes PR #347's
-  FileIPC timeout repair and the preceding #344–#346 hardening records. The
-  resulting merge commit is the
+  `ac049a2ed43d3e5b25f0da1adcf217491933198f`, which includes the preceding
+  #344–#347 hardening records, the Phase 1/2 facades, the late active-drawing
+  currentness repair, canonical rollback restoration, and the bounded Phase 3
+  pilot. The resulting merge commit is the
   exact GitHub source of truth for this record after integration.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
@@ -53,10 +54,34 @@
   then passed after the bounded owner fix. Focused owner/IPC coverage was
   `71 passed` with `5` live prerequisite skips and `50` subtests; the canonical
   verifier recorded dotnet IPC `118 passed` and offline `3063 passed`.
-- The next provider-independent hardening audit target is
-  source/accepted-DWG immutability and backup/rollback recovery. No additional
-  production-code gap or write set is claimed until a fresh causal measurement
-  proves one.
+- PR #358 (`ccc2fd13a7795fade1212f7a27d21c7`) closed the measured late
+  active-DWG TOCTOU currentness boundary. PR #360
+  (`3af290c3a8ccace082ba896eb64fbbcdb511e5d5`) then restored canonical staged
+  DXF and build-evidence bytes after a failed second review and verified a
+  canonical reopen, with the backup path excluded from the reopen assertion.
+- PR #361 (`d2d8865516ceffb6d41dd7ae3075a7d3715d7953`) added the bounded
+  synthetic simple-shaft pilot on merged main
+  `ac049a2ed43d3e5b25f0da1adcf217491933198f`. The selected fixture is
+  `tests/fixtures/phase3_synthetic_simple_shaft_v1.json`, SHA-256
+  `a9c3a17b59aace782c5c28679e55b68b8036b9636ede5d40bc64d0697e10f55f`.
+  It reuses Primitive IR, Semantic IR, the DXF builder, headless review, and
+  SHA-bound build evidence for a typed `mechanical_shaft_step` plus
+  `mechanical_hole_feature` candidate. Focused/regression coverage was
+  `133 passed`; exact-head hosted checks and the full offline verifier passed
+  with `3178` JUnit tests and no failures or errors.
+- Two disposable Phase 3 live read-back epochs remain **NON_PASS**. Epoch 1
+  stopped at the dispatcher-ready ping because `SECURELOAD=1` and its
+  bootstrap path was outside `TRUSTEDPATHS`. Epoch 2 reused the already-loaded
+  canonical dispatcher but had no terminal result for `drawing-list-open-paths`
+  and then no terminal cleanup result. Both candidates were closed without
+  save, both candidate hashes were unchanged, and both IPC roots had zero
+  survivors. No live review PASS is claimed.
+- The current next provider-independent boundary is
+  `PHASE3_LIVE_FILEIPC_TERMINAL_RESULT_UNAVAILABLE`, owned by the existing
+  `FileIPCLiveMCPClient` plus the loaded AutoLISP dispatcher. No code write-set
+  is authorized from these two live failures alone. Issue #362 records a
+  separate measured Phase 4 gap: the existing PDF pipeline emits generic
+  Semantic IR and does not yet bind the selected typed shaft/hole cluster.
 
 ## M3 real-provider/live boundary — frozen non-pass
 
@@ -65,7 +90,7 @@
   `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`, branch
   `codex/m3-task3-responses-provider`, based on its frozen base `main`
   `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`. Current `main` has advanced
-  independently through provider-independent PRs #344–#347; no rebase was
+  independently through provider-independent PRs #344–#361; no rebase was
   performed or implied.
 - Frozen real-provider evidence: exactly one authorized synchronous
   `gpt-5.6-sol` attempt was made; the provider returned HTTP `429`; no
