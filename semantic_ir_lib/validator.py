@@ -19,6 +19,7 @@ _VALID_PART_TYPES = {
     "lo_bat_vit", "duong_vien_tron",
     # compound parts (pattern_compound.py)
     "khung_chu_nhat", "gia_do", "ban_le", "diem_noi",
+    "mechanical_shaft_step", "mechanical_hole_feature",
     "unclassified",
 }
 _VALID_PART_SOURCES = {"rule_geometry", "vision_assisted"}

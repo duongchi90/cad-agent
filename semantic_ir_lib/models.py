@@ -31,6 +31,8 @@ PartType = Literal[
     "gia_do",            # L-bracket: 2 line vuông góc + coincident_endpoint tại 1 đầu
     "ban_le",            # hinge: 2 line song song + coincident_endpoint + 2 lỗ bắt vít
     "diem_noi",          # điểm nối hàn/gia cố: >=2 line coincident_endpoint tại 1 điểm chung
+    # Phase 3 synthetic Mechanical pilot feature vocabulary.
+    "mechanical_shaft_step", "mechanical_hole_feature",
     "unclassified",
 ]
 PartSource = Literal["rule_geometry", "vision_assisted"]

@@ -56,6 +56,8 @@ _LAYER_BY_PART_TYPE: Dict[str, Tuple[str, int]] = {
     "gia_do": ("GIA_DO", 30),                    # orange (cam)
     "ban_le": ("BAN_LE", 186),                   # light magenta (hồng nhạt)
     "diem_noi": ("DIEM_NOI", 9),                 # light gray (xám nhạt)
+    "mechanical_shaft_step": ("MECHANICAL_SHAFT_STEP", 1),
+    "mechanical_hole_feature": ("MECHANICAL_HOLE_FEATURE", 2),
     "unclassified": ("UNCLASSIFIED", 8),     # xám
 }
 _DEFAULT_LAYER: Tuple[str, int] = ("UNCLASSIFIED", 8)

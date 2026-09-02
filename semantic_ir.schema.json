@@ -42,6 +42,7 @@
         "thanh_ngang", "thanh_doc", "thanh_xien",
         "lo_bat_vit", "duong_vien_tron",
         "khung_chu_nhat", "gia_do", "ban_le", "diem_noi",
+        "mechanical_shaft_step", "mechanical_hole_feature",
         "unclassified"
       ]
     },
