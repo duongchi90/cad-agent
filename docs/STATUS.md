@@ -19,11 +19,11 @@
 ## Current main / provider-independent hardening (2026-09-02)
 
 - This status update is based on canonical `main`
-  `ca2306cff66e4c3e31b82a27757043d867684ce8`, which includes the preceding
+  `72ce937f3f7a90db94247c2288cd89033003f004`, which includes the preceding
   #344–#347 hardening records, the Phase 1/2 facades, the late active-drawing
   currentness repair, canonical rollback restoration, the bounded Phase 3
-  pilot, and the bounded Phase 4 PDF-to-pilot binding. The resulting merge
-  commit is the
+  pilot, the bounded Phase 4 PDF-to-pilot binding, and the documentation
+  currentness reconciliation in PR #365. The resulting merge commit is the
   exact GitHub source of truth for this record after integration.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
@@ -79,13 +79,20 @@
   `8 passed`, the nearest regression was `296 passed` with one expected
   private-data skip, and the authoritative verifier recorded `3110 passed`,
   `3182` JUnit tests, `.NET 198 passed`, and exact-head hosted checks PASS.
-- Two disposable Phase 3 live read-back epochs remain **NON_PASS**. Epoch 1
-  stopped at the dispatcher-ready ping because `SECURELOAD=1` and its
-  bootstrap path was outside `TRUSTEDPATHS`. Epoch 2 reused the already-loaded
-  canonical dispatcher but had no terminal result for `drawing-list-open-paths`
-  and then no terminal cleanup result. Both candidates were closed without
-  save, both candidate hashes were unchanged, and both IPC roots had zero
-  survivors. No live review PASS is claimed.
+- Disposable Phase 3 live epochs remain **NON_PASS**. Epochs 1–2 stopped at
+  the SecureLoad/bootstrap and dispatcher terminal-result boundaries. Fresh
+  current-main epochs #05–#07 reused the loaded canonical dispatcher and
+  valid foreground/root bindings: #05 timed out on claim-bound `ping`, #06
+  returned a terminal `drawing-open` result but timed out on the immediate
+  post-activation read-back, and #07 repeated the read-back timeout after a
+  bounded settle interval. Epoch #08 had no recoverable request/result
+  evidence after cleanup and is not verifiable. Epoch #09 durably captured
+  request `a80c0e43547a` for claim-bound `ping`, but no terminal result was
+  produced within the bounded timeout; the post-epoch diagnostic reported
+  `DISPATCH_SYMBOL_PRESENT`, `ROOT_DIRECTORY_VALID`, `PENDING_OWNER_NIL`, and
+  `CMDACTIVE=0`. Every candidate was disposable, closed without save, kept
+  its source/candidate SHA, and left zero owned IPC survivors. No live review
+  PASS is claimed.
 - The current next provider-independent boundary is
   `PHASE3_LIVE_FILEIPC_TERMINAL_RESULT_UNAVAILABLE`, owned by the existing
   `FileIPCLiveMCPClient` plus the loaded AutoLISP dispatcher. No code write-set
