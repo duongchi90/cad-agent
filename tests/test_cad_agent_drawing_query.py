@@ -184,7 +184,13 @@ def test_component_selector_resolves_only_registry_bound_handle() -> None:
     assert client.entity_list_calls == 0
     assert client.entity_get_calls == ["C3D4"]
     assert result["entities"] == [
-        {"handle": "C3D4", "type": "INSERT", "layer": "BODY"}
+        {
+            "handle": "C3D4",
+            "type": "INSERT",
+            "layer": "BODY",
+            "component_ids": [component_id],
+            "geometry_status": "UNSUPPORTED",
+        }
     ]
 
 

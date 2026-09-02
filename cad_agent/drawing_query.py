@@ -82,7 +82,16 @@ _ENTITY_GEOMETRY_FIELDS = (
     "rotation_deg",
     "attributes",
 )
-_ENTITY_FIELDS = frozenset((*_ENTITY_BASE_FIELDS, *_ENTITY_GEOMETRY_FIELDS))
+_ENTITY_FIELDS = frozenset(
+    (*_ENTITY_BASE_FIELDS, *_ENTITY_GEOMETRY_FIELDS, "component_ids", "view_ids", "geometry_status")
+)
+_GEOMETRY_BY_TYPE = {
+    "LINE": ("start", "end"),
+    "CIRCLE": ("center", "radius"),
+    "ARC": ("center", "radius", "start_angle_deg", "end_angle_deg"),
+    "TEXT": ("insert", "content"),
+    "MTEXT": ("insert", "content"),
+}
 
 
 class DrawingQueryError(ValueError):
@@ -437,6 +446,7 @@ def _structural_summary(registry: Mapping[str, object]) -> dict[str, object]:
 
 
 def observe_drawing(
+    client: object = None,
     *,
     reference: Mapping[str, object],
     current_observation: Mapping[str, object],
@@ -446,7 +456,6 @@ def observe_drawing(
     registry: Mapping[str, object],
     registry_upstream_context: object,
     candidate_state: Mapping[str, object],
-    client: object = None,
     expected_active_document_path: str | None = None,
 ) -> dict[str, object]:
     """Return a provenance-bound structural summary without entity enumeration."""
@@ -482,14 +491,35 @@ def observe_drawing(
 
 def _selector_handles(
     query: Mapping[str, object], registry: Mapping[str, object]
-) -> tuple[list[str], set[str]]:
+) -> tuple[list[str], set[str], dict[str, dict[str, list[str]]]]:
     requested = list(query["handles"])
     bound: set[str] = set()
-    component_ids = set(query["component_ids"])
-    view_ids = set(query["view_ids"])
+    memberships: dict[str, dict[str, set[str]]] = {}
     components = {str(item["component_id"]): item for item in registry["components"]}
     views = {str(item["view_id"]): item for item in registry["views"]}
     candidate_id = registry["upstream_bindings"]["candidate_id"]
+    for component_id, component in components.items():
+        for binding in component["candidate_entity_bindings"]:
+            if (
+                binding["target_namespace"] == "CANDIDATE"
+                and binding["candidate_id"] == candidate_id
+            ):
+                handle_key = str(binding["entity_handle"]).casefold()
+                membership = memberships.setdefault(
+                    handle_key, {"components": set(), "views": set()}
+                )
+                membership["components"].add(component_id)
+    for view_id, view in views.items():
+        for binding in view["candidate_entity_bindings"]:
+            if (
+                binding["target_namespace"] == "CANDIDATE"
+                and binding["candidate_id"] == candidate_id
+            ):
+                handle_key = str(binding["entity_handle"]).casefold()
+                membership = memberships.setdefault(
+                    handle_key, {"components": set(), "views": set()}
+                )
+                membership["views"].add(view_id)
     for component_id in query["component_ids"]:
         component = components.get(component_id)
         if component is None:
@@ -517,11 +547,26 @@ def _selector_handles(
         unique.setdefault(handle.casefold(), handle)
     if len(unique) > MAX_QUERY_HANDLES:
         _fail("QUERY_RESOLUTION_UNBOUNDED")
-    return sorted(unique.values(), key=lambda item: (item.casefold(), item)), bound
+    normalized_memberships = {
+        handle: {
+            "components": sorted(values["components"]),
+            "views": sorted(values["views"]),
+        }
+        for handle, values in memberships.items()
+    }
+    return (
+        sorted(unique.values(), key=lambda item: (item.casefold(), item)),
+        bound,
+        normalized_memberships,
+    )
 
 
 def _entity_record(
-    raw: Mapping[str, object], requested_handle: str, detail: str
+    raw: Mapping[str, object],
+    requested_handle: str,
+    detail: str,
+    component_ids: Sequence[str] = (),
+    view_ids: Sequence[str] = (),
 ) -> dict[str, object]:
     if type(raw.get("handle")) is not str or raw["handle"].casefold() != requested_handle.casefold():
         _fail("ENTITY_IDENTITY_MISMATCH")
@@ -530,9 +575,18 @@ def _entity_record(
     result: dict[str, object] = {
         field: deepcopy(raw[field]) for field in _ENTITY_BASE_FIELDS
     }
+    if component_ids:
+        result["component_ids"] = list(component_ids)
+    if view_ids:
+        result["view_ids"] = list(view_ids)
     if detail == "GEOMETRY":
-        for field in _ENTITY_GEOMETRY_FIELDS:
-            if field in raw:
+        expected_geometry = _GEOMETRY_BY_TYPE.get(str(raw["type"]).upper())
+        if expected_geometry is None:
+            result["geometry_status"] = "UNSUPPORTED"
+        else:
+            for field in expected_geometry:
+                if field not in raw:
+                    _fail("ENTITY_GEOMETRY_UNAVAILABLE")
                 result[field] = deepcopy(raw[field])
     return result
 
@@ -548,6 +602,17 @@ def _validate_entity(value: object) -> dict[str, object]:
     if not {"handle", "type", "layer"}.issubset(keys) or not keys.issubset(_ENTITY_FIELDS):
         _fail("RESULT_ENTITY_INVALID")
     if any(type(value.get(field)) is not str or not value[field] for field in _ENTITY_BASE_FIELDS):
+        _fail("RESULT_ENTITY_INVALID")
+    for field in ("component_ids", "view_ids"):
+        if field in value:
+            items = value[field]
+            if (
+                not isinstance(items, list)
+                or any(type(item) is not str or not item for item in items)
+                or items != sorted(set(items))
+            ):
+                _fail("RESULT_ENTITY_INVALID")
+    if "geometry_status" in value and value["geometry_status"] != "UNSUPPORTED":
         _fail("RESULT_ENTITY_INVALID")
     return deepcopy(dict(value))
 
@@ -589,6 +654,7 @@ def validate_entity_query_result(payload: Mapping[str, object]) -> dict[str, obj
 
 
 def query_entities(
+    client: object,
     *,
     reference: Mapping[str, object],
     current_observation: Mapping[str, object],
@@ -598,7 +664,6 @@ def query_entities(
     registry: Mapping[str, object],
     registry_upstream_context: object,
     candidate_state: Mapping[str, object],
-    client: object,
     expected_active_document_path: str,
     query: Mapping[str, object],
 ) -> dict[str, object]:
@@ -617,7 +682,9 @@ def query_entities(
     )
     expected_path = _normalize_path(expected_active_document_path, "DRAWING_PATH_REQUIRED")
     _live_session(client, expected_path)
-    handles, registry_bound = _selector_handles(normalized_query, sealed_registry)
+    handles, registry_bound, memberships = _selector_handles(
+        normalized_query, sealed_registry
+    )
     entities: list[dict[str, object]] = []
     for handle in handles:
         try:
@@ -633,7 +700,16 @@ def query_entities(
             if handle.casefold() in registry_bound:
                 _fail("REGISTRY_ENTITY_BINDING_NOT_OBSERVED")
             _fail("ENTITY_GET_INVALID")
-        entities.append(_entity_record(raw, handle, normalized_query["detail"]))
+        membership = memberships.get(handle.casefold(), {"components": [], "views": []})
+        entities.append(
+            _entity_record(
+                raw,
+                handle,
+                normalized_query["detail"],
+                membership["components"],
+                membership["views"],
+            )
+        )
     payload = {
         "schema_version": ENTITY_QUERY_RESULT_SCHEMA_VERSION,
         "binding": _binding_record(sealed_reference, sealed_registry, candidate),
