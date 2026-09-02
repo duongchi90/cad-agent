@@ -98,8 +98,22 @@
   result before cleanup. Every candidate was disposable, closed without save,
   kept its source/candidate SHA, and left zero owned IPC survivors. No live
   review PASS is claimed.
+- Epoch #12 was a setup-only NON_PASS: its evidence observer accidentally
+  dropped the `_mcp_claim_bound` marker, so the client emitted a legacy
+  claimless request and timed out. It is not a semantic acceptance result.
+  Epoch #13 corrected that harness condition and made one genuine
+  claim-bound `ping` attempt (`ab1f472b75ea`), but the normal
+  `c:mcp-dispatch` route still produced no terminal result within 30 seconds.
+  The candidate remained byte-identical and cleanup left zero owned IPC
+  survivors.
+- A separate read-only in-session diagnostic then showed `CMDACTIVE=0`, an
+  empty-root `c:mcp-dispatch` entry returning normally, and
+  `mcp-dispatch-core` returning its expected missing-file error for a
+  nonexistent request. Together with the earlier direct-core diagnostic,
+  this proves the core request/result owner can work while leaving the
+  request-bearing command context unresolved.
 - The current next provider-independent boundary is
-  `PHASE3_FILEIPC_REQUEST_BEARING_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE`,
+  `PHASE3_FILEIPC_C_MCP_DISPATCH_REQUEST_CONTEXT_TERMINAL_RESULT_UNAVAILABLE`,
   owned by the existing `FileIPCLiveMCPClient` plus the loaded AutoLISP
   dispatcher. The current diagnostic is causal RED for the request-bearing
   path but does not yet justify replacing the intentionally asynchronous
