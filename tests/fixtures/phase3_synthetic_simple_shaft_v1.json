@@ -1,0 +1,41 @@
+{
+  "schema_version": "mechanical-shaft-pilot-1.0",
+  "pilot_id": "synthetic-simple-stepped-shaft-v1",
+  "source_document": {
+    "file_name": "phase3_synthetic_simple_shaft_v1.json",
+    "page_index": 0,
+    "image_width_px": 1200,
+    "image_height_px": 800
+  },
+  "calibration": {
+    "unit": "mm",
+    "pixel_to_unit_scale": 1.0,
+    "origin_px": [0, 0],
+    "method": "manual_override",
+    "reference_note": "synthetic non-private millimetre fixture",
+    "status": "verified"
+  },
+  "features": [
+    {
+      "id": "shaft-profile-001",
+      "kind": "shaft_step",
+      "segments": [
+        {"id": "top-main", "start": [0.0, 10.0], "end": [60.0, 10.0]},
+        {"id": "step-rise", "start": [60.0, 10.0], "end": [60.0, 15.0]},
+        {"id": "top-step", "start": [60.0, 15.0], "end": [100.0, 15.0]},
+        {"id": "right-cap", "start": [100.0, 15.0], "end": [100.0, -15.0]},
+        {"id": "bottom-step", "start": [100.0, -15.0], "end": [60.0, -15.0]},
+        {"id": "step-fall", "start": [60.0, -15.0], "end": [60.0, -10.0]},
+        {"id": "bottom-main", "start": [60.0, -10.0], "end": [0.0, -10.0]},
+        {"id": "left-cap", "start": [0.0, -10.0], "end": [0.0, 10.0]}
+      ]
+    },
+    {
+      "id": "hole-axial-001",
+      "kind": "hole_feature",
+      "center": [80.0, 0.0],
+      "diameter_mm": 10.0
+    }
+  ]
+}
+
