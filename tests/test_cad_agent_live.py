@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,6 @@ from cad_agent.live import (
 )
 from dxf_builder_lib.builder import BuildResult
 from mcp_integration_lib.mcp_client import FakeMCPClient
-from mcp_integration_lib.repair2 import RepairResult
 
 
 def _build(path: Path) -> BuildResult:
@@ -104,6 +104,15 @@ class _CloseFailureClient(_BrokenRepairClient):
         return None
 
 
+@dataclass
+class _FakeRepairResult:
+    repaired_count: int = 0
+    skipped_count: int = 0
+    repaired_primitive_ids: list[str] = field(default_factory=list)
+    skipped_primitive_ids: list[str] = field(default_factory=list)
+    details: list[str] = field(default_factory=list)
+
+
 def test_failed_second_review_does_not_save_and_reopens_canonical_dxf() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -140,10 +149,10 @@ def test_failed_second_review_restores_canonical_dxf_and_build_evidence(
         client = _BrokenRepairClient(fail_entity_get=False)
         client.preload_entity("A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)})
 
-        def mutate_canonical_files(*_args: object, **_kwargs: object) -> RepairResult:
+        def mutate_canonical_files(*_args: object, **_kwargs: object) -> _FakeRepairResult:
             dxf.write_bytes(b"mutated staged dxf")
             evidence.write_bytes(b"mutated build evidence")
-            return RepairResult(repaired_count=1)
+            return _FakeRepairResult(repaired_count=1)
 
         monkeypatch.setattr("cad_agent.live.repair_dxf_live", mutate_canonical_files)
 
