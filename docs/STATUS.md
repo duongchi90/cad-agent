@@ -151,15 +151,28 @@
   foreground matched, the disposable candidate SHA was unchanged, and owned
   IPC cleanup left zero survivors. This is a ping-only owner acceptance, not
   a Phase 1A entity-query acceptance or provider-backed M3 PASS.
+- Epoch #15 then closed the exact-current drawing read-back boundary on current
+  main `8dc6b6e0217a8085590e7a7454f24460cc292a28`: the existing owner returned
+  claim-bound `drawing-list-open-paths` request `ff4a5a76e560` with the active
+  disposable candidate path. AutoCAD PID/HWND and foreground matched, the
+  candidate remained at SHA-256
+  `f7d21a2c5608d1bf4185d13e619bc9c5663fe01dacab6eea4ad9e0b3a4dbbd90`, and
+  owned IPC cleanup left zero survivors. This is exact drawing read-back only;
+  it does not establish a Phase 1A provenance-bound entity query.
 - The current next provider-independent boundary is
-  `PHASE3_DISPOSABLE_EXACT_CURRENT_DRAWING_READBACK`, owned by the existing
-  `FileIPCLiveMCPClient` plus the loaded dispatcher and bounded drawing
-  currentness/read owners. Do not repeat the ping. One disposable exact-current
-  drawing-list-open-paths/read-back request must produce a claim-bound semantic
-  terminal result with exact session/drawing identity, unchanged
-  source/candidate bytes, and zero owned IPC survivors. If the exact live
-  binding is unavailable, record `PRECONDITION_MISSING`; do not guess or
-  promote the ping-only result. Real/private PDF evidence and provider-backed
+  `PHASE1A_LIVE_BOUND_QUERY_PRECONDITION_MISSING`, owned by the existing
+  DARA/R3/R4 provenance-currentness owners plus `drawing_query.query_entities`
+  and `FileIPCLiveMCPClient`. The active disposable drawing is
+  `C:\\temp\\cad-agent-m3-live-20260831-02\\candidate-pre-repair.dxf` at
+  SHA-256 `f7d21a2c5608d1bf4185d13e619bc9c5663fe01dacab6eea4ad9e0b3a4dbbd90`
+  with one `2F/LINE` entity, while the accepted Phase 1A fixture binding is a
+  different synthetic artifact (`fd50d352fa93db9f171847e7d61a9b2c191cb65ef613be707ef29a8cc834bba0`)
+  with bound handle `C3D4`. No exact accepted provenance/candidate binding for
+  the active drawing is available, so no entity-query request is justified.
+  The next oracle is one future disposable exact-bound candidate/entity query
+  with matching artifact, reference, R3 binding, candidate state, and handle,
+  followed by claim-bound result/hash, pre/post identity, integrity, and
+  zero-survivor cleanup checks. Real/private PDF evidence and provider-backed
   M3 acceptance remain unrun/non-pass.
 
 ## M3 real-provider/live boundary — frozen non-pass
