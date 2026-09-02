@@ -19,11 +19,11 @@
 ## Current main / provider-independent hardening (2026-09-02)
 
 - This status update is based on canonical `main`
-  `f2d410b77f1dc0d62cc5e734cd3ad32b0fd96955`, which includes the preceding
+  `8d83b771653d225495ec017cf517c1dc13128312`, which includes the preceding
   #344–#347 hardening records, the Phase 1/2 facades, the late active-drawing
   currentness repair, canonical rollback restoration, the bounded Phase 3
   pilot, the bounded Phase 4 PDF-to-pilot binding, and the documentation
-  currentness reconciliation in PR #366. The resulting merge commit is the
+  currentness reconciliations in PRs #366–#368. The resulting merge commit is the
   exact GitHub source of truth for this record after integration.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
@@ -129,7 +129,7 @@
   `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`, branch
   `codex/m3-task3-responses-provider`, based on its frozen base `main`
   `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`. Current `main` has advanced
-  independently through provider-independent PRs #344–#361; no rebase was
+  independently through provider-independent PRs #344–#368; no rebase was
   performed or implied.
 - Frozen real-provider evidence: exactly one authorized synchronous
   `gpt-5.6-sol` attempt was made; the provider returned HTTP `429`; no
