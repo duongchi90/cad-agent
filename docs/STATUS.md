@@ -19,14 +19,15 @@
 ## Current main / provider-independent hardening (2026-09-02)
 
 - This status record uses canonical `main` evidence baseline
-  `f23e4db6c2d41a9d56520d65cd864f02a6549878` after bounded Phase 1A PR #371.
+  `549fd27d1c44600fd467665ae71759d0eda74a9f` after bounded Phase 1A PR #373.
   This docs-only reconciliation records that new evidence without changing
   any implementation. The implementation/evidence below includes the preceding
   #344–#347 hardening records, the Phase 1/2 facades, the late active-drawing
   currentness repair, canonical rollback restoration, the bounded Phase 3
   pilot, the bounded Phase 4 PDF-to-pilot binding, and the documentation
   currentness reconciliations in PRs #366–#370, plus the bounded Phase 1A
-  query adapter in PR #371. The eventual publication merge commit is the
+  query adapter in PR #371 and its late active-DWG currentness repair in PR
+  #373. The eventual publication merge commit is the
   exact GitHub source of truth for this record.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
@@ -94,6 +95,15 @@
   IPC tests, with the intentional causal RED and unavailable live markers
   unchanged. This closes the bounded offline MECH-1A contract only; broad
   layer/type/bbox discovery remains deferred to the existing transport owner.
+- PR #373 (`52f9a56bebc6f84bd3fe38caa4d38718e8d5f5ce`, merged as
+  `549fd27d1c44600fd467665ae71759d0eda74a9f`) closed the measured late
+  active-DWG TOCTOU reopened by the Phase 1A adapter. A switching-client
+  causal RED showed that `query_entities` could seal a result after the active
+  document changed; the adapter now reuses `_live_session` immediately before
+  result finalization and refuses `ACTIVE_DOCUMENT_MISMATCH`. Focused
+  drawing-query/facade/candidate/registry/skill coverage was `253 passed`, and
+  exact-head hosted checks passed. No live query, provider call, M2 retest, or
+  CAD mutation was involved.
 - Disposable Phase 3 live epochs remain **NON_PASS**. Epochs 1–2 stopped at
   the SecureLoad/bootstrap and dispatcher terminal-result boundaries. Fresh
   current-main epochs #05–#07 reused the loaded canonical dispatcher and
@@ -127,15 +137,30 @@
   nonexistent request. Together with the earlier direct-core diagnostic,
   this proves the core request/result owner can work while leaving the
   request-bearing command context unresolved.
-- The current next provider-independent boundary is
+- Before Epoch #14, the next provider-independent boundary was
   `PHASE3_FILEIPC_C_MCP_DISPATCH_REQUEST_CONTEXT_TERMINAL_RESULT_UNAVAILABLE`,
   owned by the existing `FileIPCLiveMCPClient` plus the loaded AutoLISP
-  dispatcher. The current diagnostic is causal RED for the request-bearing
-  path but does not yet justify replacing the intentionally asynchronous
-  `PostMessageW` contract with a different transport or generic execution ACK.
-  Issue #362 records the now-closed bounded offline Phase 4 gap; real/private
-  PDF evidence and live AutoCAD/FileIPC acceptance remain unrun and are not
-  implied by the synthetic result.
+  dispatcher. The then-current diagnostic was causal RED for the
+  request-bearing path but did not justify replacing the intentionally
+  asynchronous `PostMessageW` contract with a different transport or generic
+  execution ACK.
+- Epoch #14 then closed the request-bearing ping/result boundary for the
+  existing owner: on canonical main `63795aeda4730cc51c803ce6649f7372e0c9fd95`,
+  a fresh disposable root returned claim-bound request `d1d4197d869f` with
+  terminal `ok=true` and `{ "ready": true }`. Exact AutoCAD PID/HWND and
+  foreground matched, the disposable candidate SHA was unchanged, and owned
+  IPC cleanup left zero survivors. This is a ping-only owner acceptance, not
+  a Phase 1A entity-query acceptance or provider-backed M3 PASS.
+- The current next provider-independent boundary is
+  `PHASE1A_LIVE_QUERY_RESULT_ACCEPTANCE`, owned by the bounded
+  `cad_agent.drawing_query.query_entities` adapter plus the existing
+  `FileIPCLiveMCPClient` and provenance/currentness owners. One fresh
+  disposable candidate must produce a claim-bound bounded explicit-handle or
+  component/view query result with exact drawing identity before and after,
+  valid result hash, unchanged source/candidate bytes, and zero owned IPC
+  survivors. If exact live binding is unavailable, record `PRECONDITION_MISSING`;
+  do not guess or promote the ping-only result. Real/private PDF evidence and
+  provider-backed M3 acceptance remain unrun/non-pass.
 
 ## M3 real-provider/live boundary — frozen non-pass
 
