@@ -710,6 +710,7 @@ def query_entities(
                 membership["views"],
             )
         )
+    _live_session(client, expected_path)
     payload = {
         "schema_version": ENTITY_QUERY_RESULT_SCHEMA_VERSION,
         "binding": _binding_record(sealed_reference, sealed_registry, candidate),

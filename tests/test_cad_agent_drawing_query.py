@@ -244,6 +244,34 @@ def test_wrong_active_document_rejects_before_entity_get() -> None:
     assert client.entity_list_calls == 0
 
 
+def test_query_rejects_active_drawing_drift_before_result_sealing() -> None:
+    module = _module()
+
+    class _LateDriftClient(_RecordingClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.identity_reads = 0
+
+        def drawing_get_variables(self, names: list[str]) -> dict[str, object]:
+            self.identity_reads += 1
+            if self.identity_reads == 2:
+                self.drawing_path = _FOREIGN_DRAWING_PATH
+            return super().drawing_get_variables(names)
+
+    client = _LateDriftClient()
+    with pytest.raises(module.DrawingQueryError, match="ACTIVE_DOCUMENT_MISMATCH"):
+        module.query_entities(
+            client=client,
+            **_bound(),
+            expected_active_document_path=_DRAWING_PATH,
+            query=_live_query(),
+        )
+
+    assert client.identity_reads == 2
+    assert client.entity_get_calls == ["10"]
+    assert client.entity_list_calls == 0
+
+
 def test_live_identity_allowlist_is_code_owned() -> None:
     module = _module()
     client = _RecordingClient()
@@ -255,7 +283,8 @@ def test_live_identity_allowlist_is_code_owned() -> None:
     )
 
     assert client.variable_calls == [
-        ["DWGPREFIX", "DWGNAME", "CTAB", "CVPORT", "TILEMODE", "INSUNITS"]
+        ["DWGPREFIX", "DWGNAME", "CTAB", "CVPORT", "TILEMODE", "INSUNITS"],
+        ["DWGPREFIX", "DWGNAME", "CTAB", "CVPORT", "TILEMODE", "INSUNITS"],
     ]
 
 
