@@ -19,10 +19,11 @@
 ## Current main / provider-independent hardening (2026-09-02)
 
 - This status update is based on canonical `main`
-  `ac049a2ed43d3e5b25f0da1adcf217491933198f`, which includes the preceding
+  `ca2306cff66e4c3e31b82a27757043d867684ce8`, which includes the preceding
   #344–#347 hardening records, the Phase 1/2 facades, the late active-drawing
-  currentness repair, canonical rollback restoration, and the bounded Phase 3
-  pilot. The resulting merge commit is the
+  currentness repair, canonical rollback restoration, the bounded Phase 3
+  pilot, and the bounded Phase 4 PDF-to-pilot binding. The resulting merge
+  commit is the
   exact GitHub source of truth for this record after integration.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
@@ -69,6 +70,15 @@
   `mechanical_hole_feature` candidate. Focused/regression coverage was
   `133 passed`; exact-head hosted checks and the full offline verifier passed
   with `3178` JUnit tests and no failures or errors.
+- PR #364 (`a6590f4d74a0fe6e54a70ce32121462707439e7f`) closed the bounded
+  synthetic Phase 4 PDF-to-typed-pilot binding boundary. The existing fixed
+  `run_pdf_stages` path is now accepted only when it yields exactly eight
+  axis-aligned outline lines plus one interior circle under the declared
+  tolerance/topology contract; the adapter binds the existing page/source
+  hashes before producing the typed shaft/hole pilot. Focused coverage was
+  `8 passed`, the nearest regression was `296 passed` with one expected
+  private-data skip, and the authoritative verifier recorded `3110 passed`,
+  `3182` JUnit tests, `.NET 198 passed`, and exact-head hosted checks PASS.
 - Two disposable Phase 3 live read-back epochs remain **NON_PASS**. Epoch 1
   stopped at the dispatcher-ready ping because `SECURELOAD=1` and its
   bootstrap path was outside `TRUSTEDPATHS`. Epoch 2 reused the already-loaded
@@ -79,9 +89,10 @@
 - The current next provider-independent boundary is
   `PHASE3_LIVE_FILEIPC_TERMINAL_RESULT_UNAVAILABLE`, owned by the existing
   `FileIPCLiveMCPClient` plus the loaded AutoLISP dispatcher. No code write-set
-  is authorized from these two live failures alone. Issue #362 records a
-  separate measured Phase 4 gap: the existing PDF pipeline emits generic
-  Semantic IR and does not yet bind the selected typed shaft/hole cluster.
+  is authorized from the two prior live failures alone. Issue #362 records the
+  now-closed bounded offline Phase 4 gap; real/private PDF evidence and live
+  AutoCAD/FileIPC acceptance remain unrun and are not implied by the synthetic
+  result.
 
 ## M3 real-provider/live boundary — frozen non-pass
 
