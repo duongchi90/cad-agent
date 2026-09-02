@@ -19,11 +19,11 @@
 ## Current main / provider-independent hardening (2026-09-02)
 
 - This status update is based on canonical `main`
-  `72ce937f3f7a90db94247c2288cd89033003f004`, which includes the preceding
+  `f2d410b77f1dc0d62cc5e734cd3ad32b0fd96955`, which includes the preceding
   #344–#347 hardening records, the Phase 1/2 facades, the late active-drawing
   currentness repair, canonical rollback restoration, the bounded Phase 3
   pilot, the bounded Phase 4 PDF-to-pilot binding, and the documentation
-  currentness reconciliation in PR #365. The resulting merge commit is the
+  currentness reconciliation in PR #366. The resulting merge commit is the
   exact GitHub source of truth for this record after integration.
 - PR #344 (`c50f90f145e91e397137fd0305208e8c64c03c4e`) closed the measured
   abandoned publication-manifest lock boundary. The existing manifest owner
@@ -90,16 +90,23 @@
   request `a80c0e43547a` for claim-bound `ping`, but no terminal result was
   produced within the bounded timeout; the post-epoch diagnostic reported
   `DISPATCH_SYMBOL_PRESENT`, `ROOT_DIRECTORY_VALID`, `PENDING_OWNER_NIL`, and
-  `CMDACTIVE=0`. Every candidate was disposable, closed without save, kept
-  its source/candidate SHA, and left zero owned IPC survivors. No live review
-  PASS is claimed.
+  `CMDACTIVE=0`. Epoch #10 then used a fresh disposable candidate and valid
+  root/foreground bindings for claim-bound `ping` request `78b713ef4479`; it
+  also timed out with no terminal result. A bounded request-path diagnostic
+  wrote a correctly shaped claim-bearing `ping` request, invoked the existing
+  dispatcher, observed the return marker, and still produced no matching
+  result before cleanup. Every candidate was disposable, closed without save,
+  kept its source/candidate SHA, and left zero owned IPC survivors. No live
+  review PASS is claimed.
 - The current next provider-independent boundary is
-  `PHASE3_LIVE_FILEIPC_TERMINAL_RESULT_UNAVAILABLE`, owned by the existing
-  `FileIPCLiveMCPClient` plus the loaded AutoLISP dispatcher. No code write-set
-  is authorized from the two prior live failures alone. Issue #362 records the
-  now-closed bounded offline Phase 4 gap; real/private PDF evidence and live
-  AutoCAD/FileIPC acceptance remain unrun and are not implied by the synthetic
-  result.
+  `PHASE3_FILEIPC_REQUEST_BEARING_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE`,
+  owned by the existing `FileIPCLiveMCPClient` plus the loaded AutoLISP
+  dispatcher. The current diagnostic is causal RED for the request-bearing
+  path but does not yet justify replacing the intentionally asynchronous
+  `PostMessageW` contract with a different transport or generic execution ACK.
+  Issue #362 records the now-closed bounded offline Phase 4 gap; real/private
+  PDF evidence and live AutoCAD/FileIPC acceptance remain unrun and are not
+  implied by the synthetic result.
 
 ## M3 real-provider/live boundary — frozen non-pass
 
