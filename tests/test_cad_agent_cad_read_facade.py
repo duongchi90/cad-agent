@@ -363,6 +363,37 @@ def test_query_rejects_active_drawing_change_during_read_epoch() -> None:
         _facade().query_entities(client=client, **_bound_kwargs())
 
 
+@pytest.mark.parametrize("operation", ("observe_drawing", "query_entities"))
+def test_read_rejects_active_drawing_change_after_payload_assembly(
+    operation: str,
+) -> None:
+    class _LateFlippingClient(_BoundFakeCadClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self._identity_reads = 0
+
+        def drawing_get_variables(self, names: list[str]) -> dict[str, object]:
+            self._identity_reads += 1
+            path = (
+                _DRAWING_PATH
+                if self._identity_reads <= 2
+                else _FOREIGN_DRAWING_PATH
+            )
+            return _BoundFakeCadClient(path).drawing_get_variables(names)
+
+    client = _LateFlippingClient()
+    client.preload_entity(
+        "10", "LINE", "SHAFT", {"start": (0.0, 0.0), "end": (1.0, 0.0)}
+    )
+    bound = _bound_kwargs()
+
+    with pytest.raises(_facade().CadReadFacadeError, match="DRAWING_IDENTITY_MISMATCH"):
+        if operation == "observe_drawing":
+            _facade().observe_drawing(client=client, **bound)
+        else:
+            _facade().query_entities(client=client, **bound)
+
+
 def test_query_enforces_layer_filter_when_owner_ignores_filter() -> None:
     class _NoncompliantLayerClient(_BoundFakeCadClient):
         def entity_list(self, layer: str | None = None) -> list[dict[str, object]]:
