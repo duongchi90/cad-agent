@@ -15,6 +15,7 @@ from cad_agent.live import (
 )
 from dxf_builder_lib.builder import BuildResult
 from mcp_integration_lib.mcp_client import FakeMCPClient
+from mcp_integration_lib.repair2 import RepairResult
 
 
 def _build(path: Path) -> BuildResult:
@@ -103,7 +104,7 @@ class _CloseFailureClient(_BrokenRepairClient):
         return None
 
 
-def test_failed_second_review_does_not_save_and_reopens_backup() -> None:
+def test_failed_second_review_does_not_save_and_reopens_canonical_dxf() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         dxf = root / "staged.dxf"
@@ -119,8 +120,41 @@ def test_failed_second_review_does_not_save_and_reopens_backup() -> None:
         assert report["save_state"] == "not_saved"
         assert report["after_review"]["passed"] is False
         assert client.closed_without_save is True
-        assert report["rollback_state"] == "failed_drawing_closed_and_backup_reopened"
-        assert client.opened_path == report["backup"]["dxf_path"]
+        assert report["rollback_state"] == "failed_canonical_restored"
+        assert client.opened_path == str(dxf)
+        assert report["rollback_restore"]["canonical_document_open"] is True
+
+
+def test_failed_second_review_restores_canonical_dxf_and_build_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        dxf_before = dxf.read_bytes()
+        evidence_before = evidence.read_bytes()
+        client = _BrokenRepairClient(fail_entity_get=False)
+        client.preload_entity("A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)})
+
+        def mutate_canonical_files(*_args: object, **_kwargs: object) -> RepairResult:
+            dxf.write_bytes(b"mutated staged dxf")
+            evidence.write_bytes(b"mutated build evidence")
+            return RepairResult(repaired_count=1)
+
+        monkeypatch.setattr("cad_agent.live.repair_dxf_live", mutate_canonical_files)
+
+        report = repair_live(build, client, dxf, evidence, root / "backups", "change-42")
+
+        assert report["save_state"] == "not_saved"
+        assert report["rollback_state"] == "failed_canonical_restored"
+        assert client.opened_path == str(dxf)
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == evidence_before
+        assert load_build_evidence(evidence, dxf).output_path == str(dxf)
 
 
 def test_rollback_is_not_complete_while_failed_original_remains_open() -> None:

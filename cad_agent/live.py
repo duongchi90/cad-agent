@@ -143,6 +143,65 @@ def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, Any]:
     }
 
 
+def _restore_canonical(
+    *,
+    client: Any,
+    dxf: Path,
+    evidence_path: Path,
+    backup: dict[str, Any],
+) -> dict[str, Any]:
+    """Restore verified backup bytes and reopen the canonical staged artifact."""
+
+    backup_dxf = Path(backup["dxf_path"])
+    backup_evidence = Path(backup["build_evidence_path"])
+    if (
+        sha256_file(backup_dxf) != backup["dxf_backup_sha256"]
+        or sha256_file(backup_evidence) != backup["build_evidence_backup_sha256"]
+    ):
+        raise LiveSafetyError("Rollback backup integrity verification failed.")
+
+    open_paths_before_restore = {
+        _normalized_document_path(path)
+        for path in client.drawing_list_open_paths()
+    }
+    canonical_path = _normalized_document_path(dxf)
+    if canonical_path in open_paths_before_restore:
+        raise LiveSafetyError(
+            "Rollback document close verification failed: the modified "
+            "canonical staged DXF is still open."
+        )
+
+    shutil.copy2(backup_dxf, dxf)
+    shutil.copy2(backup_evidence, evidence_path)
+    dxf_sha256 = sha256_file(dxf)
+    evidence_sha256 = sha256_file(evidence_path)
+    if (
+        dxf_sha256 != backup["dxf_source_sha256"]
+        or evidence_sha256 != backup["build_evidence_source_sha256"]
+    ):
+        raise LiveSafetyError("Canonical rollback restoration verification failed.")
+
+    client.drawing_open(str(dxf))
+    open_paths = {
+        _normalized_document_path(path)
+        for path in client.drawing_list_open_paths()
+    }
+    backup_path = _normalized_document_path(backup_dxf)
+    if canonical_path not in open_paths or backup_path in open_paths:
+        raise LiveSafetyError(
+            "Rollback document verification failed: the canonical staged DXF "
+            "is not the only restored document open."
+        )
+    load_build_evidence(evidence_path, dxf)
+    return {
+        "dxf_path": str(dxf),
+        "dxf_sha256": dxf_sha256,
+        "build_evidence_path": str(evidence_path),
+        "build_evidence_sha256": evidence_sha256,
+        "canonical_document_open": True,
+    }
+
+
 def review_live(build: BuildResult, client: Any, dxf: Path) -> LiveReviewResult:
     build.output_path = str(dxf)
     return review_dxf_live(build, client, open_drawing=True)
@@ -169,6 +228,7 @@ def repair_live(
         "approval_reference": approval_reference,
         "dxf_path": str(dxf),
         "dxf_sha256_before": sha256_file(dxf),
+        "build_evidence_sha256_before": sha256_file(evidence_path),
         "before_review": review_dict(before),
         "backup": None,
         "repair": None,
@@ -194,19 +254,13 @@ def repair_live(
 
     try:
         client.drawing_close(save_changes=False)
-        client.drawing_open(backup["dxf_path"])
-        open_paths = {
-            _normalized_document_path(path)
-            for path in client.drawing_list_open_paths()
-        }
-        original_path = _normalized_document_path(dxf)
-        backup_path = _normalized_document_path(backup["dxf_path"])
-        if original_path in open_paths or backup_path not in open_paths:
-            raise LiveSafetyError(
-                "Rollback document verification failed: the modified original "
-                "is still open or the verified backup is absent."
-            )
-        report["rollback_state"] = "failed_drawing_closed_and_backup_reopened"
+        report["rollback_restore"] = _restore_canonical(
+            client=client,
+            dxf=dxf,
+            evidence_path=evidence_path,
+            backup=backup,
+        )
+        report["rollback_state"] = "failed_canonical_restored"
     except Exception as exc:  # pragma: no cover - exercised by live transport failures
         report["rollback_state"] = f"rollback_failed: {exc}"
     return report
