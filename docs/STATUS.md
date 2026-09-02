@@ -159,6 +159,17 @@
   `f7d21a2c5608d1bf4185d13e619bc9c5663fe01dacab6eea4ad9e0b3a4dbbd90`, and
   owned IPC cleanup left zero survivors. This is exact drawing read-back only;
   it does not establish a Phase 1A provenance-bound entity query.
+- After the current-main candidate was regenerated from the canonical fixture,
+  Epoch #27 was run once on main `d440073c6913254083696d7c8dfa06da2de9d88c`
+  using the existing `FileIPCLiveMCPClient` and loaded canonical dispatcher.
+  AutoCAD PID `7964`, HWND `11601136`, and foreground equality were verified;
+  the disposable candidate was SHA-256
+  `96538393f65df60fc9a76572b0d9aed6cf1b72457f98deed969450d2f87379c9` before
+  and after. The claim-bound `ping` request `fcea6377e974` timed out without a
+  terminal result, so no entity read or query was attempted. The candidate was
+  closed without saving and owned IPC cleanup left zero survivors. This is a
+  NON_PASS environment/precondition result, not a provider or code PASS, and
+  was not retried.
 - The current next provider-independent boundary is
   `PHASE1A_LIVE_BOUND_QUERY_PRECONDITION_MISSING`, owned by the existing
   DARA/R3/R4 provenance-currentness owners plus `drawing_query.query_entities`
@@ -169,6 +180,10 @@
   different synthetic artifact (`fd50d352fa93db9f171847e7d61a9b2c191cb65ef613be707ef29a8cc834bba0`)
   with bound handle `C3D4`. No exact accepted provenance/candidate binding for
   the active drawing is available, so no entity-query request is justified.
+  Independently, Epoch #27 leaves the live runtime precondition
+  `PHASE3_FILEIPC_DISPATCHER_TERMINAL_RESULT_MISSING`; no new live epoch is
+  justified until the request-bearing canonical dispatcher path is shown ready
+  without retrying the uncertain request.
   The next oracle is one future disposable exact-bound candidate/entity query
   with matching artifact, reference, R3 binding, candidate state, and handle,
   followed by claim-bound result/hash, pre/post identity, integrity, and
