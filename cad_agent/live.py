@@ -434,6 +434,79 @@ def review_live(build: BuildResult, client: Any, dxf: Path) -> LiveReviewResult:
     return review_dxf_live(build, client, open_drawing=True)
 
 
+def _attest_saved_candidate(
+    build: BuildResult,
+    client: Any,
+    dxf: Path,
+    evidence_path: Path,
+) -> dict[str, Any]:
+    """Reopen and revalidate the exact persisted candidate before PASS."""
+    expected_path = _normalized_document_path(dxf)
+    try:
+        client.drawing_close(save_changes=False)
+        client.drawing_open(str(dxf))
+        open_paths = {
+            _normalized_document_path(path)
+            for path in client.drawing_list_open_paths()
+        }
+    except Exception as exc:
+        raise LiveSafetyError(
+            "POST_SAVE_REOPEN_FAILED: persisted candidate could not be rebound."
+        ) from exc
+
+    if expected_path not in open_paths:
+        raise LiveSafetyError(
+            "POST_SAVE_TARGET_NOT_OPEN: persisted candidate is not the open target."
+        )
+
+    active_path = getattr(client, "_active_drawing_path", None)
+    if active_path is None:
+        active_path = getattr(client, "opened_path", None)
+    if active_path is not None and _normalized_document_path(active_path) != expected_path:
+        raise LiveSafetyError(
+            "POST_SAVE_ACTIVE_TARGET_MISMATCH: active drawing is not the persisted candidate."
+        )
+
+    try:
+        variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
+    except Exception as exc:
+        raise LiveSafetyError(
+            "POST_SAVE_IDENTITY_READ_FAILED: active drawing identity could not be read."
+        ) from exc
+    prefix = variables.get("DWGPREFIX")
+    name = variables.get("DWGNAME")
+    if isinstance(prefix, str) and isinstance(name, str) and prefix and name:
+        variable_path = _normalized_document_path(ntpath.join(prefix, name))
+        if variable_path != expected_path:
+            raise LiveSafetyError(
+                "POST_SAVE_VARIABLE_TARGET_MISMATCH: AutoCAD active variables do not match the candidate."
+            )
+
+    try:
+        persisted_build = load_build_evidence(evidence_path, dxf)
+    except LiveSafetyError:
+        raise
+    except Exception as exc:
+        raise LiveSafetyError(
+            "POST_SAVE_EVIDENCE_READ_FAILED: persisted build evidence could not be loaded."
+        ) from exc
+    persisted_review = review_dxf_live(persisted_build, client, open_drawing=False)
+    if not persisted_review.passed:
+        raise LiveSafetyError(
+            "POST_SAVE_REVIEW_FAILED: persisted candidate did not pass fresh live review."
+        )
+    return {
+        "closed_without_save": True,
+        "reopened": True,
+        "active_path": str(dxf),
+        "open_paths": sorted(open_paths),
+        "evidence_verified": True,
+        "dxf_sha256": sha256_file(dxf),
+        "evidence_sha256": sha256_file(evidence_path),
+        "review": review_dict(persisted_review),
+    }
+
+
 def repair_live(
     build: BuildResult,
     client: Any,
@@ -477,6 +550,9 @@ def repair_live(
         write_build_evidence(evidence_path, build)
         report["dxf_sha256_after"] = sha256_file(dxf)
         report["save_state"] = "saved"
+        report["post_save_attestation"] = _attest_saved_candidate(
+            build, client, dxf, evidence_path
+        )
         return report
 
     try:

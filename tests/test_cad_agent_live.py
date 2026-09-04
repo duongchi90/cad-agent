@@ -15,6 +15,7 @@ from cad_agent.live import (
     _restore_canonical,
     load_build_evidence,
     repair_live,
+    sha256_file,
     write_build_evidence,
 )
 from dxf_builder_lib.builder import BuildResult
@@ -175,14 +176,18 @@ def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
         evidence = root / "build-evidence.json"
         build = _build(dxf)
         write_build_evidence(evidence, build)
+        client = _mismatched_client()
 
         report = repair_live(
-            build, _mismatched_client(), dxf, evidence, root / "backups", "change-42"
+            build, client, dxf, evidence, root / "backups", "change-42"
         )
 
         assert report["save_state"] == "saved"
         assert report["repair"]["repaired_count"] == 1
         assert report["after_review"]["passed"] is True
+        assert report["post_save_attestation"]["review"]["passed"] is True
+        assert report["post_save_attestation"]["evidence_verified"] is True
+        assert client.closed_without_save is True
         assert Path(report["backup"]["dxf_path"]).is_file()
         assert Path(report["backup"]["build_evidence_path"]).is_file()
         assert report["backup"]["verified"] is True
@@ -195,6 +200,95 @@ def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
             == report["backup"]["build_evidence_backup_sha256"]
         )
         assert json.loads(evidence.read_text(encoding="utf-8"))["build_result"]["handle_by_primitive_id"]
+
+
+def test_repair_success_attests_persisted_candidate_after_close_and_reopen() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _mismatched_client()
+
+        report = repair_live(
+            build, client, dxf, evidence, root / "backups", "change-42"
+        )
+
+        attestation = report["post_save_attestation"]
+        assert attestation["closed_without_save"] is True
+        assert attestation["reopened"] is True
+        assert attestation["active_path"] == str(dxf)
+        assert attestation["evidence_verified"] is True
+        assert attestation["dxf_sha256"] == sha256_file(dxf)
+        assert attestation["evidence_sha256"] == sha256_file(evidence)
+        assert attestation["review"]["passed"] is True
+
+
+class _DriftingActiveClient(FakeMCPClient):
+    def __init__(self) -> None:
+        super().__init__(fail_entity_get=False)
+        self._open_count = 0
+
+    def drawing_open(self, path: str):  # type: ignore[no-untyped-def]
+        result = super().drawing_open(path)
+        self._open_count += 1
+        if self._open_count >= 2:
+            self.opened_path = str(Path(path).with_name("foreign.dxf"))
+        return result
+
+
+def test_repair_fails_closed_when_post_save_active_document_drifts() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _DriftingActiveClient()
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)}
+        )
+
+        with pytest.raises(LiveSafetyError, match="ACTIVE_TARGET_MISMATCH"):
+            repair_live(
+                build, client, dxf, evidence, root / "backups", "change-42"
+            )
+
+
+class _PersistedBytesDriftClient(FakeMCPClient):
+    def __init__(self, dxf: Path) -> None:
+        super().__init__(fail_entity_get=False)
+        self._dxf = dxf
+        self._open_count = 0
+
+    def drawing_open(self, path: str):  # type: ignore[no-untyped-def]
+        result = super().drawing_open(path)
+        self._open_count += 1
+        if self._open_count >= 2:
+            self._dxf.write_bytes(b"tampered persisted candidate")
+        return result
+
+
+def test_repair_fails_closed_when_persisted_candidate_bytes_diverge() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _PersistedBytesDriftClient(dxf)
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)}
+        )
+
+        with pytest.raises(LiveSafetyError, match="DXF SHA-256"):
+            repair_live(
+                build, client, dxf, evidence, root / "backups", "change-42"
+            )
 
 
 class _BrokenRepairClient(FakeMCPClient):
