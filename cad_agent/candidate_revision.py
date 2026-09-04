@@ -181,7 +181,9 @@ def _normalize_baseline(value: object) -> dict[str, object]:
     }
 
 
-def _normalize_handoff(value: object) -> dict[str, object]:
+def _normalize_handoff(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
     if not isinstance(value, Mapping):
         _fail("BASE_CAD_HANDOFF_INVALID")
     try:
@@ -192,7 +194,7 @@ def _normalize_handoff(value: object) -> dict[str, object]:
 
 def _normalize_registry(
     value: object,
-    handoff: dict[str, object],
+    handoff: dict[str, object] | None,
     upstream_context: object,
 ) -> dict[str, object]:
     try:
@@ -205,6 +207,29 @@ def _normalize_registry(
     upstream = registry["upstream_bindings"]
     if not isinstance(upstream, Mapping):
         _fail("UPSTREAM_BINDINGS_INVALID")
+    if (
+        registry["schema_version"]
+        == _r3.COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION
+    ):
+        if handoff is not None:
+            _fail("GENERATED_HANDOFF_FORBIDDEN")
+        if upstream.get("provenance_mode") != "GENERATED_MECHANICAL_PILOT":
+            _fail("GENERATED_UPSTREAM_INVALID")
+        if set(upstream) != {
+            "provenance_mode",
+            "pilot_id",
+            "source_sha256",
+            "candidate_id",
+            "candidate_drawing_sha256",
+            "candidate_path_binding_sha256",
+            "build_evidence_sha256",
+            "pilot_evidence_sha256",
+            "provenance_packet_sha256",
+        }:
+            _fail("GENERATED_UPSTREAM_INVALID")
+        return registry
+    if handoff is None:
+        _fail("BASE_CAD_HANDOFF_INVALID")
     if upstream["candidate_drawing_sha256"] != handoff["candidate_output_sha256"]:
         _fail("R2_CANDIDATE_MISMATCH")
     for field in (
@@ -630,8 +655,20 @@ def _normalize_root_inputs(
         for field in ("run_id", "project_id", "drawing_id")
     ):
         _fail("BASELINE_CURRENTNESS_INVALID")
-    if root_reference["artifact_sha256"] != handoff["candidate_output_sha256"]:
-        _fail("R2_CANDIDATE_MISMATCH")
+    if normalized_registry["schema_version"] == (
+        _r3.COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION
+    ):
+        if handoff is not None:
+            _fail("GENERATED_HANDOFF_FORBIDDEN")
+        if root_reference["artifact_sha256"] != normalized_registry[
+            "upstream_bindings"
+        ]["candidate_drawing_sha256"]:
+            _fail("GENERATED_CANDIDATE_MISMATCH")
+    else:
+        if handoff is None:
+            _fail("BASE_CAD_HANDOFF_INVALID")
+        if root_reference["artifact_sha256"] != handoff["candidate_output_sha256"]:
+            _fail("R2_CANDIDATE_MISMATCH")
     binding = root_reference.get("r3_provenance_binding")
     if not isinstance(binding, Mapping) or dict(binding) != {
         "registry_snapshot_sha256": provenance["registry_snapshot_sha256"],
