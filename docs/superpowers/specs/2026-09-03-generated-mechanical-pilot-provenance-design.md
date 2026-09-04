@@ -43,6 +43,20 @@ The packet contains only bounded identity and binding evidence:
 
 It is not a new store, transport, geometry engine, or authority service.
 
+### Reuse-first declaration
+
+The implementation reuses the existing `build_simple_shaft_pilot`,
+`load_pilot_definition`, `_documents`, `load_build_evidence`, DARA reference and
+currentness functions, R3 registry, R4 candidate-revision builders, and bounded
+drawing-query owner. The new module is only a deterministic validator/sealer
+and composition adapter around those owners; it does not duplicate geometry,
+CAD transport, persistence, or query execution.
+
+The existing Base-CAD `component-view-registry-1.0` and required R2 handoff
+remain unchanged. Generated mode is an explicit second schema path with no
+rollback, mutation, provider, or live-session side effects. Its only output is
+checksummed evidence and arguments for the existing read-only owners.
+
 ### 2. Discriminated R3 upstream mode
 
 Preserve the existing Base-CAD R3 context and `component-view-registry-1.0`

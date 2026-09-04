@@ -11,7 +11,11 @@ import re
 from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.live import load_build_evidence
 from cad_agent.manifest import sha256_file
-from cad_agent.mechanical_pilot import MechanicalPilotResult
+from cad_agent.mechanical_pilot import (
+    MechanicalPilotResult,
+    _documents,
+    load_pilot_definition,
+)
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
 
 
@@ -264,6 +268,14 @@ def _validate_pilot_evidence(result: MechanicalPilotResult) -> tuple[str, str]:
     return str(result.pilot_id), sha256_file(pilot_path)
 
 
+def _source_bound_primitive_document(result: MechanicalPilotResult) -> dict[str, object]:
+    payload = result.primitive_doc.to_dict()
+    for primitive in payload["primitives"]:
+        primitive["handle"] = None
+        primitive["layer"] = "UNCLASSIFIED"
+    return payload
+
+
 def _validate_build_evidence(result: MechanicalPilotResult) -> str:
     evidence_path = _regular_file(
         result.build_evidence_path, "BUILD_EVIDENCE_INVALID"
@@ -303,6 +315,22 @@ def _validate_result_files(result: MechanicalPilotResult) -> tuple[str, str, str
     pilot_id, pilot_sha256 = _validate_pilot_evidence(result)
     if pilot_id != result.pilot_id:
         _fail("PILOT_ID_MISMATCH")
+    try:
+        definition = load_pilot_definition(source_path)
+        expected_primitive, expected_semantic, expected_bindings = _documents(
+            definition, source_sha256, source_path
+        )
+    except Exception as error:
+        raise GeneratedPilotProvenanceError("PILOT_SOURCE_BINDING_INVALID") from error
+    if (
+        canonical_json_sha256(expected_primitive.to_dict())
+        != canonical_json_sha256(_source_bound_primitive_document(result))
+        or canonical_json_sha256(expected_semantic.to_dict())
+        != canonical_json_sha256(result.semantic_doc.to_dict())
+        or canonical_json_sha256(expected_bindings)
+        != canonical_json_sha256(result.feature_bindings)
+    ):
+        _fail("PILOT_SOURCE_BINDING_MISMATCH")
     return source_sha256, candidate_sha256, build_sha256, pilot_sha256
 
 

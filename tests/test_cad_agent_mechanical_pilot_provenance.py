@@ -73,6 +73,20 @@ def test_generated_pilot_packet_rejects_tampering_and_unknown_fields(
         provenance.validate_generated_pilot_provenance(foreign)
 
 
+def test_generated_pilot_rejects_in_memory_ir_not_bound_to_source(
+    tmp_path: Path,
+) -> None:
+    result = _pilot(tmp_path)
+    primitive = result.primitive_doc.primitives[0]
+    primitive.geometry.start.x += 1.0
+
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="SOURCE_BINDING|PILOT_SOURCE",
+    ):
+        provenance.build_generated_pilot_provenance(result)
+
+
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(
     tmp_path: Path,
 ) -> None:
@@ -115,6 +129,41 @@ def test_generated_r3_rejects_foreign_handle_and_mixed_base_context(
     with pytest.raises(r3.ComponentViewRegistryError, match="UPSTREAM|MIXED"):
         r3.build_component_view_registry(
             upstream_context=mixed_context, components=inputs["components"]
+        )
+
+
+@pytest.mark.parametrize("tampered_field", ["source", "semantic", "build"])
+def test_generated_r3_rejects_tampered_upstream_checksums(
+    tmp_path: Path, tampered_field: str
+) -> None:
+    result = _pilot(tmp_path)
+    inputs = provenance.build_generated_pilot_r3_inputs(result)
+    tampered_context = deepcopy(inputs["upstream_context"])
+    packet = tampered_context["mechanical_pilot_provenance"]
+    if tampered_field == "source":
+        packet["source_sha256"] = "0" * 64
+    elif tampered_field == "semantic":
+        packet["feature_projections"][0]["semantic_projection_ref"] = "0" * 64
+    else:
+        packet["build_evidence_sha256"] = "0" * 64
+
+    with pytest.raises(r3.ComponentViewRegistryError, match="PROVENANCE"):
+        r3.build_component_view_registry(
+            upstream_context=tampered_context,
+            components=inputs["components"],
+        )
+
+
+def test_generated_r3_rejects_non_generated_origin_class(tmp_path: Path) -> None:
+    result = _pilot(tmp_path)
+    inputs = provenance.build_generated_pilot_r3_inputs(result)
+    components = deepcopy(inputs["components"])
+    components[0]["origin_class"] = "REUSED_UNCHANGED"
+
+    with pytest.raises(r3.ComponentViewRegistryError, match="GENERATED_ORIGIN"):
+        r3.build_component_view_registry(
+            upstream_context=inputs["upstream_context"],
+            components=components,
         )
 
 
@@ -189,6 +238,29 @@ def test_generated_composition_produces_current_r4_and_bounded_query(
     )
     assert [item["handle"] for item in query["entities"]] == sorted(handles)
     assert client.calls == sorted(handles)
+
+    stale_client = _BoundClient(str(result.candidate_path), handles)
+    with pytest.raises(drawing_query.DrawingQueryError, match="STALE"):
+        drawing_query.query_entities(
+            client=stale_client,
+            reference=binding["reference"],
+            current_observation=binding["current_observation"],
+            artifact_bytes=binding["artifact_bytes"] + b"\n",
+            parent_reference=None,
+            accepted_transition_evidence_sha256=None,
+            registry=binding["registry"],
+            registry_upstream_context=binding["registry_upstream_context"],
+            candidate_state=binding["candidate_state"],
+            expected_active_document_path=str(result.candidate_path),
+            query={
+                "schema_version": "entity-query-1.0",
+                "handles": [],
+                "component_ids": [shaft["component_id"]],
+                "view_ids": [],
+                "detail": "SUMMARY",
+            },
+        )
+    assert stale_client.calls == []
 
 
 def test_generated_r4_requires_no_fake_handoff_and_rejects_supplied_one(

@@ -10,6 +10,22 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-03-generated-mechanical-pilot-provenance-design.md`
 
+## Current execution record
+
+- Status: executing review remediation.
+- Base SHA: `8cfbce22ba9f965164fbc9a4d67824475c15f150`.
+- Completion head SHA: pending final implementation/evidence commit.
+- Initial focused evidence: `225 passed` across the five relevant modules;
+  source-binding remediation and added causal checks must be rerun before
+  completion.
+- Canonical verifier at the initial implementation head completed with exit 0;
+  it recorded the intended offline/IPC results, the retained causal FileIPC
+  RED, and unavailable live/provider gates. The final head must rerun it.
+- Required live gate: Phase 1A FileIPC query acceptance, not run in this slice.
+- Provider gate: M3 real-provider acceptance remains
+  `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`; no provider call is permitted.
+- Private/customer and AutoCAD mutation gates: not run.
+
 ## Global Constraints
 
 - Keep M3 real-provider acceptance frozen at `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`.
