@@ -14,14 +14,16 @@
 
 - Status: completed implementation/evidence; hosted review and integration are pending.
 - Base SHA: `8cfbce22ba9f965164fbc9a4d67824475c15f150`.
-- Completion head SHA: `5ae95bd595795ab210437bdafbc4c7ac74b8feb8`.
+- Completion implementation head SHA: `7a49d201d9815fb138862edef13e156de5a13abf`.
 - Final focused evidence at the completion head: `235 passed` across the five relevant modules;
   Ruff and `git diff --check` passed. This includes the existing
   Primitive-IR-bound Phase 4 producer and file-drift/currentness regressions.
-- Canonical verifier at the completion head exited `0`; it recorded `.NET 198
-  passed`, IPC `68 passed + 50 subtests`, offline `3140 passed, 18
-  deselected, 72 subtests`, the retained causal FileIPC RED, and the
-  unavailable live/private/provider gates.
+- Canonical verifier at the completion implementation head exited `0`; it
+  recorded .NET `198 passed`, IPC `68 passed + 50 subtests`, offline `3140
+  passed, 18 deselected, 72 subtests`, the retained causal FileIPC RED, and
+  the unavailable live/private/provider gates. The final PR head may advance
+  with documentation-only currentness updates; those do not change this
+  executable implementation evidence.
 - Required live gate: Phase 1A FileIPC query acceptance, not run in this slice.
 - Provider gate: M3 real-provider acceptance remains
   `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`; no provider call is permitted.
