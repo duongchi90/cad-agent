@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
@@ -234,6 +235,43 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
             self.assertEqual({}, client._dispatch("ping", {}))
             self.assertEqual([], list(ipc_dir.iterdir()))
+
+    def test_open_document_listing_retries_transient_windows_cleanup_lock(self):
+        raw_commands = []
+        listing_path = None
+
+        def raw_trigger(command):
+            nonlocal listing_path
+            raw_commands.append(command)
+            marker = '(setq mcp-doc-file (open "'
+            if marker in command:
+                listing_path = Path(
+                    command.split(marker, 1)[1].split('"', 1)[0].replace("/", "\\")
+                )
+                listing_path.write_text("C:/work/a.dxf\n", encoding="utf-8")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_trigger,
+            timeout_s=0.01,
+            poll_interval_s=0,
+        )
+        original_unlink = Path.unlink
+        attempts = 0
+
+        def transient_lock(path, *args, **kwargs):
+            nonlocal attempts
+            if path.name.startswith("autocad_mcp_open_documents_") and attempts == 0:
+                attempts += 1
+                raise PermissionError("listing file is still locked")
+            attempts += 1
+            return original_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", transient_lock):
+            self.assertEqual(["C:/work/a.dxf"], client.drawing_list_open_paths())
+        self.assertEqual(2, attempts)
+        self.assertIsNotNone(listing_path)
+        self.assertFalse(listing_path.exists())
 
     def test_fail_closed_cleanup_preserves_disposable_fixture_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
