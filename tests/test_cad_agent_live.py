@@ -12,6 +12,7 @@ from cad_agent import live as live_module
 from cad_agent.live import (
     LiveSafetyError,
     _backup,
+    _restore_canonical,
     load_build_evidence,
     repair_live,
     write_build_evidence,
@@ -266,6 +267,36 @@ def test_failed_second_review_restores_canonical_dxf_and_build_evidence(
         assert dxf.read_bytes() == dxf_before
         assert evidence.read_bytes() == evidence_before
         assert load_build_evidence(evidence, dxf).output_path == str(dxf)
+
+
+@pytest.mark.parametrize("linked_name", ["staged.dxf", "build-evidence.json"])
+def test_rollback_rejects_linked_canonical_destination_without_external_mutation(
+    linked_name: str,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        backup = _backup(dxf, evidence, root / "backups")
+
+        destination = root / linked_name
+        destination.unlink()
+        external = root / f"outside-{linked_name}"
+        external.write_bytes(b"outside sentinel")
+        os.link(external, destination)
+
+        with pytest.raises(LiveSafetyError, match="destination|identity|link"):
+            _restore_canonical(
+                client=FakeMCPClient(),
+                dxf=dxf,
+                evidence_path=evidence,
+                backup=backup,
+            )
+
+        assert external.read_bytes() == b"outside sentinel"
 
 
 def test_rollback_failure_is_terminal_non_pass() -> None:
