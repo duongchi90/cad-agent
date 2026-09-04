@@ -3,6 +3,7 @@ import json
 import re
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from dxf_builder_lib.builder import BuildResult
 from mcp_integration_lib.mcp_client import FakeMCPClient, FileIPCLiveMCPClient, MCPToolError, MCPTimeoutError
@@ -265,6 +266,33 @@ class FileIPCClientTests(unittest.TestCase):
             raw_commands,
         )
         self.assertEqual([], command_sequences)
+
+    def test_raw_lisp_close_fails_closed_when_active_document_remains_open(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            command_trigger=lambda command: None,
+            document_settle_s=0,
+            poll_interval_s=0,
+        )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_list_open_paths = lambda: [r"C:\work\candidate.dxf"]
+
+        with patch(
+            "mcp_integration_lib.mcp_client.time.time",
+            side_effect=[0, 1, 6],
+        ), patch("mcp_integration_lib.mcp_client.time.sleep"):
+            with self.assertRaisesRegex(
+                MCPToolError, "^DRAWING_CLOSE_NOT_CONFIRMED$"
+            ):
+                client.drawing_close(save_changes=False)
+
+        self.assertEqual(
+            "c:\\work\\candidate.dxf",
+            client._active_drawing_path,
+        )
+        self.assertEqual(1, len(raw_commands))
 
     def test_drawing_open_falls_back_to_command_when_start_tab_has_no_document(self):
         raw_commands = []
