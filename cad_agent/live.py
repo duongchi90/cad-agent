@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+import hashlib
 import json
 import ntpath
+import os
+import stat
 import shutil
 from pathlib import Path
 from typing import Any
@@ -18,6 +21,7 @@ from .manifest import sha256_file
 
 
 BUILD_EVIDENCE_SCHEMA_VERSION = "1.0"
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 
 class LiveSafetyError(ValueError):
@@ -114,15 +118,89 @@ def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Pa
     raise LiveSafetyError("Could not allocate a unique backup path.")
 
 
-def _cleanup_backup_artifacts(paths: tuple[Path, Path]) -> None:
+def _is_regular_non_reparse(stat_result: os.stat_result) -> bool:
+    return stat.S_ISREG(stat_result.st_mode) and not bool(
+        getattr(stat_result, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def _assert_backup_path_identity(path: Path, opened_stat: os.stat_result) -> None:
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise LiveSafetyError("Backup destination identity could not be verified.") from exc
+    if not _is_regular_non_reparse(path_stat) or not os.path.samestat(
+        opened_stat, path_stat
+    ):
+        raise LiveSafetyError(
+            "Backup destination must remain the same regular non-reparse file."
+        )
+
+
+def _copy_to_exclusive_backup(
+    source: Path,
+    destination: Path,
+    owned_paths: dict[Path, os.stat_result | None],
+) -> str:
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(destination, flags, 0o600)
+    except OSError as exc:
+        raise LiveSafetyError(
+            "Backup destination must be a new regular non-reparse file."
+        ) from exc
+
+    owned_paths[destination] = None
+    try:
+        opened_stat = os.fstat(descriptor)
+        if not _is_regular_non_reparse(opened_stat):
+            raise LiveSafetyError("Backup destination is not a regular file.")
+        owned_paths[destination] = opened_stat
+        with source.open("rb") as source_handle, os.fdopen(
+            descriptor, "w+b"
+        ) as destination_handle:
+            descriptor = -1
+            shutil.copyfileobj(source_handle, destination_handle)
+            destination_handle.flush()
+            os.fsync(destination_handle.fileno())
+            destination_handle.seek(0)
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: destination_handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        _assert_backup_path_identity(destination, opened_stat)
+        return digest.hexdigest()
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _cleanup_backup_artifacts(
+    paths: tuple[Path, Path], owned_paths: dict[Path, os.stat_result | None]
+) -> None:
     cleanup_failures: list[Path] = []
-    for path in paths:
+    for path, opened_stat in owned_paths.items():
+        if opened_stat is None:
+            cleanup_failures.append(path)
+            continue
         try:
+            path_stat = os.stat(path, follow_symlinks=False)
+            if not _is_regular_non_reparse(path_stat) or not os.path.samestat(
+                opened_stat, path_stat
+            ):
+                cleanup_failures.append(path)
+                continue
             path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            continue
         except OSError:
             cleanup_failures.append(path)
     survivors = [
-        path for path in paths if path.exists() or path.is_symlink()
+        path
+        for path in owned_paths
+        if path.exists() or path.is_symlink()
     ]
     if cleanup_failures or survivors:
         raise LiveSafetyError(
@@ -133,15 +211,16 @@ def _cleanup_backup_artifacts(paths: tuple[Path, Path]) -> None:
 def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, Any]:
     dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
     backup_paths = (dxf_backup, evidence_backup)
+    owned_paths: dict[Path, os.stat_result | None] = {}
     try:
         dxf_source_before = sha256_file(dxf)
         evidence_source_before = sha256_file(evidence)
-        shutil.copy2(dxf, dxf_backup)
-        shutil.copy2(evidence, evidence_backup)
+        dxf_backup_hash = _copy_to_exclusive_backup(dxf, dxf_backup, owned_paths)
+        evidence_backup_hash = _copy_to_exclusive_backup(
+            evidence, evidence_backup, owned_paths
+        )
         dxf_source_after = sha256_file(dxf)
         evidence_source_after = sha256_file(evidence)
-        dxf_backup_hash = sha256_file(dxf_backup)
-        evidence_backup_hash = sha256_file(evidence_backup)
         verified = (
             dxf_source_before == dxf_source_after == dxf_backup_hash
             and evidence_source_before == evidence_source_after == evidence_backup_hash
@@ -161,7 +240,7 @@ def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, Any]:
         }
     except Exception as exc:
         try:
-            _cleanup_backup_artifacts(backup_paths)
+            _cleanup_backup_artifacts(backup_paths, owned_paths)
         except LiveSafetyError as cleanup_exc:
             raise LiveSafetyError(
                 "backup acquisition failed; cleanup could not prove zero survivors."
