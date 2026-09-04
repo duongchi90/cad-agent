@@ -12,17 +12,16 @@
 
 ## Current execution record
 
-- Status: executing review remediation and compatibility hardening.
+- Status: completed implementation/evidence; hosted review and integration are pending.
 - Base SHA: `8cfbce22ba9f965164fbc9a4d67824475c15f150`.
-- Completion head SHA: pending the compatibility/remediation commit.
-- Current focused evidence: `235 passed` across the five relevant modules;
+- Completion head SHA: `5ae95bd595795ab210437bdafbc4c7ac74b8feb8`.
+- Final focused evidence at the completion head: `235 passed` across the five relevant modules;
   Ruff and `git diff --check` passed. This includes the existing
   Primitive-IR-bound Phase 4 producer and file-drift/currentness regressions.
-- Canonical verifier at the prior implementation head completed with exit 0;
-  it recorded `.NET 198 passed`, IPC `68 passed + 50 subtests`, offline `3135
-  passed, 18 deselected, 72 subtests`, the retained causal FileIPC RED, and
-  the unavailable live/private/provider gates. The remediation head must
-  rerun it.
+- Canonical verifier at the completion head exited `0`; it recorded `.NET 198
+  passed`, IPC `68 passed + 50 subtests`, offline `3140 passed, 18
+  deselected, 72 subtests`, the retained causal FileIPC RED, and the
+  unavailable live/private/provider gates.
 - Required live gate: Phase 1A FileIPC query acceptance, not run in this slice.
 - Provider gate: M3 real-provider acceptance remains
   `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`; no provider call is permitted.
@@ -163,7 +162,7 @@
   Run Ruff on changed Python files, `git diff --check`, and inspect the exact
   changed-path set for scope violations.
 
-- [ ] **Step 3: Run the canonical verifier**
+- [x] **Step 3: Run the canonical verifier**
 
   Run: `.\scripts\verify.ps1`
 
@@ -175,7 +174,7 @@
   review against the exact base/head diff. Resolve every P0/P1 finding and rerun
   affected verification.
 
-- [ ] **Step 5: Record truthful status and commit**
+- [x] **Step 5: Record truthful status and commit**
 
   Update `docs/STATUS.md` with only deterministic acceptance, explicitly leaving
   Phase 1A live FileIPC query and provider-backed M3 acceptance unrun/blocked.
