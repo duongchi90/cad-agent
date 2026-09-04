@@ -16,7 +16,44 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-## Current main / provider-independent hardening (2026-09-02)
+## Current canonical snapshot (2026-09-04)
+
+- Canonical GitHub main is 87655c8e46de4640c389cf1ce2923a86ccdc65a3,
+  the merge commit for PR #380. PR #378 and PR #380 are merged provider-
+  independent work; PR #379 was superseded and closed with its branch and
+  evidence retained.
+- PR #380 closes the measured backup-acquisition zero-survivor and terminal
+  rollback-failure boundary in the existing cad_agent.live owner. Its exact
+  write-set is cad_agent/live.py and tests/test_cad_agent_live.py. Current-main
+  verification exited 0: .NET 198 passed, IPC 68 passed plus 50 subtests,
+  offline 3141 passed with 18 deselected and 72 subtests, and hosted CodeQL,
+  Analyze Python, reuse-declaration, and both offline-tests checks passed.
+- Phase 1A deterministic provenance and bounded-query contracts are verified
+  offline; the fresh focused recheck passed 231 tests. This does not promote
+  live AutoCAD/FileIPC query evidence to PASS.
+- The latest genuine disposable live epoch was NON_PASS. With AutoCAD PID
+  3940 and HWND 0x380606 foreground-matched, one claim-bound ping request
+  56adaf74b9ad timed out without a terminal dispatcher result. No query,
+  mutation, save, retry, or second IPC request occurred. The disposable
+  candidate and source remained byte-identical, cleanup returned to
+  Drawing1.dwg, and owned IPC survivors were zero.
+- FIRST_UNSATISFIED_BOUNDARY is
+  LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_MISSING, owned by the existing
+  FileIPCLiveMCPClient and canonical AutoLISP dispatcher. The next oracle is
+  one future disposable exact-bound semantic query only after the existing
+  request-bearing dispatcher session is independently restored or verified.
+  Timeout, enqueue-only, cleanup-only, SKIP, and NOT RUN remain NON_PASS.
+- M3 real-provider acceptance remains
+  BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED. PR #340 is OPEN/DRAFT/FROZEN at head
+  714620001e8dbc1c49adbb13b9af4d5821eb6a7d; no provider call, billing action,
+  credential use, PR #340/#337 mutation, or M2 retest is included here.
+- Source, customer, and accepted drawings remain protected. All live work used
+  disposable candidates only; no production CAD mutation or save was run.
+- Comments 5538798034, 5538818965, and 5538805670 on #343/#301 record the
+  merge, dispatcher recheck, and current-boundary ACK. Older sections below
+  are retained historical evidence and do not override this snapshot.
+
+## Historical provider-independent hardening ledger (through 2026-09-02)
 
 - This status record uses canonical `main` evidence baseline
   `549fd27d1c44600fd467665ae71759d0eda74a9f` after bounded Phase 1A PR #373.
