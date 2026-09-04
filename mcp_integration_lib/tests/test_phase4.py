@@ -222,19 +222,7 @@ class FileIPCClientTests(unittest.TestCase):
         self.assertIn(str(Path(self._ipc_dir)).replace("\\", "/"), raw_commands[1])
         self.assertIn('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
 
-    def test_raw_lisp_close_queues_no_save_command_without_com_close(self):
-        raw_commands = []
-        client = FileIPCLiveMCPClient(
-            ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
-            document_settle_s=0,
-        )
-
-        client.drawing_close(save_changes=False)
-
-        self.assertEqual(['(command-s "_.CLOSE" "_N")'], raw_commands)
-
-    def test_command_trigger_closes_without_save_at_command_boundary(self):
+    def test_raw_lisp_close_uses_com_false_without_save_modal_without_command_trigger(self):
         raw_commands = []
         command_sequences = []
         client = FileIPCLiveMCPClient(
@@ -246,8 +234,37 @@ class FileIPCClientTests(unittest.TestCase):
 
         client.drawing_close(save_changes=False)
 
-        self.assertEqual(["_.CLOSE\r_N"], command_sequences)
-        self.assertEqual([], raw_commands)
+        self.assertEqual(
+            [
+                "(progn (vl-load-com) "
+                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
+                ":vlax-false))"
+            ],
+            raw_commands,
+        )
+        self.assertEqual([], command_sequences)
+
+    def test_raw_lisp_close_prefers_com_even_with_command_trigger(self):
+        raw_commands = []
+        command_sequences = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            command_trigger=command_sequences.append,
+            document_settle_s=0,
+        )
+
+        client.drawing_close(save_changes=False)
+
+        self.assertEqual(
+            [
+                "(progn (vl-load-com) "
+                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
+                ":vlax-false))"
+            ],
+            raw_commands,
+        )
+        self.assertEqual([], command_sequences)
 
     def test_drawing_open_falls_back_to_command_when_start_tab_has_no_document(self):
         raw_commands = []
