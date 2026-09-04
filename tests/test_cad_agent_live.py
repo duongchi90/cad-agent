@@ -186,9 +186,13 @@ def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
         build = _build(dxf)
         write_build_evidence(evidence, build)
         client = _mismatched_client()
+        backup_dir = root / "backups"
+        backup_dir.mkdir()
+        unrelated = backup_dir / "unrelated.txt"
+        unrelated.write_text("preserve", encoding="utf-8")
 
         report = repair_live(
-            build, client, dxf, evidence, root / "backups", "change-42"
+            build, client, dxf, evidence, backup_dir, "change-42"
         )
 
         assert report["save_state"] == "saved"
@@ -197,9 +201,11 @@ def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
         assert report["post_save_attestation"]["review"]["passed"] is True
         assert report["post_save_attestation"]["evidence_verified"] is True
         assert client.closed_without_save is True
-        assert Path(report["backup"]["dxf_path"]).is_file()
-        assert Path(report["backup"]["build_evidence_path"]).is_file()
         assert report["backup"]["verified"] is True
+        assert report["backup_cleanup"] == {"zero_survivors": True}
+        assert not Path(report["backup"]["dxf_path"]).exists()
+        assert not Path(report["backup"]["build_evidence_path"]).exists()
+        assert unrelated.read_text(encoding="utf-8") == "preserve"
         assert (
             report["backup"]["dxf_source_sha256"]
             == report["backup"]["dxf_backup_sha256"]
@@ -209,6 +215,29 @@ def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
             == report["backup"]["build_evidence_backup_sha256"]
         )
         assert json.loads(evidence.read_text(encoding="utf-8"))["build_result"]["handle_by_primitive_id"]
+
+
+def test_success_path_backup_cleanup_failure_is_terminal_non_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _mismatched_client()
+
+        def fail_cleanup(
+            _paths: tuple[Path, Path], _owned_paths: dict[Path, object]
+        ) -> None:
+            raise LiveSafetyError("injected backup cleanup failure")
+
+        monkeypatch.setattr(live_module, "_cleanup_backup_artifacts", fail_cleanup)
+
+        with pytest.raises(LiveSafetyError, match="backup cleanup|non-pass"):
+            repair_live(build, client, dxf, evidence, root / "backups", "change-42")
 
 
 def test_repair_success_attests_persisted_candidate_after_close_and_reopen() -> None:
