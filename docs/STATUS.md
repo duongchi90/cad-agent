@@ -18,40 +18,48 @@
 
 ## Current canonical snapshot (2026-09-04)
 
-- Canonical GitHub main is 87655c8e46de4640c389cf1ce2923a86ccdc65a3,
-  the merge commit for PR #380. PR #378 and PR #380 are merged provider-
-  independent work; PR #379 was superseded and closed with its branch and
-  evidence retained.
-- PR #380 closes the measured backup-acquisition zero-survivor and terminal
-  rollback-failure boundary in the existing cad_agent.live owner. Its exact
-  write-set is cad_agent/live.py and tests/test_cad_agent_live.py. Current-main
-  verification exited 0: .NET 198 passed, IPC 68 passed plus 50 subtests,
-  offline 3141 passed with 18 deselected and 72 subtests, and hosted CodeQL,
-  Analyze Python, reuse-declaration, and both offline-tests checks passed.
-- Phase 1A deterministic provenance and bounded-query contracts are verified
-  offline; the fresh focused recheck passed 231 tests. This does not promote
-  live AutoCAD/FileIPC query evidence to PASS.
-- The latest genuine disposable live epoch was NON_PASS. With AutoCAD PID
-  3940 and HWND 0x380606 foreground-matched, one claim-bound ping request
-  56adaf74b9ad timed out without a terminal dispatcher result. No query,
-  mutation, save, retry, or second IPC request occurred. The disposable
-  candidate and source remained byte-identical, cleanup returned to
-  Drawing1.dwg, and owned IPC survivors were zero.
+- Canonical GitHub main is 0da62d12cbda8b5a879d4e57c95e0dacc1352f44, the
+  merge commit for PR #388. It includes the provider-independent M4 repairs
+  merged through PR #389 (geometry-degraded post-save false-PASS) and PR #390
+  (exact canonical post-save document identity). PR #388, #389, and #390 are
+  merged; their exact write-sets remain limited to the existing live owners
+  and focused regression tests.
+- PR #388's close owner now fails closed when a disposable candidate remains
+  open after a no-save close request. PR #389 rejects degraded persisted
+  geometry during post-save attestation. PR #390 requires an exact canonical
+  open-document set plus mandatory active-document and DWGPREFIX/DWGNAME
+  identity before post-save attestation. These changes add no transport,
+  queue, daemon, retry worker, shadow CAD store, or provider path.
+- The merged PRs' exact-head hosted required checks passed. Exact current-main
+  tests and CodeQL checks are also PASS; live AutoCAD, private-data, and
+  provider gates remain separate and are never promoted from offline evidence.
+- The latest current-main live boundary attempt was NON_PASS before a new
+  candidate was created. AutoCAD PID 3940 and HWND 0x380606 were responding
+  and foreground-matched, but the main window was disabled by a visible
+  `Security - Unsigned Executable File` modal (HWND 0x960a78). The existing
+  dispatcher readiness request 64e3f95b3768 and a separate read-only
+  open-document observation produced no terminal result. No candidate was
+  created, no mutation/save/retry occurred, and the new IPC root had zero
+  owned survivors. A known prior disposable candidate remains open because
+  the modal prevents safe dispatcher/close confirmation.
 - FIRST_UNSATISFIED_BOUNDARY is
-  LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_MISSING, owned by the existing
-  FileIPCLiveMCPClient and canonical AutoLISP dispatcher. The next oracle is
-  one future disposable exact-bound semantic query only after the existing
-  request-bearing dispatcher session is independently restored or verified.
-  Timeout, enqueue-only, cleanup-only, SKIP, and NOT RUN remain NON_PASS.
+  LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE, classified as an
+  environment precondition and owned by the existing FileIPCLiveMCPClient
+  plus canonical AutoLISP dispatcher. The next oracle is one fresh
+  disposable close-only epoch after the exact security dialog is resolved;
+  it must produce a claim-bound terminal result, authoritative no-save close,
+  candidate/source integrity, and zero owned IPC survivors. Timeout,
+  enqueue-only, cleanup-only, SKIP, and NOT RUN remain NON_PASS.
 - M3 real-provider acceptance remains
   BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED. PR #340 is OPEN/DRAFT/FROZEN at head
   714620001e8dbc1c49adbb13b9af4d5821eb6a7d; no provider call, billing action,
   credential use, PR #340/#337 mutation, or M2 retest is included here.
 - Source, customer, and accepted drawings remain protected. All live work used
   disposable candidates only; no production CAD mutation or save was run.
-- Comments 5538798034, 5538818965, and 5538805670 on #343/#301 record the
-  merge, dispatcher recheck, and current-boundary ACK. Older sections below
-  are retained historical evidence and do not override this snapshot.
+- Comments 5542133082, 5542491909, 5542620048, 5542716100, and 5542756905
+  on #301/#343 record the measured repairs, merges, live boundary, and
+  rollback oracle. Older sections below are retained historical evidence and
+  do not override this snapshot.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 
