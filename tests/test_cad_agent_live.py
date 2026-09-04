@@ -35,8 +35,16 @@ def _build(path: Path) -> BuildResult:
     )
 
 
+class _CanonicalIdentityFakeMCPClient(FakeMCPClient):
+    def drawing_get_variables(self, names):  # type: ignore[no-untyped-def]
+        if self.opened_path is None:
+            return {}
+        path = Path(self.opened_path)
+        return {"DWGPREFIX": str(path.parent) + "\\", "DWGNAME": path.name}
+
+
 def _mismatched_client() -> FakeMCPClient:
-    client = FakeMCPClient(fail_entity_get=False)
+    client = _CanonicalIdentityFakeMCPClient(fail_entity_get=False)
     client.preload_entity("A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)})
     return client
 
@@ -235,7 +243,7 @@ def test_post_save_attestation_rejects_degraded_geometry() -> None:
         evidence = root / "build-evidence.json"
         build = _build(dxf)
         write_build_evidence(evidence, build)
-        client = FakeMCPClient(fail_entity_get=True)
+        client = _CanonicalIdentityFakeMCPClient(fail_entity_get=True)
         client.preload_entity(
             "A", "LINE", "0", {"start": (0.0, 0.0), "end": (10.0, 0.0)}
         )
@@ -276,7 +284,7 @@ def test_repair_fails_closed_when_post_save_active_document_drifts() -> None:
             )
 
 
-class _PersistedBytesDriftClient(FakeMCPClient):
+class _PersistedBytesDriftClient(_CanonicalIdentityFakeMCPClient):
     def __init__(self, dxf: Path) -> None:
         super().__init__(fail_entity_get=False)
         self._dxf = dxf
@@ -288,6 +296,55 @@ class _PersistedBytesDriftClient(FakeMCPClient):
         if self._open_count >= 2:
             self._dxf.write_bytes(b"tampered persisted candidate")
         return result
+
+
+class _ExtraOpenDocumentClient(_CanonicalIdentityFakeMCPClient):
+    def drawing_list_open_paths(self):  # type: ignore[no-untyped-def]
+        return super().drawing_list_open_paths() + [r"C:\work\unrelated.dxf"]
+
+
+class _MissingActiveObservableClient(_CanonicalIdentityFakeMCPClient):
+    def drawing_open(self, path: str):  # type: ignore[no-untyped-def]
+        result = super().drawing_open(path)
+        self.opened_path = None
+        return result
+
+
+class _MissingVariableIdentityClient(_CanonicalIdentityFakeMCPClient):
+    def drawing_get_variables(self, names):  # type: ignore[no-untyped-def]
+        return {}
+
+
+def _attestation_fixture(root: Path, client: FakeMCPClient):
+    client.fail_entity_get = False
+    dxf = root / "staged.dxf"
+    dxf.write_bytes(b"staged dxf")
+    evidence = root / "build-evidence.json"
+    build = _build(dxf)
+    write_build_evidence(evidence, build)
+    client.preload_entity(
+        "A", "LINE", "0", {"start": (0.0, 0.0), "end": (10.0, 0.0)}
+    )
+    return build, dxf, evidence
+
+
+@pytest.mark.parametrize(
+    ("client_type", "message"),
+    [
+        (_ExtraOpenDocumentClient, "POST_SAVE_OPEN_DOCUMENT_SET_MISMATCH"),
+        (_MissingActiveObservableClient, "POST_SAVE_ACTIVE_TARGET_UNAVAILABLE"),
+        (_MissingVariableIdentityClient, "POST_SAVE_VARIABLE_IDENTITY_UNAVAILABLE"),
+    ],
+)
+def test_post_save_attestation_rejects_incomplete_canonical_identity(
+    client_type: type[FakeMCPClient], message: str
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        client = client_type()
+        build, dxf, evidence = _attestation_fixture(Path(directory), client)
+
+        with pytest.raises(LiveSafetyError, match=message):
+            _attest_saved_candidate(build, client, dxf, evidence)
 
 
 def test_repair_fails_closed_when_persisted_candidate_bytes_diverge() -> None:
