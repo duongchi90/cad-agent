@@ -124,17 +124,27 @@ def _is_regular_non_reparse(stat_result: os.stat_result) -> bool:
     )
 
 
-def _assert_backup_path_identity(path: Path, opened_stat: os.stat_result) -> None:
+def _is_single_link_regular_non_reparse(stat_result: os.stat_result) -> bool:
+    return _is_regular_non_reparse(stat_result) and getattr(stat_result, "st_nlink", 1) == 1
+
+
+def _assert_path_identity(
+    path: Path, opened_stat: os.stat_result, *, label: str
+) -> None:
     try:
         path_stat = os.stat(path, follow_symlinks=False)
     except OSError as exc:
-        raise LiveSafetyError("Backup destination identity could not be verified.") from exc
-    if not _is_regular_non_reparse(path_stat) or not os.path.samestat(
+        raise LiveSafetyError(f"{label} identity could not be verified.") from exc
+    if not _is_single_link_regular_non_reparse(path_stat) or not os.path.samestat(
         opened_stat, path_stat
     ):
         raise LiveSafetyError(
-            "Backup destination must remain the same regular non-reparse file."
+            f"{label} must remain the same single-link regular non-reparse file."
         )
+
+
+def _assert_backup_path_identity(path: Path, opened_stat: os.stat_result) -> None:
+    _assert_path_identity(path, opened_stat, label="Backup destination")
 
 
 def _copy_to_exclusive_backup(
@@ -252,6 +262,89 @@ def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, Any]:
         ) from exc
 
 
+def _open_bound_file(path: Path, *, flags: int, label: str) -> tuple[int, os.stat_result]:
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise LiveSafetyError(f"{label} identity could not be verified.") from exc
+    if not _is_single_link_regular_non_reparse(path_stat):
+        raise LiveSafetyError(
+            f"{label} must be a single-link regular non-reparse file."
+        )
+
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags)
+        opened_stat = os.fstat(descriptor)
+        if (
+            not _is_single_link_regular_non_reparse(opened_stat)
+            or not os.path.samestat(path_stat, opened_stat)
+        ):
+            raise LiveSafetyError(f"{label} identity changed while opening.")
+        _assert_path_identity(path, opened_stat, label=label)
+        return descriptor, opened_stat
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _sha256_open_file(handle: Any) -> str:
+    handle.seek(0)
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+    handle.seek(0)
+    return digest.hexdigest()
+
+
+def _restore_bound_file(
+    source: Path,
+    destination: Path,
+    *,
+    expected_backup_sha256: str,
+    expected_destination_sha256: str,
+) -> str:
+    binary = getattr(os, "O_BINARY", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    source_fd, _ = _open_bound_file(
+        source,
+        flags=os.O_RDONLY | binary | no_follow,
+        label="Rollback backup source",
+    )
+    destination_fd = -1
+    try:
+        with os.fdopen(source_fd, "rb") as source_handle:
+            source_fd = -1
+            source_sha256 = _sha256_open_file(source_handle)
+            if source_sha256 != expected_backup_sha256:
+                raise LiveSafetyError("Rollback backup integrity verification failed.")
+
+            destination_fd, destination_stat = _open_bound_file(
+                destination,
+                flags=os.O_RDWR | binary | no_follow,
+                label="Rollback destination",
+            )
+            with os.fdopen(destination_fd, "r+b") as destination_handle:
+                destination_fd = -1
+                os.ftruncate(destination_handle.fileno(), 0)
+                shutil.copyfileobj(source_handle, destination_handle)
+                destination_handle.flush()
+                os.fsync(destination_handle.fileno())
+                restored_sha256 = _sha256_open_file(destination_handle)
+                if restored_sha256 != expected_destination_sha256:
+                    raise LiveSafetyError(
+                        "Canonical rollback restoration verification failed."
+                    )
+                _assert_backup_path_identity(destination, destination_stat)
+                return restored_sha256
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if destination_fd >= 0:
+            os.close(destination_fd)
+
+
 def _restore_canonical(
     *,
     client: Any,
@@ -263,12 +356,6 @@ def _restore_canonical(
 
     backup_dxf = Path(backup["dxf_path"])
     backup_evidence = Path(backup["build_evidence_path"])
-    if (
-        sha256_file(backup_dxf) != backup["dxf_backup_sha256"]
-        or sha256_file(backup_evidence) != backup["build_evidence_backup_sha256"]
-    ):
-        raise LiveSafetyError("Rollback backup integrity verification failed.")
-
     open_paths_before_restore = {
         _normalized_document_path(path)
         for path in client.drawing_list_open_paths()
@@ -280,15 +367,18 @@ def _restore_canonical(
             "canonical staged DXF is still open."
         )
 
-    shutil.copy2(backup_dxf, dxf)
-    shutil.copy2(backup_evidence, evidence_path)
-    dxf_sha256 = sha256_file(dxf)
-    evidence_sha256 = sha256_file(evidence_path)
-    if (
-        dxf_sha256 != backup["dxf_source_sha256"]
-        or evidence_sha256 != backup["build_evidence_source_sha256"]
-    ):
-        raise LiveSafetyError("Canonical rollback restoration verification failed.")
+    dxf_sha256 = _restore_bound_file(
+        backup_dxf,
+        dxf,
+        expected_backup_sha256=backup["dxf_backup_sha256"],
+        expected_destination_sha256=backup["dxf_source_sha256"],
+    )
+    evidence_sha256 = _restore_bound_file(
+        backup_evidence,
+        evidence_path,
+        expected_backup_sha256=backup["build_evidence_backup_sha256"],
+        expected_destination_sha256=backup["build_evidence_source_sha256"],
+    )
 
     client.drawing_open(str(dxf))
     open_paths = {
