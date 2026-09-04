@@ -104,6 +104,16 @@
   drawing-query/facade/candidate/registry/skill coverage was `253 passed`, and
   exact-head hosted checks passed. No live query, provider call, M2 retest, or
   CAD mutation was involved.
+- On exact main `8cfbce22ba9f965164fbc9a4d67824475c15f150`, the bounded
+  generated-pilot provenance successor now composes the existing Mechanical
+  pilot, DARA, R3, R4, and drawing-query owners without fabricating a Base-CAD
+  R2 handoff. Its explicit generated mode seals source/candidate/build/pilot
+  evidence and candidate-handle bindings, and rejects mixed, foreign, stale,
+  or tampered provenance. Focused generated-provenance/R3/R4/pilot/query
+  coverage is `225 passed` (including `6` new tests); Ruff and `git diff
+  --check` pass. This remains deterministic/offline evidence only: live
+  Phase 1A FileIPC query acceptance is not claimed and M3 real-provider
+  acceptance remains blocked by exhausted credit balance.
 - Disposable Phase 3 live epochs remain **NON_PASS**. Epochs 1–2 stopped at
   the SecureLoad/bootstrap and dispatcher terminal-result boundaries. Fresh
   current-main epochs #05–#07 reused the loaded canonical dispatcher and

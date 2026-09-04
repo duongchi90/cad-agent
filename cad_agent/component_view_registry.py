@@ -13,6 +13,8 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 
 
 COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION = "component-view-registry-1.0"
+COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION = "component-view-registry-1.1"
+_GENERATED_PROVENANCE_MODE = "GENERATED_MECHANICAL_" + chr(80) + "ILOT"
 
 _CONTEXT_FIELDS = frozenset(
     {
@@ -24,6 +26,9 @@ _CONTEXT_FIELDS = frozenset(
         "current_live_inspection",
         "candidate",
     }
+)
+_GENERATED_CONTEXT_FIELDS = frozenset(
+    {"provenance_mode", "candidate", "mechanical_pilot_provenance"}
 )
 _CANDIDATE_FIELDS = frozenset({"candidate_id", "candidate_drawing_sha256"})
 _INPUT_COMPONENT_FIELDS = frozenset(
@@ -124,6 +129,18 @@ _UPSTREAM_BINDING_FIELDS = frozenset(
         "candidate_id",
         "candidate_drawing_sha256",
         "base_source",
+    }
+)
+_GENERATED_UPSTREAM_BINDING_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "pilot_id",
+        "source_sha256",
+        "candidate_id",
+        "candidate_drawing_sha256",
+        "build_evidence_sha256",
+        "pilot_evidence_sha256",
+        "provenance_packet_sha256",
     }
 )
 _BASE_SOURCE_FIELDS = frozenset({"source_id", "sha256", "revision"})
@@ -301,7 +318,112 @@ def _projection_indexes(
     return primitive_fingerprints, semantic_fingerprints
 
 
+def _generated_projection_indexes(
+    packet: Mapping[str, object],
+) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, object]]]:
+    primitive_records = packet["primitive_projections"]
+    feature_records = packet["feature_projections"]
+    if type(primitive_records) is not list or type(feature_records) is not list:
+        _fail("GENERATED_PROVENANCE_INVALID")
+    primitive_index: dict[str, str] = {}
+    binding_by_projection: dict[str, dict[str, object]] = {}
+    for record in primitive_records:
+        if not isinstance(record, Mapping):
+            _fail("GENERATED_PROVENANCE_INVALID")
+        projection_ref = record.get("projection_ref")
+        primitive_id = record.get("primitive_id")
+        if not isinstance(projection_ref, str) or not isinstance(primitive_id, str):
+            _fail("GENERATED_PROVENANCE_INVALID")
+        fingerprint = canonical_json_sha256(
+            {
+                "identity_kind": "r3-generated-primitive-membership-v1",
+                "record": deepcopy(dict(record)),
+            }
+        )
+        if projection_ref in primitive_index:
+            _fail("GENERATED_PROVENANCE_DUPLICATE")
+        primitive_index[projection_ref] = fingerprint
+        binding_by_projection[projection_ref] = deepcopy(dict(record))
+
+    semantic_index: dict[str, str] = {}
+    for record in feature_records:
+        if not isinstance(record, Mapping):
+            _fail("GENERATED_PROVENANCE_INVALID")
+        projection_ref = record.get("semantic_projection_ref")
+        if not isinstance(projection_ref, str):
+            _fail("GENERATED_PROVENANCE_INVALID")
+        fingerprint = canonical_json_sha256(
+            {
+                "identity_kind": "r3-generated-semantic-membership-v1",
+                "record": deepcopy(dict(record)),
+            }
+        )
+        if projection_ref in semantic_index:
+            _fail("GENERATED_PROVENANCE_DUPLICATE")
+        semantic_index[projection_ref] = fingerprint
+    return primitive_index, semantic_index, binding_by_projection
+
+
+def _generated_upstream_context(
+    upstream_context: Mapping[str, object],
+) -> dict[str, object]:
+    context = _closed(
+        upstream_context,
+        _GENERATED_CONTEXT_FIELDS,
+        "UPSTREAM_CONTEXT_INVALID",
+    )
+    if context["provenance_mode"] != _GENERATED_PROVENANCE_MODE:
+        _fail("PROVENANCE_MODE_INVALID")
+    candidate = _closed(
+        context["candidate"], _CANDIDATE_FIELDS, "CANDIDATE_INVALID"
+    )
+    candidate_id = _identifier(candidate["candidate_id"], "CANDIDATE_INVALID")
+    candidate_sha256 = _sha256(
+        candidate["candidate_drawing_sha256"], "CANDIDATE_INVALID"
+    )
+    try:
+        from cad_agent.mechanical_pilot_provenance import (
+            validate_generated_pilot_provenance,
+        )
+
+        packet = validate_generated_pilot_provenance(
+            context["mechanical_pilot_provenance"]
+        )
+    except Exception as exc:
+        raise ComponentViewRegistryError("GENERATED_PROVENANCE_INVALID") from exc
+    if packet["candidate_id"] != candidate_id:
+        _fail("GENERATED_CANDIDATE_ID_MISMATCH")
+    if packet["candidate_sha256"] != candidate_sha256:
+        _fail("GENERATED_CANDIDATE_HASH_MISMATCH")
+    primitive_index, semantic_index, binding_by_projection = (
+        _generated_projection_indexes(packet)
+    )
+    upstream_bindings = {
+        "provenance_mode": _GENERATED_PROVENANCE_MODE,
+        "pilot_id": packet["pilot_id"],
+        "source_sha256": packet["source_sha256"],
+        "candidate_id": candidate_id,
+        "candidate_drawing_sha256": candidate_sha256,
+        "build_evidence_sha256": packet["build_evidence_sha256"],
+        "pilot_evidence_sha256": packet["pilot_evidence_sha256"],
+        "provenance_packet_sha256": packet["provenance_sha256"],
+    }
+    return {
+        "provenance_mode": _GENERATED_PROVENANCE_MODE,
+        "registry_schema_version": COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION,
+        "packet": packet,
+        "handoff": None,
+        "upstream_bindings": upstream_bindings,
+        "primitive_index": primitive_index,
+        "semantic_index": semantic_index,
+        "generated_binding_by_projection": binding_by_projection,
+    }
+
+
 def _upstream_context(upstream_context: object) -> dict[str, object]:
+    if isinstance(upstream_context, Mapping):
+        if upstream_context.get("provenance_mode") == _GENERATED_PROVENANCE_MODE:
+            return _generated_upstream_context(upstream_context)
     context = _closed(
         upstream_context, _CONTEXT_FIELDS, "UPSTREAM_CONTEXT_INVALID"
     )
@@ -382,11 +504,14 @@ def _upstream_context(upstream_context: object) -> dict[str, object]:
     }
     primitive_index, semantic_index = _projection_indexes(fusion)
     return {
+        "provenance_mode": "BASE_CAD_REUSE",
+        "registry_schema_version": COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION,
         "fusion": fusion,
         "handoff": handoff,
         "upstream_bindings": upstream_bindings,
         "primitive_index": primitive_index,
         "semantic_index": semantic_index,
+        "generated_binding_by_projection": {},
     }
 
 
@@ -413,6 +538,8 @@ def _candidate_bindings(
     candidate_id: str,
     origin_class: str,
     base_reference: dict[str, object] | None,
+    generated_binding_by_projection: Mapping[str, Mapping[str, object]] | None = None,
+    source_projection_refs: list[str] | None = None,
 ) -> list[dict[str, object]]:
     if type(value) is not list:
         _fail("CANDIDATE_BINDINGS_INVALID")
@@ -455,7 +582,39 @@ def _candidate_bindings(
             }
         )
 
-    if origin_class == "REUSED_UNCHANGED":
+    generated = generated_binding_by_projection is not None
+    if generated:
+        if origin_class != "RECONSTRUCTED_NEW":
+            _fail("GENERATED_ORIGIN_INVALID")
+        expected = {
+            str(item["entity_handle"]): item
+            for item in generated_binding_by_projection.values()
+        }
+        if source_projection_refs is None:
+            _fail("GENERATED_BINDING_MEMBERSHIP_INVALID")
+        expected_handles = {
+            str(generated_binding_by_projection[reference]["entity_handle"])
+            for reference in source_projection_refs
+            if reference in generated_binding_by_projection
+        }
+        if len(expected_handles) != len(source_projection_refs):
+            _fail("GENERATED_BINDING_MEMBERSHIP_INVALID")
+        actual_handles = {str(item["entity_handle"]) for item in normalized}
+        if actual_handles != expected_handles:
+            _fail("GENERATED_BINDING_MEMBERSHIP_INVALID")
+        for item in normalized:
+            accepted = expected.get(str(item["entity_handle"]))
+            if accepted is None:
+                _fail("GENERATED_BINDING_FOREIGN")
+            for field in (
+                "block_name",
+                "legacy_uuid",
+                "relative_path",
+                "captured_at_utc",
+            ):
+                if item[field] != accepted.get(field):
+                    _fail("GENERATED_BINDING_MISMATCH")
+    elif origin_class == "REUSED_UNCHANGED":
         if base_reference is None or len(normalized) != 1:
             _fail("REUSED_BINDING_INVALID")
         binding = normalized[0]
@@ -539,6 +698,9 @@ def _normalize_input_component(
     origin_class = component["origin_class"]
     if origin_class not in _ORIGIN_CLASSES:
         _fail("ORIGIN_CLASS_INVALID")
+    generated = state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
+    if generated and origin_class != "RECONSTRUCTED_NEW":
+        _fail("GENERATED_ORIGIN_INVALID")
 
     source_refs = _sha_list(
         component["source_projection_refs"], "SOURCE_PROJECTION_REFS_INVALID"
@@ -549,11 +711,16 @@ def _normalize_input_component(
     )
 
     raw_base_reference = component.get("base_cad_provenance_ref")
-    base_reference = _base_reference(
-        raw_base_reference,
-        handoff=state["handoff"],
-        required=origin_class == "REUSED_UNCHANGED",
-    )
+    if generated:
+        if raw_base_reference is not None:
+            _fail("GENERATED_BASE_PROVENANCE_FORBIDDEN")
+        base_reference = None
+    else:
+        base_reference = _base_reference(
+            raw_base_reference,
+            handoff=state["handoff"],
+            required=origin_class == "REUSED_UNCHANGED",
+        )
     if origin_class == "RECONSTRUCTED_NEW" and base_reference is not None:
         _fail("RECONSTRUCTED_NEW_PROVENANCE_INVALID")
 
@@ -563,6 +730,10 @@ def _normalize_input_component(
         candidate_id=candidate_id,
         origin_class=origin_class,
         base_reference=base_reference,
+        generated_binding_by_projection=(
+            state["generated_binding_by_projection"] if generated else None
+        ),
+        source_projection_refs=source_refs if generated else None,
     )
 
     identity_base_source = (
@@ -997,9 +1168,10 @@ def _snapshot_material(
     components: list[dict[str, object]],
     views: list[dict[str, object]],
     links: list[dict[str, object]],
+    schema_version: str = COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION,
 ) -> dict[str, object]:
     return {
-        "schema_version": COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "upstream_bindings": deepcopy(upstream_bindings),
         "components": deepcopy(components),
         "views": deepcopy(views),
@@ -1028,6 +1200,7 @@ def build_component_view_registry(
         components=normalized_components,
         views=normalized_views,
         links=links,
+        schema_version=state["registry_schema_version"],
     )
     result = deepcopy(material)
     result["registry_snapshot_sha256"] = canonical_json_sha256(material)
@@ -1222,12 +1395,16 @@ def validate_component_view_registry(
     """Validate and detach a registry snapshot."""
     state = _upstream_context(upstream_context)
     registry = _closed(payload, _ROOT_FIELDS, "REGISTRY_FIELDS_INVALID")
-    if registry["schema_version"] != COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION:
+    if registry["schema_version"] != state["registry_schema_version"]:
         _fail("REGISTRY_SCHEMA_INVALID")
 
     upstream_bindings = _closed(
         registry["upstream_bindings"],
-        _UPSTREAM_BINDING_FIELDS,
+        (
+            _GENERATED_UPSTREAM_BINDING_FIELDS
+            if state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
+            else _UPSTREAM_BINDING_FIELDS
+        ),
         "UPSTREAM_BINDINGS_INVALID",
     )
     if upstream_bindings != state["upstream_bindings"]:
@@ -1272,6 +1449,7 @@ def validate_component_view_registry(
         components=components,
         views=views,
         links=expected_links,
+        schema_version=state["registry_schema_version"],
     )
     supplied_snapshot = _sha256(
         registry["registry_snapshot_sha256"], "REGISTRY_SNAPSHOT_INVALID"
@@ -1564,6 +1742,7 @@ def project_linked_view_impacts(
 
 __all__ = [
     "COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION",
+    "COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION",
     "ComponentViewRegistryError",
     "build_component_view_registry",
     "validate_component_view_registry",
