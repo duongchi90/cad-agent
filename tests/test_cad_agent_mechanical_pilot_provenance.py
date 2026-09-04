@@ -58,6 +58,7 @@ def test_generated_pilot_packet_is_exact_and_replayable(tmp_path: Path) -> None:
         "1c86ce46261a3689d00bc18157087e418df0872ac0a6a4635c157f2b85677b8d"
     )
     assert packet["candidate_sha256"] == result.candidate_sha256
+    assert len(packet["candidate_path_binding_sha256"]) == 64
     assert [item["primitive_id"] for item in packet["primitive_projections"]] == [
         "hole-axial-001",
         "shaft-profile-001:bottom-main",
@@ -196,6 +197,11 @@ def test_generated_r3_registry_accepts_only_explicit_generated_mode(
     assert registry["schema_version"] == "component-view-registry-1.1"
     assert registry["upstream_bindings"]["provenance_mode"] == (
         "GENERATED_MECHANICAL_PILOT"
+    )
+    assert registry["upstream_bindings"]["candidate_path_binding_sha256"] == (
+        inputs["upstream_context"]["mechanical_pilot_provenance"][
+            "candidate_path_binding_sha256"
+        ]
     )
     assert [component["origin_class"] for component in registry["components"]] == [
         "RECONSTRUCTED_NEW",

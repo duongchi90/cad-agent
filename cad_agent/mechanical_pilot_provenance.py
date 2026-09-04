@@ -30,6 +30,7 @@ _PACKET_FIELDS = frozenset(
         "schema_version",
         "pilot_id",
         "candidate_id",
+        "candidate_path_binding_sha256",
         "source_sha256",
         "candidate_sha256",
         "build_evidence_sha256",
@@ -147,6 +148,16 @@ def _file_snapshot(value: object, code: str) -> tuple[Path, bytes, str]:
 
 def _candidate_id(pilot_id: str, candidate_sha256: str) -> str:
     return f"{pilot_id}:{candidate_sha256}"
+
+
+def _candidate_path_binding_sha256(path: Path) -> str:
+    normalized = str(path.resolve(strict=True)).replace("/", "\\").casefold()
+    return canonical_json_sha256(
+        {
+            "identity_kind": "generated-pilot-candidate-path-v1",
+            "canonical_path": normalized,
+        }
+    )
 
 
 def _primitive_geometry(value: object) -> object:
@@ -342,7 +353,17 @@ def _validate_build_evidence(
     return evidence_sha256
 
 
-def _validate_result_files(result: MechanicalPilotResult) -> tuple[str, str, str, str]:
+def _require_stable_artifact(
+    value: object, expected_sha256: str, code: str
+) -> None:
+    _path, _bytes, actual_sha256 = _file_snapshot(value, code)
+    if actual_sha256 != expected_sha256:
+        _fail(code)
+
+
+def _validate_result_files(
+    result: MechanicalPilotResult,
+) -> tuple[str, str, str, str, str]:
     source_path, _source_bytes, source_sha256 = _file_snapshot(
         result.source_path, "SOURCE_ARTIFACT_INVALID"
     )
@@ -357,6 +378,7 @@ def _validate_result_files(result: MechanicalPilotResult) -> tuple[str, str, str
         result.candidate_path
     ).resolve():
         _fail("ARTIFACT_PATH_MISMATCH")
+    candidate_path_binding_sha256 = _candidate_path_binding_sha256(candidate_path)
     build_sha256 = _validate_build_evidence(result, candidate_sha256)
     pilot_id, pilot_sha256 = _validate_pilot_evidence(result)
     if pilot_id != result.pilot_id:
@@ -395,7 +417,25 @@ def _validate_result_files(result: MechanicalPilotResult) -> tuple[str, str, str
         != canonical_json_sha256(result.feature_bindings)
     ):
         _fail("PILOT_SOURCE_BINDING_MISMATCH")
-    return source_sha256, candidate_sha256, build_sha256, pilot_sha256
+    _require_stable_artifact(
+        result.source_path, source_sha256, "SOURCE_ARTIFACT_DRIFT"
+    )
+    _require_stable_artifact(
+        result.candidate_path, candidate_sha256, "CANDIDATE_ARTIFACT_DRIFT"
+    )
+    _require_stable_artifact(
+        result.build_evidence_path, build_sha256, "BUILD_EVIDENCE_DRIFT"
+    )
+    _require_stable_artifact(
+        result.pilot_evidence_path, pilot_sha256, "PILOT_EVIDENCE_DRIFT"
+    )
+    return (
+        source_sha256,
+        candidate_sha256,
+        build_sha256,
+        pilot_sha256,
+        candidate_path_binding_sha256,
+    )
 
 
 def _packet_without_checksum(packet: Mapping[str, object]) -> dict[str, object]:
@@ -545,6 +585,10 @@ def validate_generated_pilot_provenance(payload: object) -> dict[str, object]:
     pilot_id = _identifier(packet["pilot_id"], "PILOT_ID_INVALID")
     source_sha256 = _sha(packet["source_sha256"], "SOURCE_HASH_INVALID")
     candidate_sha256 = _sha(packet["candidate_sha256"], "CANDIDATE_HASH_INVALID")
+    _sha(
+        packet["candidate_path_binding_sha256"],
+        "CANDIDATE_PATH_BINDING_HASH_INVALID",
+    )
     expected_candidate_id = _candidate_id(pilot_id, candidate_sha256)
     if packet["candidate_id"] != expected_candidate_id:
         _fail("CANDIDATE_ID_MISMATCH")
@@ -565,6 +609,9 @@ def validate_generated_pilot_provenance(payload: object) -> dict[str, object]:
         "schema_version": GENERATED_PILOT_PROVENANCE_SCHEMA_VERSION,
         "pilot_id": pilot_id,
         "candidate_id": expected_candidate_id,
+        "candidate_path_binding_sha256": packet[
+            "candidate_path_binding_sha256"
+        ],
         "source_sha256": source_sha256,
         "candidate_sha256": candidate_sha256,
         "build_evidence_sha256": packet["build_evidence_sha256"],
@@ -584,7 +631,13 @@ def build_generated_pilot_provenance(
     result: MechanicalPilotResult,
 ) -> dict[str, object]:
     """Issue a checksummed packet from one exact pilot result and its files."""
-    source_sha256, candidate_sha256, build_sha256, pilot_sha256 = (
+    (
+        source_sha256,
+        candidate_sha256,
+        build_sha256,
+        pilot_sha256,
+        candidate_path_binding_sha256,
+    ) = (
         _validate_result_files(result)
     )
     candidate_relative_path = _regular_file(
@@ -643,6 +696,7 @@ def build_generated_pilot_provenance(
         "schema_version": GENERATED_PILOT_PROVENANCE_SCHEMA_VERSION,
         "pilot_id": pilot_id,
         "candidate_id": candidate_id,
+        "candidate_path_binding_sha256": candidate_path_binding_sha256,
         "source_sha256": source_sha256,
         "candidate_sha256": candidate_sha256,
         "build_evidence_sha256": build_sha256,

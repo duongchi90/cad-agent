@@ -138,6 +138,7 @@ _GENERATED_UPSTREAM_BINDING_FIELDS = frozenset(
         "source_sha256",
         "candidate_id",
         "candidate_drawing_sha256",
+        "candidate_path_binding_sha256",
         "build_evidence_sha256",
         "pilot_evidence_sha256",
         "provenance_packet_sha256",
@@ -404,6 +405,9 @@ def _generated_upstream_context(
         "source_sha256": packet["source_sha256"],
         "candidate_id": candidate_id,
         "candidate_drawing_sha256": candidate_sha256,
+        "candidate_path_binding_sha256": packet[
+            "candidate_path_binding_sha256"
+        ],
         "build_evidence_sha256": packet["build_evidence_sha256"],
         "pilot_evidence_sha256": packet["pilot_evidence_sha256"],
         "provenance_packet_sha256": packet["provenance_sha256"],

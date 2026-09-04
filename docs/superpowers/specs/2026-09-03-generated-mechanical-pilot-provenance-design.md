@@ -35,6 +35,8 @@ issuing a closed checksummed packet.
 The packet contains only bounded identity and binding evidence:
 
 - exact pilot/source/candidate/build/pilot-evidence identities;
+- a non-disclosing hash of the canonical candidate path, carried into generated
+  R3 upstream bindings and the read-only composition result;
 - one record per written primitive with a deterministic projection reference,
   written-geometry checksum, layer, and entity handle;
 - one record per pilot feature with a deterministic semantic projection
@@ -141,6 +143,9 @@ this adapter.
   rejected before query execution.
 - Existing Base-CAD R3/R4 behavior and schema remain unchanged.
 - Output ordering and checksums are deterministic.
+- Candidate, source, build-evidence, and pilot-evidence artifacts are
+  re-snapshotted at the final sealing boundary; replacement or drift refuses
+  the packet.
 
 ## Acceptance
 

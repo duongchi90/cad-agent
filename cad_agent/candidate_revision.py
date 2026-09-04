@@ -221,6 +221,7 @@ def _normalize_registry(
             "source_sha256",
             "candidate_id",
             "candidate_drawing_sha256",
+            "candidate_path_binding_sha256",
             "build_evidence_sha256",
             "pilot_evidence_sha256",
             "provenance_packet_sha256",
