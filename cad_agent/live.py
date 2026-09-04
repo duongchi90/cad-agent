@@ -458,11 +458,19 @@ def _attest_saved_candidate(
         raise LiveSafetyError(
             "POST_SAVE_TARGET_NOT_OPEN: persisted candidate is not the open target."
         )
+    if open_paths != {expected_path}:
+        raise LiveSafetyError(
+            "POST_SAVE_OPEN_DOCUMENT_SET_MISMATCH: open documents are not canonical-only."
+        )
 
     active_path = getattr(client, "_active_drawing_path", None)
     if active_path is None:
         active_path = getattr(client, "opened_path", None)
-    if active_path is not None and _normalized_document_path(active_path) != expected_path:
+    if active_path is None or not str(active_path).strip():
+        raise LiveSafetyError(
+            "POST_SAVE_ACTIVE_TARGET_UNAVAILABLE: authoritative active document identity is missing."
+        )
+    if _normalized_document_path(active_path) != expected_path:
         raise LiveSafetyError(
             "POST_SAVE_ACTIVE_TARGET_MISMATCH: active drawing is not the persisted candidate."
         )
@@ -475,12 +483,20 @@ def _attest_saved_candidate(
         ) from exc
     prefix = variables.get("DWGPREFIX")
     name = variables.get("DWGNAME")
-    if isinstance(prefix, str) and isinstance(name, str) and prefix and name:
-        variable_path = _normalized_document_path(ntpath.join(prefix, name))
-        if variable_path != expected_path:
-            raise LiveSafetyError(
-                "POST_SAVE_VARIABLE_TARGET_MISMATCH: AutoCAD active variables do not match the candidate."
-            )
+    if not (
+        isinstance(prefix, str)
+        and isinstance(name, str)
+        and prefix.strip()
+        and name.strip()
+    ):
+        raise LiveSafetyError(
+            "POST_SAVE_VARIABLE_IDENTITY_UNAVAILABLE: AutoCAD active variables are incomplete."
+        )
+    variable_path = _normalized_document_path(ntpath.join(prefix, name))
+    if variable_path != expected_path:
+        raise LiveSafetyError(
+            "POST_SAVE_VARIABLE_TARGET_MISMATCH: AutoCAD active variables do not match the candidate."
+        )
 
     try:
         persisted_build = load_build_evidence(evidence_path, dxf)
