@@ -18,8 +18,9 @@
 
 ## Current canonical snapshot (2026-09-04)
 
-- Canonical GitHub main is 681cb8555e3944dcf2b6991e9beccb2ee44cb627,
-  the merge commit for PR #393. It includes the provider-independent M4
+- Canonical GitHub main at this snapshot is 701feb18ed5c014049d6ce1fa6d9e1d73aa93824,
+  the merge commit for docs PR #394. Its runtime state includes the
+  provider-independent M4
   repairs merged through PR #393: PR #388 (fail-closed candidate close),
   PR #389 (geometry-degraded post-save false-PASS), PR #390 (exact canonical
   post-save document identity), and PR #393 (successful-repair backup
@@ -38,18 +39,23 @@
 - Phase 1A deterministic provenance and bounded-query contracts are verified
   offline; the fresh focused recheck passed 231 tests. This does not promote
   live AutoCAD/FileIPC query evidence to PASS.
-- The latest genuine disposable live epoch was NON_PASS. With AutoCAD PID
-  3940 and HWND 0x380606 foreground-matched, one claim-bound ping request
-  56adaf74b9ad timed out without a terminal dispatcher result. No query,
-  mutation, save, retry, or second IPC request occurred. The disposable
-  candidate and source remained byte-identical, cleanup returned to
-  Drawing1.dwg, and owned IPC survivors were zero.
+- The latest current-main live boundary attempt was NON_PASS before a new
+  candidate was created. AutoCAD PID 3940 and HWND 0x380606 were responding
+  and foreground-matched, but the main window was disabled by a visible
+  `Security - Unsigned Executable File` modal (HWND 0x960a78). The existing
+  dispatcher readiness request 64e3f95b3768 and a separate read-only
+  open-document observation produced no terminal result. No candidate was
+  created, no mutation/save/retry occurred, and the new IPC root had zero
+  owned survivors. A known prior disposable candidate remains open because
+  the modal prevents safe dispatcher/close confirmation.
 - FIRST_UNSATISFIED_BOUNDARY is
-  LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_MISSING, owned by the existing
-  FileIPCLiveMCPClient and canonical AutoLISP dispatcher. The next oracle is
-  one future disposable exact-bound semantic query only after the existing
-  request-bearing dispatcher session is independently restored or verified.
-  Timeout, enqueue-only, cleanup-only, SKIP, and NOT RUN remain NON_PASS.
+  LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE, classified as an
+  environment precondition and owned by the existing FileIPCLiveMCPClient
+  plus canonical AutoLISP dispatcher. The next oracle is one fresh
+  disposable close-only epoch after the exact security dialog is resolved;
+  it must produce a claim-bound terminal result, authoritative no-save close,
+  candidate/source integrity, and zero owned IPC survivors. Timeout,
+  enqueue-only, cleanup-only, SKIP, and NOT RUN remain NON_PASS.
 - M3 real-provider acceptance remains
   BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED. PR #340 is OPEN/DRAFT/FROZEN at head
   714620001e8dbc1c49adbb13b9af4d5821eb6a7d; no provider call, billing action,
