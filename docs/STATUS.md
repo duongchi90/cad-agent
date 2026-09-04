@@ -18,16 +18,23 @@
 
 ## Current canonical snapshot (2026-09-04)
 
-- Canonical GitHub main is 87655c8e46de4640c389cf1ce2923a86ccdc65a3,
-  the merge commit for PR #380. PR #378 and PR #380 are merged provider-
-  independent work; PR #379 was superseded and closed with its branch and
-  evidence retained.
-- PR #380 closes the measured backup-acquisition zero-survivor and terminal
-  rollback-failure boundary in the existing cad_agent.live owner. Its exact
-  write-set is cad_agent/live.py and tests/test_cad_agent_live.py. Current-main
-  verification exited 0: .NET 198 passed, IPC 68 passed plus 50 subtests,
-  offline 3141 passed with 18 deselected and 72 subtests, and hosted CodeQL,
-  Analyze Python, reuse-declaration, and both offline-tests checks passed.
+- Canonical GitHub main is 681cb8555e3944dcf2b6991e9beccb2ee44cb627,
+  the merge commit for PR #393. It includes the provider-independent M4
+  repairs merged through PR #393: PR #388 (fail-closed candidate close),
+  PR #389 (geometry-degraded post-save false-PASS), PR #390 (exact canonical
+  post-save document identity), and PR #393 (successful-repair backup
+  zero-survivor cleanup). PR #388, #389, #390, and #393 are merged; their
+  exact write-sets remain limited to existing live owners and focused tests.
+- PR #393 closes the measured `SUCCESS_PATH_BACKUP_ZERO_SURVIVOR_CLEANUP`
+  boundary in the existing `cad_agent.live` owner. After verified post-save
+  attestation, only the two attempt-owned backup artifacts are deleted and
+  zero owned survivors are required; unrelated backup-directory files are
+  preserved, and cleanup uncertainty is terminal non-pass. Its exact
+  write-set is `cad_agent/live.py` and `tests/test_cad_agent_live.py`.
+  Exact-head hosted checks passed; current-main verification on the merged
+  head exited 0 with .NET 198/198, offline 3156 passed with 18 deselected
+  and 72 subtests, and the intentional causal negative oracle retained one
+  failure.
 - Phase 1A deterministic provenance and bounded-query contracts are verified
   offline; the fresh focused recheck passed 231 tests. This does not promote
   live AutoCAD/FileIPC query evidence to PASS.
@@ -49,9 +56,10 @@
   credential use, PR #340/#337 mutation, or M2 retest is included here.
 - Source, customer, and accepted drawings remain protected. All live work used
   disposable candidates only; no production CAD mutation or save was run.
-- Comments 5538798034, 5538818965, and 5538805670 on #343/#301 record the
-  merge, dispatcher recheck, and current-boundary ACK. Older sections below
-  are retained historical evidence and do not override this snapshot.
+- Comments 5542716100, 5542869128, and 5543014396 on #343 record the current
+  live precondition, the measured backup-cleanup advisory, and its closed
+  successor evidence. Older sections below are retained historical evidence
+  and do not override this snapshot.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 
