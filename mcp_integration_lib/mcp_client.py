@@ -514,6 +514,7 @@ class FileIPCLiveMCPClient:
             expected_path = self._active_drawing_path
             if self._command_trigger is not None and expected_path is not None:
                 deadline = time.time() + max(5.0, self._document_settle_s * 3.0)
+                close_confirmed = False
                 while time.time() < deadline:
                     try:
                         open_paths = {
@@ -521,10 +522,13 @@ class FileIPCLiveMCPClient:
                             for open_path in self.drawing_list_open_paths()
                         }
                         if expected_path not in open_paths:
+                            close_confirmed = True
                             break
                     except (MCPTimeoutError, MCPToolError):
                         pass
                     time.sleep(self._poll)
+                if not close_confirmed:
+                    raise MCPToolError("DRAWING_CLOSE_NOT_CONFIRMED")
             self._active_drawing_path = None
             return
         self._dispatch("drawing-close", {"save_changes": save_changes})
