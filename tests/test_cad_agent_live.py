@@ -12,6 +12,7 @@ from cad_agent import live as live_module
 from cad_agent.live import (
     LiveSafetyError,
     _backup,
+    _attest_saved_candidate,
     _restore_canonical,
     load_build_evidence,
     repair_live,
@@ -224,6 +225,23 @@ def test_repair_success_attests_persisted_candidate_after_close_and_reopen() -> 
         assert attestation["dxf_sha256"] == sha256_file(dxf)
         assert attestation["evidence_sha256"] == sha256_file(evidence)
         assert attestation["review"]["passed"] is True
+
+
+def test_post_save_attestation_rejects_degraded_geometry() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = FakeMCPClient(fail_entity_get=True)
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (10.0, 0.0)}
+        )
+
+        with pytest.raises(LiveSafetyError, match="POST_SAVE_REVIEW_DEGRADED"):
+            _attest_saved_candidate(build, client, dxf, evidence)
 
 
 class _DriftingActiveClient(FakeMCPClient):
