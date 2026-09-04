@@ -505,10 +505,11 @@ class FileIPCLiveMCPClient:
                     ":vlax-true))"
                 )
             else:
-                if self._command_trigger is not None:
-                    self._command_trigger("_.CLOSE\r_N")
-                else:
-                    self._raw_lisp_trigger('(command-s "_.CLOSE" "_N")')
+                self._raw_lisp_trigger(
+                    "(progn (vl-load-com) "
+                    "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
+                    ":vlax-false))"
+                )
             time.sleep(self._document_settle_s)
             expected_path = self._active_drawing_path
             if self._command_trigger is not None and expected_path is not None:
