@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,22 @@ SCOPE = {
 
 def _pilot(tmp_path: Path):
     return build_simple_shaft_pilot(FIXTURE, tmp_path / "generated_candidate.dxf")
+
+
+def _primitive_bound_pilot(tmp_path: Path):
+    helper_path = Path(__file__).with_name("test_cad_agent_phase4_pilot_binding.py")
+    spec = importlib.util.spec_from_file_location("phase4_pilot_test_helpers", helper_path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("phase4 helper module unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    primitive_path = tmp_path / "page_01.json"
+    module._write_primitive(primitive_path)
+    from cad_agent.mechanical_pilot import bind_simple_shaft_pilot_from_primitive
+
+    return bind_simple_shaft_pilot_from_primitive(
+        primitive_path, tmp_path / "primitive-candidate" / "candidate.dxf"
+    )
 
 
 def test_generated_pilot_packet_is_exact_and_replayable(tmp_path: Path) -> None:
@@ -85,6 +103,86 @@ def test_generated_pilot_rejects_in_memory_ir_not_bound_to_source(
         match="SOURCE_BINDING|PILOT_SOURCE",
     ):
         provenance.build_generated_pilot_provenance(result)
+
+
+def test_generated_pilot_rejects_candidate_file_drift_before_composition(
+    tmp_path: Path,
+) -> None:
+    result = _pilot(tmp_path)
+    result.candidate_path.write_bytes(result.candidate_path.read_bytes() + b"\n")
+
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="CANDIDATE_ARTIFACT_HASH_MISMATCH",
+    ):
+        provenance.compose_generated_pilot_query_binding(result, **SCOPE)
+
+
+def test_generated_pilot_rejects_build_evidence_file_drift_before_composition(
+    tmp_path: Path,
+) -> None:
+    result = _pilot(tmp_path)
+    payload = json.loads(result.build_evidence_path.read_text(encoding="utf-8"))
+    payload["build_result"]["entity_count"] += 1
+    result.build_evidence_path.write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="BUILD_EVIDENCE_MISMATCH",
+    ):
+        provenance.compose_generated_pilot_query_binding(result, **SCOPE)
+
+
+def test_generated_pilot_rejects_source_replacement_during_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source-pilot.json"
+    source_path.write_bytes(FIXTURE.read_bytes())
+    result = build_simple_shaft_pilot(
+        source_path, tmp_path / "source-candidate" / "candidate.dxf"
+    )
+    original_loader = provenance.load_pilot_definition
+
+    def replace_before_load(path: Path) -> dict[str, object]:
+        path.write_bytes(path.read_bytes() + b" ")
+        return original_loader(path)
+
+    monkeypatch.setattr(provenance, "load_pilot_definition", replace_before_load)
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="SOURCE_ARTIFACT_DRIFT",
+    ):
+        provenance.compose_generated_pilot_query_binding(result, **SCOPE)
+
+
+def test_generated_pilot_rejects_build_evidence_replacement_during_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _pilot(tmp_path)
+    original_loader = provenance.load_build_evidence
+
+    def replace_before_load(path: Path, dxf: Path):
+        path.write_bytes(path.read_bytes() + b" ")
+        return original_loader(path, dxf)
+
+    monkeypatch.setattr(provenance, "load_build_evidence", replace_before_load)
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="BUILD_EVIDENCE_DRIFT",
+    ):
+        provenance.compose_generated_pilot_query_binding(result, **SCOPE)
+
+
+def test_generated_pilot_reuses_primitive_bound_phase4_owner(tmp_path: Path) -> None:
+    result = _primitive_bound_pilot(tmp_path)
+
+    packet = provenance.build_generated_pilot_provenance(result)
+
+    assert packet["pilot_id"] == "synthetic-simple-stepped-shaft-v1"
+    assert packet["source_sha256"] == result.source_sha256
+    assert len(packet["primitive_projections"]) == result.build.entity_count
 
 
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(
@@ -190,6 +288,9 @@ def test_generated_composition_produces_current_r4_and_bounded_query(
 ) -> None:
     result = _pilot(tmp_path)
     binding = provenance.compose_generated_pilot_query_binding(result, **SCOPE)
+    assert binding["expected_active_document_path"] == str(
+        result.candidate_path.resolve()
+    )
 
     revision = binding["candidate_revision"]
     assert revision["candidate_kind"] == "ROOT_PRE_REPAIR"
@@ -261,6 +362,29 @@ def test_generated_composition_produces_current_r4_and_bounded_query(
             },
         )
     assert stale_client.calls == []
+
+    foreign_client = _BoundClient(str(tmp_path / "foreign.dxf"), handles)
+    with pytest.raises(drawing_query.DrawingQueryError, match="ACTIVE_DOCUMENT"):
+        drawing_query.query_entities(
+            client=foreign_client,
+            reference=binding["reference"],
+            current_observation=binding["current_observation"],
+            artifact_bytes=binding["artifact_bytes"],
+            parent_reference=None,
+            accepted_transition_evidence_sha256=None,
+            registry=binding["registry"],
+            registry_upstream_context=binding["registry_upstream_context"],
+            candidate_state=binding["candidate_state"],
+            expected_active_document_path=binding["expected_active_document_path"],
+            query={
+                "schema_version": "entity-query-1.0",
+                "handles": [],
+                "component_ids": [shaft["component_id"]],
+                "view_ids": [],
+                "detail": "SUMMARY",
+            },
+        )
+    assert foreign_client.calls == []
 
 
 def test_generated_r4_requires_no_fake_handoff_and_rejects_supplied_one(

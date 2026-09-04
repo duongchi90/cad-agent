@@ -57,6 +57,40 @@ remain unchanged. Generated mode is an explicit second schema path with no
 rollback, mutation, provider, or live-session side effects. Its only output is
 checksummed evidence and arguments for the existing read-only owners.
 
+## Reuse dossier
+
+### Internal owners and classification
+
+| Capability | Existing owner/API | Classification | Fit and evidence |
+| --- | --- | --- | --- |
+| Pilot source and in-memory documents | `cad_agent.mechanical_pilot::load_pilot_definition`, `_documents`, `build_simple_shaft_pilot` | `REUSE_AS_IS` | The adapter validates the source-bound primitive/semantic documents produced by the existing pilot; it does not create a second geometry or semantic engine. |
+| Phase 4 primitive-bound pilot | `cad_agent.mechanical_pilot::bind_simple_shaft_pilot_from_primitive`, `_load_primitive_document`, `_semantic_from_primitive` | `REUSE_AS_IS` | The same validator also accepts the existing Primitive IR producer used by the Phase 4 PDF-bound pilot; no pilot-definition-only fork or new IR producer is introduced. |
+| Candidate/build evidence | `cad_agent.live::load_build_evidence`, `cad_agent.manifest::sha256_file` | `REUSE_AS_IS` | Existing DXF and BuildResult evidence is reloaded and hash-checked before projection. Candidate/build drift regressions are in the focused provenance suite. |
+| Provenance/currentness | DARA reference/currentness functions, `component_view_registry`, `candidate_revision` | `EXTEND_WITH_ADAPTER` | The measured gap was the missing generated upstream discriminator; the adapter adds only that closed mode and preserves the Base-CAD v1.0 path. |
+| Bounded CAD read | `cad_agent.drawing_query::query_entities` | `REUSE_AS_IS` | The composition function returns existing query inputs; it does not add a transport, persistence, or query language. |
+
+### External reuse audit
+
+Audit basis: 2026-09-04, repository lock/runtime state at base
+`8cfbce22ba9f965164fbc9a4d67824475c15f150`. No external repository, vendor
+sample, new dependency, or new license surface is adopted by this slice.
+
+| Candidate | Exact basis/license | Fit decision | Classification |
+| --- | --- | --- | --- |
+| Python 3.11.9 standard library (`json`, `pathlib`, `hashlib`, `copy`, `re`) | Supported runtime; PSF License 2.0 | Sufficient for closed parsing, hashing, path checks, and detached values; no external package is needed. | `REUSE_AS_IS` |
+| Existing locked `ezdxf==1.4.4` / Autodesk managed references | Existing project/runtime authorities; no new import or revision in this slice | Remain behind the existing pilot/plugin owners; adopting another CAD parser or SDK would duplicate authority. | `REUSE_AS_IS` / `REJECT_NEW_USE` |
+| OpenAI/provider SDK or paid inference | Not used; no credential or provider call is part of this boundary | Provider inference is unrelated to generated provenance sealing and remains blocked/frozen. | `REJECT` |
+| New database, shadow CAD store, transport, queue, or vendor adapter | No approved revision/license or measured need | Would violate the measured-gap and anti-bloat constraints. | `REJECT` |
+
+Benchmark/verification method and result: the checked-in synthetic shaft fixture
+and a disposable Primitive IR producer fixture are built into fresh disposable
+outputs; focused generated-provenance, R3, R4, pilot, and drawing-query tests
+passed `235`; Ruff and `git diff --check` passed;
+the canonical verifier exited `0` with offline `3135 passed`, .NET `198
+passed`, and IPC `68 passed + 50 subtests`. Private-data and live AutoCAD
+acceptance are not applicable to this offline slice and remain explicitly
+`NOT RUN`/`SKIP`; no provider evidence is claimed.
+
 ### 2. Discriminated R3 upstream mode
 
 Preserve the existing Base-CAD R3 context and `component-view-registry-1.0`

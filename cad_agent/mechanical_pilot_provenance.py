@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
 
 from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.live import load_build_evidence
-from cad_agent.manifest import sha256_file
 from cad_agent.mechanical_pilot import (
     MechanicalPilotResult,
     _documents,
+    _load_primitive_document,
+    _semantic_from_primitive,
     load_pilot_definition,
 )
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
@@ -115,6 +118,31 @@ def _regular_file(value: object, code: str) -> Path:
         return path.resolve(strict=True)
     except OSError as error:
         raise GeneratedPilotProvenanceError(code) from error
+
+
+def _file_snapshot(value: object, code: str) -> tuple[Path, bytes, str]:
+    """Read one regular artifact and refuse replacement during the read."""
+    path = _regular_file(value, code)
+    try:
+        with path.open("rb") as stream:
+            descriptor_stat = os.fstat(stream.fileno())
+            data = stream.read()
+        path_stat = path.stat()
+    except OSError as error:
+        raise GeneratedPilotProvenanceError(code) from error
+    if (
+        descriptor_stat.st_dev,
+        descriptor_stat.st_ino,
+        descriptor_stat.st_size,
+        descriptor_stat.st_mtime_ns,
+    ) != (
+        path_stat.st_dev,
+        path_stat.st_ino,
+        path_stat.st_size,
+        path_stat.st_mtime_ns,
+    ):
+        _fail(code)
+    return path, data, hashlib.sha256(data).hexdigest()
 
 
 def _candidate_id(pilot_id: str, candidate_sha256: str) -> str:
@@ -245,9 +273,11 @@ def _feature_projection(
 
 
 def _validate_pilot_evidence(result: MechanicalPilotResult) -> tuple[str, str]:
-    pilot_path = _regular_file(result.pilot_evidence_path, "PILOT_EVIDENCE_INVALID")
+    _pilot_path, pilot_bytes, pilot_sha256 = _file_snapshot(
+        result.pilot_evidence_path, "PILOT_EVIDENCE_INVALID"
+    )
     try:
-        payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+        payload = json.loads(pilot_bytes.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise GeneratedPilotProvenanceError("PILOT_EVIDENCE_INVALID") from error
     if not isinstance(payload, Mapping):
@@ -265,7 +295,7 @@ def _validate_pilot_evidence(result: MechanicalPilotResult) -> tuple[str, str]:
     for key, value in expected.items():
         if payload.get(key) != value:
             _fail("PILOT_EVIDENCE_MISMATCH")
-    return str(result.pilot_id), sha256_file(pilot_path)
+    return str(result.pilot_id), pilot_sha256
 
 
 def _source_bound_primitive_document(result: MechanicalPilotResult) -> dict[str, object]:
@@ -276,8 +306,10 @@ def _source_bound_primitive_document(result: MechanicalPilotResult) -> dict[str,
     return payload
 
 
-def _validate_build_evidence(result: MechanicalPilotResult) -> str:
-    evidence_path = _regular_file(
+def _validate_build_evidence(
+    result: MechanicalPilotResult, candidate_sha256: str
+) -> str:
+    evidence_path, _evidence_bytes, evidence_sha256 = _file_snapshot(
         result.build_evidence_path, "BUILD_EVIDENCE_INVALID"
     )
     try:
@@ -295,14 +327,28 @@ def _validate_build_evidence(result: MechanicalPilotResult) -> str:
             _fail("BUILD_EVIDENCE_MISMATCH")
     if loaded.entity_count != result.build.entity_count:
         _fail("BUILD_EVIDENCE_MISMATCH")
-    return sha256_file(evidence_path)
+    _candidate_path, _candidate_bytes, loaded_candidate_sha256 = _file_snapshot(
+        result.candidate_path, "CANDIDATE_ARTIFACT_INVALID"
+    )
+    _evidence_path_after, _evidence_after, evidence_sha256_after = _file_snapshot(
+        result.build_evidence_path, "BUILD_EVIDENCE_INVALID"
+    )
+    if (
+        loaded_candidate_sha256 != candidate_sha256
+        or evidence_sha256_after != evidence_sha256
+        or _evidence_path_after != evidence_path
+    ):
+        _fail("BUILD_EVIDENCE_DRIFT")
+    return evidence_sha256
 
 
 def _validate_result_files(result: MechanicalPilotResult) -> tuple[str, str, str, str]:
-    source_path = _regular_file(result.source_path, "SOURCE_ARTIFACT_INVALID")
-    candidate_path = _regular_file(result.candidate_path, "CANDIDATE_ARTIFACT_INVALID")
-    source_sha256 = sha256_file(source_path)
-    candidate_sha256 = sha256_file(candidate_path)
+    source_path, _source_bytes, source_sha256 = _file_snapshot(
+        result.source_path, "SOURCE_ARTIFACT_INVALID"
+    )
+    candidate_path, _candidate_bytes, candidate_sha256 = _file_snapshot(
+        result.candidate_path, "CANDIDATE_ARTIFACT_INVALID"
+    )
     if source_sha256 != result.source_sha256:
         _fail("SOURCE_ARTIFACT_HASH_MISMATCH")
     if candidate_sha256 != result.candidate_sha256:
@@ -311,17 +357,35 @@ def _validate_result_files(result: MechanicalPilotResult) -> tuple[str, str, str
         result.candidate_path
     ).resolve():
         _fail("ARTIFACT_PATH_MISMATCH")
-    build_sha256 = _validate_build_evidence(result)
+    build_sha256 = _validate_build_evidence(result, candidate_sha256)
     pilot_id, pilot_sha256 = _validate_pilot_evidence(result)
     if pilot_id != result.pilot_id:
         _fail("PILOT_ID_MISMATCH")
     try:
-        definition = load_pilot_definition(source_path)
-        expected_primitive, expected_semantic, expected_bindings = _documents(
-            definition, source_sha256, source_path
-        )
+        try:
+            definition = load_pilot_definition(source_path)
+        except Exception:
+            expected_primitive, expected_source_sha256 = _load_primitive_document(
+                source_path
+            )
+            if expected_source_sha256 != source_sha256:
+                _fail("PILOT_SOURCE_BINDING_MISMATCH")
+            expected_semantic, expected_bindings = _semantic_from_primitive(
+                expected_primitive, source_path, source_sha256
+            )
+        else:
+            expected_primitive, expected_semantic, expected_bindings = _documents(
+                definition, source_sha256, source_path
+            )
     except Exception as error:
+        if isinstance(error, GeneratedPilotProvenanceError):
+            raise
         raise GeneratedPilotProvenanceError("PILOT_SOURCE_BINDING_INVALID") from error
+    _source_path_after, _source_after, source_sha256_after = _file_snapshot(
+        result.source_path, "SOURCE_ARTIFACT_INVALID"
+    )
+    if source_sha256_after != source_sha256 or _source_path_after != source_path:
+        _fail("SOURCE_ARTIFACT_DRIFT")
     if (
         canonical_json_sha256(expected_primitive.to_dict())
         != canonical_json_sha256(_source_bound_primitive_document(result))
@@ -669,9 +733,10 @@ def compose_generated_pilot_query_binding(
     registry_provenance = r3.component_view_registry_provenance_evidence(
         registry, upstream_context=context
     )
-    artifact_path = _regular_file(result.candidate_path, "CANDIDATE_ARTIFACT_INVALID")
-    artifact_bytes = artifact_path.read_bytes()
-    if sha256_file(artifact_path) != packet["candidate_sha256"]:
+    artifact_path, artifact_bytes, artifact_sha256 = _file_snapshot(
+        result.candidate_path, "CANDIDATE_ARTIFACT_INVALID"
+    )
+    if artifact_sha256 != packet["candidate_sha256"]:
         _fail("CANDIDATE_ARTIFACT_HASH_MISMATCH")
     scope = {"run_id": run_id, "project_id": project_id, "drawing_id": drawing_id}
     baseline_evidence = {
@@ -792,6 +857,7 @@ def compose_generated_pilot_query_binding(
         "baseline_context": baseline_context,
         "change_impact": change_impact,
         "mutation_evidence": mutation_evidence,
+        "expected_active_document_path": str(artifact_path),
     }
 
 
