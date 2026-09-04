@@ -554,7 +554,16 @@ class FileIPCLiveMCPClient:
                 time.sleep(self._poll)
             raise MCPTimeoutError("Timeout waiting for AutoCAD open-document list")
         finally:
-            result.unlink(missing_ok=True)
+            for attempt in range(10):
+                try:
+                    result.unlink(missing_ok=True)
+                    break
+                except PermissionError as exc:
+                    if attempt == 9:
+                        raise MCPToolError(
+                            "IPC_OPEN_DOCUMENTS_CLEANUP_FAILED"
+                        ) from exc
+                    time.sleep(self._poll)
 
     def drawing_save_as_dxf(self, path: str) -> None:
         self._dispatch("drawing-save-as-dxf", {"path": path.replace("\\", "/")})
