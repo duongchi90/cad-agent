@@ -299,6 +299,38 @@ def test_rollback_rejects_linked_canonical_destination_without_external_mutation
         assert external.read_bytes() == b"outside sentinel"
 
 
+def test_rollback_pair_preflights_destinations_before_any_write() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        backup = _backup(dxf, evidence, root / "backups")
+
+        dxf.write_bytes(b"mutated dxf")
+        evidence.write_bytes(b"mutated evidence")
+        dxf_before = dxf.read_bytes()
+        destination = evidence
+        destination.unlink()
+        external = root / "outside-build-evidence.json"
+        external.write_bytes(b"outside sentinel")
+        os.link(external, destination)
+
+        with pytest.raises(LiveSafetyError, match="destination|identity|link"):
+            _restore_canonical(
+                client=FakeMCPClient(),
+                dxf=dxf,
+                evidence_path=evidence,
+                backup=backup,
+        )
+
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == b"outside sentinel"
+        assert external.read_bytes() == b"outside sentinel"
+
+
 def test_rollback_failure_is_terminal_non_pass() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -298,51 +299,57 @@ def _sha256_open_file(handle: Any) -> str:
     return digest.hexdigest()
 
 
-def _restore_bound_file(
+def _open_restore_pair(
+    stack: ExitStack,
     source: Path,
     destination: Path,
     *,
     expected_backup_sha256: str,
-    expected_destination_sha256: str,
-) -> str:
+    destination_label: str,
+) -> tuple[Any, Any, os.stat_result, os.stat_result]:
     binary = getattr(os, "O_BINARY", 0)
     no_follow = getattr(os, "O_NOFOLLOW", 0)
-    source_fd, _ = _open_bound_file(
+    source_fd, source_stat = _open_bound_file(
         source,
         flags=os.O_RDONLY | binary | no_follow,
         label="Rollback backup source",
     )
-    destination_fd = -1
-    try:
-        with os.fdopen(source_fd, "rb") as source_handle:
-            source_fd = -1
-            source_sha256 = _sha256_open_file(source_handle)
-            if source_sha256 != expected_backup_sha256:
-                raise LiveSafetyError("Rollback backup integrity verification failed.")
+    source_handle = stack.enter_context(os.fdopen(source_fd, "rb"))
+    destination_fd, destination_stat = _open_bound_file(
+        destination,
+        flags=os.O_RDWR | binary | no_follow,
+        label=destination_label,
+    )
+    destination_handle = stack.enter_context(os.fdopen(destination_fd, "r+b"))
+    source_sha256 = _sha256_open_file(source_handle)
+    if source_sha256 != expected_backup_sha256:
+        raise LiveSafetyError("Rollback backup integrity verification failed.")
+    return source_handle, destination_handle, source_stat, destination_stat
 
-            destination_fd, destination_stat = _open_bound_file(
-                destination,
-                flags=os.O_RDWR | binary | no_follow,
-                label="Rollback destination",
-            )
-            with os.fdopen(destination_fd, "r+b") as destination_handle:
-                destination_fd = -1
-                os.ftruncate(destination_handle.fileno(), 0)
-                shutil.copyfileobj(source_handle, destination_handle)
-                destination_handle.flush()
-                os.fsync(destination_handle.fileno())
-                restored_sha256 = _sha256_open_file(destination_handle)
-                if restored_sha256 != expected_destination_sha256:
-                    raise LiveSafetyError(
-                        "Canonical rollback restoration verification failed."
-                    )
-                _assert_backup_path_identity(destination, destination_stat)
-                return restored_sha256
-    finally:
-        if source_fd >= 0:
-            os.close(source_fd)
-        if destination_fd >= 0:
-            os.close(destination_fd)
+
+def _restore_bound_file(
+    source: Path,
+    destination: Path,
+    *,
+    source_handle: Any,
+    destination_handle: Any,
+    source_stat: os.stat_result,
+    destination_stat: os.stat_result,
+    expected_destination_sha256: str,
+) -> str:
+    _assert_path_identity(source, source_stat, label="Rollback backup source")
+    _assert_path_identity(destination, destination_stat, label="Rollback destination")
+    source_handle.seek(0)
+    os.ftruncate(destination_handle.fileno(), 0)
+    shutil.copyfileobj(source_handle, destination_handle)
+    destination_handle.flush()
+    os.fsync(destination_handle.fileno())
+    restored_sha256 = _sha256_open_file(destination_handle)
+    if restored_sha256 != expected_destination_sha256:
+        raise LiveSafetyError("Canonical rollback restoration verification failed.")
+    _assert_path_identity(source, source_stat, label="Rollback backup source")
+    _assert_path_identity(destination, destination_stat, label="Rollback destination")
+    return restored_sha256
 
 
 def _restore_canonical(
@@ -367,18 +374,39 @@ def _restore_canonical(
             "canonical staged DXF is still open."
         )
 
-    dxf_sha256 = _restore_bound_file(
-        backup_dxf,
-        dxf,
-        expected_backup_sha256=backup["dxf_backup_sha256"],
-        expected_destination_sha256=backup["dxf_source_sha256"],
-    )
-    evidence_sha256 = _restore_bound_file(
-        backup_evidence,
-        evidence_path,
-        expected_backup_sha256=backup["build_evidence_backup_sha256"],
-        expected_destination_sha256=backup["build_evidence_source_sha256"],
-    )
+    with ExitStack() as stack:
+        dxf_pair = _open_restore_pair(
+            stack,
+            backup_dxf,
+            dxf,
+            expected_backup_sha256=backup["dxf_backup_sha256"],
+            destination_label="Rollback destination",
+        )
+        evidence_pair = _open_restore_pair(
+            stack,
+            backup_evidence,
+            evidence_path,
+            expected_backup_sha256=backup["build_evidence_backup_sha256"],
+            destination_label="Rollback destination",
+        )
+        dxf_sha256 = _restore_bound_file(
+            backup_dxf,
+            dxf,
+            source_handle=dxf_pair[0],
+            destination_handle=dxf_pair[1],
+            source_stat=dxf_pair[2],
+            destination_stat=dxf_pair[3],
+            expected_destination_sha256=backup["dxf_source_sha256"],
+        )
+        evidence_sha256 = _restore_bound_file(
+            backup_evidence,
+            evidence_path,
+            source_handle=evidence_pair[0],
+            destination_handle=evidence_pair[1],
+            source_stat=evidence_pair[2],
+            destination_stat=evidence_pair[3],
+            expected_destination_sha256=backup["build_evidence_source_sha256"],
+        )
 
     client.drawing_open(str(dxf))
     open_paths = {
