@@ -114,33 +114,63 @@ def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Pa
     raise LiveSafetyError("Could not allocate a unique backup path.")
 
 
+def _cleanup_backup_artifacts(paths: tuple[Path, Path]) -> None:
+    cleanup_failures: list[Path] = []
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            cleanup_failures.append(path)
+    survivors = [
+        path for path in paths if path.exists() or path.is_symlink()
+    ]
+    if cleanup_failures or survivors:
+        raise LiveSafetyError(
+            "Backup acquisition cleanup failed; zero owned survivors cannot be proven."
+        )
+
+
 def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, Any]:
     dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
-    dxf_source_before = sha256_file(dxf)
-    evidence_source_before = sha256_file(evidence)
-    shutil.copy2(dxf, dxf_backup)
-    shutil.copy2(evidence, evidence_backup)
-    dxf_source_after = sha256_file(dxf)
-    evidence_source_after = sha256_file(evidence)
-    dxf_backup_hash = sha256_file(dxf_backup)
-    evidence_backup_hash = sha256_file(evidence_backup)
-    verified = (
-        dxf_source_before == dxf_source_after == dxf_backup_hash
-        and evidence_source_before == evidence_source_after == evidence_backup_hash
-    )
-    if not verified:
-        raise LiveSafetyError(
-            "Production backup verification failed; repair is refused before mutation."
+    backup_paths = (dxf_backup, evidence_backup)
+    try:
+        dxf_source_before = sha256_file(dxf)
+        evidence_source_before = sha256_file(evidence)
+        shutil.copy2(dxf, dxf_backup)
+        shutil.copy2(evidence, evidence_backup)
+        dxf_source_after = sha256_file(dxf)
+        evidence_source_after = sha256_file(evidence)
+        dxf_backup_hash = sha256_file(dxf_backup)
+        evidence_backup_hash = sha256_file(evidence_backup)
+        verified = (
+            dxf_source_before == dxf_source_after == dxf_backup_hash
+            and evidence_source_before == evidence_source_after == evidence_backup_hash
         )
-    return {
-        "dxf_path": str(dxf_backup),
-        "dxf_source_sha256": dxf_source_before,
-        "dxf_backup_sha256": dxf_backup_hash,
-        "build_evidence_path": str(evidence_backup),
-        "build_evidence_source_sha256": evidence_source_before,
-        "build_evidence_backup_sha256": evidence_backup_hash,
-        "verified": True,
-    }
+        if not verified:
+            raise LiveSafetyError(
+                "Production backup verification failed; repair is refused before mutation."
+            )
+        return {
+            "dxf_path": str(dxf_backup),
+            "dxf_source_sha256": dxf_source_before,
+            "dxf_backup_sha256": dxf_backup_hash,
+            "build_evidence_path": str(evidence_backup),
+            "build_evidence_source_sha256": evidence_source_before,
+            "build_evidence_backup_sha256": evidence_backup_hash,
+            "verified": True,
+        }
+    except Exception as exc:
+        try:
+            _cleanup_backup_artifacts(backup_paths)
+        except LiveSafetyError as cleanup_exc:
+            raise LiveSafetyError(
+                "backup acquisition failed; cleanup could not prove zero survivors."
+            ) from cleanup_exc
+        if isinstance(exc, LiveSafetyError):
+            raise exc
+        raise LiveSafetyError(
+            "backup acquisition failed; zero owned survivors were proven."
+        ) from exc
 
 
 def _restore_canonical(
@@ -262,5 +292,7 @@ def repair_live(
         )
         report["rollback_state"] = "failed_canonical_restored"
     except Exception as exc:  # pragma: no cover - exercised by live transport failures
-        report["rollback_state"] = f"rollback_failed: {exc}"
+        raise LiveSafetyError(
+            "rollback failed; unrecoverable recovery is terminal and non-pass."
+        ) from exc
     return report

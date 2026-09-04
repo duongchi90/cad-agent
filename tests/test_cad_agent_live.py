@@ -10,6 +10,7 @@ import pytest
 
 from cad_agent.live import (
     LiveSafetyError,
+    _backup,
     load_build_evidence,
     repair_live,
     write_build_evidence,
@@ -62,6 +63,33 @@ def test_repair_requires_approval_before_backup_or_mutation() -> None:
             repair_live(_build(dxf), _mismatched_client(), dxf, evidence, root / "backups", "")
 
         assert not (root / "backups").exists()
+
+
+def test_backup_acquisition_failure_removes_partial_owned_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+        original_copy2 = shutil.copy2
+        copy_count = 0
+
+        def fail_second_copy(source, destination):  # type: ignore[no-untyped-def]
+            nonlocal copy_count
+            copy_count += 1
+            if copy_count == 2:
+                raise OSError("injected evidence backup failure")
+            return original_copy2(source, destination)
+
+        monkeypatch.setattr("cad_agent.live.shutil.copy2", fail_second_copy)
+
+        with pytest.raises(LiveSafetyError, match="backup|cleanup"):
+            _backup(dxf, evidence, root / "backups")
+
+        assert list((root / "backups").iterdir()) == []
 
 
 def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
@@ -166,7 +194,7 @@ def test_failed_second_review_restores_canonical_dxf_and_build_evidence(
         assert load_build_evidence(evidence, dxf).output_path == str(dxf)
 
 
-def test_rollback_is_not_complete_while_failed_original_remains_open() -> None:
+def test_rollback_failure_is_terminal_non_pass() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         dxf = root / "staged.dxf"
@@ -182,17 +210,15 @@ def test_rollback_is_not_complete_while_failed_original_remains_open() -> None:
             {"start": (0.0, 0.0), "end": (99.0, 0.0)},
         )
 
-        report = repair_live(
-            build,
-            client,
-            dxf,
-            evidence,
-            root / "backups",
-            "change-42",
-        )
-
-        assert report["save_state"] == "not_saved"
-        assert report["rollback_state"].startswith("rollback_failed:")
+        with pytest.raises(LiveSafetyError, match="rollback|recovery"):
+            repair_live(
+                build,
+                client,
+                dxf,
+                evidence,
+                root / "backups",
+                "change-42",
+            )
 
 
 def test_corrupt_backup_aborts_before_repair(
@@ -224,3 +250,4 @@ def test_corrupt_backup_aborts_before_repair(
 
         assert "A" in client._entities
         assert len(client._entities) == 1
+        assert list((root / "backups").iterdir()) == []
