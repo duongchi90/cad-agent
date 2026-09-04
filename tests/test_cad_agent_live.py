@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
+from cad_agent import live as live_module
 from cad_agent.live import (
     LiveSafetyError,
     _backup,
@@ -74,22 +75,95 @@ def test_backup_acquisition_failure_removes_partial_owned_artifacts(
         dxf.write_bytes(b"staged dxf")
         evidence = root / "build-evidence.json"
         write_build_evidence(evidence, _build(dxf))
-        original_copy2 = shutil.copy2
+        original_copy = live_module._copy_to_exclusive_backup
         copy_count = 0
 
-        def fail_second_copy(source, destination):  # type: ignore[no-untyped-def]
+        def fail_second_copy(
+            source, destination, owned_paths
+        ):  # type: ignore[no-untyped-def]
             nonlocal copy_count
             copy_count += 1
             if copy_count == 2:
                 raise OSError("injected evidence backup failure")
-            return original_copy2(source, destination)
+            return original_copy(source, destination, owned_paths)
 
-        monkeypatch.setattr("cad_agent.live.shutil.copy2", fail_second_copy)
+        monkeypatch.setattr(
+            "cad_agent.live._copy_to_exclusive_backup", fail_second_copy
+        )
 
         with pytest.raises(LiveSafetyError, match="backup|cleanup"):
             _backup(dxf, evidence, root / "backups")
 
         assert list((root / "backups").iterdir()) == []
+
+
+def test_backup_rejects_raced_linked_destination_without_external_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        backups = root / "backups"
+        backups.mkdir()
+        external = root / "outside.bin"
+        external.write_bytes(b"outside sentinel")
+        linked_destination = backups / "staged.raced.dxf"
+        os.link(external, linked_destination)
+        evidence_destination = backups / "evidence.raced.json"
+
+        monkeypatch.setattr(
+            "cad_agent.live._backup_paths",
+            lambda *_args: (linked_destination, evidence_destination),
+        )
+
+        with pytest.raises(LiveSafetyError, match="backup|destination|regular|zero"):
+            _backup(dxf, evidence, backups)
+
+        assert external.read_bytes() == b"outside sentinel"
+        assert linked_destination.exists()
+
+
+def test_backup_cleanup_does_not_unlink_replaced_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        backups = root / "backups"
+        backups.mkdir()
+        external = root / "outside.bin"
+        external.write_bytes(b"outside sentinel")
+        dxf_destination = backups / "staged.raced.dxf"
+        evidence_destination = backups / "evidence.raced.json"
+        monkeypatch.setattr(
+            "cad_agent.live._backup_paths",
+            lambda *_args: (dxf_destination, evidence_destination),
+        )
+        original_assert = live_module._assert_backup_path_identity
+
+        def replace_then_reject(path, opened_stat):  # type: ignore[no-untyped-def]
+            if path == dxf_destination:
+                path.unlink()
+                os.link(external, path)
+            original_assert(path, opened_stat)
+
+        monkeypatch.setattr(
+            "cad_agent.live._assert_backup_path_identity", replace_then_reject
+        )
+
+        with pytest.raises(LiveSafetyError, match="cleanup|survivors"):
+            _backup(dxf, evidence, backups)
+
+        assert external.read_bytes() == b"outside sentinel"
+        assert dxf_destination.exists()
 
 
 def test_repair_creates_backup_saves_only_after_second_review_passes() -> None:
@@ -232,18 +306,20 @@ def test_corrupt_backup_aborts_before_repair(
         build = _build(dxf)
         write_build_evidence(evidence, build)
         client = _mismatched_client()
-        original_copy2 = shutil.copy2
-        copy_count = 0
+        original_copyfileobj = live_module.shutil.copyfileobj
 
-        def corrupting_copy(source, destination):  # type: ignore[no-untyped-def]
-            nonlocal copy_count
-            result = original_copy2(source, destination)
-            copy_count += 1
-            if copy_count == 1:
-                Path(destination).write_bytes(b"corrupt")
+        def corrupting_copyfileobj(
+            source, destination, *args, **kwargs
+        ):  # type: ignore[no-untyped-def]
+            result = original_copyfileobj(source, destination, *args, **kwargs)
+            destination.seek(0)
+            destination.write(b"corrupt")
+            destination.flush()
             return result
 
-        monkeypatch.setattr("cad_agent.live.shutil.copy2", corrupting_copy)
+        monkeypatch.setattr(
+            "cad_agent.live.shutil.copyfileobj", corrupting_copyfileobj
+        )
 
         with pytest.raises(LiveSafetyError, match="backup verification"):
             repair_live(build, client, dxf, evidence, root / "backups", "change-42")
