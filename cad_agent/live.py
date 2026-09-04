@@ -74,10 +74,11 @@ def write_build_evidence(path: Path, build: BuildResult) -> None:
         "dxf": {"name": dxf.name, "sha256": sha256_file(dxf)},
         "build_result": _build_result_dict(build),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_json_artifact(
+        path,
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        label="Build evidence",
+    )
 
 
 def load_build_evidence(path: Path, dxf: Path) -> BuildResult:
@@ -102,10 +103,11 @@ def review_dict(review: LiveReviewResult) -> dict[str, Any]:
 
 
 def write_live_report(path: Path, report: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_json_artifact(
+        path,
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+        label="Live report",
+    )
 
 
 def _is_directory_non_reparse(stat_result: os.stat_result) -> bool:
@@ -202,6 +204,110 @@ def _assert_backup_directory_identity(
         ):
             raise LiveSafetyError("Backup directory chain identity changed.")
     return current
+
+
+def _capture_output_destination(
+    path: Path, *, label: str
+) -> os.stat_result | None:
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise LiveSafetyError(f"{label} destination identity could not be verified.") from exc
+    if not _is_single_link_regular_non_reparse(path_stat):
+        raise LiveSafetyError(
+            f"{label} destination must be a single-link regular non-reparse file."
+        )
+    return path_stat
+
+
+def _assert_output_destination_identity(
+    path: Path,
+    expected: os.stat_result | None,
+    *,
+    label: str,
+) -> None:
+    current = _capture_output_destination(path, label=label)
+    if expected is None:
+        if current is not None:
+            raise LiveSafetyError(f"{label} destination appeared during the write.")
+        return
+    if current is None or not os.path.samestat(expected, current):
+        raise LiveSafetyError(f"{label} destination identity changed during the write.")
+
+
+def _write_json_artifact(path: Path, text: str, *, label: str) -> None:
+    if not path.is_absolute():
+        raise LiveSafetyError(f"{label} path must be absolute.")
+    parent_identity = _prepare_backup_directory(path.parent)
+    destination_before = _capture_output_destination(path, label=label)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    owned_temp_stat: os.stat_result | None = None
+    payload = text.encode("utf-8")
+    try:
+        _assert_backup_directory_identity(path.parent, parent_identity)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(temporary, flags, 0o600)
+        except OSError as exc:
+            raise LiveSafetyError(f"{label} temporary destination is not safely available.") from exc
+        try:
+            owned_temp_stat = os.fstat(descriptor)
+            if not _is_single_link_regular_non_reparse(owned_temp_stat):
+                raise LiveSafetyError(f"{label} temporary destination is not a regular file.")
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+        _assert_backup_directory_identity(path.parent, parent_identity)
+        _assert_path_identity(temporary, owned_temp_stat, label=f"{label} temporary")
+        _assert_output_destination_identity(
+            path, destination_before, label=label
+        )
+        os.replace(temporary, path)
+        _assert_backup_directory_identity(path.parent, parent_identity)
+        destination_after = _capture_output_destination(path, label=label)
+        if destination_after is None or not os.path.samestat(
+            owned_temp_stat, destination_after
+        ):
+            raise LiveSafetyError(f"{label} destination identity was not preserved.")
+
+        read_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            read_flags |= os.O_NOFOLLOW
+        read_descriptor, opened_stat = _open_bound_file(
+            path, flags=read_flags, label=f"{label} destination"
+        )
+        with os.fdopen(read_descriptor, "rb") as stream:
+            persisted = stream.read()
+        if not os.path.samestat(owned_temp_stat, opened_stat):
+            raise LiveSafetyError(f"{label} destination identity changed after publish.")
+        if persisted != payload or hashlib.sha256(persisted).hexdigest() != hashlib.sha256(payload).hexdigest():
+            raise LiveSafetyError(f"{label} persisted bytes could not be verified.")
+        _assert_backup_directory_identity(path.parent, parent_identity)
+    except Exception as exc:
+        if owned_temp_stat is not None:
+            try:
+                _cleanup_backup_artifacts(
+                    (temporary, temporary),
+                    {temporary: owned_temp_stat},
+                    directory_identity=parent_identity,
+                )
+            except LiveSafetyError as cleanup_exc:
+                raise LiveSafetyError(
+                    f"{label} cleanup could not prove zero temporary survivors."
+                ) from cleanup_exc
+        if isinstance(exc, LiveSafetyError):
+            raise
+        raise LiveSafetyError(f"{label} write failed.") from exc
 
 
 def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Path]:

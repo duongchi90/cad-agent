@@ -169,6 +169,76 @@ def test_backup_cleanup_refuses_reparse_parent_substitution(
         assert list(outside.iterdir()) == []
 
 
+def test_write_build_evidence_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "evidence-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(LiveSafetyError, match="evidence|directory|reparse|symlink|identity"):
+            write_build_evidence(linked_parent / "build-evidence.json", _build(dxf))
+
+        assert list(outside.iterdir()) == []
+
+
+def test_write_live_report_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "report-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(LiveSafetyError, match="report|directory|reparse|symlink|identity"):
+            live_module.write_live_report(linked_parent / "live-report.json", {"state": "candidate"})
+
+        assert list(outside.iterdir()) == []
+
+
+def test_write_live_report_rejects_linked_destination_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        outside = root / "outside.json"
+        outside.write_text("outside", encoding="utf-8")
+        destination = root / "live-report.json"
+        destination.symlink_to(outside)
+
+        with pytest.raises(LiveSafetyError, match="report|destination|regular|identity"):
+            live_module.write_live_report(destination, {"state": "candidate"})
+
+        assert outside.read_text(encoding="utf-8") == "outside"
+        assert destination.is_symlink()
+
+
+def test_write_live_report_rejects_destination_substitution_after_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        outside = root / "outside.json"
+        outside.write_text("outside", encoding="utf-8")
+        destination = root / "live-report.json"
+        destination.write_text("original", encoding="utf-8")
+        original_replace = live_module.os.replace
+
+        def replace_then_substitute(source, target):  # type: ignore[no-untyped-def]
+            original_replace(source, target)
+            target.unlink()
+            target.symlink_to(outside)
+
+        monkeypatch.setattr(live_module.os, "replace", replace_then_substitute)
+
+        with pytest.raises(LiveSafetyError, match="report|destination|identity|cleanup"):
+            live_module.write_live_report(destination, {"state": "candidate"})
+
+        assert outside.read_text(encoding="utf-8") == "outside"
+        assert destination.is_symlink()
+
+
 def test_backup_rejects_raced_linked_destination_without_external_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
