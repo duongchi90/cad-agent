@@ -219,10 +219,16 @@ def _cleanup_backup_artifacts(
         )
 
 
-def _backup(dxf: Path, evidence: Path, backup_dir: Path) -> dict[str, Any]:
+def _backup(
+    dxf: Path,
+    evidence: Path,
+    backup_dir: Path,
+    *,
+    owned_paths: dict[Path, os.stat_result | None] | None = None,
+) -> dict[str, Any]:
     dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
     backup_paths = (dxf_backup, evidence_backup)
-    owned_paths: dict[Path, os.stat_result | None] = {}
+    owned_paths = {} if owned_paths is None else owned_paths
     try:
         dxf_source_before = sha256_file(dxf)
         evidence_source_before = sha256_file(evidence)
@@ -558,7 +564,13 @@ def repair_live(
     if before.passed:
         return report
 
-    backup = _backup(dxf, evidence_path, backup_dir)
+    owned_backup_paths: dict[Path, os.stat_result | None] = {}
+    backup = _backup(
+        dxf,
+        evidence_path,
+        backup_dir,
+        owned_paths=owned_backup_paths,
+    )
     report["backup"] = backup
     repaired = repair_dxf_live(build, before.mismatches, client)
     report["repair"] = asdict(repaired)
@@ -570,9 +582,23 @@ def repair_live(
         write_build_evidence(evidence_path, build)
         report["dxf_sha256_after"] = sha256_file(dxf)
         report["save_state"] = "saved"
-        report["post_save_attestation"] = _attest_saved_candidate(
+        post_save_attestation = _attest_saved_candidate(
             build, client, dxf, evidence_path
         )
+        try:
+            _cleanup_backup_artifacts(
+                (
+                    Path(backup["dxf_path"]),
+                    Path(backup["build_evidence_path"]),
+                ),
+                owned_backup_paths,
+            )
+        except Exception as exc:
+            raise LiveSafetyError(
+                "post-save backup cleanup failed; unrecoverable recovery is terminal and non-pass."
+            ) from exc
+        report["post_save_attestation"] = post_save_attestation
+        report["backup_cleanup"] = {"zero_survivors": True}
         return report
 
     try:
