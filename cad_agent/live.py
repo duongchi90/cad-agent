@@ -23,6 +23,7 @@ from .manifest import sha256_file
 
 BUILD_EVIDENCE_SCHEMA_VERSION = "1.0"
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+BackupDirectoryIdentity = tuple[tuple[Path, os.stat_result], ...]
 
 
 class LiveSafetyError(ValueError):
@@ -107,8 +108,104 @@ def write_live_report(path: Path, report: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _is_directory_non_reparse(stat_result: os.stat_result) -> bool:
+    return stat.S_ISDIR(stat_result.st_mode) and not bool(
+        getattr(stat_result, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def _backup_directory_components(backup_dir: Path) -> tuple[Path, ...]:
+    if not backup_dir.is_absolute():
+        raise LiveSafetyError("Backup directory must be an absolute path.")
+    components: list[Path] = []
+    current = backup_dir
+    while True:
+        components.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return tuple(reversed(components))
+
+
+def _stat_backup_directory_component(path: Path) -> os.stat_result | None:
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise LiveSafetyError(
+            "Backup directory identity could not be verified."
+        ) from exc
+    if not _is_directory_non_reparse(path_stat):
+        raise LiveSafetyError(
+            "Backup directory must remain a regular non-reparse directory chain."
+        )
+    return path_stat
+
+
+def _capture_backup_directory_identity(backup_dir: Path) -> BackupDirectoryIdentity:
+    components = _backup_directory_components(backup_dir)
+    identity: list[tuple[Path, os.stat_result]] = []
+    for component in components:
+        path_stat = _stat_backup_directory_component(component)
+        if path_stat is None:
+            raise LiveSafetyError("Backup directory chain is incomplete.")
+        identity.append((component, path_stat))
+    return tuple(identity)
+
+
+def _prepare_backup_directory(backup_dir: Path) -> BackupDirectoryIdentity:
+    components = _backup_directory_components(backup_dir)
+    first_missing: int | None = None
+    identity: list[tuple[Path, os.stat_result]] = []
+    for index, component in enumerate(components):
+        path_stat = _stat_backup_directory_component(component)
+        if path_stat is None:
+            first_missing = index
+            break
+        identity.append((component, path_stat))
+
+    if first_missing is not None:
+        for component in components[first_missing:]:
+            if identity:
+                _assert_backup_directory_identity(identity[-1][0], tuple(identity))
+            try:
+                component.mkdir()
+            except FileExistsError as exc:
+                raise LiveSafetyError(
+                    "Backup directory changed while creating its identity-safe chain."
+                ) from exc
+            except OSError as exc:
+                raise LiveSafetyError(
+                    "Backup directory could not be created safely."
+                ) from exc
+            component_stat = _stat_backup_directory_component(component)
+            if component_stat is None:
+                raise LiveSafetyError("Backup directory disappeared while creating it.")
+            identity.append((component, component_stat))
+
+    return _capture_backup_directory_identity(backup_dir)
+
+
+def _assert_backup_directory_identity(
+    backup_dir: Path, expected: BackupDirectoryIdentity | None = None
+) -> BackupDirectoryIdentity:
+    current = _capture_backup_directory_identity(backup_dir)
+    if expected is not None:
+        if len(current) != len(expected) or any(
+            current_path != expected_path
+            or not os.path.samestat(current_stat, expected_stat)
+            for (current_path, current_stat), (expected_path, expected_stat) in zip(
+                current, expected
+            )
+        ):
+            raise LiveSafetyError("Backup directory chain identity changed.")
+    return current
+
+
 def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Path]:
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_backup_directory(backup_dir)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     for suffix in range(1000):
         label = stamp if suffix == 0 else f"{stamp}-{suffix:03d}"
@@ -189,25 +286,37 @@ def _copy_to_exclusive_backup(
 
 
 def _cleanup_backup_artifacts(
-    paths: tuple[Path, Path], owned_paths: dict[Path, os.stat_result | None]
+    paths: tuple[Path, Path],
+    owned_paths: dict[Path, os.stat_result | None],
+    *,
+    directory_identity: BackupDirectoryIdentity | None = None,
 ) -> None:
     cleanup_failures: list[Path] = []
-    for path, opened_stat in owned_paths.items():
-        if opened_stat is None:
-            cleanup_failures.append(path)
-            continue
+    directory_safe = True
+    if directory_identity is not None:
         try:
-            path_stat = os.stat(path, follow_symlinks=False)
-            if not _is_regular_non_reparse(path_stat) or not os.path.samestat(
-                opened_stat, path_stat
-            ):
+            _assert_backup_directory_identity(paths[0].parent, directory_identity)
+        except LiveSafetyError:
+            directory_safe = False
+            cleanup_failures.extend(owned_paths)
+
+    if directory_safe:
+        for path, opened_stat in owned_paths.items():
+            if opened_stat is None:
                 cleanup_failures.append(path)
                 continue
-            path.unlink(missing_ok=True)
-        except FileNotFoundError:
-            continue
-        except OSError:
-            cleanup_failures.append(path)
+            try:
+                path_stat = os.stat(path, follow_symlinks=False)
+                if not _is_regular_non_reparse(path_stat) or not os.path.samestat(
+                    opened_stat, path_stat
+                ):
+                    cleanup_failures.append(path)
+                    continue
+                path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                cleanup_failures.append(path)
     survivors = [
         path
         for path in owned_paths
@@ -225,17 +334,25 @@ def _backup(
     backup_dir: Path,
     *,
     owned_paths: dict[Path, os.stat_result | None] | None = None,
+    directory_identity_out: list[tuple[Path, os.stat_result]] | None = None,
 ) -> dict[str, Any]:
+    directory_identity = _prepare_backup_directory(backup_dir)
     dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
     backup_paths = (dxf_backup, evidence_backup)
     owned_paths = {} if owned_paths is None else owned_paths
+    _assert_backup_directory_identity(backup_dir, directory_identity)
+    if directory_identity_out is not None:
+        directory_identity_out.extend(directory_identity)
     try:
         dxf_source_before = sha256_file(dxf)
         evidence_source_before = sha256_file(evidence)
+        _assert_backup_directory_identity(backup_dir, directory_identity)
         dxf_backup_hash = _copy_to_exclusive_backup(dxf, dxf_backup, owned_paths)
+        _assert_backup_directory_identity(backup_dir, directory_identity)
         evidence_backup_hash = _copy_to_exclusive_backup(
             evidence, evidence_backup, owned_paths
         )
+        _assert_backup_directory_identity(backup_dir, directory_identity)
         dxf_source_after = sha256_file(dxf)
         evidence_source_after = sha256_file(evidence)
         verified = (
@@ -257,7 +374,11 @@ def _backup(
         }
     except Exception as exc:
         try:
-            _cleanup_backup_artifacts(backup_paths, owned_paths)
+            _cleanup_backup_artifacts(
+                backup_paths,
+                owned_paths,
+                directory_identity=directory_identity,
+            )
         except LiveSafetyError as cleanup_exc:
             raise LiveSafetyError(
                 "backup acquisition failed; cleanup could not prove zero survivors."
@@ -565,11 +686,13 @@ def repair_live(
         return report
 
     owned_backup_paths: dict[Path, os.stat_result | None] = {}
+    backup_directory_identity: list[tuple[Path, os.stat_result]] = []
     backup = _backup(
         dxf,
         evidence_path,
         backup_dir,
         owned_paths=owned_backup_paths,
+        directory_identity_out=backup_directory_identity,
     )
     report["backup"] = backup
     repaired = repair_dxf_live(build, before.mismatches, client)
@@ -592,6 +715,7 @@ def repair_live(
                     Path(backup["build_evidence_path"]),
                 ),
                 owned_backup_paths,
+                directory_identity=tuple(backup_directory_identity),
             )
         except Exception as exc:
             raise LiveSafetyError(

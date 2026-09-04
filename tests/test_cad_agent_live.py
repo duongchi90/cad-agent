@@ -108,6 +108,67 @@ def test_backup_acquisition_failure_removes_partial_owned_artifacts(
         assert list((root / "backups").iterdir()) == []
 
 
+def test_backup_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "backup-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+        backup_dir = linked_parent / "nested"
+
+        with pytest.raises(LiveSafetyError, match="backup|reparse|symlink|identity"):
+            _backup(dxf, evidence, backup_dir)
+
+        assert list(outside.iterdir()) == []
+
+
+def test_backup_cleanup_refuses_reparse_parent_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        backups = root / "backups"
+        backups.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        original_copy = live_module._copy_to_exclusive_backup
+        copy_count = 0
+
+        def replace_parent_after_first_copy(
+            source, destination, owned_paths
+        ):  # type: ignore[no-untyped-def]
+            nonlocal copy_count
+            copy_count += 1
+            result = original_copy(source, destination, owned_paths)
+            if copy_count == 1:
+                destination.unlink()
+                backups.rmdir()
+                backups.symlink_to(outside, target_is_directory=True)
+            return result
+
+        monkeypatch.setattr(
+            "cad_agent.live._copy_to_exclusive_backup",
+            replace_parent_after_first_copy,
+        )
+
+        with pytest.raises(LiveSafetyError, match="backup|cleanup|identity|survivors"):
+            _backup(dxf, evidence, backups)
+
+        assert backups.is_symlink()
+        assert list(outside.iterdir()) == []
+
+
 def test_backup_rejects_raced_linked_destination_without_external_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
