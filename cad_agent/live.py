@@ -495,6 +495,10 @@ def _attest_saved_candidate(
         raise LiveSafetyError(
             "POST_SAVE_REVIEW_FAILED: persisted candidate did not pass fresh live review."
         )
+    if persisted_review.geometry_degraded:
+        raise LiveSafetyError(
+            "POST_SAVE_REVIEW_DEGRADED: persisted candidate geometry was not freshly revalidated."
+        )
     return {
         "closed_without_save": True,
         "reopened": True,
