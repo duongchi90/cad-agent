@@ -16,56 +16,54 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-## Current canonical snapshot (2026-09-04)
+## Current canonical snapshot (2026-09-05)
 
-- Canonical GitHub main at this snapshot is 701feb18ed5c014049d6ce1fa6d9e1d73aa93824,
-  the merge commit for docs PR #394. Its runtime state includes the
-  provider-independent M4
-  repairs merged through PR #393: PR #388 (fail-closed candidate close),
-  PR #389 (geometry-degraded post-save false-PASS), PR #390 (exact canonical
-  post-save document identity), and PR #393 (successful-repair backup
-  zero-survivor cleanup). PR #388, #389, #390, and #393 are merged; their
-  exact write-sets remain limited to existing live owners and focused tests.
-- PR #393 closes the measured `SUCCESS_PATH_BACKUP_ZERO_SURVIVOR_CLEANUP`
-  boundary in the existing `cad_agent.live` owner. After verified post-save
-  attestation, only the two attempt-owned backup artifacts are deleted and
-  zero owned survivors are required; unrelated backup-directory files are
-  preserved, and cleanup uncertainty is terminal non-pass. Its exact
-  write-set is `cad_agent/live.py` and `tests/test_cad_agent_live.py`.
-  Exact-head hosted checks passed; current-main verification on the merged
-  head exited 0 with .NET 198/198, offline 3156 passed with 18 deselected
-  and 72 subtests, and the intentional causal negative oracle retained one
-  failure.
-- Phase 1A deterministic provenance and bounded-query contracts are verified
-  offline; the fresh focused recheck passed 231 tests. This does not promote
-  live AutoCAD/FileIPC query evidence to PASS.
-- The latest current-main live boundary attempt was NON_PASS before a new
-  candidate was created. AutoCAD PID 3940 and HWND 0x380606 were responding
-  and foreground-matched, but the main window was disabled by a visible
-  `Security - Unsigned Executable File` modal (HWND 0x960a78). The existing
-  dispatcher readiness request 64e3f95b3768 and a separate read-only
-  open-document observation produced no terminal result. No candidate was
-  created, no mutation/save/retry occurred, and the new IPC root had zero
-  owned survivors. A known prior disposable candidate remains open because
-  the modal prevents safe dispatcher/close confirmation.
+- Canonical GitHub main at this snapshot is
+  `dd907d953dc7cc521997d1855a47cbfdea719f18`, the merge commit for docs PR
+  #395. Its runtime state includes the provider-independent hardening merged
+  through PR #393 and the current live-boundary documentation refresh.
+- Relevant provider-independent PRs remain open and must not be described as
+  merged: PR #396 is DRAFT at `1c91d8a514220600cc373dd063a4452f5d765605`,
+  PR #397 is DRAFT at `d274d534700cef1140f54ae1bdea59f045404b48`, and PR #398
+  is READY at `e6804ae1b9a610d77fb26c508ad56050001a8004`. Their exact-head
+  hosted checks are green where recorded, but the required independent review
+  gates remain unresolved.
+- Phase 1A deterministic provenance/bounded-query, Phase 2 skill discovery,
+  the synthetic Mechanical pilot, and the Phase 4 PDF-to-pilot binding remain
+  offline-verified. A fresh focused current-main recheck passed `159` tests.
+  This does not promote live AutoCAD/FileIPC query evidence to PASS.
+- A current-main bootstrap-only ping previously returned a claim-bound
+  terminal `{ "ready": true }` result using the canonical dispatcher. A later
+  single disposable Phase 4 native-edit/save/close/reopen epoch on the same
+  AutoCAD session failed before drawing-open completion: request
+  `4523c8bbc4f0` did not produce a dispatcher readiness result within 20
+  seconds. AutoCAD PID `3996`, HWND `0x1405C4`, and foreground equality were
+  valid before and after. No mutation or save occurred.
+- The failed epoch's disposable candidate and source both retained SHA-256
+  `141616d99bcdaf59a4b65662222aed187fe1527f750ed4545c287783e8dbfa71`.
+  The candidate was subsequently closed without save through the existing
+  command-boundary owner, AutoCAD returned to `Drawing1.dwg`, and the owned
+  IPC root had zero survivors. No source/customer/accepted drawing was
+  touched. This is NON_PASS evidence, not native edit/save/reopen PASS.
 - FIRST_UNSATISFIED_BOUNDARY is
-  LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE, classified as an
-  environment precondition and owned by the existing FileIPCLiveMCPClient
-  plus canonical AutoLISP dispatcher. The next oracle is one fresh
-  disposable close-only epoch after the exact security dialog is resolved;
-  it must produce a claim-bound terminal result, authoritative no-save close,
-  candidate/source integrity, and zero owned IPC survivors. Timeout,
-  enqueue-only, cleanup-only, SKIP, and NOT RUN remain NON_PASS.
+  `LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE`, classified as an
+  environment/runtime precondition and owned by the existing
+  `FileIPCLiveMCPClient` plus canonical AutoLISP dispatcher. No blind retry is
+  justified. The next oracle is one future fresh disposable exact-bound epoch
+  with a claim-bound terminal result, exact document identity, candidate/source
+  integrity, and zero owned IPC survivors.
+- A fresh authoritative verifier using the supported external Python 3.11
+  environment passed the offline gate with `3156` passed, `18` deselected,
+  `72` subtests, and `.NET IPC` `118` passed. The intentional causal RED has
+  one expected failure; private data has two skips; the AutoCAD .NET gate was
+  explicitly `NOT RUN`. Worktrees remained clean.
 - M3 real-provider acceptance remains
-  BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED. PR #340 is OPEN/DRAFT/FROZEN at head
-  714620001e8dbc1c49adbb13b9af4d5821eb6a7d; no provider call, billing action,
+  `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`. PR #340 is OPEN/DRAFT/FROZEN at head
+  `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`; no provider call, billing action,
   credential use, PR #340/#337 mutation, or M2 retest is included here.
-- Source, customer, and accepted drawings remain protected. All live work used
-  disposable candidates only; no production CAD mutation or save was run.
-- Comments 5542716100, 5542869128, and 5543014396 on #343 record the current
-  live precondition, the measured backup-cleanup advisory, and its closed
-  successor evidence. Older sections below are retained historical evidence
-  and do not override this snapshot.
+- Comments `5549694504` on #343 and `5549698861` on #377 record the latest
+  live NON_PASS and current provider-independent verification. Older sections
+  below remain historical evidence and do not override this snapshot.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 
