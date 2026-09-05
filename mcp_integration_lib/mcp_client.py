@@ -291,6 +291,14 @@ class FileIPCLiveMCPClient:
         self._command_trigger = command_trigger
         self._start_tab_no_document_probe = start_tab_no_document_probe
         self._active_drawing_path: Optional[str] = None
+        self._last_exchange_evidence: Optional[Dict[str, Any]] = None
+
+    @property
+    def last_exchange_evidence(self) -> Optional[Dict[str, Any]]:
+        """Return privacy-safe evidence for the latest validated exchange."""
+        if self._last_exchange_evidence is None:
+            return None
+        return dict(self._last_exchange_evidence)
 
     def _assert_root_unchanged(self) -> None:
         try:
@@ -304,6 +312,9 @@ class FileIPCLiveMCPClient:
             raise MCPToolError("IPC_ROOT_CHANGED") from exc
 
     def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        # Evidence is scoped to the current exchange.  Never let a prior
+        # terminal success describe a later failed or incomplete request.
+        self._last_exchange_evidence = None
         if command not in _FILE_IPC_ALLOWED_COMMANDS:
             raise MCPToolError("IPC_COMMAND_UNSUPPORTED")
         self._assert_root_unchanged()
@@ -385,7 +396,15 @@ class FileIPCLiveMCPClient:
                         raw_result,
                         error_code="IPC_RESULT_INVALID",
                     )
-                    return _validate_file_ipc_result(data, request_id, claim)
+                    payload = _validate_file_ipc_result(data, request_id, claim)
+                    self._last_exchange_evidence = {
+                        "request_id": request_id,
+                        "command": command,
+                        "claim_bound": claim is not None,
+                        "terminal": True,
+                        "ok": True,
+                    }
+                    return payload
                 time.sleep(self._poll)
             raise MCPTimeoutError(f"Timeout waiting for result (request_id={request_id})")
         finally:
@@ -496,23 +515,62 @@ class FileIPCLiveMCPClient:
     def drawing_save(self, path: Optional[str] = None) -> None:
         self._dispatch("drawing-save", {"path": path} if path else {})
 
+    def _assert_active_document_matches(self, expected_path: Optional[str]) -> str:
+        if expected_path is None:
+            raise MCPToolError("DRAWING_CLOSE_TARGET_UNBOUND")
+        variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
+        prefix = variables.get("DWGPREFIX")
+        name = variables.get("DWGNAME")
+        active_path = _normalized_autocad_path(
+            ntpath.join(str(prefix or ""), str(name or ""))
+        )
+        if not prefix or not name or active_path != expected_path:
+            raise MCPToolError("DRAWING_CLOSE_TARGET_MISMATCH")
+        return _autolisp_string_literal(expected_path.replace("\\", "/"))
+
     def drawing_close(self, save_changes: bool = False) -> None:
         if self._raw_lisp_trigger is not None:
+            expected_path = self._active_drawing_path
+            expected_literal = self._assert_active_document_matches(expected_path)
             if save_changes:
                 self._raw_lisp_trigger(
                     "(progn (vl-load-com) "
-                    "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                    ":vlax-true))"
+                    "(setq mcp-close-doc "
+                    "(vla-get-ActiveDocument (vlax-get-acad-object)) "
+                    "mcp-close-target (findfile "
+                    + expected_literal
+                    + ")) "
+                    "(if (not mcp-close-target) "
+                    "(setq mcp-close-target "
+                    + expected_literal
+                    + ")) "
+                    "(if (= (strcase (vla-get-FullName mcp-close-doc)) "
+                    "(strcase mcp-close-target)) "
+                    "(vla-close mcp-close-doc :vlax-true) "
+                    '(princ "DRAWING_CLOSE_TARGET_MISMATCH")))'
                 )
             else:
+                # Queue no-save close at AutoCAD's command boundary. Direct
+                # COM close can race the active File IPC dispatcher and
+                # report that the drawing is busy.
                 self._raw_lisp_trigger(
                     "(progn (vl-load-com) "
-                    "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                    ":vlax-false))"
+                    "(setq mcp-close-doc "
+                    "(vla-get-ActiveDocument (vlax-get-acad-object)) "
+                    "mcp-close-target (findfile "
+                    + expected_literal
+                    + ")) "
+                    "(if (not mcp-close-target) "
+                    "(setq mcp-close-target "
+                    + expected_literal
+                    + ")) "
+                    "(if (= (strcase (vla-get-FullName mcp-close-doc)) "
+                    "(strcase mcp-close-target)) "
+                    '(command-s "_.CLOSE" "_N") '
+                    '(princ "DRAWING_CLOSE_TARGET_MISMATCH")))'
                 )
             time.sleep(self._document_settle_s)
-            expected_path = self._active_drawing_path
-            if self._command_trigger is not None and expected_path is not None:
+            if expected_path is not None:
                 deadline = time.time() + max(5.0, self._document_settle_s * 3.0)
                 close_confirmed = False
                 while time.time() < deadline:
