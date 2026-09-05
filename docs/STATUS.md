@@ -348,6 +348,66 @@
   not retested; the bounded MECH-1A read/query contract is accepted, while
   broader unbounded introspection remains deferred.
 
+## M3 Task3 authenticated CODEX_HOME custody — executing successor
+
+- State: **Offline custody contract PASS; provider-backed pre-R5 NOT RUN**.
+  Issue #336 owns the first unsatisfied boundary after the merged official
+  START/BIND adapter. No M2 retest, NETLOAD, AutoCAD mutation, or R5/R6 work
+  was performed for this successor.
+- Exact base: current `main` `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`;
+  branch `codex/task3-auth-custody-gap`; current implementation head
+  `f7f1038f7ad81c5ef3758dc6251df817a536cd13`.
+- Measurement-first official login used the exact executable
+  `C:\temp\cad-agent-m3-provider-venv-20260831\Lib\site-packages\codex_cli_bin\bin\codex.exe`,
+  `codex-cli 0.144.4`, SHA-256
+  `51398051c2332b6afe08dc3b9dbb4056085c197f35ca57a307ee303d450cada5`, and
+  exact server-created home
+  `C:\temp\cad-agent-m3-auth-custody-20260831-01\codex-home`. Same-home
+  `codex login status` returned exit `0` using ChatGPT.
+- Privacy-safe post-login inventory contained `9` entries, `5` files, `4244`
+  bytes, and no `config.toml`, `.env`, AGENTS/instruction/prompt file,
+  plugin/marketplace, MCP configuration, or reparse/symlink entry. Credential
+  contents and credential-derived content hashes were not read, copied,
+  transmitted, or recorded in public evidence; private in-memory hashes are
+  used only for pre-launch drift detection.
+- Implemented custody lifecycle: server-issued environment identity;
+  immutable home entry manifest; exact executable hash/version and observed
+  login-status binding; canonical Task3 authenticated start; one-shot custody
+  consumption; fail-closed home/executable/ambient/reparse/manifest drift;
+  exact-home purge coupled to zero-survivor cleanup. The existing sanitized
+  environment and control wire carry no credential bytes.
+- Evidence: focused custody/worker/policy suite `177 passed`; canonical
+  `scripts/verify.ps1 -SkipAutoCADDotNet` on `f7f1038` passed offline with
+  `3067 passed, 18 deselected, 72 subtests`, dotnet IPC `117/0/0`, real-data
+  `2 skipped`, and AutoCAD unavailable `14 skipped`. The verifier's causal RED
+  probe failed as intentionally expected; verifier completed exit `0`.
+- Remaining boundary: canonical Task3 must continue with the exact authenticated
+  home to a genuine provider-backed pre-R5 turn. After that attempt, purge the
+  home and do not reuse it; only then can the existing M3 LINE live packet
+  proceed.
+
+### Auth-custody execution update (2026-08-31)
+
+- PR #337 hosted checks are green at exact head
+  `4df15664cfdcbe40ab378b2ca92976e3a08fe65a`, but the PR remains DRAFT and
+  unmerged because no canonical provider-backed pre-R5 PASS exists.
+- The first canonical continuation reached the exact same-home login but was
+  refused before child creation with `WORKER_AUTHORITY_MISMATCH`. Root cause
+  was an executable-role mismatch: authenticated custody correctly attested
+  the official `codex.exe`, while the canonical Task3 child is launched by the
+  trusted Python worker launcher. The old validator compared those distinct
+  roles. This attempt is non-evidence; no provider thread or pre-R5 result was
+  created. The exact authenticated root was then purged and verified clean.
+- Commit `f7f1038f7ad81c5ef3758dc6251df817a536cd13` revalidates the attested
+  official provider binary and hash independently, while validating the child
+  launcher through the existing process owner. A regression with distinct
+  provider/launcher files is GREEN; no identity or custody check was weakened.
+- After exact-head hosted gates, the packet
+  `C:\temp\prepare_and_run_m3_auth.py` must create a NEW home and obtain one
+  new direct official login before canonical Task3 START plus one provider
+  turn. The prior authenticated home is not reusable. `M2_RETEST=NO`;
+  `NETLOAD_REQUIRED=NO`.
+
 ## Accelerated reuse-first program: PLANNING/GOVERNANCE ONLY
 
 - Exact planning base: `d00b24e4853d2bfa6bd94873d3014e37575e2718`.
