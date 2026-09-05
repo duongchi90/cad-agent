@@ -5,13 +5,16 @@ from __future__ import annotations
 from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import datetime, timezone
+import ctypes
 import hashlib
 import json
 import ntpath
 import os
 import stat
 import shutil
+import sys
 from pathlib import Path
+from ctypes import wintypes
 from typing import Any
 
 from dxf_builder_lib.builder import BuildResult
@@ -114,6 +117,124 @@ def _is_directory_non_reparse(stat_result: os.stat_result) -> bool:
     return stat.S_ISDIR(stat_result.st_mode) and not bool(
         getattr(stat_result, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
     )
+
+
+class _ByHandleFileInformation(ctypes.Structure):
+    _fields_ = [
+        ("dwFileAttributes", wintypes.DWORD),
+        ("ftCreationTime", wintypes.FILETIME),
+        ("ftLastAccessTime", wintypes.FILETIME),
+        ("ftLastWriteTime", wintypes.FILETIME),
+        ("dwVolumeSerialNumber", wintypes.DWORD),
+        ("nFileSizeHigh", wintypes.DWORD),
+        ("nFileSizeLow", wintypes.DWORD),
+        ("nNumberOfLinks", wintypes.DWORD),
+        ("nFileIndexHigh", wintypes.DWORD),
+        ("nFileIndexLow", wintypes.DWORD),
+    ]
+
+
+class _DirectoryChainBinding:
+    """Pin a verified directory chain against Windows rename/reparse races."""
+
+    _FILE_LIST_DIRECTORY = 0x0001
+    _FILE_READ_ATTRIBUTES = 0x0080
+    _SYNCHRONIZE = 0x100000
+    _FILE_SHARE_READ = 0x0001
+    _FILE_SHARE_WRITE = 0x0002
+    _OPEN_EXISTING = 3
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    def __init__(self, path: Path, identity: BackupDirectoryIdentity) -> None:
+        self.path = path
+        self.identity = identity
+        self._kernel32: Any | None = None
+        self._handles: list[int] = []
+
+    def __enter__(self) -> "_DirectoryChainBinding":
+        try:
+            if sys.platform != "win32":
+                raise LiveSafetyError(
+                    "Directory identity cannot be safely pinned on this platform."
+                )
+            self._open_windows_chain()
+            self.assert_current()
+            return self
+        except Exception:
+            self._close_handles()
+            raise
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        close_error = self._close_handles()
+        if close_error is not None and exc_type is None:
+            raise close_error
+
+    def assert_current(self) -> None:
+        _assert_backup_directory_identity(self.path, self.identity)
+
+    def _open_windows_chain(self) -> None:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.GetFileInformationByHandle.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_ByHandleFileInformation),
+        ]
+        kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        self._kernel32 = kernel32
+
+        for component, expected in self.identity:
+            handle = kernel32.CreateFileW(
+                str(component),
+                self._FILE_LIST_DIRECTORY | self._FILE_READ_ATTRIBUTES | self._SYNCHRONIZE,
+                self._FILE_SHARE_READ | self._FILE_SHARE_WRITE,
+                None,
+                self._OPEN_EXISTING,
+                self._FILE_FLAG_BACKUP_SEMANTICS | self._FILE_FLAG_OPEN_REPARSE_POINT,
+                None,
+            )
+            value = ctypes.cast(handle, ctypes.c_void_p).value
+            if value in {None, self._INVALID_HANDLE_VALUE}:
+                raise LiveSafetyError("Verified directory chain could not be pinned.")
+            info = _ByHandleFileInformation()
+            if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+                kernel32.CloseHandle(handle)
+                raise LiveSafetyError("Pinned directory identity could not be verified.")
+            handle_identity = (
+                int(info.dwVolumeSerialNumber),
+                (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow),
+            )
+            expected_identity = (int(expected.st_dev), int(expected.st_ino))
+            if (
+                bool(info.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT)
+                or handle_identity != expected_identity
+            ):
+                kernel32.CloseHandle(handle)
+                raise LiveSafetyError("Pinned directory identity changed before use.")
+            self._handles.append(int(value))
+
+    def _close_handles(self) -> LiveSafetyError | None:
+        close_error: LiveSafetyError | None = None
+        if self._kernel32 is not None:
+            for value in reversed(self._handles):
+                if not self._kernel32.CloseHandle(wintypes.HANDLE(value)):
+                    close_error = LiveSafetyError(
+                        "Pinned directory handle could not be closed safely."
+                    )
+        self._handles.clear()
+        return close_error
 
 
 def _backup_directory_components(backup_dir: Path) -> tuple[Path, ...]:
@@ -241,73 +362,73 @@ def _write_json_artifact(path: Path, text: str, *, label: str) -> None:
     if not path.is_absolute():
         raise LiveSafetyError(f"{label} path must be absolute.")
     parent_identity = _prepare_backup_directory(path.parent)
-    destination_before = _capture_output_destination(path, label=label)
     temporary = path.with_suffix(path.suffix + ".tmp")
     owned_temp_stat: os.stat_result | None = None
     payload = text.encode("utf-8")
-    try:
-        _assert_backup_directory_identity(path.parent, parent_identity)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+    with _DirectoryChainBinding(path.parent, parent_identity) as directory_binding:
+        destination_before = _capture_output_destination(path, label=label)
         try:
-            descriptor = os.open(temporary, flags, 0o600)
-        except OSError as exc:
-            raise LiveSafetyError(f"{label} temporary destination is not safely available.") from exc
-        try:
-            owned_temp_stat = os.fstat(descriptor)
-            if not _is_single_link_regular_non_reparse(owned_temp_stat):
-                raise LiveSafetyError(f"{label} temporary destination is not a regular file.")
-            with os.fdopen(descriptor, "wb") as stream:
-                descriptor = -1
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-
-        _assert_backup_directory_identity(path.parent, parent_identity)
-        _assert_path_identity(temporary, owned_temp_stat, label=f"{label} temporary")
-        _assert_output_destination_identity(
-            path, destination_before, label=label
-        )
-        os.replace(temporary, path)
-        _assert_backup_directory_identity(path.parent, parent_identity)
-        destination_after = _capture_output_destination(path, label=label)
-        if destination_after is None or not os.path.samestat(
-            owned_temp_stat, destination_after
-        ):
-            raise LiveSafetyError(f"{label} destination identity was not preserved.")
-
-        read_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-        if hasattr(os, "O_NOFOLLOW"):
-            read_flags |= os.O_NOFOLLOW
-        read_descriptor, opened_stat = _open_bound_file(
-            path, flags=read_flags, label=f"{label} destination"
-        )
-        with os.fdopen(read_descriptor, "rb") as stream:
-            persisted = stream.read()
-        if not os.path.samestat(owned_temp_stat, opened_stat):
-            raise LiveSafetyError(f"{label} destination identity changed after publish.")
-        if persisted != payload or hashlib.sha256(persisted).hexdigest() != hashlib.sha256(payload).hexdigest():
-            raise LiveSafetyError(f"{label} persisted bytes could not be verified.")
-        _assert_backup_directory_identity(path.parent, parent_identity)
-    except Exception as exc:
-        if owned_temp_stat is not None:
+            directory_binding.assert_current()
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
             try:
-                _cleanup_backup_artifacts(
-                    (temporary, temporary),
-                    {temporary: owned_temp_stat},
-                    directory_identity=parent_identity,
-                )
-            except LiveSafetyError as cleanup_exc:
-                raise LiveSafetyError(
-                    f"{label} cleanup could not prove zero temporary survivors."
-                ) from cleanup_exc
-        if isinstance(exc, LiveSafetyError):
-            raise
-        raise LiveSafetyError(f"{label} write failed.") from exc
+                descriptor = os.open(temporary, flags, 0o600)
+            except OSError as exc:
+                raise LiveSafetyError(f"{label} temporary destination is not safely available.") from exc
+            try:
+                owned_temp_stat = os.fstat(descriptor)
+                if not _is_single_link_regular_non_reparse(owned_temp_stat):
+                    raise LiveSafetyError(f"{label} temporary destination is not a regular file.")
+                with os.fdopen(descriptor, "wb") as stream:
+                    descriptor = -1
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+
+            directory_binding.assert_current()
+            _assert_path_identity(temporary, owned_temp_stat, label=f"{label} temporary")
+            _assert_output_destination_identity(path, destination_before, label=label)
+            os.replace(temporary, path)
+            directory_binding.assert_current()
+            destination_after = _capture_output_destination(path, label=label)
+            if destination_after is None or not os.path.samestat(
+                owned_temp_stat, destination_after
+            ):
+                raise LiveSafetyError(f"{label} destination identity was not preserved.")
+
+            read_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            if hasattr(os, "O_NOFOLLOW"):
+                read_flags |= os.O_NOFOLLOW
+            read_descriptor, opened_stat = _open_bound_file(
+                path, flags=read_flags, label=f"{label} destination"
+            )
+            with os.fdopen(read_descriptor, "rb") as stream:
+                persisted = stream.read()
+            if not os.path.samestat(owned_temp_stat, opened_stat):
+                raise LiveSafetyError(f"{label} destination identity changed after publish.")
+            if persisted != payload or hashlib.sha256(persisted).hexdigest() != hashlib.sha256(payload).hexdigest():
+                raise LiveSafetyError(f"{label} persisted bytes could not be verified.")
+            directory_binding.assert_current()
+        except Exception as exc:
+            if owned_temp_stat is not None:
+                try:
+                    _cleanup_backup_artifacts(
+                        (temporary, temporary),
+                        {temporary: owned_temp_stat},
+                        directory_identity=parent_identity,
+                        directory_binding=directory_binding,
+                    )
+                except LiveSafetyError as cleanup_exc:
+                    raise LiveSafetyError(
+                        f"{label} cleanup could not prove zero temporary survivors."
+                    ) from cleanup_exc
+            if isinstance(exc, LiveSafetyError):
+                raise
+            raise LiveSafetyError(f"{label} write failed.") from exc
 
 
 def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Path]:
@@ -355,7 +476,11 @@ def _copy_to_exclusive_backup(
     source: Path,
     destination: Path,
     owned_paths: dict[Path, os.stat_result | None],
+    *,
+    directory_binding: _DirectoryChainBinding | None = None,
 ) -> str:
+    if directory_binding is not None:
+        directory_binding.assert_current()
     flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -384,6 +509,8 @@ def _copy_to_exclusive_backup(
             for chunk in iter(lambda: destination_handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         _assert_backup_path_identity(destination, opened_stat)
+        if directory_binding is not None:
+            directory_binding.assert_current()
         return digest.hexdigest()
     except Exception:
         if descriptor >= 0:
@@ -396,10 +523,17 @@ def _cleanup_backup_artifacts(
     owned_paths: dict[Path, os.stat_result | None],
     *,
     directory_identity: BackupDirectoryIdentity | None = None,
+    directory_binding: _DirectoryChainBinding | None = None,
 ) -> None:
     cleanup_failures: list[Path] = []
     directory_safe = True
-    if directory_identity is not None:
+    if directory_binding is not None:
+        try:
+            directory_binding.assert_current()
+        except LiveSafetyError:
+            directory_safe = False
+            cleanup_failures.extend(owned_paths)
+    elif directory_identity is not None:
         try:
             _assert_backup_directory_identity(paths[0].parent, directory_identity)
         except LiveSafetyError:
@@ -443,57 +577,67 @@ def _backup(
     directory_identity_out: list[tuple[Path, os.stat_result]] | None = None,
 ) -> dict[str, Any]:
     directory_identity = _prepare_backup_directory(backup_dir)
-    dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
-    backup_paths = (dxf_backup, evidence_backup)
     owned_paths = {} if owned_paths is None else owned_paths
-    _assert_backup_directory_identity(backup_dir, directory_identity)
-    if directory_identity_out is not None:
-        directory_identity_out.extend(directory_identity)
-    try:
-        dxf_source_before = sha256_file(dxf)
-        evidence_source_before = sha256_file(evidence)
+    with _DirectoryChainBinding(backup_dir, directory_identity) as directory_binding:
+        dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
+        backup_paths = (dxf_backup, evidence_backup)
         _assert_backup_directory_identity(backup_dir, directory_identity)
-        dxf_backup_hash = _copy_to_exclusive_backup(dxf, dxf_backup, owned_paths)
-        _assert_backup_directory_identity(backup_dir, directory_identity)
-        evidence_backup_hash = _copy_to_exclusive_backup(
-            evidence, evidence_backup, owned_paths
-        )
-        _assert_backup_directory_identity(backup_dir, directory_identity)
-        dxf_source_after = sha256_file(dxf)
-        evidence_source_after = sha256_file(evidence)
-        verified = (
-            dxf_source_before == dxf_source_after == dxf_backup_hash
-            and evidence_source_before == evidence_source_after == evidence_backup_hash
-        )
-        if not verified:
-            raise LiveSafetyError(
-                "Production backup verification failed; repair is refused before mutation."
-            )
-        return {
-            "dxf_path": str(dxf_backup),
-            "dxf_source_sha256": dxf_source_before,
-            "dxf_backup_sha256": dxf_backup_hash,
-            "build_evidence_path": str(evidence_backup),
-            "build_evidence_source_sha256": evidence_source_before,
-            "build_evidence_backup_sha256": evidence_backup_hash,
-            "verified": True,
-        }
-    except Exception as exc:
+        if directory_identity_out is not None:
+            directory_identity_out.extend(directory_identity)
         try:
-            _cleanup_backup_artifacts(
-                backup_paths,
+            dxf_source_before = sha256_file(dxf)
+            evidence_source_before = sha256_file(evidence)
+            directory_binding.assert_current()
+            dxf_backup_hash = _copy_to_exclusive_backup(
+                dxf,
+                dxf_backup,
                 owned_paths,
-                directory_identity=directory_identity,
+                directory_binding=directory_binding,
             )
-        except LiveSafetyError as cleanup_exc:
+            directory_binding.assert_current()
+            evidence_backup_hash = _copy_to_exclusive_backup(
+                evidence,
+                evidence_backup,
+                owned_paths,
+                directory_binding=directory_binding,
+            )
+            directory_binding.assert_current()
+            dxf_source_after = sha256_file(dxf)
+            evidence_source_after = sha256_file(evidence)
+            verified = (
+                dxf_source_before == dxf_source_after == dxf_backup_hash
+                and evidence_source_before == evidence_source_after == evidence_backup_hash
+            )
+            if not verified:
+                raise LiveSafetyError(
+                    "Production backup verification failed; repair is refused before mutation."
+                )
+            return {
+                "dxf_path": str(dxf_backup),
+                "dxf_source_sha256": dxf_source_before,
+                "dxf_backup_sha256": dxf_backup_hash,
+                "build_evidence_path": str(evidence_backup),
+                "build_evidence_source_sha256": evidence_source_before,
+                "build_evidence_backup_sha256": evidence_backup_hash,
+                "verified": True,
+            }
+        except Exception as exc:
+            try:
+                _cleanup_backup_artifacts(
+                    backup_paths,
+                    owned_paths,
+                    directory_identity=directory_identity,
+                    directory_binding=directory_binding,
+                )
+            except LiveSafetyError as cleanup_exc:
+                raise LiveSafetyError(
+                    "backup acquisition failed; cleanup could not prove zero survivors."
+                ) from cleanup_exc
+            if isinstance(exc, LiveSafetyError):
+                raise exc
             raise LiveSafetyError(
-                "backup acquisition failed; cleanup could not prove zero survivors."
-            ) from cleanup_exc
-        if isinstance(exc, LiveSafetyError):
-            raise exc
-        raise LiveSafetyError(
-            "backup acquisition failed; zero owned survivors were proven."
-        ) from exc
+                "backup acquisition failed; zero owned survivors were proven."
+            ) from exc
 
 
 def _open_bound_file(path: Path, *, flags: int, label: str) -> tuple[int, os.stat_result]:
