@@ -198,10 +198,7 @@ def repair_dxf_live(build_result: BuildResult, mismatches: List[str], client: MC
             continue
         old_handle = build_result.handle_by_primitive_id.get(pid)
         if old_handle is not None:
-            try:
-                client.entity_erase(old_handle)
-            except (MCPTimeoutError, MCPToolError):
-                pass
+            _dispatch_erase(client, old_handle)
         try:
             kind = written.get("type")
             capability = kind.upper() if type(kind) is str else kind
