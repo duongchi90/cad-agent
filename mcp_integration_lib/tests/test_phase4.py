@@ -302,6 +302,99 @@ class FileIPCClientTests(unittest.TestCase):
         self.assertEqual([], raw_commands)
         self.assertEqual([], command_sequences)
 
+    def test_raw_lisp_save_close_rejects_unbound_target_before_close(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            document_settle_s=0,
+        )
+
+        with self.assertRaisesRegex(
+            MCPToolError, "^DRAWING_CLOSE_TARGET_UNBOUND$"
+        ):
+            client.drawing_close(save_changes=True)
+
+        self.assertEqual([], raw_commands)
+
+    def test_raw_lisp_save_close_rejects_active_document_mismatch_before_close(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            document_settle_s=0,
+        )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "other.dxf",
+        }
+
+        with self.assertRaisesRegex(
+            MCPToolError, "^DRAWING_CLOSE_TARGET_MISMATCH$"
+        ):
+            client.drawing_close(save_changes=True)
+
+        self.assertEqual([], raw_commands)
+
+    def test_raw_lisp_save_close_embeds_exact_target_guard_before_com_save(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            document_settle_s=0,
+            poll_interval_s=0,
+        )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "candidate.dxf",
+        }
+        client.drawing_list_open_paths = lambda: []
+
+        client.drawing_close(save_changes=True)
+
+        self.assertEqual(1, len(raw_commands))
+        expression = raw_commands[0]
+        self.assertIn("vla-get-ActiveDocument", expression)
+        self.assertIn("vla-get-FullName", expression)
+        self.assertIn("findfile", expression)
+        self.assertIn("(vla-close mcp-close-doc :vlax-true)", expression)
+        self.assertLess(
+            expression.index("vla-get-FullName"),
+            expression.index("(vla-close mcp-close-doc :vlax-true)"),
+        )
+
+    def test_raw_lisp_save_close_fails_closed_when_target_remains_open(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            document_settle_s=0,
+            poll_interval_s=0,
+        )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "candidate.dxf",
+        }
+        client.drawing_list_open_paths = lambda: [r"C:\work\candidate.dxf"]
+
+        with patch(
+            "mcp_integration_lib.mcp_client.time.time",
+            side_effect=[0, 1, 6],
+        ), patch("mcp_integration_lib.mcp_client.time.sleep"):
+            with self.assertRaisesRegex(
+                MCPToolError, "^DRAWING_CLOSE_NOT_CONFIRMED$"
+            ):
+                client.drawing_close(save_changes=True)
+
+        self.assertEqual(
+            "c:\\work\\candidate.dxf",
+            client._active_drawing_path,
+        )
+        self.assertEqual(1, len(raw_commands))
+
     def test_raw_lisp_close_embeds_exact_target_guard_before_command(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
@@ -395,24 +488,27 @@ class FileIPCClientTests(unittest.TestCase):
         assert client.drawing_open("C:/work/a.dxf") == {"path": "C:/work/a.dxf"}
         self.assertEqual(['_.OPEN\r"C:/work/a.dxf"'], command_sequences)
 
-    def test_raw_lisp_close_with_save_keeps_com_save_path(self):
+    def test_raw_lisp_close_with_save_keeps_guarded_com_save_path(self):
         raw_commands = []
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
             raw_lisp_trigger=raw_commands.append,
             document_settle_s=0,
+            poll_interval_s=0,
         )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "candidate.dxf",
+        }
+        client.drawing_list_open_paths = lambda: []
 
         client.drawing_close(save_changes=True)
 
-        self.assertEqual(
-            [
-                "(progn (vl-load-com) "
-                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                ":vlax-true))"
-            ],
-            raw_commands,
-        )
+        self.assertEqual(1, len(raw_commands))
+        self.assertIn("vla-get-FullName", raw_commands[0])
+        self.assertIn("findfile", raw_commands[0])
+        self.assertIn("(vla-close mcp-close-doc :vlax-true)", raw_commands[0])
 
     def test_bootstrap_waits_for_dispatcher_ping(self):
         raw_commands = []
