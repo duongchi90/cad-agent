@@ -888,14 +888,34 @@
   (mcp-object (list (cons "paths" (mcp-array (reverse paths)))))
 )
 
-(defun mcp-op-drawing-save-as-dxf (params / path doc)
+(defun mcp-op-drawing-save-as-dxf (params / path doc old-filedia export-result)
   (setq path (mcp-param params "path")
-        doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-  (if (not (= (type path) 'STR))
-    (mcp-object nil)
+        doc (vla-get-ActiveDocument (vlax-get-acad-object))
+        old-filedia (getvar "FILEDIA"))
+  (if
+    (or
+      (not (= (type path) 'STR))
+      (= (strcase path) (strcase (vla-get-FullName doc)))
+      (findfile path)
+    )
+    'MCP_COMMAND_FAILED_SENTINEL
     (progn
-      (vla-SaveAs doc path)
-      (mcp-object nil)
+      (setvar "FILEDIA" 0)
+      (setq export-result
+        (vl-catch-all-apply
+          '(lambda (target) (command-s "_.DXFOUT" target ""))
+          (list path)
+        )
+      )
+      (setvar "FILEDIA" old-filedia)
+      (if
+        (or
+          (vl-catch-all-error-p export-result)
+          (not (findfile path))
+        )
+        'MCP_COMMAND_FAILED_SENTINEL
+        (mcp-object nil)
+      )
     )
   )
 )
@@ -1243,6 +1263,9 @@
                               (cond
                                 ((= result 'MCP_COMMAND_UNSUPPORTED_SENTINEL)
                                   (list request-id claim *mcp-error-command*)
+                                )
+                                ((= result 'MCP_COMMAND_FAILED_SENTINEL)
+                                  (list request-id claim *mcp-error-failed*)
                                 )
                                 ((vl-catch-all-error-p result)
                                   (list request-id claim *mcp-error-failed*)

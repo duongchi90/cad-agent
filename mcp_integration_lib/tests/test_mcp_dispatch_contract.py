@@ -792,6 +792,33 @@ def test_dispatcher_covers_every_existing_file_ipc_dispatch_command() -> None:
     assert not missing, f"dispatcher is missing existing File IPC commands: {missing}"
 
 
+def test_dxf_export_uses_dxfout_and_requires_destination_existence() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-op-drawing-save-as-dxf\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "(command-s" in body
+    assert '"_.dxfout"' in body
+    assert "(list path)" in body
+    assert '(getvar "filedia")' in body
+    assert '(setvar "filedia" 0)' in body
+    assert '(setvar "filedia" old-filedia)' in body
+    assert "(findfile path)" in body
+    assert "'mcp_command_failed_sentinel" in body
+    assert "vla-saveas" not in body
+
+
+def test_dxf_export_failure_is_a_categorical_terminal_failure() -> None:
+    source = _dispatcher_source().casefold()
+    core = source[source.index("(defun mcp-dispatch-core") :]
+    assert "(= result 'mcp_command_failed_sentinel)" in core
+    assert "*mcp-error-failed*" in core
+
+
 def test_dispatcher_never_converts_json_into_executable_autolisp() -> None:
     source = _dispatcher_source().casefold()
     for forbidden_form in (
