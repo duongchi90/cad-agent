@@ -19,15 +19,16 @@
 ## Current canonical snapshot (2026-09-05)
 
 - Canonical GitHub main at this snapshot is
-  `dd907d953dc7cc521997d1855a47cbfdea719f18`, the merge commit for docs PR
-  #395. Its runtime state includes the provider-independent hardening merged
+  `0c8055c18512960ff70c0181add10e19960d9a8f`, the merge commit for docs PR
+  #399. Its runtime state includes the provider-independent hardening merged
   through PR #393 and the current live-boundary documentation refresh.
 - Relevant provider-independent PRs remain open and must not be described as
   merged: PR #396 is DRAFT at `1c91d8a514220600cc373dd063a4452f5d765605`,
-  PR #397 is DRAFT at `d274d534700cef1140f54ae1bdea59f045404b48`, and PR #398
-  is READY at `e6804ae1b9a610d77fb26c508ad56050001a8004`. Their exact-head
-  hosted checks are green where recorded, but the required independent review
-  gates remain unresolved.
+  PR #397 is DRAFT at `d274d534700cef1140f54ae1bdea59f045404b48`, PR #398 is
+  READY at `e6804ae1b9a610d77fb26c508ad56050001a8004`, and PR #400 is READY
+  at `3a37220a916b0a72571e3c7c1e31b9c8a0411edb`. Their exact-head hosted
+  checks are green where recorded; PR #400 still requires the live owner gate
+  before merge.
 - Phase 1A deterministic provenance/bounded-query, Phase 2 skill discovery,
   the synthetic Mechanical pilot, and the Phase 4 PDF-to-pilot binding remain
   offline-verified. A fresh focused current-main recheck passed `159` tests.
@@ -77,9 +78,10 @@
   `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`. PR #340 is OPEN/DRAFT/FROZEN at head
   `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`; no provider call, billing action,
   credential use, PR #340/#337 mutation, or M2 retest is included here.
-- Comments `5549694504` on #343 and `5549698861` on #377 record the latest
-  live NON_PASS and current provider-independent verification. Older sections
-  below remain historical evidence and do not override this snapshot.
+- Comments `5549995801` and `5549943811` on #343, plus `5549794343` on #377,
+  record the latest provider-independent repair-boundary and live NON_PASS
+  evidence. Older sections below remain historical evidence and do not
+  override this snapshot.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 
