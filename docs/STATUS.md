@@ -18,70 +18,48 @@
 
 ## Current canonical snapshot (2026-09-05)
 
-- Canonical GitHub main at this snapshot is
-  `0c8055c18512960ff70c0181add10e19960d9a8f`, the merge commit for docs PR
-  #399. Its runtime state includes the provider-independent hardening merged
-  through PR #393 and the current live-boundary documentation refresh.
-- Relevant provider-independent PRs remain open and must not be described as
-  merged: PR #396 is DRAFT at `1c91d8a514220600cc373dd063a4452f5d765605`,
-  PR #397 is DRAFT at `d274d534700cef1140f54ae1bdea59f045404b48`, PR #398 is
-  READY at `e6804ae1b9a610d77fb26c508ad56050001a8004`, and PR #400 is READY
-  at `3a37220a916b0a72571e3c7c1e31b9c8a0411edb`. Their exact-head hosted
-  checks are green where recorded; PR #400 still requires the live owner gate
-  before merge.
-- Phase 1A deterministic provenance/bounded-query, Phase 2 skill discovery,
-  the synthetic Mechanical pilot, and the Phase 4 PDF-to-pilot binding remain
-  offline-verified. A fresh focused current-main recheck passed `159` tests.
-  This does not promote live AutoCAD/FileIPC query evidence to PASS.
-- A fresh disposable offline generated-pilot binding epoch composed and
-  validated the existing provenance, R3 registry, DARA currentness, and R4
-  candidate revision/state owners for `synthetic-simple-stepped-shaft-v1`.
-  Source SHA-256 is
-  `1c86ce46261a3689d00bc18157087e418df0872ac0a6a4635c157f2b85677b8d`;
-  candidate SHA-256 is
-  `6fe59a1ae1d38eb59f6edb002f713c0dbc6d111235f263c07b1e67df584d9e90`;
-  provenance, registry snapshot, candidate revision, and candidate state
-  hashes are respectively
-  `208ee6353e26b2cdb500e8a6e71638e1cdfb2745f4271a92f11af1edf65ccbb7`,
-  `3a2ba92ed1021dc647d0ec5ae0a38c9bdbde4d11795327294ce36228b296a302`,
-  `31415f69b1bbc88a8ac8fe1614032a3575c860d3bd3b4ae98612e747a90875f9`,
-  and `73997a0c71b858ed432d20d5fc290725ab32cd9da1df0272f5975eeb3cff1983`.
-  The result has two components and nine candidate bindings, with
-  `live_session=NOT_OBSERVED` and `mutation=false`; this closes the offline
-  binding-preparation sub-boundary only, not live query acceptance.
-- A current-main bootstrap-only ping previously returned a claim-bound
-  terminal `{ "ready": true }` result using the canonical dispatcher. A later
-  single disposable Phase 4 native-edit/save/close/reopen epoch on the same
-  AutoCAD session failed before drawing-open completion: request
-  `4523c8bbc4f0` did not produce a dispatcher readiness result within 20
-  seconds. AutoCAD PID `3996`, HWND `0x1405C4`, and foreground equality were
-  valid before and after. No mutation or save occurred.
-- The failed epoch's disposable candidate and source both retained SHA-256
-  `141616d99bcdaf59a4b65662222aed187fe1527f750ed4545c287783e8dbfa71`.
-  The candidate was subsequently closed without save through the existing
-  command-boundary owner, AutoCAD returned to `Drawing1.dwg`, and the owned
-  IPC root had zero survivors. No source/customer/accepted drawing was
-  touched. This is NON_PASS evidence, not native edit/save/reopen PASS.
-- FIRST_UNSATISFIED_BOUNDARY is
-  `LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE`, classified as an
-  environment/runtime precondition and owned by the existing
-  `FileIPCLiveMCPClient` plus canonical AutoLISP dispatcher. No blind retry is
-  justified. The next oracle is one future fresh disposable exact-bound epoch
-  with a claim-bound terminal result, exact document identity, candidate/source
-  integrity, and zero owned IPC survivors.
-- A fresh authoritative verifier using the supported external Python 3.11
-  environment passed the offline gate with `3156` passed, `18` deselected,
-  `72` subtests, and `.NET IPC` `118` passed. The intentional causal RED has
-  one expected failure; private data has two skips; the AutoCAD .NET gate was
-  explicitly `NOT RUN`. Worktrees remained clean.
+- Fresh GitHub main is
+  `156d080390015f1895035443d7d13e6f95c9e834`. The older snapshot
+  `0c8055c18512960ff70c0181add10e19960d9a8f` is historical and must not be
+  used as current authority.
+- Provider-independent Phase 1A/2/3/4 deterministic foundations remain
+  verified on their merged owners. Issue #377 records a live bounded query
+  PASS on PR #404 head `dfc10f5f374c1b2aff1990c6b5d78ac6cf89b301`, but that
+  head is still OPEN and is not in main; this evidence is not current-main
+  acceptance.
+- Current open successors are not merged: PR #403 is OPEN/READY at
+  `6ffd2abf7d0a7cf80bd57555da47c2d98088f1a4`, PR #404 is OPEN/READY at
+  `dfc10f5f374c1b2aff1990c6b5d78ac6cf89b301`, and PR #405 is OPEN/DRAFT at
+  `dbd94bdf7acfd16278f939471351dec3e461d869`. Their exact-head hosted
+  checks are green where recorded; review/currentness and product/live gates
+  remain separate merge conditions.
+- PR #403's actual exact write-set is
+  `mcp_integration_lib/mcp_client.py`,
+  `mcp_integration_lib/tests/test_phase4.py`, and
+  `mcp_integration_lib/tests/test_mcp_dispatch_contract.py`. The prior
+  two-file declaration was reconciled; fresh exact-head Security and
+  Integration finals are still required.
+- PR #404 remains blocked from merge by its current dependency on the
+  guarded close owner from #403 and its current handle-identity rollback
+  finding. No new live retry is justified by that review state.
+- PR #405 contains the bounded DXFOUT terminal-output repair in exactly
+  `mcp_integration_lib/mcp_dispatch.lsp` and
+  `mcp_integration_lib/tests/test_mcp_dispatch_contract.py`. Its local
+  verifier passed `3163` offline tests, `118` .NET IPC tests, and the hosted
+  exact-head contexts are green. One fresh disposable epoch stopped before
+  mutation at `AUTOCAD_DISPATCHER_READINESS`; the root was removed only after
+  `IPC_SURVIVORS=[]`, and no live export PASS is claimed.
+- The measured live precondition is environmental: AutoCAD `SECURELOAD=1`
+  and the active profile's `TRUSTEDPATHS` does not include `C:\temp`, where
+  the PR405 dispatcher copy resides. No trust policy or security setting was
+  changed. The next oracle is one fresh exact-head disposable epoch after the
+  verified dispatcher is legitimately loaded in the exact drawing context.
 - M3 real-provider acceptance remains
   `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`. PR #340 is OPEN/DRAFT/FROZEN at head
   `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`; no provider call, billing action,
   credential use, PR #340/#337 mutation, or M2 retest is included here.
-- Comments `5549995801` and `5549943811` on #343, plus `5549794343` on #377,
-  record the latest provider-independent repair-boundary and live NON_PASS
-  evidence. Older sections below remain historical evidence and do not
-  override this snapshot.
+- Older sections below remain historical evidence and do not override this
+  snapshot. Current PR/issue state and exact-head evidence remain canonical.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 
