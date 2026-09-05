@@ -15,8 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.mcp_client import MCPTimeoutError, MCPToolError
-from mcp_integration_lib.repair2 import repair_dxf_live
+from mcp_integration_lib.repair2 import (
+    MCPTimeoutError,
+    MCPToolError,
+    repair_dxf_live,
+)
 from mcp_integration_lib.reviewer2 import LiveReviewResult, review_dxf_live
 
 from .manifest import sha256_file
