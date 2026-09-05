@@ -312,6 +312,9 @@ class FileIPCLiveMCPClient:
             raise MCPToolError("IPC_ROOT_CHANGED") from exc
 
     def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        # Evidence is scoped to the current exchange.  Never let a prior
+        # terminal success describe a later failed or incomplete request.
+        self._last_exchange_evidence = None
         if command not in _FILE_IPC_ALLOWED_COMMANDS:
             raise MCPToolError("IPC_COMMAND_UNSUPPORTED")
         self._assert_root_unchanged()
