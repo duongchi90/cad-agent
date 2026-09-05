@@ -20,7 +20,11 @@ from cad_agent.live import (
     write_build_evidence,
 )
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.mcp_client import FakeMCPClient
+from mcp_integration_lib.mcp_client import (
+    FakeMCPClient,
+    MCPTimeoutError,
+    MCPToolError,
+)
 
 
 def _build(path: Path) -> BuildResult:
@@ -405,6 +409,126 @@ class _CloseFailureClient(_BrokenRepairClient):
         return None
 
 
+@pytest.mark.parametrize("failure", [MCPTimeoutError("timeout"), MCPToolError("tool")])
+def test_uncertain_repair_restores_canonical_before_terminal_non_pass(
+    failure: Exception,
+) -> None:
+    class _CreateFailureClient(_CanonicalIdentityFakeMCPClient):
+        def entity_create_line(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise failure
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        dxf_before = dxf.read_bytes()
+        evidence_before = evidence.read_bytes()
+        client = _CreateFailureClient(fail_entity_get=False)
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)}
+        )
+
+        report = repair_live(
+            build, client, dxf, evidence, root / "backups", "change-42"
+        )
+
+        assert report["save_state"] == "not_saved"
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert report["rollback_state"] == "failed_canonical_restored"
+        assert report["rollback_restore"]["canonical_document_open"] is True
+        assert client.closed_without_save is True
+        assert client.opened_path == str(dxf)
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == evidence_before
+
+
+@pytest.mark.parametrize("failure", [MCPTimeoutError("timeout"), MCPToolError("tool")])
+def test_uncertain_erase_restores_canonical_before_terminal_non_pass(
+    failure: Exception,
+) -> None:
+    class _EraseFailureClient(_CanonicalIdentityFakeMCPClient):
+        def entity_erase(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise failure
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        dxf_before = dxf.read_bytes()
+        evidence_before = evidence.read_bytes()
+        client = _EraseFailureClient(fail_entity_get=False)
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)}
+        )
+
+        report = repair_live(
+            build, client, dxf, evidence, root / "backups", "change-42"
+        )
+
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert report["rollback_state"] == "failed_canonical_restored"
+        assert client.closed_without_save is True
+        assert client.opened_path == str(dxf)
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == evidence_before
+
+
+def test_uncertain_later_repair_restores_in_memory_handles_and_canonical() -> None:
+    class _SecondCreateFailureClient(_CanonicalIdentityFakeMCPClient):
+        def __init__(self) -> None:
+            super().__init__(fail_entity_get=False)
+            self._create_count = 0
+
+        def entity_create_line(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self._create_count += 1
+            if self._create_count == 2:
+                raise MCPToolError("second create uncertain")
+            return self._create("LINE", kwargs.get("layer"), {"start": args[0:2], "end": args[2:4]})
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = BuildResult(
+            output_path=str(dxf),
+            handle_by_primitive_id={"p": "A", "q": "B"},
+            layer_by_primitive_id={"p": "0", "q": "0"},
+            written_geometry_by_primitive_id={
+                "p": {"type": "line", "start": [0.0, 0.0], "end": [10.0, 0.0]},
+                "q": {"type": "line", "start": [0.0, 1.0], "end": [20.0, 1.0]},
+            },
+            entity_count=2,
+        )
+        write_build_evidence(evidence, build)
+        dxf_before = dxf.read_bytes()
+        evidence_before = evidence.read_bytes()
+        client = _SecondCreateFailureClient()
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)}
+        )
+        client.preload_entity(
+            "B", "LINE", "0", {"start": (0.0, 1.0), "end": (99.0, 1.0)}
+        )
+
+        report = repair_live(
+            build, client, dxf, evidence, root / "backups", "change-42"
+        )
+
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert build.handle_by_primitive_id == {"p": "A", "q": "B"}
+        assert client.closed_without_save is True
+        assert client.opened_path == str(dxf)
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == evidence_before
+
+
 @dataclass
 class _FakeRepairResult:
     repaired_count: int = 0
@@ -545,15 +669,22 @@ def test_rollback_failure_is_terminal_non_pass() -> None:
             {"start": (0.0, 0.0), "end": (99.0, 0.0)},
         )
 
-        with pytest.raises(LiveSafetyError, match="rollback|recovery"):
-            repair_live(
-                build,
-                client,
-                dxf,
-                evidence,
-                root / "backups",
-                "change-42",
-            )
+        report = repair_live(
+            build,
+            client,
+            dxf,
+            evidence,
+            root / "backups",
+            "change-42",
+        )
+
+        assert report["save_state"] == "not_saved"
+        assert report["rollback_state"] == "rollback_failed"
+        assert report["rollback_restore"] == {
+            "recovery_verified": False,
+            "error": "ROLLBACK_FAILED",
+        }
+        assert build.handle_by_primitive_id == {}
 
 
 def test_corrupt_backup_aborts_before_repair(

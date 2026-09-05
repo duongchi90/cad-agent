@@ -200,19 +200,87 @@ def test_existing_repair_dxf_live_path_remains_available() -> None:
     assert not hasattr(repair2, "execute_repair_command")
 
 
-def test_existing_repair_dxf_live_keeps_erase_timeout_compatibility() -> None:
-    class EraseTimeoutClient(RecordingClient):
+@pytest.mark.parametrize("failure", [MCPTimeoutError("timeout"), MCPToolError("tool")])
+def test_repair_dxf_live_fails_closed_when_erase_is_uncertain(failure: Exception) -> None:
+    class EraseFailureClient(RecordingClient):
         def entity_erase(self, handle: str) -> None:
             self.calls.append(("entity_erase", (handle,), {}))
-            raise MCPTimeoutError("timeout")
+            raise failure
 
     build = BuildResult(output_path="fake.dxf", entity_count=1)
     build.handle_by_primitive_id = {"p": "OLD-001"}
     build.layer_by_primitive_id = {"p": "L"}
     build.written_geometry_by_primitive_id = {"p": _geometry("LINE")}
-    client = EraseTimeoutClient()
+    client = EraseFailureClient()
+
+    with pytest.raises(MCPToolError, match="REPAIR_CAPABILITY_FAILED"):
+        repair2.repair_dxf_live(build, ["p: mismatch"], client)
+
+    assert [call[0] for call in client.calls] == ["entity_erase"]
+    assert build.handle_by_primitive_id["p"] == "OLD-001"
+
+
+@pytest.mark.parametrize("failure", [MCPTimeoutError("timeout"), MCPToolError("tool")])
+def test_repair_dxf_live_fails_closed_when_create_is_uncertain(failure: Exception) -> None:
+    class CreateFailureClient(RecordingClient):
+        def entity_create_line(self, *args, **kwargs):
+            self.calls.append(("entity_create_line", (args, kwargs)))
+            raise failure
+
+    build = BuildResult(output_path="fake.dxf", entity_count=1)
+    build.handle_by_primitive_id = {"p": "OLD-001"}
+    build.layer_by_primitive_id = {"p": "L"}
+    build.written_geometry_by_primitive_id = {"p": _geometry("LINE")}
+    client = CreateFailureClient()
+
+    with pytest.raises(MCPToolError, match="REPAIR_CAPABILITY_FAILED"):
+        repair2.repair_dxf_live(build, ["p: mismatch"], client)
+
+    assert [call[0] for call in client.calls] == [
+        "entity_erase",
+        "entity_create_line",
+    ]
+    assert build.handle_by_primitive_id["p"] == "OLD-001"
+
+
+def test_repair_dxf_live_does_not_continue_after_uncertain_create() -> None:
+    class CreateFailureClient(RecordingClient):
+        def entity_create_line(self, *args, **kwargs):
+            self.calls.append(("entity_create_line", (args, kwargs)))
+            raise MCPTimeoutError("response lost after remote create")
+
+    build = BuildResult(output_path="fake.dxf", entity_count=2)
+    build.handle_by_primitive_id = {"p": "OLD-001", "q": "OLD-002"}
+    build.layer_by_primitive_id = {"p": "L", "q": "L"}
+    build.written_geometry_by_primitive_id = {
+        "p": _geometry("LINE"),
+        "q": _geometry("CIRCLE"),
+    }
+    client = CreateFailureClient()
+
+    with pytest.raises(MCPToolError, match="REPAIR_CAPABILITY_FAILED"):
+        repair2.repair_dxf_live(build, ["p: mismatch", "q: mismatch"], client)
+
+    assert [call[0] for call in client.calls] == [
+        "entity_erase",
+        "entity_create_line",
+    ]
+    assert build.handle_by_primitive_id == {"p": "OLD-001", "q": "OLD-002"}
+
+
+def test_repair_dxf_live_rejects_invalid_geometry_before_erase() -> None:
+    build = BuildResult(output_path="fake.dxf", entity_count=1)
+    build.handle_by_primitive_id = {"p": "OLD-001"}
+    build.layer_by_primitive_id = {"p": "L"}
+    build.written_geometry_by_primitive_id = {
+        "p": {"type": "line", "start": (0.0, 0.0)}
+    }
+    client = RecordingClient()
 
     result = repair2.repair_dxf_live(build, ["p: mismatch"], client)
 
-    assert result.repaired_count == 1
-    assert [call[0] for call in client.calls] == ["entity_erase", "entity_create_line"]
+    assert client.calls == []
+    assert result.repaired_count == 0
+    assert result.skipped_count == 1
+    assert "REPAIR_GEOMETRY_INVALID" in result.details[0]
+    assert build.handle_by_primitive_id["p"] == "OLD-001"
