@@ -505,11 +505,10 @@ class FileIPCLiveMCPClient:
                     ":vlax-true))"
                 )
             else:
-                self._raw_lisp_trigger(
-                    "(progn (vl-load-com) "
-                    "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                    ":vlax-false))"
-                )
+                # Queue no-save close at AutoCAD's command boundary. Direct
+                # COM close can race the active File IPC dispatcher and
+                # report that the drawing is busy.
+                self._raw_lisp_trigger('(command-s "_.CLOSE" "_N")')
             time.sleep(self._document_settle_s)
             expected_path = self._active_drawing_path
             if self._command_trigger is not None and expected_path is not None:

@@ -223,7 +223,7 @@ class FileIPCClientTests(unittest.TestCase):
         self.assertIn(str(Path(self._ipc_dir)).replace("\\", "/"), raw_commands[1])
         self.assertIn('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
 
-    def test_raw_lisp_close_uses_com_false_without_save_modal_without_command_trigger(self):
+    def test_raw_lisp_close_queues_no_save_command_at_command_boundary(self):
         raw_commands = []
         command_sequences = []
         client = FileIPCLiveMCPClient(
@@ -236,16 +236,12 @@ class FileIPCClientTests(unittest.TestCase):
         client.drawing_close(save_changes=False)
 
         self.assertEqual(
-            [
-                "(progn (vl-load-com) "
-                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                ":vlax-false))"
-            ],
+            ['(command-s "_.CLOSE" "_N")'],
             raw_commands,
         )
         self.assertEqual([], command_sequences)
 
-    def test_raw_lisp_close_prefers_com_even_with_command_trigger(self):
+    def test_raw_lisp_close_queues_no_save_command_with_command_trigger(self):
         raw_commands = []
         command_sequences = []
         client = FileIPCLiveMCPClient(
@@ -258,11 +254,7 @@ class FileIPCClientTests(unittest.TestCase):
         client.drawing_close(save_changes=False)
 
         self.assertEqual(
-            [
-                "(progn (vl-load-com) "
-                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                ":vlax-false))"
-            ],
+            ['(command-s "_.CLOSE" "_N")'],
             raw_commands,
         )
         self.assertEqual([], command_sequences)
