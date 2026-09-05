@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from dxf_builder_lib.builder import BuildResult
+from mcp_integration_lib.mcp_client import MCPTimeoutError, MCPToolError
 from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import LiveReviewResult, review_dxf_live
 
@@ -435,6 +436,35 @@ def _restore_canonical(
     }
 
 
+def _rollback_failed_repair(
+    *,
+    build: BuildResult,
+    client: Any,
+    dxf: Path,
+    evidence_path: Path,
+    backup: dict[str, Any],
+    handles_before_repair: dict[str, str],
+) -> dict[str, Any]:
+    """Close an uncertain repair without saving, then restore the backup."""
+    build.handle_by_primitive_id.clear()
+    try:
+        client.drawing_close(save_changes=False)
+        restored = _restore_canonical(
+            client=client,
+            dxf=dxf,
+            evidence_path=evidence_path,
+            backup=backup,
+        )
+        build.handle_by_primitive_id.update(handles_before_repair)
+        return {"recovery_verified": True, **restored}
+    except Exception:  # pragma: no cover - exercised by live transport failures
+        build.handle_by_primitive_id.clear()
+        return {
+            "recovery_verified": False,
+            "error": "ROLLBACK_FAILED",
+        }
+
+
 def review_live(build: BuildResult, client: Any, dxf: Path) -> LiveReviewResult:
     build.output_path = str(dxf)
     return review_dxf_live(build, client, open_drawing=True)
@@ -572,7 +602,25 @@ def repair_live(
         owned_paths=owned_backup_paths,
     )
     report["backup"] = backup
-    repaired = repair_dxf_live(build, before.mismatches, client)
+    handles_before_repair = dict(build.handle_by_primitive_id)
+    try:
+        repaired = repair_dxf_live(build, before.mismatches, client)
+    except (MCPTimeoutError, MCPToolError):
+        report["repair_error"] = "REPAIR_CAPABILITY_FAILED"
+        report["rollback_restore"] = _rollback_failed_repair(
+            build=build,
+            client=client,
+            dxf=dxf,
+            evidence_path=evidence_path,
+            backup=backup,
+            handles_before_repair=handles_before_repair,
+        )
+        report["rollback_state"] = (
+            "failed_canonical_restored"
+            if report["rollback_restore"]["recovery_verified"]
+            else "rollback_failed"
+        )
+        return report
     report["repair"] = asdict(repaired)
     after = review_dxf_live(build, client, open_drawing=False)
     report["after_review"] = review_dict(after)
