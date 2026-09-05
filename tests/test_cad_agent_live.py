@@ -20,7 +20,11 @@ from cad_agent.live import (
     write_build_evidence,
 )
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.mcp_client import FakeMCPClient
+from mcp_integration_lib.mcp_client import (
+    FakeMCPClient,
+    MCPTimeoutError,
+    MCPToolError,
+)
 
 
 def _build(path: Path) -> BuildResult:
@@ -403,6 +407,42 @@ class _BrokenRepairClient(FakeMCPClient):
 class _CloseFailureClient(_BrokenRepairClient):
     def drawing_close(self, save_changes: bool = False) -> None:
         return None
+
+
+@pytest.mark.parametrize("failure", [MCPTimeoutError("timeout"), MCPToolError("tool")])
+def test_uncertain_repair_restores_canonical_before_terminal_non_pass(
+    failure: Exception,
+) -> None:
+    class _CreateFailureClient(_CanonicalIdentityFakeMCPClient):
+        def entity_create_line(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise failure
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        dxf_before = dxf.read_bytes()
+        evidence_before = evidence.read_bytes()
+        client = _CreateFailureClient(fail_entity_get=False)
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (99.0, 0.0)}
+        )
+
+        report = repair_live(
+            build, client, dxf, evidence, root / "backups", "change-42"
+        )
+
+        assert report["save_state"] == "not_saved"
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert report["rollback_state"] == "failed_canonical_restored"
+        assert report["rollback_restore"]["canonical_document_open"] is True
+        assert client.closed_without_save is True
+        assert client.opened_path == str(dxf)
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == evidence_before
 
 
 @dataclass

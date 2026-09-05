@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.repair2 import repair_dxf_live
+from mcp_integration_lib.repair2 import (
+    MCPTimeoutError,
+    MCPToolError,
+    repair_dxf_live,
+)
 from mcp_integration_lib.reviewer2 import LiveReviewResult, review_dxf_live
 
 from .manifest import sha256_file
@@ -533,6 +537,28 @@ def _attest_saved_candidate(
     }
 
 
+def _rollback_failed_repair(
+    *,
+    client: Any,
+    dxf: Path,
+    evidence_path: Path,
+    backup: dict[str, Any],
+) -> dict[str, Any]:
+    """Close an uncertain repair without saving, then restore the backup."""
+    try:
+        client.drawing_close(save_changes=False)
+        return _restore_canonical(
+            client=client,
+            dxf=dxf,
+            evidence_path=evidence_path,
+            backup=backup,
+        )
+    except Exception as exc:  # pragma: no cover - exercised by live transport failures
+        raise LiveSafetyError(
+            "rollback failed; unrecoverable recovery is terminal and non-pass."
+        ) from exc
+
+
 def repair_live(
     build: BuildResult,
     client: Any,
@@ -572,7 +598,18 @@ def repair_live(
         owned_paths=owned_backup_paths,
     )
     report["backup"] = backup
-    repaired = repair_dxf_live(build, before.mismatches, client)
+    try:
+        repaired = repair_dxf_live(build, before.mismatches, client)
+    except (MCPTimeoutError, MCPToolError):
+        report["repair_error"] = "REPAIR_CAPABILITY_FAILED"
+        report["rollback_restore"] = _rollback_failed_repair(
+            client=client,
+            dxf=dxf,
+            evidence_path=evidence_path,
+            backup=backup,
+        )
+        report["rollback_state"] = "failed_canonical_restored"
+        return report
     report["repair"] = asdict(repaired)
     after = review_dxf_live(build, client, open_drawing=False)
     report["after_review"] = review_dict(after)
@@ -601,17 +638,11 @@ def repair_live(
         report["backup_cleanup"] = {"zero_survivors": True}
         return report
 
-    try:
-        client.drawing_close(save_changes=False)
-        report["rollback_restore"] = _restore_canonical(
-            client=client,
-            dxf=dxf,
-            evidence_path=evidence_path,
-            backup=backup,
-        )
-        report["rollback_state"] = "failed_canonical_restored"
-    except Exception as exc:  # pragma: no cover - exercised by live transport failures
-        raise LiveSafetyError(
-            "rollback failed; unrecoverable recovery is terminal and non-pass."
-        ) from exc
+    report["rollback_restore"] = _rollback_failed_repair(
+        client=client,
+        dxf=dxf,
+        evidence_path=evidence_path,
+        backup=backup,
+    )
+    report["rollback_state"] = "failed_canonical_restored"
     return report
