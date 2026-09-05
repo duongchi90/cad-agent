@@ -232,12 +232,22 @@ class FileIPCClientTests(unittest.TestCase):
             command_trigger=command_sequences.append,
             document_settle_s=0,
         )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "candidate.dxf",
+        }
+        client.drawing_list_open_paths = lambda: []
 
         client.drawing_close(save_changes=False)
 
         self.assertEqual(
-            ['(command-s "_.CLOSE" "_N")'],
-            raw_commands,
+            1,
+            len(raw_commands),
+        )
+        self.assertIn(
+            '(command-s "_.CLOSE" "_N")',
+            raw_commands[0],
         )
         self.assertEqual([], command_sequences)
 
@@ -250,14 +260,76 @@ class FileIPCClientTests(unittest.TestCase):
             command_trigger=command_sequences.append,
             document_settle_s=0,
         )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "candidate.dxf",
+        }
+        client.drawing_list_open_paths = lambda: []
 
         client.drawing_close(save_changes=False)
 
         self.assertEqual(
-            ['(command-s "_.CLOSE" "_N")'],
-            raw_commands,
+            1,
+            len(raw_commands),
+        )
+        self.assertIn(
+            '(command-s "_.CLOSE" "_N")',
+            raw_commands[0],
         )
         self.assertEqual([], command_sequences)
+
+    def test_raw_lisp_close_rejects_active_document_mismatch_before_close(self):
+        raw_commands = []
+        command_sequences = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            command_trigger=command_sequences.append,
+            document_settle_s=0,
+        )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "other.dxf",
+        }
+
+        with self.assertRaisesRegex(
+            MCPToolError, "^DRAWING_CLOSE_TARGET_MISMATCH$"
+        ):
+            client.drawing_close(save_changes=False)
+
+        self.assertEqual([], raw_commands)
+        self.assertEqual([], command_sequences)
+
+    def test_raw_lisp_close_embeds_exact_target_guard_before_command(self):
+        raw_commands = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            command_trigger=lambda command: None,
+            document_settle_s=0,
+            poll_interval_s=0,
+        )
+        client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "candidate.dxf",
+        }
+        client.drawing_list_open_paths = lambda: []
+
+        client.drawing_close(save_changes=False)
+
+        self.assertEqual(1, len(raw_commands))
+        expression = raw_commands[0]
+        self.assertIn("vla-get-ActiveDocument", expression)
+        self.assertIn("vla-get-FullName", expression)
+        self.assertIn("findfile", expression)
+        self.assertIn('(command-s "_.CLOSE" "_N")', expression)
+        self.assertLess(
+            expression.index("vla-get-FullName"),
+            expression.index('(command-s "_.CLOSE" "_N")'),
+        )
 
     def test_raw_lisp_close_fails_closed_when_active_document_remains_open(self):
         raw_commands = []
@@ -269,6 +341,10 @@ class FileIPCClientTests(unittest.TestCase):
             poll_interval_s=0,
         )
         client._active_drawing_path = r"c:\work\candidate.dxf"
+        client.drawing_get_variables = lambda names: {
+            "DWGPREFIX": "C:/work/",
+            "DWGNAME": "candidate.dxf",
+        }
         client.drawing_list_open_paths = lambda: [r"C:\work\candidate.dxf"]
 
         with patch(
