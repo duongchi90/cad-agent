@@ -551,16 +551,18 @@ def _rollback_failed_repair(
     build.handle_by_primitive_id.update(handles_before_repair)
     try:
         client.drawing_close(save_changes=False)
-        return _restore_canonical(
+        restored = _restore_canonical(
             client=client,
             dxf=dxf,
             evidence_path=evidence_path,
             backup=backup,
         )
-    except Exception as exc:  # pragma: no cover - exercised by live transport failures
-        raise LiveSafetyError(
-            "rollback failed; unrecoverable recovery is terminal and non-pass."
-        ) from exc
+        return {"recovery_verified": True, **restored}
+    except Exception:  # pragma: no cover - exercised by live transport failures
+        return {
+            "recovery_verified": False,
+            "error": "ROLLBACK_FAILED",
+        }
 
 
 def repair_live(
@@ -615,7 +617,11 @@ def repair_live(
             backup=backup,
             handles_before_repair=handles_before_repair,
         )
-        report["rollback_state"] = "failed_canonical_restored"
+        report["rollback_state"] = (
+            "failed_canonical_restored"
+            if report["rollback_restore"]["recovery_verified"]
+            else "rollback_failed"
+        )
         return report
     report["repair"] = asdict(repaired)
     after = review_dxf_live(build, client, open_drawing=False)
@@ -653,5 +659,9 @@ def repair_live(
         backup=backup,
         handles_before_repair=handles_before_repair,
     )
-    report["rollback_state"] = "failed_canonical_restored"
+    report["rollback_state"] = (
+        "failed_canonical_restored"
+        if report["rollback_restore"]["recovery_verified"]
+        else "rollback_failed"
+    )
     return report

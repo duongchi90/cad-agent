@@ -669,15 +669,21 @@ def test_rollback_failure_is_terminal_non_pass() -> None:
             {"start": (0.0, 0.0), "end": (99.0, 0.0)},
         )
 
-        with pytest.raises(LiveSafetyError, match="rollback|recovery"):
-            repair_live(
-                build,
-                client,
-                dxf,
-                evidence,
-                root / "backups",
-                "change-42",
-            )
+        report = repair_live(
+            build,
+            client,
+            dxf,
+            evidence,
+            root / "backups",
+            "change-42",
+        )
+
+        assert report["save_state"] == "not_saved"
+        assert report["rollback_state"] == "rollback_failed"
+        assert report["rollback_restore"] == {
+            "recovery_verified": False,
+            "error": "ROLLBACK_FAILED",
+        }
 
 
 def test_corrupt_backup_aborts_before_repair(
