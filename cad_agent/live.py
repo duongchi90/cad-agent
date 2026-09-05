@@ -539,12 +539,16 @@ def _attest_saved_candidate(
 
 def _rollback_failed_repair(
     *,
+    build: BuildResult,
     client: Any,
     dxf: Path,
     evidence_path: Path,
     backup: dict[str, Any],
+    handles_before_repair: dict[str, str],
 ) -> dict[str, Any]:
     """Close an uncertain repair without saving, then restore the backup."""
+    build.handle_by_primitive_id.clear()
+    build.handle_by_primitive_id.update(handles_before_repair)
     try:
         client.drawing_close(save_changes=False)
         return _restore_canonical(
@@ -598,15 +602,18 @@ def repair_live(
         owned_paths=owned_backup_paths,
     )
     report["backup"] = backup
+    handles_before_repair = dict(build.handle_by_primitive_id)
     try:
         repaired = repair_dxf_live(build, before.mismatches, client)
     except (MCPTimeoutError, MCPToolError):
         report["repair_error"] = "REPAIR_CAPABILITY_FAILED"
         report["rollback_restore"] = _rollback_failed_repair(
+            build=build,
             client=client,
             dxf=dxf,
             evidence_path=evidence_path,
             backup=backup,
+            handles_before_repair=handles_before_repair,
         )
         report["rollback_state"] = "failed_canonical_restored"
         return report
@@ -639,10 +646,12 @@ def repair_live(
         return report
 
     report["rollback_restore"] = _rollback_failed_repair(
+        build=build,
         client=client,
         dxf=dxf,
         evidence_path=evidence_path,
         backup=backup,
+        handles_before_repair=handles_before_repair,
     )
     report["rollback_state"] = "failed_canonical_restored"
     return report
