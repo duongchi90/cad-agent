@@ -32,6 +32,22 @@
   the synthetic Mechanical pilot, and the Phase 4 PDF-to-pilot binding remain
   offline-verified. A fresh focused current-main recheck passed `159` tests.
   This does not promote live AutoCAD/FileIPC query evidence to PASS.
+- A fresh disposable offline generated-pilot binding epoch composed and
+  validated the existing provenance, R3 registry, DARA currentness, and R4
+  candidate revision/state owners for `synthetic-simple-stepped-shaft-v1`.
+  Source SHA-256 is
+  `1c86ce46261a3689d00bc18157087e418df0872ac0a6a4635c157f2b85677b8d`;
+  candidate SHA-256 is
+  `6fe59a1ae1d38eb59f6edb002f713c0dbc6d111235f263c07b1e67df584d9e90`;
+  provenance, registry snapshot, candidate revision, and candidate state
+  hashes are respectively
+  `208ee6353e26b2cdb500e8a6e71638e1cdfb2745f4271a92f11af1edf65ccbb7`,
+  `3a2ba92ed1021dc647d0ec5ae0a38c9bdbde4d11795327294ce36228b296a302`,
+  `31415f69b1bbc88a8ac8fe1614032a3575c860d3bd3b4ae98612e747a90875f9`,
+  and `73997a0c71b858ed432d20d5fc290725ab32cd9da1df0272f5975eeb3cff1983`.
+  The result has two components and nine candidate bindings, with
+  `live_session=NOT_OBSERVED` and `mutation=false`; this closes the offline
+  binding-preparation sub-boundary only, not live query acceptance.
 - A current-main bootstrap-only ping previously returned a claim-bound
   terminal `{ "ready": true }` result using the canonical dispatcher. A later
   single disposable Phase 4 native-edit/save/close/reopen epoch on the same
