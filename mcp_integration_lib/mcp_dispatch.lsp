@@ -721,6 +721,19 @@
   (vlax-3d-point (list x y 0.0))
 )
 
+(defun mcp-validate-layer-if-present (params / layer layers)
+  (setq layer (mcp-param params "layer"))
+  (if (= (type layer) 'STR)
+    (progn
+      (setq layers
+        (vla-get-Layers (vla-get-ActiveDocument (vlax-get-acad-object)))
+      )
+      (vla-item layers layer)
+    )
+  )
+  T
+)
+
 (defun mcp-set-layer-if-present (object params / layer)
   (setq layer (mcp-param params "layer"))
   (if (= (type layer) 'STR)
@@ -888,14 +901,34 @@
   (mcp-object (list (cons "paths" (mcp-array (reverse paths)))))
 )
 
-(defun mcp-op-drawing-save-as-dxf (params / path doc)
+(defun mcp-op-drawing-save-as-dxf (params / path doc old-filedia export-result)
   (setq path (mcp-param params "path")
-        doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-  (if (not (= (type path) 'STR))
-    (mcp-object nil)
+        doc (vla-get-ActiveDocument (vlax-get-acad-object))
+        old-filedia (getvar "FILEDIA"))
+  (if
+    (or
+      (not (= (type path) 'STR))
+      (= (strcase path) (strcase (vla-get-FullName doc)))
+      (findfile path)
+    )
+    'MCP_COMMAND_FAILED_SENTINEL
     (progn
-      (vla-SaveAs doc path)
-      (mcp-object nil)
+      (setvar "FILEDIA" 0)
+      (setq export-result
+        (vl-catch-all-apply
+          '(lambda (target) (command-s "_.DXFOUT" target ""))
+          (list path)
+        )
+      )
+      (setvar "FILEDIA" old-filedia)
+      (if
+        (or
+          (vl-catch-all-error-p export-result)
+          (not (findfile path))
+        )
+        'MCP_COMMAND_FAILED_SENTINEL
+        (mcp-object nil)
+      )
     )
   )
 )
@@ -1096,6 +1129,7 @@
 )
 
 (defun mcp-op-create-line (params / object model)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         object
           (vla-AddLine
@@ -1113,6 +1147,7 @@
 )
 
 (defun mcp-op-create-circle (params / object model)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         object
           (vla-AddCircle
@@ -1134,6 +1169,7 @@
 )
 
 (defun mcp-op-create-arc (params / object model)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         object
           (vla-AddArc
@@ -1153,6 +1189,7 @@
 )
 
 (defun mcp-op-create-text (params / object model height rotation)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         height (mcp-param params "height")
         rotation (mcp-param params "rotation"))
@@ -1243,6 +1280,9 @@
                               (cond
                                 ((= result 'MCP_COMMAND_UNSUPPORTED_SENTINEL)
                                   (list request-id claim *mcp-error-command*)
+                                )
+                                ((= result 'MCP_COMMAND_FAILED_SENTINEL)
+                                  (list request-id claim *mcp-error-failed*)
                                 )
                                 ((vl-catch-all-error-p result)
                                   (list request-id claim *mcp-error-failed*)
