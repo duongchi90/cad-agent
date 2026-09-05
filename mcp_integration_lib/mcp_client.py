@@ -498,6 +498,7 @@ class FileIPCLiveMCPClient:
 
     def drawing_close(self, save_changes: bool = False) -> None:
         if self._raw_lisp_trigger is not None:
+            expected_path = self._active_drawing_path
             if save_changes:
                 self._raw_lisp_trigger(
                     "(progn (vl-load-com) "
@@ -505,12 +506,39 @@ class FileIPCLiveMCPClient:
                     ":vlax-true))"
                 )
             else:
+                if expected_path is None:
+                    raise MCPToolError("DRAWING_CLOSE_TARGET_UNBOUND")
+                variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
+                prefix = variables.get("DWGPREFIX")
+                name = variables.get("DWGNAME")
+                active_path = _normalized_autocad_path(
+                    ntpath.join(str(prefix or ""), str(name or ""))
+                )
+                if not prefix or not name or active_path != expected_path:
+                    raise MCPToolError("DRAWING_CLOSE_TARGET_MISMATCH")
+                expected_literal = _autolisp_string_literal(
+                    expected_path.replace("\\", "/")
+                )
                 # Queue no-save close at AutoCAD's command boundary. Direct
                 # COM close can race the active File IPC dispatcher and
                 # report that the drawing is busy.
-                self._raw_lisp_trigger('(command-s "_.CLOSE" "_N")')
+                self._raw_lisp_trigger(
+                    "(progn (vl-load-com) "
+                    "(setq mcp-close-doc "
+                    "(vla-get-ActiveDocument (vlax-get-acad-object)) "
+                    "mcp-close-target (findfile "
+                    + expected_literal
+                    + ")) "
+                    "(if (not mcp-close-target) "
+                    "(setq mcp-close-target "
+                    + expected_literal
+                    + ")) "
+                    "(if (= (strcase (vla-get-FullName mcp-close-doc)) "
+                    "(strcase mcp-close-target)) "
+                    '(command-s "_.CLOSE" "_N") '
+                    '(princ "DRAWING_CLOSE_TARGET_MISMATCH")))'
+                )
             time.sleep(self._document_settle_s)
-            expected_path = self._active_drawing_path
             if self._command_trigger is not None and expected_path is not None:
                 deadline = time.time() + max(5.0, self._document_settle_s * 3.0)
                 close_confirmed = False
