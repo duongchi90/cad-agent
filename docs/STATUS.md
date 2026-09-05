@@ -19,16 +19,15 @@
 ## Current canonical snapshot (2026-09-05)
 
 - Canonical GitHub main at this snapshot is
-  `0c8055c18512960ff70c0181add10e19960d9a8f`, the merge commit for docs PR
-  #399. Its runtime state includes the provider-independent hardening merged
+  `156d080390015f1895035443d7d13e6f95c9e834`, the merge commit for docs PR
+  #401. Its runtime state includes the provider-independent hardening merged
   through PR #393 and the current live-boundary documentation refresh.
 - Relevant provider-independent PRs remain open and must not be described as
   merged: PR #396 is DRAFT at `1c91d8a514220600cc373dd063a4452f5d765605`,
-  PR #397 is DRAFT at `d274d534700cef1140f54ae1bdea59f045404b48`, PR #398 is
-  READY at `e6804ae1b9a610d77fb26c508ad56050001a8004`, and PR #400 is READY
-  at `3a37220a916b0a72571e3c7c1e31b9c8a0411edb`. Their exact-head hosted
-  checks are green where recorded; PR #400 still requires the live owner gate
-  before merge.
+  PR #397 is DRAFT at `d274d534700cef1140f54ae1bdea59f045404b48`, and PR #400
+  is READY at `c8fdcb82180e1f8d4458a6203e6a93d4877a7be5`. PR #400's hosted
+  checks are green and its exact-head authoritative verifier passed, but its
+  live owner gate remains NOT RUN and it is not merged.
 - Phase 1A deterministic provenance/bounded-query, Phase 2 skill discovery,
   the synthetic Mechanical pilot, and the Phase 4 PDF-to-pilot binding remain
   offline-verified. A fresh focused current-main recheck passed `159` tests.
@@ -49,39 +48,47 @@
   The result has two components and nine candidate bindings, with
   `live_session=NOT_OBSERVED` and `mutation=false`; this closes the offline
   binding-preparation sub-boundary only, not live query acceptance.
-- A current-main bootstrap-only ping previously returned a claim-bound
-  terminal `{ "ready": true }` result using the canonical dispatcher. A later
-  single disposable Phase 4 native-edit/save/close/reopen epoch on the same
-  AutoCAD session failed before drawing-open completion: request
-  `4523c8bbc4f0` did not produce a dispatcher readiness result within 20
-  seconds. AutoCAD PID `3996`, HWND `0x1405C4`, and foreground equality were
-  valid before and after. No mutation or save occurred.
-- The failed epoch's disposable candidate and source both retained SHA-256
-  `141616d99bcdaf59a4b65662222aed187fe1527f750ed4545c287783e8dbfa71`.
-  The candidate was subsequently closed without save through the existing
-  command-boundary owner, AutoCAD returned to `Drawing1.dwg`, and the owned
-  IPC root had zero survivors. No source/customer/accepted drawing was
-  touched. This is NON_PASS evidence, not native edit/save/reopen PASS.
+- Fresh disposable current-main runtime epochs #04–#06 remain NON_PASS. The
+  runtime implementation head was `dd907d953dc7cc521997d1855a47cbfdea719f18`
+  (the only difference from the current main snapshot was documentation).
+  Epoch #04 opened candidate SHA-256
+  `5b37075c96f033c9d03fd4df60e033b9ce5550e82e68f5af834295be42b888b3`, but
+  AutoCAD reported a busy/cancelled load and then `C:MCP-DISPATCH` was
+  undefined in the candidate tab. Epoch #05 did not observe the candidate tab
+  after one OPEN submission and the existing trigger refused a read-only probe
+  with `WINDOW_FOREGROUND_INVALID`. Epoch #06 likewise did not produce an
+  observable candidate-tab document or open-document result; no dispatcher,
+  ping, or query was sent.
+- Across these epochs AutoCAD PID `3996`, HWND `0x1405C4`, and the protected
+  source SHA-256
+  `1c86ce46261a3689d00bc18157087e418df0872ac0a6a4635c157f2b85677b8d`
+  remained unchanged. Epoch #05's disposable candidate SHA-256 was
+  `47ddd5afd445f7ede62d3d79d676b2cac3daae9bbeded0b3de766315be45d839`.
+  Epoch #06's disposable candidate SHA-256 was
+  `aaf30772db695dd22658706fff9817591777a86e2fe805fe0ecaa1e34fe989c5`.
+  No mutation or save occurred; all owned IPC/candidate roots were removed and
+  AutoCAD returned to `Drawing1.dwg`. These are NON_PASS precondition records,
+  not live query or native edit acceptance.
 - FIRST_UNSATISFIED_BOUNDARY is
-  `LIVE_FILEIPC_DISPATCHER_TERMINAL_RESULT_UNAVAILABLE`, classified as an
+  `PHASE1A_LIVE_CANDIDATE_TAB_BOOTSTRAP_UNVERIFIED`, classified as an
   environment/runtime precondition and owned by the existing
-  `FileIPCLiveMCPClient` plus canonical AutoLISP dispatcher. No blind retry is
-  justified. The next oracle is one future fresh disposable exact-bound epoch
-  with a claim-bound terminal result, exact document identity, candidate/source
-  integrity, and zero owned IPC survivors.
-- A fresh authoritative verifier using the supported external Python 3.11
-  environment passed the offline gate with `3156` passed, `18` deselected,
-  `72` subtests, and `.NET IPC` `118` passed. The intentional causal RED has
-  one expected failure; private data has two skips; the AutoCAD .NET gate was
-  explicitly `NOT RUN`. Worktrees remained clean.
+  `FileIPCLiveMCPClient`, canonical AutoLISP dispatcher, and AutoCAD command
+  boundary. The next oracle is one fresh disposable candidate whose exact tab
+  is visibly/authoritatively observed idle, followed by canonical dispatcher
+  load observed in that tab and one claim-bound terminal ping before any
+  Phase 1A query. No blind retry is justified.
+- A fresh exact-head PR #400 verifier passed with offline `3166` tests,
+  `18` deselected, `72` subtests, `.NET` `198` tests, and `.NET IPC` `118`
+  tests. The intentional causal RED has one expected failure; private-data
+  and AutoCAD live markers remain unavailable/NOT RUN. The PR worktree stayed
+  clean.
 - M3 real-provider acceptance remains
   `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`. PR #340 is OPEN/DRAFT/FROZEN at head
   `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`; no provider call, billing action,
   credential use, PR #340/#337 mutation, or M2 retest is included here.
-- Comments `5549995801` and `5549943811` on #343, plus `5549794343` on #377,
-  record the latest provider-independent repair-boundary and live NON_PASS
-  evidence. Older sections below remain historical evidence and do not
-  override this snapshot.
+- Comment `5550276695` on #377 records the latest live NON_PASS epochs and
+  their causal boundary. Older sections below remain historical evidence and
+  do not override this snapshot.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 
