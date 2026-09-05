@@ -684,6 +684,7 @@ def test_rollback_failure_is_terminal_non_pass() -> None:
             "recovery_verified": False,
             "error": "ROLLBACK_FAILED",
         }
+        assert build.handle_by_primitive_id == {}
 
 
 def test_corrupt_backup_aborts_before_repair(

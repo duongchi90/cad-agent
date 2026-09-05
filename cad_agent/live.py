@@ -559,6 +559,7 @@ def _rollback_failed_repair(
         )
         return {"recovery_verified": True, **restored}
     except Exception:  # pragma: no cover - exercised by live transport failures
+        build.handle_by_primitive_id.clear()
         return {
             "recovery_verified": False,
             "error": "ROLLBACK_FAILED",
