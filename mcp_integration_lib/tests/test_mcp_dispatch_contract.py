@@ -253,6 +253,46 @@ def test_file_ipc_dispatch_binds_request_filename_payload_and_result_identity(tm
     assert not list(tmp_path.glob("autocad_mcp_result_*.json"))
 
 
+def test_file_ipc_dispatch_exposes_privacy_safe_terminal_exchange_evidence(
+    tmp_path: Path,
+) -> None:
+    observed: dict[str, str] = {}
+
+    def trigger() -> None:
+        request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        observed["request_id"] = request["request_id"]
+        result_path = tmp_path / f"autocad_mcp_result_{request['request_id']}.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "request_id": request["request_id"],
+                    "claim": request["claim"],
+                    "ok": True,
+                    "payload": {"ready": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        legacy_fixture_mode=False,
+        timeout_s=0.2,
+        poll_interval_s=0.001,
+    )
+    assert client._dispatch("ping", {}) == {"ready": True}
+    assert client.last_exchange_evidence == {
+        "request_id": observed["request_id"],
+        "command": "ping",
+        "claim_bound": True,
+        "terminal": True,
+        "ok": True,
+    }
+    assert "claim" not in client.last_exchange_evidence
+
+
 def test_file_ipc_client_mints_fresh_unpredictable_claims() -> None:
     source = MCP_CLIENT.read_text(encoding="utf-8")
     assert "import secrets" in source

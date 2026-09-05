@@ -291,6 +291,14 @@ class FileIPCLiveMCPClient:
         self._command_trigger = command_trigger
         self._start_tab_no_document_probe = start_tab_no_document_probe
         self._active_drawing_path: Optional[str] = None
+        self._last_exchange_evidence: Optional[Dict[str, Any]] = None
+
+    @property
+    def last_exchange_evidence(self) -> Optional[Dict[str, Any]]:
+        """Return privacy-safe evidence for the latest validated exchange."""
+        if self._last_exchange_evidence is None:
+            return None
+        return dict(self._last_exchange_evidence)
 
     def _assert_root_unchanged(self) -> None:
         try:
@@ -385,7 +393,15 @@ class FileIPCLiveMCPClient:
                         raw_result,
                         error_code="IPC_RESULT_INVALID",
                     )
-                    return _validate_file_ipc_result(data, request_id, claim)
+                    payload = _validate_file_ipc_result(data, request_id, claim)
+                    self._last_exchange_evidence = {
+                        "request_id": request_id,
+                        "command": command,
+                        "claim_bound": claim is not None,
+                        "terminal": True,
+                        "ok": True,
+                    }
+                    return payload
                 time.sleep(self._poll)
             raise MCPTimeoutError(f"Timeout waiting for result (request_id={request_id})")
         finally:
