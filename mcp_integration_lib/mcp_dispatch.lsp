@@ -895,6 +895,7 @@
   (if
     (or
       (not (= (type path) 'STR))
+      (= (strlen path) 0)
       (= (strcase path) (strcase (vla-get-FullName doc)))
       (findfile path)
     )

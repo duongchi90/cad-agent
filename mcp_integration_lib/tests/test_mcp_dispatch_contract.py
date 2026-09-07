@@ -812,6 +812,17 @@ def test_dxf_export_uses_dxfout_and_requires_destination_existence() -> None:
     assert "vla-saveas" not in body
 
 
+def test_dxf_export_rejects_empty_destination_path() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-op-drawing-save-as-dxf\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    assert "(= (strlen path) 0)" in match.group("body")
+
+
 def test_dxf_export_failure_is_a_categorical_terminal_failure() -> None:
     source = _dispatcher_source().casefold()
     core = source[source.index("(defun mcp-dispatch-core") :]
