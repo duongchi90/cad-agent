@@ -14,7 +14,11 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 
 COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION = "component-view-registry-1.0"
 COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION = "component-view-registry-1.1"
+COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION = (
+    "component-view-registry-native-dwg-1.0"
+)
 _GENERATED_PROVENANCE_MODE = "GENERATED_MECHANICAL_" + chr(80) + "ILOT"
+_NATIVE_DWG_PROVENANCE_MODE = "NATIVE_DWG_FULL_DRAWING"
 
 _CONTEXT_FIELDS = frozenset(
     {
@@ -29,6 +33,9 @@ _CONTEXT_FIELDS = frozenset(
 )
 _GENERATED_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "mechanical_pilot_provenance"}
+)
+_NATIVE_DWG_CONTEXT_FIELDS = frozenset(
+    {"provenance_mode", "candidate", "native_dwg_provenance"}
 )
 _CANDIDATE_FIELDS = frozenset({"candidate_id", "candidate_drawing_sha256"})
 _INPUT_COMPONENT_FIELDS = frozenset(
@@ -144,6 +151,39 @@ _GENERATED_UPSTREAM_BINDING_FIELDS = frozenset(
         "provenance_packet_sha256",
     }
 )
+_NATIVE_DWG_UPSTREAM_BINDING_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "profile_id",
+        "source_sha256",
+        "candidate_id",
+        "candidate_drawing_sha256",
+        "source_path_binding_sha256",
+        "candidate_path_binding_sha256",
+        "source_entity_count",
+        "candidate_entity_count",
+        "entity_signature_sha256",
+        "source_setup_audit_sha256",
+        "candidate_setup_audit_sha256",
+        "calibration_mode",
+        "provenance_packet_sha256",
+    }
+)
+_NATIVE_DWG_DRAWING_BINDING_FIELDS = frozenset(
+    {
+        "candidate_id",
+        "source_sha256",
+        "candidate_sha256",
+        "source_entity_count",
+        "candidate_entity_count",
+        "entity_signature_sha256",
+        "source_path_binding_sha256",
+        "candidate_path_binding_sha256",
+        "provenance_sha256",
+        "calibration_mode",
+    }
+)
+_NATIVE_DWG_ROOT_FIELDS = _ROOT_FIELDS | frozenset({"drawing_binding"})
 _BASE_SOURCE_FIELDS = frozenset({"source_id", "sha256", "revision"})
 _ORIGIN_CLASSES = frozenset(
     {
@@ -424,10 +464,109 @@ def _generated_upstream_context(
     }
 
 
+def _native_dwg_drawing_binding(
+    packet: Mapping[str, object],
+) -> dict[str, object]:
+    source_readback = packet["source_readback"]
+    candidate_readback = packet["candidate_readback"]
+    return {
+        "candidate_id": packet["candidate_id"],
+        "source_sha256": packet["source_sha256"],
+        "candidate_sha256": packet["candidate_sha256"],
+        "source_entity_count": source_readback["entity_count"],
+        "candidate_entity_count": candidate_readback["entity_count"],
+        "entity_signature_sha256": source_readback[
+            "entity_signature_sha256"
+        ],
+        "source_path_binding_sha256": packet[
+            "source_path_binding_sha256"
+        ],
+        "candidate_path_binding_sha256": packet[
+            "candidate_path_binding_sha256"
+        ],
+        "provenance_sha256": packet["provenance_sha256"],
+        "calibration_mode": packet["calibration_mode"],
+    }
+
+
+def _native_dwg_upstream_context(
+    upstream_context: Mapping[str, object],
+) -> dict[str, object]:
+    context = _closed(
+        upstream_context,
+        _NATIVE_DWG_CONTEXT_FIELDS,
+        "UPSTREAM_CONTEXT_INVALID",
+    )
+    if context["provenance_mode"] != _NATIVE_DWG_PROVENANCE_MODE:
+        _fail("PROVENANCE_MODE_INVALID")
+    candidate = _closed(
+        context["candidate"], _CANDIDATE_FIELDS, "CANDIDATE_INVALID"
+    )
+    candidate_id = _identifier(candidate["candidate_id"], "CANDIDATE_INVALID")
+    candidate_sha256 = _sha256(
+        candidate["candidate_drawing_sha256"], "CANDIDATE_INVALID"
+    )
+    try:
+        from cad_agent.native_dwg_provenance import (
+            validate_native_dwg_provenance,
+        )
+
+        packet = validate_native_dwg_provenance(
+            context["native_dwg_provenance"]
+        )
+    except Exception as exc:
+        raise ComponentViewRegistryError("NATIVE_DWG_PROVENANCE_INVALID") from exc
+    if packet["candidate_id"] != candidate_id:
+        _fail("NATIVE_DWG_CANDIDATE_ID_MISMATCH")
+    if packet["candidate_sha256"] != candidate_sha256:
+        _fail("NATIVE_DWG_CANDIDATE_HASH_MISMATCH")
+    source_readback = packet["source_readback"]
+    candidate_readback = packet["candidate_readback"]
+    upstream_bindings = {
+        "provenance_mode": _NATIVE_DWG_PROVENANCE_MODE,
+        "profile_id": packet["profile_id"],
+        "source_sha256": packet["source_sha256"],
+        "candidate_id": candidate_id,
+        "candidate_drawing_sha256": candidate_sha256,
+        "source_path_binding_sha256": packet[
+            "source_path_binding_sha256"
+        ],
+        "candidate_path_binding_sha256": packet[
+            "candidate_path_binding_sha256"
+        ],
+        "source_entity_count": source_readback["entity_count"],
+        "candidate_entity_count": candidate_readback["entity_count"],
+        "entity_signature_sha256": source_readback[
+            "entity_signature_sha256"
+        ],
+        "source_setup_audit_sha256": packet[
+            "source_setup_audit_sha256"
+        ],
+        "candidate_setup_audit_sha256": packet[
+            "candidate_setup_audit_sha256"
+        ],
+        "calibration_mode": packet["calibration_mode"],
+        "provenance_packet_sha256": packet["provenance_sha256"],
+    }
+    return {
+        "provenance_mode": _NATIVE_DWG_PROVENANCE_MODE,
+        "registry_schema_version": COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION,
+        "packet": packet,
+        "handoff": None,
+        "upstream_bindings": upstream_bindings,
+        "primitive_index": {},
+        "semantic_index": {},
+        "generated_binding_by_projection": {},
+        "drawing_binding": _native_dwg_drawing_binding(packet),
+    }
+
+
 def _upstream_context(upstream_context: object) -> dict[str, object]:
     if isinstance(upstream_context, Mapping):
         if upstream_context.get("provenance_mode") == _GENERATED_PROVENANCE_MODE:
             return _generated_upstream_context(upstream_context)
+        if upstream_context.get("provenance_mode") == _NATIVE_DWG_PROVENANCE_MODE:
+            return _native_dwg_upstream_context(upstream_context)
     context = _closed(
         upstream_context, _CONTEXT_FIELDS, "UPSTREAM_CONTEXT_INVALID"
     )
@@ -1172,15 +1311,19 @@ def _snapshot_material(
     components: list[dict[str, object]],
     views: list[dict[str, object]],
     links: list[dict[str, object]],
+    drawing_binding: dict[str, object] | None = None,
     schema_version: str = COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION,
 ) -> dict[str, object]:
-    return {
+    material: dict[str, object] = {
         "schema_version": schema_version,
         "upstream_bindings": deepcopy(upstream_bindings),
         "components": deepcopy(components),
         "views": deepcopy(views),
         "links": deepcopy(links),
     }
+    if drawing_binding is not None:
+        material["drawing_binding"] = deepcopy(drawing_binding)
+    return material
 
 
 def build_component_view_registry(
@@ -1191,6 +1334,22 @@ def build_component_view_registry(
 ) -> dict[str, object]:
     """Build a detached deterministic registry snapshot."""
     state = _upstream_context(upstream_context)
+    if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE:
+        if components not in ([], ()):
+            _fail("NATIVE_DWG_COMPONENTS_FORBIDDEN")
+        if views not in ([], ()):
+            _fail("NATIVE_DWG_VIEWS_FORBIDDEN")
+        material = _snapshot_material(
+            upstream_bindings=state["upstream_bindings"],
+            components=[],
+            views=[],
+            links=[],
+            drawing_binding=state["drawing_binding"],
+            schema_version=state["registry_schema_version"],
+        )
+        result = deepcopy(material)
+        result["registry_snapshot_sha256"] = canonical_json_sha256(material)
+        return result
     normalized_components = _normalize_components(components, state=state)
     normalized_views = _normalize_views(
         views,
@@ -1398,7 +1557,15 @@ def validate_component_view_registry(
 ) -> dict[str, object]:
     """Validate and detach a registry snapshot."""
     state = _upstream_context(upstream_context)
-    registry = _closed(payload, _ROOT_FIELDS, "REGISTRY_FIELDS_INVALID")
+    registry = _closed(
+        payload,
+        (
+            _NATIVE_DWG_ROOT_FIELDS
+            if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE
+            else _ROOT_FIELDS
+        ),
+        "REGISTRY_FIELDS_INVALID",
+    )
     if registry["schema_version"] != state["registry_schema_version"]:
         _fail("REGISTRY_SCHEMA_INVALID")
 
@@ -1407,12 +1574,48 @@ def validate_component_view_registry(
         (
             _GENERATED_UPSTREAM_BINDING_FIELDS
             if state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
-            else _UPSTREAM_BINDING_FIELDS
+            else (
+                _NATIVE_DWG_UPSTREAM_BINDING_FIELDS
+                if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE
+                else _UPSTREAM_BINDING_FIELDS
+            )
         ),
         "UPSTREAM_BINDINGS_INVALID",
     )
     if upstream_bindings != state["upstream_bindings"]:
         _fail("UPSTREAM_BINDINGS_MISMATCH")
+
+    if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE:
+        drawing_binding = _closed(
+            registry["drawing_binding"],
+            _NATIVE_DWG_DRAWING_BINDING_FIELDS,
+            "NATIVE_DWG_DRAWING_BINDING_INVALID",
+        )
+        if drawing_binding != state["drawing_binding"]:
+            _fail("NATIVE_DWG_DRAWING_BINDING_MISMATCH")
+        if registry["components"] != []:
+            _fail("NATIVE_DWG_COMPONENTS_FORBIDDEN")
+        if registry["views"] != []:
+            _fail("NATIVE_DWG_VIEWS_FORBIDDEN")
+        if registry["links"] != []:
+            _fail("NATIVE_DWG_LINKS_FORBIDDEN")
+        material = _snapshot_material(
+            upstream_bindings=state["upstream_bindings"],
+            components=[],
+            views=[],
+            links=[],
+            drawing_binding=drawing_binding,
+            schema_version=state["registry_schema_version"],
+        )
+        supplied_snapshot = _sha256(
+            registry["registry_snapshot_sha256"], "REGISTRY_SNAPSHOT_INVALID"
+        )
+        expected_snapshot = canonical_json_sha256(material)
+        if supplied_snapshot != expected_snapshot:
+            _fail("REGISTRY_SNAPSHOT_MISMATCH")
+        result = deepcopy(material)
+        result["registry_snapshot_sha256"] = expected_snapshot
+        return result
 
     raw_components = registry["components"]
     if type(raw_components) is not list or not raw_components:
@@ -1508,12 +1711,15 @@ def _task3_provenance_material(
     registry: dict[str, object],
 ) -> dict[str, object]:
     component_bindings, view_bindings = _task3_record_bindings(registry)
-    return {
+    material: dict[str, object] = {
         "identity_kind": "r3-component-view-registry-provenance-v1",
         "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
         "component_bindings": component_bindings,
         "view_bindings": view_bindings,
     }
+    if registry["schema_version"] == COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION:
+        material["drawing_binding"] = deepcopy(registry["drawing_binding"])
+    return material
 
 
 def component_view_registry_provenance_evidence(
@@ -1527,7 +1733,7 @@ def component_view_registry_provenance_evidence(
         upstream_context=upstream_context,
     )
     provenance_material = _task3_provenance_material(normalized_registry)
-    return {
+    evidence = {
         "identity_kind": provenance_material["identity_kind"],
         "registry_snapshot_sha256": provenance_material[
             "registry_snapshot_sha256"
@@ -1536,6 +1742,13 @@ def component_view_registry_provenance_evidence(
         "component_bindings": deepcopy(provenance_material["component_bindings"]),
         "view_bindings": deepcopy(provenance_material["view_bindings"]),
     }
+    if normalized_registry["schema_version"] == (
+        COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
+    ):
+        evidence["drawing_binding"] = deepcopy(
+            provenance_material["drawing_binding"]
+        )
+    return evidence
 
 
 def finalize_component_view_correspondence(
@@ -1676,6 +1889,15 @@ def project_linked_view_impacts(
         component_ids, code="IMPACT_COMPONENT_IDS_INVALID"
     )
     view_seeds = _seed_ids(view_ids, code="IMPACT_VIEW_IDS_INVALID")
+    if normalized["schema_version"] == COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION:
+        if component_seeds or view_seeds:
+            _fail("NATIVE_DWG_IMPACT_FORBIDDEN")
+        return {
+            "component_ids": [],
+            "view_ids": [],
+            "layout_bindings": [],
+            "link_ids": [],
+        }
     if not component_seeds and not view_seeds:
         _fail("IMPACT_SEEDS_REQUIRED")
 
@@ -1747,6 +1969,7 @@ def project_linked_view_impacts(
 __all__ = [
     "COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION",
     "COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION",
+    "COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION",
     "ComponentViewRegistryError",
     "build_component_view_registry",
     "validate_component_view_registry",

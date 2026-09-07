@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from cad_agent import component_view_registry as r3
 from cad_agent.drawing_contracts import canonical_json_sha256
 
 
@@ -213,6 +214,114 @@ def test_native_r3_inputs_are_closed_and_do_not_invent_components(
     )
     assert "mechanical_pilot_provenance" not in inputs["upstream_context"]
     assert "source_fusion" not in inputs["upstream_context"]
+
+
+def test_native_r3_registry_seals_one_drawing_binding_and_no_components(
+    tmp_path: Path,
+) -> None:
+    module = _api()
+    packet = _build(module, _fixture(tmp_path))
+    inputs = module.build_native_dwg_r3_inputs(packet)
+    registry = r3.build_component_view_registry(**inputs)
+
+    assert registry["schema_version"] == (
+        "component-view-registry-native-dwg-1.0"
+    )
+    assert set(registry) == {
+        "schema_version",
+        "upstream_bindings",
+        "drawing_binding",
+        "components",
+        "views",
+        "links",
+        "registry_snapshot_sha256",
+    }
+    assert registry["components"] == []
+    assert registry["views"] == []
+    assert registry["links"] == []
+    assert registry["drawing_binding"]["candidate_id"] == packet["candidate_id"]
+    assert r3.validate_component_view_registry(
+        registry,
+        upstream_context=inputs["upstream_context"],
+    ) == registry
+    evidence = r3.component_view_registry_provenance_evidence(
+        registry,
+        upstream_context=inputs["upstream_context"],
+    )
+    assert evidence["drawing_binding"] == registry["drawing_binding"]
+
+
+def test_native_r3_rejects_mixed_fields_and_nonempty_collections(
+    tmp_path: Path,
+) -> None:
+    module = _api()
+    packet = _build(module, _fixture(tmp_path))
+    inputs = module.build_native_dwg_r3_inputs(packet)
+
+    mixed_context = deepcopy(inputs["upstream_context"])
+    mixed_context["source_fusion"] = {}
+    with pytest.raises(
+        r3.ComponentViewRegistryError,
+        match="UPSTREAM_CONTEXT_INVALID",
+    ):
+        r3.build_component_view_registry(
+            upstream_context=mixed_context,
+            components=[],
+            views=[],
+        )
+
+    with pytest.raises(
+        r3.ComponentViewRegistryError,
+        match="NATIVE_DWG_COMPONENTS_FORBIDDEN",
+    ):
+        r3.build_component_view_registry(
+            upstream_context=inputs["upstream_context"],
+            components=[{}],
+            views=[],
+        )
+
+    with pytest.raises(
+        r3.ComponentViewRegistryError,
+        match="NATIVE_DWG_VIEWS_FORBIDDEN",
+    ):
+        r3.build_component_view_registry(
+            upstream_context=inputs["upstream_context"],
+            components=[],
+            views=[{}],
+        )
+
+
+def test_native_r3_rejects_tampered_packet_and_nonempty_impact(
+    tmp_path: Path,
+) -> None:
+    module = _api()
+    packet = _build(module, _fixture(tmp_path))
+    tampered = deepcopy(packet)
+    tampered["candidate_sha256"] = "f" * 64
+    inputs = module.build_native_dwg_r3_inputs(packet)
+    tampered_context = deepcopy(inputs["upstream_context"])
+    tampered_context["native_dwg_provenance"] = tampered
+    with pytest.raises(
+        r3.ComponentViewRegistryError,
+        match="NATIVE_DWG_PROVENANCE_INVALID",
+    ):
+        r3.build_component_view_registry(
+            upstream_context=tampered_context,
+            components=[],
+            views=[],
+        )
+
+    registry = r3.build_component_view_registry(**inputs)
+    with pytest.raises(
+        r3.ComponentViewRegistryError,
+        match="NATIVE_DWG_IMPACT_FORBIDDEN",
+    ):
+        r3.project_linked_view_impacts(
+            registry=registry,
+            component_ids=["a" * 64],
+            view_ids=[],
+            upstream_context=inputs["upstream_context"],
+        )
 
 
 def test_native_composition_produces_current_dara_r3_r4_binding(
