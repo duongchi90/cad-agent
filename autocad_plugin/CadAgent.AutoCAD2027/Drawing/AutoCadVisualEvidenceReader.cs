@@ -75,6 +75,8 @@ internal static class AutoCadVisualEvidenceReader
         "ANNOALLVISIBLE"
     };
 
+    private const int MaxSerializedSampledPoints = 8;
+
     public static VisualEvidenceSnapshot Export(
         Document document,
         VisualEvidenceRequest request,
@@ -125,14 +127,7 @@ internal static class AutoCadVisualEvidenceReader
 
             var measurements = EvaluateMeasurements(request.Measurements, request.DatumBindings, projectedEntities);
             var renderBytes = RenderRegion(request.Region, projectedEntities);
-            var entityBytes = JsonSerializer.SerializeToUtf8Bytes(projectedEntities.Select(entity => new
-            {
-                stable_id = entity.StableId,
-                handle = entity.Handle,
-                type = entity.Type,
-                layer = entity.Layer,
-                geometry = entity.Geometry
-            }).ToArray());
+            var entityBytes = SerializeEntityMap(projectedEntities);
             var measurementBytes = JsonSerializer.SerializeToUtf8Bytes(measurements.ToArray());
 
             var renderWidth = request.Region.GetProperty("pixel_size")[0].GetInt32();
@@ -287,6 +282,12 @@ internal static class AutoCadVisualEvidenceReader
             }
             catch (Autodesk.AutoCAD.Runtime.Exception exception)
             {
+                if (entity is BlockReference blockReference
+                    && IsEmptyBlockReference(blockReference, transaction))
+                {
+                    continue;
+                }
+
                 throw new InvalidDataException(
                     $"Entity '{entity.Handle}' has no readable extents for region filtering.",
                     exception);
@@ -308,6 +309,18 @@ internal static class AutoCadVisualEvidenceReader
         }
 
         return snapshots;
+    }
+
+    private static bool IsEmptyBlockReference(
+        BlockReference blockReference,
+        Transaction transaction)
+    {
+        var blockRecord = (BlockTableRecord)transaction.GetObject(
+            blockReference.BlockTableRecord,
+            OpenMode.ForRead);
+        return !blockRecord
+            .Cast<ObjectId>()
+            .Any(objectId => transaction.GetObject(objectId, OpenMode.ForRead, false) is Entity);
     }
 
     private static EntitySnapshot? CreateSnapshot(
@@ -347,6 +360,11 @@ internal static class AutoCadVisualEvidenceReader
             Line => ReviewEntityTypes.Line,
             Circle => ReviewEntityTypes.Circle,
             Arc => ReviewEntityTypes.Arc,
+            Ellipse => "ELLIPSE",
+            Leader => "LEADER",
+            Solid => "SOLID",
+            Wipeout => "WIPEOUT",
+            Viewport => "VIEWPORT",
             DBText => ReviewEntityTypes.Text,
             Dimension => ReviewEntityTypes.Dimension,
             Polyline => "POLYLINE",
@@ -377,6 +395,18 @@ internal static class AutoCadVisualEvidenceReader
             case Circle circle:
                 AddPoint(geometry, "center", circle.Center.TransformBy(transform));
                 geometry["radius"] = TransformRadius(circle.Radius, transform);
+                break;
+            case Ellipse ellipse:
+                geometry["closed"] = ellipse.Closed;
+                geometry["sampled_points"] = Enumerable.Range(0, 65)
+                    .Select(index =>
+                    {
+                        var parameter = ellipse.StartParam
+                            + (ellipse.EndParam - ellipse.StartParam) * index / 64.0;
+                        var point = ellipse.GetPointAtParameter(parameter).TransformBy(transform);
+                        return new { x = point.X, y = point.Y };
+                    })
+                    .ToArray();
                 break;
             case Arc arc:
                 var arcCenter = arc.Center.TransformBy(transform);
@@ -415,6 +445,14 @@ internal static class AutoCadVisualEvidenceReader
                         AddPoint(geometry, "xline2", rotated.XLine2Point.TransformBy(transform));
                         AddPoint(geometry, "dimline", rotated.DimLinePoint.TransformBy(transform));
                         break;
+                    case LineAngularDimension2 angular:
+                        geometry["dimension_kind"] = "LINE_ANGULAR";
+                        AddPoint(geometry, "xline1_start", angular.XLine1Start.TransformBy(transform));
+                        AddPoint(geometry, "xline1_end", angular.XLine1End.TransformBy(transform));
+                        AddPoint(geometry, "xline2_start", angular.XLine2Start.TransformBy(transform));
+                        AddPoint(geometry, "xline2_end", angular.XLine2End.TransformBy(transform));
+                        AddPoint(geometry, "arc_point", angular.ArcPoint.TransformBy(transform));
+                        break;
                     default:
                         throw new InvalidDataException(
                             $"Dimension '{dimension.Handle}' has unsupported visible subtype '{dimension.GetType().Name}'.");
@@ -422,15 +460,55 @@ internal static class AutoCadVisualEvidenceReader
                 geometry["height"] = 20.0;
                 break;
             case Polyline polyline:
+                var polylineReversesOrientation = HasReversedOrientation(transform);
                 geometry["closed"] = polyline.Closed;
                 geometry["vertices"] = Enumerable.Range(0, polyline.NumberOfVertices)
                         .Select(index => new
                         {
                             point = new Point3d(polyline.GetPoint2dAt(index).X, polyline.GetPoint2dAt(index).Y, 0).TransformBy(transform),
-                            bulge = polyline.GetBulgeAt(index)
+                            bulge = polylineReversesOrientation
+                                ? -polyline.GetBulgeAt(index)
+                                : polyline.GetBulgeAt(index)
                         })
                     .Select(value => new { x = value.point.X, y = value.point.Y, value.bulge })
                     .ToArray();
+                break;
+            case Leader leader:
+                geometry["closed"] = false;
+                geometry["vertices"] = Enumerable.Range(0, leader.NumVertices)
+                    .Select(index => ToPointObject(leader.VertexAt(index).TransformBy(transform)))
+                    .ToArray();
+                break;
+            case Solid solid:
+                geometry["closed"] = true;
+                geometry["vertices"] = Enumerable.Range(0, 4)
+                    .Select(index => ToPointObject(solid.GetPointAt((short)index).TransformBy(transform)))
+                    .ToArray();
+                break;
+            case Wipeout wipeout:
+                var wipeoutVertices = wipeout.GetVertices().Cast<Point3d>().ToArray();
+                if (wipeoutVertices.Length < 2)
+                {
+                    throw new InvalidDataException(
+                        $"Wipeout '{entity.Handle}' has too few deterministic boundary vertices.");
+                }
+
+                geometry["closed"] = true;
+                geometry["vertices"] = wipeoutVertices
+                    .Select(point => ToPointObject(point.TransformBy(transform)))
+                    .ToArray();
+                break;
+            case Viewport viewport:
+                var halfWidth = viewport.Width / 2.0;
+                var halfHeight = viewport.Height / 2.0;
+                geometry["closed"] = true;
+                geometry["vertices"] = new[]
+                {
+                    ToPointObject(new Point3d(viewport.CenterPoint.X - halfWidth, viewport.CenterPoint.Y - halfHeight, viewport.CenterPoint.Z).TransformBy(transform)),
+                    ToPointObject(new Point3d(viewport.CenterPoint.X + halfWidth, viewport.CenterPoint.Y - halfHeight, viewport.CenterPoint.Z).TransformBy(transform)),
+                    ToPointObject(new Point3d(viewport.CenterPoint.X + halfWidth, viewport.CenterPoint.Y + halfHeight, viewport.CenterPoint.Z).TransformBy(transform)),
+                    ToPointObject(new Point3d(viewport.CenterPoint.X - halfWidth, viewport.CenterPoint.Y + halfHeight, viewport.CenterPoint.Z).TransformBy(transform))
+                };
                 break;
             case MText mtext:
                 AddPoint(geometry, "position", mtext.Location.TransformBy(transform));
@@ -493,8 +571,9 @@ internal static class AutoCadVisualEvidenceReader
                     blockStack.Remove(block.BlockTableRecord);
                 }
                 break;
-            case Hatch:
-                throw new InvalidDataException($"Hatch '{entity.Handle}' has no approved deterministic boundary flattener.");
+            case Hatch hatch:
+                geometry["loops"] = CreateHatchBoundaryLoops(hatch, transform, entity.Handle.ToString());
+                break;
             case Spline spline:
                 geometry["sampled_points"] = Enumerable.Range(0, 65)
                     .Select(index =>
@@ -512,6 +591,216 @@ internal static class AutoCadVisualEvidenceReader
         }
 
         return geometry;
+    }
+
+    private static byte[] SerializeEntityMap(
+        IReadOnlyList<VisualEvidenceEntityRecord> entities)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartArray();
+            foreach (var entity in entities)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("stable_id", entity.StableId);
+                writer.WriteString("handle", entity.Handle);
+                writer.WriteString("type", entity.Type);
+                writer.WriteString("layer", entity.Layer);
+                writer.WritePropertyName("geometry");
+                WriteCompactJson(entity.Geometry, writer);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return stream.ToArray();
+    }
+
+    private static void WriteCompactJson(
+        IReadOnlyDictionary<string, JsonElement> geometry,
+        Utf8JsonWriter writer)
+    {
+        writer.WriteStartObject();
+        foreach (var property in geometry.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            if (property.Key == "bounding_box")
+            {
+                continue;
+            }
+
+            writer.WritePropertyName(property.Key);
+            WriteCompactJson(property.Value, writer);
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static void WriteCompactJson(JsonElement value, Utf8JsonWriter writer)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in value.EnumerateObject())
+                {
+                    writer.WritePropertyName(property.Name);
+                    if (property.Name == "sampled_points"
+                        && property.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        WriteCompactSampledPoints(property.Value, writer);
+                    }
+                    else
+                    {
+                        WriteCompactJson(property.Value, writer);
+                    }
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in value.EnumerateArray())
+                {
+                    WriteCompactJson(item, writer);
+                }
+
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.Number:
+                if (value.TryGetDouble(out var number))
+                {
+                    var rounded = Math.Round(number, 1, MidpointRounding.ToEven);
+                    writer.WriteNumberValue(rounded == 0 ? 0 : rounded);
+                }
+                else
+                {
+                    writer.WriteRawValue(value.GetRawText(), skipInputValidation: true);
+                }
+
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(value.GetString());
+                break;
+            case JsonValueKind.True:
+                writer.WriteBooleanValue(true);
+                break;
+            case JsonValueKind.False:
+                writer.WriteBooleanValue(false);
+                break;
+            case JsonValueKind.Null:
+                writer.WriteNullValue();
+                break;
+            default:
+                throw new JsonException($"Unsupported JSON value kind {value.ValueKind}.");
+        }
+    }
+
+    private static void WriteCompactSampledPoints(
+        JsonElement value,
+        Utf8JsonWriter writer)
+    {
+        var points = value.EnumerateArray().ToArray();
+        if (points.Length <= MaxSerializedSampledPoints)
+        {
+            WriteCompactJson(value, writer);
+            return;
+        }
+
+        writer.WriteStartArray();
+        foreach (var index in Enumerable.Range(0, MaxSerializedSampledPoints)
+                     .Select(item => (int)Math.Round(
+                         item * (points.Length - 1) / (double)(MaxSerializedSampledPoints - 1)))
+                     .Distinct())
+        {
+            WriteCompactJson(points[index], writer);
+        }
+
+        writer.WriteEndArray();
+    }
+
+    private static object[] CreateHatchBoundaryLoops(
+        Hatch hatch,
+        Matrix3d transform,
+        string handle)
+    {
+        var loops = new List<object>();
+        var reversesOrientation = HasReversedOrientation(transform);
+        for (var loopIndex = 0; loopIndex < hatch.NumberOfLoops; loopIndex++)
+        {
+            var loop = hatch.GetLoopAt(loopIndex);
+            var closed = (hatch.LoopTypeAt(loopIndex) & HatchLoopTypes.NotClosed) == 0;
+            if (loop.IsPolyline && loop.Polyline is { Count: >= 2 } polyline)
+            {
+                loops.Add(new
+                {
+                    closed,
+                    vertices = polyline
+                        .Cast<BulgeVertex>()
+                        .Select(vertex =>
+                        {
+                            var point = new Point3d(
+                                vertex.Vertex.X,
+                                vertex.Vertex.Y,
+                                0).TransformBy(transform);
+                            return new
+                            {
+                                x = point.X,
+                                y = point.Y,
+                                bulge = reversesOrientation ? -vertex.Bulge : vertex.Bulge
+                            };
+                        })
+                        .ToArray()
+                });
+                continue;
+            }
+
+            var curves = loop.Curves.Cast<Curve2d>().ToArray();
+            if (curves.Length == 0)
+            {
+                throw new InvalidDataException(
+                    $"Hatch '{handle}' loop {loopIndex} has no deterministic curve boundary.");
+            }
+
+            var vertices = new List<object>();
+            foreach (var curve in curves)
+            {
+                var samples = curve.GetSamplePoints(32);
+                if (samples is null || samples.Length < 2)
+                {
+                    throw new InvalidDataException(
+                        $"Hatch '{handle}' loop {loopIndex} curve '{curve.GetType().Name}' has too few deterministic samples.");
+                }
+
+                foreach (var sample in samples)
+                {
+                    var point = new Point3d(sample.X, sample.Y, 0).TransformBy(transform);
+                    vertices.Add(new
+                    {
+                        x = point.X,
+                        y = point.Y,
+                        bulge = 0.0
+                    });
+                }
+            }
+
+            if (vertices.Count < 2)
+            {
+                throw new InvalidDataException(
+                    $"Hatch '{handle}' loop {loopIndex} has too few deterministic curve samples.");
+            }
+
+            loops.Add(new { closed, vertices = vertices.ToArray() });
+        }
+
+        if (loops.Count == 0)
+        {
+            throw new InvalidDataException(
+                $"Hatch '{handle}' has no deterministic boundary loops.");
+        }
+
+        return loops.ToArray();
     }
 
     private static object ToPointObject(Point3d point) => new { x = point.X, y = point.Y };
@@ -537,7 +826,7 @@ internal static class AutoCadVisualEvidenceReader
         var scale = Math.Max(1.0, Math.Max(xLength, yLength));
         return Math.Abs(xLength - yLength) <= 1e-9 * scale
             && Math.Abs(dotProduct) <= 1e-9 * scale * scale
-            && orientation > 1e-9 * scale * scale;
+            && Math.Abs(orientation) > 1e-9 * scale * scale;
     }
 
     private static bool IsConformalTransform(Matrix3d transform)
@@ -548,6 +837,12 @@ internal static class AutoCadVisualEvidenceReader
             basis.Yaxis.Length,
             basis.Xaxis.DotProduct(basis.Yaxis),
             basis.Xaxis.CrossProduct(basis.Yaxis).DotProduct(Vector3d.ZAxis));
+    }
+
+    private static bool HasReversedOrientation(Matrix3d transform)
+    {
+        var basis = transform.CoordinateSystem3d;
+        return basis.Xaxis.CrossProduct(basis.Yaxis).DotProduct(Vector3d.ZAxis) < 0;
     }
 
     private static string EffectiveLayer(
@@ -815,7 +1110,11 @@ internal static class AutoCadVisualEvidenceReader
             return;
         }
 
-        if (entity.Type == "POLYLINE"
+        if ((entity.Type == "POLYLINE"
+                || entity.Type == "LEADER"
+                || entity.Type == "SOLID"
+                || entity.Type == "WIPEOUT"
+                || entity.Type == "VIEWPORT")
             && entity.Geometry.TryGetValue("vertices", out var vertices)
             && vertices.ValueKind == JsonValueKind.Array)
         {
@@ -841,7 +1140,50 @@ internal static class AutoCadVisualEvidenceReader
             return;
         }
 
-        if (entity.Type == "SPLINE"
+        if (entity.Type == "HATCH"
+            && entity.Geometry.TryGetValue("loops", out var loops)
+            && loops.ValueKind == JsonValueKind.Array)
+        {
+            var loopIndex = 0;
+            foreach (var loop in loops.EnumerateArray())
+            {
+                if (loop.ValueKind != JsonValueKind.Object
+                    || !loop.TryGetProperty("vertices", out var loopVertices)
+                    || loopVertices.ValueKind != JsonValueKind.Array)
+                {
+                    throw new InvalidDataException(
+                        $"Hatch '{entity.StableId}' loop {loopIndex} has an invalid boundary projection.");
+                }
+
+                var values = loopVertices.EnumerateArray().ToArray();
+                if (values.Length < 2)
+                {
+                    throw new InvalidDataException(
+                        $"Hatch '{entity.StableId}' loop {loopIndex} has too few boundary vertices.");
+                }
+
+                var closed = loop.TryGetProperty("closed", out var closedValue)
+                    && closedValue.ValueKind == JsonValueKind.True;
+                var segmentCount = closed ? values.Length : values.Length - 1;
+                for (var index = 0; index < segmentCount; index++)
+                {
+                    var first = values[index];
+                    var second = values[(index + 1) % values.Length];
+                    var start = Transform(first.GetProperty("x").GetDouble(), first.GetProperty("y").GetDouble());
+                    var end = Transform(second.GetProperty("x").GetDouble(), second.GetProperty("y").GetDouble());
+                    var bulge = first.TryGetProperty("bulge", out var bulgeValue)
+                        ? bulgeValue.GetDouble()
+                        : 0.0;
+                    DrawBulgeSegment(graphics, pen, start, end, bulge);
+                }
+
+                loopIndex++;
+            }
+
+            return;
+        }
+
+        if ((entity.Type == "SPLINE" || entity.Type == "ELLIPSE")
             && entity.Geometry.TryGetValue("sampled_points", out var sampledPoints)
             && sampledPoints.ValueKind == JsonValueKind.Array)
         {
@@ -854,6 +1196,14 @@ internal static class AutoCadVisualEvidenceReader
             }
 
             graphics.DrawLines(pen, points);
+            if (entity.Type == "ELLIPSE"
+                && entity.Geometry.TryGetValue("closed", out var closedValue)
+                && closedValue.ValueKind == JsonValueKind.True
+                && points[0] != points[^1])
+            {
+                graphics.DrawLine(pen, points[^1], points[0]);
+            }
+
             return;
         }
 
@@ -1000,6 +1350,14 @@ internal static class AutoCadVisualEvidenceReader
         VisualEvidenceEntityRecord entity,
         Func<double, double, PointF> transform)
     {
+        if (entity.Geometry.TryGetValue("dimension_kind", out var dimensionKind)
+            && dimensionKind.ValueKind == JsonValueKind.String
+            && string.Equals(dimensionKind.GetString(), "LINE_ANGULAR", StringComparison.Ordinal))
+        {
+            DrawLineAngularDimensionGeometry(graphics, pen, entity, transform);
+            return;
+        }
+
         if (!entity.Geometry.TryGetValue("xline1_x", out var xline1X)
             || !entity.Geometry.TryGetValue("xline1_y", out var xline1Y)
             || !entity.Geometry.TryGetValue("xline2_x", out var xline2X)
@@ -1021,6 +1379,115 @@ internal static class AutoCadVisualEvidenceReader
         graphics.DrawLine(pen, dimensionFirst, dimensionSecond);
         DrawArrow(graphics, pen, dimensionFirst, dimensionSecond);
         DrawArrow(graphics, pen, dimensionSecond, dimensionFirst);
+    }
+
+    private static void DrawLineAngularDimensionGeometry(
+        Graphics graphics,
+        Pen pen,
+        VisualEvidenceEntityRecord entity,
+        Func<double, double, PointF> transform)
+    {
+        var firstStart = ReadPoint(entity, "xline1_start", transform);
+        var firstEnd = ReadPoint(entity, "xline1_end", transform);
+        var secondStart = ReadPoint(entity, "xline2_start", transform);
+        var secondEnd = ReadPoint(entity, "xline2_end", transform);
+        var arcPoint = ReadPoint(entity, "arc_point", transform);
+        if (!TryIntersectLines(firstStart, firstEnd, secondStart, secondEnd, out var center))
+        {
+            throw new InvalidDataException(
+                $"Dimension '{entity.StableId}' has parallel angular extension lines.");
+        }
+
+        graphics.DrawLine(pen, firstStart, firstEnd);
+        graphics.DrawLine(pen, secondStart, secondEnd);
+
+        var radius = Distance(center, arcPoint);
+        if (radius < 1e-6)
+        {
+            throw new InvalidDataException(
+                $"Dimension '{entity.StableId}' has an angular arc point at its vertex.");
+        }
+
+        var firstAngle = Math.Atan2(firstEnd.Y - center.Y, firstEnd.X - center.X);
+        var secondAngle = Math.Atan2(secondEnd.Y - center.Y, secondEnd.X - center.X);
+        var arcAngle = Math.Atan2(arcPoint.Y - center.Y, arcPoint.X - center.X);
+        var positiveSweep = NormalizePositiveAngle(secondAngle - firstAngle);
+        var sweep = IsAngleOnSweep(firstAngle, positiveSweep, arcAngle)
+            ? positiveSweep
+            : positiveSweep - (2.0 * Math.PI);
+        var points = Enumerable.Range(0, 33)
+            .Select(index =>
+            {
+                var angle = firstAngle + sweep * index / 32.0;
+                return new PointF(
+                    center.X + (float)(Math.Cos(angle) * radius),
+                    center.Y + (float)(Math.Sin(angle) * radius));
+            })
+            .ToArray();
+        graphics.DrawLines(pen, points);
+        DrawArrow(graphics, pen, points[0], points[1]);
+        DrawArrow(graphics, pen, points[^1], points[^2]);
+    }
+
+    private static PointF ReadPoint(
+        VisualEvidenceEntityRecord entity,
+        string prefix,
+        Func<double, double, PointF> transform)
+    {
+        if (!entity.Geometry.TryGetValue($"{prefix}_x", out var x)
+            || !entity.Geometry.TryGetValue($"{prefix}_y", out var y))
+        {
+            throw new InvalidDataException(
+                $"Dimension '{entity.StableId}' is missing angular point '{prefix}'.");
+        }
+
+        return transform(x.GetDouble(), y.GetDouble());
+    }
+
+    private static bool TryIntersectLines(
+        PointF firstStart,
+        PointF firstEnd,
+        PointF secondStart,
+        PointF secondEnd,
+        out PointF intersection)
+    {
+        var firstDx = firstEnd.X - firstStart.X;
+        var firstDy = firstEnd.Y - firstStart.Y;
+        var secondDx = secondEnd.X - secondStart.X;
+        var secondDy = secondEnd.Y - secondStart.Y;
+        var determinant = firstDx * secondDy - firstDy * secondDx;
+        if (Math.Abs(determinant) < 1e-6)
+        {
+            intersection = default;
+            return false;
+        }
+
+        var offsetX = secondStart.X - firstStart.X;
+        var offsetY = secondStart.Y - firstStart.Y;
+        var firstParameter = (offsetX * secondDy - offsetY * secondDx) / determinant;
+        intersection = new PointF(
+            firstStart.X + firstParameter * firstDx,
+            firstStart.Y + firstParameter * firstDy);
+        return true;
+    }
+
+    private static double Distance(PointF first, PointF second)
+    {
+        var dx = second.X - first.X;
+        var dy = second.Y - first.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    private static double NormalizePositiveAngle(double angle)
+    {
+        var fullTurn = 2.0 * Math.PI;
+        var normalized = angle % fullTurn;
+        return normalized < 0 ? normalized + fullTurn : normalized;
+    }
+
+    private static bool IsAngleOnSweep(double start, double sweep, double candidate)
+    {
+        return NormalizePositiveAngle(candidate - start) <= sweep + 1e-9;
     }
 
     private static void DrawArrow(Graphics graphics, Pen pen, PointF tip, PointF tail)
