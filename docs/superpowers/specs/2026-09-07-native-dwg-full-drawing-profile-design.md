@@ -85,9 +85,10 @@ The native registry schema is
 `component-view-registry-native-dwg-1.0`. Its closed `drawing_binding`
 contains the candidate ID, source/candidate SHA-256 values, source/candidate
 entity counts, the equal canonical entity-signature SHA-256, the native packet
-SHA-256, and the DARA candidate-reference SHA-256. R3 provenance evidence
-hashes this binding directly; it does not project the full drawing into
-components.
+SHA-256, and the calibration mode. The DARA candidate reference is bound by
+R4 after R3 is sealed; it is deliberately not copied into `drawing_binding`,
+which avoids a circular reference hash. R3 provenance evidence hashes this
+binding directly; it does not project the full drawing into components.
 
 The existing `component-view-registry-1.0` Base-CAD path and
 `component-view-registry-1.1` generated path remain byte-for-byte compatible.
