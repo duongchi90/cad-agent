@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from cad_agent import candidate_revision as r4
 from cad_agent import component_view_registry as r3
+from cad_agent import drawing_artifact_reference as dara
 from cad_agent.drawing_contracts import canonical_json_sha256
 
 
@@ -77,6 +79,113 @@ def _build(module, fixture: dict[str, object]) -> dict[str, object]:
         source_setup_audit_sha256=fixture["source_setup_audit_sha256"],
         candidate_setup_audit_sha256=fixture["candidate_setup_audit_sha256"],
     )
+
+
+def _native_root_args(module, fixture: dict[str, object]) -> dict[str, object]:
+    packet = _build(module, fixture)
+    r3_inputs = module.build_native_dwg_r3_inputs(packet)
+    context = r3_inputs["upstream_context"]
+    registry = r3.build_component_view_registry(**r3_inputs)
+    registry_provenance = r3.component_view_registry_provenance_evidence(
+        registry,
+        upstream_context=context,
+    )
+    artifact_bytes = fixture["candidate_path"].read_bytes()
+    scope = {
+        "run_id": "run-native-001",
+        "project_id": "project-native-001",
+        "drawing_id": "drawing-native-001",
+    }
+    baseline_reference = dara.issue_drawing_artifact_reference(
+        **scope,
+        artifact_role="BASELINE",
+        artifact_bytes=artifact_bytes,
+        upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "native-test-baseline",
+            "evidence_sha256": canonical_json_sha256(
+                {
+                    "kind": "native-test-baseline",
+                    "candidate_sha256": packet["candidate_sha256"],
+                }
+            ),
+        },
+    )
+    baseline_observation = dara.observe_drawing_artifact_currentness(
+        reference=baseline_reference,
+        artifact_bytes=artifact_bytes,
+        observation_evidence_sha256=canonical_json_sha256(
+            {"kind": "native-test-baseline-observation"}
+        ),
+    )
+    candidate_reference = dara.issue_drawing_artifact_reference(
+        **scope,
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=artifact_bytes,
+        upstream_evidence={
+            "evidence_kind": "R3_CANDIDATE_CUSTODY",
+            "evidence_id": "native-test-candidate",
+            "evidence_sha256": canonical_json_sha256(
+                {
+                    "kind": "native-test-candidate",
+                    "candidate_sha256": packet["candidate_sha256"],
+                }
+            ),
+        },
+        r3_provenance_binding={
+            "registry_snapshot_sha256": registry[
+                "registry_snapshot_sha256"
+            ],
+            "provenance_sha256": registry_provenance["provenance_sha256"],
+        },
+    )
+    candidate_observation = dara.observe_drawing_artifact_currentness(
+        reference=candidate_reference,
+        artifact_bytes=artifact_bytes,
+        observation_evidence_sha256=canonical_json_sha256(
+            {"kind": "native-test-candidate-observation"}
+        ),
+    )
+    impact = r3.project_linked_view_impacts(
+        registry=registry,
+        component_ids=[],
+        view_ids=[],
+        upstream_context=context,
+    )
+    change_impact = {
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+        "impact": impact,
+        "provenance_evidence": registry_provenance,
+        "upstream_context": deepcopy(context),
+        "root_candidate_reference": deepcopy(candidate_reference),
+        "root_candidate_observation": deepcopy(candidate_observation),
+        "root_candidate_artifact_bytes": artifact_bytes,
+    }
+    mutation_evidence = {
+        "evidence_kind": "R4_ROOT_PRE_REPAIR",
+        "evidence_id": "native-test-root",
+        "r3_candidate_reference_id": candidate_reference["reference_id"],
+        "r3_candidate_reference_sha256": candidate_reference[
+            "reference_sha256"
+        ],
+        "candidate_artifact_sha256": candidate_reference["artifact_sha256"],
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+    }
+    return {
+        "registry": registry,
+        "base_cad_handoff": None,
+        "baseline_context": {
+            "reference": baseline_reference,
+            "observation": baseline_observation,
+            "artifact_bytes": artifact_bytes,
+        },
+        "parent_candidate": None,
+        "change_impact": change_impact,
+        "mutation_evidence": mutation_evidence,
+        "lineage_context": (),
+        "schema_version": r4.CANDIDATE_REVISION_V11_SCHEMA_VERSION,
+        "candidate_kind": r4.CANDIDATE_REVISION_ROOT_KIND,
+    }
 
 
 def test_native_module_exposes_closed_packet_contract() -> None:
@@ -322,6 +431,43 @@ def test_native_r3_rejects_tampered_packet_and_nonempty_impact(
             view_ids=[],
             upstream_context=inputs["upstream_context"],
         )
+
+
+def test_native_r4_accepts_root_without_fake_base_cad_handoff(
+    tmp_path: Path,
+) -> None:
+    module = _api()
+    args = _native_root_args(module, _fixture(tmp_path))
+    revision = r4.build_candidate_revision(**args)
+
+    assert revision["candidate_kind"] == "ROOT_PRE_REPAIR"
+    assert revision["upstream_bindings"]["provenance_mode"] == (
+        "NATIVE_DWG_FULL_DRAWING"
+    )
+    assert revision["component_lineage"] == []
+    assert revision["view_lineage"] == []
+
+
+def test_native_r4_rejects_supplied_handoff_and_foreign_artifact(
+    tmp_path: Path,
+) -> None:
+    module = _api()
+    args = _native_root_args(module, _fixture(tmp_path))
+
+    with pytest.raises(r4.CandidateRevisionError):
+        r4.build_candidate_revision(
+            **{**args, "base_cad_handoff": {}},
+        )
+
+    foreign = deepcopy(args)
+    foreign["change_impact"]["root_candidate_artifact_bytes"] = (
+        b"foreign candidate bytes"
+    )
+    with pytest.raises(
+        r4.CandidateRevisionError,
+        match="BASELINE_CURRENTNESS_INVALID",
+    ):
+        r4.build_candidate_revision(**foreign)
 
 
 def test_native_composition_produces_current_dara_r3_r4_binding(
