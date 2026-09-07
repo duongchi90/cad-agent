@@ -630,7 +630,6 @@ class FileIPCLiveMCPClient:
 
     def drawing_save_as_dxf(self, path: str) -> None:
         self._dispatch("drawing-save-as-dxf", {"path": path.replace("\\", "/")})
-        self._active_drawing_path = _normalized_autocad_path(path)
 
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})

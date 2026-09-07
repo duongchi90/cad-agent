@@ -153,6 +153,34 @@ class FileIPCClientTests(unittest.TestCase):
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {}}))
             self.assertIsNone(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_save_as_dxf("a.dxf"))
 
+    def test_drawing_save_as_dxf_preserves_active_document_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+
+            def trigger():
+                command = json.loads(
+                    next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text()
+                )
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": command["request_id"],
+                            "ok": True,
+                            "payload": {},
+                        }
+                    )
+                )
+
+            client = FileIPCLiveMCPClient(tmp, trigger, .1, .001)
+            client._active_drawing_path = r"c:\work\candidate.dxf"
+
+            client.drawing_save_as_dxf(r"C:\temp\export.dxf")
+
+            self.assertEqual(
+                r"c:\work\candidate.dxf",
+                client._active_drawing_path,
+            )
+
     def test_normalizes_windows_dxf_export_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
