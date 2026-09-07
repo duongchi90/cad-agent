@@ -68,7 +68,14 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
 
 
 def _build(module, fixture: dict[str, object]) -> dict[str, object]:
-    return module.build_native_dwg_provenance(**fixture)
+    return module.build_native_dwg_provenance(
+        source_path=fixture["source_path"],
+        candidate_path=fixture["candidate_path"],
+        source_readback=fixture["source_readback"],
+        candidate_readback=fixture["candidate_readback"],
+        source_setup_audit_sha256=fixture["source_setup_audit_sha256"],
+        candidate_setup_audit_sha256=fixture["candidate_setup_audit_sha256"],
+    )
 
 
 def test_native_module_exposes_closed_packet_contract() -> None:
@@ -214,7 +221,12 @@ def test_native_composition_produces_current_dara_r3_r4_binding(
     module = _api()
     fixture = _fixture(tmp_path)
     binding = module.compose_native_dwg_query_binding(
-        **fixture,
+        source_path=fixture["source_path"],
+        candidate_path=fixture["candidate_path"],
+        source_readback=fixture["source_readback"],
+        candidate_readback=fixture["candidate_readback"],
+        source_setup_audit_sha256=fixture["source_setup_audit_sha256"],
+        candidate_setup_audit_sha256=fixture["candidate_setup_audit_sha256"],
         run_id="run-native-001",
         project_id="project-native-001",
         drawing_id="drawing-native-001",
