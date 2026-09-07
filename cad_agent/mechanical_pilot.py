@@ -512,6 +512,17 @@ def _cluster_endpoints(
     return centers, labels
 
 
+def _phase4_tolerances_cad(
+    primitive_doc: PrimitiveIRDocument,
+) -> tuple[float, float]:
+    """Convert the Phase 4 pixel policy into the document's CAD unit domain."""
+    scale = primitive_doc.calibration.pixel_to_unit_scale
+    return (
+        _PHASE4_ENDPOINT_TOLERANCE_PX * scale,
+        _PHASE4_AXIS_TOLERANCE_PX * scale,
+    )
+
+
 def _phase4_profile_bindings(
     primitive_doc: PrimitiveIRDocument,
 ) -> tuple[list[str], str]:
@@ -519,23 +530,24 @@ def _phase4_profile_bindings(
     circles = [primitive for primitive in primitive_doc.primitives if primitive.type == "circle"]
     if len(lines) != 8 or len(circles) != 1:
         raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
+    endpoint_tolerance, axis_tolerance = _phase4_tolerances_cad(primitive_doc)
 
     endpoints: list[tuple[float, float]] = []
     for primitive in lines:
         assert isinstance(primitive.geometry, LineGeometry)
         start = (primitive.geometry.start.x, primitive.geometry.start.y)
         end = (primitive.geometry.end.x, primitive.geometry.end.y)
-        if math.hypot(end[0] - start[0], end[1] - start[1]) <= 2 * _PHASE4_ENDPOINT_TOLERANCE_PX:
+        if math.hypot(end[0] - start[0], end[1] - start[1]) <= 2 * endpoint_tolerance:
             raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
         dx, dy = abs(end[0] - start[0]), abs(end[1] - start[1])
         if not (
-            (dx > _PHASE4_AXIS_TOLERANCE_PX and dy <= _PHASE4_AXIS_TOLERANCE_PX)
-            or (dy > _PHASE4_AXIS_TOLERANCE_PX and dx <= _PHASE4_AXIS_TOLERANCE_PX)
+            (dx > axis_tolerance and dy <= axis_tolerance)
+            or (dy > axis_tolerance and dx <= axis_tolerance)
         ):
             raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
         endpoints.extend((start, end))
 
-    centers, labels = _cluster_endpoints(endpoints, _PHASE4_ENDPOINT_TOLERANCE_PX)
+    centers, labels = _cluster_endpoints(endpoints, endpoint_tolerance)
     if len(centers) != 8:
         raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
     edge_clusters: list[tuple[int, int]] = []
@@ -579,12 +591,12 @@ def _phase4_profile_bindings(
             expected_x = [x0, x1, x1, x2, x2, x1, x1, x0]
             expected_y = [y0, y0, y1, y1, y2, y2, y3, y3]
             if not (
-                x0 + 2 * _PHASE4_ENDPOINT_TOLERANCE_PX < x1 < x2 - 2 * _PHASE4_ENDPOINT_TOLERANCE_PX
-                and y0 + 2 * _PHASE4_ENDPOINT_TOLERANCE_PX < y1 < y2 - 2 * _PHASE4_ENDPOINT_TOLERANCE_PX
-                and y2 + 2 * _PHASE4_ENDPOINT_TOLERANCE_PX < y3
+                x0 + 2 * endpoint_tolerance < x1 < x2 - 2 * endpoint_tolerance
+                and y0 + 2 * endpoint_tolerance < y1 < y2 - 2 * endpoint_tolerance
+                and y2 + 2 * endpoint_tolerance < y3
                 and all(
-                    abs(point[0] - expected_x[index]) <= _PHASE4_ENDPOINT_TOLERANCE_PX
-                    and abs(point[1] - expected_y[index]) <= _PHASE4_ENDPOINT_TOLERANCE_PX
+                    abs(point[0] - expected_x[index]) <= endpoint_tolerance
+                    and abs(point[1] - expected_y[index]) <= endpoint_tolerance
                     for index, point in enumerate(points)
                 )
             ):
@@ -603,8 +615,8 @@ def _phase4_profile_bindings(
     y_min = min(point[1] for point in points)
     y_max = max(point[1] for point in points)
     if not (
-        x_min + _PHASE4_ENDPOINT_TOLERANCE_PX < center.x < x_max - _PHASE4_ENDPOINT_TOLERANCE_PX
-        and y_min + _PHASE4_ENDPOINT_TOLERANCE_PX < center.y < y_max - _PHASE4_ENDPOINT_TOLERANCE_PX
+        x_min + endpoint_tolerance < center.x < x_max - endpoint_tolerance
+        and y_min + endpoint_tolerance < center.y < y_max - endpoint_tolerance
     ):
         raise ValueError("PILOT_HOLE_POSITION_INVALID")
     return [lines[index].id for index in edge_ids], circle.id
