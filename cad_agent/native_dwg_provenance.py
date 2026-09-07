@@ -135,7 +135,7 @@ def _path_binding(path: Path, *, role: str) -> str:
     return canonical_json_sha256(
         {
             "identity_kind": f"native-dwg-{role}-path-v1",
-            "canonical_path": str(path.resolve(strict=True))
+            "canonical_path": str(path.resolve(strict=False))
             .replace("/", "\\")
             .casefold(),
         }

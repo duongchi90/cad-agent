@@ -471,6 +471,23 @@ def test_native_r4_rejects_supplied_handoff_and_foreign_artifact(
         r4.build_candidate_revision(**foreign)
 
 
+def test_native_r4_rejects_post_repair_mutation(
+    tmp_path: Path,
+) -> None:
+    module = _api()
+    args = _native_root_args(module, _fixture(tmp_path))
+    root = r4.build_candidate_revision(**args)
+    post = deepcopy(args)
+    post["parent_candidate"] = root
+    post["candidate_kind"] = r4.CANDIDATE_REVISION_POST_REPAIR_KIND
+
+    with pytest.raises(
+        r4.CandidateRevisionError,
+        match="NATIVE_DWG_MUTATION_FORBIDDEN",
+    ):
+        r4.build_candidate_revision(**post)
+
+
 def test_native_composition_produces_current_dara_r3_r4_binding(
     tmp_path: Path,
 ) -> None:

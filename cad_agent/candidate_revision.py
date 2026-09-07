@@ -954,6 +954,12 @@ def build_candidate_revision(
             lineage_context=lineage_context,
         )
     else:
+        if (
+            isinstance(registry, Mapping)
+            and registry.get("schema_version")
+            == _r3.COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
+        ):
+            _fail("NATIVE_DWG_MUTATION_FORBIDDEN")
         if parent_candidate is None:
             _fail("ROOT_TRANSITION_FORBIDDEN")
         if not isinstance(mutation_evidence, Mapping) or mutation_evidence.get(
@@ -1010,6 +1016,12 @@ def validate_candidate_revision(
             lineage_context=lineage_context,
         )
     else:
+        if (
+            isinstance(registry, Mapping)
+            and registry.get("schema_version")
+            == _r3.COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
+        ):
+            _fail("NATIVE_DWG_MUTATION_FORBIDDEN")
         if parent_candidate is None:
             _fail("ROOT_TRANSITION_FORBIDDEN")
         if not isinstance(mutation_evidence, Mapping) or mutation_evidence.get(
