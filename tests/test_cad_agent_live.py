@@ -90,13 +90,13 @@ def test_backup_acquisition_failure_removes_partial_owned_artifacts(
         copy_count = 0
 
         def fail_second_copy(
-            source, destination, owned_paths
+            source, destination, owned_paths, **kwargs
         ):  # type: ignore[no-untyped-def]
             nonlocal copy_count
             copy_count += 1
             if copy_count == 2:
                 raise OSError("injected evidence backup failure")
-            return original_copy(source, destination, owned_paths)
+            return original_copy(source, destination, owned_paths, **kwargs)
 
         monkeypatch.setattr(
             "cad_agent.live._copy_to_exclusive_backup", fail_second_copy
@@ -106,6 +106,142 @@ def test_backup_acquisition_failure_removes_partial_owned_artifacts(
             _backup(dxf, evidence, root / "backups")
 
         assert list((root / "backups").iterdir()) == []
+
+
+def test_backup_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "backup-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+        backup_dir = linked_parent / "nested"
+
+        with pytest.raises(LiveSafetyError, match="backup|reparse|symlink|identity"):
+            _backup(dxf, evidence, backup_dir)
+
+        assert list(outside.iterdir()) == []
+
+
+def test_backup_parent_binding_blocks_reparse_parent_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        backups = root / "backups"
+        backups.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        original_copy = live_module._copy_to_exclusive_backup
+        copy_count = 0
+        substitution_blocked = False
+
+        def replace_parent_after_first_copy(
+            source, destination, owned_paths, **kwargs
+        ):  # type: ignore[no-untyped-def]
+            nonlocal copy_count, substitution_blocked
+            copy_count += 1
+            result = original_copy(source, destination, owned_paths, **kwargs)
+            if copy_count == 1:
+                try:
+                    moved = root / "backups-moved"
+                    backups.rename(moved)
+                    backups.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    substitution_blocked = True
+            return result
+
+        monkeypatch.setattr(
+            "cad_agent.live._copy_to_exclusive_backup",
+            replace_parent_after_first_copy,
+        )
+
+        backup = _backup(dxf, evidence, backups)
+
+        assert substitution_blocked is True
+        assert list(outside.iterdir()) == []
+        assert Path(backup["dxf_path"]).is_file()
+        assert Path(backup["build_evidence_path"]).is_file()
+
+
+def test_write_build_evidence_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "evidence-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(LiveSafetyError, match="evidence|directory|reparse|symlink|identity"):
+            write_build_evidence(linked_parent / "build-evidence.json", _build(dxf))
+
+        assert list(outside.iterdir()) == []
+
+
+def test_write_live_report_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "report-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(LiveSafetyError, match="report|directory|reparse|symlink|identity"):
+            live_module.write_live_report(linked_parent / "live-report.json", {"state": "candidate"})
+
+        assert list(outside.iterdir()) == []
+
+
+def test_write_live_report_rejects_linked_destination_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        outside = root / "outside.json"
+        outside.write_text("outside", encoding="utf-8")
+        destination = root / "live-report.json"
+        destination.symlink_to(outside)
+
+        with pytest.raises(LiveSafetyError, match="report|destination|regular|identity"):
+            live_module.write_live_report(destination, {"state": "candidate"})
+
+        assert outside.read_text(encoding="utf-8") == "outside"
+        assert destination.is_symlink()
+
+
+def test_write_live_report_rejects_destination_substitution_after_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        outside = root / "outside.json"
+        outside.write_text("outside", encoding="utf-8")
+        destination = root / "live-report.json"
+        destination.write_text("original", encoding="utf-8")
+        original_replace = live_module.os.replace
+
+        def replace_then_substitute(source, target):  # type: ignore[no-untyped-def]
+            original_replace(source, target)
+            target.unlink()
+            target.symlink_to(outside)
+
+        monkeypatch.setattr(live_module.os, "replace", replace_then_substitute)
+
+        with pytest.raises(LiveSafetyError, match="report|destination|identity|cleanup"):
+            live_module.write_live_report(destination, {"state": "candidate"})
+
+        assert outside.read_text(encoding="utf-8") == "outside"
+        assert destination.is_symlink()
 
 
 def test_backup_rejects_raced_linked_destination_without_external_mutation(
@@ -136,6 +272,114 @@ def test_backup_rejects_raced_linked_destination_without_external_mutation(
 
         assert external.read_bytes() == b"outside sentinel"
         assert linked_destination.exists()
+
+
+def test_backup_parent_substitution_before_child_creation_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+        backups = root / "backups"
+        backups.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        original_copy = live_module._copy_to_exclusive_backup
+        substitution_blocked = False
+
+        def substitute_before_copy(source, destination, owned_paths, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal substitution_blocked
+            try:
+                moved = root / "backups-moved"
+                backups.rename(moved)
+                backups.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                substitution_blocked = True
+            if "directory_binding" in kwargs:
+                return original_copy(source, destination, owned_paths, **kwargs)
+            return original_copy(source, destination, owned_paths)
+
+        monkeypatch.setattr(
+            "cad_agent.live._copy_to_exclusive_backup", substitute_before_copy
+        )
+
+        backup = _backup(dxf, evidence, backups)
+
+        assert substitution_blocked is True
+        assert list(outside.iterdir()) == []
+        assert Path(backup["dxf_path"]).is_file()
+        assert Path(backup["build_evidence_path"]).is_file()
+
+
+def test_write_live_report_parent_substitution_before_temp_open_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        parent = root / "reports"
+        parent.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        destination = parent / "live-report.json"
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        original_open = live_module.os.open
+        substitution_blocked = False
+
+        def substitute_before_open(path, flags, mode=0o777, *, dir_fd=None):  # type: ignore[no-untyped-def]
+            nonlocal substitution_blocked
+            if Path(path) == temporary:
+                try:
+                    moved = root / "reports-moved"
+                    parent.rename(moved)
+                    parent.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    substitution_blocked = True
+            if dir_fd is None:
+                return original_open(path, flags, mode)
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(live_module.os, "open", substitute_before_open)
+
+        live_module.write_live_report(destination, {"state": "candidate"})
+
+        assert substitution_blocked is True
+        assert list(outside.iterdir()) == []
+        assert destination.is_file()
+
+
+def test_write_live_report_parent_substitution_before_publish_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        parent = root / "reports"
+        parent.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        destination = parent / "live-report.json"
+        original_replace = live_module.os.replace
+        substitution_blocked = False
+
+        def substitute_before_publish(source, target):  # type: ignore[no-untyped-def]
+            nonlocal substitution_blocked
+            try:
+                moved = root / "reports-moved"
+                parent.rename(moved)
+                parent.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                substitution_blocked = True
+            return original_replace(source, target)
+
+        monkeypatch.setattr(live_module.os, "replace", substitute_before_publish)
+
+        live_module.write_live_report(destination, {"state": "candidate"})
+
+        assert substitution_blocked is True
+        assert list(outside.iterdir()) == []
+        assert destination.is_file()
 
 
 def test_backup_cleanup_does_not_unlink_replaced_destination(
