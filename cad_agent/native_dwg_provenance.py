@@ -10,6 +10,11 @@ from pathlib import Path
 import re
 
 from cad_agent.drawing_contracts import canonical_json_sha256
+from cad_agent.file_integrity import (
+    FileIdentityError,
+    assert_path_identity,
+    open_bound_file,
+)
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
 
 
@@ -109,25 +114,23 @@ def _regular_file(value: object, code: str) -> Path:
 
 def _snapshot(value: object, code: str) -> tuple[Path, bytes, str]:
     path = _regular_file(value, code)
+    descriptor = -1
     try:
-        with path.open("rb") as stream:
-            descriptor_stat = os.fstat(stream.fileno())
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor, descriptor_stat = open_bound_file(
+            path, flags=flags, label=code
+        )
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
             data = stream.read()
-        path_stat = path.stat()
-    except OSError as error:
+        assert_path_identity(path, descriptor_stat, label=code)
+    except FileIdentityError as error:
         raise NativeDwgProvenanceError(code) from error
-    if (
-        descriptor_stat.st_dev,
-        descriptor_stat.st_ino,
-        descriptor_stat.st_size,
-        descriptor_stat.st_mtime_ns,
-    ) != (
-        path_stat.st_dev,
-        path_stat.st_ino,
-        path_stat.st_size,
-        path_stat.st_mtime_ns,
-    ):
-        _fail(code)
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise NativeDwgProvenanceError(code) from error
     return path, data, hashlib.sha256(data).hexdigest()
 
 

@@ -215,6 +215,44 @@ def test_native_packet_is_deterministic_and_replayable(tmp_path: Path) -> None:
     )
 
 
+def test_native_snapshot_rejects_path_replacement_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _api()
+    selected = tmp_path / "selected.dxf"
+    original = tmp_path / "selected.original.dxf"
+    foreign = tmp_path / "foreign.dxf"
+    selected.write_bytes(b"trusted candidate bytes")
+    foreign.write_bytes(b"foreign replacement bytes")
+    original_os_open = module.os.open
+    swapped = False
+
+    def raced_os_open(path: Path, flags: int, *args: object, **kwargs: object):
+        nonlocal swapped
+        if path == selected and not swapped:
+            swapped = True
+            selected.rename(original)
+            foreign.rename(selected)
+        return original_os_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", raced_os_open)
+    try:
+        with pytest.raises(
+            module.NativeDwgProvenanceError,
+            match="CANDIDATE_ARTIFACT_INVALID",
+        ):
+            module._snapshot(selected, "CANDIDATE_ARTIFACT_INVALID")
+    finally:
+        if selected.exists():
+            selected.unlink()
+        if original.exists():
+            original.rename(selected)
+
+    assert swapped
+    assert selected.read_bytes() == b"trusted candidate bytes"
+
+
 def test_native_packet_rejects_source_or_candidate_hash_drift(
     tmp_path: Path,
 ) -> None:

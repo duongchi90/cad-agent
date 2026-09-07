@@ -9,7 +9,6 @@ import hashlib
 import json
 import ntpath
 import os
-import stat
 import shutil
 from pathlib import Path
 from typing import Any
@@ -18,13 +17,17 @@ from dxf_builder_lib.builder import BuildResult
 from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import LiveReviewResult, review_dxf_live
 
+from .file_integrity import (
+    FileIdentityError,
+    assert_path_identity,
+    is_regular_non_reparse,
+    is_single_link_regular_non_reparse,
+    open_bound_file,
+)
 from .manifest import sha256_file
 
 
 BUILD_EVIDENCE_SCHEMA_VERSION = "1.0"
-_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
-
-
 class LiveSafetyError(ValueError):
     """Raised when a live drawing operation cannot meet its safety contract."""
 
@@ -120,28 +123,20 @@ def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Pa
 
 
 def _is_regular_non_reparse(stat_result: os.stat_result) -> bool:
-    return stat.S_ISREG(stat_result.st_mode) and not bool(
-        getattr(stat_result, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
-    )
+    return is_regular_non_reparse(stat_result)
 
 
 def _is_single_link_regular_non_reparse(stat_result: os.stat_result) -> bool:
-    return _is_regular_non_reparse(stat_result) and getattr(stat_result, "st_nlink", 1) == 1
+    return is_single_link_regular_non_reparse(stat_result)
 
 
 def _assert_path_identity(
     path: Path, opened_stat: os.stat_result, *, label: str
 ) -> None:
     try:
-        path_stat = os.stat(path, follow_symlinks=False)
-    except OSError as exc:
-        raise LiveSafetyError(f"{label} identity could not be verified.") from exc
-    if not _is_single_link_regular_non_reparse(path_stat) or not os.path.samestat(
-        opened_stat, path_stat
-    ):
-        raise LiveSafetyError(
-            f"{label} must remain the same single-link regular non-reparse file."
-        )
+        assert_path_identity(path, opened_stat, label=label)
+    except FileIdentityError as exc:
+        raise LiveSafetyError(str(exc)) from exc
 
 
 def _assert_backup_path_identity(path: Path, opened_stat: os.stat_result) -> None:
@@ -271,29 +266,9 @@ def _backup(
 
 def _open_bound_file(path: Path, *, flags: int, label: str) -> tuple[int, os.stat_result]:
     try:
-        path_stat = os.stat(path, follow_symlinks=False)
-    except OSError as exc:
-        raise LiveSafetyError(f"{label} identity could not be verified.") from exc
-    if not _is_single_link_regular_non_reparse(path_stat):
-        raise LiveSafetyError(
-            f"{label} must be a single-link regular non-reparse file."
-        )
-
-    descriptor = -1
-    try:
-        descriptor = os.open(path, flags)
-        opened_stat = os.fstat(descriptor)
-        if (
-            not _is_single_link_regular_non_reparse(opened_stat)
-            or not os.path.samestat(path_stat, opened_stat)
-        ):
-            raise LiveSafetyError(f"{label} identity changed while opening.")
-        _assert_path_identity(path, opened_stat, label=label)
-        return descriptor, opened_stat
-    except Exception:
-        if descriptor >= 0:
-            os.close(descriptor)
-        raise
+        return open_bound_file(path, flags=flags, label=label)
+    except FileIdentityError as exc:
+        raise LiveSafetyError(str(exc)) from exc
 
 
 def _sha256_open_file(handle: Any) -> str:
