@@ -11,6 +11,7 @@ import pytest
 from cad_agent import candidate_revision as r4
 from cad_agent import component_view_registry as r3
 from cad_agent import drawing_artifact_reference as dara
+from cad_agent import drawing_query
 from cad_agent.drawing_contracts import canonical_json_sha256
 
 
@@ -497,3 +498,40 @@ def test_native_composition_produces_current_dara_r3_r4_binding(
         fixture["candidate_path"].resolve()
     )
     assert binding["base_cad_handoff"] is None
+
+
+def test_native_composition_reuses_bounded_drawing_observation(
+    tmp_path: Path,
+) -> None:
+    module = _api()
+    fixture = _fixture(tmp_path)
+    binding = module.compose_native_dwg_query_binding(
+        source_path=fixture["source_path"],
+        candidate_path=fixture["candidate_path"],
+        source_readback=fixture["source_readback"],
+        candidate_readback=fixture["candidate_readback"],
+        source_setup_audit_sha256=fixture["source_setup_audit_sha256"],
+        candidate_setup_audit_sha256=fixture["candidate_setup_audit_sha256"],
+        run_id="run-native-001",
+        project_id="project-native-001",
+        drawing_id="drawing-native-001",
+    )
+    observation = drawing_query.observe_drawing(
+        client=None,
+        reference=binding["reference"],
+        current_observation=binding["current_observation"],
+        artifact_bytes=binding["artifact_bytes"],
+        parent_reference=None,
+        accepted_transition_evidence_sha256=None,
+        registry=binding["registry"],
+        registry_upstream_context=binding["registry_upstream_context"],
+        candidate_state=binding["candidate_state"],
+    )
+
+    assert observation["structural_summary"]["component_count"] == 0
+    assert observation["structural_summary"]["view_count"] == 0
+    assert observation["structural_summary"]["link_count"] == 0
+    assert observation["structural_summary"]["candidate_binding_count"] == 0
+    assert observation["structural_summary"][
+        "whole_drawing_entity_count_status"
+    ] == "NOT_ENUMERATED"
