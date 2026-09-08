@@ -180,6 +180,8 @@ def test_rotated_ocr_candidate_is_fused_and_mapped_to_original_crop() -> None:
 def test_cross_angle_ocr_conflict_is_not_resolved_by_rotation_majority() -> None:
     values = ("4500", "4600", "4700")
     calls = 0
+    image = synthetic_horizontal_dimension()
+    cluster = horizontal_dimension_cluster()
 
     def conflicting_reader(image: np.ndarray) -> list[RawText]:
         nonlocal calls
@@ -198,8 +200,8 @@ def test_cross_angle_ocr_conflict_is_not_resolved_by_rotation_majority() -> None
         )]
 
     disposition = observe_dimension_cluster(
-        synthetic_horizontal_dimension(),
-        horizontal_dimension_cluster(),
+        image,
+        cluster,
         page_id="PAGE-001",
         view_id="SIDE",
         source_sha256="1" * 64,
@@ -214,6 +216,19 @@ def test_cross_angle_ocr_conflict_is_not_resolved_by_rotation_majority() -> None
         90.0,
         -90.0,
     ]
+
+    register = build_dimension_register(
+        run_id="RUN-VS-T1-CONFLICT-SUMMARY",
+        source_sha256="1" * 64,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        total_area_px=image.shape[0] * image.shape[1],
+        inspected_area_px=image.shape[0] * image.shape[1],
+        detected_cluster_ids=[cluster.cluster_id],
+        dispositions=[disposition],
+    )
+    assert register["summary"] == {"confirmed": 0, "unresolved": 0, "conflicts": 1}
+    assert validate_visual_contract(register, contract="dimension_register") == register
 
 
 def test_leader_lines_are_preserved_in_closed_observer_evidence() -> None:
