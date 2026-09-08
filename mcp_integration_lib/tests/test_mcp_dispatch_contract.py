@@ -183,10 +183,16 @@ def test_entity_get_source_exposes_text_height_and_rotation() -> None:
 
 def test_dispatcher_serializes_real_numbers_with_round_trip_precision() -> None:
     source = _dispatcher_source()
+    helper_start = source.index("(defun mcp-json-normalize-real-text")
     start = source.index("(defun mcp-json-encode-number")
     end = source.index("(defun mcp-json-encode-array", start)
+    helper = source[helper_start:start]
     number_encoder = source[start:end]
+    assert '(= (substr text 1 2) "-.")' in helper
+    assert '(= (substr text 1 1) ".")' in helper
+    assert '(strcat normalized "0")' in helper
     assert '(rtos value 2 16)' in number_encoder
+    assert '(mcp-json-normalize-real-text (rtos value 2 16))' in number_encoder
     assert '(vl-princ-to-string value)' not in number_encoder
 
 

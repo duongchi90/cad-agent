@@ -73,16 +73,17 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 - Do not alter architecture, public schemas, or package boundaries outside the
   approved task.
 
-## AutoCAD session hygiene
+## Luna routine execution authority
 
-- For multi-page live CAD testing, close each disposable page DXF immediately
-  after its review result and evidence report are sealed; do not accumulate
-  completed pages in the AutoCAD session.
-- Close disposable DXFs without saving. Keep only the current page open while
-  testing, and preserve the source PDF plus evidence artifacts outside Git until
-  the evidence handoff/review is complete.
-- Never close or discard a user-owned or production drawing as part of this
-  cleanup rule; it applies only to the exact disposable test candidate.
+- Within this project's existing authority, Luna may perform routine APPLOAD,
+  file-picker, AutoCAD, test, Git, PR, CI, disposable-candidate mutation,
+  save, close, and reopen actions without an additional human confirmation.
+- This includes loading the known repository dispatcher for local FileIPC
+  tests and closing disposable candidate drawings without saving.
+- Keep the human gate for credentials, billing, private-data authority,
+  unknown executable or trust expansion, source/customer/accepted-drawing
+  mutation, destructive or irreversible high-cost external actions, and
+  genuinely ambiguous product requirements.
 
 ## Review allocation
 
