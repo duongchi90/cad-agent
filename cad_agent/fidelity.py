@@ -2453,7 +2453,9 @@ def _render_layout_dxf(dxf: Path, width_mm: float, height_mm: float, width_px: i
     document = ezdxf.readfile(dxf)
     backend = PyMuPdfBackend()
     Frontend(RenderContext(document), backend).draw_layout(document.modelspace(), finalize=True)
-    png = backend.get_replay(layout.Page(width_mm, height_mm)).get_pixmap(144, alpha=True).tobytes("png")
+    page = layout.Page(width_mm, height_mm)
+    render_box = layout.BoundingBox2d([(0.0, 0.0), (float(width_mm), float(height_mm))])
+    png = backend.get_replay(page, render_box=render_box).get_pixmap(144, alpha=True).tobytes("png")
     rendered = cv2.imdecode(np.frombuffer(png, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
     if rendered is None:
         raise FidelityError("Could not rasterize clean layout DXF.")

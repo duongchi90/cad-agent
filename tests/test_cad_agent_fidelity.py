@@ -54,6 +54,28 @@ def _pdf(path: Path) -> None:
     document.close()
 
 
+def test_fidelity_renderer_preserves_explicit_local_coordinate_frame(tmp_path: Path) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    dxf = tmp_path / "coordinate-frame.dxf"
+    document = ezdxf.new("R2010")
+    model = document.modelspace()
+    model.add_line((20, 10), (80, 10))
+    model.add_line((80, 10), (80, 40))
+    document.saveas(dxf)
+
+    rendered = fidelity_module._render_layout_dxf(dxf, 100.0, 50.0, 200, 100)
+    expected = np.full((100, 200), 255, dtype=np.uint8)
+    cv2.line(expected, (40, 80), (160, 80), 0, 1, cv2.LINE_AA)
+    cv2.line(expected, (160, 80), (160, 20), 0, 1, cv2.LINE_AA)
+    metric = fidelity_module._edge_metrics(
+        cv2.Canny(expected, 50, 150),
+        cv2.Canny(cv2.cvtColor(rendered, cv2.COLOR_BGR2GRAY), 50, 150),
+        np.full((100, 200), 255, dtype=np.uint8),
+    )
+    assert metric["f1"] > 0.95
+
+
 def _dimension_pdf(path: Path) -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)
