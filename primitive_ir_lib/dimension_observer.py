@@ -579,9 +579,12 @@ def build_dimension_register(
         if disposition.observation is None:
             raise DimensionObserverError(f"{cluster_id} disposition lacks observation")
         dimensions.append(disposition.observation)
-        summary_key = disposition.disposition.casefold()
-        if summary_key in summary:
-            summary[summary_key] += 1
+        summary_key = {
+            "CONFIRMED": "confirmed",
+            "UNRESOLVED": "unresolved",
+            "CONFLICT": "conflicts",
+        }[disposition.disposition]
+        summary[summary_key] += 1
     coverage_percent = 100.0 if total_area_px == 0 else inspected_area_px / total_area_px * 100.0
     return {
         "schema_version": "dimension-register-1.0",
