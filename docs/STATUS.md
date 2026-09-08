@@ -16,50 +16,47 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-## Current canonical snapshot (2026-09-05)
+## Current canonical snapshot (2026-09-08)
 
-- Fresh GitHub main is
-  `156d080390015f1895035443d7d13e6f95c9e834`. The older snapshot
-  `0c8055c18512960ff70c0181add10e19960d9a8f` is historical and must not be
-  used as current authority.
-- Provider-independent Phase 1A/2/3/4 deterministic foundations remain
-  verified on their merged owners. Issue #377 records a live bounded query
-  PASS on PR #404 head `dfc10f5f374c1b2aff1990c6b5d78ac6cf89b301`, but that
-  head is still OPEN and is not in main; this evidence is not current-main
-  acceptance.
-- Current open successors are not merged: PR #403 is OPEN/READY at
-  `6ffd2abf7d0a7cf80bd57555da47c2d98088f1a4`, PR #404 is OPEN/READY at
-  `dfc10f5f374c1b2aff1990c6b5d78ac6cf89b301`, and PR #405 is OPEN/DRAFT at
-  `dbd94bdf7acfd16278f939471351dec3e461d869`. Their exact-head hosted
-  checks are green where recorded; review/currentness and product/live gates
-  remain separate merge conditions.
-- PR #403's actual exact write-set is
-  `mcp_integration_lib/mcp_client.py`,
-  `mcp_integration_lib/tests/test_phase4.py`, and
-  `mcp_integration_lib/tests/test_mcp_dispatch_contract.py`. The prior
-  two-file declaration was reconciled; fresh exact-head Security and
-  Integration finals are still required.
-- PR #404 remains blocked from merge by its current dependency on the
-  guarded close owner from #403 and its current handle-identity rollback
-  finding. No new live retry is justified by that review state.
-- PR #405 contains the bounded DXFOUT terminal-output repair in exactly
-  `mcp_integration_lib/mcp_dispatch.lsp` and
-  `mcp_integration_lib/tests/test_mcp_dispatch_contract.py`. Its local
-  verifier passed `3163` offline tests, `118` .NET IPC tests, and the hosted
-  exact-head contexts are green. One fresh disposable epoch stopped before
-  mutation at `AUTOCAD_DISPATCHER_READINESS`; the root was removed only after
-  `IPC_SURVIVORS=[]`, and no live export PASS is claimed.
-- The measured live precondition is environmental: AutoCAD `SECURELOAD=1`
-  and the active profile's `TRUSTEDPATHS` does not include `C:\temp`, where
-  the PR405 dispatcher copy resides. No trust policy or security setting was
-  changed. The next oracle is one fresh exact-head disposable epoch after the
-  verified dispatcher is legitimately loaded in the exact drawing context.
+- Fresh GitHub `main` is `8bc63e6886b6099aad2eee042050a8745bfac8df`, the merge
+  commit for PR #410. PR #410 is `MERGED` at exact head
+  `db6f78d0287f951398794d498eb9398e91ab8317`; local verification was performed
+  against the same `main` base.
+- REAL IMAGE/PDF P1 live Mechanical review is **Verified** for the private
+  nine-page PDF identified by SHA-256
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
+  The existing `run-pdf` owner completed all 36/36 page stages in manifest
+  `90fc43a14dcd52517de273f98e57bc7c1b860c86257cc406080180176953b261` under
+  `C:\temp\cad-agent-real-p1-20260908-01` with approved calibration
+  `STATUS-e48f3970-144dpi-1to40`, `144` DPI, and `7.055555555556` mm/px.
+- AutoCAD Mechanical 2027 live session identity was PID `17520`, HWND
+  `1705904`. The nine accepted read-only reports recorded structural/geometry
+  counts `828/828`, `855/855`, `675/675`, `878/878`, `396/396`, `528/528`,
+  `606/606`, `653/653`, and `990/990`; every report had
+  `passed=true`, `geometry_degraded=false`, zero mismatches, and zero warnings.
+  No repair, save, or production drawing mutation was performed.
+- The observed P1 blocker was AutoLISP real-number serialization truncating
+  values through `vl-princ-to-string`. Commit `973b6151da34d20adc1d7b399e37eb20920abb7a`
+  changes only `mcp_integration_lib/mcp_dispatch.lsp` and its contract test to
+  use `(rtos value 2 16)`. Focused coverage is `104 passed`; the authoritative
+  verifier on that exact commit exited `0` with offline JUnit `3260/0/0/0`,
+  dotnet IPC `118/0/0/0`, .NET `202 passed`, and the declared causal RED plus
+  unavailable-state skips recorded by the script.
+- The private source and all live artifacts remain outside Git. The run remains
+  `release_profile=DRAFT_REFERENCE` and
+  `authoritative_release_eligible=false`; no visual-fidelity, authoritative
+  drawing-setup, production mutation, or release claim is implied by this P1
+  review.
+- `FIRST_UNSATISFIED_PRODUCT_BOUNDARY` is now
+  `M2_DRAWING_INITIALIZATION_SETUP_VERIFIED`: the existing image/PDF path still
+  requires approved Drawing Definition/Profile/Domain Pack/template provenance
+  and hash-bound read-only `SETUP_VERIFIED` evidence before it can be promoted
+  beyond `DRAFT_REFERENCE`. M2 remains separate from this read-only P1 pass.
 - M3 real-provider acceptance remains
-  `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`. PR #340 is OPEN/DRAFT/FROZEN at head
-  `714620001e8dbc1c49adbb13b9af4d5821eb6a7d`; no provider call, billing action,
-  credential use, PR #340/#337 mutation, or M2 retest is included here.
+  `BLOCKED_BY_CREDIT_BALANCE_EXHAUSTED`; no provider retry, billing action, or
+  credential use is included here.
 - Older sections below remain historical evidence and do not override this
-  snapshot. Current PR/issue state and exact-head evidence remain canonical.
+  snapshot. Current GitHub state and exact-head evidence remain canonical.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 
