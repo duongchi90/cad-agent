@@ -1264,27 +1264,37 @@ def run_fidelity_linetype_reconstruct(
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     height_px = int(audit["source_page"]["render_height_px"])
     scale = float(page["pixel_to_paper_mm"]["used"])
+    linetype_specs = {
+        "DASHED": ("FIDELITY_DASHED", [0.0, 4.0, -2.0]),
+        "CENTER": ("FIDELITY_CENTER", [0.0, 4.0, -1.0, 1.0, -1.0]),
+    }
     coordinates = [
-        (height_px - float(pattern["coordinate_px"])) * scale
+        ((height_px - float(pattern["coordinate_px"])) * scale, linetype_specs[linetype][0])
         for pattern in patterns
         if isinstance(pattern, dict)
         and pattern.get("axis") == "horizontal"
-        and pattern.get("suggested_linetype") == "DASHED"
         and isinstance(pattern.get("coordinate_px"), (int, float))
+        and (linetype := str(pattern.get("suggested_linetype", "")).upper()) in linetype_specs
     ]
     import ezdxf
 
     document = ezdxf.readfile(base_dxf)
-    if "FIDELITY_DASHED" not in document.linetypes:
-        document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    required_linetype_names = {"FIDELITY_DASHED"} | {name for _, name in coordinates}
+    for name, pattern in linetype_specs.values():
+        if name in required_linetype_names and name not in document.linetypes:
+            document.linetypes.add(name, pattern)
     tolerance_mm = max(0.25, 3.0 * scale)
     changed = 0
     for entity in document.modelspace().query("LINE"):
         start, end = entity.dxf.start, entity.dxf.end
         if abs(float(start.y) - float(end.y)) > tolerance_mm:
             continue
-        if any(abs(float(start.y) - coordinate) <= tolerance_mm for coordinate in coordinates):
-            entity.dxf.linetype = "FIDELITY_DASHED"
+        linetype = next(
+            (name for coordinate, name in coordinates if abs(float(start.y) - coordinate) <= tolerance_mm),
+            None,
+        )
+        if linetype is not None:
+            entity.dxf.linetype = linetype
             changed += 1
     base_root = output_root / "linetype_reconstruction"
     revision = 2
@@ -1306,7 +1316,7 @@ def run_fidelity_linetype_reconstruct(
         "matched_horizontal_pattern_count": len(coordinates),
         "changed_line_entities": changed,
         "tolerance_mm": tolerance_mm,
-        "unresolved": ["dashed mapping is a fidelity candidate and needs visual review", "no model export"],
+        "unresolved": ["non-default linetype mapping is a fidelity candidate and needs visual review", "no model export"],
     }
     (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return output

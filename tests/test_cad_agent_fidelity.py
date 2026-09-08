@@ -400,6 +400,54 @@ def test_linetype_reconstruction_cli_writes_private_candidate(tmp_path: Path) ->
     assert (output / "linetype_reconstruction" / "page_01" / "layout.dxf").is_file()
 
 
+def test_linetype_reconstruction_applies_center_to_hash_bound_horizontal_lines(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+
+    height_px = int(json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))["source_page"]["render_height_px"])
+    coordinate_px = 180
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    y_mm = (height_px - coordinate_px) * scale
+    base_dxf = output / "base.dxf"
+    document = ezdxf.new("R2010")
+    model = document.modelspace()
+    model.add_line((10, y_mm), (40, y_mm))
+    model.add_line((10, y_mm + 10), (40, y_mm + 10))
+    document.saveas(base_dxf)
+    observation = output / "linetype-center-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "patterns": [{
+            "axis": "horizontal",
+            "coordinate_px": coordinate_px,
+            "segment_count": 6,
+            "median_gap_px": 12.0,
+            "status": "needs_review",
+            "suggested_linetype": "CENTER",
+        }],
+    }), encoding="utf-8")
+
+    result = run_fidelity_linetype_reconstruct(
+        source, output, manifest, observation, base_dxf, workspace_root=Path.cwd(),
+    )
+
+    entities = list(ezdxf.readfile(result).modelspace().query("LINE"))
+    assert entities[0].dxf.linetype == "FIDELITY_CENTER"
+    assert entities[1].dxf.linetype == "BYLAYER"
+    assert "FIDELITY_CENTER" in ezdxf.readfile(result).linetypes
+
+
 def test_table_text_reconstruction_emits_only_matched_cells(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
