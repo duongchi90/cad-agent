@@ -673,6 +673,19 @@ def _fidelity_text_reconstruct_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_semantic_region_handoff_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_semantic_region_handoff
+
+    manifest_path = args.manifest.resolve()
+    results = run_fidelity_semantic_region_handoff(
+        args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path),
+        args.approval.resolve(), workspace_root=Path.cwd(),
+    )
+    for result in results:
+        print(result)
+    return 0
+
+
 def _fidelity_compose_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_compose
 
@@ -960,6 +973,13 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_text_reconstruct.add_argument("--manifest", type=Path, required=True)
     fidelity_text_reconstruct.add_argument("--approval", type=Path, required=True)
     fidelity_text_reconstruct.add_argument("--base-dxf", type=Path)
+    fidelity_semantic_handoff = subcommands.add_parser(
+        "fidelity-semantic-region-handoff",
+        help="Transfer existing semantic-owner DXFs into approved local region candidates",
+    )
+    fidelity_semantic_handoff.add_argument("--input", type=Path, required=True)
+    fidelity_semantic_handoff.add_argument("--manifest", type=Path, required=True)
+    fidelity_semantic_handoff.add_argument("--approval", type=Path, required=True)
     fidelity_compose = subcommands.add_parser("fidelity-compose", help="Compose approved region geometry into a paper-coordinate review page")
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
@@ -1071,6 +1091,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_text_approval_selection_command(args)
         if args.command == "fidelity-text-reconstruct":
             return _fidelity_text_reconstruct_command(args)
+        if args.command == "fidelity-semantic-region-handoff":
+            return _fidelity_semantic_region_handoff_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
         if args.command == "fidelity-promote":

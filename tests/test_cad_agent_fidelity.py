@@ -596,6 +596,7 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert (output / "fidelity_text_approvals" / "page_01.json").is_file()
         text_dxf = run_fidelity_text_reconstruct(source, output, manifest, output / "fidelity_text_approvals" / "page_01.json", workspace_root=Path.cwd())
         assert {entity.dxftype() for entity in ezdxf.readfile(text_dxf).modelspace()} == {"TEXT"}
+        assert json.loads((text_dxf.parent / "report.json").read_text(encoding="utf-8"))["output_dxf_sha256"] == __import__("hashlib").sha256(text_dxf.read_bytes()).hexdigest()
 
 
 def test_text_selection_file_creates_page_approvals(tmp_path: Path) -> None:
@@ -1001,6 +1002,131 @@ def test_fidelity_compose_rejects_unsupported_dimension_type_before_linear_trans
         run_fidelity_compose(
             source, output, manifest, output / "region_approvals" / "page_01.json", workspace_root=Path.cwd(),
         )
+
+
+def test_semantic_owner_handoff_translates_owner_outputs_into_local_region_candidates(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "main", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [300, 200, 390, 290], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["main"], "approved-semantic-owner-handoff", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    from cad_agent import fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+    rendered_sha256 = fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"])
+
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "main" / "geometry.dxf"
+    candidate = ezdxf.readfile(candidate_path)
+    horizontal = next(
+        entity for entity in candidate.modelspace().query("LINE")
+        if abs(float(entity.dxf.start.y) - float(entity.dxf.end.y)) <= 1e-6
+    )
+    local_start = horizontal.dxf.start
+    local_end = horizontal.dxf.end
+
+    text_root = output / "text_reconstruction" / "page_01"
+    text_root.mkdir(parents=True)
+    text_dxf = text_root / "layout.dxf"
+    text_document = ezdxf.new("R2010")
+    text = text_document.modelspace().add_text("SEMANTIC TEXT", dxfattribs={"height": 4.0})
+    text.set_placement((offset_x + 20.0, offset_y + 15.0))
+    text_document.saveas(text_dxf)
+    text_approval = output / "fidelity_text_approvals" / "page_01.json"
+    text_approval.parent.mkdir(parents=True)
+    text_approval.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+    }), encoding="utf-8")
+    (text_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "text_approval_sha256": fidelity_module.sha256_file(text_approval),
+        "output_dxf_sha256": fidelity_module.sha256_file(text_dxf),
+    }), encoding="utf-8")
+
+    dimension_root = output / "dimension_reconstruction" / "page_01"
+    dimension_root.mkdir(parents=True)
+    dimension_dxf = dimension_root / "layout.dxf"
+    dimension_document = ezdxf.new("R2010")
+    dimension = dimension_document.modelspace().add_linear_dim(
+        base=(offset_x + 10.0, offset_y + 20.0),
+        p1=(offset_x + 10.0, offset_y + 10.0),
+        p2=(offset_x + 30.0, offset_y + 10.0),
+        location=(offset_x + 20.0, offset_y + 20.0),
+        text="<>",
+    )
+    dimension.render()
+    dimension_document.saveas(dimension_dxf)
+    (dimension_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": rendered_sha256,
+        "output_dxf_sha256": fidelity_module.sha256_file(dimension_dxf),
+    }), encoding="utf-8")
+
+    linetype_root = output / "linetype_reconstruction" / "page_01"
+    linetype_root.mkdir(parents=True)
+    linetype_dxf = linetype_root / "layout.dxf"
+    linetype_document = ezdxf.new("R2010")
+    linetype_document.linetypes.add("FIDELITY_CENTER", [0.0, 4.0, -1.0, 1.0, -1.0])
+    linetype_document.modelspace().add_line(
+        (offset_x + float(local_start.x), offset_y + float(local_start.y)),
+        (offset_x + float(local_end.x), offset_y + float(local_end.y)),
+        dxfattribs={"linetype": "FIDELITY_CENTER"},
+    )
+    linetype_document.modelspace().add_line(
+        (offset_x + float(local_start.x), offset_y + float(local_start.y) + 0.2),
+        (offset_x + float(local_end.x), offset_y + float(local_end.y) + 0.2),
+        dxfattribs={"linetype": "FIDELITY_CENTER"},
+    )
+    linetype_document.saveas(linetype_dxf)
+    (linetype_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": rendered_sha256,
+        "output_dxf_sha256": fidelity_module.sha256_file(linetype_dxf),
+    }), encoding="utf-8")
+
+    assert main([
+        "fidelity-semantic-region-handoff",
+        "--input", str(source),
+        "--manifest", str(output / "fidelity-run-manifest.json"),
+        "--approval", str(approval_path),
+    ]) == 0
+    handoff = json.loads((output / "semantic_region_handoff" / "page_01.json").read_text(encoding="utf-8"))
+    assert handoff["transferred"][0]["counts"]["LINETYPE"] == 1
+
+    candidate = ezdxf.readfile(candidate_path)
+    assert [entity.dxf.text for entity in candidate.modelspace().query("TEXT")] == ["SEMANTIC TEXT"]
+    dimensions = list(candidate.modelspace().query("DIMENSION"))
+    assert len(dimensions) == 1
+    assert dimensions[0].get_measurement() == pytest.approx(20.0)
+    assert sum(entity.dxf.linetype == "FIDELITY_CENTER" for entity in candidate.modelspace().query("LINE")) == 1
+
+    composed = run_fidelity_compose(source, output, manifest, approval_path, workspace_root=Path.cwd())
+    result = ezdxf.readfile(composed / "layout.dxf")
+    assert len(result.modelspace().query("TEXT")) == 1
+    assert len(result.modelspace().query("DIMENSION")) == 1
+    assert result.modelspace().query("LINE")[0].dxf.linetype == "FIDELITY_CENTER"
+    compose_report = json.loads((composed / "report.json").read_text(encoding="utf-8"))
+    assert "semantic owner handoff remains review-only" in compose_report["unresolved"]
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:

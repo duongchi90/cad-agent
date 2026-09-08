@@ -720,6 +720,25 @@
         }
       }
     },
+    "fidelity-semantic-region-handoff": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
     "fidelity-text-review-index": {
       "options": {
         "--input": {
