@@ -404,6 +404,282 @@ def run_fidelity_reconstruct(
     return results
 
 
+def _latest_fidelity_owner_output(output_root: Path, prefix: str, page_number: int) -> Path | None:
+    candidates = [
+        path for path in output_root.glob(f"{prefix}*/page_{page_number:02d}/layout.dxf")
+        if path.is_file()
+    ]
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns) if candidates else None
+
+
+def _validate_fidelity_owner_output(
+    output_root: Path,
+    path: Path,
+    kind: str,
+    page: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    report_path = path.parent / "report.json"
+    if not report_path.is_file():
+        raise FidelityError(f"{kind} owner output is missing its report.")
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError(f"{kind} owner report is invalid JSON.") from exc
+    if report.get("output_dxf_sha256") != sha256_file(path):
+        raise FidelityError(f"{kind} owner output hash does not match its report.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if kind == "text":
+        approval_path = output_root / "fidelity_text_approvals" / f"page_{page['page']:02d}.json"
+        if not approval_path.is_file() or report.get("text_approval_sha256") != sha256_file(approval_path):
+            raise FidelityError("Text owner output is not bound to its text approval.")
+        try:
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FidelityError("Text approval is invalid JSON.") from exc
+        if approval.get("source") != manifest.get("source") or approval.get("page") != page["page"]:
+            raise FidelityError("Text owner output is bound to a different source or page.")
+    elif report.get("source_render_sha256") != sha256_file(rendered):
+        raise FidelityError(f"{kind} owner output does not match the current rendered page.")
+    return report
+
+
+def _fidelity_region_offsets(
+    region: dict[str, Any], page: dict[str, Any], height_px: float,
+) -> tuple[float, float, float]:
+    x0, _, _, y1 = (float(value) for value in region["bbox_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    return x0 * scale, (height_px - y1) * scale, max(0.25, 3.0 * scale)
+
+
+def _fidelity_point_in_region(
+    point: Any,
+    offset_x: float,
+    offset_y: float,
+    region: dict[str, Any],
+    page: dict[str, Any],
+    height_px: float,
+    tolerance: float,
+) -> bool:
+    x0, y0, x1, y1 = (float(value) for value in region["bbox_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    return (
+        offset_x - tolerance <= float(point.x) <= x1 * scale + tolerance
+        and offset_y - tolerance <= float(point.y) <= (height_px - y0) * scale + tolerance
+    )
+
+
+def _copy_fidelity_text_style(source_document: Any, target_document: Any, name: str) -> str:
+    if not name or name in target_document.styles:
+        return name or _ensure_unicode_text_style(target_document)
+    source_style = source_document.styles.get(name)
+    target_document.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
+    return name
+
+
+def _copy_fidelity_linetype(source_document: Any, target_document: Any, name: str) -> None:
+    if name in target_document.linetypes or name.upper() in {"BYLAYER", "BYBLOCK", "CONTINUOUS"}:
+        return
+    source_linetype = source_document.linetypes.get(name)
+    pattern = [tag.value for tag in source_linetype.pattern_tags.tags if tag.code == 49]
+    length = next((float(tag.value) for tag in source_linetype.pattern_tags.tags if tag.code == 40), 0.0)
+    target_document.linetypes.add(
+        name,
+        pattern or [0.0],
+        description=str(source_linetype.dxf.get("description", "")),
+        length=length,
+    )
+
+
+def _fidelity_local_point(point: Any, offset_x: float, offset_y: float) -> tuple[float, float, float]:
+    return (float(point.x) - offset_x, float(point.y) - offset_y, float(point.z))
+
+
+def _fidelity_line_matches(first: Any, second: Any, start: Any, end: Any, tolerance: float) -> bool:
+    def xy(point: Any) -> tuple[float, float]:
+        if hasattr(point, "x"):
+            return float(point.x), float(point.y)
+        return float(point[0]), float(point[1])
+
+    first_x, first_y = xy(first)
+    second_x, second_y = xy(second)
+    start_x, start_y = xy(start)
+    end_x, end_y = xy(end)
+    direct = (
+        math.hypot(first_x - start_x, first_y - start_y) <= tolerance
+        and math.hypot(second_x - end_x, second_y - end_y) <= tolerance
+    )
+    reverse = (
+        math.hypot(first_x - end_x, first_y - end_y) <= tolerance
+        and math.hypot(second_x - start_x, second_y - start_y) <= tolerance
+    )
+    return direct or reverse
+
+
+def _merge_fidelity_owner_output_into_region(
+    target_document: Any,
+    source_document: Any,
+    kind: str,
+    region: dict[str, Any],
+    page: dict[str, Any],
+    height_px: float,
+) -> dict[str, int]:
+    offset_x, offset_y, tolerance = _fidelity_region_offsets(region, page, height_px)
+    target_model = target_document.modelspace()
+    counts = {"TEXT": 0, "MTEXT": 0, "DIMENSION": 0, "LINETYPE": 0}
+    if kind == "text":
+        for entity in source_document.modelspace():
+            if entity.dxftype() not in {"TEXT", "MTEXT"}:
+                continue
+            insert = entity.dxf.insert
+            if not _fidelity_point_in_region(insert, offset_x, offset_y, region, page, height_px, tolerance):
+                continue
+            style = _copy_fidelity_text_style(source_document, target_document, str(entity.dxf.get("style", "")))
+            if entity.dxftype() == "TEXT":
+                attributes = {"layer": "FIDELITY_TEXT", "height": float(entity.dxf.get("height", 1.0)), "style": style}
+                for name in ("rotation", "oblique", "width", "text_generation_flag", "thickness"):
+                    if entity.dxf.hasattr(name):
+                        attributes[name] = entity.dxf.get(name)
+                output = target_model.add_text(str(entity.dxf.text), dxfattribs=attributes)
+                output.dxf.insert = _fidelity_local_point(insert, offset_x, offset_y)
+                counts["TEXT"] += 1
+            else:
+                attributes = {"layer": "FIDELITY_TEXT", "char_height": float(entity.dxf.get("char_height", 1.0)), "style": style}
+                for name in ("rotation", "width", "attachment_point", "line_spacing_style", "line_spacing_factor"):
+                    if entity.dxf.hasattr(name):
+                        attributes[name] = entity.dxf.get(name)
+                output = target_model.add_mtext(str(entity.text), dxfattribs=attributes)
+                output.dxf.insert = _fidelity_local_point(insert, offset_x, offset_y)
+                counts["MTEXT"] += 1
+    elif kind == "dimension":
+        for entity in source_document.modelspace().query("DIMENSION"):
+            dimension_type = int(entity.dxf.get("dimtype", 0)) & 0x0F
+            if dimension_type != 0:
+                raise FidelityError(f"Unsupported fidelity dimension type {dimension_type}; only linear dimensions are supported.")
+            if not all(entity.dxf.hasattr(name) for name in ("defpoint", "defpoint2", "defpoint3")):
+                raise FidelityError("Only linear fidelity dimensions with definition points are supported.")
+            points = [entity.dxf.defpoint, entity.dxf.defpoint2, entity.dxf.defpoint3]
+            midpoint = entity.dxf.get("text_midpoint", entity.dxf.defpoint)
+            if not all(_fidelity_point_in_region(point, offset_x, offset_y, region, page, height_px, tolerance) for point in [*points, midpoint]):
+                continue
+            dimstyle = str(entity.dxf.get("dimstyle", "Standard"))
+            if dimstyle not in target_document.dimstyles:
+                source_style = source_document.dimstyles.get(dimstyle)
+                attributes = {key: value for key, value in source_style.dxfattribs().items() if key not in {"handle", "owner", "name"}}
+                target_document.dimstyles.add(dimstyle, dxfattribs=attributes)
+            output = target_model.add_linear_dim(
+                base=_fidelity_local_point(entity.dxf.defpoint, offset_x, offset_y),
+                p1=_fidelity_local_point(entity.dxf.defpoint2, offset_x, offset_y),
+                p2=_fidelity_local_point(entity.dxf.defpoint3, offset_x, offset_y),
+                location=_fidelity_local_point(midpoint, offset_x, offset_y),
+                angle=float(entity.dxf.get("angle", 0.0)),
+                text=str(entity.dxf.get("text", "<>")),
+                dimstyle=dimstyle,
+                dxfattribs={"layer": "FIDELITY_DIMENSIONS"},
+            )
+            output.render()
+            counts["DIMENSION"] += 1
+    else:
+        matched_targets: set[int] = set()
+        for entity in source_document.modelspace().query("LINE"):
+            line_type = str(entity.dxf.get("linetype", ""))
+            if line_type.upper() in {"", "BYLAYER", "BYBLOCK", "CONTINUOUS"}:
+                continue
+            if not all(_fidelity_point_in_region(point, offset_x, offset_y, region, page, height_px, tolerance) for point in (entity.dxf.start, entity.dxf.end)):
+                continue
+            start = _fidelity_local_point(entity.dxf.start, offset_x, offset_y)
+            end = _fidelity_local_point(entity.dxf.end, offset_x, offset_y)
+            matches = [
+                candidate for candidate in target_model.query("LINE")
+                if _fidelity_line_matches(candidate.dxf.start, candidate.dxf.end, start, end, tolerance)
+            ]
+            if not matches:
+                raise FidelityError(f"Linetype owner output line has no matching local region line for {line_type}.")
+            matches = [candidate for candidate in matches if id(candidate) not in matched_targets]
+            if not matches:
+                continue
+            _copy_fidelity_linetype(source_document, target_document, line_type)
+            matches[0].dxf.linetype = line_type
+            matched_targets.add(id(matches[0]))
+            if entity.dxf.hasattr("linetype_scale"):
+                matches[0].dxf.linetype_scale = entity.dxf.linetype_scale
+            counts["LINETYPE"] += 1
+    return counts
+
+
+def run_fidelity_semantic_region_handoff(
+    source: Path, output_root: Path, manifest: dict[str, Any], approval_path: Path, *, workspace_root: Path,
+) -> list[Path]:
+    """Transfer existing approved semantic-owner DXFs into approved local candidates."""
+    import ezdxf
+
+    if _is_within(output_root, workspace_root):
+        raise FidelityError("Fidelity output must be outside the Git worktree.")
+    verify_source(manifest, source)
+    if not _is_within(approval_path, output_root) or not approval_path.is_file():
+        raise FidelityError("Region approval must reside inside the private fidelity output root.")
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    if approval.get("state") != "approved-layout-reconstruction-only" or approval.get("source") != manifest.get("source"):
+        raise FidelityError("Region approval is not valid for semantic handoff.")
+    proposal_record = approval.get("proposal", {})
+    proposal_path = _safe_artifact_path(output_root, {"artifact": proposal_record.get("artifact"), "sha256": proposal_record.get("sha256")})
+    proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    if proposal.get("proposal_definition_sha256") != proposal_record.get("definition_sha256"):
+        raise FidelityError("Approved proposal definition no longer matches its approval.")
+    page_number = approval.get("page", {}).get("number")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Approved page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if approval["page"].get("render_sha256") != sha256_file(rendered):
+        raise FidelityError("Region approval render hash no longer matches the page artifact.")
+    image = cv2.imread(str(rendered))
+    if image is None:
+        raise FidelityError("Cannot read approved rendered page.")
+    height_px = float(image.shape[0])
+    owner_outputs: dict[str, Path] = {}
+    for kind, prefix in (("text", "text_reconstruction"), ("dimension", "dimension_reconstruction"), ("linetype", "linetype_reconstruction")):
+        path = _latest_fidelity_owner_output(output_root, prefix, page_number)
+        if path is not None:
+            _validate_fidelity_owner_output(output_root, path, kind, page, manifest)
+            owner_outputs[kind] = path
+    if not owner_outputs:
+        raise FidelityError("No validated semantic owner output is available for handoff.")
+    selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
+    transferred: list[dict[str, Any]] = []
+    for region in selected:
+        candidate_path = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
+        if not candidate_path.is_file():
+            raise FidelityError(f"Missing approved region candidate: {candidate_path}")
+        document = ezdxf.readfile(candidate_path)
+        counts = {"TEXT": 0, "MTEXT": 0, "DIMENSION": 0, "LINETYPE": 0}
+        for kind, owner_path in owner_outputs.items():
+            result = _merge_fidelity_owner_output_into_region(
+                document, ezdxf.readfile(owner_path), kind, region, page, height_px,
+            )
+            counts = {key: counts[key] + result[key] for key in counts}
+        document.saveas(candidate_path)
+        transferred.append({"region": region["id"], "candidate": str(candidate_path.relative_to(output_root)).replace("\\", "/"), "counts": counts})
+    handoff_root = output_root / "semantic_region_handoff"
+    revision = 1
+    while (handoff_root / f"page_{page_number:02d}.json").exists():
+        revision += 1
+        handoff_root = output_root / f"semantic_region_handoff-r{revision}"
+    handoff_root.mkdir(parents=True)
+    report_path = handoff_root / f"page_{page_number:02d}.json"
+    report_path.write_text(json.dumps({
+        "state": "needs_review",
+        "profile": "fidelity-layout-semantic-region-handoff",
+        "source": manifest["source"],
+        "page": page_number,
+        "render_sha256": sha256_file(rendered),
+        "owner_outputs": {kind: {"path": str(path.relative_to(output_root)).replace("\\", "/"), "sha256": sha256_file(path)} for kind, path in owner_outputs.items()},
+        "transferred": transferred,
+        "unresolved": ["semantic placement and visual fidelity require review", "no model export or production AutoCAD mutation"],
+    }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return [report_path]
+
+
 def run_fidelity_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
     """Record bounded table-grid observations for every private fidelity page."""
     if _is_within(output_root, workspace_root):
@@ -1505,7 +1781,7 @@ def run_fidelity_text_reconstruct(
     root.mkdir(parents=True)
     output = root / "layout.dxf"
     document.saveas(output)
-    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "emitted_text_entities": emitted, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "output_dxf_sha256": sha256_file(output), "emitted_text_entities": emitted, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
     return output
 
 
@@ -1698,7 +1974,7 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
     source_edges = cv2.Canny(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 50, 150); vector_edges = cv2.Canny(cv2.cvtColor(vector, cv2.COLOR_BGR2GRAY), 50, 150)
     overlay = image.copy(); overlap = (source_edges > 0) & (vector_edges > 0); overlay[source_edges > 0] = (0, 0, 255); overlay[vector_edges > 0] = (255, 255, 0); overlay[overlap] = (0, 255, 0)
     cv2.imwrite(str(root / "overlay.png"), overlay)
-    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(image.shape[:2], 255, dtype=np.uint8)), "unresolved": ["unselected content remains absent", "no text/dimensions/linetypes/tables/model export"]}, indent=2) + "\n", encoding="utf-8")
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout", "approval_sha256": sha256_file(approval_path), "edge_metric": _edge_metrics(source_edges, vector_edges, np.full(image.shape[:2], 255, dtype=np.uint8)), "unresolved": ["unselected content remains absent", "semantic owner handoff remains review-only", "no model export"]}, indent=2) + "\n", encoding="utf-8")
     return root
 
 
