@@ -228,6 +228,32 @@ def _normalize_registry(
         }:
             _fail("GENERATED_UPSTREAM_INVALID")
         return registry
+    if (
+        registry["schema_version"]
+        == _r3.COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
+    ):
+        if handoff is not None:
+            _fail("NATIVE_DWG_HANDOFF_FORBIDDEN")
+        if upstream.get("provenance_mode") != "NATIVE_DWG_FULL_DRAWING":
+            _fail("NATIVE_DWG_UPSTREAM_INVALID")
+        if set(upstream) != {
+            "provenance_mode",
+            "profile_id",
+            "source_sha256",
+            "candidate_id",
+            "candidate_drawing_sha256",
+            "source_path_binding_sha256",
+            "candidate_path_binding_sha256",
+            "source_entity_count",
+            "candidate_entity_count",
+            "entity_signature_sha256",
+            "source_setup_audit_sha256",
+            "candidate_setup_audit_sha256",
+            "calibration_mode",
+            "provenance_packet_sha256",
+        }:
+            _fail("NATIVE_DWG_UPSTREAM_INVALID")
+        return registry
     if handoff is None:
         _fail("BASE_CAD_HANDOFF_INVALID")
     if upstream["candidate_drawing_sha256"] != handoff["candidate_output_sha256"]:
@@ -664,6 +690,15 @@ def _normalize_root_inputs(
             "upstream_bindings"
         ]["candidate_drawing_sha256"]:
             _fail("GENERATED_CANDIDATE_MISMATCH")
+    elif normalized_registry["schema_version"] == (
+        _r3.COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
+    ):
+        if handoff is not None:
+            _fail("NATIVE_DWG_HANDOFF_FORBIDDEN")
+        if root_reference["artifact_sha256"] != normalized_registry[
+            "upstream_bindings"
+        ]["candidate_drawing_sha256"]:
+            _fail("NATIVE_DWG_CANDIDATE_MISMATCH")
     else:
         if handoff is None:
             _fail("BASE_CAD_HANDOFF_INVALID")
@@ -919,6 +954,12 @@ def build_candidate_revision(
             lineage_context=lineage_context,
         )
     else:
+        if (
+            isinstance(registry, Mapping)
+            and registry.get("schema_version")
+            == _r3.COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
+        ):
+            _fail("NATIVE_DWG_MUTATION_FORBIDDEN")
         if parent_candidate is None:
             _fail("ROOT_TRANSITION_FORBIDDEN")
         if not isinstance(mutation_evidence, Mapping) or mutation_evidence.get(
@@ -975,6 +1016,12 @@ def validate_candidate_revision(
             lineage_context=lineage_context,
         )
     else:
+        if (
+            isinstance(registry, Mapping)
+            and registry.get("schema_version")
+            == _r3.COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
+        ):
+            _fail("NATIVE_DWG_MUTATION_FORBIDDEN")
         if parent_candidate is None:
             _fail("ROOT_TRANSITION_FORBIDDEN")
         if not isinstance(mutation_evidence, Mapping) or mutation_evidence.get(
