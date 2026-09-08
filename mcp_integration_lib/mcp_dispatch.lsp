@@ -558,7 +558,7 @@
 (defun mcp-json-encode-number (value)
   (if (= (type value) 'INT)
     (itoa value)
-    (vl-princ-to-string value)
+    (rtos value 2 16)
   )
 )
 

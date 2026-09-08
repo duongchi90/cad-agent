@@ -181,6 +181,15 @@ def test_entity_get_source_exposes_text_height_and_rotation() -> None:
     assert '(cons "rotation_deg" (mcp-angle-degrees (cdr (assoc 50 data))))' in source
 
 
+def test_dispatcher_serializes_real_numbers_with_round_trip_precision() -> None:
+    source = _dispatcher_source()
+    start = source.index("(defun mcp-json-encode-number")
+    end = source.index("(defun mcp-json-encode-array", start)
+    number_encoder = source[start:end]
+    assert '(rtos value 2 16)' in number_encoder
+    assert '(vl-princ-to-string value)' not in number_encoder
+
+
 def test_file_ipc_constructor_requires_an_explicit_root() -> None:
     with pytest.raises(TypeError):
         FileIPCLiveMCPClient()
