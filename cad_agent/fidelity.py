@@ -991,11 +991,147 @@ def run_fidelity_hatch_reconstruct(
     return output
 
 
-def run_fidelity_text_observations(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> list[Path]:
+_APPROVED_REGION_OCR_TILE_LIMIT = 320
+_APPROVED_REGION_OCR_CALL_LIMIT = 64
+
+
+def _approved_region_text_candidates(
+    image: np.ndarray,
+    regions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Run the existing OCR owner over explicitly approved region ROIs only."""
+    candidates: list[dict[str, Any]] = []
+    detector_roi_count = 0
+    ocr_call_count = 0
+    for region in regions:
+        x0, y0, x1, y1 = (int(value) for value in region["bbox_px"])
+        crop = image[y0:y1, x0:x1]
+        if crop.size == 0:
+            continue
+        for rotation in (0, 90):
+            rotated = crop if rotation == 0 else cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
+            detected = detect_text_candidate_rois(rotated, min_cluster_components=1)
+            detector_roi_count += len(detected)
+            if detector_roi_count > _APPROVED_REGION_OCR_TILE_LIMIT:
+                raise FidelityError("Approved-region OCR exceeded the bounded tile limit.")
+            original_height = crop.shape[0]
+            tiles: list[tuple[int, tuple[int, int, int, int], tuple[int, int, int, int], np.ndarray]] = []
+            canvas_y = 10
+            canvas_width = 1
+            for roi in detected:
+                rx0, ry0, rx1, ry1 = roi
+                expanded = (
+                    max(0, rx0 - 20),
+                    max(0, ry0 - 5),
+                    min(rotated.shape[1], rx1 + 20),
+                    min(rotated.shape[0], ry1 + 5),
+                )
+                patch = rotated[expanded[1]:expanded[3], expanded[0]:expanded[2]]
+                if patch.size == 0:
+                    continue
+                tiles.append((canvas_y, expanded, roi, patch))
+                canvas_y += patch.shape[0] + 10
+                canvas_width = max(canvas_width, patch.shape[1])
+            if not tiles:
+                continue
+            if ocr_call_count >= _APPROVED_REGION_OCR_CALL_LIMIT:
+                raise FidelityError("Approved-region OCR exceeded the bounded invocation limit.")
+            canvas = np.full((canvas_y, canvas_width, 3), 255, dtype=np.uint8)
+            for tile_y, _, _, patch in tiles:
+                canvas[tile_y:tile_y + patch.shape[0], :patch.shape[1]] = patch
+            recognized = extract_text_tesseract(
+                canvas,
+                roi_boxes=[(0, 0, canvas.shape[1], canvas.shape[0])],
+                min_confidence=20,
+                psm=11,
+            )
+            ocr_call_count += 1
+            for text in recognized:
+                tx0, ty0, tx1, ty1 = text.bbox_px
+                center_y = (ty0 + ty1) / 2.0
+                tile = next((item for item in tiles if item[0] <= center_y <= item[0] + item[3].shape[0]), None)
+                if tile is None:
+                    continue
+                tile_y, expanded, roi, _ = tile
+                local_bbox = (
+                    tx0 + expanded[0],
+                    ty0 - tile_y + expanded[1],
+                    tx1 + expanded[0],
+                    ty1 - tile_y + expanded[1],
+                )
+                lx0, ly0, lx1, ly1 = local_bbox
+                if rotation == 0:
+                    mapped = (x0 + lx0, y0 + ly0, x0 + lx1, y0 + ly1)
+                else:
+                    mapped = (
+                        x0 + ly0,
+                        y0 + original_height - lx1,
+                        x0 + ly1,
+                        y0 + original_height - lx0,
+                    )
+                candidate = _raw_text_payload(text)
+                candidate["bbox_px"] = list(mapped)
+                candidate["rotation_deg"] = float(rotation)
+                candidate["approved_region_id"] = region["id"]
+                candidate["roi_px"] = list(roi)
+                candidates.append(candidate)
+    return candidates, {"detector_roi_count": detector_roi_count, "ocr_call_count": ocr_call_count}
+
+
+def run_fidelity_text_observations(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    *,
+    workspace_root: Path,
+    region_approval_path: Path | None = None,
+) -> list[Path]:
     """Write hash-bound OCR candidates for later per-text review, never DXF text."""
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
+    approved_regions_by_page: dict[int, list[dict[str, Any]]] = {}
+    region_approval_record: dict[str, str] | None = None
+    if region_approval_path is not None:
+        if not _is_within(region_approval_path, output_root) or not region_approval_path.is_file():
+            raise FidelityError("Region approval must reside inside the private fidelity output root.")
+        try:
+            approval = json.loads(region_approval_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FidelityError("Region approval is invalid JSON.") from exc
+        if (
+            approval.get("schema_version") != "fidelity-region-approval-1.0"
+            or approval.get("private_artifact") is not True
+            or approval.get("state") != "approved-layout-reconstruction-only"
+            or approval.get("source") != manifest.get("source")
+        ):
+            raise FidelityError("Region approval is not valid for text observation.")
+        page_record = approval.get("page")
+        page_number = page_record.get("number") if isinstance(page_record, dict) else None
+        page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+        if page is None:
+            raise FidelityError("Region approval page is absent from the fidelity manifest.")
+        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+        if page_record.get("render_sha256") != sha256_file(rendered):
+            raise FidelityError("Region approval render hash no longer matches the page artifact.")
+        proposal_record = approval.get("proposal")
+        if not isinstance(proposal_record, dict):
+            raise FidelityError("Region approval is missing its proposal provenance.")
+        proposal_path = _safe_artifact_path(output_root, proposal_record)
+        proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+        if proposal.get("proposal_definition_sha256") != proposal_record.get("definition_sha256"):
+            raise FidelityError("Approved proposal definition no longer matches its approval.")
+        approved_ids = approval.get("approved_region_ids")
+        if not isinstance(approved_ids, list) or not approved_ids:
+            raise FidelityError("Region approval must name approved regions.")
+        selected = [
+            item for item in proposal.get("regions", [])
+            if isinstance(item, dict) and item.get("id") in approved_ids
+        ]
+        if len(selected) != len(approved_ids):
+            raise FidelityError("Region approval names an unknown region.")
+        approved_regions_by_page[page_number] = selected
+        region_approval_record = _artifact(region_approval_path, output_root)
     outputs: list[Path] = []
     for page in manifest.get("pages", []):
         audit_record = page["artifacts"]["layout_audit"]
@@ -1016,6 +1152,21 @@ def run_fidelity_text_observations(source: Path, output_root: Path, manifest: di
             for item in raw_texts
             if isinstance(item, dict) and isinstance(item.get("content"), str) and item["content"].strip()
         ]
+        approved_region_ocr: dict[str, Any] | None = None
+        if page["page"] in approved_regions_by_page:
+            rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+            image = cv2.imread(str(rendered))
+            if image is None:
+                raise FidelityError("Cannot read rendered page for approved-region text observation.")
+            extra_candidates, stats = _approved_region_text_candidates(
+                image, approved_regions_by_page[page["page"]],
+            )
+            candidates.extend(extra_candidates)
+            approved_region_ocr = {
+                "regions": [region["id"] for region in approved_regions_by_page[page["page"]]],
+                "rotations_deg": [0, 90],
+                **stats,
+            }
         output = output_root / "fidelity_text_observations" / f"page_{page['page']:02d}.json"
         if output.exists():
             raise FidelityError(f"Fidelity text observation already exists: {output}")
@@ -1030,6 +1181,9 @@ def run_fidelity_text_observations(source: Path, output_root: Path, manifest: di
             "candidates": candidates,
             "unresolved": ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"],
         }
+        if region_approval_record is not None and page["page"] in approved_regions_by_page:
+            payload["region_approval"] = region_approval_record
+            payload["approved_region_ocr"] = approved_region_ocr
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         outputs.append(output)
     return outputs

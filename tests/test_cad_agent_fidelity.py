@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+from primitive_ir_lib.text_extraction import RawText
 from cad_agent.fidelity import (
     FidelityError,
     new_fidelity_manifest,
@@ -619,6 +620,65 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         text_dxf = run_fidelity_text_reconstruct(source, output, manifest, output / "fidelity_text_approvals" / "page_01.json", workspace_root=Path.cwd())
         assert {entity.dxftype() for entity in ezdxf.readfile(text_dxf).modelspace()} == {"TEXT"}
         assert json.loads((text_dxf.parent / "report.json").read_text(encoding="utf-8"))["output_dxf_sha256"] == __import__("hashlib").sha256(text_dxf.read_bytes()).hexdigest()
+
+
+def test_text_observation_uses_hash_bound_approved_region_for_single_component_dimension_roi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "dimension-band", "bbox_px": [20, 20, width - 100, height - 20], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [width - 70, 20, width - 20, height - 20], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    write_region_approval(
+        source, output, manifest, 1, 1, ["dimension-band"], "approved-region-ocr-test", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+
+    calls: list[tuple[str, object]] = []
+
+    def fake_detect(image: np.ndarray, **kwargs: object) -> list[tuple[int, int, int, int]]:
+        calls.append(("detect", kwargs))
+        return [(10, 10, 30, 30)]
+
+    def fake_ocr(
+        image: np.ndarray, *, roi_boxes: list[tuple[int, int, int, int]], min_confidence: int = 40,
+        psm: int = 6, lang: str = "vie+eng",
+    ) -> list[RawText]:
+        del image, min_confidence, psm, lang
+        calls.append(("ocr", roi_boxes))
+        return [RawText("approved-dimension", "1490", (5, 12, 15, 22), 0.0, 0.99, "text_tesseract", 1490.0, "dimension_value")]
+
+    from cad_agent import fidelity as fidelity_module
+
+    monkeypatch.setattr(fidelity_module, "detect_text_candidate_rois", fake_detect)
+    monkeypatch.setattr(fidelity_module, "extract_text_tesseract", fake_ocr)
+
+    observation_path = run_fidelity_text_observations(
+        source,
+        output,
+        manifest,
+        region_approval_path=approval_path,
+        workspace_root=Path.cwd(),
+    )[0]
+    payload = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert any(candidate["content"] == "1490" for candidate in payload["candidates"])
+    assert payload["region_approval"]["artifact"] == "region_approvals/page_01.json"
+    assert calls
+    rotated = next(candidate for candidate in payload["candidates"] if candidate["rotation_deg"] == 90.0)
+    assert rotated["bbox_px"] == [27, height - 35, 37, height - 25]
 
 
 def test_text_selection_file_creates_page_approvals(tmp_path: Path) -> None:
