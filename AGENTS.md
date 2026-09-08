@@ -73,6 +73,17 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 - Do not alter architecture, public schemas, or package boundaries outside the
   approved task.
 
+## AutoCAD session hygiene
+
+- For multi-page live CAD testing, close each disposable page DXF immediately
+  after its review result and evidence report are sealed; do not accumulate
+  completed pages in the AutoCAD session.
+- Close disposable DXFs without saving. Keep only the current page open while
+  testing, and preserve the source PDF plus evidence artifacts outside Git until
+  the evidence handoff/review is complete.
+- Never close or discard a user-owned or production drawing as part of this
+  cleanup rule; it applies only to the exact disposable test candidate.
+
 ## Review allocation
 
 - Small: Codex plus one bounded independent review.
