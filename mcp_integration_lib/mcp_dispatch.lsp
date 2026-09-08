@@ -555,10 +555,24 @@
   out
 )
 
+(defun mcp-json-normalize-real-text (text / normalized)
+  (setq normalized
+    (cond
+      ((= (substr text 1 2) "-.") (strcat "-0" (substr text 2)))
+      ((= (substr text 1 1) ".") (strcat "0" text))
+      (T text)
+    )
+  )
+  (if (= (substr normalized (strlen normalized) 1) ".")
+    (strcat normalized "0")
+    normalized
+  )
+)
+
 (defun mcp-json-encode-number (value)
   (if (= (type value) 'INT)
     (itoa value)
-    (vl-princ-to-string value)
+    (mcp-json-normalize-real-text (rtos value 2 16))
   )
 )
 

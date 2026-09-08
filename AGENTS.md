@@ -73,6 +73,18 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 - Do not alter architecture, public schemas, or package boundaries outside the
   approved task.
 
+## Luna routine execution authority
+
+- Within this project's existing authority, Luna may perform routine APPLOAD,
+  file-picker, AutoCAD, test, Git, PR, CI, disposable-candidate mutation,
+  save, close, and reopen actions without an additional human confirmation.
+- This includes loading the known repository dispatcher for local FileIPC
+  tests and closing disposable candidate drawings without saving.
+- Keep the human gate for credentials, billing, private-data authority,
+  unknown executable or trust expansion, source/customer/accepted-drawing
+  mutation, destructive or irreversible high-cost external actions, and
+  genuinely ambiguous product requirements.
+
 ## Review allocation
 
 - Small: Codex plus one bounded independent review.
