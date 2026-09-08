@@ -1617,6 +1617,11 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
         mtext.dxf.insert = offset_point(entity.dxf.insert, offset_x, offset_y)
 
     def add_dimension_entity(source_document: Any, entity: Any, offset_x: float, offset_y: float) -> None:
+        dimension_type = int(entity.dxf.get("dimtype", 0)) & 0x0F
+        if dimension_type != 0:
+            raise FidelityError(
+                f"Unsupported fidelity dimension type {dimension_type}; only linear dimensions are supported."
+            )
         if not all(entity.dxf.hasattr(name) for name in ("defpoint", "defpoint2", "defpoint3")):
             raise FidelityError("Only linear fidelity dimensions with definition points are supported.")
         dimstyle = str(entity.dxf.get("dimstyle", "Standard"))
