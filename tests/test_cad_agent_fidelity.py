@@ -878,6 +878,83 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
             run_fidelity_reconstruct(source, output, manifest, foreign, workspace_root=Path.cwd())
 
 
+def test_fidelity_compose_preserves_semantic_entities_and_nondefault_linetype(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "main", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [300, 200, 390, 290], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval = write_region_approval(
+        source, output, manifest, 1, 1, ["main"], "approved-compose-transfer-test", workspace_root=Path.cwd(),
+    )
+    candidate = output / "reconstruction_candidates" / "page_01" / "main" / "geometry.dxf"
+    candidate.parent.mkdir(parents=True)
+    document = ezdxf.new("R2010")
+    document.linetypes.add("DASHED", [0.0, 4.0, -2.0])
+    model = document.modelspace()
+    model.add_line((10, 10), (100, 10), dxfattribs={"linetype": "DASHED"})
+    model.add_circle((50, 50), 12)
+    model.add_text("TRANSFER ME", dxfattribs={"height": 5}).set_placement((20, 30))
+    dimension = model.add_linear_dim(base=(20, 70), p1=(10, 10), p2=(100, 10), location=(55, 70))
+    dimension.render()
+    document.saveas(candidate)
+
+    composed = run_fidelity_compose(
+        source, output, manifest, output / "region_approvals" / "page_01.json", workspace_root=Path.cwd(),
+    )
+    result = ezdxf.readfile(composed / "layout.dxf")
+    assert len(result.modelspace().query("LINE")) == 1
+    assert len(result.modelspace().query("CIRCLE")) == 1
+    assert len(result.modelspace().query("TEXT")) == 1
+    assert len(result.modelspace().query("DIMENSION")) == 1
+    assert result.modelspace().query("TEXT")[0].dxf.text == "TRANSFER ME"
+    assert result.modelspace().query("DIMENSION")[0].dxf.text == "<>"
+    assert result.modelspace().query("DIMENSION")[0].get_measurement() == pytest.approx(90.0)
+    assert result.modelspace().query("LINE")[0].dxf.linetype == "DASHED"
+    assert "DASHED" in result.linetypes
+
+
+def test_fidelity_compose_rejects_unsupported_dimension_type_before_linear_transfer(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "main", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [300, 200, 390, 290], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval = write_region_approval(
+        source, output, manifest, 1, 1, ["main"], "approved-unsupported-dimension-test", workspace_root=Path.cwd(),
+    )
+    candidate = output / "reconstruction_candidates" / "page_01" / "main" / "geometry.dxf"
+    candidate.parent.mkdir(parents=True)
+    document = ezdxf.new("R2010")
+    dimension_override = document.modelspace().add_linear_dim(
+        base=(20, 70), p1=(10, 10), p2=(100, 10), location=(55, 70),
+    )
+    dimension_override.render()
+    dimension_override.dimension.dxf.dimtype = 2
+    document.saveas(candidate)
+
+    persisted = ezdxf.readfile(candidate).modelspace().query("DIMENSION")[0]
+    assert persisted.dxf.dimtype == 2
+    with pytest.raises(FidelityError, match=r"(?i)unsupported.*dimension"):
+        run_fidelity_compose(
+            source, output, manifest, output / "region_approvals" / "page_01.json", workspace_root=Path.cwd(),
+        )
+
+
 def test_fidelity_cli_creates_private_baseline() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

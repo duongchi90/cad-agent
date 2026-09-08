@@ -1567,19 +1567,109 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
     model = composed.modelspace()
     scale = float(page["pixel_to_paper_mm"]["used"])
     height_px = approval["page"]["render_height_px"]
+
+    def offset_point(point: Any, offset_x: float, offset_y: float) -> tuple[float, float, float]:
+        return (float(point.x) + offset_x, float(point.y) + offset_y, float(point.z))
+
+    def copy_linetype(source_document: Any, name: str) -> None:
+        if name in composed.linetypes or name.upper() in {"BYLAYER", "BYBLOCK", "CONTINUOUS"}:
+            return
+        source_linetype = source_document.linetypes.get(name)
+        pattern = [tag.value for tag in source_linetype.pattern_tags.tags if tag.code == 49]
+        length = next((float(tag.value) for tag in source_linetype.pattern_tags.tags if tag.code == 40), 0.0)
+        composed.linetypes.add(
+            name,
+            pattern or [0.0],
+            description=str(source_linetype.dxf.get("description", "")),
+            length=length,
+        )
+
+    def copy_text_style(source_document: Any, name: str) -> str:
+        if not name or name in composed.styles:
+            return name or _ensure_unicode_text_style(composed)
+        source_style = source_document.styles.get(name)
+        composed.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
+        return name
+
+    def add_text_entity(source_document: Any, entity: Any, offset_x: float, offset_y: float) -> None:
+        style = copy_text_style(source_document, str(entity.dxf.get("style", "")))
+        if entity.dxftype() == "TEXT":
+            attributes = {
+                "layer": "FIDELITY_TEXT",
+                "height": float(entity.dxf.get("height", 1.0)),
+                "style": style,
+            }
+            for name in ("rotation", "oblique", "width", "text_generation_flag", "thickness"):
+                if entity.dxf.hasattr(name):
+                    attributes[name] = entity.dxf.get(name)
+            text = model.add_text(str(entity.dxf.text), dxfattribs=attributes)
+            text.dxf.insert = offset_point(entity.dxf.insert, offset_x, offset_y)
+            return
+        attributes = {
+            "layer": "FIDELITY_TEXT",
+            "char_height": float(entity.dxf.get("char_height", 1.0)),
+            "style": style,
+        }
+        for name in ("rotation", "width", "attachment_point", "line_spacing_style", "line_spacing_factor"):
+            if entity.dxf.hasattr(name):
+                attributes[name] = entity.dxf.get(name)
+        mtext = model.add_mtext(str(entity.text), dxfattribs=attributes)
+        mtext.dxf.insert = offset_point(entity.dxf.insert, offset_x, offset_y)
+
+    def add_dimension_entity(source_document: Any, entity: Any, offset_x: float, offset_y: float) -> None:
+        dimension_type = int(entity.dxf.get("dimtype", 0)) & 0x0F
+        if dimension_type != 0:
+            raise FidelityError(
+                f"Unsupported fidelity dimension type {dimension_type}; only linear dimensions are supported."
+            )
+        if not all(entity.dxf.hasattr(name) for name in ("defpoint", "defpoint2", "defpoint3")):
+            raise FidelityError("Only linear fidelity dimensions with definition points are supported.")
+        dimstyle = str(entity.dxf.get("dimstyle", "Standard"))
+        if dimstyle not in composed.dimstyles:
+            source_style = source_document.dimstyles.get(dimstyle)
+            attributes = {
+                key: value for key, value in source_style.dxfattribs().items()
+                if key not in {"handle", "owner", "name"}
+            }
+            composed.dimstyles.add(dimstyle, dxfattribs=attributes)
+        midpoint = entity.dxf.get("text_midpoint", entity.dxf.defpoint)
+        override = model.add_linear_dim(
+            base=offset_point(entity.dxf.defpoint, offset_x, offset_y),
+            p1=offset_point(entity.dxf.defpoint2, offset_x, offset_y),
+            p2=offset_point(entity.dxf.defpoint3, offset_x, offset_y),
+            location=offset_point(midpoint, offset_x, offset_y),
+            angle=float(entity.dxf.get("angle", 0.0)),
+            text=str(entity.dxf.get("text", "<>")),
+            dimstyle=dimstyle,
+            dxfattribs={"layer": "FIDELITY_DIMENSIONS"},
+        )
+        override.render()
+
     for region in selected:
         candidate = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
         if not candidate.is_file():
             raise FidelityError(f"Missing approved region candidate: {candidate}")
         x0, _, _, y1 = region["bbox_px"]
         offset_x, offset_y = x0 * scale, (height_px - y1) * scale
-        for entity in ezdxf.readfile(candidate).modelspace():
+        source_document = ezdxf.readfile(candidate)
+        for entity in source_document.modelspace():
             if entity.dxftype() == "LINE":
                 a, b = entity.dxf.start, entity.dxf.end
-                model.add_line((a.x + offset_x, a.y + offset_y), (b.x + offset_x, b.y + offset_y), dxfattribs={"layer": "FIDELITY_GEOMETRY"})
+                line_type = str(entity.dxf.get("linetype", "BYLAYER"))
+                copy_linetype(source_document, line_type)
+                attributes = {"layer": "FIDELITY_GEOMETRY", "linetype": line_type}
+                if entity.dxf.hasattr("linetype_scale"):
+                    attributes["linetype_scale"] = entity.dxf.linetype_scale
+                model.add_line(offset_point(a, offset_x, offset_y), offset_point(b, offset_x, offset_y), dxfattribs=attributes)
             elif entity.dxftype() == "CIRCLE":
                 c = entity.dxf.center
-                model.add_circle((c.x + offset_x, c.y + offset_y), entity.dxf.radius, dxfattribs={"layer": "FIDELITY_GEOMETRY"})
+                line_type = str(entity.dxf.get("linetype", "BYLAYER"))
+                copy_linetype(source_document, line_type)
+                model.add_circle(offset_point(c, offset_x, offset_y), entity.dxf.radius, dxfattribs={"layer": "FIDELITY_GEOMETRY", "linetype": line_type})
+            elif entity.dxftype() in {"TEXT", "MTEXT"}:
+                add_text_entity(source_document, entity, offset_x, offset_y)
+            elif entity.dxftype() == "DIMENSION":
+                add_dimension_entity(source_document, entity, offset_x, offset_y)
     root.mkdir(parents=True)
     dxf = root / "layout.dxf"; composed.saveas(dxf)
     rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
