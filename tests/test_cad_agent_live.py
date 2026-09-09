@@ -20,7 +20,7 @@ from cad_agent.live import (
     write_build_evidence,
 )
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.mcp_client import FakeMCPClient
+from mcp_integration_lib.mcp_client import FakeMCPClient, MCPTimeoutError, MCPToolError
 
 
 def _build(path: Path) -> BuildResult:
@@ -465,6 +465,76 @@ def test_failed_second_review_restores_canonical_dxf_and_build_evidence(
         assert dxf.read_bytes() == dxf_before
         assert evidence.read_bytes() == evidence_before
         assert load_build_evidence(evidence, dxf).output_path == str(dxf)
+
+
+@pytest.mark.parametrize("failure", [MCPTimeoutError("timeout"), MCPToolError("tool")])
+def test_uncertain_repair_fails_closed_and_restores_canonical_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        dxf_before = dxf.read_bytes()
+        evidence_before = evidence.read_bytes()
+        handles_before = dict(build.handle_by_primitive_id)
+        client = _mismatched_client()
+
+        def uncertain_repair(*_args: object, **_kwargs: object) -> _FakeRepairResult:
+            raise failure
+
+        monkeypatch.setattr("cad_agent.live.repair_dxf_live", uncertain_repair)
+
+        report = repair_live(build, client, dxf, evidence, root / "backups", "change-42")
+
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert report["rollback_state"] == "failed_canonical_restored"
+        assert report["rollback_restore"]["recovery_verified"] is True
+        assert report["rollback_restore"]["canonical_document_open"] is True
+        assert client.closed_without_save is True
+        assert build.handle_by_primitive_id == handles_before
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == evidence_before
+        assert load_build_evidence(evidence, dxf).output_path == str(dxf)
+
+
+def test_uncertain_repair_quarantines_handles_until_recovery_is_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _mismatched_client()
+        observed_handles: list[dict[str, str]] = []
+
+        def uncertain_repair(*_args: object, **_kwargs: object) -> _FakeRepairResult:
+            raise MCPToolError("tool")
+
+        def failed_restore(**_kwargs: object) -> dict[str, object]:
+            observed_handles.append(dict(build.handle_by_primitive_id))
+            raise LiveSafetyError("restore uncertain")
+
+        monkeypatch.setattr("cad_agent.live.repair_dxf_live", uncertain_repair)
+        monkeypatch.setattr("cad_agent.live._restore_canonical", failed_restore)
+
+        report = repair_live(build, client, dxf, evidence, root / "backups", "change-42")
+
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert report["rollback_state"] == "rollback_failed"
+        assert report["rollback_restore"] == {
+            "recovery_verified": False,
+            "error": "ROLLBACK_FAILED",
+        }
+        assert observed_handles == [{}]
+        assert build.handle_by_primitive_id == {}
 
 
 @pytest.mark.parametrize("linked_name", ["staged.dxf", "build-evidence.json"])
