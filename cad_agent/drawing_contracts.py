@@ -179,6 +179,16 @@ def _strings(value: object, *, contract: str, path: str, min_items: int = 1) -> 
     return value
 
 
+def _audit_style_names(value: object, *, contract: str, path: str, min_items: int = 1) -> list[str]:
+    """Validate observed audit style names, including AutoCAD's empty text name."""
+    if not isinstance(value, list) or len(value) < min_items:
+        _fail(contract, f"{path} must be a non-empty list")
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            _fail(contract, f"{path}[{index}] must be a string")
+    return value
+
+
 def _validate_definition(payload: dict[str, Any]) -> None:
     contract = "drawing_definition"
     required = {"schema_version","id","domain","drawing_type","purpose","source_mode","revision","release_profile","status","approval"}
@@ -422,7 +432,8 @@ def _validate_audit(payload: dict[str, Any]) -> None:
         _validate_audit_entry(layer, contract=contract, path=f"layers[{index}]")
     styles = _object(payload["styles"], contract=contract, path="styles")
     _keys(styles, contract=contract, required={"text","dimension","mleader","table"})
-    for key in ("text","dimension","mleader","table"):
+    _audit_style_names(styles["text"], contract=contract, path="styles.text")
+    for key in ("dimension", "mleader", "table"):
         _strings(styles[key], contract=contract, path=f"styles.{key}")
     layouts = payload["layouts"]
     if not isinstance(layouts, list):
