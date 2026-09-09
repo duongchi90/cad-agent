@@ -713,6 +713,23 @@ def test_create_setup_audit_copies_only_strict_fields_without_mutating_result(
     assert read_contract(output, contract="drawing_setup_audit") == audit
 
 
+def test_create_setup_audit_output_round_trips_with_empty_text_style(
+    tmp_path: Path,
+) -> None:
+    """Allow AutoCAD's empty observed text-style name through the audit contract."""
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["styles"]["text"] = [""]
+
+    audit = create_setup_audit(drawing, sha256_file(drawing), result)
+
+    assert audit["styles"]["text"] == [""]
+    output = tmp_path / "audit-with-empty-text-style.json"
+    output.write_text(json.dumps(audit), encoding="utf-8")
+    assert read_contract(output, contract="drawing_setup_audit") == audit
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
