@@ -663,11 +663,29 @@ def _merge_fidelity_owner_output_into_region(
             matches = [candidate for candidate in matches if id(candidate) not in matched_targets]
             if not matches:
                 continue
+            exact_matches = [
+                candidate for candidate in matches
+                if _fidelity_line_matches(
+                    candidate.dxf.start,
+                    candidate.dxf.end,
+                    start,
+                    end,
+                    tolerance,
+                )
+            ]
+            if len(exact_matches) > 1:
+                raise FidelityError(f"Ambiguous exact horizontal linetype match for {line_type}.")
+            if len(exact_matches) == 1:
+                selected = exact_matches[0]
+            elif len(matches) > 1:
+                raise FidelityError(f"Ambiguous fuzzy horizontal linetype match for {line_type}.")
+            else:
+                selected = matches[0]
             _copy_fidelity_linetype(source_document, target_document, line_type)
-            matches[0].dxf.linetype = line_type
-            matched_targets.add(id(matches[0]))
+            selected.dxf.linetype = line_type
+            matched_targets.add(id(selected))
             if entity.dxf.hasattr("linetype_scale"):
-                matches[0].dxf.linetype_scale = entity.dxf.linetype_scale
+                selected.dxf.linetype_scale = entity.dxf.linetype_scale
             counts["LINETYPE"] += 1
     return counts
 

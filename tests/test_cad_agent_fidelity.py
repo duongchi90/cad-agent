@@ -1546,6 +1546,82 @@ def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(tm
     assert (float(lines[0].dxf.end.x), float(lines[0].dxf.end.y)) == pytest.approx(local_target_end)
 
 
+def test_semantic_handoff_rejects_ambiguous_fuzzy_horizontal_matches(tmp_path: Path) -> None:
+    """Two fuzzy targets must not be resolved by target iteration order."""
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "side", "bbox_px": [20, 20, 350, 500], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [360, 520, 390, 590], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["side"], "ambiguous-fuzzy-horizontal", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    import cad_agent.fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+
+    # Both distinct targets are outside the exact endpoint tolerance but are
+    # inside the existing one-pixel horizontal fuzzy rule and overlap the
+    # owner segment by the required 50% shorter-segment threshold.
+    local_targets = [
+        ((0.0, 0.6), (8.0, 0.6)),
+        ((2.0, 0.6), (10.0, 0.6)),
+    ]
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "side" / "geometry.dxf"
+    candidate_document = ezdxf.new("R2010")
+    for start, end in local_targets:
+        candidate_document.modelspace().add_line(start, end)
+    candidate_document.saveas(candidate_path)
+
+    owner_root = output / "linetype_reconstruction" / "page_01"
+    owner_root.mkdir(parents=True)
+    owner_path = owner_root / "layout.dxf"
+    owner_document = ezdxf.new("R2010")
+    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.modelspace().add_line(
+        (offset_x, offset_y),
+        (offset_x + 10.0, offset_y),
+        dxfattribs={"linetype": "FIDELITY_DASHED"},
+    )
+    owner_document.saveas(owner_path)
+    (owner_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"]),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner_path),
+    }), encoding="utf-8")
+
+    try:
+        run_fidelity_semantic_region_handoff(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    except FidelityError as exc:
+        assert "ambiguous fuzzy horizontal" in str(exc).lower()
+        candidate = ezdxf.readfile(candidate_path)
+        assert all(str(line.dxf.get("linetype", "")).upper() in {"", "BYLAYER", "BYBLOCK", "CONTINUOUS"}
+                   for line in candidate.modelspace().query("LINE"))
+    else:
+        candidate = ezdxf.readfile(candidate_path)
+        dashed_indices = [
+            index for index, line in enumerate(candidate.modelspace().query("LINE"))
+            if str(line.dxf.get("linetype", "")).upper() == "FIDELITY_DASHED"
+        ]
+        pytest.fail(f"Current handoff silently selected matches[0]; dashed target indices={dashed_indices}.")
+
+
 def test_semantic_handoff_stays_fail_closed_for_unmatched_dashed_line(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
