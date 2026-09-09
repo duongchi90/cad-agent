@@ -59,6 +59,42 @@ def _create_plan(
     )
 
 
+def _policy_plan(
+    *, field_modes: dict[str, str], unresolved: frozenset[str] = frozenset()
+) -> dict[str, object]:
+    plan = copy.deepcopy(approved_setup_plan())
+    plan["expectation_policy"] = {
+        "schema_version": "drawing-setup-expectation-policy-1.0",
+        "default_mode": "GATING",
+        "field_modes": dict(field_modes),
+    }
+    expectations = plan["setup_expectations"]
+    for path in unresolved:
+        if path.startswith("variables."):
+            expectations["variables"][path.removeprefix("variables.")] = "UNRESOLVED"
+        else:
+            expectations[path] = "UNRESOLVED"
+    return plan
+
+
+def test_policy_plan_accepts_observation_only_unresolved_and_empty_layouts(
+    tmp_path: Path,
+) -> None:
+    plan = _policy_plan(
+        field_modes={
+            "variables.MSLTSCALE": "OBSERVATION_ONLY",
+            "layouts": "OBSERVATION_ONLY",
+            "current_layer": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"variables.MSLTSCALE", "current_layer"}),
+    )
+    plan["setup_expectations"]["layouts"] = []
+    path = tmp_path / "policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    assert read_contract(path, contract="drawing_setup_plan") == plan
+
+
 def test_create_setup_plan_has_only_the_approved_keyword_api() -> None:
     signature = inspect.signature(create_setup_plan)
     assert list(signature.parameters) == [
