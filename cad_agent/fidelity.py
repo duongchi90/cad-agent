@@ -217,8 +217,28 @@ def _normalized_regions(regions: dict[str, Any], width: int, height: int) -> tup
             expected = "layout-reconstruction" if category == "region" else "exclude"
             if purpose != expected:
                 raise FidelityError(f"{category} purpose must be {expected!r}.")
+            normalized = {"id": item["id"], "bbox_px": box, "purpose": purpose}
+            ocr_roi = item.get("ocr_roi_px")
+            if ocr_roi is not None:
+                if (
+                    not isinstance(ocr_roi, list)
+                    or len(ocr_roi) != 4
+                    or any(isinstance(value, bool) or not isinstance(value, int) for value in ocr_roi)
+                ):
+                    raise FidelityError(f"{category} ocr_roi_px must contain four integer coordinates.")
+                rx0, ry0, rx1, ry1 = ocr_roi
+                if (
+                    rx0 < 0
+                    or ry0 < 0
+                    or rx1 > x1 - x0
+                    or ry1 > y1 - y0
+                    or rx1 - rx0 < 30
+                    or ry1 - ry0 < 30
+                ):
+                    raise FidelityError(f"{category} ocr_roi_px must fit inside bbox_px and be at least 30 px wide/high.")
+                normalized["ocr_roi_px"] = ocr_roi
             ids.add(item["id"])
-            result.append({"id": item["id"], "bbox_px": box, "purpose": purpose})
+            result.append(normalized)
         return result
 
     included = normalize(regions.get("regions"), "region")
@@ -1130,6 +1150,48 @@ def _approved_region_text_candidates(
                 candidate["rotation_deg"] = float(rotation)
                 candidate["approved_region_id"] = region["id"]
                 candidate["roi_px"] = list(roi)
+                candidates.append(candidate)
+        block_roi = region.get("ocr_roi_px")
+        if block_roi is not None:
+            rx0, ry0, rx1, ry1 = block_roi
+            block_crop = crop[ry0:ry1, rx0:rx1]
+            block_scale = 3
+            block_image = cv2.resize(
+                block_crop,
+                None,
+                fx=block_scale,
+                fy=block_scale,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            if block_image.shape[0] * block_image.shape[1] > _APPROVED_REGION_OCR_CANVAS_PIXEL_LIMIT:
+                raise FidelityError("Approved-region OCR exceeded the bounded canvas limit.")
+            if ocr_call_count >= _APPROVED_REGION_OCR_CALL_LIMIT:
+                raise FidelityError("Approved-region OCR exceeded the bounded invocation limit.")
+            recognized = extract_text_tesseract(
+                block_image,
+                roi_boxes=[(0, 0, block_image.shape[1], block_image.shape[0])],
+                min_confidence=20,
+                psm=6,
+            )
+            ocr_call_count += 1
+            for text in recognized:
+                tx0, ty0, tx1, ty1 = text.bbox_px
+                mapped = (
+                    x0 + rx0 + int(tx0 / block_scale),
+                    y0 + ry0 + int(ty0 / block_scale),
+                    x0 + rx0 + int(tx1 / block_scale),
+                    y0 + ry0 + int(ty1 / block_scale),
+                )
+                if not (
+                    x0 <= mapped[0] < mapped[2] <= x1
+                    and y0 <= mapped[1] < mapped[3] <= y1
+                ):
+                    continue
+                candidate = _raw_text_payload(text)
+                candidate["bbox_px"] = list(mapped)
+                candidate["rotation_deg"] = 0.0
+                candidate["approved_region_id"] = region["id"]
+                candidate["roi_px"] = list(block_roi)
                 candidates.append(candidate)
     return candidates, {"detector_roi_count": detector_roi_count, "ocr_call_count": ocr_call_count}
 
