@@ -84,6 +84,77 @@
     "approval_reference": {
       "type": "string",
       "minLength": 1
+    },
+    "expectation_policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "verification_scope": {
+      "enum": [
+        "GATING_ONLY",
+        "NO_CONFORMANCE_ASSERTION"
+      ]
+    },
+    "verification_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gating_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "evaluated_gating_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "observation_only_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "unresolved_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "observation_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "observed_value",
+          "comparison",
+          "conformance"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observed_value": {},
+          "comparison": {
+            "const": "NOT_EVALUATED"
+          },
+          "conformance": {
+            "const": "NOT_ASSERTED"
+          }
+        }
+      }
+    },
+    "conformance_assertion": {
+      "type": "boolean"
     }
   },
   "allOf": [

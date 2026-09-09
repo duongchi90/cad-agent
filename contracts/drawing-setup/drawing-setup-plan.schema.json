@@ -332,6 +332,50 @@
           }
         }
       }
+    },
+    "expectation_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "default_mode",
+        "field_modes"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "drawing-setup-expectation-policy-1.0"
+        },
+        "default_mode": {
+          "const": "GATING"
+        },
+        "field_modes": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "variables.INSUNITS",
+              "variables.MEASUREMENT",
+              "variables.LTSCALE",
+              "variables.CELTSCALE",
+              "variables.PSLTSCALE",
+              "variables.MSLTSCALE",
+              "variables.DIMASSOC",
+              "variables.ANNOALLVISIBLE",
+              "current_layer",
+              "required_layers",
+              "required_styles",
+              "layouts",
+              "font_policy",
+              "embedded_settings"
+            ]
+          },
+          "additionalProperties": {
+            "enum": [
+              "GATING",
+              "OBSERVATION_ONLY"
+            ]
+          }
+        }
+      }
     }
   }
 }

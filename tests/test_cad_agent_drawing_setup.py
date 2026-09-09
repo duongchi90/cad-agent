@@ -335,7 +335,7 @@ def test_policy_plan_all_observation_only_never_returns_setup_verified() -> None
     assert evidence["conformance_assertion"] is False
 
 
-def _non_vacuous_policy_evidence() -> tuple[dict[str, object], dict[str, str]]:
+def _non_vacuous_policy_evidence() -> tuple[dict[str, object], dict[str, object]]:
     plan = _policy_plan(
         field_modes={
             "current_layer": "OBSERVATION_ONLY",
@@ -350,6 +350,7 @@ def _non_vacuous_policy_evidence() -> tuple[dict[str, object], dict[str, str]]:
         approval_reference="POLICY-VALID-001",
     )
     expected = {
+        "setup_plan": plan,
         "setup_plan_sha256": canonical_json_sha256(plan),
         "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
         "template_file_sha256": plan["template"]["file_sha256"],
@@ -394,6 +395,7 @@ def test_require_setup_verified_rejects_tampered_all_observation_evidence() -> N
     )
     evidence["status"] = "SETUP_VERIFIED"
     expected = {
+        "setup_plan": plan,
         "setup_plan_sha256": canonical_json_sha256(plan),
         "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
         "template_file_sha256": plan["template"]["file_sha256"],
@@ -401,6 +403,58 @@ def test_require_setup_verified_rejects_tampered_all_observation_evidence() -> N
 
     with pytest.raises(DrawingSetupError, match="scope|conformance|verified"):
         require_setup_verified(evidence, **expected)
+
+
+def test_require_setup_verified_rejects_policy_fields_stripped_from_vacuous_evidence() -> None:
+    plan = _all_observation_policy_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-STRIPPED-001",
+    )
+    for key in (
+        "expectation_policy_sha256",
+        "verification_scope",
+        "verification_reason",
+        "gating_paths",
+        "evaluated_gating_paths",
+        "observation_only_paths",
+        "unresolved_paths",
+        "observation_records",
+        "conformance_assertion",
+    ):
+        evidence.pop(key, None)
+    evidence["status"] = "SETUP_VERIFIED"
+    expected = {
+        "setup_plan": plan,
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+
+    with pytest.raises(DrawingSetupError, match="policy|scope|verified"):
+        require_setup_verified(evidence, **expected)
+
+
+def test_require_setup_verified_rejects_policy_evidence_for_no_policy_plan() -> None:
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="OWNER",
+        approval_reference="POLICY-MISMATCH-001",
+    )
+    evidence["expectation_policy_sha256"] = "a" * 64
+
+    with pytest.raises(DrawingSetupError, match="policy"):
+        require_setup_verified(
+            evidence,
+            setup_plan=plan,
+            setup_plan_sha256=canonical_json_sha256(plan),
+            drawing_profile_sha256=plan["drawing_profile"]["sha256"],
+            template_file_sha256=plan["template"]["file_sha256"],
+        )
 
 
 def test_create_setup_plan_has_only_the_approved_keyword_api() -> None:
@@ -857,6 +911,7 @@ def test_matching_audit_becomes_setup_verified_without_mutating_inputs(
     assert read_contract(output, contract="drawing_setup_evidence") == evidence
     require_setup_verified(
         evidence,
+        setup_plan=plan,
         setup_plan_sha256=canonical_json_sha256(plan),
         drawing_profile_sha256=plan["drawing_profile"]["sha256"],
         template_file_sha256=plan["template"]["file_sha256"],
@@ -1000,6 +1055,7 @@ def test_require_setup_verified_rejects_stale_evidence(argument: str, value: str
         approval_reference="LEAN-SETUP-001",
     )
     expected = {
+        "setup_plan": plan,
         "setup_plan_sha256": canonical_json_sha256(plan),
         "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
         "template_file_sha256": plan["template"]["file_sha256"],
@@ -1019,6 +1075,7 @@ def test_require_setup_verified_rejects_status_or_blocker_downgrade() -> None:
         approval_reference="LEAN-SETUP-001",
     )
     expected = {
+        "setup_plan": plan,
         "setup_plan_sha256": canonical_json_sha256(plan),
         "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
         "template_file_sha256": plan["template"]["file_sha256"],

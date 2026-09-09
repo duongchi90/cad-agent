@@ -21,7 +21,8 @@
 - Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
   The drawing-setup expectation-policy candidate is on local branch
   `codex/drawing-setup-expectation-policy-20260909` at implementation head
-  `90c62eb361f56e3241724f7fa2aa978a40d89ddc`; it is not pushed and has no PR.
+  `90c62eb361f56e3241724f7fa2aa978a40d89ddc`; it is pushed at lifecycle head
+  `5372aa296248e33a4be8917da75bd2b4beb09af3` and is tracked by open PR #422.
 - REAL IMAGE/PDF P1 live Mechanical review is **Verified** for the private
   nine-page PDF identified by SHA-256
   `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.

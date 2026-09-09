@@ -737,6 +737,7 @@ def evaluate_setup_plan(
 def require_setup_verified(
     evidence: Mapping[str, object],
     *,
+    setup_plan: Mapping[str, object],
     setup_plan_sha256: str,
     drawing_profile_sha256: str,
     template_file_sha256: str,
@@ -744,43 +745,102 @@ def require_setup_verified(
     """Refuse any non-verified, blocked, or stale Drawing Setup evidence."""
     if not isinstance(evidence, Mapping):
         raise _fail("Drawing Setup evidence must be an object")
+    if not isinstance(setup_plan, Mapping):
+        raise _fail("Drawing Setup plan must be an object")
     if evidence.get("status") != "SETUP_VERIFIED":
         raise _fail("Drawing Setup evidence is not SETUP_VERIFIED")
     if evidence.get("blockers") != []:
         raise _fail("SETUP_VERIFIED evidence must contain no blockers")
-    if "expectation_policy_sha256" in evidence:
-        policy_hash = evidence.get("expectation_policy_sha256")
-        if not isinstance(policy_hash, str) or _SHA256_RE.fullmatch(policy_hash) is None:
-            raise _fail("policy Drawing Setup evidence has an invalid expectation policy hash")
-        if evidence.get("verification_scope") != "GATING_ONLY":
-            raise _fail("policy Drawing Setup evidence is not a verified gating scope")
-        gating_paths = evidence.get("gating_paths")
-        evaluated_gating_paths = evidence.get("evaluated_gating_paths")
-        if (
-            not isinstance(gating_paths, list)
-            or not isinstance(evaluated_gating_paths, list)
-            or not gating_paths
-            or not evaluated_gating_paths
-            or not all(isinstance(path, str) for path in gating_paths)
-            or not all(isinstance(path, str) for path in evaluated_gating_paths)
-            or len(set(gating_paths)) != len(gating_paths)
-            or len(set(evaluated_gating_paths)) != len(evaluated_gating_paths)
-            or set(gating_paths) != set(evaluated_gating_paths)
-        ):
-            raise _fail("policy Drawing Setup evidence has an empty or incomplete gating scope")
-        if evidence.get("conformance_assertion") is not True:
-            raise _fail("policy Drawing Setup evidence has no conformance assertion")
 
     expected_hashes = {
         "setup_plan_sha256": setup_plan_sha256,
         "drawing_profile_sha256": drawing_profile_sha256,
         "template_file_sha256": template_file_sha256,
     }
+    try:
+        actual_setup_plan_sha256 = canonical_json_sha256(setup_plan)
+    except (TypeError, ValueError) as exc:
+        raise _fail("Drawing Setup plan cannot be canonicalized") from exc
+    if actual_setup_plan_sha256 != setup_plan_sha256:
+        raise _fail("stale Drawing Setup evidence: setup plan does not match expected hash")
+    if evidence.get("setup_plan_sha256") != actual_setup_plan_sha256:
+        raise _fail("stale Drawing Setup evidence: setup_plan_sha256 mismatch")
     for name, expected in expected_hashes.items():
         if not isinstance(expected, str) or _SHA256_RE.fullmatch(expected) is None:
             raise _fail(f"invalid expected {name}")
         if evidence.get(name) != expected:
             raise _fail(f"stale Drawing Setup evidence: {name} mismatch")
+
+    policy_scope = _policy_scope(setup_plan)
+    policy_evidence_keys = {
+        "expectation_policy_sha256",
+        "verification_scope",
+        "verification_reason",
+        "gating_paths",
+        "evaluated_gating_paths",
+        "observation_only_paths",
+        "unresolved_paths",
+        "observation_records",
+        "conformance_assertion",
+    }
+    if policy_scope is None:
+        if policy_evidence_keys & set(evidence):
+            raise _fail("policy Drawing Setup evidence is attached to a no-policy plan")
+    else:
+        policy, gating_paths, observation_only_paths = policy_scope
+        expected_policy_hash = canonical_json_sha256(policy)
+        if evidence.get("expectation_policy_sha256") != expected_policy_hash:
+            raise _fail("policy Drawing Setup evidence policy hash mismatch")
+        if evidence.get("verification_scope") != "GATING_ONLY":
+            raise _fail("policy Drawing Setup evidence is not a verified gating scope")
+        if evidence.get("verification_reason") == "EMPTY_GATING_SCOPE":
+            raise _fail("policy Drawing Setup evidence has an empty gating scope")
+
+        actual_gating_paths = evidence.get("gating_paths")
+        evaluated_gating_paths = evidence.get("evaluated_gating_paths")
+        actual_observation_only_paths = evidence.get("observation_only_paths")
+        if (
+            actual_gating_paths != gating_paths
+            or actual_observation_only_paths != observation_only_paths
+            or not isinstance(evaluated_gating_paths, list)
+            or evaluated_gating_paths != gating_paths
+            or not gating_paths
+        ):
+            raise _fail("policy Drawing Setup evidence has an empty or incomplete gating scope")
+
+        expected_unresolved_paths = sorted(
+            path
+            for path in observation_only_paths
+            if _policy_expectation_value(
+                _required_mapping(setup_plan, "setup_expectations", "setup plan"),
+                path,
+            )
+            == "UNRESOLVED"
+        )
+        if evidence.get("unresolved_paths") != expected_unresolved_paths:
+            raise _fail("policy Drawing Setup evidence has an inconsistent unresolved scope")
+
+        records = evidence.get("observation_records")
+        if (
+            not isinstance(records, list)
+            or len(records) != len(observation_only_paths)
+            or sorted(
+                record.get("path")
+                for record in records
+                if isinstance(record, Mapping)
+            )
+            != observation_only_paths
+            or any(
+                not isinstance(record, Mapping)
+                or record.get("comparison") != "NOT_EVALUATED"
+                or record.get("conformance") != "NOT_ASSERTED"
+                for record in records
+            )
+        ):
+            raise _fail("policy Drawing Setup evidence has an incomplete observation scope")
+        if evidence.get("conformance_assertion") is not True:
+            raise _fail("policy Drawing Setup evidence has no conformance assertion")
+
     audit_hash = evidence.get("audit_sha256")
     if not isinstance(audit_hash, str) or _SHA256_RE.fullmatch(audit_hash) is None:
         raise _fail("Drawing Setup evidence audit_sha256 is invalid")

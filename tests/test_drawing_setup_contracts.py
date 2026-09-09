@@ -158,6 +158,52 @@ def test_schema_roots_are_closed() -> None:
         assert schema["additionalProperties"] is False
 
 
+def test_plan_schema_accepts_the_approved_expectation_policy() -> None:
+    payload = approved_setup_plan()
+    payload["expectation_policy"] = {
+        "schema_version": "drawing-setup-expectation-policy-1.0",
+        "default_mode": "GATING",
+        "field_modes": {"current_layer": "OBSERVATION_ONLY"},
+    }
+    schema = json.loads(
+        (ROOT / "contracts" / "drawing-setup" / "drawing-setup-plan.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert_schema_accepts(schema, payload, path="drawing-setup-plan-policy.json")
+
+
+def test_evidence_schema_accepts_the_approved_scoped_fields() -> None:
+    payload = json.loads((EXAMPLES / "drawing-setup-evidence.json").read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "expectation_policy_sha256": "a" * 64,
+            "verification_scope": "GATING_ONLY",
+            "gating_paths": ["variables.INSUNITS"],
+            "evaluated_gating_paths": ["variables.INSUNITS"],
+            "observation_only_paths": ["current_layer"],
+            "unresolved_paths": [],
+            "observation_records": [
+                {
+                    "path": "current_layer",
+                    "observed_value": "0",
+                    "comparison": "NOT_EVALUATED",
+                    "conformance": "NOT_ASSERTED",
+                }
+            ],
+            "conformance_assertion": False,
+        }
+    )
+    schema = json.loads(
+        (ROOT / "contracts" / "drawing-setup" / "drawing-setup-evidence.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert_schema_accepts(schema, payload, path="drawing-setup-evidence-policy.json")
+
+
 def test_empty_identifier_and_invalid_template_are_rejected(tmp_path: Path) -> None:
     definition = approved_definition()
     definition["id"] = ""
