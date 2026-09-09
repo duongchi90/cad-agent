@@ -12,6 +12,8 @@ from typing import Mapping
 
 import pytest
 
+import agent_lib.codex_worker as worker_module
+import agent_lib.codex_worker_process as process_owner
 from agent_lib.codex_worker import (
     AdapterRequest,
     CodexWorkerError,
@@ -24,6 +26,7 @@ from agent_lib.codex_worker import (
 )
 from agent_lib.codex_worker_process import (
     ProcessTreeIdentity,
+    WorkerAuthenticationAttestation,
     WorkerCleanupResult,
     WorkerEnvironmentAttestation,
 )
@@ -281,6 +284,61 @@ def _assert_failed(result: CodexWorkerResult, code: str | None = None) -> None:
     assert result.candidate_trusted is False
     if code is not None:
         assert result.failure_code == code
+
+
+def _unissued_authentication_custody(tmp_path: Path) -> WorkerAuthenticationAttestation:
+    root = tmp_path / "prepared"
+    cwd = root / "workspace"
+    cwd.mkdir(parents=True)
+    environment = process_owner.prepare_worker_environment(disposable_root=root, cwd=cwd)
+    return WorkerAuthenticationAttestation(
+        environment=environment,
+        executable=Path(__file__).resolve(),
+        executable_sha256="a" * 64,
+        executable_version="test",
+        auth_mode="chatgpt",
+        home_manifest_sha256="b" * 64,
+        home_entries=(),
+    )
+
+
+def test_authenticated_start_rejects_noncanonical_process_boundary(
+    tmp_path: Path,
+) -> None:
+    fx = _fixture(tmp_path)
+    with pytest.raises(CodexWorkerError) as caught:
+        _start(fx, authenticated_environment=_unissued_authentication_custody(tmp_path / "custody"))
+    assert caught.value.code == "WORKER_AUTHORITY_MISMATCH"
+    assert fx.process.calls == []
+
+
+def test_task3_authenticated_start_forwards_only_issued_custody_and_no_secret_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custody = _unissued_authentication_custody(tmp_path)
+    boundary = worker_module.Task3ProcessBoundary(
+        cleanup_deadline_seconds=1.0,
+        max_processes=4,
+        _executable=Path(__file__).resolve(),
+        _argv=("-c", "pass"),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_launch(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return "opaque-handle"
+
+    monkeypatch.setattr(worker_module, "launch_authenticated_worker_process", fake_launch)
+    environment, handle = boundary.start_authenticated(
+        custody=custody,
+        expected_disposable_root=custody.environment.disposable_root,
+        expected_cwd=custody.environment.cwd,
+    )
+    assert environment is custody.environment
+    assert handle == "opaque-handle"
+    assert captured["custody"] is custody
+    assert set(captured).isdisjoint({"credential", "token", "auth_bytes", "auth_json"})
 
 
 def test_01_start_valid_exact_binding_uses_fake_only_and_returns_session(tmp_path: Path) -> None:

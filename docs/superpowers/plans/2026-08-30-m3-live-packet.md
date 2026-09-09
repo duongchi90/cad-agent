@@ -127,6 +127,63 @@ an explicit `autocad_mechanical` opt-in gate.
 Until then: `M3_CONTRACT_COMPOSITION=PASS`,
 `LIVE_REPAIR_ACCEPTANCE=NOT_RUN`, and `M3_MILESTONE=NOT_CLOSED`.
 
+## Task3 authenticated provider-home custody packet
+
+- Current successor boundary: Issue #336, based on current `main`
+  `e8386342d4a7bdab7ee12eb7b163f573e6b2df02`, branch
+  `codex/task3-auth-custody-gap`, implementation head
+  `f7f1038f7ad81c5ef3758dc6251df817a536cd13`.
+- Official runtime identity: `C:\temp\cad-agent-m3-provider-venv-20260831\Lib\site-packages\codex_cli_bin\bin\codex.exe`,
+  `codex-cli 0.144.4`, SHA-256
+  `51398051c2332b6afe08dc3b9dbb4056085c197f35ca57a307ee303d450cada5`.
+- The exact server-created home prepared for the current auth gate is
+  `C:\temp\cad-agent-m3-auth-custody-20260831-01\codex-home`. Same-home
+  `codex login status` returned exit `0` and `Logged in using ChatGPT`.
+  Post-login privacy-safe inventory: `9` entries, `5` files, `4244` bytes,
+  no behavior-changing ambient config/instruction/plugin/MCP/reparse state.
+  No credential contents or credential-derived content hashes were read,
+  copied, transmitted, or put in public evidence; private in-memory hashes are
+  used only for pre-launch drift detection.
+- The canonical continuation must launch with the exact same home and the
+  server-owned authenticated custody attestation. It must fail closed on home,
+  executable, manifest, auth-mode, or policy drift, and cleanup must purge the
+  exact home after zero-survivor process cleanup. The official command runner
+  is an injected boundary fact; the process owner adds no second supervisor or
+  transport.
+- Current live state: `LIVE_PROVIDER_BACKED=NOT_RUN`; no AutoCAD/M2/NETLOAD
+  action is needed for this custody repair. After the genuine provider pre-R5
+  boundary is proven, continue the existing two-turn LINE packet sequence.
+
+## Authenticated attempt executable-role repair
+
+- The first fresh same-home login succeeded, but canonical Task3 START stopped
+  before child creation with `WORKER_AUTHORITY_MISMATCH`. Custody attested the
+  official `codex.exe`; the trusted Task3 child is launched by Python. The old
+  validator compared these distinct roles, so the attempt is non-evidence.
+- Commit `f7f1038f7ad81c5ef3758dc6251df817a536cd13` keeps exact official
+  provider path/hash revalidation and separately validates the child launcher.
+  RED/GREEN focused coverage passed `177` tests; canonical verifier exit `0`.
+- The authenticated root was purged and verified clean. A NEW exact home and
+  one new official login are required after hosted exact-head GREEN; the prior
+  home cannot be reused.
+
+## Auth-custody continuation result
+
+- PR #337 hosted checks are green at the previous exact head
+  `4df15664cfdcbe40ab378b2ca92976e3a08fe65a`; the new repair head
+  `f7f1038` requires fresh hosted checks before merge. No merge or live PASS is
+  claimed.
+- The latest authenticated continuation reached same-home login but stopped
+  before child creation with `WORKER_AUTHORITY_MISMATCH`: the custody official
+  binary and trusted Python child launcher were incorrectly compared as one
+  executable role. This is non-evidence; the exact authenticated root was
+  purged. A distinct provider/launcher RED test now guards the repair.
+- `C:\temp\prepare_and_run_m3_auth.py` remains the one-action packet. It
+  issues a NEW exact path with `cwd == disposable_root`, runs official login
+  and status in that isolated environment, retains custody in-process, then
+  attempts canonical Task3 START and one provider turn. The prior home cannot
+  be reused. `M2_RETEST=NO` and `NETLOAD_REQUIRED=NO`.
+
 ## Safety invariants
 
 - No automated NETLOAD, UI automation, AutoCAD restart/kill, COM/process
