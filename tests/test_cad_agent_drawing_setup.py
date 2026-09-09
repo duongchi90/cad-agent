@@ -1066,6 +1066,40 @@ def test_drawing_setup_verify_cli_writes_verified_evidence(tmp_path: Path) -> No
     )
 
 
+def test_drawing_setup_verify_cli_consumes_policy_bearing_plan(tmp_path: Path) -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    audit = matching_setup_audit(approved_setup_plan())
+    plan_path = tmp_path / "policy-plan.json"
+    audit_path = tmp_path / "audit.json"
+    output = tmp_path / "policy-evidence.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert main([
+        "drawing-setup-verify",
+        "--plan", str(plan_path),
+        "--audit", str(audit_path),
+        "--verified-by", "OWNER",
+        "--approval-reference", "POLICY-CLI-001",
+        "--output", str(output),
+    ]) == 0
+
+    evidence = read_contract(output, contract="drawing_setup_evidence")
+    assert evidence["status"] == "SETUP_VERIFIED"
+    assert evidence["expectation_policy_sha256"] == canonical_json_sha256(
+        plan["expectation_policy"]
+    )
+    assert evidence["verification_scope"] == "GATING_ONLY"
+    assert evidence["gating_paths"] == evidence["evaluated_gating_paths"]
+    assert evidence["conformance_assertion"] is True
+
+
 def test_drawing_setup_verify_cli_writes_needs_review_before_returning_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
