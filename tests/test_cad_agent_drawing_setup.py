@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from cad_agent.cli import main
-from cad_agent.drawing_contracts import canonical_json_sha256, read_contract
+from cad_agent.drawing_contracts import DrawingContractError, canonical_json_sha256, read_contract
 from cad_agent.drawing_setup import (
     DrawingSetupError,
     SETUP_BLOCKERS,
@@ -57,6 +57,404 @@ def _create_plan(
         template_manifest=template_manifest,
         template_file=template_file,
     )
+
+
+def _policy_plan(
+    *, field_modes: dict[str, str], unresolved: frozenset[str] = frozenset()
+) -> dict[str, object]:
+    plan = copy.deepcopy(approved_setup_plan())
+    plan["expectation_policy"] = {
+        "schema_version": "drawing-setup-expectation-policy-1.0",
+        "default_mode": "GATING",
+        "field_modes": dict(field_modes),
+    }
+    expectations = plan["setup_expectations"]
+    for path in unresolved:
+        if path.startswith("variables."):
+            expectations["variables"][path.removeprefix("variables.")] = "UNRESOLVED"
+        else:
+            expectations[path] = "UNRESOLVED"
+    return plan
+
+
+def test_policy_plan_accepts_observation_only_unresolved_and_empty_layouts(
+    tmp_path: Path,
+) -> None:
+    plan = _policy_plan(
+        field_modes={
+            "variables.MSLTSCALE": "OBSERVATION_ONLY",
+            "layouts": "OBSERVATION_ONLY",
+            "current_layer": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"variables.MSLTSCALE", "current_layer"}),
+    )
+    plan["setup_expectations"]["layouts"] = []
+    path = tmp_path / "policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    assert read_contract(path, contract="drawing_setup_plan") == plan
+
+
+def test_policy_plan_rejects_default_mode_observation_only(tmp_path: Path) -> None:
+    plan = _policy_plan(field_modes={})
+    plan["expectation_policy"]["default_mode"] = "OBSERVATION_ONLY"
+    path = tmp_path / "invalid-policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="default_mode must be GATING"):
+        read_contract(path, contract="drawing_setup_plan")
+
+
+def test_policy_plan_rejects_unknown_field_path(tmp_path: Path) -> None:
+    plan = _policy_plan(field_modes={"variables.UNKNOWN": "OBSERVATION_ONLY"})
+    path = tmp_path / "invalid-policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="field_modes.variables.UNKNOWN is invalid"):
+        read_contract(path, contract="drawing_setup_plan")
+
+
+def test_policy_plan_rejects_unresolved_gating_field(tmp_path: Path) -> None:
+    plan = _policy_plan(
+        field_modes={},
+        unresolved=frozenset({"variables.MSLTSCALE"}),
+    )
+    path = tmp_path / "invalid-policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="MSLTSCALE must be numeric"):
+        read_contract(path, contract="drawing_setup_plan")
+
+
+def test_drawing_profile_remains_legacy_strict_for_unresolved(tmp_path: Path) -> None:
+    _, profile, _, _, _ = _approved_mappings(tmp_path)
+    profile["setup_expectations"]["variables"]["MSLTSCALE"] = "UNRESOLVED"
+    path = tmp_path / "invalid-profile.json"
+    path.write_text(json.dumps(profile), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="MSLTSCALE must be numeric"):
+        read_contract(path, contract="drawing_profile")
+
+
+def test_policy_plan_evidence_accepts_scoped_fields(tmp_path: Path) -> None:
+    evidence = {
+        "schema_version": "drawing-setup-evidence-1.0",
+        "status": "NEEDS_REVIEW",
+        "run_id": "RUN-POLICY-001",
+        "setup_plan_sha256": "0" * 64,
+        "audit_sha256": "1" * 64,
+        "drawing_profile_sha256": "2" * 64,
+        "template_file_sha256": "3" * 64,
+        "blockers": [],
+        "verified_by": "OWNER",
+        "approval_reference": "POLICY-001",
+        "expectation_policy_sha256": "4" * 64,
+        "verification_scope": "NO_CONFORMANCE_ASSERTION",
+        "verification_reason": "EMPTY_GATING_SCOPE",
+        "gating_paths": [],
+        "evaluated_gating_paths": [],
+        "observation_only_paths": ["layouts"],
+        "unresolved_paths": [],
+        "observation_records": [
+            {
+                "path": "layouts",
+                "observed_value": [],
+                "comparison": "NOT_EVALUATED",
+                "conformance": "NOT_ASSERTED",
+            }
+        ],
+        "conformance_assertion": False,
+    }
+    path = tmp_path / "policy-evidence.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    assert read_contract(path, contract="drawing_setup_evidence") == evidence
+
+
+def test_policy_plan_evaluator_inventories_policy_scope_and_hash() -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "layouts": "OBSERVATION_ONLY",
+        }
+    )
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-001",
+    )
+
+    assert evidence["expectation_policy_sha256"] == canonical_json_sha256(
+        plan["expectation_policy"]
+    )
+    assert evidence["observation_only_paths"] == ["current_layer", "layouts"]
+    assert "current_layer" not in evidence["gating_paths"]
+    assert "layouts" not in evidence["gating_paths"]
+    assert "variables.INSUNITS" in evidence["gating_paths"]
+    assert "embedded_settings" in evidence["gating_paths"]
+
+
+def test_no_policy_evidence_shape_remains_legacy() -> None:
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+
+    assert set(evidence) == {
+        "schema_version",
+        "status",
+        "run_id",
+        "setup_plan_sha256",
+        "audit_sha256",
+        "drawing_profile_sha256",
+        "template_file_sha256",
+        "blockers",
+        "verified_by",
+        "approval_reference",
+    }
+
+
+def _all_observation_policy_plan() -> dict[str, object]:
+    paths = {
+        "variables.INSUNITS",
+        "variables.MEASUREMENT",
+        "variables.LTSCALE",
+        "variables.CELTSCALE",
+        "variables.PSLTSCALE",
+        "variables.MSLTSCALE",
+        "variables.DIMASSOC",
+        "variables.ANNOALLVISIBLE",
+        "current_layer",
+        "required_layers",
+        "required_styles",
+        "layouts",
+        "font_policy",
+        "embedded_settings",
+    }
+    plan = _policy_plan(
+        field_modes={path: "OBSERVATION_ONLY" for path in paths},
+        unresolved=frozenset(
+            {
+                "variables.INSUNITS",
+                "variables.MEASUREMENT",
+                "variables.LTSCALE",
+                "variables.CELTSCALE",
+                "variables.PSLTSCALE",
+                "variables.MSLTSCALE",
+                "variables.DIMASSOC",
+                "variables.ANNOALLVISIBLE",
+                "current_layer",
+                "font_policy",
+            }
+        ),
+    )
+    plan["setup_expectations"]["required_layers"] = []
+    plan["setup_expectations"]["required_styles"] = {
+        "text": [],
+        "dimension": [],
+        "mleader": [],
+        "table": [],
+    }
+    plan["setup_expectations"]["layouts"] = []
+    return plan
+
+
+def test_policy_plan_observation_mismatch_is_not_evaluated_or_blocking() -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "layouts": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["current_layer"] = "OBSERVED-DIFFERENT"
+    audit["layouts"] = []
+
+    evidence = evaluate_setup_plan(
+        plan, audit, verified_by="OWNER", approval_reference="POLICY-001"
+    )
+
+    assert evidence["status"] == "SETUP_VERIFIED"
+    assert evidence["blockers"] == []
+    records = {record["path"]: record for record in evidence["observation_records"]}
+    assert records["current_layer"] == {
+        "path": "current_layer",
+        "observed_value": "OBSERVED-DIFFERENT",
+        "comparison": "NOT_EVALUATED",
+        "conformance": "NOT_ASSERTED",
+    }
+    assert records["layouts"]["observed_value"] == []
+    assert records["current_layer"]["path"] not in evidence["gating_paths"]
+    assert evidence["conformance_assertion"] is True
+
+
+def test_policy_plan_gating_mismatch_blocks_but_observation_mismatch_does_not() -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["current_layer"] = "OBSERVED-DIFFERENT"
+    audit["variables"]["INSUNITS"] = 0
+
+    evidence = evaluate_setup_plan(
+        plan, audit, verified_by="OWNER", approval_reference="POLICY-002"
+    )
+
+    assert evidence["status"] == "NEEDS_REVIEW"
+    assert any(item["path"] == "variables.INSUNITS" for item in evidence["blockers"])
+    assert all(item["path"] != "current_layer" for item in evidence["blockers"])
+    assert evidence["verification_scope"] == "GATING_ONLY"
+    assert evidence["conformance_assertion"] is False
+
+
+def test_policy_plan_all_observation_only_never_returns_setup_verified() -> None:
+    plan = _all_observation_policy_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-EMPTY-001",
+    )
+
+    assert evidence["status"] == "NEEDS_REVIEW"
+    assert evidence["blockers"] == []
+    assert evidence["gating_paths"] == []
+    assert evidence["evaluated_gating_paths"] == []
+    assert evidence["verification_reason"] == "EMPTY_GATING_SCOPE"
+    assert evidence["verification_scope"] == "NO_CONFORMANCE_ASSERTION"
+    assert evidence["conformance_assertion"] is False
+
+
+def _non_vacuous_policy_evidence() -> tuple[dict[str, object], dict[str, object]]:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-VALID-001",
+    )
+    expected = {
+        "setup_plan": plan,
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+    return evidence, expected
+
+
+def test_require_setup_verified_accepts_non_vacuous_policy_evidence() -> None:
+    evidence, expected = _non_vacuous_policy_evidence()
+
+    require_setup_verified(evidence, **expected)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda evidence: evidence.__setitem__("gating_paths", []),
+        lambda evidence: evidence.__setitem__("evaluated_gating_paths", []),
+        lambda evidence: evidence.__setitem__(
+            "verification_scope", "NO_CONFORMANCE_ASSERTION"
+        ),
+        lambda evidence: evidence.__setitem__("conformance_assertion", False),
+    ],
+)
+def test_require_setup_verified_rejects_vacuous_policy_evidence(
+    mutation: Any,
+) -> None:
+    evidence, expected = _non_vacuous_policy_evidence()
+    mutation(evidence)
+
+    with pytest.raises(DrawingSetupError, match="scope|conformance|verified"):
+        require_setup_verified(evidence, **expected)
+
+
+def test_require_setup_verified_rejects_tampered_all_observation_evidence() -> None:
+    plan = _all_observation_policy_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-EMPTY-002",
+    )
+    evidence["status"] = "SETUP_VERIFIED"
+    expected = {
+        "setup_plan": plan,
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+
+    with pytest.raises(DrawingSetupError, match="scope|conformance|verified"):
+        require_setup_verified(evidence, **expected)
+
+
+def test_require_setup_verified_rejects_policy_fields_stripped_from_vacuous_evidence() -> None:
+    plan = _all_observation_policy_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-STRIPPED-001",
+    )
+    for key in (
+        "expectation_policy_sha256",
+        "verification_scope",
+        "verification_reason",
+        "gating_paths",
+        "evaluated_gating_paths",
+        "observation_only_paths",
+        "unresolved_paths",
+        "observation_records",
+        "conformance_assertion",
+    ):
+        evidence.pop(key, None)
+    evidence["status"] = "SETUP_VERIFIED"
+    expected = {
+        "setup_plan": plan,
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+
+    with pytest.raises(DrawingSetupError, match="policy|scope|verified"):
+        require_setup_verified(evidence, **expected)
+
+
+def test_require_setup_verified_rejects_policy_evidence_for_no_policy_plan() -> None:
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="OWNER",
+        approval_reference="POLICY-MISMATCH-001",
+    )
+    evidence["expectation_policy_sha256"] = "a" * 64
+
+    with pytest.raises(DrawingSetupError, match="policy"):
+        require_setup_verified(
+            evidence,
+            setup_plan=plan,
+            setup_plan_sha256=canonical_json_sha256(plan),
+            drawing_profile_sha256=plan["drawing_profile"]["sha256"],
+            template_file_sha256=plan["template"]["file_sha256"],
+        )
 
 
 def test_create_setup_plan_has_only_the_approved_keyword_api() -> None:
@@ -513,6 +911,7 @@ def test_matching_audit_becomes_setup_verified_without_mutating_inputs(
     assert read_contract(output, contract="drawing_setup_evidence") == evidence
     require_setup_verified(
         evidence,
+        setup_plan=plan,
         setup_plan_sha256=canonical_json_sha256(plan),
         drawing_profile_sha256=plan["drawing_profile"]["sha256"],
         template_file_sha256=plan["template"]["file_sha256"],
@@ -656,6 +1055,7 @@ def test_require_setup_verified_rejects_stale_evidence(argument: str, value: str
         approval_reference="LEAN-SETUP-001",
     )
     expected = {
+        "setup_plan": plan,
         "setup_plan_sha256": canonical_json_sha256(plan),
         "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
         "template_file_sha256": plan["template"]["file_sha256"],
@@ -675,6 +1075,7 @@ def test_require_setup_verified_rejects_status_or_blocker_downgrade() -> None:
         approval_reference="LEAN-SETUP-001",
     )
     expected = {
+        "setup_plan": plan,
         "setup_plan_sha256": canonical_json_sha256(plan),
         "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
         "template_file_sha256": plan["template"]["file_sha256"],
@@ -720,6 +1121,40 @@ def test_drawing_setup_verify_cli_writes_verified_evidence(tmp_path: Path) -> No
     assert read_contract(output, contract="drawing_setup_evidence")["status"] == (
         "SETUP_VERIFIED"
     )
+
+
+def test_drawing_setup_verify_cli_consumes_policy_bearing_plan(tmp_path: Path) -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    audit = matching_setup_audit(approved_setup_plan())
+    plan_path = tmp_path / "policy-plan.json"
+    audit_path = tmp_path / "audit.json"
+    output = tmp_path / "policy-evidence.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert main([
+        "drawing-setup-verify",
+        "--plan", str(plan_path),
+        "--audit", str(audit_path),
+        "--verified-by", "OWNER",
+        "--approval-reference", "POLICY-CLI-001",
+        "--output", str(output),
+    ]) == 0
+
+    evidence = read_contract(output, contract="drawing_setup_evidence")
+    assert evidence["status"] == "SETUP_VERIFIED"
+    assert evidence["expectation_policy_sha256"] == canonical_json_sha256(
+        plan["expectation_policy"]
+    )
+    assert evidence["verification_scope"] == "GATING_ONLY"
+    assert evidence["gating_paths"] == evidence["evaluated_gating_paths"]
+    assert evidence["conformance_assertion"] is True
 
 
 def test_drawing_setup_verify_cli_writes_needs_review_before_returning_two(
