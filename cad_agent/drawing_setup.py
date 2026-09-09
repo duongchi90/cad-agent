@@ -41,6 +41,26 @@ SETUP_BLOCKERS = frozenset(
     }
 )
 _MISSING = object()
+_POLICY_COMPARISON_PATHS = tuple(
+    sorted(
+        (
+            "variables.INSUNITS",
+            "variables.MEASUREMENT",
+            "variables.LTSCALE",
+            "variables.CELTSCALE",
+            "variables.PSLTSCALE",
+            "variables.MSLTSCALE",
+            "variables.DIMASSOC",
+            "variables.ANNOALLVISIBLE",
+            "current_layer",
+            "required_layers",
+            "required_styles",
+            "layouts",
+            "font_policy",
+            "embedded_settings",
+        )
+    )
+)
 
 
 class DrawingSetupError(DrawingContractError):
@@ -329,6 +349,33 @@ def _named_items(values: list[object]) -> dict[str, Mapping[str, object]]:
     return result
 
 
+def _policy_scope(
+    plan: Mapping[str, object],
+) -> tuple[Mapping[str, object], list[str], list[str]] | None:
+    policy = plan.get("expectation_policy")
+    if policy is None:
+        return None
+    if not isinstance(policy, Mapping):
+        raise _fail("invalid setup plan expectation_policy")
+    if policy.get("default_mode") != "GATING":
+        raise _fail("invalid setup plan expectation_policy.default_mode")
+    field_modes = policy.get("field_modes")
+    if not isinstance(field_modes, Mapping):
+        raise _fail("invalid setup plan expectation_policy.field_modes")
+    for path, mode in field_modes.items():
+        if path not in _POLICY_COMPARISON_PATHS or mode not in {"GATING", "OBSERVATION_ONLY"}:
+            raise _fail("invalid setup plan expectation_policy.field_modes")
+    observation_only_paths = [
+        path
+        for path in _POLICY_COMPARISON_PATHS
+        if field_modes.get(path, "GATING") == "OBSERVATION_ONLY"
+    ]
+    gating_paths = [
+        path for path in _POLICY_COMPARISON_PATHS if path not in observation_only_paths
+    ]
+    return policy, gating_paths, observation_only_paths
+
+
 def evaluate_setup_plan(
     plan: Mapping[str, object],
     audit: Mapping[str, object],
@@ -355,6 +402,7 @@ def evaluate_setup_plan(
         expectations, "required_layers", "setup expectations"
     )
     expected_layouts = _required_list(expectations, "layouts", "setup expectations")
+    policy_scope = _policy_scope(plan)
     blockers: list[dict[str, object]] = []
 
     if audit.get("changed") is not False:
@@ -576,7 +624,7 @@ def evaluate_setup_plan(
             raise _fail(f"invalid setup plan {name}")
 
     blockers.sort(key=lambda item: (str(item["code"]), str(item["path"])))
-    return {
+    evidence: dict[str, object] = {
         "schema_version": "drawing-setup-evidence-1.0",
         "status": "SETUP_VERIFIED" if not blockers else "NEEDS_REVIEW",
         "run_id": run_id,
@@ -588,6 +636,16 @@ def evaluate_setup_plan(
         "verified_by": verified_by,
         "approval_reference": approval_reference,
     }
+    if policy_scope is not None:
+        policy, gating_paths, observation_only_paths = policy_scope
+        evidence.update(
+            {
+                "expectation_policy_sha256": canonical_json_sha256(policy),
+                "gating_paths": gating_paths,
+                "observation_only_paths": observation_only_paths,
+            }
+        )
+    return evidence
 
 
 def require_setup_verified(

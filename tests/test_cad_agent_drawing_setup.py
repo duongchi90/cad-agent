@@ -171,6 +171,53 @@ def test_policy_plan_evidence_accepts_scoped_fields(tmp_path: Path) -> None:
     assert read_contract(path, contract="drawing_setup_evidence") == evidence
 
 
+def test_policy_plan_evaluator_inventories_policy_scope_and_hash() -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "layouts": "OBSERVATION_ONLY",
+        }
+    )
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-001",
+    )
+
+    assert evidence["expectation_policy_sha256"] == canonical_json_sha256(
+        plan["expectation_policy"]
+    )
+    assert evidence["observation_only_paths"] == ["current_layer", "layouts"]
+    assert "current_layer" not in evidence["gating_paths"]
+    assert "layouts" not in evidence["gating_paths"]
+    assert "variables.INSUNITS" in evidence["gating_paths"]
+    assert "embedded_settings" in evidence["gating_paths"]
+
+
+def test_no_policy_evidence_shape_remains_legacy() -> None:
+    plan = approved_setup_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(plan),
+        verified_by="OWNER",
+        approval_reference="LEAN-SETUP-001",
+    )
+
+    assert set(evidence) == {
+        "schema_version",
+        "status",
+        "run_id",
+        "setup_plan_sha256",
+        "audit_sha256",
+        "drawing_profile_sha256",
+        "template_file_sha256",
+        "blockers",
+        "verified_by",
+        "approval_reference",
+    }
+
+
 def test_create_setup_plan_has_only_the_approved_keyword_api() -> None:
     signature = inspect.signature(create_setup_plan)
     assert list(signature.parameters) == [
