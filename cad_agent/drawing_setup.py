@@ -376,6 +376,26 @@ def _policy_scope(
     return policy, gating_paths, observation_only_paths
 
 
+def _policy_expectation_value(
+    expectations: Mapping[str, object], path: str
+) -> object:
+    if path.startswith("variables."):
+        variables = expectations.get("variables")
+        if isinstance(variables, Mapping):
+            return variables.get(path.removeprefix("variables."), _MISSING)
+        return _MISSING
+    return expectations.get(path, _MISSING)
+
+
+def _observation_record(path: str, observed_value: object) -> dict[str, object]:
+    return {
+        "path": path,
+        "observed_value": copy.deepcopy(None if observed_value is _MISSING else observed_value),
+        "comparison": "NOT_EVALUATED",
+        "conformance": "NOT_ASSERTED",
+    }
+
+
 def evaluate_setup_plan(
     plan: Mapping[str, object],
     audit: Mapping[str, object],
@@ -394,15 +414,31 @@ def evaluate_setup_plan(
     expectations = _required_mapping(plan, "setup_expectations", "setup plan")
     profile_ref = _required_mapping(plan, "drawing_profile", "setup plan")
     template_ref = _required_mapping(plan, "template", "setup plan")
-    expected_variables = _required_mapping(expectations, "variables", "setup expectations")
-    expected_styles = _required_mapping(
-        expectations, "required_styles", "setup expectations"
-    )
-    expected_layers = _required_list(
-        expectations, "required_layers", "setup expectations"
-    )
-    expected_layouts = _required_list(expectations, "layouts", "setup expectations")
     policy_scope = _policy_scope(plan)
+    observation_only_paths = set(policy_scope[2]) if policy_scope is not None else set()
+    observation_records: list[dict[str, object]] = []
+    evaluated_gating_paths: list[str] = []
+    expected_variables = _required_mapping(expectations, "variables", "setup expectations")
+    expected_styles = (
+        None
+        if "required_styles" in observation_only_paths
+        else _required_mapping(expectations, "required_styles", "setup expectations")
+    )
+    expected_layers = (
+        []
+        if "required_layers" in observation_only_paths
+        else _required_list(expectations, "required_layers", "setup expectations")
+    )
+    expected_layouts = (
+        []
+        if "layouts" in observation_only_paths
+        else _required_list(expectations, "layouts", "setup expectations")
+    )
+    unresolved_paths = sorted(
+        path
+        for path in observation_only_paths
+        if _policy_expectation_value(expectations, path) == "UNRESOLVED"
+    )
     blockers: list[dict[str, object]] = []
 
     if audit.get("changed") is not False:
@@ -451,20 +487,29 @@ def evaluate_setup_plan(
     actual_variables = audit.get("variables")
     actual_variables = actual_variables if isinstance(actual_variables, Mapping) else {}
     for name in sorted(expected_variables):
+        path = f"variables.{name}"
         expected = expected_variables[name]
         actual = actual_variables.get(name, _MISSING)
+        if path in observation_only_paths:
+            observation_records.append(_observation_record(path, actual))
+            continue
+        evaluated_gating_paths.append(path)
         if actual != expected:
             _add_blocker(
                 blockers,
                 "setup_incomplete",
-                f"variables.{name}",
+                path,
                 expected,
                 actual,
             )
 
     expected_current_layer = expectations.get("current_layer", _MISSING)
     actual_current_layer = audit.get("current_layer", _MISSING)
-    if actual_current_layer != expected_current_layer:
+    if "current_layer" in observation_only_paths:
+        observation_records.append(_observation_record("current_layer", actual_current_layer))
+    else:
+        evaluated_gating_paths.append("current_layer")
+    if "current_layer" not in observation_only_paths and actual_current_layer != expected_current_layer:
         _add_blocker(
             blockers,
             "setup_incomplete",
@@ -475,141 +520,164 @@ def evaluate_setup_plan(
 
     actual_layer_values = audit.get("layers")
     actual_layers = _named_items(actual_layer_values if isinstance(actual_layer_values, list) else [])
-    for expected_layer_value in expected_layers:
-        if not isinstance(expected_layer_value, Mapping) or not isinstance(
-            expected_layer_value.get("name"), str
-        ):
-            raise _fail("invalid setup expectations: required layer")
-        name = expected_layer_value["name"]
-        actual_layer = actual_layers.get(name)
-        if actual_layer is None:
-            _add_blocker(
-                blockers,
-                "setup_incomplete",
-                f"layers.{name}",
-                dict(expected_layer_value),
-                None,
-            )
-            continue
-        for field in ("linetype", "plottable"):
-            expected = expected_layer_value.get(field, _MISSING)
-            actual = actual_layer.get(field, _MISSING)
-            if actual != expected:
+    if "required_layers" in observation_only_paths:
+        observation_records.append(_observation_record("required_layers", actual_layer_values))
+    else:
+        evaluated_gating_paths.append("required_layers")
+        for expected_layer_value in expected_layers:
+            if not isinstance(expected_layer_value, Mapping) or not isinstance(
+                expected_layer_value.get("name"), str
+            ):
+                raise _fail("invalid setup expectations: required layer")
+            name = expected_layer_value["name"]
+            actual_layer = actual_layers.get(name)
+            if actual_layer is None:
                 _add_blocker(
                     blockers,
                     "setup_incomplete",
-                    f"layers.{name}.{field}",
-                    expected,
-                    actual,
+                    f"layers.{name}",
+                    dict(expected_layer_value),
+                    None,
                 )
+                continue
+            for field in ("linetype", "plottable"):
+                expected = expected_layer_value.get(field, _MISSING)
+                actual = actual_layer.get(field, _MISSING)
+                if actual != expected:
+                    _add_blocker(
+                        blockers,
+                        "setup_incomplete",
+                        f"layers.{name}.{field}",
+                        expected,
+                        actual,
+                    )
 
     actual_styles = audit.get("styles")
     actual_styles = actual_styles if isinstance(actual_styles, Mapping) else {}
-    for category in ("text", "dimension", "mleader", "table"):
-        required_names = expected_styles.get(category)
-        actual_names = actual_styles.get(category)
-        if not isinstance(required_names, list):
-            raise _fail(f"invalid setup expectations: styles.{category}")
-        if not isinstance(actual_names, list):
-            _add_blocker(
-                blockers,
-                "profile_missing",
-                f"styles.{category}",
-                required_names,
-                actual_names,
-            )
-            continue
-        for name in required_names:
-            if name not in actual_names:
+    if "required_styles" in observation_only_paths:
+        observation_records.append(_observation_record("required_styles", audit.get("styles")))
+    else:
+        evaluated_gating_paths.append("required_styles")
+        assert expected_styles is not None
+        for category in ("text", "dimension", "mleader", "table"):
+            required_names = expected_styles.get(category)
+            actual_names = actual_styles.get(category)
+            if not isinstance(required_names, list):
+                raise _fail(f"invalid setup expectations: styles.{category}")
+            if not isinstance(actual_names, list):
                 _add_blocker(
                     blockers,
-                    "profile_hash_mismatch",
-                    f"styles.{category}.{name}",
-                    True,
-                    False,
+                    "profile_missing",
+                    f"styles.{category}",
+                    required_names,
+                    actual_names,
                 )
+                continue
+            for name in required_names:
+                if name not in actual_names:
+                    _add_blocker(
+                        blockers,
+                        "profile_hash_mismatch",
+                        f"styles.{category}.{name}",
+                        True,
+                        False,
+                    )
 
     actual_layout_values = audit.get("layouts")
     actual_layouts = _named_items(
         actual_layout_values if isinstance(actual_layout_values, list) else []
     )
-    for expected_layout_value in expected_layouts:
-        if not isinstance(expected_layout_value, Mapping) or not isinstance(
-            expected_layout_value.get("name"), str
-        ):
-            raise _fail("invalid setup expectations: layout")
-        name = expected_layout_value["name"]
-        actual_layout = actual_layouts.get(name)
-        if actual_layout is None:
-            _add_blocker(
-                blockers,
-                "viewport_scale_mismatch",
-                f"layouts.{name}",
-                dict(expected_layout_value),
-                None,
+    if "layouts" in observation_only_paths:
+        observation_records.append(_observation_record("layouts", actual_layout_values))
+    else:
+        evaluated_gating_paths.append("layouts")
+        for expected_layout_value in expected_layouts:
+            if not isinstance(expected_layout_value, Mapping) or not isinstance(
+                expected_layout_value.get("name"), str
+            ):
+                raise _fail("invalid setup expectations: layout")
+            name = expected_layout_value["name"]
+            actual_layout = actual_layouts.get(name)
+            if actual_layout is None:
+                _add_blocker(
+                    blockers,
+                    "viewport_scale_mismatch",
+                    f"layouts.{name}",
+                    dict(expected_layout_value),
+                    None,
+                )
+                continue
+            expected_scales = expected_layout_value.get("viewport_scales", _MISSING)
+            actual_scales = actual_layout.get("viewport_scales", _MISSING)
+            normalized_expected = (
+                sorted(expected_scales) if isinstance(expected_scales, list) else expected_scales
             )
-            continue
-        expected_scales = expected_layout_value.get("viewport_scales", _MISSING)
-        actual_scales = actual_layout.get("viewport_scales", _MISSING)
-        normalized_expected = (
-            sorted(expected_scales) if isinstance(expected_scales, list) else expected_scales
-        )
-        normalized_actual = (
-            sorted(actual_scales) if isinstance(actual_scales, list) else actual_scales
-        )
-        if normalized_actual != normalized_expected:
-            _add_blocker(
-                blockers,
-                "viewport_scale_mismatch",
-                f"layouts.{name}.viewport_scales",
-                normalized_expected,
-                normalized_actual,
+            normalized_actual = (
+                sorted(actual_scales) if isinstance(actual_scales, list) else actual_scales
             )
-        expected_locked = expected_layout_value.get("locked", _MISSING)
-        actual_locked = actual_layout.get("locked", _MISSING)
-        if actual_locked != expected_locked:
-            _add_blocker(
-                blockers,
-                "viewport_scale_mismatch",
-                f"layouts.{name}.locked",
-                expected_locked,
-                actual_locked,
-            )
+            if normalized_actual != normalized_expected:
+                _add_blocker(
+                    blockers,
+                    "viewport_scale_mismatch",
+                    f"layouts.{name}.viewport_scales",
+                    normalized_expected,
+                    normalized_actual,
+                )
+            expected_locked = expected_layout_value.get("locked", _MISSING)
+            actual_locked = actual_layout.get("locked", _MISSING)
+            if actual_locked != expected_locked:
+                _add_blocker(
+                    blockers,
+                    "viewport_scale_mismatch",
+                    f"layouts.{name}.locked",
+                    expected_locked,
+                    actual_locked,
+                )
 
     font_report = audit.get("font_report")
     font_report = font_report if isinstance(font_report, Mapping) else {}
-    for field in ("missing", "substituted"):
-        actual = font_report.get(field, _MISSING)
-        if actual != []:
-            _add_blocker(
-                blockers,
-                "font_substitution_risk",
-                f"font_report.{field}",
-                [],
-                actual,
-            )
+    if "font_policy" in observation_only_paths:
+        observation_records.append(_observation_record("font_policy", audit.get("font_report")))
+    else:
+        evaluated_gating_paths.append("font_policy")
+        for field in ("missing", "substituted"):
+            actual = font_report.get(field, _MISSING)
+            if actual != []:
+                _add_blocker(
+                    blockers,
+                    "font_substitution_risk",
+                    f"font_report.{field}",
+                    [],
+                    actual,
+                )
 
     expected_settings_hash = template_ref.get("embedded_settings_sha256", _MISSING)
     actual_properties = audit.get("custom_properties")
     actual_properties = actual_properties if isinstance(actual_properties, Mapping) else {}
     actual_settings_hash = actual_properties.get("CAD_AGENT_SETTINGS_SHA256", _MISSING)
-    if actual_settings_hash != expected_settings_hash:
-        _add_blocker(
-            blockers,
-            "template_hash_mismatch",
-            "custom_properties.CAD_AGENT_SETTINGS_SHA256",
-            expected_settings_hash,
-            actual_settings_hash,
+    if "embedded_settings" in observation_only_paths:
+        observation_records.append(
+            _observation_record("embedded_settings", actual_settings_hash)
         )
-    calculated_settings_hash = canonical_json_sha256(expectations)
-    if expected_settings_hash != calculated_settings_hash:
-        _add_blocker(
-            blockers,
-            "profile_hash_mismatch",
-            "template.embedded_settings_sha256",
-            calculated_settings_hash,
-            expected_settings_hash,
-        )
+    else:
+        evaluated_gating_paths.append("embedded_settings")
+        if actual_settings_hash != expected_settings_hash:
+            _add_blocker(
+                blockers,
+                "template_hash_mismatch",
+                "custom_properties.CAD_AGENT_SETTINGS_SHA256",
+                expected_settings_hash,
+                actual_settings_hash,
+            )
+        calculated_settings_hash = canonical_json_sha256(expectations)
+        if expected_settings_hash != calculated_settings_hash:
+            _add_blocker(
+                blockers,
+                "profile_hash_mismatch",
+                "template.embedded_settings_sha256",
+                calculated_settings_hash,
+                expected_settings_hash,
+            )
 
     run_id = plan.get("run_id")
     profile_hash = profile_ref.get("sha256")
@@ -638,13 +706,31 @@ def evaluate_setup_plan(
     }
     if policy_scope is not None:
         policy, gating_paths, observation_only_paths = policy_scope
+        evaluated_gating_paths = sorted(set(evaluated_gating_paths))
+        has_non_vacuous_scope = bool(gating_paths) and set(gating_paths) == set(
+            evaluated_gating_paths
+        )
+        evidence["status"] = (
+            "SETUP_VERIFIED" if has_non_vacuous_scope and not blockers else "NEEDS_REVIEW"
+        )
         evidence.update(
             {
                 "expectation_policy_sha256": canonical_json_sha256(policy),
                 "gating_paths": gating_paths,
                 "observation_only_paths": observation_only_paths,
+                "evaluated_gating_paths": evaluated_gating_paths,
+                "unresolved_paths": unresolved_paths,
+                "observation_records": sorted(
+                    observation_records, key=lambda item: str(item["path"])
+                ),
+                "verification_scope": (
+                    "GATING_ONLY" if gating_paths else "NO_CONFORMANCE_ASSERTION"
+                ),
+                "conformance_assertion": bool(has_non_vacuous_scope and not blockers),
             }
         )
+        if not gating_paths:
+            evidence["verification_reason"] = "EMPTY_GATING_SCOPE"
     return evidence
 
 

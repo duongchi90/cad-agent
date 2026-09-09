@@ -218,6 +218,123 @@ def test_no_policy_evidence_shape_remains_legacy() -> None:
     }
 
 
+def _all_observation_policy_plan() -> dict[str, object]:
+    paths = {
+        "variables.INSUNITS",
+        "variables.MEASUREMENT",
+        "variables.LTSCALE",
+        "variables.CELTSCALE",
+        "variables.PSLTSCALE",
+        "variables.MSLTSCALE",
+        "variables.DIMASSOC",
+        "variables.ANNOALLVISIBLE",
+        "current_layer",
+        "required_layers",
+        "required_styles",
+        "layouts",
+        "font_policy",
+        "embedded_settings",
+    }
+    plan = _policy_plan(
+        field_modes={path: "OBSERVATION_ONLY" for path in paths},
+        unresolved=frozenset(
+            {
+                "variables.INSUNITS",
+                "variables.MEASUREMENT",
+                "variables.LTSCALE",
+                "variables.CELTSCALE",
+                "variables.PSLTSCALE",
+                "variables.MSLTSCALE",
+                "variables.DIMASSOC",
+                "variables.ANNOALLVISIBLE",
+                "current_layer",
+                "font_policy",
+            }
+        ),
+    )
+    plan["setup_expectations"]["required_layers"] = []
+    plan["setup_expectations"]["required_styles"] = {
+        "text": [],
+        "dimension": [],
+        "mleader": [],
+        "table": [],
+    }
+    plan["setup_expectations"]["layouts"] = []
+    return plan
+
+
+def test_policy_plan_observation_mismatch_is_not_evaluated_or_blocking() -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "layouts": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["current_layer"] = "OBSERVED-DIFFERENT"
+    audit["layouts"] = []
+
+    evidence = evaluate_setup_plan(
+        plan, audit, verified_by="OWNER", approval_reference="POLICY-001"
+    )
+
+    assert evidence["status"] == "SETUP_VERIFIED"
+    assert evidence["blockers"] == []
+    records = {record["path"]: record for record in evidence["observation_records"]}
+    assert records["current_layer"] == {
+        "path": "current_layer",
+        "observed_value": "OBSERVED-DIFFERENT",
+        "comparison": "NOT_EVALUATED",
+        "conformance": "NOT_ASSERTED",
+    }
+    assert records["layouts"]["observed_value"] == []
+    assert records["current_layer"]["path"] not in evidence["gating_paths"]
+    assert evidence["conformance_assertion"] is True
+
+
+def test_policy_plan_gating_mismatch_blocks_but_observation_mismatch_does_not() -> None:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["current_layer"] = "OBSERVED-DIFFERENT"
+    audit["variables"]["INSUNITS"] = 0
+
+    evidence = evaluate_setup_plan(
+        plan, audit, verified_by="OWNER", approval_reference="POLICY-002"
+    )
+
+    assert evidence["status"] == "NEEDS_REVIEW"
+    assert any(item["path"] == "variables.INSUNITS" for item in evidence["blockers"])
+    assert all(item["path"] != "current_layer" for item in evidence["blockers"])
+    assert evidence["verification_scope"] == "GATING_ONLY"
+    assert evidence["conformance_assertion"] is False
+
+
+def test_policy_plan_all_observation_only_never_returns_setup_verified() -> None:
+    plan = _all_observation_policy_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-EMPTY-001",
+    )
+
+    assert evidence["status"] == "NEEDS_REVIEW"
+    assert evidence["blockers"] == []
+    assert evidence["gating_paths"] == []
+    assert evidence["evaluated_gating_paths"] == []
+    assert evidence["verification_reason"] == "EMPTY_GATING_SCOPE"
+    assert evidence["verification_scope"] == "NO_CONFORMANCE_ASSERTION"
+    assert evidence["conformance_assertion"] is False
+
+
 def test_create_setup_plan_has_only_the_approved_keyword_api() -> None:
     signature = inspect.signature(create_setup_plan)
     assert list(signature.parameters) == [
