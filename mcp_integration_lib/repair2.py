@@ -197,26 +197,23 @@ def repair_dxf_live(build_result: BuildResult, mismatches: List[str], client: MC
             result.details.append(f"{pid}: bỏ qua repair — không có written_geometry")
             continue
         old_handle = build_result.handle_by_primitive_id.get(pid)
-        if old_handle is not None:
-            try:
-                client.entity_erase(old_handle)
-            except (MCPTimeoutError, MCPToolError):
-                pass
         try:
             kind = written.get("type")
             capability = kind.upper() if type(kind) is str else kind
             build_result.handle_by_primitive_id[pid] = execute_supported_repair_capability(
                 client,
                 capability=capability,
-                target_handle=None,
+                target_handle=old_handle,
                 geometry=written,
                 layer=build_result.layer_by_primitive_id.get(pid, "0"),
             )
-        except (ValueError, MCPTimeoutError, MCPToolError) as exc:
+        except ValueError as exc:
             result.skipped_count += 1
             result.skipped_primitive_ids.append(pid)
             result.details.append(f"{pid}: bỏ qua repair — {exc}")
             continue
+        except (MCPTimeoutError, MCPToolError) as exc:
+            raise MCPToolError("REPAIR_CAPABILITY_FAILED") from exc
         result.repaired_count += 1
         result.repaired_primitive_ids.append(pid)
         result.details.append(f"{pid}: đã thay handle '{old_handle}'")
