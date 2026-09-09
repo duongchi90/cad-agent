@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from cad_agent.cli import main
-from cad_agent.drawing_contracts import canonical_json_sha256, read_contract
+from cad_agent.drawing_contracts import DrawingContractError, canonical_json_sha256, read_contract
 from cad_agent.drawing_setup import (
     DrawingSetupError,
     SETUP_BLOCKERS,
@@ -93,6 +93,82 @@ def test_policy_plan_accepts_observation_only_unresolved_and_empty_layouts(
     path.write_text(json.dumps(plan), encoding="utf-8")
 
     assert read_contract(path, contract="drawing_setup_plan") == plan
+
+
+def test_policy_plan_rejects_default_mode_observation_only(tmp_path: Path) -> None:
+    plan = _policy_plan(field_modes={})
+    plan["expectation_policy"]["default_mode"] = "OBSERVATION_ONLY"
+    path = tmp_path / "invalid-policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="default_mode must be GATING"):
+        read_contract(path, contract="drawing_setup_plan")
+
+
+def test_policy_plan_rejects_unknown_field_path(tmp_path: Path) -> None:
+    plan = _policy_plan(field_modes={"variables.UNKNOWN": "OBSERVATION_ONLY"})
+    path = tmp_path / "invalid-policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="field_modes.variables.UNKNOWN is invalid"):
+        read_contract(path, contract="drawing_setup_plan")
+
+
+def test_policy_plan_rejects_unresolved_gating_field(tmp_path: Path) -> None:
+    plan = _policy_plan(
+        field_modes={},
+        unresolved=frozenset({"variables.MSLTSCALE"}),
+    )
+    path = tmp_path / "invalid-policy-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="MSLTSCALE must be numeric"):
+        read_contract(path, contract="drawing_setup_plan")
+
+
+def test_drawing_profile_remains_legacy_strict_for_unresolved(tmp_path: Path) -> None:
+    _, profile, _, _, _ = _approved_mappings(tmp_path)
+    profile["setup_expectations"]["variables"]["MSLTSCALE"] = "UNRESOLVED"
+    path = tmp_path / "invalid-profile.json"
+    path.write_text(json.dumps(profile), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="MSLTSCALE must be numeric"):
+        read_contract(path, contract="drawing_profile")
+
+
+def test_policy_plan_evidence_accepts_scoped_fields(tmp_path: Path) -> None:
+    evidence = {
+        "schema_version": "drawing-setup-evidence-1.0",
+        "status": "NEEDS_REVIEW",
+        "run_id": "RUN-POLICY-001",
+        "setup_plan_sha256": "0" * 64,
+        "audit_sha256": "1" * 64,
+        "drawing_profile_sha256": "2" * 64,
+        "template_file_sha256": "3" * 64,
+        "blockers": [],
+        "verified_by": "OWNER",
+        "approval_reference": "POLICY-001",
+        "expectation_policy_sha256": "4" * 64,
+        "verification_scope": "NO_CONFORMANCE_ASSERTION",
+        "verification_reason": "EMPTY_GATING_SCOPE",
+        "gating_paths": [],
+        "evaluated_gating_paths": [],
+        "observation_only_paths": ["layouts"],
+        "unresolved_paths": ["variables.MSLTSCALE"],
+        "observation_records": [
+            {
+                "path": "layouts",
+                "observed_value": [],
+                "comparison": "NOT_EVALUATED",
+                "conformance": "NOT_ASSERTED",
+            }
+        ],
+        "conformance_assertion": False,
+    }
+    path = tmp_path / "policy-evidence.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    assert read_contract(path, contract="drawing_setup_evidence") == evidence
 
 
 def test_create_setup_plan_has_only_the_approved_keyword_api() -> None:

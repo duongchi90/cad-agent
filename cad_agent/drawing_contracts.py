@@ -25,6 +25,34 @@ _EXPECTATION_KEYS = {
     "variables", "current_layer", "required_layers",
     "required_styles", "layouts", "font_policy",
 }
+_EXPECTATION_POLICY_PATHS = {
+    "variables.INSUNITS",
+    "variables.MEASUREMENT",
+    "variables.LTSCALE",
+    "variables.CELTSCALE",
+    "variables.PSLTSCALE",
+    "variables.MSLTSCALE",
+    "variables.DIMASSOC",
+    "variables.ANNOALLVISIBLE",
+    "current_layer",
+    "required_layers",
+    "required_styles",
+    "layouts",
+    "font_policy",
+    "embedded_settings",
+}
+_EXPECTATION_POLICY_MODES = {"GATING", "OBSERVATION_ONLY"}
+_EVIDENCE_POLICY_KEYS = {
+    "expectation_policy_sha256",
+    "verification_scope",
+    "verification_reason",
+    "gating_paths",
+    "evaluated_gating_paths",
+    "observation_only_paths",
+    "unresolved_paths",
+    "observation_records",
+    "conformance_assertion",
+}
 
 
 class DrawingContractError(ValueError):
@@ -119,11 +147,18 @@ def _approval(value: object, *, contract: str, path: str = "approval") -> None:
     _string(item["approved_by"], contract=contract, path=f"{path}.approved_by")
 
 
-def _common(payload: dict[str, Any], *, contract: str, version: str, required: set[str]) -> None:
+def _common(
+    payload: dict[str, Any],
+    *,
+    contract: str,
+    version: str,
+    required: set[str],
+    optional: set[str] | None = None,
+) -> None:
     if "schema_version" not in payload:
         _fail(contract, "missing required properties: schema_version")
     if required != {"schema_version"}:
-        _keys(payload, contract=contract, required=required)
+        _keys(payload, contract=contract, required=required, optional=optional)
     if payload.get("schema_version") != version:
         _fail(contract, f"schema_version must be {version!r}")
     _id(payload.get("id", ""), contract=contract, path="id") if "id" in required else None
@@ -161,57 +196,123 @@ def _validate_layer(value: object, *, contract: str, path: str) -> None:
     _bool(item["plottable"], contract=contract, path=f"{path}.plottable")
 
 
-def _validate_expectations(value: object, *, contract: str) -> None:
+def _validate_expectation_policy(value: object, *, contract: str) -> dict[str, Any]:
+    policy = _object(value, contract=contract, path="expectation_policy")
+    _keys(
+        policy,
+        contract=contract,
+        required={"schema_version", "default_mode", "field_modes"},
+    )
+    if policy["schema_version"] != "drawing-setup-expectation-policy-1.0":
+        _fail(contract, "expectation_policy.schema_version is invalid")
+    if policy["default_mode"] != "GATING":
+        _fail(contract, "expectation_policy.default_mode must be GATING")
+    field_modes = _object(
+        policy["field_modes"],
+        contract=contract,
+        path="expectation_policy.field_modes",
+    )
+    for path, mode in field_modes.items():
+        _string(path, contract=contract, path="expectation_policy.field_modes key")
+        if path not in _EXPECTATION_POLICY_PATHS:
+            _fail(contract, f"expectation_policy.field_modes.{path} is invalid")
+        _string(mode, contract=contract, path=f"expectation_policy.field_modes.{path}")
+        if mode not in _EXPECTATION_POLICY_MODES:
+            _fail(contract, f"expectation_policy.field_modes.{path} is invalid")
+    return policy
+
+
+def _expectation_mode(policy: Mapping[str, Any] | None, path: str) -> str:
+    if policy is None:
+        return "GATING"
+    field_modes = policy["field_modes"]
+    assert isinstance(field_modes, Mapping)
+    mode = field_modes.get(path, policy["default_mode"])
+    assert isinstance(mode, str)
+    return mode
+
+
+def _observation_unresolved(policy: Mapping[str, Any] | None, path: str, value: object) -> bool:
+    return _expectation_mode(policy, path) == "OBSERVATION_ONLY" and value == "UNRESOLVED"
+
+
+def _validate_expectations(
+    value: object,
+    *,
+    contract: str,
+    policy: Mapping[str, Any] | None = None,
+) -> None:
     item = _object(value, contract=contract, path="setup_expectations")
     _keys(item, contract=contract, required=_EXPECTATION_KEYS)
     variables = _object(item["variables"], contract=contract, path="setup_expectations.variables")
     _keys(variables, contract=contract, required=_VARIABLES)
     for key in _VARIABLES:
-        _number(variables[key], contract=contract, path=f"setup_expectations.variables.{key}")
-    _string(item["current_layer"], contract=contract, path="setup_expectations.current_layer")
+        path = f"variables.{key}"
+        if not _observation_unresolved(policy, path, variables[key]):
+            _number(variables[key], contract=contract, path=f"setup_expectations.{path}")
+    if not _observation_unresolved(policy, "current_layer", item["current_layer"]):
+        _string(item["current_layer"], contract=contract, path="setup_expectations.current_layer")
     layers = item["required_layers"]
-    if not isinstance(layers, list) or not layers:
-        _fail(contract, "setup_expectations.required_layers must be non-empty")
-    for index, layer in enumerate(layers):
-        _validate_layer(layer, contract=contract, path=f"setup_expectations.required_layers[{index}]")
-    styles = _object(item["required_styles"], contract=contract, path="setup_expectations.required_styles")
-    _keys(styles, contract=contract, required={"text","dimension","mleader","table"})
-    for key in ("text","dimension","mleader","table"):
-        _strings(styles[key], contract=contract, path=f"setup_expectations.required_styles.{key}")
-    layouts = item["layouts"]
-    if not isinstance(layouts, list) or not layouts:
-        _fail(contract, "setup_expectations.layouts must be non-empty")
-    for index, layout in enumerate(layouts):
-        layout_item = _object(layout, contract=contract, path=f"setup_expectations.layouts[{index}]")
-        _keys(layout_item, contract=contract, required={"name","viewport_scales","locked"})
-        _string(layout_item["name"], contract=contract, path=f"setup_expectations.layouts[{index}].name")
-        scales = layout_item["viewport_scales"]
-        if not isinstance(scales, list) or not scales:
-            _fail(contract, f"setup_expectations.layouts[{index}].viewport_scales must be a non-empty list")
-        for scale in scales:
-            number = _number(
-                scale,
+    if not (
+        _observation_unresolved(policy, "required_layers", layers)
+        or (_expectation_mode(policy, "required_layers") == "OBSERVATION_ONLY" and layers == [])
+    ):
+        if not isinstance(layers, list) or not layers:
+            _fail(contract, "setup_expectations.required_layers must be non-empty")
+        for index, layer in enumerate(layers):
+            _validate_layer(layer, contract=contract, path=f"setup_expectations.required_layers[{index}]")
+    styles_value = item["required_styles"]
+    if not _observation_unresolved(policy, "required_styles", styles_value):
+        styles = _object(styles_value, contract=contract, path="setup_expectations.required_styles")
+        _keys(styles, contract=contract, required={"text","dimension","mleader","table"})
+        min_items = 0 if _expectation_mode(policy, "required_styles") == "OBSERVATION_ONLY" else 1
+        for key in ("text","dimension","mleader","table"):
+            _strings(
+                styles[key],
                 contract=contract,
-                path=f"setup_expectations.layouts[{index}].viewport_scales",
+                path=f"setup_expectations.required_styles.{key}",
+                min_items=min_items,
             )
-            if number <= 0:
-                _fail(contract, "viewport scales must be positive")
-        _bool(layout_item["locked"], contract=contract, path=f"setup_expectations.layouts[{index}].locked")
-    font = _object(item["font_policy"], contract=contract, path="setup_expectations.font_policy")
-    _keys(font, contract=contract, required={"selected_mode","new_drawing","legacy_compatibility"})
-    if font["selected_mode"] not in {"NEW_DRAWING","LEGACY_COMPATIBILITY"}:
-        _fail(contract, "font_policy.selected_mode is invalid")
-    new = _object(font["new_drawing"], contract=contract, path="font_policy.new_drawing")
-    _keys(new, contract=contract, required={"approved_fonts","substitution_allowed"})
-    _strings(new["approved_fonts"], contract=contract, path="font_policy.new_drawing.approved_fonts")
-    if _bool(new["substitution_allowed"], contract=contract, path="font_policy.new_drawing.substitution_allowed"):
-        _fail(contract, "new_drawing font substitution must be false")
-    legacy = _object(font["legacy_compatibility"], contract=contract, path="font_policy.legacy_compatibility")
-    _keys(legacy, contract=contract, required={"preserve_source_styles","mapping_report_required"})
-    if not _bool(legacy["preserve_source_styles"], contract=contract, path="font_policy.legacy_compatibility.preserve_source_styles"):
-        _fail(contract, "legacy compatibility must preserve source styles")
-    if not _bool(legacy["mapping_report_required"], contract=contract, path="font_policy.legacy_compatibility.mapping_report_required"):
-        _fail(contract, "legacy compatibility requires a mapping report")
+    layouts = item["layouts"]
+    if not (
+        _observation_unresolved(policy, "layouts", layouts)
+        or (_expectation_mode(policy, "layouts") == "OBSERVATION_ONLY" and layouts == [])
+    ):
+        if not isinstance(layouts, list) or not layouts:
+            _fail(contract, "setup_expectations.layouts must be non-empty")
+        for index, layout in enumerate(layouts):
+            layout_item = _object(layout, contract=contract, path=f"setup_expectations.layouts[{index}]")
+            _keys(layout_item, contract=contract, required={"name","viewport_scales","locked"})
+            _string(layout_item["name"], contract=contract, path=f"setup_expectations.layouts[{index}].name")
+            scales = layout_item["viewport_scales"]
+            if not isinstance(scales, list) or not scales:
+                _fail(contract, f"setup_expectations.layouts[{index}].viewport_scales must be a non-empty list")
+            for scale in scales:
+                number = _number(
+                    scale,
+                    contract=contract,
+                    path=f"setup_expectations.layouts[{index}].viewport_scales",
+                )
+                if number <= 0:
+                    _fail(contract, "viewport scales must be positive")
+            _bool(layout_item["locked"], contract=contract, path=f"setup_expectations.layouts[{index}].locked")
+    font_value = item["font_policy"]
+    if not _observation_unresolved(policy, "font_policy", font_value):
+        font = _object(font_value, contract=contract, path="setup_expectations.font_policy")
+        _keys(font, contract=contract, required={"selected_mode","new_drawing","legacy_compatibility"})
+        if font["selected_mode"] not in {"NEW_DRAWING","LEGACY_COMPATIBILITY"}:
+            _fail(contract, "font_policy.selected_mode is invalid")
+        new = _object(font["new_drawing"], contract=contract, path="font_policy.new_drawing")
+        _keys(new, contract=contract, required={"approved_fonts","substitution_allowed"})
+        _strings(new["approved_fonts"], contract=contract, path="font_policy.new_drawing.approved_fonts")
+        if _bool(new["substitution_allowed"], contract=contract, path="font_policy.new_drawing.substitution_allowed"):
+            _fail(contract, "new_drawing font substitution must be false")
+        legacy = _object(font["legacy_compatibility"], contract=contract, path="font_policy.legacy_compatibility")
+        _keys(legacy, contract=contract, required={"preserve_source_styles","mapping_report_required"})
+        if not _bool(legacy["preserve_source_styles"], contract=contract, path="font_policy.legacy_compatibility.preserve_source_styles"):
+            _fail(contract, "legacy compatibility must preserve source styles")
+        if not _bool(legacy["mapping_report_required"], contract=contract, path="font_policy.legacy_compatibility.mapping_report_required"):
+            _fail(contract, "legacy compatibility requires a mapping report")
 
 
 def _validate_profile(payload: dict[str, Any]) -> None:
@@ -262,7 +363,13 @@ def _validate_ref(value: object, *, contract: str, path: str, fields: set[str]) 
 def _validate_setup_plan(payload: dict[str, Any]) -> None:
     contract = "drawing_setup_plan"
     required = {"schema_version","run_id","state","definition","drawing_profile","domain_pack","template","setup_expectations"}
-    _common(payload, contract=contract, version="drawing-setup-plan-1.0", required=required)
+    _common(
+        payload,
+        contract=contract,
+        version="drawing-setup-plan-1.0",
+        required=required,
+        optional={"expectation_policy"},
+    )
     _id(payload["run_id"], contract=contract, path="run_id")
     if payload["state"] != "SETUP_PENDING":
         _fail(contract, "state must be SETUP_PENDING")
@@ -270,7 +377,12 @@ def _validate_setup_plan(payload: dict[str, Any]) -> None:
     _validate_ref(payload["drawing_profile"], contract=contract, path="drawing_profile", fields={"id","revision","sha256"})
     _validate_ref(payload["domain_pack"], contract=contract, path="domain_pack", fields={"id","revision","sha256"})
     _validate_ref(payload["template"], contract=contract, path="template", fields={"id","revision","file_sha256","embedded_settings_sha256"})
-    _validate_expectations(payload["setup_expectations"], contract=contract)
+    policy = (
+        _validate_expectation_policy(payload["expectation_policy"], contract=contract)
+        if "expectation_policy" in payload
+        else None
+    )
+    _validate_expectations(payload["setup_expectations"], contract=contract, policy=policy)
 
 
 def _validate_audit_entry(value: object, *, contract: str, path: str) -> None:
@@ -345,11 +457,24 @@ def _validate_blocker(value: object, *, contract: str, path: str) -> None:
     _assert_finite_json(item["actual"], path=f"{path}.actual")
 
 
+def _validate_observation_record(value: object, *, contract: str, path: str) -> None:
+    item = _object(value, contract=contract, path=path)
+    _keys(item, contract=contract, required={"path", "observed_value", "comparison", "conformance"})
+    _string(item["path"], contract=contract, path=f"{path}.path")
+    if not isinstance(item["observed_value"], (str, int, float, bool, type(None), list, dict)):
+        _fail(contract, f"{path}.observed_value must be JSON-compatible")
+    _assert_finite_json(item["observed_value"], path=f"{path}.observed_value")
+    if item["comparison"] != "NOT_EVALUATED":
+        _fail(contract, f"{path}.comparison must be NOT_EVALUATED")
+    if item["conformance"] != "NOT_ASSERTED":
+        _fail(contract, f"{path}.conformance must be NOT_ASSERTED")
+
+
 def _validate_evidence(payload: dict[str, Any]) -> None:
     contract = "drawing_setup_evidence"
     required = {"schema_version","status","run_id","setup_plan_sha256","audit_sha256","drawing_profile_sha256","template_file_sha256","blockers","verified_by","approval_reference"}
     _common(payload, contract=contract, version="drawing-setup-evidence-1.0", required={"schema_version"})
-    _keys(payload, contract=contract, required=required)
+    _keys(payload, contract=contract, required=required, optional=_EVIDENCE_POLICY_KEYS)
     if payload["status"] not in {"SETUP_VERIFIED","NEEDS_REVIEW"}:
         _fail(contract, "status must be SETUP_VERIFIED or NEEDS_REVIEW")
     _id(payload["run_id"], contract=contract, path="run_id")
@@ -364,6 +489,30 @@ def _validate_evidence(payload: dict[str, Any]) -> None:
         _fail(contract, "SETUP_VERIFIED evidence cannot contain blockers")
     _string(payload["verified_by"], contract=contract, path="verified_by")
     _string(payload["approval_reference"], contract=contract, path="approval_reference")
+    if "expectation_policy_sha256" in payload:
+        _sha(payload["expectation_policy_sha256"], contract=contract, path="expectation_policy_sha256")
+    if "verification_scope" in payload:
+        _string(payload["verification_scope"], contract=contract, path="verification_scope")
+        if payload["verification_scope"] not in {"GATING_ONLY", "NO_CONFORMANCE_ASSERTION"}:
+            _fail(contract, "verification_scope is invalid")
+    if "verification_reason" in payload:
+        _string(payload["verification_reason"], contract=contract, path="verification_reason")
+    for key in (
+        "gating_paths",
+        "evaluated_gating_paths",
+        "observation_only_paths",
+        "unresolved_paths",
+    ):
+        if key in payload:
+            _strings(payload[key], contract=contract, path=key, min_items=0)
+    if "observation_records" in payload:
+        records = payload["observation_records"]
+        if not isinstance(records, list):
+            _fail(contract, "observation_records must be a list")
+        for index, record in enumerate(records):
+            _validate_observation_record(record, contract=contract, path=f"observation_records[{index}]")
+    if "conformance_assertion" in payload:
+        _bool(payload["conformance_assertion"], contract=contract, path="conformance_assertion")
 
 
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
