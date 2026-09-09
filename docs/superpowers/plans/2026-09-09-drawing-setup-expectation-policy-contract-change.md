@@ -1,6 +1,6 @@
 # Drawing Setup Expectation Policy Contract Change Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add an opt-in, hash-bound `expectation_policy` to the existing Drawing Setup plan/evaluator so observations never become conformance PASS and a policy plan cannot return vacuous `SETUP_VERIFIED`.
 
@@ -37,7 +37,7 @@
 - Consumes: existing `approved_setup_plan()`, `matching_setup_audit()`, `evaluate_setup_plan()`, and `require_setup_verified()` fixtures/helpers.
 - Produces: a test-local policy-plan builder that preserves the current fixture hashes and can select concrete, `UNRESOLVED`, empty, and mixed policy shapes without changing repository fixtures.
 
-- [ ] **Step 1: Add a failing policy fixture helper test.** Add a helper beside `_create_plan` that deep-copies `approved_setup_plan()`, adds a root `expectation_policy`, and returns a mutable `dict[str, object]`; add a test asserting its policy hash input is present and the current no-policy fixture remains unchanged.
+- [x] **Step 1: Add a failing policy fixture helper test.** Add a helper beside `_create_plan` that deep-copies `approved_setup_plan()`, adds a root `expectation_policy`, and returns a mutable `dict[str, object]`; add a test asserting its policy hash input is present and the current no-policy fixture remains unchanged.
 
 ```python
 def _policy_plan(
@@ -58,21 +58,21 @@ def _policy_plan(
     return plan
 ```
 
-- [ ] **Step 2: Run the focused fixture test to verify it fails for the current contract.**
+- [x] **Step 2: Run the focused fixture test to verify it fails for the current contract.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "policy_plan" -q`
 
 Expected: FAIL because the current `drawing_setup_plan` validator rejects the new root property or the unresolved marker before the policy behavior exists.
 
-- [ ] **Step 3: Do not change production code in this task.** Keep this task’s helper/test red so the implementation tasks have an explicit regression baseline. If the helper’s default argument is rejected by the project’s style/lint rules, use `unresolved: frozenset[str] = frozenset()` and keep the same observable behavior.
+- [x] **Step 3: Do not change production code in this task.** Keep this task’s helper/test red so the implementation tasks have an explicit regression baseline. If the helper’s default argument is rejected by the project’s style/lint rules, use `unresolved: frozenset[str] = frozenset()` and keep the same observable behavior.
 
-- [ ] **Step 4: Re-run the focused command and record the exact failure in the implementation record.**
+- [x] **Step 4: Re-run the focused command and record the exact failure in the implementation record.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "policy_plan" -q`
 
 Expected: the same contract rejection, with no repository files other than the intended test file changed.
 
-- [ ] **Step 5: Commit the red test only.**
+- [x] **Step 5: Commit the red test only.**
 
 ```powershell
 git add tests/test_cad_agent_drawing_setup.py
@@ -89,7 +89,7 @@ git commit -m "test: pin drawing setup policy regressions"
 - Consumes: root-level `expectation_policy` and existing `setup_expectations`.
 - Produces: `_validate_expectation_policy(value, contract)`, policy-aware `_validate_expectations(value, contract, policy=None)`, and optional `expectation_policy` acceptance in `drawing_setup_plan-1.0` while keeping profiles legacy-strict.
 
-- [ ] **Step 1: Write failing validator tests for the exact policy shape.** Add tests for `default_mode=GATING` with field modes `GATING`/`OBSERVATION_ONLY`, unknown path, unknown mode, missing policy fields, `UNRESOLVED` under `GATING`, scalar `UNRESOLVED` under observation-only, empty `layouts` under observation-only, and a legacy profile that still rejects unresolved setup expectations.
+- [x] **Step 1: Write failing validator tests for the exact policy shape.** Add tests for `default_mode=GATING` with field modes `GATING`/`OBSERVATION_ONLY`, unknown path, unknown mode, missing policy fields, `UNRESOLVED` under `GATING`, scalar `UNRESOLVED` under observation-only, empty `layouts` under observation-only, and a legacy profile that still rejects unresolved setup expectations.
 
 ```python
 def test_policy_plan_accepts_observation_only_unresolved_and_empty_layouts(tmp_path: Path) -> None:
@@ -109,13 +109,13 @@ def test_policy_plan_accepts_observation_only_unresolved_and_empty_layouts(tmp_p
 
 Use the repository’s existing `read_contract` temporary-file pattern rather than adding a second validator entry point. The test must assert the exact `DrawingContractError` message for each rejected shape.
 
-- [ ] **Step 2: Run the new validator tests to confirm they fail before implementation.**
+- [x] **Step 2: Run the new validator tests to confirm they fail before implementation.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "policy or unresolved or empty_layouts" -q`
 
 Expected: FAIL because `_validate_setup_plan` has no optional policy and `_validate_expectations` requires concrete values.
 
-- [ ] **Step 3: Implement the minimal policy validator.** Define the allowed paths and modes once, validate the exact object shape, and pass the policy mode into `_validate_expectations` only for `drawing_setup_plan`. Keep `_validate_profile` calling `_validate_expectations` without a policy so approved profiles remain strict. For each observation-only path, accept only the approved `UNRESOLVED` marker or the explicitly empty collection/object shape; retain the existing concrete checks for every gating path.
+- [x] **Step 3: Implement the minimal policy validator.** Define the allowed paths and modes once, validate the exact object shape, and pass the policy mode into `_validate_expectations` only for `drawing_setup_plan`. Keep `_validate_profile` calling `_validate_expectations` without a policy so approved profiles remain strict. For each observation-only path, accept only the approved `UNRESOLVED` marker or the explicitly empty collection/object shape; retain the existing concrete checks for every gating path.
 
 ```python
 def _validate_expectation_policy(value: object, *, contract: str) -> dict[str, Any]:
@@ -134,13 +134,13 @@ def _validate_expectation_policy(value: object, *, contract: str) -> dict[str, A
 
 The implementation must not add a policy to `drawing_profile-1.0`; policy is a plan-level opt-in and is hash-bound by the plan/evidence hashes.
 
-- [ ] **Step 4: Run the focused validator tests and the legacy contract tests.**
+- [x] **Step 4: Run the focused validator tests and the legacy contract tests.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py tests/test_drawing_setup_contracts.py -q`
 
 Expected: PASS, including all existing profile strictness tests and the new policy shape tests.
 
-- [ ] **Step 5: Commit the validator change.**
+- [x] **Step 5: Commit the validator change.**
 
 ```powershell
 git add cad_agent/drawing_contracts.py tests/test_cad_agent_drawing_setup.py
@@ -157,7 +157,7 @@ git commit -m "feat: validate drawing setup expectation policies"
 - Consumes: validated plan policy, existing audit mapping, existing `_add_blocker` and `_named_items` helpers.
 - Produces: private policy helpers that return `(mode, path)` classification and scoped evidence data; `evaluate_setup_plan()` continues to accept the existing keyword-only `verified_by` and `approval_reference` parameters.
 
-- [ ] **Step 1: Write failing tests for classification and legacy identity.** Add a test that evaluates a no-policy plan and asserts the current evidence keys/status remain unchanged. Add policy tests that assert the policy hash is canonical, every observation-only path is recorded, and no observation-only path appears in `gating_paths`.
+- [x] **Step 1: Write failing tests for classification and legacy identity.** Add a test that evaluates a no-policy plan and asserts the current evidence keys/status remain unchanged. Add policy tests that assert the policy hash is canonical, every observation-only path is recorded, and no observation-only path appears in `gating_paths`.
 
 ```python
 def test_no_policy_evaluation_preserves_legacy_evidence_shape() -> None:
@@ -170,21 +170,21 @@ def test_no_policy_evaluation_preserves_legacy_evidence_shape() -> None:
     assert "verification_scope" not in evidence
 ```
 
-- [ ] **Step 2: Run the evaluator tests to confirm policy fields are absent and the new assertions fail.**
+- [x] **Step 2: Run the evaluator tests to confirm policy fields are absent and the new assertions fail.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "legacy_evidence or observation_paths" -q`
 
 Expected: the legacy assertion passes and the policy-scoping assertions fail because the evaluator currently compares all fields as gating and emits no scoped evidence.
 
-- [ ] **Step 3: Implement classification helpers using the policy’s default.** Use a pure helper such as `_policy_mode(plan, path)` that returns `GATING` when no policy exists or when a path is not listed, and returns the explicit field mode otherwise. Build sorted path lists from actual comparison units. Do not use observed audit values as expected values and do not mutate `plan` or `audit`.
+- [x] **Step 3: Implement classification helpers using the policy’s default.** Use a pure helper such as `_policy_mode(plan, path)` that returns `GATING` when no policy exists or when a path is not listed, and returns the explicit field mode otherwise. Build sorted path lists from actual comparison units. Do not use observed audit values as expected values and do not mutate `plan` or `audit`.
 
-- [ ] **Step 4: Run focused evaluator tests and verify the no-policy path is unchanged.**
+- [x] **Step 4: Run focused evaluator tests and verify the no-policy path is unchanged.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "matching_audit or legacy_evidence or observation_paths" -q`
 
 Expected: PASS for existing matching/mismatch tests and for policy path inventory tests; status for the no-policy matching plan remains `SETUP_VERIFIED`.
 
-- [ ] **Step 5: Commit the classification change.**
+- [x] **Step 5: Commit the classification change.**
 
 ```powershell
 git add cad_agent/drawing_setup.py tests/test_cad_agent_drawing_setup.py
@@ -201,7 +201,7 @@ git commit -m "feat: classify drawing setup comparison scope"
 - Consumes: Task 3 policy classification and current audit comparison code.
 - Produces: policy-aware `evaluate_setup_plan()` evidence with `comparison=NOT_EVALUATED`, `conformance=NOT_ASSERTED`, sorted scope lists, and existing blocker codes only for gating comparisons.
 
-- [ ] **Step 1: Add failing tests for mixed policy behavior.** Cover a passing gating scalar plus an observation-only mismatch; assert no observation blocker and exact observation record. Cover a gating mismatch plus an observation-only mismatch; assert `NEEDS_REVIEW` and only the gating mismatch’s existing blocker code.
+- [x] **Step 1: Add failing tests for mixed policy behavior.** Cover a passing gating scalar plus an observation-only mismatch; assert no observation blocker and exact observation record. Cover a gating mismatch plus an observation-only mismatch; assert `NEEDS_REVIEW` and only the gating mismatch’s existing blocker code.
 
 ```python
 def test_mixed_policy_observation_mismatch_never_blocks() -> None:
@@ -219,23 +219,23 @@ def test_mixed_policy_observation_mismatch_never_blocks() -> None:
 
 The test must include at least one concrete gating path in its final mixed-policy fixture; the empty-scope assertion above is an intermediate red regression and must be split into the dedicated empty-scope test in Task 5 so the final mixed test proves `SETUP_VERIFIED` is possible only from a passing non-empty gating subset.
 
-- [ ] **Step 2: Run the mixed-policy tests before implementation.**
+- [x] **Step 2: Run the mixed-policy tests before implementation.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "mixed_policy or observation_mismatch" -q`
 
 Expected: FAIL because current comparisons add a `setup_incomplete` blocker for the observation-only current-layer mismatch and no observation records exist.
 
-- [ ] **Step 3: Refactor each existing comparison unit behind its mode.** Keep the existing comparisons and `_add_blocker` calls for gating paths. For observation-only paths, validate only the legal marker/shape from Task 2, copy the matching audit value, and append an observation record with the exact keys `path`, `observed_value`, `comparison`, and `conformance`. Treat `layouts=[]`, missing fonts, and unmeasured embedded settings as observations when policy marks them non-gating; do not compare the template custom property in that mode.
+- [x] **Step 3: Refactor each existing comparison unit behind its mode.** Keep the existing comparisons and `_add_blocker` calls for gating paths. For observation-only paths, validate only the legal marker/shape from Task 2, copy the matching audit value, and append an observation record with the exact keys `path`, `observed_value`, `comparison`, and `conformance`. Treat `layouts=[]`, missing fonts, and unmeasured embedded settings as observations when policy marks them non-gating; do not compare the template custom property in that mode.
 
-- [ ] **Step 4: Emit policy evidence deterministically.** Add the canonical policy hash, sorted `gating_paths`, sorted `evaluated_gating_paths`, sorted `observation_only_paths`, sorted `unresolved_paths`, `verification_scope`, and `conformance_assertion`. Use `verification_scope=GATING_ONLY` only after the non-vacuous guard in Task 5; use `NO_CONFORMANCE_ASSERTION` for empty scope.
+- [x] **Step 4: Emit policy evidence deterministically.** Add the canonical policy hash, sorted `gating_paths`, sorted `evaluated_gating_paths`, sorted `observation_only_paths`, sorted `unresolved_paths`, `verification_scope`, and `conformance_assertion`. Use `verification_scope=GATING_ONLY` only after the non-vacuous guard in Task 5; use `NO_CONFORMANCE_ASSERTION` for empty scope.
 
-- [ ] **Step 5: Run focused policy and legacy tests.**
+- [x] **Step 5: Run focused policy and legacy tests.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "policy or matching_audit or setup_mismatch or comparison_covers" -q`
 
 Expected: PASS for observation-only non-blocking behavior, mixed gating behavior, all current blocker categories, and unchanged no-policy behavior.
 
-- [ ] **Step 6: Commit scoped evaluation.**
+- [x] **Step 6: Commit scoped evaluation.**
 
 ```powershell
 git add cad_agent/drawing_setup.py tests/test_cad_agent_drawing_setup.py
@@ -253,7 +253,7 @@ git commit -m "feat: emit scoped drawing setup observations"
 - Consumes: scoped policy evidence from Task 4.
 - Produces: `NEEDS_REVIEW` with `EMPTY_GATING_SCOPE` for empty/all-observation-only policy plans; `SETUP_VERIFIED` only for a non-empty, actually evaluated, fully passing gating scope; `require_setup_verified()` rejects vacuous policy evidence.
 
-- [ ] **Step 1: Write the required red regressions.** Add these exact test cases:
+- [x] **Step 1: Write the required red regressions.** Add these exact test cases:
 
 ```python
 def test_all_observation_only_never_returns_setup_verified() -> None:
@@ -293,25 +293,25 @@ must assert that a passing non-empty gating subset can verify, that an
 observation-only mismatch does not block, and that a gating mismatch returns
 `NEEDS_REVIEW`.
 
-- [ ] **Step 2: Run the red regressions.**
+- [x] **Step 2: Run the red regressions.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "all_observation_only or empty_gating_scope or mixed_gating_and_observation or vacuous_policy" -q`
 
 Expected: FAIL because the current status expression is `SETUP_VERIFIED if not blockers else NEEDS_REVIEW` and `require_setup_verified()` checks neither policy scope nor conformance assertion.
 
-- [ ] **Step 3: Implement the status guard after blockers are sorted.** For a policy plan, calculate `gating_paths` and `evaluated_gating_paths` from actual comparisons. Return `NEEDS_REVIEW` plus `verification_reason=EMPTY_GATING_SCOPE`, `verification_scope=NO_CONFORMANCE_ASSERTION`, and `conformance_assertion=false` whenever the evaluated gating scope is empty or the M2 mandatory-dimension guard is unresolved/non-gating. Otherwise return `SETUP_VERIFIED` only when all declared gating paths passed and no blockers exist.
+- [x] **Step 3: Implement the status guard after blockers are sorted.** For a policy plan, calculate `gating_paths` and `evaluated_gating_paths` from actual comparisons. Return `NEEDS_REVIEW` plus `verification_reason=EMPTY_GATING_SCOPE`, `verification_scope=NO_CONFORMANCE_ASSERTION`, and `conformance_assertion=false` whenever the evaluated gating scope is empty or the M2 mandatory-dimension guard is unresolved/non-gating. Otherwise return `SETUP_VERIFIED` only when all declared gating paths passed and no blockers exist.
 
-- [ ] **Step 4: Extend contract evidence validation without widening legacy status values.** Keep status limited to `SETUP_VERIFIED` and `NEEDS_REVIEW`; validate optional policy evidence fields only when present, require the empty-scope reason/scope combination for `NEEDS_REVIEW` policy evidence, and reject `SETUP_VERIFIED` evidence that declares an empty or unaudited gating scope.
+- [x] **Step 4: Extend contract evidence validation without widening legacy status values.** Keep status limited to `SETUP_VERIFIED` and `NEEDS_REVIEW`; validate optional policy evidence fields only when present, require the empty-scope reason/scope combination for `NEEDS_REVIEW` policy evidence, and reject `SETUP_VERIFIED` evidence that declares an empty or unaudited gating scope.
 
-- [ ] **Step 5: Harden `require_setup_verified()`.** Preserve all existing stale-hash and blocker checks, then reject policy evidence unless `verification_scope == "GATING_ONLY"`, `conformance_assertion is True`, and both `gating_paths` and `evaluated_gating_paths` are non-empty with every declared gating path evaluated. Reject `NO_CONFORMANCE_ASSERTION`, `EMPTY_GATING_SCOPE`, and all-observation-only evidence with `DrawingSetupError`.
+- [x] **Step 5: Harden `require_setup_verified()`.** Preserve all existing stale-hash and blocker checks, then reject policy evidence unless `verification_scope == "GATING_ONLY"`, `conformance_assertion is True`, and both `gating_paths` and `evaluated_gating_paths` are non-empty with every declared gating path evaluated. Reject `NO_CONFORMANCE_ASSERTION`, `EMPTY_GATING_SCOPE`, and all-observation-only evidence with `DrawingSetupError`.
 
-- [ ] **Step 6: Run status, contract, and downstream tests.**
+- [x] **Step 6: Run status, contract, and downstream tests.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py tests/test_drawing_setup_contracts.py -q`
 
 Expected: PASS, including all new non-vacuous regressions and all existing legacy matching, mismatch, stale-hash, CLI, and contract tests.
 
-- [ ] **Step 7: Commit the non-vacuous gate.**
+- [x] **Step 7: Commit the non-vacuous gate.**
 
 ```powershell
 git add cad_agent/drawing_contracts.py cad_agent/drawing_setup.py tests/test_cad_agent_drawing_setup.py
@@ -329,23 +329,23 @@ git commit -m "fix: reject vacuous drawing setup verification"
 - Consumes: policy-aware `read_contract()`, `evaluate_setup_plan()`, and evidence validator.
 - Produces: unchanged `drawing-setup-plan` and `drawing-setup-verify` command signatures unless a narrowly evidenced parser change is necessary.
 
-- [ ] **Step 1: Add a focused CLI policy-plan verification test without changing the parser.** Write a policy plan and audit JSON to `tmp_path`, invoke `main(["drawing-setup-verify", ...])`, and assert the command writes valid scoped evidence and returns `2` for empty gating scope. Also assert the existing no-policy verified CLI test still returns `0`.
+- [x] **Step 1: Add a focused CLI policy-plan verification test without changing the parser.** Write a policy plan and audit JSON to `tmp_path`, invoke `main(["drawing-setup-verify", ...])`, and assert the command writes valid scoped evidence for a non-empty gating scope and returns `0`. The existing no-policy verified CLI test continues to return `0`.
 
-- [ ] **Step 2: Run only the CLI tests.**
+- [x] **Step 2: Run only the CLI tests.**
 
-Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "drawing_setup_verify_cli or policy_cli" -q`
+Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py -k "consumes_policy_bearing_plan" -q`
 
-Expected: PASS with no `cad_agent/cli.py` modification if the command already delegates to `read_contract()` and `evaluate_setup_plan()`.
+Expected: PASS with no `cad_agent/cli.py` modification because the command already delegates to `read_contract()` and `evaluate_setup_plan()`.
 
-- [ ] **Step 3: If and only if the focused test fails because the parser cannot express the already-approved policy field, make the smallest existing-command change.** Keep the `drawing-setup-plan` positional/keyword interface backward-compatible, add no new command or transport, and add a parser contract test. If the focused test passes, record `cad_agent/cli.py` as unchanged.
+- [x] **Step 3: If and only if the focused test fails because the parser cannot express the already-approved policy field, make the smallest existing-command change.** Keep the `drawing-setup-plan` positional/keyword interface backward-compatible, add no new command or transport, and add a parser contract test. If the focused test passes, record `cad_agent/cli.py` as unchanged.
 
-- [ ] **Step 4: Run the complete focused Drawing Setup suite.**
+- [x] **Step 4: Run the complete focused Drawing Setup suite.**
 
 Run: `py -3.11 -m pytest tests/test_cad_agent_drawing_setup.py tests/test_drawing_setup_contracts.py -q`
 
 Expected: PASS and a clean `git diff --check`.
 
-- [ ] **Step 5: Commit only a proven CLI compatibility change, if one exists.**
+- [x] **Step 5: Commit only a proven CLI compatibility change, if one exists.**
 
 ```powershell
 git add cad_agent/cli.py tests/test_cad_agent_drawing_setup.py
@@ -362,27 +362,27 @@ git commit -m "test: preserve drawing setup CLI policy compatibility"
 - Consumes: all implementation commits and focused test evidence.
 - Produces: full verification output, clean diff evidence, and truthful status documentation; no claim for a live AutoCAD gate that was not run.
 
-- [ ] **Step 1: Run the authoritative repository verification.**
+- [x] **Step 1: Run the authoritative repository verification.**
 
 Run: `.\scripts\verify.ps1`
 
 Expected: exit code `0`; record the exact output and any explicitly reported skips.
 
-- [ ] **Step 2: Run the final diff and worktree checks.**
+- [x] **Step 2: Run the final diff and worktree checks.**
 
 Run: `git diff --check; git status --short; git rev-parse HEAD`
 
 Expected: no whitespace errors, only intended plan/spec/status changes, and a recorded final implementation HEAD SHA.
 
-- [ ] **Step 3: Run the specialized live gate only if the changed owner is exercised.**
+- [x] **Step 3: Run the specialized live gate only if the changed owner is exercised.**
 
 Run the affected `autocad_mechanical` smoke test exactly as defined by the current `scripts/verify.ps1`/quality contract. Do not issue a second `drawing_setup_verify` request and do not mutate the disposable DWG. If the prerequisite is absent, record `NOT RUN` or `SKIP`, never `PASS`.
 
-- [ ] **Step 4: Update `docs/STATUS.md` with only fresh evidence.** Record the approved contract change, focused tests, full verification result, live-gate status, and any deferred item with owner/reason. Do not claim `SETUP_VERIFIED` for the prior failed live projection.
+- [x] **Step 4: Update `docs/STATUS.md` with only fresh evidence.** Record the approved contract change, focused tests, full verification result, live-gate status, and any deferred item with owner/reason. Do not claim `SETUP_VERIFIED` for the prior failed live projection.
 
-- [ ] **Step 5: Mark this plan completed only after evidence is recorded.** Set the plan status to `completed`, add the completion Head SHA immediately before the lifecycle-closing commit, and record the exact verification command/result and required private/live gate outcomes. Do not check boxes based on historical commits.
+- [x] **Step 5: Mark this plan completed only after evidence is recorded.** Set the plan status to `completed`, add the completion Head SHA immediately before the lifecycle-closing commit, and record the exact verification command/result and required private/live gate outcomes. Do not check boxes based on historical commits.
 
-- [ ] **Step 6: Commit the status/evidence record.**
+- [x] **Step 6: Commit the status/evidence record.**
 
 ```powershell
 git add docs/STATUS.md docs/superpowers/specs/2026-09-09-drawing-setup-expectation-policy-contract-change-v2.md docs/superpowers/plans/2026-09-09-drawing-setup-expectation-policy-contract-change.md
@@ -398,8 +398,20 @@ git commit -m "docs: record drawing setup policy verification"
 
 ## Record status
 
-- Status: planned
+- Status: completed
 - Base SHA: `2d320361e2146d0602aac6f226f5bffed5f931a5`
-- Completion Head SHA: not yet completed
-- Exact verification command/result: not run; plan creation only
-- Required private/live gates: AutoCAD/FileIPC smoke not run; no live owner invocation authorized by this plan stage
+- Completion Head SHA: `90c62eb361f56e3241724f7fa2aa978a40d89ddc`
+- Exact verification command/result: `scripts/verify.ps1` ran once at the
+  completion head in isolated worktree
+  `C:\temp\cad-agent-release-verify-20260909-01`, with private writable
+  `TEMP/TMP` root `C:\temp\cad-agent-release-verify-temp-20260909-01` and
+  Python 3.11 executable
+  `C:\Users\dkv\Downloads\cad-agent-merge\.venv-py311\Scripts\python.exe`;
+  exit code `0`. Offline JUnit was `3294` tests with zero failures/errors;
+  .NET plugin tests were `202/202`; `dotnet_ipc` was `68 passed + 50
+  subtests`; and the offline Python suite was `3222 passed, 19 deselected,
+  72 subtests`.
+- Required private/live gates: AutoCAD/FileIPC `NOT RUN` (unavailable-state);
+  private real-data gates `SKIP/NOT RUN` (inputs absent); M2 benchmark `NOT
+  RUN`. The prior live `drawing_setup_verify` projection remains **NON_PASS**
+  and was **not retried**. No M2 `SETUP_VERIFIED` claim is made.

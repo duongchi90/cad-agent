@@ -16,12 +16,12 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-## Current canonical snapshot (2026-09-08)
+## Current canonical snapshot (2026-09-09)
 
-- Fresh GitHub `main` is `8bc63e6886b6099aad2eee042050a8745bfac8df`, the merge
-  commit for PR #410. PR #410 is `MERGED` at exact head
-  `db6f78d0287f951398794d498eb9398e91ab8317`; local verification was performed
-  against the same `main` base.
+- Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
+  The drawing-setup expectation-policy candidate is on local branch
+  `codex/drawing-setup-expectation-policy-20260909` at implementation head
+  `90c62eb361f56e3241724f7fa2aa978a40d89ddc`; it is not pushed and has no PR.
 - REAL IMAGE/PDF P1 live Mechanical review is **Verified** for the private
   nine-page PDF identified by SHA-256
   `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
@@ -57,6 +57,35 @@
   credential use is included here.
 - Older sections below remain historical evidence and do not override this
   snapshot. Current GitHub state and exact-head evidence remain canonical.
+
+## Drawing Setup expectation-policy candidate (2026-09-09)
+
+- The approved contract proposal is bound to SHA-256
+  `17ee02ea89d6fadce5148b730a8f62d302b032a29431cba6a3a33847b4e0da6d`.
+  Implementation head is `90c62eb361f56e3241724f7fa2aa978a40d89ddc` on the
+  local branch above; the CLI compatibility proof confirmed that
+  `cad_agent/cli.py` required no change.
+- Focused Drawing Setup regression/contracts passed: `98 passed`.
+  The policy-bearing `drawing-setup-verify` CLI proof passed and emitted valid
+  scoped evidence; the CLI proof commit is included in the implementation head.
+- The authoritative `scripts/verify.ps1` run passed with exit code `0` in
+  isolated worktree `C:\temp\cad-agent-release-verify-20260909-01`, using a
+  private writable `TEMP/TMP` root
+  `C:\temp\cad-agent-release-verify-temp-20260909-01`. It recorded .NET
+  plugin tests `202/202`, `dotnet_ipc` `68 passed + 50 subtests`, offline
+  Python `3222 passed, 19 deselected, 72 subtests`, and JUnit totals
+  `3294` with zero failures/errors. The expected causal RED oracle was handled
+  by the verifier; it is not a product-test failure.
+- This is **Partially verified**: deterministic contract/evaluator/CLI and
+  authoritative offline gates passed, while live AutoCAD/FileIPC and private
+  real-data gates were `NOT RUN`/`SKIP`. The prior live
+  `drawing_setup_verify` projection remains **NON_PASS** and was **not
+  retried**. No M2 `SETUP_VERIFIED` claim is made, and no source drawing was
+  saved or mutated.
+- AutoCAD PID `12012` remained running because the Computer Use surface did
+  not expose the disposable session; no force termination, drawing save, or
+  CAD mutation was performed. M2 and private real-data acceptance remain
+  deferred with their existing owners/reasons.
 
 ## Historical provider-independent hardening ledger (through 2026-09-02)
 

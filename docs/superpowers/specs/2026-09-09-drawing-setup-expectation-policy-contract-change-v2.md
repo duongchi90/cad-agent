@@ -2,12 +2,14 @@
 
 ## Record status
 
-- Status: approved design; implementation not started
+- Status: implemented; offline release verification passed; live/private gates not run
 - Approval date: 2026-09-09
 - Supported scope: the M2 drawing-initialization `SETUP_VERIFIED` boundary only
 - Base repository SHA: `2d320361e2146d0602aac6f226f5bffed5f931a5`
 - SOL technical-clear evidence: [issue comment 5601271257](https://github.com/duongchi90/cad-agent/issues/412#issuecomment-5601271257)
 - Human approval evidence: [issue comment 5601313049](https://github.com/duongchi90/cad-agent/issues/412#issuecomment-5601313049)
+- Implementation branch: `codex/drawing-setup-expectation-policy-20260909`
+- Implementation head: `90c62eb361f56e3241724f7fa2aa978a40d89ddc`
 
 ## Exact approval binding
 
@@ -158,6 +160,28 @@ blocker vocabulary.
   changes and their tests; no drawing or external application state is
   changed.
 - No migration of existing plans is required; old plans remain valid.
+
+## Implementation and verification record
+
+- The staged implementation commits are `da8da424`, `997e17c`, `ef36667`,
+  `7881bfc`, `b960965`, `db73b711`, and `90c62eb`. The final commit adds the
+  CLI compatibility proof test; `cad_agent/cli.py` is unchanged.
+- Focused Drawing Setup regression/contracts passed: `98 passed`. The focused
+  CLI policy-bearing plan proof passed and emitted `SETUP_VERIFIED` evidence
+  with a non-empty gating scope.
+- The exact final verification command was run once in isolated worktree
+  `C:\temp\cad-agent-release-verify-20260909-01` at implementation head
+  `90c62eb361f56e3241724f7fa2aa978a40d89ddc`, with `TEMP` and `TMP` set to
+  `C:\temp\cad-agent-release-verify-temp-20260909-01` and the verified Python
+  3.11 executable. `scripts/verify.ps1` exited `0`: .NET plugin tests
+  `202/202`, `dotnet_ipc` `68 passed + 50 subtests`, offline Python
+  `3222 passed, 19 deselected, 72 subtests`, and offline JUnit
+  `3294` with zero failures/errors. The expected causal RED oracle was
+  handled by the verifier.
+- AutoCAD live/FileIPC and private real-data gates were `NOT RUN`/`SKIP` under
+  the approved bounded scope. The prior live `drawing_setup_verify` result
+  remains **NON_PASS** and was **not retried**. No M2 `SETUP_VERIFIED` claim,
+  drawing save, or production drawing mutation is made.
 
 ## Required acceptance evidence
 
