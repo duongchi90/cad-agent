@@ -564,10 +564,103 @@ và đã PASS trên AutoCAD thật.
 
 ## 2026-07-30 — Final Release Candidate (dae1f2c)
 
-Toàn bộ công việc từ ứng viên ban đầu d31087 đến HEAD hiện tại dae1f2c đã hoàn tất. Các thay đổi bao gồm:
+Toàn bộ công việc từ ứng viên ban đầu \bd31087 đến HEAD hiện tại dae1f2c đã hoàn tất. Các thay đổi bao gồm:
 - Tái dựng trung thực fidelity (dimensions, linetypes, hatches) với cơ chế kiểm duyệt (approval gates).
 - Sửa các lỗi provenance, ID hợp lệ, và live dimensions measurement.
 - Khắc phục rò rỉ tài liệu AutoCAD (chỉ tái sử dụng active document chính xác, đóng các bản vẽ disposable).
 - Vượt qua 3 cổng tái duyệt: correctness, security ops, và requirements.
 
 Kết quả kiểm thử trên ứng viên cuối dae1f2c xác nhận toàn bộ 3 cổng (offline, private PDF, live AutoCAD Mechanical) đều xanh.
+
+---
+
+## 2026-09-09 — ChatGPT ↔ Luna/Codex C2C orchestration verified
+
+Đã hoàn tất và xác minh end-to-end đường điều phối C2C giữa ChatGPT và
+Luna/Codex cho workspace Windows `cad-agent-merge`.
+
+### Trạng thái đã xác minh
+
+- `CONNECTED_VERIFIED=YES`
+- `C2C_ORCHESTRATION_VERIFIED=YES`
+- `CHATGPT_PLANNER_REVIEWER=ACTIVE`
+- `LUNA_EXECUTOR=ACTIVE`
+- `MCP_READ_ONLY_BOUNDARY=ACTIVE`
+- `NO_HUMAN_RELAY=YES`
+- `BLOCKER=NONE`
+
+C2C build/test trên local validation branch đều PASS: 15 test files, 165 tests.
+OAuth/pairing và ChatGPT connector đã connected. ChatGPT đã đọc thật
+`README.md` trong workspace qua MCP (read-only), chứng minh connector không
+chỉ dừng ở `/health`.
+
+### Smoke test điều phối end-to-end
+
+Task C2C: `c2c_1016`.
+
+Chuỗi đã chạy thành công mà không cần người dùng copy/paste relay:
+
+`INIT → PLAN → EXECUTING → EXECUTED → REVIEW → DONE`
+
+Trong task này:
+
+- ChatGPT phát `PLAN`.
+- Luna thực hiện đúng kế hoạch read-only.
+- Luna đọc `README.md`, `AGENTS.md`, cấu trúc workspace và Git state trước/sau.
+- Không sửa file, không commit, không push, không build/test ngoài scope.
+- Luna ghi execution record và gửi `EXECUTED`.
+- ChatGPT review độc lập qua MCP và trả `C2C_SMOKE=PASS`.
+- Branch/HEAD giữ nguyên, working tree sạch.
+- Checkpoint C2C kết thúc ở `DONE`.
+
+### Operating model từ đây
+
+ChatGPT giữ vai trò PO / architect / governance / planner / independent reviewer.
+Luna/Codex giữ vai trò primary executor trên Windows/AutoCAD/Git/PR.
+
+MCP C2C hiện cố ý **read-only**. ChatGPT dùng MCP để kiểm tra độc lập workspace,
+file, Git state/diff và execution evidence; ChatGPT không trực tiếp mutate
+workspace Windows qua MCP. Write/command execution vẫn thuộc Luna.
+
+Workflow mặc định cho task đáng kể:
+
+1. Luna gửi `INIT`.
+2. ChatGPT fresh-read evidence cần thiết và trả `PLAN`.
+3. Luna execute đúng PLAN.
+4. Luna record evidence và gửi `EXECUTED`.
+5. ChatGPT inspect độc lập qua MCP và trả `REVIEW`.
+6. Lặp `PLAN` nếu còn iteration; kết thúc bằng `DONE` hoặc `BLOCKED` thật sự.
+
+Không quay lại human relay cho routine planning/execution/review khi C2C đang
+khỏe. Human Gate chỉ dành cho credential/login, CAPTCHA/2FA, billing/private
+authority, source/customer/accepted-drawing mutation, unknown executable/trust
+expansion, destructive/irreversible/high-cost action, hoặc product ambiguity thật.
+
+### Technical debt tạm thời của C2C
+
+C2C đang chạy trên local branch `c2c-validation-pr-416` với upstream
+`XiaoDuoYa/codex-with-chatgpt` PR #416 HEAD
+`691d5bf8c6332afd602bc0045ed3d34557ca3995` tại thời điểm xác minh.
+PR #416 khi đó OPEN và chưa merged.
+
+Root cause đã xác nhận cho Quick Tunnel failure trước đó:
+`CLOUDFLARE_QUICK_TUNNEL_FRESH_DNS_NEGATIVE_CACHE`.
+
+Local validation dùng initial health delay 15000ms và Quick Tunnel/public
+`/health` đã PASS. Đây là infrastructure technical debt của C2C, **không phải
+CAD Agent product debt**. Không mang patch này vào source CAD Agent. Khi #416
+được merge/release, cần validate official C2C release trước khi bỏ local
+validation branch.
+
+### Quy tắc tiếp tục
+
+GitHub vẫn là canonical source of truth. Fresh-read GitHub/workspace trước các
+kết luận material; không tin SHA/status/frontier cũ khi có thể kiểm tra lại.
+
+Từ thời điểm handoff này, giả định vận hành là:
+
+`CHATGPT_LUNA_C2C_AVAILABLE=YES`
+
+trừ khi một connectivity/protocol check mới chứng minh ngược lại. Không cần
+lặp lại toàn bộ setup acceptance ở mỗi task; chỉ quay lại diagnosis C2C khi có
+failure thực tế.
