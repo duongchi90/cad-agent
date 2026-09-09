@@ -27,6 +27,7 @@ from cad_agent.fidelity import (
     run_fidelity_text_reconstruct,
     run_fidelity_dimension_observations,
     run_fidelity_linetype_reconstruct,
+    run_fidelity_semantic_region_handoff,
     run_fidelity_table_text_reconstruct,
     write_region_proposal,
     write_region_approval,
@@ -1472,6 +1473,208 @@ def test_semantic_owner_handoff_translates_owner_outputs_into_local_region_candi
     assert result.modelspace().query("LINE")[0].dxf.linetype == "FIDELITY_CENTER"
     compose_report = json.loads((composed / "report.json").read_text(encoding="utf-8"))
     assert "semantic owner handoff remains review-only" in compose_report["unresolved"]
+
+
+def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(tmp_path: Path) -> None:
+    """The measured page-1 @512 DASHED owner line must reach side."""
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "side", "bbox_px": [20, 20, 350, 500], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [360, 520, 390, 590], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["side"], "measured-page1-horizontal-512", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    import cad_agent.fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+
+    # These are the measured local endpoints from the exact BVTL page-1 @512
+    # failure. The intended local candidate is the existing overlapping side
+    # LINE; the owner output is the full-page transformed DASHED line.
+    local_target_start = (36.50253171971714, 35.44448713571971)
+    local_target_end = (46.024931239853855, 35.62082792998169)
+    owner_local_start = (34.033761458480235, 34.915465123207696)
+    owner_local_end = (43.379820304591384, 34.915465123207696)
+
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "side" / "geometry.dxf"
+    candidate_document = ezdxf.new("R2010")
+    candidate_document.modelspace().add_line(local_target_start, local_target_end)
+    candidate_document.saveas(candidate_path)
+
+    owner_root = output / "linetype_reconstruction" / "page_01"
+    owner_root.mkdir(parents=True)
+    owner_path = owner_root / "layout.dxf"
+    owner_document = ezdxf.new("R2010")
+    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.modelspace().add_line(
+        (offset_x + owner_local_start[0], offset_y + owner_local_start[1]),
+        (offset_x + owner_local_end[0], offset_y + owner_local_end[1]),
+        dxfattribs={"linetype": "FIDELITY_DASHED"},
+    )
+    owner_document.saveas(owner_path)
+    (owner_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"]),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner_path),
+    }), encoding="utf-8")
+
+    # Intended GREEN behavior: one supported DASHED output transfers to the
+    # existing side LINE, with no unrelated LINE mutation.
+    run_fidelity_semantic_region_handoff(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    candidate = ezdxf.readfile(candidate_path)
+    lines = list(candidate.modelspace().query("LINE"))
+    assert len(lines) == 1
+    assert lines[0].dxf.linetype == "FIDELITY_DASHED"
+    assert (float(lines[0].dxf.start.x), float(lines[0].dxf.start.y)) == pytest.approx(local_target_start)
+    assert (float(lines[0].dxf.end.x), float(lines[0].dxf.end.y)) == pytest.approx(local_target_end)
+
+
+def test_semantic_handoff_rejects_ambiguous_fuzzy_horizontal_matches(tmp_path: Path) -> None:
+    """Two fuzzy targets must not be resolved by target iteration order."""
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "side", "bbox_px": [20, 20, 350, 500], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [360, 520, 390, 590], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["side"], "ambiguous-fuzzy-horizontal", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    import cad_agent.fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+
+    # Both distinct targets are outside the exact endpoint tolerance but are
+    # inside the existing one-pixel horizontal fuzzy rule and overlap the
+    # owner segment by the required 50% shorter-segment threshold.
+    local_targets = [
+        ((0.0, 0.6), (8.0, 0.6)),
+        ((2.0, 0.6), (10.0, 0.6)),
+    ]
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "side" / "geometry.dxf"
+    candidate_document = ezdxf.new("R2010")
+    for start, end in local_targets:
+        candidate_document.modelspace().add_line(start, end)
+    candidate_document.saveas(candidate_path)
+
+    owner_root = output / "linetype_reconstruction" / "page_01"
+    owner_root.mkdir(parents=True)
+    owner_path = owner_root / "layout.dxf"
+    owner_document = ezdxf.new("R2010")
+    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.modelspace().add_line(
+        (offset_x, offset_y),
+        (offset_x + 10.0, offset_y),
+        dxfattribs={"linetype": "FIDELITY_DASHED"},
+    )
+    owner_document.saveas(owner_path)
+    (owner_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"]),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner_path),
+    }), encoding="utf-8")
+
+    try:
+        run_fidelity_semantic_region_handoff(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    except FidelityError as exc:
+        assert "ambiguous fuzzy horizontal" in str(exc).lower()
+        candidate = ezdxf.readfile(candidate_path)
+        assert all(str(line.dxf.get("linetype", "")).upper() in {"", "BYLAYER", "BYBLOCK", "CONTINUOUS"}
+                   for line in candidate.modelspace().query("LINE"))
+    else:
+        candidate = ezdxf.readfile(candidate_path)
+        dashed_indices = [
+            index for index, line in enumerate(candidate.modelspace().query("LINE"))
+            if str(line.dxf.get("linetype", "")).upper() == "FIDELITY_DASHED"
+        ]
+        pytest.fail(f"Current handoff silently selected matches[0]; dashed target indices={dashed_indices}.")
+
+
+def test_semantic_handoff_stays_fail_closed_for_unmatched_dashed_line(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "side", "bbox_px": [20, 20, 350, 500], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [360, 520, 390, 590], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["side"], "unmatched-dashed-fail-closed", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    import cad_agent.fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "side" / "geometry.dxf"
+    candidate_document = ezdxf.new("R2010")
+    candidate_document.modelspace().add_line((10.0, 10.0), (20.0, 10.0))
+    candidate_document.saveas(candidate_path)
+
+    owner_root = output / "linetype_reconstruction" / "page_01"
+    owner_root.mkdir(parents=True)
+    owner_path = owner_root / "layout.dxf"
+    owner_document = ezdxf.new("R2010")
+    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.modelspace().add_line(
+        (offset_x + 30.0, offset_y + 40.0),
+        (offset_x + 40.0, offset_y + 40.0),
+        dxfattribs={"linetype": "FIDELITY_DASHED"},
+    )
+    owner_document.saveas(owner_path)
+    (owner_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"]),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner_path),
+    }), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="no matching local region line"):
+        run_fidelity_semantic_region_handoff(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:

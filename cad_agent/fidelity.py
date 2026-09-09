@@ -526,7 +526,15 @@ def _fidelity_local_point(point: Any, offset_x: float, offset_y: float) -> tuple
     return (float(point.x) - offset_x, float(point.y) - offset_y, float(point.z))
 
 
-def _fidelity_line_matches(first: Any, second: Any, start: Any, end: Any, tolerance: float) -> bool:
+def _fidelity_line_matches(
+    first: Any,
+    second: Any,
+    start: Any,
+    end: Any,
+    tolerance: float,
+    *,
+    pixel_scale: float = 0.0,
+) -> bool:
     def xy(point: Any) -> tuple[float, float]:
         if hasattr(point, "x"):
             return float(point.x), float(point.y)
@@ -544,7 +552,25 @@ def _fidelity_line_matches(first: Any, second: Any, start: Any, end: Any, tolera
         math.hypot(first_x - end_x, first_y - end_y) <= tolerance
         and math.hypot(second_x - start_x, second_y - start_y) <= tolerance
     )
-    return direct or reverse
+    if direct or reverse or pixel_scale <= 0.0:
+        return direct or reverse
+
+    # Raster geometry can split/extend the same horizontal source band into
+    # different endpoints. Keep this normalization narrow: it is only enabled
+    # by the linetype handoff, only for horizontal lines, and only within one
+    # additional source pixel of the existing region tolerance.
+    alignment_tolerance = tolerance + pixel_scale
+    if (
+        abs(first_y - second_y) > alignment_tolerance
+        or abs(start_y - end_y) > alignment_tolerance
+        or abs(((first_y + second_y) - (start_y + end_y)) / 2.0) > alignment_tolerance
+    ):
+        return False
+    first_min, first_max = sorted((first_x, second_x))
+    start_min, start_max = sorted((start_x, end_x))
+    overlap = max(0.0, min(first_max, start_max) - max(first_min, start_min))
+    shorter = min(first_max - first_min, start_max - start_min)
+    return shorter > 0.0 and overlap >= 0.5 * shorter
 
 
 def _merge_fidelity_owner_output_into_region(
@@ -612,6 +638,7 @@ def _merge_fidelity_owner_output_into_region(
             counts["DIMENSION"] += 1
     else:
         matched_targets: set[int] = set()
+        pixel_scale = float(page["pixel_to_paper_mm"]["used"])
         for entity in source_document.modelspace().query("LINE"):
             line_type = str(entity.dxf.get("linetype", ""))
             if line_type.upper() in {"", "BYLAYER", "BYBLOCK", "CONTINUOUS"}:
@@ -622,18 +649,43 @@ def _merge_fidelity_owner_output_into_region(
             end = _fidelity_local_point(entity.dxf.end, offset_x, offset_y)
             matches = [
                 candidate for candidate in target_model.query("LINE")
-                if _fidelity_line_matches(candidate.dxf.start, candidate.dxf.end, start, end, tolerance)
+                if _fidelity_line_matches(
+                    candidate.dxf.start,
+                    candidate.dxf.end,
+                    start,
+                    end,
+                    tolerance,
+                    pixel_scale=pixel_scale,
+                )
             ]
             if not matches:
                 raise FidelityError(f"Linetype owner output line has no matching local region line for {line_type}.")
             matches = [candidate for candidate in matches if id(candidate) not in matched_targets]
             if not matches:
                 continue
+            exact_matches = [
+                candidate for candidate in matches
+                if _fidelity_line_matches(
+                    candidate.dxf.start,
+                    candidate.dxf.end,
+                    start,
+                    end,
+                    tolerance,
+                )
+            ]
+            if len(exact_matches) > 1:
+                raise FidelityError(f"Ambiguous exact horizontal linetype match for {line_type}.")
+            if len(exact_matches) == 1:
+                selected = exact_matches[0]
+            elif len(matches) > 1:
+                raise FidelityError(f"Ambiguous fuzzy horizontal linetype match for {line_type}.")
+            else:
+                selected = matches[0]
             _copy_fidelity_linetype(source_document, target_document, line_type)
-            matches[0].dxf.linetype = line_type
-            matched_targets.add(id(matches[0]))
+            selected.dxf.linetype = line_type
+            matched_targets.add(id(selected))
             if entity.dxf.hasattr("linetype_scale"):
-                matches[0].dxf.linetype_scale = entity.dxf.linetype_scale
+                selected.dxf.linetype_scale = entity.dxf.linetype_scale
             counts["LINETYPE"] += 1
     return counts
 
