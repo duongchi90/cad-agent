@@ -681,6 +681,81 @@ def test_text_observation_uses_hash_bound_approved_region_for_single_component_d
     assert rotated["bbox_px"] == [27, height - 35, 37, height - 25]
 
 
+def test_approved_title_region_ocr_keeps_block_level_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((700, 1400, 3), 255, dtype=np.uint8)
+    calls: list[tuple[tuple[int, int], list[tuple[int, int, int, int]], int]] = []
+
+    def fake_detect(image: np.ndarray, **kwargs: object) -> list[tuple[int, int, int, int]]:
+        del image, kwargs
+        return []
+
+    def fake_ocr(
+        image: np.ndarray,
+        *,
+        roi_boxes: list[tuple[int, int, int, int]],
+        min_confidence: int = 40,
+        psm: int = 6,
+        lang: str = "vie+eng",
+    ) -> list[RawText]:
+        del min_confidence, lang
+        calls.append((image.shape[:2], roi_boxes, psm))
+        if psm != 6:
+            return []
+        return [RawText(
+            "full-title",
+            "THIET KE CAI TAO O TO TAI THUNG KIN THACO K190",
+            (30, 45, 900, 80),
+            0.0,
+            0.90,
+            "text_tesseract",
+            None,
+            "general_note",
+        )]
+
+    monkeypatch.setattr(fidelity_module, "detect_text_candidate_rois", fake_detect)
+    monkeypatch.setattr(fidelity_module, "extract_text_tesseract", fake_ocr)
+
+    candidates, metrics = fidelity_module._approved_region_text_candidates(
+        image,
+        [{"id": "title", "bbox_px": [100, 200, 1200, 580], "ocr_roi_px": [374, 0, 1089, 133]}],
+    )
+
+    assert metrics == {"detector_roi_count": 0, "ocr_call_count": 1}
+    assert [candidate["content"] for candidate in candidates] == [
+        "THIET KE CAI TAO O TO TAI THUNG KIN THACO K190",
+    ]
+    assert candidates[0]["approved_region_id"] == "title"
+    assert candidates[0]["bbox_px"] == [484, 215, 774, 226]
+    assert calls == [((399, 2145), [(0, 0, 2145, 399)], 6)]
+
+
+def test_approved_region_ocr_rejects_oversized_block_before_resize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((2000, 2000, 3), 255, dtype=np.uint8)
+    monkeypatch.setattr(fidelity_module, "detect_text_candidate_rois", lambda image, **kwargs: [])
+    resize_calls: list[bool] = []
+
+    def fail_resize(*args: object, **kwargs: object) -> np.ndarray:
+        del args, kwargs
+        resize_calls.append(True)
+        raise AssertionError("oversized OCR ROI was resized before the bound check")
+
+    monkeypatch.setattr(fidelity_module.cv2, "resize", fail_resize)
+    with pytest.raises(FidelityError, match="canvas limit"):
+        fidelity_module._approved_region_text_candidates(
+            image,
+            [{"id": "title", "bbox_px": [0, 0, 2000, 2000], "ocr_roi_px": [0, 0, 2000, 2000]}],
+        )
+    assert resize_calls == []
+
+
 def test_text_observation_rejects_approved_region_page_other_than_page_one(tmp_path: Path) -> None:
     source = tmp_path / "two-page-drawing.pdf"
     document = fitz.open()
@@ -746,6 +821,51 @@ def test_text_observation_rejects_stale_region_proposal_page_metadata(
         run_fidelity_text_observations(
             source, output, manifest, region_approval_path=approval_path, workspace_root=Path.cwd(),
         )
+
+
+def test_text_observation_rejects_hash_consistent_malformed_approved_region_ocr_roi(
+    tmp_path: Path,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "title", "bbox_px": [20, 20, width - 100, height - 20], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [width - 70, 20, width - 20, height - 20], "purpose": "exclude"}],
+    }
+    write_region_proposal(source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd())
+    write_region_approval(source, output, manifest, 1, 1, ["title"], "approved-region-ocr-test", workspace_root=Path.cwd())
+    proposal_path = output / "region_proposals" / "page_01.json"
+    approval_path = output / "region_approvals" / "page_01.json"
+    base_proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    for invalid_roi in (
+        [0, 0, "not-an-integer", 100],
+        [-1, 0, 100, 100],
+        [0, 0, width, 100],
+        [0, 0, 20, 20],
+    ):
+        proposal = json.loads(json.dumps(base_proposal))
+        proposal["regions"][0]["ocr_roi_px"] = invalid_roi
+        proposal["proposal_definition_sha256"] = fidelity_module._region_proposal_definition_sha256(proposal)
+        proposal_path.write_text(json.dumps(proposal, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        approval["proposal"]["sha256"] = __import__("hashlib").sha256(proposal_path.read_bytes()).hexdigest()
+        approval["proposal"]["definition_sha256"] = proposal["proposal_definition_sha256"]
+        approval_path.write_text(json.dumps(approval, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        with pytest.raises(FidelityError, match="ocr_roi_px"):
+            run_fidelity_text_observations(
+                source, output, manifest, region_approval_path=approval_path, workspace_root=Path.cwd(),
+            )
 
 
 def test_text_observation_discards_ocr_boxes_outside_approved_region(
@@ -1045,7 +1165,7 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
         regions = {
             "regions": [
-                {"id": "main_view", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"},
+                {"id": "main_view", "bbox_px": [20, 20, 250, 150], "ocr_roi_px": [5, 5, 220, 120], "purpose": "layout-reconstruction"},
                 {"id": "detail", "bbox_px": [260, 20, 390, 150], "purpose": "layout-reconstruction"},
             ],
             "excluded_regions": [
@@ -1059,6 +1179,7 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         assert proposal["unclassified_area_state"] == "needs_classification"
         assert proposal["page"]["coordinate_system"] == "pixel-top-left"
         assert proposal["source"] == {"name": "drawing.pdf", "sha256": manifest["source"]["sha256"], "kind": "pdf"}
+        assert proposal["regions"][0]["ocr_roi_px"] == [5, 5, 220, 120]
         assert (output / "region_proposals" / "page_01.json").is_file()
         assert not (output / "layout_dxf" / "page_01.dxf").read_text(encoding="utf-8").count("INSERT")
 
