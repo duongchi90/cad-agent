@@ -335,6 +335,74 @@ def test_policy_plan_all_observation_only_never_returns_setup_verified() -> None
     assert evidence["conformance_assertion"] is False
 
 
+def _non_vacuous_policy_evidence() -> tuple[dict[str, object], dict[str, str]]:
+    plan = _policy_plan(
+        field_modes={
+            "current_layer": "OBSERVATION_ONLY",
+            "embedded_settings": "OBSERVATION_ONLY",
+        },
+        unresolved=frozenset({"current_layer"}),
+    )
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-VALID-001",
+    )
+    expected = {
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+    return evidence, expected
+
+
+def test_require_setup_verified_accepts_non_vacuous_policy_evidence() -> None:
+    evidence, expected = _non_vacuous_policy_evidence()
+
+    require_setup_verified(evidence, **expected)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda evidence: evidence.__setitem__("gating_paths", []),
+        lambda evidence: evidence.__setitem__("evaluated_gating_paths", []),
+        lambda evidence: evidence.__setitem__(
+            "verification_scope", "NO_CONFORMANCE_ASSERTION"
+        ),
+        lambda evidence: evidence.__setitem__("conformance_assertion", False),
+    ],
+)
+def test_require_setup_verified_rejects_vacuous_policy_evidence(
+    mutation: Any,
+) -> None:
+    evidence, expected = _non_vacuous_policy_evidence()
+    mutation(evidence)
+
+    with pytest.raises(DrawingSetupError, match="scope|conformance|verified"):
+        require_setup_verified(evidence, **expected)
+
+
+def test_require_setup_verified_rejects_tampered_all_observation_evidence() -> None:
+    plan = _all_observation_policy_plan()
+    evidence = evaluate_setup_plan(
+        plan,
+        matching_setup_audit(approved_setup_plan()),
+        verified_by="OWNER",
+        approval_reference="POLICY-EMPTY-002",
+    )
+    evidence["status"] = "SETUP_VERIFIED"
+    expected = {
+        "setup_plan_sha256": canonical_json_sha256(plan),
+        "drawing_profile_sha256": plan["drawing_profile"]["sha256"],
+        "template_file_sha256": plan["template"]["file_sha256"],
+    }
+
+    with pytest.raises(DrawingSetupError, match="scope|conformance|verified"):
+        require_setup_verified(evidence, **expected)
+
+
 def test_create_setup_plan_has_only_the_approved_keyword_api() -> None:
     signature = inspect.signature(create_setup_plan)
     assert list(signature.parameters) == [

@@ -748,6 +748,28 @@ def require_setup_verified(
         raise _fail("Drawing Setup evidence is not SETUP_VERIFIED")
     if evidence.get("blockers") != []:
         raise _fail("SETUP_VERIFIED evidence must contain no blockers")
+    if "expectation_policy_sha256" in evidence:
+        policy_hash = evidence.get("expectation_policy_sha256")
+        if not isinstance(policy_hash, str) or _SHA256_RE.fullmatch(policy_hash) is None:
+            raise _fail("policy Drawing Setup evidence has an invalid expectation policy hash")
+        if evidence.get("verification_scope") != "GATING_ONLY":
+            raise _fail("policy Drawing Setup evidence is not a verified gating scope")
+        gating_paths = evidence.get("gating_paths")
+        evaluated_gating_paths = evidence.get("evaluated_gating_paths")
+        if (
+            not isinstance(gating_paths, list)
+            or not isinstance(evaluated_gating_paths, list)
+            or not gating_paths
+            or not evaluated_gating_paths
+            or not all(isinstance(path, str) for path in gating_paths)
+            or not all(isinstance(path, str) for path in evaluated_gating_paths)
+            or len(set(gating_paths)) != len(gating_paths)
+            or len(set(evaluated_gating_paths)) != len(evaluated_gating_paths)
+            or set(gating_paths) != set(evaluated_gating_paths)
+        ):
+            raise _fail("policy Drawing Setup evidence has an empty or incomplete gating scope")
+        if evidence.get("conformance_assertion") is not True:
+            raise _fail("policy Drawing Setup evidence has no conformance assertion")
 
     expected_hashes = {
         "setup_plan_sha256": setup_plan_sha256,
