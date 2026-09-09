@@ -564,7 +564,7 @@ và đã PASS trên AutoCAD thật.
 
 ## 2026-07-30 — Final Release Candidate (dae1f2c)
 
-Toàn bộ công việc từ ứng viên ban đầu \bd31087 đến HEAD hiện tại dae1f2c đã hoàn tất. Các thay đổi bao gồm:
+Toàn bộ công việc từ ứng viên ban đầu d31087 đến HEAD hiện tại dae1f2c đã hoàn tất. Các thay đổi bao gồm:
 - Tái dựng trung thực fidelity (dimensions, linetypes, hatches) với cơ chế kiểm duyệt (approval gates).
 - Sửa các lỗi provenance, ID hợp lệ, và live dimensions measurement.
 - Khắc phục rò rỉ tài liệu AutoCAD (chỉ tái sử dụng active document chính xác, đóng các bản vẽ disposable).
