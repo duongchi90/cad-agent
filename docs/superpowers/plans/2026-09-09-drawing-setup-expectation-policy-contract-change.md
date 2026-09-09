@@ -400,9 +400,11 @@ git commit -m "docs: record drawing setup policy verification"
 
 - Status: completed
 - Base SHA: `2d320361e2146d0602aac6f226f5bffed5f931a5`
-- Completion Head SHA: `90c62eb361f56e3241724f7fa2aa978a40d89ddc`
-- Exact verification command/result: `scripts/verify.ps1` ran once at the
-  completion head in isolated worktree
+- Current-state pointer: open PR [#422](https://github.com/duongchi90/cad-agent/pull/422)
+  and governance/evidence issue [#412](https://github.com/duongchi90/cad-agent/issues/412)
+- Historical completion head SHA: `90c62eb361f56e3241724f7fa2aa978a40d89ddc`
+- Historical verification command/result: `scripts/verify.ps1` ran once at the
+  historical completion head in isolated worktree
   `C:\temp\cad-agent-release-verify-20260909-01`, with private writable
   `TEMP/TMP` root `C:\temp\cad-agent-release-verify-temp-20260909-01` and
   Python 3.11 executable
@@ -410,7 +412,10 @@ git commit -m "docs: record drawing setup policy verification"
   exit code `0`. Offline JUnit was `3294` tests with zero failures/errors;
   .NET plugin tests were `202/202`; `dotnet_ipc` was `68 passed + 50
   subtests`; and the offline Python suite was `3222 passed, 19 deselected,
-  72 subtests`.
+   72 subtests`.
+- The current remediation verification is bound to the canonical PR #422 / issue
+  #412 state. The local combined release evidence and all hosted checks passed;
+  issue #412 comment `5603356625` records the authoritative SOL acceptance.
 - Required private/live gates: AutoCAD/FileIPC `NOT RUN` (unavailable-state);
   private real-data gates `SKIP/NOT RUN` (inputs absent); M2 benchmark `NOT
   RUN`. The prior live `drawing_setup_verify` projection remains **NON_PASS**

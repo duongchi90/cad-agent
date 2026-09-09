@@ -19,10 +19,11 @@
 ## Current canonical snapshot (2026-09-09)
 
 - Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
-  The drawing-setup expectation-policy candidate is on local branch
-  `codex/drawing-setup-expectation-policy-20260909` at implementation head
-  `90c62eb361f56e3241724f7fa2aa978a40d89ddc`; it is pushed at lifecycle head
-  `5372aa296248e33a4be8917da75bd2b4beb09af3` and is tracked by open PR #422.
+  The drawing-setup expectation-policy candidate is tracked by open PR #422
+  and governed by issue #412; those GitHub records are the canonical current
+  state pointers. The earlier implementation head
+  `90c62eb361f56e3241724f7fa2aa978a40d89ddc` and lifecycle checkpoint
+  `5372aa296248e33a4be8917da75bd2b4beb09af3` are historical evidence only.
 - REAL IMAGE/PDF P1 live Mechanical review is **Verified** for the private
   nine-page PDF identified by SHA-256
   `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
@@ -63,13 +64,15 @@
 
 - The approved contract proposal is bound to SHA-256
   `17ee02ea89d6fadce5148b730a8f62d302b032a29431cba6a3a33847b4e0da6d`.
-  Implementation head is `90c62eb361f56e3241724f7fa2aa978a40d89ddc` on the
-  local branch above; the CLI compatibility proof confirmed that
-  `cad_agent/cli.py` required no change.
-- Focused Drawing Setup regression/contracts passed: `98 passed`.
-  The policy-bearing `drawing-setup-verify` CLI proof passed and emitted valid
-  scoped evidence; the CLI proof commit is included in the implementation head.
-- The authoritative `scripts/verify.ps1` run passed with exit code `0` in
+  The earlier implementation head `90c62eb361f56e3241724f7fa2aa978a40d89ddc`
+  is a historical checkpoint; the current candidate and its evidence are
+  tracked by PR #422 and issue #412. The CLI compatibility proof confirmed
+  that `cad_agent/cli.py` required no change.
+- Historical pre-remediation focused Drawing Setup regression/contracts passed:
+  `98 passed`; the policy-bearing `drawing-setup-verify` CLI proof passed and
+  emitted valid scoped evidence.
+- Historical pre-remediation `scripts/verify.ps1` evidence recorded exit code
+  `0` in
   isolated worktree `C:\temp\cad-agent-release-verify-20260909-01`, using a
   private writable `TEMP/TMP` root
   `C:\temp\cad-agent-release-verify-temp-20260909-01`. It recorded .NET
@@ -77,6 +80,10 @@
   Python `3222 passed, 19 deselected, 72 subtests`, and JUnit totals
   `3294` with zero failures/errors. The expected causal RED oracle was handled
   by the verifier; it is not a product-test failure.
+- Current remediation verification is bound to the canonical PR #422 / issue
+  #412 state. The remediation head passed the local combined release evidence
+  and all hosted checks; issue #412 comment `5603356625` records the
+  authoritative SOL acceptance.
 - This is **Partially verified**: deterministic contract/evaluator/CLI and
   authoritative offline gates passed, while live AutoCAD/FileIPC and private
   real-data gates were `NOT RUN`/`SKIP`. The prior live

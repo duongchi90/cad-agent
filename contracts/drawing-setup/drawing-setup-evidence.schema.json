@@ -101,30 +101,98 @@
     },
     "gating_paths": {
       "type": "array",
+      "uniqueItems": true,
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "enum": [
+          "variables.INSUNITS",
+          "variables.MEASUREMENT",
+          "variables.LTSCALE",
+          "variables.CELTSCALE",
+          "variables.PSLTSCALE",
+          "variables.MSLTSCALE",
+          "variables.DIMASSOC",
+          "variables.ANNOALLVISIBLE",
+          "current_layer",
+          "required_layers",
+          "required_styles",
+          "layouts",
+          "font_policy",
+          "embedded_settings"
+        ]
       }
     },
     "evaluated_gating_paths": {
       "type": "array",
+      "uniqueItems": true,
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "enum": [
+          "variables.INSUNITS",
+          "variables.MEASUREMENT",
+          "variables.LTSCALE",
+          "variables.CELTSCALE",
+          "variables.PSLTSCALE",
+          "variables.MSLTSCALE",
+          "variables.DIMASSOC",
+          "variables.ANNOALLVISIBLE",
+          "current_layer",
+          "required_layers",
+          "required_styles",
+          "layouts",
+          "font_policy",
+          "embedded_settings"
+        ]
       }
     },
     "observation_only_paths": {
       "type": "array",
+      "uniqueItems": true,
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "enum": [
+          "variables.INSUNITS",
+          "variables.MEASUREMENT",
+          "variables.LTSCALE",
+          "variables.CELTSCALE",
+          "variables.PSLTSCALE",
+          "variables.MSLTSCALE",
+          "variables.DIMASSOC",
+          "variables.ANNOALLVISIBLE",
+          "current_layer",
+          "required_layers",
+          "required_styles",
+          "layouts",
+          "font_policy",
+          "embedded_settings"
+        ]
       }
     },
     "unresolved_paths": {
       "type": "array",
+      "uniqueItems": true,
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "enum": [
+          "variables.INSUNITS",
+          "variables.MEASUREMENT",
+          "variables.LTSCALE",
+          "variables.CELTSCALE",
+          "variables.PSLTSCALE",
+          "variables.MSLTSCALE",
+          "variables.DIMASSOC",
+          "variables.ANNOALLVISIBLE",
+          "current_layer",
+          "required_layers",
+          "required_styles",
+          "layouts",
+          "font_policy",
+          "embedded_settings"
+        ]
       }
     },
     "observation_records": {
@@ -141,7 +209,23 @@
         "properties": {
           "path": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "enum": [
+              "variables.INSUNITS",
+              "variables.MEASUREMENT",
+              "variables.LTSCALE",
+              "variables.CELTSCALE",
+              "variables.PSLTSCALE",
+              "variables.MSLTSCALE",
+              "variables.DIMASSOC",
+              "variables.ANNOALLVISIBLE",
+              "current_layer",
+              "required_layers",
+              "required_styles",
+              "layouts",
+              "font_policy",
+              "embedded_settings"
+            ]
           },
           "observed_value": {},
           "comparison": {
@@ -174,6 +258,209 @@
             "maxItems": 0
           }
         }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": [
+              "expectation_policy_sha256"
+            ]
+          },
+          {
+            "required": [
+              "verification_scope"
+            ]
+          },
+          {
+            "required": [
+              "gating_paths"
+            ]
+          },
+          {
+            "required": [
+              "evaluated_gating_paths"
+            ]
+          },
+          {
+            "required": [
+              "observation_only_paths"
+            ]
+          },
+          {
+            "required": [
+              "unresolved_paths"
+            ]
+          },
+          {
+            "required": [
+              "observation_records"
+            ]
+          },
+          {
+            "required": [
+              "conformance_assertion"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "expectation_policy_sha256",
+          "verification_scope",
+          "gating_paths",
+          "evaluated_gating_paths",
+          "observation_only_paths",
+          "unresolved_paths",
+          "observation_records",
+          "conformance_assertion"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "SETUP_VERIFIED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "verification_scope": {
+                  "const": "GATING_ONLY"
+                },
+                "gating_paths": {
+                  "type": "array",
+                  "minItems": 1
+                },
+                "evaluated_gating_paths": {
+                  "type": "array",
+                  "minItems": 1
+                },
+                "conformance_assertion": {
+                  "const": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "NEEDS_REVIEW"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conformance_assertion": {
+                  "const": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "allOf": [
+                {
+                  "properties": {
+                    "status": {
+                      "const": "NEEDS_REVIEW"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "verification_scope": {
+                      "const": "GATING_ONLY"
+                    }
+                  }
+                }
+              ]
+            },
+            "then": {
+              "properties": {
+                "blockers": {
+                  "type": "array",
+                  "minItems": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "observation_only_paths": {
+                  "type": "array",
+                  "minItems": 1
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "observation_records": {
+                  "type": "array",
+                  "minItems": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "verification_scope": {
+                  "const": "GATING_ONLY"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "gating_paths": {
+                  "type": "array",
+                  "minItems": 1
+                },
+                "evaluated_gating_paths": {
+                  "type": "array",
+                  "minItems": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "verification_scope": {
+                  "const": "NO_CONFORMANCE_ASSERTION"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "const": "NEEDS_REVIEW"
+                },
+                "gating_paths": {
+                  "type": "array",
+                  "maxItems": 0
+                },
+                "evaluated_gating_paths": {
+                  "type": "array",
+                  "maxItems": 0
+                },
+                "conformance_assertion": {
+                  "const": false
+                },
+                "verification_reason": {
+                  "const": "EMPTY_GATING_SCOPE"
+                }
+              },
+              "required": [
+                "verification_reason"
+              ]
+            }
+          }
+        ]
       }
     }
   ]

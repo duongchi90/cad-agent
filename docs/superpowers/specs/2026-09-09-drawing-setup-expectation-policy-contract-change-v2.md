@@ -9,7 +9,9 @@
 - SOL technical-clear evidence: [issue comment 5601271257](https://github.com/duongchi90/cad-agent/issues/412#issuecomment-5601271257)
 - Human approval evidence: [issue comment 5601313049](https://github.com/duongchi90/cad-agent/issues/412#issuecomment-5601313049)
 - Implementation branch: `codex/drawing-setup-expectation-policy-20260909`
-- Implementation head: `90c62eb361f56e3241724f7fa2aa978a40d89ddc`
+- Current-state pointer: open PR [#422](https://github.com/duongchi90/cad-agent/pull/422)
+  and governance/evidence issue [#412](https://github.com/duongchi90/cad-agent/issues/412)
+- Historical implementation checkpoint: `90c62eb361f56e3241724f7fa2aa978a40d89ddc`
 
 ## Exact approval binding
 
@@ -163,13 +165,14 @@ blocker vocabulary.
 
 ## Implementation and verification record
 
-- The staged implementation commits are `da8da424`, `997e17c`, `ef36667`,
+- The historical pre-remediation implementation commits are `da8da424`, `997e17c`, `ef36667`,
   `7881bfc`, `b960965`, `db73b711`, and `90c62eb`. The final commit adds the
   CLI compatibility proof test; `cad_agent/cli.py` is unchanged.
-- Focused Drawing Setup regression/contracts passed: `98 passed`. The focused
+- Historical pre-remediation focused Drawing Setup regression/contracts passed:
+  `98 passed`. The focused
   CLI policy-bearing plan proof passed and emitted `SETUP_VERIFIED` evidence
   with a non-empty gating scope.
-- The exact final verification command was run once in isolated worktree
+- The historical pre-remediation verification command was run once in isolated worktree
   `C:\temp\cad-agent-release-verify-20260909-01` at implementation head
   `90c62eb361f56e3241724f7fa2aa978a40d89ddc`, with `TEMP` and `TMP` set to
   `C:\temp\cad-agent-release-verify-temp-20260909-01` and the verified Python
@@ -182,6 +185,8 @@ blocker vocabulary.
   the approved bounded scope. The prior live `drawing_setup_verify` result
   remains **NON_PASS** and was **not retried**. No M2 `SETUP_VERIFIED` claim,
   drawing save, or production drawing mutation is made.
+- Current remediation and hosted-check evidence is read from PR #422; the
+  canonical SOL acceptance is recorded on issue #412 comment `5603356625`.
 
 ## Required acceptance evidence
 

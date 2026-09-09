@@ -154,7 +154,7 @@ def test_policy_plan_evidence_accepts_scoped_fields(tmp_path: Path) -> None:
         "gating_paths": [],
         "evaluated_gating_paths": [],
         "observation_only_paths": ["layouts"],
-        "unresolved_paths": ["variables.MSLTSCALE"],
+        "unresolved_paths": [],
         "observation_records": [
             {
                 "path": "layouts",

@@ -53,6 +53,7 @@ _EVIDENCE_POLICY_KEYS = {
     "observation_records",
     "conformance_assertion",
 }
+_REQUIRED_EVIDENCE_POLICY_KEYS = _EVIDENCE_POLICY_KEYS - {"verification_reason"}
 
 
 class DrawingContractError(ValueError):
@@ -470,6 +471,69 @@ def _validate_observation_record(value: object, *, contract: str, path: str) -> 
         _fail(contract, f"{path}.conformance must be NOT_ASSERTED")
 
 
+def _validate_policy_evidence(payload: dict[str, Any], *, contract: str) -> None:
+    present = _EVIDENCE_POLICY_KEYS & set(payload)
+    if not present:
+        return
+    if not _REQUIRED_EVIDENCE_POLICY_KEYS <= present:
+        _fail(contract, "policy evidence must include every scoped field")
+
+    _sha(payload["expectation_policy_sha256"], contract=contract, path="expectation_policy_sha256")
+    scope = payload["verification_scope"]
+    if scope not in {"GATING_ONLY", "NO_CONFORMANCE_ASSERTION"}:
+        _fail(contract, "verification_scope is invalid")
+    if "verification_reason" in payload:
+        _string(payload["verification_reason"], contract=contract, path="verification_reason")
+
+    path_lists: dict[str, list[str]] = {}
+    for key in (
+        "gating_paths",
+        "evaluated_gating_paths",
+        "observation_only_paths",
+        "unresolved_paths",
+    ):
+        values = _strings(payload[key], contract=contract, path=key, min_items=0)
+        if len(values) != len(set(values)) or any(
+            value not in _EXPECTATION_POLICY_PATHS for value in values
+        ):
+            _fail(contract, f"policy evidence {key} contains an invalid or duplicate path")
+        path_lists[key] = values
+
+    if path_lists["evaluated_gating_paths"] != path_lists["gating_paths"]:
+        _fail(contract, "policy evidence has an incomplete gating scope")
+    if not set(path_lists["unresolved_paths"]) <= set(path_lists["observation_only_paths"]):
+        _fail(contract, "policy evidence has an inconsistent unresolved scope")
+
+    records = payload["observation_records"]
+    if not isinstance(records, list):
+        _fail(contract, "policy evidence observation_records must be a list")
+    for index, record in enumerate(records):
+        _validate_observation_record(record, contract=contract, path=f"observation_records[{index}]")
+    record_paths = [record["path"] for record in records]
+    if record_paths != sorted(path_lists["observation_only_paths"]):
+        _fail(contract, "policy evidence has an incomplete observation scope")
+
+    conformance_assertion = payload["conformance_assertion"]
+    if not isinstance(conformance_assertion, bool):
+        _fail(contract, "policy evidence conformance_assertion must be boolean")
+    if payload["status"] == "NEEDS_REVIEW" and conformance_assertion is not False:
+        _fail(contract, "policy evidence NEEDS_REVIEW requires false conformance assertion")
+    if scope == "GATING_ONLY":
+        if not path_lists["gating_paths"]:
+            _fail(contract, "policy evidence has an empty gating scope")
+        if payload["status"] == "SETUP_VERIFIED" and conformance_assertion is not True:
+            _fail(contract, "policy evidence SETUP_VERIFIED requires conformance assertion")
+        if payload["status"] == "NEEDS_REVIEW" and not payload["blockers"]:
+            _fail(contract, "policy evidence NEEDS_REVIEW requires blockers")
+    else:
+        if path_lists["gating_paths"] or conformance_assertion is not False:
+            _fail(contract, "policy evidence has a non-empty conformance scope")
+        if payload["status"] != "NEEDS_REVIEW":
+            _fail(contract, "policy evidence SETUP_VERIFIED cannot have no conformance scope")
+        if payload.get("verification_reason") != "EMPTY_GATING_SCOPE":
+            _fail(contract, "policy evidence no-conformance scope requires EMPTY_GATING_SCOPE")
+
+
 def _validate_evidence(payload: dict[str, Any]) -> None:
     contract = "drawing_setup_evidence"
     required = {"schema_version","status","run_id","setup_plan_sha256","audit_sha256","drawing_profile_sha256","template_file_sha256","blockers","verified_by","approval_reference"}
@@ -489,30 +553,7 @@ def _validate_evidence(payload: dict[str, Any]) -> None:
         _fail(contract, "SETUP_VERIFIED evidence cannot contain blockers")
     _string(payload["verified_by"], contract=contract, path="verified_by")
     _string(payload["approval_reference"], contract=contract, path="approval_reference")
-    if "expectation_policy_sha256" in payload:
-        _sha(payload["expectation_policy_sha256"], contract=contract, path="expectation_policy_sha256")
-    if "verification_scope" in payload:
-        _string(payload["verification_scope"], contract=contract, path="verification_scope")
-        if payload["verification_scope"] not in {"GATING_ONLY", "NO_CONFORMANCE_ASSERTION"}:
-            _fail(contract, "verification_scope is invalid")
-    if "verification_reason" in payload:
-        _string(payload["verification_reason"], contract=contract, path="verification_reason")
-    for key in (
-        "gating_paths",
-        "evaluated_gating_paths",
-        "observation_only_paths",
-        "unresolved_paths",
-    ):
-        if key in payload:
-            _strings(payload[key], contract=contract, path=key, min_items=0)
-    if "observation_records" in payload:
-        records = payload["observation_records"]
-        if not isinstance(records, list):
-            _fail(contract, "observation_records must be a list")
-        for index, record in enumerate(records):
-            _validate_observation_record(record, contract=contract, path=f"observation_records[{index}]")
-    if "conformance_assertion" in payload:
-        _bool(payload["conformance_assertion"], contract=contract, path="conformance_assertion")
+    _validate_policy_evidence(payload, contract=contract)
 
 
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {

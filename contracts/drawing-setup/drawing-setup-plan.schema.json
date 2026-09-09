@@ -148,74 +148,144 @@
           ],
           "properties": {
             "INSUNITS": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             },
             "MEASUREMENT": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             },
             "LTSCALE": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             },
             "CELTSCALE": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             },
             "PSLTSCALE": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             },
             "MSLTSCALE": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             },
             "DIMASSOC": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             },
             "ANNOALLVISIBLE": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "const": "UNRESOLVED"
+                }
+              ]
             }
           }
         },
         "current_layer": {
-          "type": "string",
-          "minLength": 1
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "const": "UNRESOLVED"
+            }
+          ]
         },
         "required_layers": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "name",
-              "linetype",
-              "plottable"
-            ],
-            "properties": {
-              "name": {
-                "type": "string",
-                "minLength": 1
-              },
-              "linetype": {
-                "type": "string",
-                "minLength": 1
-              },
-              "plottable": {
-                "type": "boolean"
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "linetype",
+                  "plottable"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "linetype": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "plottable": {
+                    "type": "boolean"
+                  }
+                }
               }
+            },
+            {
+              "const": "UNRESOLVED"
             }
-          }
+          ]
         },
         "required_styles": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "text",
-            "dimension",
-            "mleader",
-            "table"
-          ],
-          "properties": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "text",
+                "dimension",
+                "mleader",
+                "table"
+              ],
+              "properties": {
             "text": {
               "type": "array",
-              "minItems": 1,
               "items": {
                 "type": "string",
                 "minLength": 1
@@ -223,7 +293,6 @@
             },
             "dimension": {
               "type": "array",
-              "minItems": 1,
               "items": {
                 "type": "string",
                 "minLength": 1
@@ -231,7 +300,6 @@
             },
             "mleader": {
               "type": "array",
-              "minItems": 1,
               "items": {
                 "type": "string",
                 "minLength": 1
@@ -239,26 +307,31 @@
             },
             "table": {
               "type": "array",
-              "minItems": 1,
               "items": {
                 "type": "string",
                 "minLength": 1
               }
             }
-          }
+              }
+            },
+            {
+              "const": "UNRESOLVED"
+            }
+          ]
         },
         "layouts": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "name",
-              "viewport_scales",
-              "locked"
-            ],
-            "properties": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "viewport_scales",
+                  "locked"
+                ],
+                "properties": {
               "name": {
                 "type": "string",
                 "minLength": 1
@@ -274,18 +347,25 @@
               "locked": {
                 "type": "boolean"
               }
+                }
+              }
+            },
+            {
+              "const": "UNRESOLVED"
             }
-          }
+          ]
         },
         "font_policy": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "selected_mode",
-            "new_drawing",
-            "legacy_compatibility"
-          ],
-          "properties": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "selected_mode",
+                "new_drawing",
+                "legacy_compatibility"
+              ],
+              "properties": {
             "selected_mode": {
               "enum": [
                 "NEW_DRAWING",
@@ -329,7 +409,12 @@
                 }
               }
             }
-          }
+              }
+            },
+            {
+              "const": "UNRESOLVED"
+            }
+          ]
         }
       }
     },
@@ -377,5 +462,558 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.INSUNITS"
+                ],
+                "properties": {
+                  "variables.INSUNITS": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "INSUNITS": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.MEASUREMENT"
+                ],
+                "properties": {
+                  "variables.MEASUREMENT": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "MEASUREMENT": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.LTSCALE"
+                ],
+                "properties": {
+                  "variables.LTSCALE": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "LTSCALE": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.CELTSCALE"
+                ],
+                "properties": {
+                  "variables.CELTSCALE": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "CELTSCALE": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.PSLTSCALE"
+                ],
+                "properties": {
+                  "variables.PSLTSCALE": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "PSLTSCALE": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.MSLTSCALE"
+                ],
+                "properties": {
+                  "variables.MSLTSCALE": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "MSLTSCALE": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.DIMASSOC"
+                ],
+                "properties": {
+                  "variables.DIMASSOC": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "DIMASSOC": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "variables.ANNOALLVISIBLE"
+                ],
+                "properties": {
+                  "variables.ANNOALLVISIBLE": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "variables": {
+                  "properties": {
+                    "ANNOALLVISIBLE": {
+                      "const": "UNRESOLVED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "current_layer"
+                ],
+                "properties": {
+                  "current_layer": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "properties": {
+            "setup_expectations": {
+              "properties": {
+                "current_layer": {
+                  "const": "UNRESOLVED"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "required_layers"
+                ],
+                "properties": {
+                  "required_layers": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "setup_expectations": {
+            "properties": {
+              "required_layers": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "required_styles"
+                ],
+                "properties": {
+                  "required_styles": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "setup_expectations": {
+            "properties": {
+              "required_styles": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "array",
+                    "minItems": 1
+                  },
+                  "dimension": {
+                    "type": "array",
+                    "minItems": 1
+                  },
+                  "mleader": {
+                    "type": "array",
+                    "minItems": 1
+                  },
+                  "table": {
+                    "type": "array",
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "layouts"
+                ],
+                "properties": {
+                  "layouts": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "setup_expectations": {
+            "properties": {
+              "layouts": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "expectation_policy"
+        ],
+        "properties": {
+          "expectation_policy": {
+            "required": [
+              "field_modes"
+            ],
+            "properties": {
+              "field_modes": {
+                "required": [
+                  "font_policy"
+                ],
+                "properties": {
+                  "font_policy": {
+                    "const": "OBSERVATION_ONLY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "setup_expectations": {
+            "properties": {
+              "font_policy": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
