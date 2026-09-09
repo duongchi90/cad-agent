@@ -993,6 +993,55 @@ def run_fidelity_hatch_reconstruct(
 
 _APPROVED_REGION_OCR_TILE_LIMIT = 320
 _APPROVED_REGION_OCR_CALL_LIMIT = 64
+_APPROVED_REGION_OCR_CANVAS_PIXEL_LIMIT = 16_000_000
+
+
+def _region_proposal_definition_sha256(proposal: dict[str, Any]) -> str:
+    definition = {
+        "regions": proposal.get("regions"),
+        "excluded_regions": proposal.get("excluded_regions"),
+    }
+    return __import__("hashlib").sha256(
+        json.dumps(definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _validate_approved_region_text_proposal(
+    proposal: object,
+    proposal_record: dict[str, Any],
+    manifest: dict[str, Any],
+    page: dict[str, Any],
+    rendered: Path,
+    output_root: Path,
+    page_number: int,
+) -> dict[str, Any]:
+    if not isinstance(proposal, dict):
+        raise FidelityError("Approved region proposal is invalid JSON.")
+    if (
+        proposal.get("schema_version") != "fidelity-region-proposal-1.0"
+        or proposal.get("private_artifact") is not True
+        or proposal.get("state") != "needs_human_approval"
+        or proposal.get("source") != manifest.get("source")
+    ):
+        raise FidelityError("Approved region proposal is not current for text observation.")
+    proposal_page = proposal.get("page")
+    if not isinstance(proposal_page, dict) or proposal_page.get("number") != page_number:
+        raise FidelityError("Approved region proposal page does not match the approval page.")
+    audit = json.loads(_safe_artifact_path(output_root, page["artifacts"]["layout_audit"]).read_text(encoding="utf-8"))
+    source_page = audit.get("source_page", {})
+    expected_page = {
+        "render_sha256": sha256_file(rendered),
+        "render_width_px": source_page.get("render_width_px"),
+        "render_height_px": source_page.get("render_height_px"),
+        "dpi": source_page.get("dpi"),
+    }
+    if any(proposal_page.get(key) != value for key, value in expected_page.items()):
+        raise FidelityError("Approved region proposal render metadata is stale.")
+    if proposal.get("proposal_definition_sha256") != _region_proposal_definition_sha256(proposal):
+        raise FidelityError("Approved region proposal definition is stale.")
+    if proposal.get("proposal_definition_sha256") != proposal_record.get("definition_sha256"):
+        raise FidelityError("Approved proposal definition no longer matches its approval.")
+    return proposal
 
 
 def _approved_region_text_candidates(
@@ -1036,6 +1085,8 @@ def _approved_region_text_candidates(
                 continue
             if ocr_call_count >= _APPROVED_REGION_OCR_CALL_LIMIT:
                 raise FidelityError("Approved-region OCR exceeded the bounded invocation limit.")
+            if canvas_y * canvas_width > _APPROVED_REGION_OCR_CANVAS_PIXEL_LIMIT:
+                raise FidelityError("Approved-region OCR exceeded the bounded canvas limit.")
             canvas = np.full((canvas_y, canvas_width, 3), 255, dtype=np.uint8)
             for tile_y, _, _, patch in tiles:
                 canvas[tile_y:tile_y + patch.shape[0], :patch.shape[1]] = patch
@@ -1069,6 +1120,11 @@ def _approved_region_text_candidates(
                         x0 + ly1,
                         y0 + original_height - lx0,
                     )
+                if not (
+                    x0 <= mapped[0] < mapped[2] <= x1
+                    and y0 <= mapped[1] < mapped[3] <= y1
+                ):
+                    continue
                 candidate = _raw_text_payload(text)
                 candidate["bbox_px"] = list(mapped)
                 candidate["rotation_deg"] = float(rotation)
@@ -1108,6 +1164,8 @@ def run_fidelity_text_observations(
             raise FidelityError("Region approval is not valid for text observation.")
         page_record = approval.get("page")
         page_number = page_record.get("number") if isinstance(page_record, dict) else None
+        if page_number != 1:
+            raise FidelityError("Approved-region text observation is page 1 only.")
         page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
         if page is None:
             raise FidelityError("Region approval page is absent from the fidelity manifest.")
@@ -1118,9 +1176,15 @@ def run_fidelity_text_observations(
         if not isinstance(proposal_record, dict):
             raise FidelityError("Region approval is missing its proposal provenance.")
         proposal_path = _safe_artifact_path(output_root, proposal_record)
-        proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
-        if proposal.get("proposal_definition_sha256") != proposal_record.get("definition_sha256"):
-            raise FidelityError("Approved proposal definition no longer matches its approval.")
+        proposal = _validate_approved_region_text_proposal(
+            json.loads(proposal_path.read_text(encoding="utf-8")),
+            proposal_record,
+            manifest,
+            page,
+            rendered,
+            output_root,
+            page_number,
+        )
         approved_ids = approval.get("approved_region_ids")
         if not isinstance(approved_ids, list) or not approved_ids:
             raise FidelityError("Region approval must name approved regions.")
