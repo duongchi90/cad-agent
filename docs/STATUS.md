@@ -68,10 +68,12 @@
   `viewport_query` input/expected invariants. The complete packet remains
   outside Git because it references private drawing artifacts; its SHA-256 is
   `312e2ce76ebf3998cbf7b9d1f6e64c8c5d6c6c2ec3d357047307193a2dfebafe`.
-- The packet is not a visual-fidelity or production-approval claim: live
-  AutoCAD/FileIPC prerequisites were absent, the viewport request remains
-  `NOT RUN`, the frozen candidate remains unpromoted, and no source, candidate,
-  or CAD state was mutated.
+- The packet records the established execution-output item-13
+  `PASS_VISUAL_FIDELITY` for the unchanged frozen candidate. This is not
+  production approval or authorization to use the candidate as the page-1
+  reuse solution: live AutoCAD/FileIPC prerequisites were absent, the viewport
+  request remains `NOT RUN`, the candidate remains unpromoted, and no source,
+  candidate, or CAD state was mutated.
 - This branch remains **Partially verified**: deterministic contracts, owner,
   dispatcher, client, test harness, remediation, and authoritative verification
   passed, but live viewport evidence and private fidelity evidence remain

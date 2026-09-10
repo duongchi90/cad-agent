@@ -66,10 +66,12 @@ The disposable page-1 candidate remains frozen and unpromoted. Its metadata is:
 - report SHA-256: `dd48e3e5c1e9cf08c7b00a04e80bd8dc5250a1c8c4285e8ae3461fb373e7a867`
 - geometry fingerprint: `81a0e2c3ecfa7ca38ddd069d7866ced392136e53f780fe487a2f61bb182928d0`
 - metrics: full-page precision `0.980933`, recall `0.874512`, F1 `0.924671`; content-ROI F1 `0.924540`
-- unresolved: independent SOL visual review and production promotion
+- visual-fidelity review: `PASS_VISUAL_FIDELITY` at established execution-output item 13
+- unresolved: production promotion and authorization to use this candidate as the page-1 reuse solution
 
-The candidate remains `ACCEPTED_DISPOSABLE_FROZEN`; this is not a release or
-visual-fidelity PASS.
+The candidate remains `ACCEPTED_DISPOSABLE_FROZEN`. The item-13 independent SOL
+visual-fidelity review passed for the frozen hashes; that verdict is not a
+release, production-promotion, or page-1 reuse-solution authorization.
 
 ## Future live registration request
 
@@ -93,10 +95,12 @@ and `twist_angle`. Every field must be `OBSERVED` with a finite value,
 failure reason. Width, height, and view height must be positive. No guessed
 zero/default is accepted.
 
-The observed result may refine registration and bind a fresh independent SOL
-review; it may not promote or mutate the frozen candidate. At packet creation,
-the required live prerequisites were absent and no AutoCAD process was running,
-so this request remains `NOT RUN`.
+The observed result may refine registration; if it changes the candidate or
+decision-relevant evidence, the changed evidence requires a fresh review. It
+may not promote or mutate the frozen candidate. The item-13 visual-fidelity
+pass remains bound to the unchanged frozen hashes. At packet creation, the
+required live prerequisites were absent and no AutoCAD process was running, so
+this request remains `NOT RUN`.
 
 ## Safety and verification
 
