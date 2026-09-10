@@ -378,7 +378,10 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
                 candidateTransaction.Commit();
             }
 
-            candidate.SaveAs(outputPath, DwgVersion.Current);
+            SerializeCandidateWithCleanupBoundary(
+                outputPath,
+                () => candidate.SaveAs(outputPath, DwgVersion.Current),
+                path => File.Exists(path) && !Directory.Exists(path));
             candidateCreated = true;
             candidateIdentity = CaptureCandidateIdentity(outputPath);
             var outputHash = StandaloneDwgComponentPolicy.ComputeSha256(outputPath);
@@ -423,6 +426,26 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
 
     public bool IsCandidatePathAbsent(string path) =>
         !File.Exists(path) && !Directory.Exists(path);
+
+    internal static void SerializeCandidateWithCleanupBoundary(
+        string outputPath,
+        Action serialize,
+        Func<string, bool> outputExists)
+    {
+        try
+        {
+            serialize();
+        }
+        catch (Exception exception)
+        {
+            if (outputExists(outputPath))
+            {
+                throw BuildRetainedCandidateCleanupFailure(outputPath, exception);
+            }
+
+            throw;
+        }
+    }
 
     internal static StandaloneDwgComponentPolicyException BuildRetainedCandidateCleanupFailure(
         string outputPath,

@@ -250,6 +250,42 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
         Assert.Contains("cleanup was not attempted", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ReportsRetainedCandidateWhenSaveAsCreatesFileThenFails()
+    {
+        var outputPath = Path.Combine(_root, "candidate", "partial-output.dwg");
+
+        var error = Assert.Throws<StandaloneDwgComponentPolicyException>(() =>
+            AutoCadStandaloneDwgComponentDatabase.SerializeCandidateWithCleanupBoundary(
+                outputPath,
+                () =>
+                {
+                    File.WriteAllText(outputPath, "partial candidate");
+                    throw new IOException("SaveAs failed after creating output");
+                },
+                path => File.Exists(path) && !Directory.Exists(path)));
+
+        Assert.Equal(StandaloneDwgComponentPolicy.CleanupFailedCode, error.Code);
+        Assert.Contains("CANDIDATE_RETAINED_UNVERIFIED", error.Message, StringComparison.Ordinal);
+        Assert.Contains(outputPath, error.Message, StringComparison.Ordinal);
+        Assert.Contains("cleanup was not attempted", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PreservesSaveAsFailureWhenOutputWasNotCreated()
+    {
+        var outputPath = Path.Combine(_root, "candidate", "missing-output.dwg");
+        var expected = new IOException("SaveAs failed before creating output");
+
+        var actual = Assert.Throws<IOException>(() =>
+            AutoCadStandaloneDwgComponentDatabase.SerializeCandidateWithCleanupBoundary(
+                outputPath,
+                () => throw expected,
+                path => File.Exists(path) && !Directory.Exists(path)));
+
+        Assert.Same(expected, actual);
+    }
+
     public void Dispose()
     {
         try
