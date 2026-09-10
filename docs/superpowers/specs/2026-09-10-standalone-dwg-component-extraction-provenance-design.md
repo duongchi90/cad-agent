@@ -168,7 +168,20 @@ extents/signature needed for identity, and the source revision/hash. Eligibility
 requires: source hash unchanged, `dbmod_before == dbmod_after`, `read_only=true`,
 `changed=false`, no conflicts, and all requested identities matching.
 
-### 5.3 Proposed/approved extraction plan
+### 5.3 Candidate-base model (closed)
+
+This capability always starts from an empty new disposable database. It does
+not consume, copy, or merge into an existing candidate artifact. Therefore
+there is no candidate input path, identity, or hash, and neither the plan nor
+the result contains `candidate_input_sha256`. The only candidate artifact is
+the newly created `candidate_output_path` under the allowed disposable root.
+
+This choice is deliberate: it closes alias protection, provenance, rollback,
+and deterministic-output semantics without inventing a candidate base. Any
+future operation that starts from an existing disposable candidate is a
+different capability and requires a separate approved design.
+
+### 5.4 Proposed/approved extraction plan
 
 The plan must bind exactly to one eligible inspection and contain:
 
@@ -180,11 +193,15 @@ inspection_id
 inspection_sha256
 source_drawing_sha256
 candidate_output_path
-candidate_input_sha256
+candidate_base_model
 components
 transform_policy
 approval
 ```
+
+`candidate_base_model` is the literal value `EMPTY_NEW_DATABASE`. The output
+path must be absent during planning and must not resolve to the source or any
+prior candidate. No candidate input artifact is read or hashed.
 
 `components` contains only inspection-backed groups. Each transform is local
 translation/rotation/positive uniform scale, reusing the existing closed
@@ -192,7 +209,7 @@ transform policy; reflection and global deformation are rejected. The plan is
 `PROPOSED` until a separate approval reference is supplied. The builder must
 never fabricate approval.
 
-### 5.4 Extraction result and provenance handoff
+### 5.5 Extraction result and provenance handoff
 
 The disposable result must record:
 
@@ -201,7 +218,7 @@ schema_version
 request_id
 run_id
 source_drawing_sha256
-candidate_input_sha256
+candidate_base_model
 candidate_output_sha256
 candidate_output_identity
 source_mutated
@@ -235,6 +252,8 @@ reference.
 ### 6.2 Disposable destination safety
 
 - Candidate output must be an absent path in an allowed disposable root.
+- Candidate creation starts from `EMPTY_NEW_DATABASE`; no candidate input
+  artifact is opened, copied, hashed, or used as a provenance ancestor.
 - Source and candidate must resolve to different identities and hashes.
 - Destination creation is the only allowed mutation in this capability.
 - The result must be re-openable/readable and hash-bound before any later
@@ -245,6 +264,8 @@ reference.
 ### 6.3 Failure and rollback
 
 - Preflight failures create no candidate output.
+- A non-absent output path or any request to provide a candidate input artifact
+  is rejected before destination creation.
 - If candidate creation fails after a file is created, cleanup may delete only
   the exact output whose captured identity still matches the operation's
   creation identity.
