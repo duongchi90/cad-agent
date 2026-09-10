@@ -96,6 +96,20 @@
   boundary or equivalent declared prerequisites; it must not retry by bypassing
   AutoCAD trust controls.
 
+## SOL live-gate decision (2026-09-10)
+
+- SOL consumed the pushed bootstrap evidence and returned
+  `VERDICT=BLOCKED`, `MATERIAL_FINDING=live viewport registration is blocked at
+  the declared human/operator trust boundary`, and `HUMAN_GATE=YES`.
+- The single bounded next action is for the human operator to manually load the
+  already-approved repository plugin DLL through the declared NETLOAD/APPLOAD
+  workflow in a fresh AutoCAD Mechanical 2027 session, verify plugin
+  identity/health only, and stop. The operator must not open or mutate
+  `BVTL.dwg` or any candidate during this step.
+- No automated trust bypass, retry loop, source/candidate mutation, or live-pass
+  claim is permitted. Until that human-gated health check occurs, the live
+  viewport gate remains `NOT RUN` and the branch remains **Partially verified**.
+
 ## Current canonical snapshot (2026-09-09)
 
 - Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
