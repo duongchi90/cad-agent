@@ -116,6 +116,33 @@
   This identity check is read-only; it does not establish that AutoCAD has
   loaded the DLL.
 
+## Live health and viewport-query follow-up (2026-09-10)
+
+- SOL subsequently classified the approved session setup as Luna-owned routine
+  work (`HUMAN_GATE=NO`) within the existing trust boundary. A fresh AutoCAD
+  Mechanical 2027 session loaded the exact approved DLL above; the module list
+  confirmed the repository binary before any production drawing was opened.
+- The bounded health request passed with plugin version `1.0.0`, host
+  `AutoCAD Mechanical 2027`, IPC directory `C:\temp`, `read_only=true`, and
+  the expected plugin SHA-256. Health evidence remains outside Git at the
+  local run boundary; its SHA-256 is
+  `a8f2817c6f24efe685f9ef293adfcf90becb9a48801b84934e43ca9cba3b7bae`.
+- `BVTL.dwg` was then opened through the existing read-only owner and exactly
+  one packet-bound request ran:
+  `request_id=layout-vp-126babe-20260910`, `handle=126BABE`.
+  The result was `success=true`, `changed=false`, `type=VIEWPORT`, `layer=0`,
+  all seven declared fields were `OBSERVED`, `DBMOD=0 -> 0`, and the source
+  hash was unchanged before/after at
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+  The private result evidence remains outside Git with SHA-256
+  `7aa5bd9478c8d84c267edb44bf93de1a5e1ac5fd314d5984f1f9e091663dc11d`.
+- The source drawing was closed without save, the disposable template drawing
+  was closed without save, and the exact AutoCAD process was shut down. No
+  source, accepted drawing, frozen candidate, packet, or production CAD state
+  was mutated. This closes the declared read-only viewport-registration gate;
+  it does not authorize production promotion or claim that the page-1 drawing
+  workflow is complete.
+
 ## Current canonical snapshot (2026-09-09)
 
 - Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
