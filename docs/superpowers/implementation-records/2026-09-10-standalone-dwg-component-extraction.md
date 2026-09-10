@@ -2,7 +2,8 @@
 
 Date: 2026-09-11
 Branch: `codex/audit-text-style-compat-20260910`
-Implementation/evidence commit: `a1fece80b1efae831d442626c6454a0ae23533d0`
+Implementation/evidence commits: `a1fece80b1efae831d442626c6454a0ae23533d0` and
+`94719ca3e854dd3bb6b668217924c85e3d07c214`
 
 ## Scope and boundary
 
@@ -34,6 +35,14 @@ The page-1 delta regression uses the existing inspection-backed allowlist:
 has not been inspected. No native full-drawing or exact-base-Xref restriction
 was changed.
 
+The candidate identity boundary was then remediated after independent review
+found that the real .NET cleanup identity (`path|length|creation ticks|write
+ticks`) was being exposed as the schema `file_id`. The raw filesystem identity
+is now retained only as the internal cleanup recheck, while the public result
+exposes `candidate-file-<sha256(raw identity)>`, which satisfies the frozen
+schema grammar. C# reader/dispatcher coverage and the Python result validator
+now exercise this real-like raw identity end to end.
+
 ## Interfaces and fixture contract
 
 The gate reuses the existing `DotNetIPCClient`, `FileIPCLiveMCPClient`, Windows
@@ -55,13 +64,14 @@ as `SKIP`; it does not turn an unavailable live session into a PASS.
 
 ## Evidence and verification
 
-Evidence captured on the implementation/evidence commit:
+Evidence captured on the remediation head `94719ca3e854dd3bb6b668217924c85e3d07c214`:
 
 - `scripts/verify.ps1`: exit `0`, all checks passed.
-- Full offline Python suite: `3276 passed`, `21 deselected`, `74 subtests`.
-- Offline IPC JUnit: `133` tests, `0` failures, `0` errors, `0` skipped.
-- Full C# solution: `235 passed`, `0` failed, `0` skipped.
-- Task 6 focused set: `219 passed`, `1 skipped`, `52 subtests`.
+- Full offline Python suite: `3277 passed`, `21 deselected`, `74 subtests`.
+- Offline IPC JUnit: `134` tests, `0` failures, `0` errors, `0` skipped.
+- Full C# solution: `237 passed`, `0` failed, `0` skipped.
+- Task 6 focused set: `219 passed`, `1 skipped`, `52 subtests`; identity
+  interoperability focused set: `83 passed`, `1 skipped`, `52 subtests`.
 - New live gate: `SKIP` with the exact missing-prerequisite list; no AutoCAD
   document was opened and no live candidate was created.
 - `autocad_mechanical` unavailable-state probe: `17 skipped`; live marker
@@ -73,9 +83,11 @@ Evidence captured on the implementation/evidence commit:
 - Python 3.11.9, .NET SDK 10.0.302, and repository Ruff checks passed.
 - `git diff --check`: pass; verification left the repository clean.
 
-The existing SOL re-review of the preceding hash-binding remediation was
-`VERDICT=PASS`, with `MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`. No new
-material finding was introduced by this bounded live-gate/test boundary.
+The preceding hash-binding remediation had SOL status `VERDICT=PASS`, with
+`MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`. SOL subsequently identified the
+candidate identity interoperability defect described above; it is remediated
+in the second commit and is pending fresh SOL re-review. No live CAD verdict
+is inferred from these offline results.
 
 ## Reuse dossier classification
 
