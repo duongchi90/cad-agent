@@ -37,6 +37,10 @@
 - `save_performed=true` means only that disposable candidate serialization completed and the output was re-opened/read back and hash-bound; a false value is never a usable success result.
 - Candidate cleanup may delete only the exact output whose captured identity still matches the failed operation; cleanup failure is a material failure.
 - Existing DARA, component/view registry, candidate-revision, drawing-query, and File IPC/.NET owners remain authoritative; `native_dwg_provenance.py` remains reference/regression-only for standalone work; no second transport, writer, registry, manifest, or truth store is introduced.
+- Execution order is dependency-safe: Task 2 validates standalone packets and
+  builds detached provenance inputs only; Task 4 creates and validates the
+  required R3/R4 standalone mode; only after Task 4 GREEN may the adapter
+  compose DARA/R3/R4 candidate binding.
 - `PAGE2_REUSED` groups may enter this capability. Page-1 deltas, text, dimensions, title-block content, and unresolved visual discrepancies remain in the existing page-1 fidelity/review path.
 - Real/customer drawings, annotations, credentials, generated private DXF/DWG files, and live AutoCAD state remain workstation-only.
 - Human approval remains required for ambiguous recognition, unverified calibration, production mutation, and any promotion beyond the disposable candidate boundary.
@@ -136,16 +140,15 @@ git commit -m "test: define standalone DWG extraction contracts"
 
 Expected result before implementation: the newly added contract tests remain RED until the validators and C# model branches are added; the commit must not be described as runtime support.
 
-## Task 2: Implement the Python validation and existing-owner composition seam
+## Task 2: Implement Python validation and detached provenance inputs
 
 **Files:**
 - Create: `cad_agent/standalone_dwg_extraction.py`.
 - Modify: `tests/test_cad_agent_standalone_dwg_extraction.py`.
-- Conditional modify: `cad_agent/component_view_registry.py` and `tests/test_cad_agent_component_view_registry.py` only under Task 4's measured RED.
 
 **Interfaces:**
 - Consumes: closed inspection/result packets and an existing `mcp_integration_lib.dotnet_ipc.DotNetIPCClient`.
-- Produces: pure functions `validate_standalone_inspection_request`, `validate_standalone_inspection_result`, `build_standalone_extraction_plan`, `validate_standalone_extraction_result`, and `compose_standalone_candidate_binding`. Each returns a detached normalized mapping or raises one categorical `StandaloneDwgExtractionError` code.
+- Produces: pure functions `validate_standalone_inspection_request`, `validate_standalone_inspection_result`, `build_standalone_extraction_plan`, `validate_standalone_extraction_result`, and `build_standalone_provenance_context`. Each returns a detached normalized mapping or raises one categorical `StandaloneDwgExtractionError` code. `compose_standalone_candidate_binding` is intentionally deferred until after Task 4 GREEN.
 
 - [ ] **Step 1: Implement only the validator REDs.** Enforce exact top-level keys, lowercase SHA-256 values, uppercase normalized hex handles, unique membership, non-empty groups, explicit entity/layer expectations, `approval=None` for inspection, `EMPTY_NEW_DATABASE`, absent/non-aliasing candidate output, and local finite transforms with positive scale. Reject Xref-only fields and every candidate-input field before any IPC call.
 
@@ -153,7 +156,7 @@ Expected result before implementation: the newly added contract tests remain RED
 
 - [ ] **Step 3: Bind the extraction result.** Require `source_mutated=false`, stable source hash/DBMOD, `save_performed=true`, candidate output identity/hash, candidate-only serialization evidence, one-to-one approved source-to-candidate handle mappings, and a deterministic result checksum. Reject a result whose candidate path aliases the source or whose output cannot be re-opened/read back.
 
-- [ ] **Step 4: Compose existing DARA/R3/R4 owners.** Issue source/candidate artifact references through `drawing_artifact_reference`, produce the standalone provenance context, route candidate identity/currentness through the existing candidate-revision builder, and expose only bound candidate handles to `drawing_query`. Do not call `build_native_dwg_r3_inputs` with fabricated full-drawing semantics and do not mutate any existing owner module.
+- [ ] **Step 4: Build detached provenance inputs only.** Issue or normalize the DARA source/candidate references and observations plus the standalone inspection/extraction result checksum into `build_standalone_provenance_context`. Do not call `component_view_registry`, `candidate_revision`, or `drawing_query` yet; the required standalone R3/R4 mode does not exist until Task 4. Do not call `build_native_dwg_r3_inputs` with fabricated full-drawing semantics and do not mutate any existing owner module.
 
 - [ ] **Step 5: Add the IPC call seam without live execution.** The adapter may call only the two new `DotNetIPCClient` methods after all local request validation succeeds. Tests must prove malformed input raises before the dispatcher/transport is triggered.
 
@@ -202,11 +205,11 @@ git commit -m "feat: add standalone DWG disposable reader"
 
 **Files:**
 - Test first: `tests/test_cad_agent_component_view_registry.py`, `tests/test_cad_agent_candidate_revision.py`.
-- Modify: `cad_agent/component_view_registry.py`, `cad_agent/candidate_revision.py`.
+- Modify: `cad_agent/component_view_registry.py`, `cad_agent/candidate_revision.py`, `cad_agent/standalone_dwg_extraction.py`, `tests/test_cad_agent_standalone_dwg_extraction.py`.
 
 **Interfaces:**
 - Consumes: the standalone provenance context and candidate handle mappings from Task 2.
-- Produces: a versioned, minimal component/view registry context plus an explicit R4 recognition/binding branch that keeps source handles and candidate handles bound to the standalone source.
+- Produces: a versioned, minimal component/view registry context, an explicit R4 recognition/binding branch, and the final `compose_standalone_candidate_binding` integration that keeps source handles and candidate handles bound to the standalone source.
 
 - [ ] **Step 1: Write the RED against the current owners.** Assert the current R3 rejection for a standalone context with non-empty selected components and the current R4 fallback/rejection when that registry is presented to candidate revision. Record the exact failure codes before changing either owner.
 
@@ -216,12 +219,14 @@ git commit -m "feat: add standalone DWG disposable reader"
 
 - [ ] **Step 4: Add adversarial tests.** Reject a full-drawing packet mislabeled as standalone, a standalone packet with `REUSED_FROM_BASE_CAD`, a candidate handle owned by two components, an unbound source handle, stale source/candidate hashes, an unknown registry mode, and a component/view link pointing to a different candidate revision.
 
-- [ ] **Step 5: Commit only the measured extension.**
+- [ ] **Step 5: Add the deferred cross-owner composition.** After the R3 and R4 RED/GREEN tests pass, implement `compose_standalone_candidate_binding` in `standalone_dwg_extraction.py`. It may then issue/validate DARA references, build the exact standalone R3 registry, build/validate the R4 candidate revision, and expose only bound candidate handles to `drawing_query`. Add cross-owner tests proving the same source/candidate identities and standalone result checksum are carried through every layer. This step must not run before the required R3/R4 branch is GREEN.
+
+- [ ] **Step 6: Commit the dependency-safe extension.**
 
 ```text
 .\.venv-py311\Scripts\python.exe -m pytest -q -p no:cacheprovider tests/test_cad_agent_component_view_registry.py tests/test_cad_agent_candidate_revision.py tests/test_cad_agent_standalone_dwg_extraction.py
 git diff --check
-git add tests/test_cad_agent_component_view_registry.py cad_agent/component_view_registry.py tests/test_cad_agent_candidate_revision.py cad_agent/candidate_revision.py
+git add tests/test_cad_agent_component_view_registry.py cad_agent/component_view_registry.py tests/test_cad_agent_candidate_revision.py cad_agent/candidate_revision.py cad_agent/standalone_dwg_extraction.py tests/test_cad_agent_standalone_dwg_extraction.py
 git commit -m "feat: bind standalone extraction lineage in R3 and R4"
 ```
 
