@@ -383,3 +383,37 @@ evidence is at
 The next action is a fresh bounded SOL diagnosis of this dispatcher boundary;
 do not retry live Task 6 or weaken readiness/custody policy before that
 review.
+
+## Iteration 38 dispatcher-owner remediation
+
+SOL classified iteration 37 as an initial dispatcher-load owner finding and
+authorized exactly one non-live remediation. The code change was pushed at
+`669472d2f8c900b58146e23921dab0fc90644d41`.
+
+The owned startup-session script now contains only bootstrap content:
+`_.QNEW`, optional approved release-plugin `_.NETLOAD`, and one AutoLISP
+expression that sets the exact FileIPC root and loads the exact
+`mcp_dispatch.lsp` path. It contains no source path, save, extraction,
+candidate, or publication command. The session still discovers the main
+window by its launched PID and returns the same-process HWND bindings. A
+`dispatcher_preloaded` binding tells `FileIPCLiveMCPClient` to skip the
+keyboard LISP load for initial bootstrap; it still requires a claim-bound
+FileIPC `ping` after readiness and before any runtime hook or source open.
+The existing runtime triggers and default writable behavior remain unchanged.
+
+Focused verification reported `49 passed`, `1 skipped`, `1 deselected`, and
+`9 subtests` with the causal-RED oracle excluded; Ruff and `git diff --check`
+passed. The authoritative `.\scripts\verify.ps1` ran on the clean code
+commit and exited `0`: C# `238 passed`; offline Python `3297 passed`, `21
+deselected`, `80 subtests`; offline IPC JUnit `134`, with zero failures or
+errors; real-data unavailable probe `2 skipped`; AutoCAD Mechanical
+unavailable probe `17 skipped`; live Task 6 `NOT RUN`. No live retry was made
+after this remediation and no CAD/source/candidate state was mutated.
+
+Private evidence and recoverable state are recorded at:
+
+- `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-dispatcher-owner-remediation-iteration38-evidence.txt`
+- `C:\temp\cad-agent-task6-live-20260911\wait-safe-resume-state-iteration38.txt`
+
+Fresh SOL review of this pushed remediation is required before another live
+Task-6 attempt.

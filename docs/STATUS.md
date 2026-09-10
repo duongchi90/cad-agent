@@ -188,6 +188,23 @@
   Live Task-6 acceptance remains **NOT RUN**, not PASS. Private evidence is at
   `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration37-evidence.txt`;
   fresh SOL review of this dispatcher boundary is pending.
+- SOL classified iteration 37 as a dispatcher-load owner finding and
+  authorized exactly one non-live remediation. Code HEAD
+  `669472d2f8c900b58146e23921dab0fc90644d41` now reuses the owned startup
+  script to perform bounded bootstrap-only loading: `_.QNEW`, approved plugin
+  `_.NETLOAD`, and one root-bound load of the exact `mcp_dispatch.lsp` path.
+  The generated script admits no source, save, extraction, candidate, or
+  publication command. The client requires a claim-bound FileIPC ping after
+  document readiness and before runtime setup/source-open; initial dispatcher
+  load no longer depends on keyboard-delivered AutoLISP. Focused checks pass
+  (`49 passed`, `1 skipped`, `1 deselected`, `9 subtests`); the exact
+  authoritative verify exits `0` with C# `238 passed`, offline Python `3297
+  passed`, `21 deselected`, `80 subtests`, offline IPC JUnit `134` with zero
+  failures/errors, real-data `2 skipped`, and AutoCAD Mechanical `17 skipped`.
+  No live retry was made on this head; live Task-6 acceptance remains **NOT
+  RUN**. Fresh SOL review is required before another live gate. Private
+  evidence is at
+  `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-dispatcher-owner-remediation-iteration38-evidence.txt`.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 

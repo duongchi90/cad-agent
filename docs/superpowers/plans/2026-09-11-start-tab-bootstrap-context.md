@@ -81,12 +81,13 @@ behavior remains unchanged.
 
 **Interfaces:**
 - Task 6 constructs its existing client with `bootstrap_start_tab=True` and a
-  factory for an owned disposable AutoCAD startup-script session. The script
-  contains only `_.QNEW`; all triggers and probes are bound to the HWND of the
-  process launched by that factory.
-- Task 6 also supplies `make_windows_start_tab_document_ready_probe(hwnd)` so
-  The positive non-`[Start]` readiness probe is confirmed before the existing
-  plugin/dispatcher is loaded through the bound session.
+  factory for an owned disposable AutoCAD startup-script session. The bounded
+  script contains `_.QNEW`, the approved plugin `_.NETLOAD`, and a root-bound
+  load of the existing dispatcher; it admits no source/save/extraction command.
+  All triggers and probes are bound to the HWND of the launched process.
+- The session positively confirms the non-`[Start]` document state before the
+  client sends the first claim-bound FileIPC ping. Runtime LISP/command
+  triggers remain available only after dispatcher readiness is established.
 - The test calls `close_start_tab_bootstrap()` in its existing `finally` path; source, candidate, and accepted drawing cleanup remains owned by the existing test/gateway.
 
 - [ ] **Step 1: Add the opt-in wiring and cleanup assertion.** Keep the approved source path, fixture, hashes, `read_only=True`, candidate root, and all existing custody assertions unchanged. Add no new source or candidate input.
@@ -128,6 +129,28 @@ The code commit was focused-tested and pushed separately. The authoritative
 verify on the exact code head exited `0`; the causal-RED diagnostic remains an
 expected negative oracle, and live Task 6 remains `NOT RUN` pending fresh SOL
 review of the pushed owner change.
+
+## Iteration 38 dispatcher-owner addendum
+
+SOL classified the iteration-37 ping timeout as an initial dispatcher-load
+owner finding and authorized exactly one non-live remediation. Code HEAD
+`669472d2f8c900b58146e23921dab0fc90644d41` extends the owned startup-session
+script with only bootstrap content: `_.QNEW`, optional approved-plugin
+`_.NETLOAD`, and one AutoLISP expression that sets the exact FileIPC root and
+loads the exact `mcp_dispatch.lsp`. The script contains no source path, save,
+extraction, candidate, or publication operation. The session binds the same
+launched PID/HWND, reports `dispatcher_preloaded`, and the client requires a
+claim-bound FileIPC ping after readiness before any runtime setup hook or
+source open. Existing runtime triggers and default writable behavior remain
+unchanged.
+
+Focused checks pass (`49 passed`, `1 skipped`, `1 deselected`, `9 subtests`)
+with Ruff and `git diff --check` passing. The authoritative verify on the
+exact code head exited `0`: C# `238 passed`; offline Python `3297 passed`,
+`21 deselected`, `80 subtests`; offline IPC JUnit `134` with zero failures or
+errors; real-data unavailable probe `2 skipped`; AutoCAD Mechanical
+unavailable probe `17 skipped`; live Task 6 `NOT RUN`. Fresh SOL review is
+required before another live gate.
 
 ---
 
