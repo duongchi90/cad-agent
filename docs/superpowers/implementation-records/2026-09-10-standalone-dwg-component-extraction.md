@@ -321,3 +321,40 @@ FileIPC ping, source read-only open, extraction, and live acceptance remain
 `NOT RUN`. Fresh SOL review is required before any production-owner change.
 Private evidence is at
 `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-owner-diagnostic-iteration35-evidence.txt`.
+
+## Iteration 36 startup-session owner remediation
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the iteration-35 diagnostic. The exact bounded owner change was implemented
+and pushed at code HEAD
+`8afc7c0494e14cf2711641e4c23b060df4920ef`.
+
+`WindowsAutoCADStartTabSession` launches a fresh disposable `acad.exe` with a
+temporary startup script whose exact bytes are `_.QNEW\r\n`. It discovers the
+main window by the launched process ID, requires the positive `[Start]`
+observation, and returns process-bound command/LISP/dispatch/readiness
+bindings. `FileIPCLiveMCPClient` waits for a non-`[Start]` document before
+loading the existing dispatcher. Task 6 then loads the approved plugin through
+the bound HWND and proceeds to the existing read-only source-open path. A
+failed readiness/ping path closes the owned session without opening the source;
+close timeout cleanup can terminate only the process created by this session.
+No source, accepted drawing, candidate, or production CAD state was mutated.
+
+Focused verification on the code head reported `48 passed`, `1 skipped`, `1
+deselected`, and `9 subtests` with the intentional causal-RED test excluded;
+Ruff and `git diff --check` passed. The authoritative
+`.\scripts\verify.ps1` ran on the clean pushed commit and exited `0`:
+C# `238 passed`; offline Python `3296 passed`, `21 deselected`, `80
+subtests`; offline IPC JUnit `tests=134`, `failures=0`, `errors=0`;
+real-data unavailable probe `2 skipped`; AutoCAD Mechanical unavailable probe
+`17 skipped`; live Task 6 `NOT RUN`. The verifier also ran the expected causal
+RED negative oracle and recorded one intentional failure without failing the
+verification contract.
+
+Private evidence and recoverable state are recorded at:
+
+- `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-owner-remediation-iteration36-evidence.txt`
+- `C:\temp\cad-agent-task6-live-20260911\wait-safe-resume-state-iteration36.txt`
+
+Fresh SOL review of the pushed owner change is required before another live
+Task-6 attempt.

@@ -80,9 +80,13 @@ behavior remains unchanged.
 - Modify: `mcp_integration_lib/mcp_client.py` only if Task 1's public helper needs its documented import/export location
 
 **Interfaces:**
-- Task 6 constructs its existing client with `bootstrap_start_tab=True`, `make_windows_command_trigger(hwnd)`, and `make_windows_start_tab_no_document_probe(hwnd)`.
+- Task 6 constructs its existing client with `bootstrap_start_tab=True` and a
+  factory for an owned disposable AutoCAD startup-script session. The script
+  contains only `_.QNEW`; all triggers and probes are bound to the HWND of the
+  process launched by that factory.
 - Task 6 also supplies `make_windows_start_tab_document_ready_probe(hwnd)` so
-  QNEW completion is positively confirmed before the dispatcher is loaded.
+  The positive non-`[Start]` readiness probe is confirmed before the existing
+  plugin/dispatcher is loaded through the bound session.
 - The test calls `close_start_tab_bootstrap()` in its existing `finally` path; source, candidate, and accepted drawing cleanup remains owned by the existing test/gateway.
 
 - [ ] **Step 1: Add the opt-in wiring and cleanup assertion.** Keep the approved source path, fixture, hashes, `read_only=True`, candidate root, and all existing custody assertions unchanged. Add no new source or candidate input.
@@ -103,6 +107,27 @@ behavior remains unchanged.
 For the iteration-33 hardening, repeat the same focused/full verification and
 record/push/review sequence with the new exact code/documentation SHAs before
 any live Task-6 attempt.
+
+## Iteration 36 owner addendum
+
+SOL approved the iteration-35 primitive diagnostic with `VERDICT=PASS`,
+`MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`. The implementation boundary is
+now the pushed code head
+`8afc7c0494e14cf2711641e4c23b060df4920ef`:
+`WindowsAutoCADStartTabSession` owns a fresh disposable `acad.exe` process,
+launches a disposable `.scr` containing exactly `_.QNEW`, discovers and binds
+the same process's main HWND, and uses the existing readiness probe before any
+LISP or source-open action. Task 6 uses the session factory and a setup hook
+to load the existing plugin after the blank document is ready; it no longer
+relies on a keyboard `_.QNEW` delivery to an unowned `[Start]` window. The
+owned session closes through WM_CLOSE and has a best-effort terminate fallback
+only for that process after a bounded close timeout. The default client path
+and writable behavior are unchanged.
+
+The code commit was focused-tested and pushed separately. The authoritative
+verify on the exact code head exited `0`; the causal-RED diagnostic remains an
+expected negative oracle, and live Task 6 remains `NOT RUN` pending fresh SOL
+review of the pushed owner change.
 
 ---
 

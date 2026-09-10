@@ -154,6 +154,25 @@
   Private evidence is at
   `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-owner-diagnostic-iteration35-evidence.txt`;
   fresh SOL review is pending.
+- SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`
+  for the iteration-35 primitive diagnostic. The bounded implementation at
+  code HEAD
+  `8afc7c0494e14cf2711641e4c23b060df4920ef` now owns that proven primitive:
+  an opt-in Task-6 path launches a disposable AutoCAD process with an exact
+  startup script containing only `_.QNEW`, binds all triggers/probes to that
+  launched process's HWND, waits for a positive non-`[Start]` readiness probe,
+  loads the existing dispatcher, and only then allows the approved source
+  `drawing_open(..., read_only=True)`. Close/timeout cleanup is restricted to
+  the owned process; default writable behavior is preserved. Focused checks
+  pass (`48 passed`, `1 skipped`, `1 deselected`, `9 subtests`, with the
+  intentional causal-RED oracle excluded). The exact authoritative verify
+  exits `0`: C# `238 passed`, offline Python `3296 passed`, `21 deselected`,
+  `80 subtests`, offline IPC JUnit `134` with zero failures/errors, real-data
+  unavailable probe `2 skipped`, and AutoCAD Mechanical unavailable probe
+  `17 skipped`. No live Task-6 run has been made on this head; source,
+  accepted drawing, candidate, and production CAD state remain unchanged.
+  Code is pushed; documentation/evidence is being recorded separately and
+  fresh SOL review is required before the next live attempt.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 
