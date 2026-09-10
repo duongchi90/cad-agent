@@ -46,6 +46,7 @@ public sealed class OperationDispatcher
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
+                ViewportQueryOperationNames.Operation => DispatchViewportQuery(request, startedAt),
                 ExactBaseXrefOperationNames.Inspection => DispatchExactBaseXrefInspection(request, startedAt),
                 ExactBaseXrefOperationNames.Extraction => DispatchExactBaseXrefExtraction(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
@@ -286,6 +287,47 @@ public sealed class OperationDispatcher
             errors: Array.Empty<string>(),
             payload: NativeRenderPayload.Create(snapshot),
             startedAt);
+    }
+
+    private IpcResult DispatchViewportQuery(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var viewportRequest = ViewportQueryRequest.FromIpc(request);
+        var snapshot = _context.DrawingGateway.ReadViewportQuery(viewportRequest);
+        if (!string.Equals(
+                snapshot.Handle,
+                viewportRequest.Handle,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                snapshot.DrawingSha256Before,
+                viewportRequest.DrawingSha256,
+                StringComparison.Ordinal))
+        {
+            return Failure(
+                request,
+                new[] { "viewport_query result did not match the requested handle or source hash" },
+                startedAt);
+        }
+
+        var result = CreateResult(
+            request.RequestId!,
+            ViewportQueryOperationNames.Operation,
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: new[] { snapshot.Handle },
+            warnings: Array.Empty<string>(),
+            errors: Array.Empty<string>(),
+            payload: snapshot.ToPayload(),
+            startedAt);
+        var validation = ContractValidator.ValidateResult(result);
+        return validation.IsValid
+            ? result
+            : Failure(request, validation.Errors, startedAt);
     }
 
     private IpcResult DispatchExactBaseXrefInspection(IpcRequest request, DateTimeOffset startedAt)

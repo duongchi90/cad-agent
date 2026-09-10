@@ -180,6 +180,89 @@ public sealed class CommandContext
             return snapshots;
         }
 
+        public ViewportQueryResult ReadViewportQuery(ViewportQueryRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            var database = _document.Database
+                ?? throw new InvalidOperationException("The active document has no database.");
+            var activePath = ContractValidator.NormalizeWindowsAbsolutePath(database.Filename);
+            var requestedPath = ContractValidator.NormalizeWindowsAbsolutePath(request.DrawingFullPath);
+            if (!StringComparer.OrdinalIgnoreCase.Equals(activePath, requestedPath))
+            {
+                throw new InvalidDataException(
+                    "viewport_query drawing_full_path does not match the active document.");
+            }
+
+            var drawingHashBefore = HashFile(database.Filename);
+            if (!string.Equals(drawingHashBefore, request.DrawingSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "viewport_query drawing hash does not match the requested source hash.");
+            }
+            var dbmodBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"), CultureInfo.InvariantCulture);
+            if (dbmodBefore < 0)
+            {
+                throw new InvalidDataException("viewport_query DBMOD must be non-negative before reading.");
+            }
+
+            ViewportQueryResult result;
+            using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+            {
+                if (!TryParseHandle(request.Handle, out var handle))
+                {
+                    throw new InvalidDataException("viewport_query handle is not a valid hexadecimal handle.");
+                }
+
+                var objectId = database.GetObjectId(false, new Handle(handle), 0);
+                if (objectId.IsNull)
+                {
+                    throw new InvalidDataException(
+                        $"viewport_query handle '{request.Handle}' was not found.");
+                }
+
+                if (transaction.GetObject(objectId, OpenMode.ForRead, false) is not Viewport viewport)
+                {
+                    throw new InvalidDataException(
+                        $"viewport_query handle '{request.Handle}' is not a VIEWPORT.");
+                }
+
+                var fields = new Dictionary<string, ViewportFieldState>(StringComparer.Ordinal)
+                {
+                    ["center_point"] = CapturePoint3d(() => viewport.CenterPoint),
+                    ["width"] = CaptureScalar(() => viewport.Width, positive: true),
+                    ["height"] = CaptureScalar(() => viewport.Height, positive: true),
+                    ["view_center"] = CapturePoint2d(() => viewport.ViewCenter),
+                    ["view_height"] = CaptureScalar(() => viewport.ViewHeight, positive: true),
+                    ["view_target"] = CapturePoint3d(() => viewport.ViewTarget),
+                    ["twist_angle"] = CaptureScalar(() => viewport.TwistAngle, positive: false)
+                };
+                result = new ViewportQueryResult(
+                    viewport.Handle.ToString().ToUpperInvariant(),
+                    ViewportQueryOperationNames.ViewportType,
+                    viewport.Layer,
+                    fields,
+                    drawingHashBefore,
+                    drawingHashBefore,
+                    dbmodBefore,
+                    dbmodBefore);
+            }
+
+            var drawingHashAfter = HashFile(database.Filename);
+            var dbmodAfter = Convert.ToInt32(ReadSystemNumber("DBMOD"), CultureInfo.InvariantCulture);
+            if (!string.Equals(drawingHashBefore, drawingHashAfter, StringComparison.Ordinal)
+                || dbmodBefore != dbmodAfter)
+            {
+                throw new InvalidDataException(
+                    "viewport_query changed the drawing hash or DBMOD during its read-only operation.");
+            }
+
+            return result with
+            {
+                DrawingSha256After = drawingHashAfter,
+                DbmodAfter = dbmodAfter
+            };
+        }
+
         public DrawingSetupSnapshot ReadDrawingSetup()
         {
             var database = _document.Database
@@ -503,6 +586,95 @@ public sealed class CommandContext
                 NumberStyles.HexNumber,
                 CultureInfo.InvariantCulture,
                 out handle);
+        }
+
+        private static ViewportFieldState CapturePoint3d(Func<Point3d> read)
+        {
+            try
+            {
+                var point = read();
+                if (!double.IsFinite(point.X)
+                    || !double.IsFinite(point.Y)
+                    || !double.IsFinite(point.Z))
+                {
+                    return ViewportFieldState.Error(ViewportFieldReasons.InvalidValue);
+                }
+
+                return ViewportFieldState.Observed(
+                    JsonSerializer.SerializeToElement(new[] { point.X, point.Y, point.Z }));
+            }
+            catch (NotSupportedException)
+            {
+                return ViewportFieldState.Unsupported();
+            }
+            catch (NotImplementedException)
+            {
+                return ViewportFieldState.Unsupported();
+            }
+            catch (System.Exception)
+            {
+                return ViewportFieldState.Error();
+            }
+        }
+
+        private static ViewportFieldState CapturePoint2d(Func<Point2d> read)
+        {
+            try
+            {
+                var point = read();
+                if (!double.IsFinite(point.X) || !double.IsFinite(point.Y))
+                {
+                    return ViewportFieldState.Error(ViewportFieldReasons.InvalidValue);
+                }
+
+                return ViewportFieldState.Observed(
+                    JsonSerializer.SerializeToElement(new[] { point.X, point.Y }));
+            }
+            catch (NotSupportedException)
+            {
+                return ViewportFieldState.Unsupported();
+            }
+            catch (NotImplementedException)
+            {
+                return ViewportFieldState.Unsupported();
+            }
+            catch (System.Exception)
+            {
+                return ViewportFieldState.Error();
+            }
+        }
+
+        private static ViewportFieldState CaptureScalar(Func<double> read, bool positive)
+        {
+            try
+            {
+                var value = read();
+                if (!double.IsFinite(value)
+                    || (positive && value <= 0))
+                {
+                    return ViewportFieldState.Error(ViewportFieldReasons.InvalidValue);
+                }
+
+                return ViewportFieldState.Observed(JsonSerializer.SerializeToElement(value));
+            }
+            catch (NotSupportedException)
+            {
+                return ViewportFieldState.Unsupported();
+            }
+            catch (NotImplementedException)
+            {
+                return ViewportFieldState.Unsupported();
+            }
+            catch (System.Exception)
+            {
+                return ViewportFieldState.Error();
+            }
+        }
+
+        private static string HashFile(string path)
+        {
+            using var stream = File.OpenRead(path);
+            return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
         }
 
         private static EntitySnapshot CreateSnapshot(Entity entity)

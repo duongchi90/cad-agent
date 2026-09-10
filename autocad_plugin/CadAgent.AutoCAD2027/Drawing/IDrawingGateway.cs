@@ -9,6 +9,10 @@ public interface IDrawingGateway
 
     IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles);
 
+    ViewportQueryResult ReadViewportQuery(ViewportQueryRequest request) =>
+        throw new InvalidOperationException(
+            "This drawing gateway does not provide the live VIEWPORT-by-handle query operation.");
+
     DrawingSetupSnapshot ReadDrawingSetup();
 
     VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request);

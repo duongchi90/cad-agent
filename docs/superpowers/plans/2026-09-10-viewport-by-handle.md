@@ -10,7 +10,7 @@
 
 **Spec:** This document is the design/spec and the implementation plan for the capability.
 
-**Status:** in progress; SOL design review passed; Task 1 complete, Tasks 2-4 pending bounded checkpoints.
+**Status:** in progress; SOL design review passed; Tasks 1-2 complete, Tasks 3-4 pending bounded checkpoints.
 
 **Approval date:** 2026-09-10; SOL design review passed with `VERDICT=PASS`, `HUMAN_GATE=NO`.
 
@@ -153,7 +153,7 @@ Expected: FAIL because `viewport_query` and `ViewportQueryResult` are not yet de
 
 - [x] **Step 3: Implement only the closed records, JSON schema branches, and validator rules described above.** Keep the top-level IPC envelope at schema version `1.0`; the payload schema version is `viewport-query-result-1.0`.
 - [x] **Step 4: Run the same focused tests and verify they pass.** Result: 41 passed, 0 failed, 0 skipped; JSON schema parse check passed.
-- [ ] **Step 5: Run `git diff --check` and commit only the contract/model files and tests.**
+- [x] **Step 5: Run `git diff --check` and commit only the contract/model files and tests.** Commit: `b88d370d271e7c1c8f8a202d014d1268a52785e9` (`feat(viewport): add query contracts`).
 
 ### Task 2: Add the read-only AutoCAD gateway and dispatcher owner
 
@@ -170,8 +170,8 @@ Expected: FAIL because `viewport_query` and `ViewportQueryResult` are not yet de
 - Add `IDrawingGateway.ReadViewportQuery(ViewportQueryRequest request)`.
 - Produce a result with `changed=false`, stable hashes/DBMOD, and per-field statuses.
 
-- [ ] **Step 1: Write the failing gateway/dispatcher tests.** Add `DispatcherRoutesViewportQueryToTheReadOnlyGateway`, `ViewportQueryPreservesUnsupportedFieldState`, and `ViewportQueryNeverReportsChanged` using the existing stub gateway; configure one synthetic `ViewportQueryResult` with one `UNSUPPORTED` field and assert it is preserved exactly.
-- [ ] **Step 2: Run the focused tests and verify failure.**
+- [x] **Step 1: Write the failing gateway/dispatcher tests.** Add `DispatcherRoutesViewportQueryToTheReadOnlyGateway`, `ViewportQueryPreservesUnsupportedFieldState`, and `ViewportQueryNeverReportsChanged` using the existing stub gateway; configure one synthetic `ViewportQueryResult` with one `UNSUPPORTED` field and assert it is preserved exactly.
+- [x] **Step 2: Run the focused tests and verify failure.** Observed the expected RED run: 3 new viewport dispatcher tests failed because the operation branch was absent; the existing 33 selected dispatcher/review tests passed.
 
 Run:
 
@@ -181,9 +181,9 @@ dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests/CadAgent.AutoCAD2027.Tests
 
 Expected: FAIL because the gateway method and dispatcher branch do not exist.
 
-- [ ] **Step 3: Implement `AutoCadDrawingGateway.ReadViewportQuery`.** Use `Database.GetObjectId(false, new Handle(parsedHandle), 0)`, open the object `OpenMode.ForRead`, require `Viewport`, read only `CenterPoint`, `Width`, `Height`, `ViewCenter`, `ViewHeight`, `ViewTarget`, and `TwistAngle`, and wrap each property read in the explicit field-state mapping. Do not call `GeometricExtents` or enumerate ModelSpace/PaperSpace.
-- [ ] **Step 4: Implement `DispatchViewportQuery`.** Verify the active path and requested source hash before calling the gateway, capture source hash/DBMOD before and after, validate the result, and return `success=true` only when the read completed with stable identity and currentness. A property-level `UNSUPPORTED`/`ERROR` remains explicit in the successful typed payload; a target identity/read transaction failure is a bounded operation error.
-- [ ] **Step 5: Run the focused tests and verify they pass.**
+- [x] **Step 3: Implement `AutoCadDrawingGateway.ReadViewportQuery`.** Uses `Database.GetObjectId(false, new Handle(parsedHandle), 0)`, opens the object `OpenMode.ForRead`, requires `Viewport`, reads only `CenterPoint`, `Width`, `Height`, `ViewCenter`, `ViewHeight`, `ViewTarget`, and `TwistAngle`, and wraps each property read in the explicit field-state mapping. It does not call `GeometricExtents` or enumerate ModelSpace/PaperSpace.
+- [x] **Step 4: Implement `DispatchViewportQuery`.** Verifies the active path and requested source hash before calling the gateway, consumes stable source hash/DBMOD before and after from the owner, validates the result, and returns `success=true` only when the read completed with stable identity and currentness. A property-level `UNSUPPORTED`/`ERROR` remains explicit in the successful typed payload; a target identity/read transaction failure is a bounded operation error.
+- [x] **Step 5: Run the focused tests and verify they pass.** Result: `dotnet test ... --filter "FullyQualifiedName~OperationDispatcherTests|FullyQualifiedName~ReviewEngineTests"` passed 47 tests, 0 failed, 0 skipped.
 - [ ] **Step 6: Run `git diff --check` and commit the owner/dispatcher files and tests.**
 
 ### Task 3: Reuse the existing Python IPC client and add offline protocol coverage

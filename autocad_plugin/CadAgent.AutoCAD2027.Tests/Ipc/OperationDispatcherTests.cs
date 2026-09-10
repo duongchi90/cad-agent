@@ -14,6 +14,62 @@ namespace CadAgent.AutoCAD2027.Tests.Ipc;
 public sealed class OperationDispatcherTests
 {
     [Fact]
+    public void DispatcherRoutesViewportQueryToTheReadOnlyGateway()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\sample.dwg",
+            ViewportQuery = ViewportSnapshot()
+        };
+        var dispatcher = CreateDispatcher(gateway);
+
+        var result = dispatcher.Dispatch(ViewportRequest(gateway.ActiveDocumentFullPath!));
+
+        Assert.True(result.Success);
+        Assert.Equal("viewport_query", result.Operation);
+        Assert.False(result.Changed);
+        Assert.Equal(new[] { "126BABE" }, result.EntityHandles);
+        Assert.Empty(result.Errors!);
+        Assert.Equal(1, gateway.ReadViewportQueryCallCount);
+        Assert.Equal("126BABE", result.Payload!["handle"].GetString());
+    }
+
+    [Fact]
+    public void ViewportQueryPreservesUnsupportedFieldState()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\sample.dwg",
+            ViewportQuery = ViewportSnapshot(unsupportedWidth: true)
+        };
+
+        var result = CreateDispatcher(gateway)
+            .Dispatch(ViewportRequest(gateway.ActiveDocumentFullPath!));
+
+        Assert.True(result.Success);
+        var width = result.Payload!["fields"].GetProperty("width");
+        Assert.Equal("UNSUPPORTED", width.GetProperty("status").GetString());
+        Assert.Equal("PROPERTY_UNAVAILABLE", width.GetProperty("reason").GetString());
+        Assert.False(width.TryGetProperty("value", out _));
+    }
+
+    [Fact]
+    public void ViewportQueryNeverReportsChanged()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\sample.dwg",
+            ViewportQuery = ViewportSnapshot()
+        };
+
+        var result = CreateDispatcher(gateway)
+            .Dispatch(ViewportRequest(gateway.ActiveDocumentFullPath!));
+
+        Assert.False(result.Changed);
+        Assert.Equal(1, gateway.ReadViewportQueryCallCount);
+    }
+
+    [Fact]
     public void ExactBaseXrefInspectionRoutesFreshReadOnlySnapshotToResult()
     {
         var fixture = InspectionDispatcherFixture();
@@ -1223,6 +1279,39 @@ public sealed class OperationDispatcherTests
             Approval = null
         };
 
+    private static IpcRequest ViewportRequest(string drawingFullPath) =>
+        Request(
+            "viewport_query",
+            "viewport-query-request-001",
+            drawingFullPath,
+            Parameters(("handle", JsonSerializer.SerializeToElement("126BABE"))),
+            new string('a', 64));
+
+    private static ViewportQueryResult ViewportSnapshot(bool unsupportedWidth = false) =>
+        new(
+            "126BABE",
+            "VIEWPORT",
+            "0",
+            new Dictionary<string, ViewportFieldState>(StringComparer.Ordinal)
+            {
+                ["center_point"] = ViewportFieldState.Observed(
+                    JsonSerializer.SerializeToElement(new[] { 0.0, 0.0, 0.0 })),
+                ["width"] = unsupportedWidth
+                    ? ViewportFieldState.Unsupported()
+                    : ViewportFieldState.Observed(JsonSerializer.SerializeToElement(100.0)),
+                ["height"] = ViewportFieldState.Observed(JsonSerializer.SerializeToElement(50.0)),
+                ["view_center"] = ViewportFieldState.Observed(
+                    JsonSerializer.SerializeToElement(new[] { 10.0, 20.0 })),
+                ["view_height"] = ViewportFieldState.Observed(JsonSerializer.SerializeToElement(200.0)),
+                ["view_target"] = ViewportFieldState.Observed(
+                    JsonSerializer.SerializeToElement(new[] { 0.0, 0.0, 0.0 })),
+                ["twist_angle"] = ViewportFieldState.Observed(JsonSerializer.SerializeToElement(0.0))
+            },
+            new string('a', 64),
+            new string('a', 64),
+            0,
+            0);
+
     private static Dictionary<string, JsonElement> Parameters(
         params (string Name, JsonElement Value)[] values) =>
         values.ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
@@ -1299,6 +1388,8 @@ public sealed class OperationDispatcherTests
 
         public ExactBaseXrefExtractionSnapshot? ExactBaseXrefExtraction { get; init; }
 
+        public ViewportQueryResult? ViewportQuery { get; init; }
+
         public Exception? NativeRenderException { get; init; }
 
         public int ReadEntitiesCallCount { get; private set; }
@@ -1312,6 +1403,8 @@ public sealed class OperationDispatcherTests
         public int ReadExactBaseXrefInspectionCallCount { get; private set; }
 
         public int ExtractExactBaseXrefCallCount { get; private set; }
+
+        public int ReadViewportQueryCallCount { get; private set; }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
@@ -1366,6 +1459,13 @@ public sealed class OperationDispatcherTests
                 ?? ExactBaseXrefExtractionSnapshot.Failure(
                     ActiveDocumentFullPath,
                     new[] { "No extraction fixture was configured." });
+        }
+
+        public ViewportQueryResult ReadViewportQuery(ViewportQueryRequest request)
+        {
+            ReadViewportQueryCallCount++;
+            return ViewportQuery
+                ?? throw new InvalidOperationException("No viewport query fixture was configured.");
         }
     }
 
