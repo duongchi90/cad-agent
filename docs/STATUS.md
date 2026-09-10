@@ -112,6 +112,20 @@
   one live prerequisite skip); authoritative verification reports C# `238`,
   offline Python `3369`, and offline IPC `134` with zero product failures.
   Fresh SOL review is pending; live acceptance remains **NOT RUN**.
+- SOL's next review found a QNEW delivery/readiness race in that remediation:
+  a native command-trigger return did not prove the blank document existed
+  before LISP was sent. The bounded iteration-33 hardening at code HEAD
+  `8040adb54629a533dbfdb3efe1cb2ef0da92fa8e` adds an explicit bounded
+  `bootstrap_document_ready_probe` and waits until the window no longer
+  reports `[Start]` before marking bootstrap ownership or loading the
+  dispatcher. On timeout it emits no LISP or source-open expression and does
+  not clean up an unowned document. Task-6 now supplies the matching Windows
+  readiness probe. Focused owner tests pass (`24` drawing-open tests; `44`
+  combined FileIPC/Task-6 tests with one live prerequisite skip); the exact
+  commit's authoritative verify exits `0` with C# `238`, offline IPC `134`,
+  offline Python `3372`, zero product failures, and the expected causal-RED
+  diagnostic. Private real-data/AutoCAD gates and live Task-6 remain
+  **NOT RUN**. Fresh SOL review of `8040adb` is pending.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 

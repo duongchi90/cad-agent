@@ -255,3 +255,25 @@ Task-6 acceptance remains `NOT RUN`. The code/plan commit is pushed and the
 fresh SOL review is pending. Private evidence and recoverable resume state are
 at `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-context-iteration32-evidence.txt`
 and `C:\temp\cad-agent-task6-live-20260911\wait-safe-resume-state-iteration32.txt`.
+
+## Iteration 33 QNEW readiness hardening
+
+SOL's fresh review found a delivery/readiness race in iteration 32: the native
+command trigger can return after posting `_.QNEW` while the AutoCAD window is
+still on the documentless `[Start]` tab. The bounded remediation at code HEAD
+`8040adb54629a533dbfdb3efe1cb2ef0da92fa8e` adds an explicit bounded
+`bootstrap_document_ready_probe` and waits until the window no longer reports
+`[Start]` before marking bootstrap ownership, loading the existing dispatcher,
+or issuing a FileIPC ping. If readiness times out, no LISP or source-open
+expression is emitted and no cleanup is attempted for an unowned document.
+Task-6 supplies the matching Windows probe; the existing no-QNEW real-document
+path and default writable behavior remain unchanged.
+
+The RED tests covered delayed/non-executed QNEW and the GREEN run passed `24`
+drawing-open tests and `44` combined FileIPC/Task-6 tests with one live
+prerequisite skip. Authoritative `scripts/verify.ps1` on the exact code commit
+exited `0`: C# `238`, offline IPC `134`, and offline Python `3372`, with zero
+product failures; the causal-RED diagnostic remains intentionally failing and
+private real-data/AutoCAD Mechanical prerequisites remain skipped. No live
+Task-6 gate was rerun, no source/candidate/accepted drawing was touched, and
+fresh SOL review of `8040adb54629a533dbfdb3efe1cb2ef0da92fa8e` is required.

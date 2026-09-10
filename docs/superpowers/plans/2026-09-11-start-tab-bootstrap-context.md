@@ -54,6 +54,15 @@
 
 - [ ] **Step 3: Implement the smallest owner change.** Validate the strict boolean flag, use the existing `command_trigger('_.QNEW')`, wait for the existing document settle interval, load the existing `bootstrap_lisp_path` through `raw_lisp_trigger`, and call the existing `_wait_for_dispatcher()` exactly once. Track creation only after `QNEW` is delivered, close on load/ping failure, and never call the source-open expression until the method returns successfully.
 
+**Iteration 33 hardening addendum:** the native command trigger's return is only
+delivery evidence. After `_.QNEW`, the owner must use an explicit bounded
+`bootstrap_document_ready_probe` and timeout to confirm that the window no
+longer reports `[Start]` before marking ownership, loading LISP, or pinging.
+If readiness is not confirmed, fail before LISP/source-open and do not attempt
+cleanup unless bootstrap ownership was positively established. The Windows
+adapter supplies the non-`[Start]` readiness probe; existing writable/default
+behavior remains unchanged.
+
 - [ ] **Step 4: Run focused GREEN checks.**
 
   Run the same focused test command and then:
@@ -72,6 +81,8 @@
 
 **Interfaces:**
 - Task 6 constructs its existing client with `bootstrap_start_tab=True`, `make_windows_command_trigger(hwnd)`, and `make_windows_start_tab_no_document_probe(hwnd)`.
+- Task 6 also supplies `make_windows_start_tab_document_ready_probe(hwnd)` so
+  QNEW completion is positively confirmed before the dispatcher is loaded.
 - The test calls `close_start_tab_bootstrap()` in its existing `finally` path; source, candidate, and accepted drawing cleanup remains owned by the existing test/gateway.
 
 - [ ] **Step 1: Add the opt-in wiring and cleanup assertion.** Keep the approved source path, fixture, hashes, `read_only=True`, candidate root, and all existing custody assertions unchanged. Add no new source or candidate input.
@@ -88,6 +99,10 @@
 - [ ] **Step 2: Commit and push code/test changes separately from documentation.** Verify local and remote HEAD match.
 - [ ] **Step 3: Update the status and implementation record with the bootstrap boundary, exact SHAs, and truthful live state.** Commit and push documentation separately.
 - [ ] **Step 4: Record C2C iteration 32, update the recoverable checkpoint, and send SOL the exact pushed HEAD.** Request only `VERDICT`, `MATERIAL_FINDING`, `NEXT_SINGLE_BOUNDED_ACTION`, and `HUMAN_GATE`; do not rerun live Task 6 until SOL reviews.
+
+For the iteration-33 hardening, repeat the same focused/full verification and
+record/push/review sequence with the new exact code/documentation SHAs before
+any live Task-6 attempt.
 
 ---
 
