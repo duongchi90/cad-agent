@@ -41,7 +41,7 @@ behavior remains unchanged in intent and acceptance rules.
 | Existing owner | Reuse decision and exact seam |
 | --- | --- |
 | `cad_agent/native_dwg_provenance.py` | `REFERENCE/REGRESSION_ONLY` for this capability. Its `validate_native_dwg_provenance`, `build_native_dwg_provenance`, `build_native_dwg_r3_inputs`, and `compose_native_dwg_query_binding` remain callable only for the existing full-drawing path and regression coverage; the standalone subset path must not call or copy them. Their `NATIVE_DWG_FULL_DRAWING` mode and empty R3 inputs remain unchanged. |
-| `cad_agent/drawing_artifact_reference.py` | Reuse `issue_drawing_artifact_reference`, `validate_drawing_artifact_reference`, `observe_drawing_artifact_currentness`, `validate_drawing_artifact_current_observation`, and `require_current_drawing_artifact_reference` for standalone source/candidate identity and currentness. Together with the hash-bound standalone inspection/extraction result checksum, these are the standalone provenance inputs; the adapter composes these records and does not create a second artifact reference format. |
+| `cad_agent/drawing_artifact_reference.py` | Reuse `issue_drawing_artifact_reference`, `validate_drawing_artifact_reference`, `observe_drawing_artifact_currentness`, `validate_drawing_artifact_current_observation`, and `require_current_drawing_artifact_reference` in two stages: source `BASELINE` reference/currentness before R3, then candidate `R3_CANDIDATE` reference/currentness only after the exact standalone `r3_provenance_binding` exists. Before R3, retain only raw hash-bound candidate output identity and the standalone inspection/extraction result checksum; do not fabricate a candidate DARA reference or create a second artifact-reference format. |
 | `cad_agent/component_view_registry.py` | Reuse `build_component_view_registry`, `validate_component_view_registry`, `component_view_registry_sha256`, `component_view_registry_provenance_evidence`, `finalize_component_view_correspondence`, and `project_linked_view_impacts`. The measured gap is the required versioned standalone mode for non-empty selected components. |
 | `cad_agent/candidate_revision.py` | Reuse `build_candidate_revision`, `validate_candidate_revision`, `build_candidate_revision_state`, `validate_candidate_revision_state`, and `transition_candidate_revision_state`. The measured gap is the explicit `_normalize_registry` branch for the exact standalone R3 schema/mode; unknown modes must not fall through to base-CAD. |
 | `cad_agent/drawing_query.py` | Reuse `validate_entity_query`, `validate_drawing_observation`, `observe_drawing`, `validate_entity_query_result`, and `query_entities` only after candidate handles are bound. It is not a source extraction owner and is not changed by Task 0. |
@@ -59,10 +59,13 @@ It does not call the full-drawing native-DWG provenance builders:
 - `build_native_dwg_r3_inputs` intentionally emits empty components and views.
 - Those contracts are correct for the existing full-drawing path but are not
   source/candidate provenance seams for selected-component extraction.
-- Standalone currentness is therefore bound by DARA source/candidate
-  references and observations plus the hash-bound standalone
-  inspection/extraction result checksum, then consumed by the required R3/R4
-  standalone mode.
+- Standalone currentness is therefore staged: the pre-R3 context binds the
+  DARA source `BASELINE` reference/currentness plus raw hash-bound candidate
+  output identity and the standalone inspection/extraction result checksum;
+  after the required R3 registry/provenance evidence exists, the adapter
+  issues and observes the candidate `R3_CANDIDATE` DARA reference with the
+  exact `r3_provenance_binding`, then feeds that reference into R4 and
+  `drawing_query`.
 
 The AutoCAD-side reuse boundary is:
 

@@ -38,9 +38,11 @@
 - Candidate cleanup may delete only the exact output whose captured identity still matches the failed operation; cleanup failure is a material failure.
 - Existing DARA, component/view registry, candidate-revision, drawing-query, and File IPC/.NET owners remain authoritative; `native_dwg_provenance.py` remains reference/regression-only for standalone work; no second transport, writer, registry, manifest, or truth store is introduced.
 - Execution order is dependency-safe: Task 2 validates standalone packets and
-  builds detached provenance inputs only; Task 4 creates and validates the
-  required R3/R4 standalone mode; only after Task 4 GREEN may the adapter
-  compose DARA/R3/R4 candidate binding.
+  builds detached pre-R3 inputs only (source `BASELINE` DARA currentness,
+  raw candidate output identity, and standalone result checksum); Task 4
+  creates and validates the required R3 mode, then issues/observes the
+  candidate `R3_CANDIDATE` DARA reference with its exact R3 binding before
+  feeding that reference into R4 and `drawing_query`.
 - `PAGE2_REUSED` groups may enter this capability. Page-1 deltas, text, dimensions, title-block content, and unresolved visual discrepancies remain in the existing page-1 fidelity/review path.
 - Real/customer drawings, annotations, credentials, generated private DXF/DWG files, and live AutoCAD state remain workstation-only.
 - Human approval remains required for ambiguous recognition, unverified calibration, production mutation, and any promotion beyond the disposable candidate boundary.
@@ -53,7 +55,7 @@ The implementation branch may create or modify only the files named in the tasks
 
 | File | Responsibility in this plan |
 | --- | --- |
-| `cad_agent/standalone_dwg_extraction.py` | New pure validation/orchestration adapter; validates closed packets, binds DARA/R3/R4 evidence, and calls the existing IPC client. It never parses DWG or clones entities. |
+| `cad_agent/standalone_dwg_extraction.py` | New pure validation/orchestration adapter; validates closed packets, builds pre-R3 inputs, and after the required R3 mode exists binds staged DARA/R3/R4 evidence and calls the existing IPC client. It never parses DWG or clones entities. |
 | `tests/test_cad_agent_standalone_dwg_extraction.py` | Python RED/GREEN coverage for packet closure, source/candidate identity, transforms, result hashing, cleanup, and DARA/R3/R4 binding. |
 | `contracts/autocad-ipc/operations/standalone-dwg-component-inspection.schema.json` | Closed inspection request schema. |
 | `contracts/autocad-ipc/operations/standalone-dwg-component-inspection-result.schema.json` | Closed inspection result schema. |
@@ -156,7 +158,7 @@ Expected result before implementation: the newly added contract tests remain RED
 
 - [ ] **Step 3: Bind the extraction result.** Require `source_mutated=false`, stable source hash/DBMOD, `save_performed=true`, candidate output identity/hash, candidate-only serialization evidence, one-to-one approved source-to-candidate handle mappings, and a deterministic result checksum. Reject a result whose candidate path aliases the source or whose output cannot be re-opened/read back.
 
-- [ ] **Step 4: Build detached provenance inputs only.** Issue or normalize the DARA source/candidate references and observations plus the standalone inspection/extraction result checksum into `build_standalone_provenance_context`. Do not call `component_view_registry`, `candidate_revision`, or `drawing_query` yet; the required standalone R3/R4 mode does not exist until Task 4. Do not call `build_native_dwg_r3_inputs` with fabricated full-drawing semantics and do not mutate any existing owner module.
+- [ ] **Step 4: Build detached pre-R3 provenance inputs only.** Issue or normalize the DARA source `BASELINE` reference/current observation plus the raw hash-bound candidate output identity and standalone inspection/extraction result checksum into `build_standalone_provenance_context`. Do not issue or normalize a candidate `R3_CANDIDATE` DARA reference before the exact `r3_provenance_binding` exists. Do not call `component_view_registry`, `candidate_revision`, or `drawing_query` yet; the required standalone R3/R4 mode does not exist until Task 4. Do not call `build_native_dwg_r3_inputs` with fabricated full-drawing semantics and do not mutate any existing owner module.
 
 - [ ] **Step 5: Add the IPC call seam without live execution.** The adapter may call only the two new `DotNetIPCClient` methods after all local request validation succeeds. Tests must prove malformed input raises before the dispatcher/transport is triggered.
 
@@ -208,18 +210,18 @@ git commit -m "feat: add standalone DWG disposable reader"
 - Modify: `cad_agent/component_view_registry.py`, `cad_agent/candidate_revision.py`, `cad_agent/standalone_dwg_extraction.py`, `tests/test_cad_agent_standalone_dwg_extraction.py`.
 
 **Interfaces:**
-- Consumes: the standalone provenance context and candidate handle mappings from Task 2.
-- Produces: a versioned, minimal component/view registry context, an explicit R4 recognition/binding branch, and the final `compose_standalone_candidate_binding` integration that keeps source handles and candidate handles bound to the standalone source.
+- Consumes: the detached pre-R3 provenance context and candidate handle mappings from Task 2.
+- Produces: a versioned, minimal component/view registry context, the candidate `R3_CANDIDATE` DARA reference/current observation bound to that exact R3 evidence, an explicit R4 recognition/binding branch, and the final `compose_standalone_candidate_binding` integration that keeps source handles and candidate handles bound to the standalone source.
 
 - [ ] **Step 1: Write the RED against the current owners.** Assert the current R3 rejection for a standalone context with non-empty selected components and the current R4 fallback/rejection when that registry is presented to candidate revision. Record the exact failure codes before changing either owner.
 
 - [ ] **Step 2: Add the versioned R3 mode.** Add exactly `component-view-registry-standalone-dwg-1.0` with provenance mode `STANDALONE_DWG_COMPONENTS` and only the minimum exact source/candidate path/hash, selected-group, handle-binding, and provenance-checksum fields. Preserve `NATIVE_DWG_FULL_DRAWING` and generated behavior byte-for-byte in intent.
 
-- [ ] **Step 3: Add the explicit R4 branch.** Extend `candidate_revision.py` to recognize only the exact standalone R3 schema/mode and bind its source identity, candidate identity, selected handles, and registry checksum. Do not route the new mode through the generic base-CAD handoff; reject unknown modes and preserve all existing R4 branches.
+- [ ] **Step 3: Add the explicit R4 branch.** After the standalone R3 RED/GREEN test proves the exact registry/provenance binding, issue and observe the candidate `R3_CANDIDATE` DARA reference with that exact `r3_provenance_binding`. Extend `candidate_revision.py` to consume that bound candidate reference, recognize only the exact standalone R3 schema/mode, and bind its source identity, candidate identity, selected handles, and registry checksum. Do not route the new mode through the generic base-CAD handoff; reject unknown modes and preserve all existing R4 branches.
 
 - [ ] **Step 4: Add adversarial tests.** Reject a full-drawing packet mislabeled as standalone, a standalone packet with `REUSED_FROM_BASE_CAD`, a candidate handle owned by two components, an unbound source handle, stale source/candidate hashes, an unknown registry mode, and a component/view link pointing to a different candidate revision.
 
-- [ ] **Step 5: Add the deferred cross-owner composition.** After the R3 and R4 RED/GREEN tests pass, implement `compose_standalone_candidate_binding` in `standalone_dwg_extraction.py`. It may then issue/validate DARA references, build the exact standalone R3 registry, build/validate the R4 candidate revision, and expose only bound candidate handles to `drawing_query`. Add cross-owner tests proving the same source/candidate identities and standalone result checksum are carried through every layer. This step must not run before the required R3/R4 branch is GREEN.
+- [ ] **Step 5: Add the deferred cross-owner composition.** After the R3 and R4 RED/GREEN tests pass, implement `compose_standalone_candidate_binding` in `standalone_dwg_extraction.py`. It may consume the already issued/observed candidate `R3_CANDIDATE` DARA reference, validate the exact standalone R3 registry and R4 candidate revision, and expose only bound candidate handles to `drawing_query`; it must not create a pre-R3 candidate DARA reference. Add cross-owner tests proving the same source/candidate identities and standalone result checksum are carried through every layer. This step must not run before the required R3/R4 branch is GREEN.
 
 - [ ] **Step 6: Commit the dependency-safe extension.**
 
@@ -323,7 +325,7 @@ Acceptance requires all of the following:
 
 ## Plan self-review
 
-- Spec coverage: source custody/currentness, explicit selection, `EMPTY_NEW_DATABASE`, candidate-only serialization, result hashing, mapping, transforms, fail-closed cleanup, DARA/R3/R4 binding, File IPC ownership, page-1 boundary, and live/private gates each have a named task.
+- Spec coverage: source custody/currentness, explicit selection, `EMPTY_NEW_DATABASE`, candidate-only serialization, result hashing, mapping, transforms, fail-closed cleanup, staged DARA/R3/R4 binding, File IPC ownership, page-1 boundary, and live/private gates each have a named task.
 - Reuse coverage: existing DARA custody/currentness, component/view, candidate-revision, drawing-query, File IPC, dispatcher, policy, and AutoCAD database boundaries are named; native-DWG full-drawing provenance is reference/regression-only; no second engine, writer, transport, or truth store is planned.
 - Registry safety: the required versioned R3 mode and explicit R4 recognition branch are bounded by RED tests and preserve the native full-drawing empty-component restriction.
 - Placeholder scan: no unfinished placeholder or unspecified implementation step is used; future file names, operation names, test names, commands, and expected states are explicit.

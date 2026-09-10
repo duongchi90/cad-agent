@@ -78,8 +78,10 @@ does not reserve a public module name.
   full-drawing native-DWG custody, currentness, and readback identity. The
   standalone component path must not call its full-drawing builders or its
   intentionally empty R3-input builder.
-- `cad_agent.drawing_artifact_reference`: source and disposable-candidate
-  artifact references and current observations.
+- `cad_agent.drawing_artifact_reference`: source baseline artifact reference and
+  current observation before R3, followed by the disposable-candidate
+  `R3_CANDIDATE` reference/current observation only after the standalone R3
+  binding exists.
 - `cad_agent.component_view_registry`: component/view lineage and impact
   binding; the implementation must preserve native full-drawing restrictions
   and add the required versioned standalone-component mode described below.
@@ -108,10 +110,15 @@ therefore include one bounded, versioned R3/R4 extension as a single change:
   mode. It must bind the same source identity, candidate identity, selected
   handles, and registry checksum into the candidate revision; it must not
   broaden the generic base-CAD fallback or accept an unknown registry mode.
-- Standalone currentness/provenance input comes from DARA source/candidate
-  references and observations plus the hash-bound standalone
-  inspection/extraction result checksum. It does not come from the
-  full-drawing native-DWG provenance packet.
+- Standalone currentness/provenance is staged. Before R3 exists, the detached
+  context may contain the DARA source `BASELINE` reference/current observation,
+  raw hash-bound candidate output identity, and the standalone
+  inspection/extraction result checksum. It must not issue or normalize a
+  candidate `R3_CANDIDATE` DARA reference because that reference requires the
+  exact `r3_provenance_binding`. After the standalone R3 registry/provenance
+  evidence exists, issue and observe that candidate `R3_CANDIDATE` reference
+  with the exact binding, then feed it into R4 and `drawing_query`. None of
+  these standalone steps use the full-drawing native-DWG provenance packet.
 - The extension is tested RED-first at both owners, including the current
   rejection codes, then GREEN with adversarial cross-lineage, stale-hash,
   duplicate-handle, mislabeled-full-drawing, and `REUSED_FROM_BASE_CAD`
@@ -263,10 +270,15 @@ result_sha256
 
 Every component mapping must be one-to-one and reference an approved source
 group. The provenance record must identify the standalone source explicitly;
-it must not claim `REUSED_FROM_BASE_CAD` or an Xref inspection. The mapping is
-then adapted into existing component/view and candidate-revision evidence,
-with the source hash and extraction evidence as the immutable provenance
-reference.
+it must not claim `REUSED_FROM_BASE_CAD` or an Xref inspection. Before R3
+exists, the handoff contains the source `BASELINE` DARA currentness, raw
+candidate output identity/hash, and the standalone inspection/extraction
+result checksum. After the exact standalone R3 registry and
+`r3_provenance_binding` exist, the adapter issues and observes the candidate
+`R3_CANDIDATE` DARA reference with that binding. Only that staged candidate
+reference is then adapted into the existing candidate-revision and
+`drawing_query` evidence, with the source hash and extraction evidence as the
+immutable provenance reference.
 
 `save_performed` has one closed meaning: it is `true` only after the newly
 created disposable database has been serialized to `candidate_output_path`,
@@ -345,8 +357,10 @@ existing test owners:
    rejects it for S3A.
 3. Source invariants: read-only mode, source hash, DBMOD, path identity, and
    no source save are verified before/after both inspection and extraction;
-   standalone currentness is bound through DARA and the standalone result
-   checksum, not the full-drawing native-DWG builder.
+   pre-R3 currentness uses the DARA source `BASELINE` reference/current
+   observation plus the standalone result checksum, while the candidate
+   `R3_CANDIDATE` reference/current observation is issued only after the exact
+   R3 binding exists. No full-drawing native-DWG builder is used.
 4. Candidate invariants: absent destination, non-aliasing path, candidate-only
    serialization, `save_performed=true` on success, re-openable output, exact
    source-to-candidate handle mapping, deterministic result hash, and
