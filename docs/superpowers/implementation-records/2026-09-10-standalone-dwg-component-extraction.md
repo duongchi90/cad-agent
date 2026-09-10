@@ -2,8 +2,9 @@
 
 Date: 2026-09-11
 Branch: `codex/audit-text-style-compat-20260910`
-Implementation/evidence commits: `a1fece80b1efae831d442626c6454a0ae23533d0` and
-`94719ca3e854dd3bb6b668217924c85e3d07c214`
+Implementation/evidence commits: `a1fece80b1efae831d442626c6454a0ae23533d0`,
+`94719ca3e854dd3bb6b668217924c85e3d07c214`, and
+`a17032275a628328dcad0fd15166e413faee3663`
 
 ## Scope and boundary
 
@@ -43,6 +44,17 @@ exposes `candidate-file-<sha256(raw identity)>`, which satisfies the frozen
 schema grammar. C# reader/dispatcher coverage and the Python result validator
 now exercise this real-like raw identity end to end.
 
+The layer-name boundary was then remediated after the live read-only setup
+probe established that the approved source legitimately uses the AutoCAD layer
+name `Duong manh`. The previous identifier-only validator rejected that name
+before File IPC, so a truthful fixture could not reach the inspection gate.
+Commit `a17032275a628328dcad0fd15166e413faee3663` changes only
+`source_layer_expectations` and observed `layers` to a closed safe-text
+contract: 1-512 printable characters, with empty, control-character,
+malformed-array, and unknown-field inputs rejected. Group IDs, component IDs,
+handles, and entity-type tokens remain identifier-strict. Python, JSON schema,
+and C# validators now share the boundary, with `Duong manh` regression tests.
+
 ## Interfaces and fixture contract
 
 The gate reuses the existing `DotNetIPCClient`, `FileIPCLiveMCPClient`, Windows
@@ -64,16 +76,23 @@ as `SKIP`; it does not turn an unavailable live session into a PASS.
 
 ## Evidence and verification
 
-Evidence captured on the remediation head `94719ca3e854dd3bb6b668217924c85e3d07c214`:
+Evidence captured on the layer-name remediation head
+`a17032275a628328dcad0fd15166e413faee3663`:
 
 - `scripts/verify.ps1`: exit `0`, all checks passed.
-- Full offline Python suite: `3277 passed`, `21 deselected`, `74 subtests`.
+- Full offline Python suite: `3278 passed`, `21 deselected`, `74 subtests`.
 - Offline IPC JUnit: `134` tests, `0` failures, `0` errors, `0` skipped.
-- Full C# solution: `237 passed`, `0` failed, `0` skipped.
-- Task 6 focused set: `219 passed`, `1 skipped`, `52 subtests`; identity
-  interoperability focused set: `83 passed`, `1 skipped`, `52 subtests`.
-- New live gate: `SKIP` with the exact missing-prerequisite list; no AutoCAD
-  document was opened and no live candidate was created.
+- Full C# solution: `238 passed`, `0` failed, `0` skipped.
+- Layer-name remediation focused set: Python/C# cross-language contract tests
+  passed (`97` Python tests in the focused owner set; `49` C# contract tests).
+- Read-only live preparation: approved `BVTL.dwg` opened with source hash
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`, .NET
+  `health` and `drawing_setup_audit` succeeded with `changed=false` and
+  `DBMOD=0`. The standalone live gate remained `NOT RUN` because the truthful
+  private fixture was absent; no inspection, extraction, candidate creation,
+  source save, or accepted-drawing mutation occurred. The detailed private
+  preparation record is outside Git at
+  `C:\temp\cad-agent-task6-live-20260911\task6-live-prep-20260911.txt`.
 - `autocad_mechanical` unavailable-state probe: `17 skipped`; live marker
   `NOT RUN` because the AutoCAD/File IPC session was not prepared.
 - Real-data/private gates: `2 skipped` because their private inputs were not
@@ -83,11 +102,12 @@ Evidence captured on the remediation head `94719ca3e854dd3bb6b668217924c85e3d07c
 - Python 3.11.9, .NET SDK 10.0.302, and repository Ruff checks passed.
 - `git diff --check`: pass; verification left the repository clean.
 
-The preceding hash-binding remediation had SOL status `VERDICT=PASS`, with
-`MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`. SOL's fresh re-review of the
-candidate-identity remediation at `0e4387e` also returned
-`VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`. No live CAD
-verdict is inferred from these offline results.
+The preceding hash-binding and candidate-identity remediations had SOL status
+`VERDICT=PASS`, with `MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`. SOL's fresh
+review then identified the real layer-name incompatibility and requested this
+single contract remediation; the remediation is now locally verified and
+awaits fresh SOL review. No live CAD verdict is inferred from these offline
+results.
 
 ## Reuse dossier classification
 

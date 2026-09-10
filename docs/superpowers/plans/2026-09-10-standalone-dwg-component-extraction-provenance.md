@@ -10,13 +10,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-10-standalone-dwg-component-extraction-provenance-design.md`
 
-**Status:** implementation complete; opt-in live gate pending/unavailable
+**Status:** implementation complete; layer-name contract remediation verified;
+opt-in live gate pending/unavailable
 
 **Base SHA:** `4cc6df980a3a78122edcff533de70ae646700b58`
 
-**SOL review:** Initial plan review returned `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`; the required R3/R4 boundary extension was implemented and independently reviewed. Task 5 hash binding and the Task 6 candidate-identity remediation both received `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, `HUMAN_GATE=NO`. The live gate remains a separate opt-in boundary.
+**SOL review:** Initial plan review returned `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`; the required R3/R4 boundary extension was implemented and independently reviewed. Task 5 hash binding and the Task 6 candidate-identity remediation both received `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, `HUMAN_GATE=NO`. A later fresh live-prep review found that the legitimate source layer `Duong manh` was rejected by the identifier-only contract; commit `a17032275a628328dcad0fd15166e413faee3663` applies the requested safe-text layer-name remediation with focused cross-language coverage. Fresh SOL review is pending; the live gate remains a separate opt-in boundary.
 
-**Completion Head SHA:** `94719ca3e854dd3bb6b668217924c85e3d07c214` for the implementation; evidence/status documentation is recorded on the branch at `94d1c05a973db3c678369fa50fa505c8307fedd2`.
+**Completion Head SHA:** `a17032275a628328dcad0fd15166e413faee3663` for the implementation; remediation evidence/status documentation is being recorded on the branch on top of this code head.
 
 **Plan-time verification:** historical plan-time docs check was `3 passed`; final implementation verification is recorded in `docs/superpowers/implementation-records/2026-09-10-standalone-dwg-component-extraction.md` and `docs/STATUS.md`.
 
