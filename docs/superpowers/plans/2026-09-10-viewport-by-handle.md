@@ -10,7 +10,7 @@
 
 **Spec:** This document is the design/spec and the implementation plan for the capability.
 
-**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added and live gate SKIP because prerequisites are absent; authoritative verification passed at remediation head `e9e692315621682e9d150e1b3cb54a1d71893f2d`; first-pass independent reviews found material evidence-binding drift, code remediation is pushed, and the three re-reviews are in progress.
+**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added and live gate SKIP because prerequisites are absent; authoritative verification passed at final remediation head `9c2ccbfa358be53b0192591d7153edd542363551`; first-pass independent reviews found material findings, code and evidence remediation are pushed, requirements/architecture and security/operations re-reviews passed, and the correctness/test provenance recheck is pending this synchronization.
 
 **Approval date:** 2026-09-10; SOL design review passed with `VERDICT=PASS`, `HUMAN_GATE=NO`.
 
@@ -18,7 +18,7 @@
 
 **Base SHA:** `de17ab99bcf9551b9eaf52dca8dd54b059871f8a`.
 
-**Completion Head SHA:** not applicable while status is `in progress`; latest verified implementation head is `e9e692315621682e9d150e1b3cb54a1d71893f2d`.
+**Completion Head SHA:** not applicable while status is `in progress`; latest verified implementation head is `9c2ccbfa358be53b0192591d7153edd542363551`.
 
 ---
 
@@ -235,7 +235,7 @@ Run:
 
 Expected: `PASS` only when AutoCAD Mechanical 2027, the approved dispatcher, and all declared environment variables are present; otherwise record `SKIP` or `NOT RUN`, never pass.
 
-- [x] **Step 3: Run the full authoritative verifier.** Result at remediation head `e9e692315621682e9d150e1b3cb54a1d71893f2d`: `scripts/verify.ps1` exited `0`; .NET Release build succeeded with 210 C# tests passed; offline Python JUnit recorded 3311 tests with 0 failures/errors; `dotnet_ipc` JUnit recorded 124 tests with 0 failures/errors; Ruff passed; causal-RED and unavailable-state probes were recorded separately; AutoCAD live marker and M2 benchmark were `NOT RUN`. `scripts/bootstrap.ps1` had already exited `0` on the preceding verified branch checkpoint. Exact status is recorded in `docs/STATUS.md`.
+- [x] **Step 3: Run the full authoritative verifier.** Result at final remediation head `9c2ccbfa358be53b0192591d7153edd542363551`: `scripts/verify.ps1` exited `0`; .NET Release build succeeded with 211 C# tests passed; offline Python JUnit recorded 3311 tests with 0 failures/errors; `dotnet_ipc` JUnit recorded 124 tests with 0 failures/errors; Ruff passed; causal-RED and unavailable-state probes were recorded separately; AutoCAD live marker and M2 benchmark were `NOT RUN`. `scripts/bootstrap.ps1` had already exited `0` on the preceding verified branch checkpoint. Exact status is recorded in `docs/STATUS.md`.
 
 Run:
 
@@ -247,7 +247,7 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 
 Record the exact exit code, test counts, live-gate state, plugin identity, and disposable artifact paths in the implementation plan and `docs/STATUS.md`.
 
-- [ ] **Step 4: Request three bounded reviews required for AutoCAD/File IPC/architecture scope:** requirements/architecture, correctness/test, and security/operations. First-pass reviews identified evidence-binding drift plus protocol-test hardening gaps; remediation commit `e9e692315621682e9d150e1b3cb54a1d71893f2d` addresses those findings. Re-reviews are being run independently on that unchanged pushed head. Each reviewer receives the compact packet from `docs/templates/`, the exact contract/schema diff, focused test output, live-gate state, and no private customer drawing.
+- [ ] **Step 4: Request three bounded reviews required for AutoCAD/File IPC/architecture scope:** requirements/architecture, correctness/test, and security/operations. First-pass reviews identified evidence-binding drift plus protocol-test hardening gaps; code remediation `e9e692315621682e9d150e1b3cb54a1d71893f2d` and strictness remediation `9c2ccbfa358be53b0192591d7153edd542363551` address those findings. Requirements/architecture and security/operations re-reviews passed; correctness/test found one final stale STATUS binding, being closed by this documentation synchronization. Each reviewer receives the compact packet from `docs/templates/`, the exact contract/schema diff, focused test output, live-gate state, and no private customer drawing.
 - [x] **Step 5: Update `docs/STATUS.md` only with evidence that actually ran.** `BVTL.dwg`, the PDF, and the frozen disposable page-1 DXF remain outside Git.
 - [ ] **Step 6: Run `git diff --check`, confirm no P0/P1 remains, and stop for design/implementation approval before using the new owner against `BVTL.dwg`.**
 

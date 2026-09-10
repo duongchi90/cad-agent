@@ -18,10 +18,10 @@
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 
-- The viewport implementation remediation was pushed as
-  `e9e692315621682e9d150e1b3cb54a1d71893f2d` on
+- The final viewport implementation remediation was pushed as
+  `9c2ccbfa358be53b0192591d7153edd542363551` on
   `codex/audit-text-style-compat-20260910`. The authoritative verification
-  evidence below was run on that exact implementation head; this is a
+  evidence below was run on that exact final implementation head; this is a
   branch-local checkpoint and does not change the canonical `main` snapshot
   above.
 - The dedicated read-only `viewport_query` path is implemented through the
@@ -33,7 +33,7 @@
   40 pinned distributions. The bootstrap emitted only the existing invalid
   `~ip` distribution warning while all locked requirements were already
   satisfied.
-- `scripts/verify.ps1` exited `0`: .NET Release build succeeded; 210 C# tests
+- `scripts/verify.ps1` exited `0`: .NET Release build succeeded; 211 C# tests
   passed; offline Python JUnit recorded `tests=3311`, `failures=0`, `errors=0`;
   the `dotnet_ipc` JUnit recorded `tests=124`, `failures=0`, `errors=0`; Ruff passed;
   and the verifier reported `All checks passed`.
@@ -50,17 +50,21 @@
   `BVTL.dwg` was not queried in this checkpoint, and the frozen page-1
   candidate was not changed or promoted.
 - The three first-pass independent reviews identified material evidence-binding
-  drift and protocol-test hardening gaps. Remediation commit
-  `e9e692315621682e9d150e1b3cb54a1d71893f2d` now binds result path/hash/handle,
-  enforces closed payload/DBMOD/field-state semantics in Python, schema and C#,
-  and asserts the live plugin binary path/SHA-256. Focused remediation evidence
-  is Python `143 passed, 50 subtests`, C# `42 passed`, Ruff `PASS`, and
-  `git diff --check PASS`. The three required re-reviews are pending on the
-  unchanged pushed head.
+  drift and protocol-test hardening gaps. Commits
+  `e9e692315621682e9d150e1b3cb54a1d71893f2d` and
+  `9c2ccbfa358be53b0192591d7153edd542363551` now bind result path/hash/handle,
+  enforce closed payload/DBMOD/field-state semantics in Python, schema and C#,
+  reject null-present optional field keys, and assert the live plugin binary
+  path/SHA-256. Focused remediation evidence is Python `143 passed, 50
+  subtests`, C# `43 passed`, live harness `9 passed, 7 skipped`, Ruff `PASS`,
+  and `git diff --check PASS`. Requirements/architecture and
+  security/operations re-reviews passed; correctness/test is awaiting the
+  final provenance rescan after this status synchronization.
 - This branch remains **Partially verified**: deterministic contracts, owner,
   dispatcher, client, test harness, remediation, and authoritative verification
   passed, but live viewport evidence and private fidelity evidence remain
-  `NOT RUN`/unavailable, and re-review closure is pending. The source drawing
+  `NOT RUN`/unavailable, and final correctness/test provenance closure is
+  pending. The source drawing
   hash remains `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
 
 ## Current canonical snapshot (2026-09-09)
