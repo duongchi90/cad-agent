@@ -173,6 +173,21 @@
   accepted drawing, candidate, and production CAD state remain unchanged.
   Code is pushed; documentation/evidence is being recorded separately and
   fresh SOL review is required before the next live attempt.
+- SOL then returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`
+  for the owner remediation and authorized exactly one fresh live Task-6 gate.
+  Iteration 37 proved the new startup-session owner reached
+  `Autodesk AutoCAD 2027 - [Drawing1.dwg]` in the same owned process
+  (`PID 28488`, `HWND 4983510`) from `[Start]`. The first failure then occurred
+  at the existing dispatcher readiness boundary:
+  `MCPTimeoutError`, FileIPC ping request `03e4086d8d2f`, after `73.71s`.
+  The test stopped before opening `BVTL.dwg`, health/setup audit, inspection,
+  extraction, candidate creation, or query. Cleanup removed the startup
+  script and left no `acad.exe` process; the disposable candidate directory
+  stayed empty; source SHA remained
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+  Live Task-6 acceptance remains **NOT RUN**, not PASS. Private evidence is at
+  `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration37-evidence.txt`;
+  fresh SOL review of this dispatcher boundary is pending.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 

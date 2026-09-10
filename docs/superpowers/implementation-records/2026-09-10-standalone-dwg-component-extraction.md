@@ -358,3 +358,28 @@ Private evidence and recoverable state are recorded at:
 
 Fresh SOL review of the pushed owner change is required before another live
 Task-6 attempt.
+
+## Iteration 37 fresh live Task-6 result
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the iteration-36 owner remediation and authorized exactly one fresh live
+Task-6 gate. The startup-session owner successfully created a blank document
+from `[Start]` in the same owned AutoCAD process (`PID 28488`, `HWND 4983510`,
+title `Autodesk AutoCAD 2027 - [Drawing1.dwg]`).
+
+The first failure was the existing dispatcher readiness boundary: FileIPC
+`ping` request `03e4086d8d2f` timed out and the client raised
+`MCPTimeoutError: AutoCAD dispatcher did not become ready` after `73.71s`.
+The gate stopped before `BVTL.dwg` open, health, setup audit, inspection,
+extraction, candidate creation, candidate query, or source reopen. Cleanup
+left no AutoCAD process, removed the disposable startup script, and left the
+candidate directory empty. The approved source SHA remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`; no
+source, accepted drawing, candidate, or production CAD state was mutated.
+Live Task-6 acceptance remains `NOT RUN`, not `PASS`. The exact private
+evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration37-evidence.txt`.
+
+The next action is a fresh bounded SOL diagnosis of this dispatcher boundary;
+do not retry live Task 6 or weaken readiness/custody policy before that
+review.
