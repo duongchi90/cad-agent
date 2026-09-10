@@ -80,6 +80,22 @@
   `NOT RUN`/unavailable. The source drawing
   hash remains `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
 
+## Live bootstrap probe follow-up (2026-09-10)
+
+- A bounded read-only bootstrap probe was attempted after the packet checkpoint.
+  AutoCAD Mechanical 2027 opened `BVTL.dwg` as `Read Only`; the source hash
+  remained `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`
+  and no save or source mutation occurred.
+- The repository plugin DLL was not present in the AutoCAD process module list,
+  so the existing health request timed out and no result file was produced.
+  The request pair is retained outside Git as diagnostic evidence; this is
+  `NOT RUN`, not a live-pass claim. No trust/security bypass was used, and the
+  frozen candidate, packet, and production drawing were not changed.
+- The read-only AutoCAD process was stopped by exact PID after the failed
+  bootstrap. A future live attempt requires the approved APPLOAD/NETLOAD
+  boundary or equivalent declared prerequisites; it must not retry by bypassing
+  AutoCAD trust controls.
+
 ## Current canonical snapshot (2026-09-09)
 
 - Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
