@@ -21,7 +21,9 @@ public static class ContractConstants
             "native_render_evidence",
             "viewport_query",
             "exact_base_xref_inspection",
-            "exact_base_xref_extraction"
+            "exact_base_xref_extraction",
+            "standalone_dwg_component_inspection",
+            "standalone_dwg_component_extraction"
         };
 }
 

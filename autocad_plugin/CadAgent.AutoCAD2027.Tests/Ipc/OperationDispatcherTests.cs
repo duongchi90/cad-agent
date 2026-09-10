@@ -70,6 +70,125 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void StandaloneInspectionRoutesReadOnlySnapshotToStandaloneReader()
+    {
+        var fixture = StandaloneDispatcherFixture();
+        try
+        {
+            var database = new StubStandaloneDatabase
+            {
+                ActiveDocumentFullPath = fixture.SourcePath,
+                IsSourceReadOnly = true,
+                SourceSha256 = fixture.SourceSha256,
+                InspectionSnapshot = new StandaloneDwgComponentInspectionSnapshot
+                {
+                    Success = true,
+                    DrawingFullPath = fixture.SourcePath,
+                    Changed = false,
+                    ReadOnly = true,
+                    IsXrefSource = false,
+                    Eligible = true,
+                    SourceSha256Before = fixture.SourceSha256,
+                    SourceSha256After = fixture.SourceSha256,
+                    DbmodBefore = 0,
+                    DbmodAfter = 0,
+                    Entities = new[]
+                    {
+                        new StandaloneDwgComponentEntitySnapshot
+                        {
+                            SourceHandle = "A1B2",
+                            EntityType = "INSERT",
+                            Layer = "BODY",
+                            Bounds = new StandaloneDwgComponentBounds
+                            {
+                                Min = new StandaloneDwgComponentPoint { X = 0, Y = 0, Z = 0 },
+                                Max = new StandaloneDwgComponentPoint { X = 1, Y = 1, Z = 1 }
+                            }
+                        }
+                    }
+                }
+            };
+            var gateway = new StubDrawingGateway { ActiveDocumentFullPath = fixture.SourcePath };
+            var dispatcher = CreateDispatcher(
+                gateway,
+                standaloneReaderFactory: () => new AutoCadStandaloneDwgComponentReader(
+                    database,
+                    new StandaloneDwgComponentPolicy(fixture.Root)));
+
+            var result = dispatcher.Dispatch(fixture.InspectionRequest);
+
+            Assert.True(result.Success);
+            Assert.Equal(StandaloneDwgComponentOperationNames.Inspection, result.Operation);
+            Assert.False(result.Changed);
+            Assert.Empty(result.EntityHandles!);
+            Assert.Equal(1, database.ReadSelectedEntitiesCallCount);
+            Assert.Equal("standalone-dwg-component-inspection-result-1.0", result.Payload!["schema_version"].GetString());
+            Assert.Equal(0, gateway.ReadExactBaseXrefInspectionCallCount);
+        }
+        finally
+        {
+            Directory.Delete(fixture.Root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StandaloneExtractionRoutesFreshCandidateSnapshotWithoutExactBaseReader()
+    {
+        var fixture = StandaloneDispatcherFixture();
+        try
+        {
+            var database = new StubStandaloneDatabase
+            {
+                ActiveDocumentFullPath = fixture.SourcePath,
+                IsSourceReadOnly = true,
+                SourceSha256 = fixture.SourceSha256,
+                ExtractionSnapshot = new StandaloneDwgComponentCandidateSnapshot
+                {
+                    CandidateCreated = true,
+                    CandidateOutputPath = fixture.OutputPath,
+                    CandidateOutputIdentity = "candidate-file-001",
+                    CandidateOutputSha256 = new string('d', 64),
+                    SourceMutated = false,
+                    SourceSha256Before = fixture.SourceSha256,
+                    SourceSha256After = fixture.SourceSha256,
+                    SourceDbmodBefore = 0,
+                    SourceDbmodAfter = 0,
+                    SavePerformed = true,
+                    Reopenable = true,
+                    Mappings = new[]
+                    {
+                        new StandaloneDwgComponentHandleMapping
+                        {
+                            SourceHandle = "A1B2",
+                            CandidateHandle = "E001"
+                        }
+                    }
+                }
+            };
+            var gateway = new StubDrawingGateway { ActiveDocumentFullPath = fixture.SourcePath };
+            var dispatcher = CreateDispatcher(
+                gateway,
+                standaloneReaderFactory: () => new AutoCadStandaloneDwgComponentReader(
+                    database,
+                    new StandaloneDwgComponentPolicy(fixture.Root)));
+
+            var result = dispatcher.Dispatch(fixture.ExtractionRequest);
+
+            Assert.True(result.Success);
+            Assert.Equal(StandaloneDwgComponentOperationNames.Extraction, result.Operation);
+            Assert.True(result.Changed);
+            Assert.Equal(new[] { "E001" }, result.EntityHandles);
+            Assert.Equal(1, database.ExtractToNewCandidateCallCount);
+            Assert.Equal("EMPTY_NEW_DATABASE", result.Payload!["candidate_base_model"].GetString());
+            Assert.Equal(0, gateway.ExtractExactBaseXrefCallCount);
+        }
+        finally
+        {
+            Directory.Delete(fixture.Root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ExactBaseXrefInspectionRoutesFreshReadOnlySnapshotToResult()
     {
         var fixture = InspectionDispatcherFixture();
@@ -907,7 +1026,8 @@ public sealed class OperationDispatcherTests
         Action? closeWithoutSaving = null,
         IMechanicalAdapter? mechanicalAdapter = null,
         ICollection<string>? mechanicalWarnings = null,
-        ExactBaseXrefPolicy? exactBaseXrefPolicy = null) =>
+        ExactBaseXrefPolicy? exactBaseXrefPolicy = null,
+        Func<AutoCadStandaloneDwgComponentReader>? standaloneReaderFactory = null) =>
         new(new CommandContext(
             new JsonFileStore(Path.Combine(Path.GetTempPath(), "cadagent-t06-tests", Guid.NewGuid().ToString("N"))),
             gateway,
@@ -915,7 +1035,99 @@ public sealed class OperationDispatcherTests
             clock: () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
             mechanicalAdapter: mechanicalAdapter,
             mechanicalWarnings: mechanicalWarnings,
-            exactBaseXrefPolicy: exactBaseXrefPolicy));
+            exactBaseXrefPolicy: exactBaseXrefPolicy),
+            standaloneReaderFactory);
+
+    private static (
+        string Root,
+        string SourcePath,
+        string OutputPath,
+        string SourceSha256,
+        IpcRequest InspectionRequest,
+        IpcRequest ExtractionRequest)
+        StandaloneDispatcherFixture()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-standalone-dispatcher-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var sourcePath = Path.Combine(root, "source.dwg");
+        var outputPath = Path.Combine(root, "candidate.dwg");
+        File.WriteAllText(sourcePath, "standalone-source");
+        var sourceSha256 = StandaloneDwgComponentPolicy.ComputeSha256(sourcePath);
+        var inspectionParameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["schema_version"] = JsonSerializer.SerializeToElement("standalone-dwg-component-inspection-1.0"),
+            ["request_id"] = JsonSerializer.SerializeToElement("standalone-inspection-request-001"),
+            ["run_id"] = JsonSerializer.SerializeToElement("standalone-run-001"),
+            ["source_drawing_path"] = JsonSerializer.SerializeToElement(sourcePath),
+            ["source_drawing_sha256"] = JsonSerializer.SerializeToElement(sourceSha256),
+            ["source_setup_audit_sha256"] = JsonSerializer.SerializeToElement(new string('b', 64)),
+            ["selection_groups"] = JsonSerializer.SerializeToElement(new[]
+            {
+                new
+                {
+                    group_id = "group-001",
+                    logical_component_id = "component-001",
+                    source_handles = new[] { "A1B2" },
+                    expected_entity_types = new[] { "INSERT" },
+                    source_layer_expectations = new[] { "BODY" }
+                }
+            }),
+            ["expected_dbmod"] = JsonSerializer.SerializeToElement(0),
+            ["approval"] = JsonSerializer.SerializeToElement<object?>(null)
+        };
+        var inspectionRequest = new IpcRequest
+        {
+            RequestId = "standalone-inspection-request-001",
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = StandaloneDwgComponentOperationNames.Inspection,
+            DrawingFullPath = sourcePath,
+            DrawingSha256 = sourceSha256,
+            Parameters = inspectionParameters,
+            Approval = null
+        };
+        var approval = new { reference = "approval-standalone-001", status = "APPROVED" };
+        var extractionParameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["plan_id"] = JsonSerializer.SerializeToElement("standalone-plan-001"),
+            ["request_id"] = JsonSerializer.SerializeToElement("standalone-extraction-request-001"),
+            ["run_id"] = JsonSerializer.SerializeToElement("standalone-run-001"),
+            ["inspection_id"] = JsonSerializer.SerializeToElement("standalone-inspection-request-001"),
+            ["inspection_sha256"] = JsonSerializer.SerializeToElement(new string('c', 64)),
+            ["source_drawing_sha256"] = JsonSerializer.SerializeToElement(sourceSha256),
+            ["candidate_output_path"] = JsonSerializer.SerializeToElement(outputPath),
+            ["candidate_base_model"] = JsonSerializer.SerializeToElement("EMPTY_NEW_DATABASE"),
+            ["components"] = JsonSerializer.SerializeToElement(new[]
+            {
+                new
+                {
+                    group_id = "group-001",
+                    logical_component_id = "component-001",
+                    source_handles = new[] { "A1B2" },
+                    transform = new
+                    {
+                        rotation_degrees = 0.0,
+                        translation = new { x = 0.0, y = 0.0, z = 0.0 },
+                        uniform_scale = 1.0
+                    }
+                }
+            }),
+            ["transform_policy"] = JsonSerializer.SerializeToElement("LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY"),
+            ["approval"] = JsonSerializer.SerializeToElement(approval)
+        };
+        var extractionRequest = new IpcRequest
+        {
+            RequestId = "standalone-extraction-request-001",
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = StandaloneDwgComponentOperationNames.Extraction,
+            DrawingFullPath = sourcePath,
+            DrawingSha256 = sourceSha256,
+            Parameters = extractionParameters,
+            Approval = JsonSerializer.SerializeToElement(approval)
+        };
+        return (root, sourcePath, outputPath, sourceSha256, inspectionRequest, extractionRequest);
+    }
 
     private static (IpcRequest Request, ExactBaseXrefPolicy Policy, string Root, string TargetPath)
         InspectionDispatcherFixture()
@@ -1557,5 +1769,48 @@ public sealed class OperationDispatcherTests
 
         public IReadOnlyList<MechanicalComponentSnapshot> ReadMechanicalComponents() =>
             throw _exception;
+    }
+
+    private sealed class StubStandaloneDatabase : IStandaloneDwgComponentDatabase
+    {
+        public string? ActiveDocumentFullPath { get; init; }
+
+        public bool? IsSourceReadOnly { get; init; }
+
+        public string SourceSha256 { get; init; } = string.Empty;
+
+        public StandaloneDwgComponentInspectionSnapshot? InspectionSnapshot { get; init; }
+
+        public StandaloneDwgComponentCandidateSnapshot? ExtractionSnapshot { get; init; }
+
+        public int ReadSelectedEntitiesCallCount { get; private set; }
+
+        public int ExtractToNewCandidateCallCount { get; private set; }
+
+        public string ComputeSourceSha256() => SourceSha256;
+
+        public StandaloneDwgComponentInspectionSnapshot ReadSelectedEntities(
+            StandaloneDwgComponentInspectionRequest request)
+        {
+            ReadSelectedEntitiesCallCount++;
+            return InspectionSnapshot
+                ?? StandaloneDwgComponentInspectionSnapshot.Failure(
+                    ActiveDocumentFullPath,
+                    new[] { "No standalone inspection fixture was configured." });
+        }
+
+        public StandaloneDwgComponentCandidateSnapshot ExtractToNewCandidate(
+            StandaloneDwgComponentExtractionPlan plan)
+        {
+            ExtractToNewCandidateCallCount++;
+            return ExtractionSnapshot
+                ?? throw new InvalidOperationException("No standalone extraction fixture was configured.");
+        }
+
+        public bool IsCandidatePathAbsent(string path) => !File.Exists(path);
+
+        public string CaptureCandidateIdentity(string path) => "candidate-file-001";
+
+        public bool DeleteCandidateIfIdentityMatches(string path, string identity) => false;
     }
 }

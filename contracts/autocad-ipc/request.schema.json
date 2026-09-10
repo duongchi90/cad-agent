@@ -34,7 +34,9 @@
         "native_render_evidence",
         "viewport_query",
         "exact_base_xref_inspection",
-        "exact_base_xref_extraction"
+        "exact_base_xref_extraction",
+        "standalone_dwg_component_inspection",
+        "standalone_dwg_component_extraction"
       ]
     },
     "drawing_full_path": {
@@ -308,6 +310,80 @@
           },
           "parameters": {
             "$ref": "operations/exact-base-xref-extraction.schema.json"
+          },
+          "approval": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "reference",
+              "status"
+            ],
+            "properties": {
+              "reference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "status": {
+                "const": "APPROVED"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "standalone_dwg_component_inspection"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "drawing_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "parameters": {
+            "$ref": "operations/standalone-dwg-component-inspection.schema.json"
+          },
+          "approval": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "standalone_dwg_component_extraction"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "drawing_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "parameters": {
+            "$ref": "operations/standalone-dwg-component-extraction.schema.json"
           },
           "approval": {
             "type": "object",

@@ -28,6 +28,13 @@ from mcp_integration_lib.exact_base_xref import (
     validate_extraction_plan,
     validate_xref_inspection,
 )
+from cad_agent.standalone_dwg_extraction import (
+    StandaloneDwgExtractionError,
+    build_standalone_extraction_plan,
+    validate_standalone_extraction_result,
+    validate_standalone_inspection_request,
+    validate_standalone_inspection_result,
+)
 from cad_agent.visual_evidence import (
     VisualEvidenceError,
     assert_dimension_register_unchanged,
@@ -68,6 +75,8 @@ SUPPORTED_OPERATIONS = frozenset(
         "viewport_query",
         "exact_base_xref_inspection",
         "exact_base_xref_extraction",
+        "standalone_dwg_component_inspection",
+        "standalone_dwg_component_extraction",
     }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -77,6 +86,8 @@ _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _EXACT_BASE_XREF_INSPECTION = "exact_base_xref_inspection"
 _EXACT_BASE_XREF_EXTRACTION = "exact_base_xref_extraction"
+_STANDALONE_DWG_COMPONENT_INSPECTION = "standalone_dwg_component_inspection"
+_STANDALONE_DWG_COMPONENT_EXTRACTION = "standalone_dwg_component_extraction"
 _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE = "INSPECTION_HOST"
 _EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE = "DISPOSABLE_CANDIDATE"
 _VIEWPORT_QUERY_FIELDS = (
@@ -769,6 +780,22 @@ class DotNetIPCClient:
                 normalized_parameters["source_full_path"],
                 candidate_output_path=normalized_parameters.get("candidate_output_path"),
             )
+        if normalized_operation in {
+            _STANDALONE_DWG_COMPONENT_INSPECTION,
+            _STANDALONE_DWG_COMPONENT_EXTRACTION,
+        }:
+            self._validate_exact_base_xref_hash(normalized_sha256, "drawing_sha256")
+            source_path = (
+                normalized_parameters.get("source_drawing_path")
+                if normalized_operation == _STANDALONE_DWG_COMPONENT_INSPECTION
+                else normalized_path
+            )
+            if normalized_operation == _STANDALONE_DWG_COMPONENT_INSPECTION:
+                source_path = normalized_parameters["source_drawing_path"]
+            if source_path is None:
+                raise ValueError("standalone source path is required")
+            if normalize_windows_absolute_path(source_path).casefold() != normalized_path.casefold():
+                raise ValueError("standalone source path must match drawing_full_path")
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
         if normalized_operation == "viewport_query" and approval is not None:
@@ -778,6 +805,13 @@ class DotNetIPCClient:
         if normalized_operation == _EXACT_BASE_XREF_EXTRACTION:
             self._validate_exact_base_xref_approval(
                 normalized_parameters["extraction_plan"]["approval"],
+                approval,
+            )
+        if normalized_operation == _STANDALONE_DWG_COMPONENT_INSPECTION and approval is not None:
+            raise ValueError("standalone inspection approval must be null")
+        if normalized_operation == _STANDALONE_DWG_COMPONENT_EXTRACTION:
+            self._validate_exact_base_xref_approval(
+                normalized_parameters["approval"],
                 approval,
             )
 
@@ -1294,6 +1328,89 @@ class DotNetIPCClient:
             approval=None,
             request_id=request_id,
         )
+
+    def standalone_dwg_component_inspection(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        inspection_request: Mapping[str, Any],
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the closed read-only standalone-DWG inspection operation."""
+
+        try:
+            validated_request = validate_standalone_inspection_request(inspection_request)
+        except StandaloneDwgExtractionError as exc:
+            raise ValueError(str(exc)) from exc
+        normalized_drawing = normalize_windows_absolute_path(drawing_full_path)
+        if normalized_drawing.casefold() != str(validated_request["source_drawing_path"]).casefold():
+            raise ValueError("standalone inspection source path must match drawing_full_path")
+        result = self.request(
+            _STANDALONE_DWG_COMPONENT_INSPECTION,
+            normalized_drawing,
+            drawing_sha256=str(validated_request["source_drawing_sha256"]),
+            parameters=validated_request,
+            approval=None,
+            request_id=(
+                str(validated_request["request_id"])
+                if request_id is None
+                else request_id
+            ),
+        )
+        try:
+            result["payload"] = validate_standalone_inspection_result(
+                result.get("payload", {}),
+                validated_request,
+            )
+        except StandaloneDwgExtractionError as exc:
+            raise DotNetIPCProtocolError(str(exc)) from exc
+        return result
+
+    def standalone_dwg_component_extraction(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        extraction_plan: Mapping[str, Any],
+        inspection_result: Mapping[str, Any] | None = None,
+        inspection_request: Mapping[str, Any] | None = None,
+        approval: Mapping[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the closed EMPTY_NEW_DATABASE standalone extraction operation."""
+
+        try:
+            validated_plan = build_standalone_extraction_plan(
+                extraction_plan,
+                inspection_result=inspection_result,
+                inspection_request=inspection_request,
+            )
+        except StandaloneDwgExtractionError as exc:
+            raise ValueError(str(exc)) from exc
+        normalized_drawing = normalize_windows_absolute_path(drawing_full_path)
+        plan_source_hash = str(validated_plan["source_drawing_sha256"])
+        envelope_approval = validated_plan["approval"] if approval is None else approval
+        result = self.request(
+            _STANDALONE_DWG_COMPONENT_EXTRACTION,
+            normalized_drawing,
+            drawing_sha256=plan_source_hash,
+            parameters=validated_plan,
+            approval=envelope_approval,
+            request_id=(
+                str(validated_plan["request_id"])
+                if request_id is None
+                else request_id
+            ),
+        )
+        try:
+            result["payload"] = validate_standalone_extraction_result(
+                result.get("payload", {}),
+                source_path=normalized_drawing,
+                plan=validated_plan,
+                inspection_result=inspection_result,
+            )
+        except StandaloneDwgExtractionError as exc:
+            raise DotNetIPCProtocolError(str(exc)) from exc
+        return result
 
     def native_render_evidence(
         self,
@@ -1821,6 +1938,18 @@ class DotNetIPCClient:
             DotNetIPCClient._validate_exact_base_xref_inspection_parameters(values)
         elif operation == _EXACT_BASE_XREF_EXTRACTION:
             DotNetIPCClient._validate_exact_base_xref_extraction_parameters(values)
+        elif operation == _STANDALONE_DWG_COMPONENT_INSPECTION:
+            try:
+                validated = validate_standalone_inspection_request(values)
+            except StandaloneDwgExtractionError as exc:
+                raise ValueError(str(exc)) from exc
+            values = validated
+        elif operation == _STANDALONE_DWG_COMPONENT_EXTRACTION:
+            try:
+                validated = build_standalone_extraction_plan(values)
+            except StandaloneDwgExtractionError as exc:
+                raise ValueError(str(exc)) from exc
+            values = validated
         return values
 
     @staticmethod
