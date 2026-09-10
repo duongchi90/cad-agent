@@ -65,6 +65,12 @@
       "maxLength": 64,
       "pattern": "^[0-9A-Fa-f]+$"
     },
+    "layerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
     "sourceIdentity": {
       "type": "object",
       "additionalProperties": false,
@@ -103,7 +109,7 @@
         "layers": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/identifier" }
+          "items": { "$ref": "#/$defs/layerName" }
         },
         "signature_sha256": { "$ref": "#/$defs/lowercaseSha256" }
       }

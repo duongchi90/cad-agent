@@ -973,6 +973,50 @@ public sealed class ContractTests
                 .GetProperty("payload")
                 .GetProperty("$ref")
                 .GetString());
+
+        foreach (var schemaRelativePath in new[]
+        {
+            "contracts/autocad-ipc/operations/standalone-dwg-component-inspection.schema.json",
+            "contracts/autocad-ipc/operations/standalone-dwg-component-inspection-result.schema.json"
+        })
+        {
+            using var operationSchema = JsonDocument.Parse(File.ReadAllText(
+                RepositoryFile(schemaRelativePath)));
+            var layerName = operationSchema.RootElement
+                .GetProperty("$defs")
+                .GetProperty("layerName");
+            Assert.Equal(1, layerName.GetProperty("minLength").GetInt32());
+            Assert.Equal(512, layerName.GetProperty("maxLength").GetInt32());
+            Assert.Equal(
+                "^[^\\u0000-\\u001F\\u007F]+$",
+                layerName.GetProperty("pattern").GetString());
+        }
+
+        using var inspectionOperationSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/operations/standalone-dwg-component-inspection.schema.json")));
+        Assert.Equal(
+            "#/$defs/layerName",
+            inspectionOperationSchema.RootElement
+                .GetProperty("$defs")
+                .GetProperty("selectionGroup")
+                .GetProperty("properties")
+                .GetProperty("source_layer_expectations")
+                .GetProperty("items")
+                .GetProperty("$ref")
+                .GetString());
+
+        using var inspectionResultSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/operations/standalone-dwg-component-inspection-result.schema.json")));
+        Assert.Equal(
+            "#/$defs/layerName",
+            inspectionResultSchema.RootElement
+                .GetProperty("$defs")
+                .GetProperty("inspectionGroup")
+                .GetProperty("properties")
+                .GetProperty("layers")
+                .GetProperty("items")
+                .GetProperty("$ref")
+                .GetString());
     }
 
     [Fact]
@@ -1045,6 +1089,91 @@ public sealed class ContractTests
         Assert.Contains(validation.Errors, error =>
             error.Contains("xref", StringComparison.OrdinalIgnoreCase)
             || error.Contains("supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentRequestsAllowRealAutocadLayerNamesButRejectControls()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json")));
+        var parameters = request.Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        var selectionGroups = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                expected_entity_types = new[] { "INSERT" },
+                source_layer_expectations = new[] { "Duong manh" }
+            }
+        });
+        parameters["selection_groups"] = selectionGroups;
+        var valid = request with { Parameters = parameters };
+
+        Assert.True(ContractValidator.ValidateRequest(valid).IsValid);
+
+        parameters["selection_groups"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                expected_entity_types = new[] { "INSERT" },
+                source_layer_expectations = new[] { "Duong\nmanh" }
+            }
+        });
+        var invalid = request with { Parameters = parameters };
+
+        var validation = ContractValidator.ValidateRequest(invalid);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error =>
+            error.Contains("layer", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("safe", StringComparison.OrdinalIgnoreCase));
+
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.result.json")));
+        var resultPayload = result.Payload!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        resultPayload["groups"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                entity_types = new[] { "INSERT" },
+                layers = new[] { "Duong manh" },
+                signature_sha256 = new string('c', 64)
+            }
+        });
+        var validResult = result with { Payload = resultPayload };
+
+        Assert.True(ContractValidator.ValidateResult(validResult).IsValid);
+
+        resultPayload["groups"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                entity_types = new[] { "INSERT" },
+                layers = new[] { "Duong\nmanh" },
+                signature_sha256 = new string('c', 64)
+            }
+        });
+        var invalidResult = result with { Payload = resultPayload };
+
+        var resultValidation = ContractValidator.ValidateResult(invalidResult);
+
+        Assert.False(resultValidation.IsValid);
+        Assert.Contains(resultValidation.Errors, error =>
+            error.Contains("layer", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("safe", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

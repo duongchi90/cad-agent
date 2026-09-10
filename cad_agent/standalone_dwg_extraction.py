@@ -39,6 +39,7 @@ _HANDLE_RE = re.compile(r"^[0-9A-Fa-f]{1,64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _WINDOWS_ABSOLUTE_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_LAYER_NAME_MAX_LENGTH = 512
 
 _INSPECTION_REQUEST_FIELDS = frozenset(
     {
@@ -260,6 +261,18 @@ def _strings(value: object, code: str) -> list[str]:
     return [_identifier(item, code) for item in value]
 
 
+def _layer_names(value: object, code: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        _fail(code)
+    names: list[str] = []
+    for item in value:
+        text = _text(item, code)
+        if len(text) > _LAYER_NAME_MAX_LENGTH or not text.strip():
+            _fail(code)
+        names.append(text)
+    return names
+
+
 def _ensure_unique(values: list[str], code: str) -> None:
     if len(values) != len(set(values)):
         _fail(code)
@@ -276,7 +289,7 @@ def _validate_selection_group(value: object) -> dict[str, object]:
         "expected_entity_types": _strings(
             group["expected_entity_types"], "REQUEST_SCHEMA_INVALID"
         ),
-        "source_layer_expectations": _strings(
+        "source_layer_expectations": _layer_names(
             group["source_layer_expectations"], "REQUEST_SCHEMA_INVALID"
         ),
     }
@@ -315,14 +328,14 @@ def _normalize_groups(
                     "expected_entity_types": _strings(
                         group["expected_entity_types"], code
                     ),
-                    "source_layer_expectations": _strings(
+                    "source_layer_expectations": _layer_names(
                         group["source_layer_expectations"], code
                     ),
                 }
             )
         else:
             entity_types = _strings(group["entity_types"], code)
-            layers = _strings(group["layers"], code)
+            layers = _layer_names(group["layers"], code)
             groups.append(
                 {
                     "group_id": group_id,

@@ -172,6 +172,41 @@ def test_inspection_rejects_non_hash_bound_or_non_hex_handles() -> None:
         module.validate_standalone_inspection_request(bad_handle)
 
 
+def test_layer_names_allow_autocad_safe_text_but_reject_controls() -> None:
+    module = _module()
+
+    request = _inspection_request()
+    request["selection_groups"][0]["source_layer_expectations"] = ["Duong manh"]
+    normalized_request = module.validate_standalone_inspection_request(request)
+    assert normalized_request["selection_groups"][0]["source_layer_expectations"] == [
+        "Duong manh"
+    ]
+
+    result = _inspection_result()
+    result["groups"][0]["layers"] = ["Duong manh"]
+    result["inspection_sha256"] = module.standalone_inspection_result_sha256(result)
+    normalized_result = module.validate_standalone_inspection_result(result)
+    assert normalized_result["groups"][0]["layers"] == ["Duong manh"]
+
+    for field in ("source_layer_expectations",):
+        invalid = _inspection_request()
+        invalid["selection_groups"][0][field] = ["Duong\nmanh"]
+        with pytest.raises(
+            module.StandaloneDwgExtractionError, match="REQUEST_SCHEMA_INVALID"
+        ):
+            module.validate_standalone_inspection_request(invalid)
+
+    invalid_result = _inspection_result()
+    invalid_result["groups"][0]["layers"] = ["Duong\nmanh"]
+    invalid_result["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        invalid_result
+    )
+    with pytest.raises(
+        module.StandaloneDwgExtractionError, match="RESULT_SCHEMA_INVALID"
+    ):
+        module.validate_standalone_inspection_result(invalid_result)
+
+
 def test_extraction_plan_requires_empty_new_database_and_no_candidate_input() -> None:
     module = _module()
     plan = _extraction_plan()

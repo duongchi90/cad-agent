@@ -269,7 +269,7 @@ public static class ContractValidator
             }
             ValidateStandaloneStringArray(group, "source_handles", "standalone selection group", errors, handles, hexadecimal: true);
             ValidateStandaloneStringArray(group, "expected_entity_types", "standalone selection group", errors, null, hexadecimal: false, identifiers: true);
-            ValidateStandaloneStringArray(group, "source_layer_expectations", "standalone selection group", errors, null, hexadecimal: false, identifiers: true);
+            ValidateStandaloneStringArray(group, "source_layer_expectations", "standalone selection group", errors, null, hexadecimal: false, identifiers: false, safeText: true);
         }
     }
 
@@ -471,7 +471,7 @@ public static class ContractValidator
                 ValidateStandaloneIdentifier(group, "logical_component_id", "standalone result group", errors);
                 ValidateStandaloneStringArray(group, "source_handles", "standalone result group", errors, null, hexadecimal: true);
                 ValidateStandaloneStringArray(group, "entity_types", "standalone result group", errors, null, hexadecimal: false, identifiers: true);
-                ValidateStandaloneStringArray(group, "layers", "standalone result group", errors, null, hexadecimal: false, identifiers: true);
+                ValidateStandaloneStringArray(group, "layers", "standalone result group", errors, null, hexadecimal: false, identifiers: false, safeText: true);
                 ValidateStandaloneHash(group, "signature_sha256", "standalone result group", errors);
             }
         }
@@ -2612,11 +2612,12 @@ public static class ContractValidator
         ISet<string>? seen = null,
         bool hexadecimal = false,
         bool identifiers = false,
+        bool safeText = false,
         bool requireNonEmpty = true)
     {
         if (values.TryGetValue(name, out var value))
         {
-            ValidateStandaloneStringArray(value, name, displayName, errors, seen, hexadecimal, identifiers, requireNonEmpty);
+            ValidateStandaloneStringArray(value, name, displayName, errors, seen, hexadecimal, identifiers, safeText, requireNonEmpty);
         }
         else
         {
@@ -2632,6 +2633,7 @@ public static class ContractValidator
         ISet<string>? seen = null,
         bool hexadecimal = false,
         bool identifiers = false,
+        bool safeText = false,
         bool requireNonEmpty = true)
     {
         var isArray = parent.ValueKind == JsonValueKind.Array;
@@ -2660,6 +2662,10 @@ public static class ContractValidator
             if (identifiers && !VisualEvidenceIdentifierPattern.IsMatch(text))
             {
                 errors.Add($"{displayName}.{name} must contain stable identifiers");
+            }
+            if (safeText && !IsNativeRenderString(text))
+            {
+                errors.Add($"{displayName}.{name} must contain safe text");
             }
             if (seen is not null && !seen.Add(text))
             {
