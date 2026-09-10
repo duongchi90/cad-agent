@@ -449,7 +449,8 @@ class FileIPCLiveMCPClient:
                     )
                 except (MCPTimeoutError, MCPToolError) as exc:
                     if (
-                        self._command_trigger is None
+                        read_only
+                        or self._command_trigger is None
                         or attempt != 0
                         or not self._start_tab_no_document_is_proven(exc)
                     ):

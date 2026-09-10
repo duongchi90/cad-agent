@@ -217,6 +217,37 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         )
         self.assertEqual(['_.OPEN\r"C:/work/a.dxf"'], command_sequences)
 
+    def test_read_only_open_fails_closed_instead_of_using_writable_open_fallback(self):
+        raw_commands = []
+        command_sequences = []
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+            if "vla-open" in command:
+                raise MCPToolError("COM activation failed")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+        client._dispatch = lambda command, params: (
+            {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+            if command == "drawing-get-variables"
+            else {}
+        )
+
+        with self.assertRaisesRegex(MCPToolError, "COM activation failed"):
+            client.drawing_open("C:/work/a.dxf", read_only=True)
+
+        self.assertEqual([], command_sequences)
+        self.assertEqual(1, len(raw_commands))
+
     def test_com_activation_failure_without_start_tab_proof_fails_closed(self):
         raw_commands = []
         command_sequences = []
