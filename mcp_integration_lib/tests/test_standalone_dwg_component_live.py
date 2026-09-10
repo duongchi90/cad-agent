@@ -36,6 +36,7 @@ from mcp_integration_lib.mcp_client import (
     make_windows_dispatch_trigger,
     make_windows_command_trigger,
     make_windows_lisp_trigger,
+    make_windows_start_tab_document_ready_probe,
     make_windows_start_tab_no_document_probe,
 )
 
@@ -243,6 +244,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
         bootstrap_lisp_path=environment["CAD_AGENT_AUTOCAD_LISP_PATH"],
         command_trigger=make_windows_command_trigger(hwnd),
         start_tab_no_document_probe=make_windows_start_tab_no_document_probe(hwnd),
+        bootstrap_document_ready_probe=make_windows_start_tab_document_ready_probe(hwnd),
         bootstrap_start_tab=True,
     )
     dotnet_client = DotNetIPCClient(

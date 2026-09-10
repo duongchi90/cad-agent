@@ -263,6 +263,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
             start_tab_no_document_probe=lambda: True,
+            bootstrap_document_ready_probe=lambda: True,
             bootstrap_start_tab=True,
             timeout_s=0.01,
             poll_interval_s=0,
@@ -296,6 +297,68 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         client.close_start_tab_bootstrap()
         self.assertFalse(client._start_tab_bootstrap_active)
         self.assertIn('command-s "_.CLOSE" "_N"', raw_commands[-1])
+
+    def test_start_tab_bootstrap_waits_for_confirmed_document_after_qnew(self):
+        events = []
+        raw_commands = []
+        readiness_checks = iter((False, False, True))
+
+        def command_trigger(command):
+            events.append(("command", command))
+
+        def ready_probe():
+            value = next(readiness_checks, True)
+            events.append(("ready", value))
+            return value
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=lambda command: (raw_commands.append(command), events.append(("lisp", command))),
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_trigger,
+            start_tab_no_document_probe=lambda: True,
+            bootstrap_document_ready_probe=ready_probe,
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+        client._dispatch = lambda command, params: (
+            {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
+            if command == "drawing-get-variables"
+            else {"ready": True}
+        )
+
+        self.assertEqual({"path": "C:/work/source.dxf"}, client.drawing_open("C:/work/source.dxf"))
+        self.assertEqual(["_.QNEW"], [event[1] for event in events if event[0] == "command"])
+        self.assertEqual([False, False, True], [event[1] for event in events if event[0] == "ready"])
+        first_lisp = next(index for index, event in enumerate(events) if event[0] == "lisp")
+        last_ready = max(index for index, event in enumerate(events) if event[0] == "ready")
+        self.assertLess(last_ready, first_lisp)
+        self.assertTrue(any('(load "C:/tools/mcp_dispatch.lsp")' in command for command in raw_commands))
+
+    def test_start_tab_bootstrap_times_out_before_lisp_when_qnew_is_not_confirmed(self):
+        raw_commands = []
+        command_sequences = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            bootstrap_document_ready_probe=lambda: False,
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        with self.assertRaisesRegex(MCPTimeoutError, "START_TAB_BOOTSTRAP_DOCUMENT_NOT_READY"):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertEqual(["_.QNEW"], command_sequences)
+        self.assertEqual([], raw_commands)
+        self.assertFalse(client._start_tab_bootstrap_active)
 
     def test_start_tab_bootstrap_does_not_run_when_real_document_is_active(self):
         raw_commands = []
@@ -347,6 +410,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
             start_tab_no_document_probe=lambda: True,
+            bootstrap_document_ready_probe=lambda: True,
             bootstrap_start_tab=True,
             timeout_s=0.01,
             poll_interval_s=0,
@@ -382,6 +446,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
             start_tab_no_document_probe=lambda: True,
+            bootstrap_document_ready_probe=lambda: True,
             bootstrap_start_tab=True,
             timeout_s=0.01,
             poll_interval_s=0,
@@ -448,6 +513,27 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             self.assertTrue(probe())
             fake_user32.title = "Autodesk AutoCAD 2027 - [Drawing1.dwg]"
             self.assertFalse(probe())
+
+    def test_start_tab_document_ready_probe_matches_non_start_document_title(self):
+        class FakeUser32:
+            def __init__(self):
+                self.title = "Autodesk AutoCAD 2027 - [Start]"
+
+            def GetWindowTextLengthW(self, hwnd):
+                return len(self.title)
+
+            def GetWindowTextW(self, hwnd, buffer, length):
+                buffer.value = self.title
+                return len(self.title)
+
+        fake_user32 = FakeUser32()
+        with patch.object(mcp_client_module.ctypes.windll, "user32", fake_user32):
+            factory = getattr(mcp_client_module, "make_windows_start_tab_document_ready_probe", None)
+            self.assertTrue(callable(factory))
+            probe = factory(9001)
+            self.assertFalse(probe())
+            fake_user32.title = "Autodesk AutoCAD 2027 - [Drawing1.dwg]"
+            self.assertTrue(probe())
 
     def test_com_activation_failure_without_start_tab_proof_fails_closed(self):
         raw_commands = []

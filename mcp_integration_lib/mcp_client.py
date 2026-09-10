@@ -274,7 +274,9 @@ class FileIPCLiveMCPClient:
                  command_trigger: Optional[Callable[[str], None]] = None,
                  start_tab_no_document_probe: Optional[Callable[[], bool]] = None,
                  legacy_fixture_mode: Optional[bool] = None,
-                 bootstrap_start_tab: bool = False) -> None:
+                 bootstrap_start_tab: bool = False,
+                 bootstrap_document_ready_probe: Optional[Callable[[], bool]] = None,
+                 bootstrap_document_ready_timeout_s: Optional[float] = None) -> None:
         self._dir = _validate_file_ipc_root(ipc_dir)
         self._root_identity = _file_ipc_root_identity(self._dir)
         self._trigger = trigger
@@ -291,6 +293,12 @@ class FileIPCLiveMCPClient:
         self._document_settle_s = document_settle_s
         self._command_trigger = command_trigger
         self._start_tab_no_document_probe = start_tab_no_document_probe
+        self._bootstrap_document_ready_probe = bootstrap_document_ready_probe
+        self._bootstrap_document_ready_timeout_s = (
+            self._timeout
+            if bootstrap_document_ready_timeout_s is None
+            else bootstrap_document_ready_timeout_s
+        )
         if type(bootstrap_start_tab) is not bool:
             raise TypeError("bootstrap_start_tab must be a bool")
         self._bootstrap_start_tab = bootstrap_start_tab
@@ -507,6 +515,7 @@ class FileIPCLiveMCPClient:
             return False
 
         self._command_trigger("_.QNEW")
+        self._wait_for_bootstrap_document()
         self._start_tab_bootstrap_active = True
         try:
             self._load_dispatcher_for_active_document()
@@ -518,6 +527,22 @@ class FileIPCLiveMCPClient:
                 pass
             raise
         return True
+
+    def _wait_for_bootstrap_document(self) -> None:
+        probe = self._bootstrap_document_ready_probe
+        if probe is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_DOCUMENT_PROBE_REQUIRED")
+        deadline = time.monotonic() + max(0.0, self._bootstrap_document_ready_timeout_s)
+        while True:
+            try:
+                if bool(probe()):
+                    return
+            except Exception:
+                pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise MCPTimeoutError("START_TAB_BOOTSTRAP_DOCUMENT_NOT_READY")
+            time.sleep(min(max(0.0, self._poll), remaining))
 
     def close_start_tab_bootstrap(self) -> None:
         """Close the tracked unsaved bootstrap document without saving it."""
@@ -928,10 +953,31 @@ def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
 
 def make_windows_start_tab_no_document_probe(hwnd: int) -> Callable[[], bool]:
     """Return a probe that positively recognizes AutoCAD's documentless Start tab."""
+    read_title = _make_windows_main_window_title_reader(hwnd)
+
+    def probe() -> bool:
+        title = read_title()
+        return title is not None and title.casefold().endswith("[start]")
+
+    return probe
+
+
+def make_windows_start_tab_document_ready_probe(hwnd: int) -> Callable[[], bool]:
+    """Return a probe that confirms QNEW left AutoCAD's documentless Start tab."""
+    read_title = _make_windows_main_window_title_reader(hwnd)
+
+    def probe() -> bool:
+        title = read_title()
+        return title is not None and not title.casefold().endswith("[start]")
+
+    return probe
+
+
+def _make_windows_main_window_title_reader(hwnd: int) -> Callable[[], Optional[str]]:
     if type(hwnd) is not int or hwnd <= 0:
         raise ValueError("hwnd must be a positive integer")
 
-    def probe() -> bool:
+    def read_title() -> Optional[str]:
         user32 = ctypes.windll.user32
         get_window_text_length = user32.GetWindowTextLengthW
         get_window_text = user32.GetWindowTextW
@@ -944,13 +990,14 @@ def make_windows_start_tab_no_document_probe(hwnd: int) -> Callable[[], bool]:
             pass
         length = int(get_window_text_length(hwnd))
         if length <= 0:
-            return False
+            return None
         title = ctypes.create_unicode_buffer(length + 1)
         if int(get_window_text(hwnd, title, len(title))) <= 0:
-            return False
-        return title.value.rstrip().casefold().endswith("[start]")
+            return None
+        normalized = title.value.rstrip()
+        return normalized or None
 
-    return probe
+    return read_title
 
 
 def make_windows_command_trigger(hwnd: int) -> Callable[[str], None]:
