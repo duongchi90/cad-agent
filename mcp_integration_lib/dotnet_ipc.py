@@ -64,6 +64,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "drawing_setup_audit",
         "visual_evidence_export",
         "native_render_evidence",
+        "viewport_query",
         "exact_base_xref_inspection",
         "exact_base_xref_extraction",
     }
@@ -724,6 +725,11 @@ class DotNetIPCClient:
             parameters if parameters is not None else {},
         )
         normalized_sha256 = self._validate_sha256(drawing_sha256)
+        if normalized_operation == "viewport_query" and (
+            normalized_sha256 is None
+            or not _LOWERCASE_SHA256_PATTERN.fullmatch(normalized_sha256)
+        ):
+            raise ValueError("viewport_query drawing_sha256 must be a lowercase SHA-256")
         if normalized_operation in {
             _EXACT_BASE_XREF_INSPECTION,
             _EXACT_BASE_XREF_EXTRACTION,
@@ -736,6 +742,8 @@ class DotNetIPCClient:
             )
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
+        if normalized_operation == "viewport_query" and approval is not None:
+            raise ValueError("viewport_query approval must be null")
         if normalized_operation == _EXACT_BASE_XREF_INSPECTION and approval is not None:
             raise ValueError("exact_base_xref_inspection approval must be null")
         if normalized_operation == _EXACT_BASE_XREF_EXTRACTION:
@@ -1230,6 +1238,23 @@ class DotNetIPCClient:
             drawing_full_path,
             drawing_sha256=drawing_sha256,
             parameters={},
+            approval=None,
+            request_id=request_id,
+        )
+
+    def viewport_query(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        drawing_sha256: str,
+        handle: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "viewport_query",
+            drawing_full_path,
+            drawing_sha256=drawing_sha256,
+            parameters={"handle": handle},
             approval=None,
             request_id=request_id,
         )
@@ -1729,6 +1754,14 @@ class DotNetIPCClient:
         elif operation == "drawing_setup_audit":
             if values:
                 raise ValueError("drawing_setup_audit parameters must be an empty object")
+        elif operation == "viewport_query":
+            if set(values) != {"handle"}:
+                raise ValueError("viewport_query parameters contain unsupported fields")
+            handle = values["handle"]
+            if not isinstance(handle, str) or not re.fullmatch(r"[0-9A-Fa-f]+", handle):
+                raise ValueError(
+                    "viewport_query parameters.handle must be a non-empty hexadecimal handle"
+                )
         elif operation == "review":
             handles = values.get("handles")
             if not isinstance(handles, list) or not handles:

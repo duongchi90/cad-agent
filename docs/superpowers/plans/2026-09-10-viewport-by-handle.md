@@ -10,7 +10,7 @@
 
 **Spec:** This document is the design/spec and the implementation plan for the capability.
 
-**Status:** in progress; SOL design review passed; Tasks 1-2 complete, Tasks 3-4 pending bounded checkpoints.
+**Status:** in progress; SOL design review passed; Tasks 1-3 complete, Task 4 pending bounded checkpoints.
 
 **Approval date:** 2026-09-10; SOL design review passed with `VERDICT=PASS`, `HUMAN_GATE=NO`.
 
@@ -184,7 +184,7 @@ Expected: FAIL because the gateway method and dispatcher branch do not exist.
 - [x] **Step 3: Implement `AutoCadDrawingGateway.ReadViewportQuery`.** Uses `Database.GetObjectId(false, new Handle(parsedHandle), 0)`, opens the object `OpenMode.ForRead`, requires `Viewport`, reads only `CenterPoint`, `Width`, `Height`, `ViewCenter`, `ViewHeight`, `ViewTarget`, and `TwistAngle`, and wraps each property read in the explicit field-state mapping. It does not call `GeometricExtents` or enumerate ModelSpace/PaperSpace.
 - [x] **Step 4: Implement `DispatchViewportQuery`.** Verifies the active path and requested source hash before calling the gateway, consumes stable source hash/DBMOD before and after from the owner, validates the result, and returns `success=true` only when the read completed with stable identity and currentness. A property-level `UNSUPPORTED`/`ERROR` remains explicit in the successful typed payload; a target identity/read transaction failure is a bounded operation error.
 - [x] **Step 5: Run the focused tests and verify they pass.** Result: `dotnet test ... --filter "FullyQualifiedName~OperationDispatcherTests|FullyQualifiedName~ReviewEngineTests"` passed 47 tests, 0 failed, 0 skipped.
-- [ ] **Step 6: Run `git diff --check` and commit the owner/dispatcher files and tests.**
+- [x] **Step 6: Run `git diff --check` and commit the owner/dispatcher files and tests.** Commit: `c986fc6e8907bd649ff1bf2cb61874054a4f7635` (`feat(viewport): add read-only dispatcher owner`).
 
 ### Task 3: Reuse the existing Python IPC client and add offline protocol coverage
 
@@ -198,8 +198,8 @@ Expected: FAIL because the gateway method and dispatcher branch do not exist.
 - The method sends `operation="viewport_query"`, `parameters={"handle": handle}`, `approval=None`, and the required source hash through the existing JSON File IPC envelope.
 - No new trigger, socket, HTTP endpoint, retry daemon, or direct COM dependency is permitted.
 
-- [ ] **Step 1: Write the failing Python tests.** Add `test_viewport_query_sends_one_handle_and_required_hash`, `test_viewport_query_rejects_missing_hash`, and `test_viewport_query_rejects_extra_parameters` using the existing fake dispatcher/request-file assertions.
-- [ ] **Step 2: Run the focused tests and verify failure.**
+- [x] **Step 1: Write the failing Python tests.** Added `test_viewport_query_sends_one_handle_and_required_hash`, `test_viewport_query_rejects_missing_hash`, and `test_viewport_query_rejects_extra_parameters`, plus the allowlist/schema binding test, using the existing fake dispatcher/request-file assertions.
+- [x] **Step 2: Run the focused tests and verify failure.** Observed the expected RED run: 4 viewport tests failed because the client method and Python operation allowlist were absent; 136 unrelated tests were deselected.
 
 Run:
 
@@ -209,9 +209,9 @@ Run:
 
 Expected: FAIL because the client method and operation allowlist are absent.
 
-- [ ] **Step 3: Add the client method and operation allowlist/schema references.** Preserve the existing cleanup behavior and reject a reused request ID result before dispatch.
-- [ ] **Step 4: Run the focused Python tests and verify they pass.**
-- [ ] **Step 5: Run `git diff --check` and commit the client/protocol files and tests.**
+- [x] **Step 3: Add the client method and operation allowlist/schema references.** Preserved the existing cleanup behavior and request-id reuse protection; enforced one hexadecimal handle, lowercase source hash, null approval, and closed parameters through the existing envelope.
+- [x] **Step 4: Run the focused Python tests and verify they pass.** Result: 4 passed, 0 failed, 136 deselected. The complete pair of touched test files also passed: 140 passed, 50 subtests passed in 13.62s.
+- [x] **Step 5: Run `git diff --check` and commit the client/protocol files and tests.** Commit: `5724655` (`feat(viewport): add Python IPC query client`).
 
 ### Task 4: Run the required live disposable-DXF gate and update status
 

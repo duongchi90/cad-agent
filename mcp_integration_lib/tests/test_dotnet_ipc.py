@@ -673,6 +673,66 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertEqual(r"C:\drawings\sample.dwg", request["drawing_full_path"])
             self.assertEqual({"handles": ["10", "A0"]}, request["parameters"])
 
+    def test_viewport_query_sends_one_handle_and_required_hash(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            dispatcher = FakeDispatcher(ipc_dir)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            client.viewport_query(
+                r"C:/drawings/parts/../sample.dwg",
+                drawing_sha256="a" * 64,
+                handle="126BABE",
+                request_id="viewport-001",
+            )
+
+            request = dispatcher.requests[0]
+            self.assertEqual("viewport_query", request["operation"])
+            self.assertEqual(r"C:\drawings\sample.dwg", request["drawing_full_path"])
+            self.assertEqual("a" * 64, request["drawing_sha256"])
+            self.assertEqual({"handle": "126BABE"}, request["parameters"])
+            self.assertIsNone(request["approval"])
+
+    def test_viewport_query_rejects_missing_hash(self) -> None:
+        with TemporaryDirectory() as temporary:
+            trigger_calls = 0
+
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+
+            with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256=None,
+                    handle="126BABE",
+                )
+
+            self.assertEqual(0, trigger_calls)
+
+    def test_viewport_query_rejects_extra_parameters(self) -> None:
+        with TemporaryDirectory() as temporary:
+            trigger_calls = 0
+
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+
+            with self.assertRaisesRegex(ValueError, "unsupported fields"):
+                client.request(
+                    "viewport_query",
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={"handle": "126BABE", "scope": "all"},
+                    approval=None,
+                )
+
+            self.assertEqual(0, trigger_calls)
+
     def test_mechanical_bom_sends_empty_parameters_and_preserves_payload(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
