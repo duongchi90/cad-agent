@@ -10,7 +10,7 @@
 
 **Spec:** This document is the design/spec and the implementation plan for the capability.
 
-**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added, live gate SKIP because prerequisites are absent; authoritative verification and reviews pending.
+**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added and live gate SKIP because prerequisites are absent; authoritative verification passed; three independent reviews pending.
 
 **Approval date:** 2026-09-10; SOL design review passed with `VERDICT=PASS`, `HUMAN_GATE=NO`.
 
@@ -235,7 +235,7 @@ Run:
 
 Expected: `PASS` only when AutoCAD Mechanical 2027, the approved dispatcher, and all declared environment variables are present; otherwise record `SKIP` or `NOT RUN`, never pass.
 
-- [ ] **Step 3: Run the full authoritative verifier.**
+- [x] **Step 3: Run the full authoritative verifier.** Result: `scripts/bootstrap.ps1` and `scripts/verify.ps1` both exited `0`; .NET build succeeded with 209 C# tests passed; offline Python JUnit recorded 3308 tests with 0 failures/errors; `dotnet_ipc` JUnit recorded 121 tests with 0 failures/errors; Ruff passed; causal-RED and unavailable-state probes were recorded separately; AutoCAD live marker and M2 benchmark were `NOT RUN`. Exact status is recorded in `docs/STATUS.md`.
 
 Run:
 
@@ -248,7 +248,7 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 Record the exact exit code, test counts, live-gate state, plugin identity, and disposable artifact paths in the implementation plan and `docs/STATUS.md`.
 
 - [ ] **Step 4: Request three bounded reviews required for AutoCAD/File IPC/architecture scope:** requirements/architecture, correctness/test, and security/operations. Each reviewer receives the compact packet from `docs/templates/`, the exact contract/schema diff, focused test output, live-gate state, and no private customer drawing.
-- [ ] **Step 5: Update `docs/STATUS.md` only with evidence that actually ran.** Keep `BVTL.dwg`, the PDF, and the frozen disposable page-1 DXF outside Git.
+- [x] **Step 5: Update `docs/STATUS.md` only with evidence that actually ran.** `BVTL.dwg`, the PDF, and the frozen disposable page-1 DXF remain outside Git.
 - [ ] **Step 6: Run `git diff --check`, confirm no P0/P1 remains, and stop for design/implementation approval before using the new owner against `BVTL.dwg`.**
 
 ## Verification and gate record
