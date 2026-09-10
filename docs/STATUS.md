@@ -21,7 +21,9 @@
 - Branch-local implementation head:
   `codex/audit-text-style-compat-20260910`, with standalone extraction code at
   `a17032275a628328dcad0fd15166e413faee3663`; the read-only-open remediation
-  is pushed at `1e17f159a2bd089f9797876beb769a872dee45b0`.
+  is pushed at `1e17f159a2bd089f9797876beb769a872dee45b0`; the latest
+  fail-closed fallback remediation is pushed at
+  `a21bf814545bbaa3148ce34a7940661be76e1b6d`.
 - Task 6 is **Partially verified**: all offline contract/provenance paths pass,
   and the private fixture is now prepared from the approved BVTL inventory. A
   bounded live attempt confirmed health/setup-audit, then correctly failed
@@ -61,6 +63,19 @@
   remediation is awaiting review. No source, accepted drawing, candidate, or
   production CAD state was mutated. Do not weaken the policy, change source
   metadata, or promote a candidate.
+- SOL's fresh review of exact pushed HEAD `cf7b5f139adc63b07d4694a488dd449bf646258f`
+  found that a positive start-tab proof could still route `read_only=True`
+  through the writable `_.OPEN` fallback when VLA open failed. Commit
+  `a21bf814545bbaa3148ce34a7940661be76e1b6d` makes that path fail closed while
+  preserving the proven writable fallback for `read_only=False`. The new
+  regression covers the exact failure sequence: `13` drawing-open tests pass;
+  the focused FileIPC/Task-6 owner set reports `33 passed`, `1 skipped`, and
+  `1` intentional causal-RED diagnostic. Authoritative verification on the
+  exact pushed HEAD exited `0`: C# `238 passed`, offline Python `3355 passed`,
+  offline IPC `134 passed`, real-data `2 skipped`, AutoCAD Mechanical
+  unavailable probe `17 skipped`, Ruff and `git diff --check` passed. A fresh
+  SOL review of `a21bf814545bbaa3148ce34a7940661be76e1b6d` is pending before
+  another live attempt.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 

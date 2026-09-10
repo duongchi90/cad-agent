@@ -159,3 +159,30 @@ the disposable root was empty and the source hash remained
 `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
 Live acceptance remains `NOT RUN` until SOL reviews this remediation and a new
 attempt actually passes inspection/extraction/query.
+
+## Read-only fallback fail-closed remediation and iteration 29
+
+SOL's fresh review of exact pushed HEAD
+`cf7b5f139adc63b07d4694a488dd449bf646258f` found one remaining escape path in
+the new owner-level contract: when VLA read-only open failed and the positive
+start-tab proof was available, `drawing_open(read_only=True)` could still call
+the generic writable `_.OPEN` fallback. The bounded remediation in commit
+`a21bf814545bbaa3148ce34a7940661be76e1b6d` propagates the VLA failure whenever
+`read_only=True`, so no writable command fallback is possible. The existing
+writable fallback remains available for `read_only=False`.
+
+Regression and verification evidence on the exact pushed code commit:
+
+- `test_mcp_client_drawing_open.py`: `13 passed`, including the new
+  fail-closed regression and the existing writable-fallback regression.
+- Focused FileIPC/Task-6 owner set: `33 passed`, one live prerequisite skip,
+  and one intentional causal-RED diagnostic.
+- `scripts/verify.ps1`: exit `0`; C# `238 passed`, offline Python `3355`
+  passed, offline IPC `134` passed, real-data `2 skipped`, AutoCAD Mechanical
+  unavailable probe `17 skipped`, Ruff passed, and `git diff --check` passed.
+
+The source DWG, private fixture, accepted drawing, candidate output, and live
+AutoCAD state were not changed. This is implementation and offline-contract
+evidence only. Live acceptance remains `NOT RUN` pending a fresh SOL review of
+`a21bf814545bbaa3148ce34a7940661be76e1b6d`; only after `VERDICT=PASS` may the
+standalone live inspection/extraction/query gate be attempted again.
