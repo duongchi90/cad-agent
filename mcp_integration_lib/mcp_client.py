@@ -789,12 +789,15 @@ class FileIPCLiveMCPClient:
         dispatcher_preloaded = getattr(bindings, "dispatcher_preloaded", False)
         if type(dispatcher_preloaded) is not bool:
             raise MCPToolError("START_TAB_BOOTSTRAP_BINDINGS_INVALID")
+        if getattr(bindings.dispatch_trigger, "_mcp_claim_bound", False) is not True:
+            raise MCPToolError("START_TAB_BOOTSTRAP_CLAIM_REQUIRED")
         self._command_trigger = bindings.command_trigger
         self._raw_lisp_trigger = bindings.raw_lisp_trigger
         self._trigger = bindings.dispatch_trigger
         self._start_tab_no_document_probe = bindings.start_tab_no_document_probe
         self._bootstrap_document_ready_probe = bindings.document_ready_probe
         self._bootstrap_dispatcher_preloaded = dispatcher_preloaded
+        self._legacy_fixture_mode = False
 
     def _wait_for_bootstrap_document(self) -> None:
         probe = self._bootstrap_document_ready_probe

@@ -14,6 +14,11 @@ from mcp_integration_lib.mcp_client import (
 )
 
 
+def _claim_bound_trigger(callback):
+    setattr(callback, "_mcp_claim_bound", True)
+    return callback
+
+
 class DrawingOpenFallbackTests(unittest.TestCase):
     def setUp(self):
         self._ipc_tmp = tempfile.TemporaryDirectory()
@@ -455,7 +460,9 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     raw_lisp_trigger=lambda command: (
                         raw_commands.append(command), events.append(("lisp", command))
                     ),
-                    dispatch_trigger=lambda: events.append("dispatch"),
+                    dispatch_trigger=_claim_bound_trigger(
+                        lambda: events.append("dispatch")
+                    ),
                     start_tab_no_document_probe=lambda: True,
                     document_ready_probe=lambda: True,
                     dispatcher_preloaded=True,
@@ -475,6 +482,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         )
         def dispatch(command, params):
             if command == "ping":
+                self.assertFalse(client._legacy_fixture_mode)
                 events.append("ping")
             if command == "drawing-get-variables":
                 return {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
@@ -503,7 +511,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 hwnd=8803,
                 command_trigger=lambda command: events.append(("command", command)),
                 raw_lisp_trigger=raw_commands.append,
-                dispatch_trigger=lambda: None,
+                dispatch_trigger=_claim_bound_trigger(lambda: None),
                 start_tab_no_document_probe=lambda: True,
                 document_ready_probe=lambda: True,
                 dispatcher_preloaded=True,
@@ -544,7 +552,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 hwnd=8801,
                 command_trigger=lambda command: events.append(("command", command)),
                 raw_lisp_trigger=raw_commands.append,
-                dispatch_trigger=lambda: None,
+                dispatch_trigger=_claim_bound_trigger(lambda: None),
                 start_tab_no_document_probe=lambda: True,
                 document_ready_probe=lambda: False,
             ),
@@ -566,6 +574,38 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertIn("close", events)
         self.assertEqual([], raw_commands)
         self.assertFalse(client._start_tab_bootstrap_active)
+
+    def test_start_tab_session_rejects_unclaimed_dispatcher_trigger(self):
+        events = []
+        session = SimpleNamespace(
+            launch_blank_document=lambda: SimpleNamespace(
+                hwnd=8804,
+                command_trigger=lambda command: events.append(("command", command)),
+                raw_lisp_trigger=lambda command: events.append(("lisp", command)),
+                dispatch_trigger=lambda: None,
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: True,
+                dispatcher_preloaded=True,
+            ),
+            close_without_save=lambda **kwargs: events.append(("close", kwargs)),
+        )
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            bootstrap_start_tab=True,
+            bootstrap_start_tab_session_factory=lambda: session,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        with self.assertRaisesRegex(
+            MCPToolError, "START_TAB_BOOTSTRAP_CLAIM_REQUIRED"
+        ):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertIn(("close", {"best_effort": True}), events)
+        self.assertTrue(client._legacy_fixture_mode)
 
     def test_start_tab_bootstrap_does_not_run_when_real_document_is_active(self):
         raw_commands = []
