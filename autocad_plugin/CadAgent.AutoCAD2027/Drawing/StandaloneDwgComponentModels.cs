@@ -245,6 +245,8 @@ public interface IStandaloneDwgComponentDatabase
 
     bool? IsSourceReadOnly { get; }
 
+    string ComputeSourceSha256();
+
     StandaloneDwgComponentInspectionSnapshot ReadSelectedEntities(
         StandaloneDwgComponentInspectionRequest request);
 

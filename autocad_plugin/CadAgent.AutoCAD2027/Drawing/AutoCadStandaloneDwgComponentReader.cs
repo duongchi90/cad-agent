@@ -56,6 +56,7 @@ public sealed class AutoCadStandaloneDwgComponentReader
         {
             _policy.ValidateExtractionPlan(plan);
             EnsureSourceReadOnly();
+            EnsureSourceFresh(plan.SourceDrawingSha256);
             outputPath = _policy.NormalizeCandidateOutputPath(
                 plan,
                 _database,
@@ -143,6 +144,17 @@ public sealed class AutoCadStandaloneDwgComponentReader
         }
     }
 
+    private void EnsureSourceFresh(string? expectedSourceSha256)
+    {
+        var actualSourceSha256 = _database.ComputeSourceSha256();
+        if (!string.Equals(actualSourceSha256, expectedSourceSha256, StringComparison.Ordinal))
+        {
+            throw new StandaloneDwgComponentPolicyException(
+                StandaloneDwgComponentPolicy.SourceFreshnessMismatchCode,
+                "source hash does not match the approved extraction plan before candidate creation");
+        }
+    }
+
     private static string FormatError(Exception exception) => exception switch
     {
         StandaloneDwgComponentPolicyException policyException =>
@@ -175,6 +187,15 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
                 return null;
             }
         }
+    }
+
+    public string ComputeSourceSha256()
+    {
+        RequireReadOnlySource();
+        var sourcePath = ContractValidator.NormalizeWindowsAbsolutePath(
+            _document.Database?.Filename
+                ?? throw new InvalidOperationException("source drawing has no path"));
+        return StandaloneDwgComponentPolicy.ComputeSha256(sourcePath);
     }
 
     internal static string ContractEntityType(Entity entity) =>
@@ -267,6 +288,15 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
             ?? throw new InvalidOperationException("the active AutoCAD document has no database");
         var sourcePath = ContractValidator.NormalizeWindowsAbsolutePath(
             database.Filename ?? throw new InvalidOperationException("source drawing has no path"));
+        var sourceBefore = StandaloneDwgComponentPolicy.ComputeSha256(sourcePath);
+        if (!string.Equals(sourceBefore, plan.SourceDrawingSha256, StringComparison.Ordinal))
+        {
+            throw new StandaloneDwgComponentPolicyException(
+                StandaloneDwgComponentPolicy.SourceFreshnessMismatchCode,
+                "source hash does not match the approved extraction plan before candidate creation");
+        }
+
+        var dbmodBefore = ReadDbmod();
         var outputPath = ContractValidator.NormalizeWindowsAbsolutePath(
             plan.CandidateOutputPath ?? throw new InvalidOperationException("candidate output path is missing"));
         if (!IsCandidatePathAbsent(outputPath))
@@ -276,8 +306,6 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
                 "candidate output already exists");
         }
 
-        var sourceBefore = StandaloneDwgComponentPolicy.ComputeSha256(sourcePath);
-        var dbmodBefore = ReadDbmod();
         var sourceIds = new ObjectIdCollection();
         var sourceHandles = new List<string>();
         using (var sourceTransaction = database.TransactionManager.StartOpenCloseTransaction())

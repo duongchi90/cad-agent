@@ -107,6 +107,21 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
     }
 
     [Fact]
+    public void RejectsStaleSourceHashBeforeCandidateCreation()
+    {
+        var database = Database();
+        database.SourceSha256 = new string('c', 64);
+
+        var result = Reader(database).Extract(Plan());
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains(
+            StandaloneDwgComponentPolicy.SourceFreshnessMismatchCode,
+            StringComparison.Ordinal));
+        Assert.Equal(0, database.ExtractionCallCount);
+    }
+
+    [Fact]
     public void VerifiedReadOnlySourcePassesInspectionAndExtraction()
     {
         var database = Database();
@@ -367,6 +382,8 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
 
         public bool? IsSourceReadOnly { get; set; } = true;
 
+        public string SourceSha256 { get; set; } = SourceHash;
+
         public StandaloneDwgComponentInspectionSnapshot Inspection { get; set; } = new();
 
         public StandaloneDwgComponentCandidateSnapshot Candidate { get; set; } = new();
@@ -374,6 +391,8 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
         public int ExtractionCallCount { get; private set; }
 
         public int InspectionCallCount { get; private set; }
+
+        public int SourceSha256CallCount { get; private set; }
 
         public StandaloneDwgComponentExtractionPlan? LastPlan { get; private set; }
 
@@ -388,6 +407,12 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
         {
             InspectionCallCount++;
             return Inspection;
+        }
+
+        public string ComputeSourceSha256()
+        {
+            SourceSha256CallCount++;
+            return SourceSha256;
         }
 
         public StandaloneDwgComponentCandidateSnapshot ExtractToNewCandidate(
