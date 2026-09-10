@@ -33,7 +33,6 @@ from mcp_integration_lib.dotnet_ipc import (
 )
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
-    make_windows_command_trigger,
     make_windows_start_tab_session_factory,
 )
 
@@ -241,21 +240,15 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
         factory = make_windows_start_tab_session_factory(
             environment["CAD_AGENT_AUTOCAD_EXE"],
             environment["CAD_AGENT_FILE_IPC_DIR"],
+            bootstrap_plugin_path=str(_PLUGIN_DLL_PATH.resolve()),
+            bootstrap_lisp_path=environment["CAD_AGENT_AUTOCAD_LISP_PATH"],
+            ipc_root=environment["CAD_AGENT_FILE_IPC_DIR"],
             timeout_s=30.0,
             poll_interval_s=0.1,
         )
         session = factory()
         session_holder["session"] = session
         return session
-
-    def load_plugin_after_document_ready() -> None:
-        session = session_holder.get("session")
-        hwnd = getattr(session, "hwnd", None)
-        if type(hwnd) is not int or hwnd <= 0:
-            raise AssertionError("bootstrap session did not expose a valid HWND")
-        make_windows_command_trigger(hwnd)(
-            '_.NETLOAD\r"' + str(_PLUGIN_DLL_PATH.resolve()).replace("\\", "/") + '"'
-        )
 
     def dotnet_trigger() -> None:
         session = session_holder.get("session")
@@ -269,7 +262,6 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
         bootstrap_lisp_path=environment["CAD_AGENT_AUTOCAD_LISP_PATH"],
         bootstrap_start_tab=True,
         bootstrap_start_tab_session_factory=create_start_tab_session,
-        bootstrap_document_setup_hook=load_plugin_after_document_ready,
     )
     dotnet_client = DotNetIPCClient(
         ipc_dir=environment["CAD_AGENT_DOTNET_IPC_DIR"],

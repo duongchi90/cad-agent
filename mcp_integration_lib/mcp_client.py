@@ -276,6 +276,7 @@ class WindowsStartTabBootstrapBindings:
     dispatch_trigger: Callable[[], None]
     start_tab_no_document_probe: Callable[[], bool]
     document_ready_probe: Callable[[], bool]
+    dispatcher_preloaded: bool = False
 
 
 class WindowsAutoCADStartTabSession:
@@ -291,6 +292,9 @@ class WindowsAutoCADStartTabSession:
         process_launcher: Optional[Callable[[Path, Path], Any]] = None,
         window_finder: Optional[Callable[[int], int]] = None,
         window_closer: Optional[Callable[[int], None]] = None,
+        bootstrap_plugin_path: Optional[str] = None,
+        bootstrap_lisp_path: Optional[str] = None,
+        ipc_root: Optional[str] = None,
         start_probe_factory: Optional[Callable[[int], Callable[[], bool]]] = None,
         document_ready_probe_factory: Optional[
             Callable[[int], Callable[[], bool]]
@@ -314,6 +318,24 @@ class WindowsAutoCADStartTabSession:
         self._process_launcher = process_launcher or _launch_windows_autocad_with_script
         self._window_finder = window_finder or _find_windows_main_window_for_pid
         self._window_closer = window_closer or _close_windows_main_window
+        if bootstrap_plugin_path is None:
+            self._bootstrap_plugin_path = None
+        else:
+            plugin_path = Path(bootstrap_plugin_path).resolve()
+            if not plugin_path.is_file():
+                raise ValueError("bootstrap_plugin_path must be an existing file")
+            self._bootstrap_plugin_path = plugin_path
+        if (bootstrap_lisp_path is None) != (ipc_root is None):
+            raise ValueError("bootstrap_lisp_path and ipc_root must be supplied together")
+        if bootstrap_lisp_path is None:
+            self._bootstrap_lisp_path = None
+            self._ipc_root = None
+        else:
+            lisp_path = Path(bootstrap_lisp_path).resolve()
+            if not lisp_path.is_file():
+                raise ValueError("bootstrap_lisp_path must be an existing file")
+            self._bootstrap_lisp_path = lisp_path
+            self._ipc_root = _validate_file_ipc_root(str(ipc_root))
         self._start_probe_factory = (
             start_probe_factory or make_windows_start_tab_no_document_probe
         )
@@ -330,13 +352,41 @@ class WindowsAutoCADStartTabSession:
     def hwnd(self) -> Optional[int]:
         return self._hwnd
 
+    def _startup_script_bytes(self) -> bytes:
+        lines = ["_.QNEW"]
+        if self._bootstrap_plugin_path is not None:
+            lines.extend(
+                [
+                    "_.NETLOAD",
+                    _autolisp_string_literal(
+                        str(self._bootstrap_plugin_path).replace("\\", "/")
+                    ),
+                    "",
+                ]
+            )
+        if self._bootstrap_lisp_path is not None and self._ipc_root is not None:
+            root_literal = _autolisp_string_literal(
+                str(self._ipc_root).replace("\\", "/")
+            )
+            lisp_literal = _autolisp_string_literal(
+                str(self._bootstrap_lisp_path).replace("\\", "/")
+            )
+            lines.append(
+                "(progn (setq *cad-agent-file-ipc-root* "
+                + root_literal
+                + ") (load "
+                + lisp_literal
+                + "))"
+            )
+        return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
     def launch_blank_document(self) -> WindowsStartTabBootstrapBindings:
         if self._process is not None:
             raise MCPToolError("START_TAB_BOOTSTRAP_SESSION_ALREADY_STARTED")
         script_path = self._script_directory / (
             f"cad-agent-start-tab-{uuid.uuid4().hex}.scr"
         )
-        script_path.write_bytes(b"_.QNEW\r\n")
+        script_path.write_bytes(self._startup_script_bytes())
         self._script_path = script_path
         try:
             process = self._process_launcher(self._acad_executable, script_path)
@@ -360,6 +410,7 @@ class WindowsAutoCADStartTabSession:
                         dispatch_trigger=make_windows_dispatch_trigger(candidate),
                         start_tab_no_document_probe=self._start_probe_factory(candidate),
                         document_ready_probe=self._document_ready_probe_factory(candidate),
+                        dispatcher_preloaded=self._bootstrap_lisp_path is not None,
                     )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -467,6 +518,7 @@ class FileIPCLiveMCPClient:
         )
         self._bootstrap_start_tab_session_factory = bootstrap_start_tab_session_factory
         self._bootstrap_document_setup_hook = bootstrap_document_setup_hook
+        self._bootstrap_dispatcher_preloaded = False
         if type(bootstrap_start_tab) is not bool:
             raise TypeError("bootstrap_start_tab must be a bool")
         self._bootstrap_start_tab = bootstrap_start_tab
@@ -642,7 +694,8 @@ class FileIPCLiveMCPClient:
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
                 time.sleep(self._document_settle_s)
                 self._active_drawing_path = expected_path
-                self._load_dispatcher_for_active_document()
+                if not self._bootstrap_dispatcher_preloaded:
+                    self._load_dispatcher_for_active_document()
                 self._wait_for_dispatcher()
                 variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
                 active_path = _normalized_autocad_path(
@@ -698,17 +751,19 @@ class FileIPCLiveMCPClient:
 
             self._wait_for_bootstrap_document()
             self._start_tab_bootstrap_active = True
+            if not self._bootstrap_dispatcher_preloaded:
+                self._load_dispatcher_for_active_document()
+            self._wait_for_dispatcher()
             if self._bootstrap_document_setup_hook is not None:
                 self._bootstrap_document_setup_hook()
                 time.sleep(self._document_settle_s)
-            self._load_dispatcher_for_active_document()
-            self._wait_for_dispatcher()
         except Exception:
             try:
                 if self._start_tab_bootstrap_session is not None:
                     self._start_tab_bootstrap_session.close_without_save(best_effort=True)
                     self._start_tab_bootstrap_session = None
                     self._start_tab_bootstrap_active = False
+                    self._bootstrap_dispatcher_preloaded = False
                 elif self._start_tab_bootstrap_active:
                     self.close_start_tab_bootstrap()
             except Exception:
@@ -731,11 +786,15 @@ class FileIPCLiveMCPClient:
         )
         if not all(callable(value) for value in required):
             raise MCPToolError("START_TAB_BOOTSTRAP_BINDINGS_INVALID")
+        dispatcher_preloaded = getattr(bindings, "dispatcher_preloaded", False)
+        if type(dispatcher_preloaded) is not bool:
+            raise MCPToolError("START_TAB_BOOTSTRAP_BINDINGS_INVALID")
         self._command_trigger = bindings.command_trigger
         self._raw_lisp_trigger = bindings.raw_lisp_trigger
         self._trigger = bindings.dispatch_trigger
         self._start_tab_no_document_probe = bindings.start_tab_no_document_probe
         self._bootstrap_document_ready_probe = bindings.document_ready_probe
+        self._bootstrap_dispatcher_preloaded = dispatcher_preloaded
 
     def _wait_for_bootstrap_document(self) -> None:
         probe = self._bootstrap_document_ready_probe
@@ -761,6 +820,7 @@ class FileIPCLiveMCPClient:
             self._start_tab_bootstrap_session.close_without_save()
             self._start_tab_bootstrap_session = None
             self._start_tab_bootstrap_active = False
+            self._bootstrap_dispatcher_preloaded = False
             return
         if self._raw_lisp_trigger is None:
             raise MCPToolError("START_TAB_BOOTSTRAP_LISP_REQUIRED")
@@ -1191,6 +1251,9 @@ def make_windows_start_tab_session_factory(
     acad_executable: str,
     script_directory: str,
     *,
+    bootstrap_plugin_path: Optional[str] = None,
+    bootstrap_lisp_path: Optional[str] = None,
+    ipc_root: Optional[str] = None,
     timeout_s: float = 30.0,
     poll_interval_s: float = 0.1,
 ) -> Callable[[], WindowsAutoCADStartTabSession]:
@@ -1206,6 +1269,9 @@ def make_windows_start_tab_session_factory(
         return WindowsAutoCADStartTabSession(
             str(executable),
             str(script_root),
+            bootstrap_plugin_path=bootstrap_plugin_path,
+            bootstrap_lisp_path=bootstrap_lisp_path,
+            ipc_root=ipc_root,
             timeout_s=timeout_s,
             poll_interval_s=poll_interval_s,
         )

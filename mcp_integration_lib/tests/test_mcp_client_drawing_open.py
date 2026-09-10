@@ -365,6 +365,10 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         process = SimpleNamespace(pid=7301, poll=lambda: None)
         launch_calls = []
         close_calls = []
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        plugin_path = Path(self._ipc_dir) / "CadAgent.AutoCAD2027.dll"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        plugin_path.write_bytes(b"test plugin")
 
         def launch(executable, script_path):
             launch_calls.append((executable, script_path, script_path.read_bytes()))
@@ -377,6 +381,9 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         session = mcp_client_module.WindowsAutoCADStartTabSession(
             acad_executable="C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
             script_directory=self._ipc_dir,
+            bootstrap_plugin_path=str(plugin_path),
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=str(self._ipc_dir),
             timeout_s=0.01,
             poll_interval_s=0,
             process_launcher=launch,
@@ -384,15 +391,26 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
-            bindings_factory=lambda hwnd: SimpleNamespace(hwnd=hwnd),
         )
 
         bindings = session.launch_blank_document()
         self.assertEqual(8801, bindings.hwnd)
+        self.assertTrue(bindings.dispatcher_preloaded)
         self.assertEqual(1, len(launch_calls))
-        self.assertEqual(b"_.QNEW\r\n", launch_calls[0][2])
-        self.assertNotIn(b"BVTL", launch_calls[0][2])
-        self.assertNotIn(b"SAVE", launch_calls[0][2])
+        script = launch_calls[0][2].decode("utf-8")
+        self.assertTrue(script.startswith("_.QNEW\r\n"))
+        self.assertIn("_.NETLOAD\r\n", script)
+        self.assertIn(plugin_path.as_posix(), script)
+        self.assertIn(
+            '(setq *cad-agent-file-ipc-root* "'
+            + Path(self._ipc_dir).as_posix()
+            + '")',
+            script,
+        )
+        self.assertIn('(load "' + lisp_path.as_posix() + '")', script)
+        self.assertNotIn("BVTL", script)
+        self.assertNotIn("SAVE", script)
+        self.assertNotIn("EXTRACTION", script)
 
         session.close_without_save()
         self.assertEqual([8801], close_calls)
@@ -440,6 +458,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     dispatch_trigger=lambda: events.append("dispatch"),
                     start_tab_no_document_probe=lambda: True,
                     document_ready_probe=lambda: True,
+                    dispatcher_preloaded=True,
                 ),
             )[1],
             close_without_save=lambda: events.append("close"),
@@ -454,19 +473,66 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             poll_interval_s=0,
             document_settle_s=0,
         )
-        client._dispatch = lambda command, params: (
-            {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
-            if command == "drawing-get-variables"
-            else {"ready": True}
-        )
+        def dispatch(command, params):
+            if command == "ping":
+                events.append("ping")
+            if command == "drawing-get-variables":
+                return {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
+            return {"ready": True}
+
+        client._dispatch = dispatch
 
         self.assertEqual({"path": "C:/work/source.dxf"}, client.drawing_open("C:/work/source.dxf"))
         self.assertEqual("launch", events[0])
-        self.assertLess(events.index("setup"), next(i for i, event in enumerate(events) if isinstance(event, tuple) and event[0] == "lisp"))
+        self.assertIn("setup", events)
+        self.assertLess(events.index("ping"), events.index("setup"))
         self.assertFalse(any(event == ("command", "_.QNEW") for event in events))
-        self.assertTrue(any('(load "C:/tools/mcp_dispatch.lsp")' in command for command in raw_commands))
+        self.assertFalse(any('(load "C:/tools/mcp_dispatch.lsp")' in command for command in raw_commands))
         client.close_start_tab_bootstrap()
         self.assertIn("close", events)
+
+    def test_preloaded_start_tab_dispatcher_ping_failure_closes_before_source_open(self):
+        raw_commands = []
+        events = []
+
+        def close_without_save(*, best_effort=False):
+            events.append(("close", best_effort))
+
+        session = SimpleNamespace(
+            launch_blank_document=lambda: SimpleNamespace(
+                hwnd=8803,
+                command_trigger=lambda command: events.append(("command", command)),
+                raw_lisp_trigger=raw_commands.append,
+                dispatch_trigger=lambda: None,
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: True,
+                dispatcher_preloaded=True,
+            ),
+            close_without_save=close_without_save,
+        )
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            bootstrap_start_tab=True,
+            bootstrap_start_tab_session_factory=lambda: session,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        def dispatch(command, params):
+            if command == "ping":
+                raise MCPTimeoutError("dispatcher unavailable")
+            self.fail("source dispatch must not run")
+
+        client._dispatch = dispatch
+
+        with self.assertRaisesRegex(MCPTimeoutError, "dispatcher unavailable"):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertIn(("close", True), events)
+        self.assertEqual([], raw_commands)
+        self.assertFalse(client._start_tab_bootstrap_active)
 
     def test_start_tab_session_readiness_timeout_closes_owned_process_before_source_open(self):
         raw_commands = []
