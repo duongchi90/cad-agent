@@ -350,3 +350,39 @@ def test_result_inspection_binding_rejects_source_dbmod_drift() -> None:
         module.validate_standalone_extraction_result(
             result, plan=plan, inspection_result=inspection
         )
+
+
+def test_plan_rejects_present_destination_at_planning_time(tmp_path) -> None:
+    module = _module()
+    output = tmp_path / "candidate.dwg"
+    output.write_bytes(b"existing")
+    plan = _extraction_plan()
+    plan["candidate_output_path"] = str(output)
+    with pytest.raises(
+        module.StandaloneDwgExtractionError, match="CANDIDATE_OUTPUT_NOT_ABSENT"
+    ):
+        module.build_standalone_extraction_plan(plan)
+
+
+def test_result_validation_reuses_approved_plan_after_output_creation(tmp_path) -> None:
+    module = _module()
+    output = tmp_path / "candidate.dwg"
+    output.write_bytes(b"serialized-candidate")
+    plan = _extraction_plan()
+    plan["candidate_output_path"] = str(output)
+    result = _extraction_result()
+    result["candidate_output_identity"]["path"] = str(output)
+    result["result_sha256"] = module.standalone_extraction_result_sha256(result)
+
+    validated = module.validate_standalone_extraction_result(result, plan=plan)
+    assert validated["candidate_output_identity"]["path"] == str(output)
+
+    wrong_path = deepcopy(result)
+    wrong_path["candidate_output_identity"]["path"] = str(
+        tmp_path / "different-candidate.dwg"
+    )
+    wrong_path["result_sha256"] = module.standalone_extraction_result_sha256(
+        wrong_path
+    )
+    with pytest.raises(module.StandaloneDwgExtractionError, match="RESULT_PLAN_MISMATCH"):
+        module.validate_standalone_extraction_result(wrong_path, plan=plan)

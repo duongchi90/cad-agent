@@ -525,7 +525,7 @@ def _transform(value: object) -> dict[str, object]:
     }
 
 
-def build_standalone_extraction_plan(
+def _normalize_standalone_extraction_plan(
     payload: Mapping[str, object],
     inspection_result: Mapping[str, object] | None = None,
     inspection_request: Mapping[str, object] | None = None,
@@ -542,8 +542,6 @@ def build_standalone_extraction_plan(
         _fail("CANDIDATE_INPUT_FORBIDDEN")
     plan = _closed(payload, _EXTRACTION_PLAN_FIELDS, "PLAN_SCHEMA_INVALID")
     normalized_path = _absolute_path(plan["candidate_output_path"], "PLAN_SCHEMA_INVALID")
-    if _path_exists(normalized_path):
-        _fail("CANDIDATE_OUTPUT_NOT_ABSENT")
     if plan["candidate_base_model"] != "EMPTY_NEW_DATABASE":
         _fail("CANDIDATE_BASE_INVALID")
     if plan["transform_policy"] != "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY":
@@ -621,6 +619,21 @@ def build_standalone_extraction_plan(
         ):
             _fail("OUTPUT_ALIASES_SOURCE")
     return deepcopy(normalized)
+
+
+def build_standalone_extraction_plan(
+    payload: Mapping[str, object],
+    inspection_result: Mapping[str, object] | None = None,
+    inspection_request: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Validate a plan and enforce the pre-execution absent-output gate."""
+
+    normalized = _normalize_standalone_extraction_plan(
+        payload, inspection_result, inspection_request
+    )
+    if _path_exists(normalized["candidate_output_path"]):
+        _fail("CANDIDATE_OUTPUT_NOT_ABSENT")
+    return normalized
 
 
 def _candidate_identity(value: object) -> dict[str, object]:
@@ -741,7 +754,7 @@ def validate_standalone_extraction_result(
     ):
         _fail("OUTPUT_ALIASES_SOURCE")
     expected_plan = (
-        build_standalone_extraction_plan(plan) if plan is not None else None
+        _normalize_standalone_extraction_plan(plan) if plan is not None else None
     )
     components, source_handles, candidate_handles = _result_components(
         result["components"]
