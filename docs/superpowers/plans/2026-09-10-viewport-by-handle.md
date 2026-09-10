@@ -10,15 +10,15 @@
 
 **Spec:** This document is the design/spec and the implementation plan for the capability.
 
-**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added and live gate SKIP because prerequisites are absent; authoritative verification passed; three independent reviews pending.
+**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added and live gate SKIP because prerequisites are absent; authoritative verification passed at remediation head `e9e692315621682e9d150e1b3cb54a1d71893f2d`; first-pass independent reviews found material evidence-binding drift, code remediation is pushed, and the three re-reviews are in progress.
 
 **Approval date:** 2026-09-10; SOL design review passed with `VERDICT=PASS`, `HUMAN_GATE=NO`.
 
 **Supported scope:** one existing AutoCAD drawing, one known hexadecimal entity handle, read-only inspection of a paper-space `Viewport`; no drawing discovery, extraction, copy, redraw, save, Xref creation, FileIPC mutation, or production promotion.
 
-**Base SHA:** `de17ab9bcf9551b9eaf52dca8dd54b059871f8a`.
+**Base SHA:** `de17ab99bcf9551b9eaf52dca8dd54b059871f8a`.
 
-**Completion Head SHA:** not applicable while status is `planned`.
+**Completion Head SHA:** not applicable while status is `in progress`; latest verified implementation head is `e9e692315621682e9d150e1b3cb54a1d71893f2d`.
 
 ---
 
@@ -235,7 +235,7 @@ Run:
 
 Expected: `PASS` only when AutoCAD Mechanical 2027, the approved dispatcher, and all declared environment variables are present; otherwise record `SKIP` or `NOT RUN`, never pass.
 
-- [x] **Step 3: Run the full authoritative verifier.** Result: `scripts/bootstrap.ps1` and `scripts/verify.ps1` both exited `0`; .NET build succeeded with 209 C# tests passed; offline Python JUnit recorded 3308 tests with 0 failures/errors; `dotnet_ipc` JUnit recorded 121 tests with 0 failures/errors; Ruff passed; causal-RED and unavailable-state probes were recorded separately; AutoCAD live marker and M2 benchmark were `NOT RUN`. Exact status is recorded in `docs/STATUS.md`.
+- [x] **Step 3: Run the full authoritative verifier.** Result at remediation head `e9e692315621682e9d150e1b3cb54a1d71893f2d`: `scripts/verify.ps1` exited `0`; .NET Release build succeeded with 210 C# tests passed; offline Python JUnit recorded 3311 tests with 0 failures/errors; `dotnet_ipc` JUnit recorded 124 tests with 0 failures/errors; Ruff passed; causal-RED and unavailable-state probes were recorded separately; AutoCAD live marker and M2 benchmark were `NOT RUN`. `scripts/bootstrap.ps1` had already exited `0` on the preceding verified branch checkpoint. Exact status is recorded in `docs/STATUS.md`.
 
 Run:
 
@@ -247,7 +247,7 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 
 Record the exact exit code, test counts, live-gate state, plugin identity, and disposable artifact paths in the implementation plan and `docs/STATUS.md`.
 
-- [ ] **Step 4: Request three bounded reviews required for AutoCAD/File IPC/architecture scope:** requirements/architecture, correctness/test, and security/operations. Each reviewer receives the compact packet from `docs/templates/`, the exact contract/schema diff, focused test output, live-gate state, and no private customer drawing.
+- [ ] **Step 4: Request three bounded reviews required for AutoCAD/File IPC/architecture scope:** requirements/architecture, correctness/test, and security/operations. First-pass reviews identified evidence-binding drift plus protocol-test hardening gaps; remediation commit `e9e692315621682e9d150e1b3cb54a1d71893f2d` addresses those findings. Re-reviews are being run independently on that unchanged pushed head. Each reviewer receives the compact packet from `docs/templates/`, the exact contract/schema diff, focused test output, live-gate state, and no private customer drawing.
 - [x] **Step 5: Update `docs/STATUS.md` only with evidence that actually ran.** `BVTL.dwg`, the PDF, and the frozen disposable page-1 DXF remain outside Git.
 - [ ] **Step 6: Run `git diff --check`, confirm no P0/P1 remains, and stop for design/implementation approval before using the new owner against `BVTL.dwg`.**
 

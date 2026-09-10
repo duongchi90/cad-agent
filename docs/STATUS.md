@@ -18,11 +18,12 @@
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 
-- Candidate branch `codex/audit-text-style-compat-20260910` is at
-  `891a6b7587002c9bc40f46c49262f148ed9fd939`, pushed to
-  `origin/codex/audit-text-style-compat-20260910`, with a clean worktree after
-  verification. This is a branch-local implementation checkpoint and does not
-  change the canonical `main` snapshot above.
+- The viewport implementation remediation was pushed as
+  `e9e692315621682e9d150e1b3cb54a1d71893f2d` on
+  `codex/audit-text-style-compat-20260910`. The authoritative verification
+  evidence below was run on that exact implementation head; this is a
+  branch-local checkpoint and does not change the canonical `main` snapshot
+  above.
 - The dedicated read-only `viewport_query` path is implemented through the
   existing .NET/File IPC owner and Python client. It is bounded to one
   hexadecimal handle, an exact lowercase source hash, closed parameters, and
@@ -32,9 +33,9 @@
   40 pinned distributions. The bootstrap emitted only the existing invalid
   `~ip` distribution warning while all locked requirements were already
   satisfied.
-- `scripts/verify.ps1` exited `0`: .NET build succeeded; 209 C# tests passed;
-  offline Python JUnit recorded `tests=3308`, `failures=0`, `errors=0`; the
-  `dotnet_ipc` JUnit recorded `tests=121`, `failures=0`, `errors=0`; Ruff passed;
+- `scripts/verify.ps1` exited `0`: .NET Release build succeeded; 210 C# tests
+  passed; offline Python JUnit recorded `tests=3311`, `failures=0`, `errors=0`;
+  the `dotnet_ipc` JUnit recorded `tests=124`, `failures=0`, `errors=0`; Ruff passed;
   and the verifier reported `All checks passed`.
 - The verifier's causal-RED negative oracle intentionally recorded
   `tests=1`, `failures=1`, `errors=0`; this is an expected diagnostic probe and
@@ -48,11 +49,19 @@
   disposable fixture was created, no live AutoCAD/File IPC request was sent,
   `BVTL.dwg` was not queried in this checkpoint, and the frozen page-1
   candidate was not changed or promoted.
-- This branch remains **Partially verified**: offline contracts, owner,
-  dispatcher, client, test harness, and authoritative verification passed, but
-  live viewport evidence, private fidelity evidence, and the required three
-  independent reviews remain `NOT RUN`/pending. The source drawing hash remains
-  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+- The three first-pass independent reviews identified material evidence-binding
+  drift and protocol-test hardening gaps. Remediation commit
+  `e9e692315621682e9d150e1b3cb54a1d71893f2d` now binds result path/hash/handle,
+  enforces closed payload/DBMOD/field-state semantics in Python, schema and C#,
+  and asserts the live plugin binary path/SHA-256. Focused remediation evidence
+  is Python `143 passed, 50 subtests`, C# `42 passed`, Ruff `PASS`, and
+  `git diff --check PASS`. The three required re-reviews are pending on the
+  unchanged pushed head.
+- This branch remains **Partially verified**: deterministic contracts, owner,
+  dispatcher, client, test harness, remediation, and authoritative verification
+  passed, but live viewport evidence and private fidelity evidence remain
+  `NOT RUN`/unavailable, and re-review closure is pending. The source drawing
+  hash remains `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
 
 ## Current canonical snapshot (2026-09-09)
 
