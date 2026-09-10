@@ -209,3 +209,26 @@ Live acceptance therefore remains `NOT RUN`. The detailed private evidence is
 at `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration30-evidence.txt`.
 No retry or production-code mutation was made after the bounded failure; the
 next action is held for a fresh SOL decision on the existing bootstrap path.
+
+## Iteration 31 bootstrap/readiness diagnostic
+
+SOL classified the iteration-30 timeout as a bootstrap/readiness boundary and
+authorized exactly one diagnostic on a fresh blank AutoCAD Mechanical 2027
+session, without running the Task-6 extraction gate. The existing native LISP
+trigger was called once with the configured load expression for
+`mcp_dispatch.lsp`, and it returned without a delivery exception:
+
+- `LISP_LOAD_TRIGGER_RETURNED=YES`.
+- Exactly one FileIPC `ping` was issued through the existing dispatch trigger,
+  with a five-second timeout.
+- The ping failed with `MCPTimeoutError: Timeout waiting for result`
+  (`request_id=d4f6cc647159`); no terminal result/evidence was produced.
+
+The session remained on `[Start]` and was closed without a drawing. The IPC
+root had no request/result residue, the disposable root remained empty, and
+the source hash remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`. No
+source, candidate, accepted drawing, production CAD, or reviewed HEAD was
+mutated. This diagnostic does not test the read-only source-open path; live
+acceptance remains `NOT RUN`. Detailed private evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-diagnostic-iteration31-evidence.txt`.

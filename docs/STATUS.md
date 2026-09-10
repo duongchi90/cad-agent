@@ -88,6 +88,15 @@
   `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
   Private evidence is at
   `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration30-evidence.txt`.
+- SOL classified the dispatcher timeout as a bootstrap/readiness boundary and
+  authorized one diagnostic without opening `BVTL.dwg`. In a fresh blank
+  AutoCAD session, the existing native LISP trigger returned after sending the
+  configured `mcp_dispatch.lsp` load expression, but exactly one FileIPC
+  `ping` timed out (`request_id=d4f6cc647159`, `5s`) with no result. AutoCAD
+  stayed on `[Start]` and was closed; the disposable root stayed empty and the
+  source hash remained unchanged. Task-6 live acceptance is still **NOT RUN**.
+  Private evidence is at
+  `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-diagnostic-iteration31-evidence.txt`.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 
