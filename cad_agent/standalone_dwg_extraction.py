@@ -588,8 +588,7 @@ def _normalize_standalone_extraction_plan(
     if inspection_request is not None:
         request = validate_standalone_inspection_request(inspection_request)
         if (
-            normalized["request_id"] != request["request_id"]
-            or normalized["run_id"] != request["run_id"]
+            normalized["run_id"] != request["run_id"]
             or normalized["source_drawing_sha256"] != request["source_drawing_sha256"]
         ):
             _fail("PLAN_INSPECTION_MISMATCH")
@@ -598,8 +597,7 @@ def _normalize_standalone_extraction_plan(
             inspection_result, inspection_request
         )
         if (
-            normalized["request_id"] != inspection["request_id"]
-            or normalized["inspection_id"] != inspection["inspection_id"]
+            normalized["inspection_id"] != inspection["inspection_id"]
             or normalized["inspection_sha256"] != inspection["inspection_sha256"]
             or normalized["source_drawing_sha256"]
             != inspection["source_sha256_before"]
@@ -842,7 +840,6 @@ def validate_standalone_extraction_result(
         if expected_plan is not None and (
             expected_plan["inspection_id"] != inspection["inspection_id"]
             or expected_plan["inspection_sha256"] != inspection["inspection_sha256"]
-            or expected_plan["request_id"] != inspection["request_id"]
         ):
             _fail("PLAN_INSPECTION_MISMATCH")
         if _path_key(normalized["candidate_output_identity"]["path"]) == _path_key(

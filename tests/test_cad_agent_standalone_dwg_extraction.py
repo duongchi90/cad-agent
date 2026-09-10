@@ -72,7 +72,7 @@ def _inspection_result() -> dict[str, object]:
 def _extraction_plan() -> dict[str, object]:
     return {
         "plan_id": "standalone-plan-001",
-        "request_id": "standalone-inspection-request-001",
+        "request_id": "standalone-extraction-request-001",
         "run_id": "standalone-run-001",
         "inspection_id": "standalone-inspection-001",
         "inspection_sha256": "d" * 64,
@@ -99,7 +99,7 @@ def _extraction_plan() -> dict[str, object]:
 def _extraction_result() -> dict[str, object]:
     return {
         "schema_version": "standalone-dwg-component-extraction-result-1.0",
-        "request_id": "standalone-inspection-request-001",
+        "request_id": "standalone-extraction-request-001",
         "run_id": "standalone-run-001",
         "source_drawing_sha256": SHA,
         "candidate_base_model": "EMPTY_NEW_DATABASE",
@@ -437,3 +437,47 @@ def test_result_validation_reuses_approved_plan_after_output_creation(tmp_path) 
     )
     with pytest.raises(module.StandaloneDwgExtractionError, match="RESULT_PLAN_MISMATCH"):
         module.validate_standalone_extraction_result(wrong_path, plan=plan)
+
+
+def test_extraction_request_identity_is_independent_from_inspection_request(
+    tmp_path,
+) -> None:
+    module = _module()
+    inspection_request = _inspection_request()
+    inspection = _inspection_result()
+    inspection["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        inspection
+    )
+    output = tmp_path / "candidate.dwg"
+    plan = _extraction_plan()
+    plan["candidate_output_path"] = str(output)
+    plan["inspection_sha256"] = inspection["inspection_sha256"]
+    approved_plan = module.build_standalone_extraction_plan(
+        plan,
+        inspection_result=inspection,
+        inspection_request=inspection_request,
+    )
+
+    result = _extraction_result()
+    result["candidate_output_identity"]["path"] = str(output)
+    result["result_sha256"] = module.standalone_extraction_result_sha256(result)
+    validated = module.validate_standalone_extraction_result(
+        result,
+        plan=approved_plan,
+        inspection_result=inspection,
+    )
+
+    assert validated["request_id"] == "standalone-extraction-request-001"
+    assert validated["request_id"] != inspection["request_id"]
+
+    wrong_request = deepcopy(result)
+    wrong_request["request_id"] = "another-extraction-request-001"
+    wrong_request["result_sha256"] = module.standalone_extraction_result_sha256(
+        wrong_request
+    )
+    with pytest.raises(module.StandaloneDwgExtractionError, match="RESULT_PLAN_MISMATCH"):
+        module.validate_standalone_extraction_result(
+            wrong_request,
+            plan=approved_plan,
+            inspection_result=inspection,
+        )
