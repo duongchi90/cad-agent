@@ -210,7 +210,101 @@ def test_result_rejects_source_mutation_or_false_save() -> None:
 
 def test_result_hash_and_mapping_are_deterministic() -> None:
     module = _module()
-    first = module.validate_standalone_extraction_result(_extraction_result())
-    second = module.validate_standalone_extraction_result(_extraction_result())
+    first_payload = _extraction_result()
+    first_payload["result_sha256"] = module.standalone_extraction_result_sha256(
+        first_payload
+    )
+    second_payload = _extraction_result()
+    second_payload["result_sha256"] = module.standalone_extraction_result_sha256(
+        second_payload
+    )
+    first = module.validate_standalone_extraction_result(first_payload)
+    second = module.validate_standalone_extraction_result(second_payload)
     assert first == second
     assert first["result_sha256"] == module.standalone_extraction_result_sha256(first)
+
+
+def test_inspection_checksum_mismatch_fails_closed() -> None:
+    module = _module()
+    payload = _inspection_result()
+    payload["inspection_sha256"] = module.standalone_inspection_result_sha256(payload)
+    assert module.validate_standalone_inspection_result(payload)["inspection_sha256"] == (
+        payload["inspection_sha256"]
+    )
+
+    forged = deepcopy(payload)
+    forged["inspection_sha256"] = "0" * 64
+    with pytest.raises(module.StandaloneDwgExtractionError, match="CHECKSUM_MISMATCH"):
+        module.validate_standalone_inspection_result(forged)
+
+
+def test_extraction_checksum_mismatch_fails_closed() -> None:
+    module = _module()
+    payload = _extraction_result()
+    payload["result_sha256"] = module.standalone_extraction_result_sha256(payload)
+    assert module.validate_standalone_extraction_result(payload)["result_sha256"] == (
+        payload["result_sha256"]
+    )
+
+    forged = deepcopy(payload)
+    forged["result_sha256"] = "0" * 64
+    with pytest.raises(module.StandaloneDwgExtractionError, match="CHECKSUM_MISMATCH"):
+        module.validate_standalone_extraction_result(forged)
+
+
+def test_provenance_context_requires_verified_inspection_and_result_checksums() -> None:
+    module = _module()
+    source_bytes = b"standalone-source"
+    candidate_bytes = b"standalone-candidate"
+    import hashlib
+
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
+    inspection = _inspection_result()
+    inspection["source_identity"]["sha256"] = source_sha
+    inspection["source_sha256_before"] = source_sha
+    inspection["source_sha256_after"] = source_sha
+    inspection["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        inspection
+    )
+    extraction = _extraction_result()
+    extraction["source_drawing_sha256"] = source_sha
+    extraction["candidate_output_sha256"] = candidate_sha
+    extraction["result_sha256"] = module.standalone_extraction_result_sha256(
+        extraction
+    )
+
+    context = module.build_standalone_provenance_context(
+        source_artifact_bytes=source_bytes,
+        run_id="standalone-run-001",
+        project_id="project-001",
+        drawing_id="drawing-001",
+        source_upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "baseline-evidence-001",
+            "evidence_sha256": "1" * 64,
+        },
+        observation_evidence_sha256="2" * 64,
+        inspection_result=inspection,
+        extraction_result=extraction,
+    )
+    assert context["provenance_mode"] == "STANDALONE_DWG_COMPONENTS"
+    assert "candidate_reference" not in context
+
+    forged = deepcopy(inspection)
+    forged["inspection_sha256"] = "f" * 64
+    with pytest.raises(module.StandaloneDwgExtractionError, match="CHECKSUM_MISMATCH"):
+        module.build_standalone_provenance_context(
+            source_artifact_bytes=source_bytes,
+            run_id="standalone-run-001",
+            project_id="project-001",
+            drawing_id="drawing-001",
+            source_upstream_evidence={
+                "evidence_kind": "BASELINE_CUSTODY",
+                "evidence_id": "baseline-evidence-001",
+                "evidence_sha256": "1" * 64,
+            },
+            observation_evidence_sha256="2" * 64,
+            inspection_result=forged,
+            extraction_result=extraction,
+        )

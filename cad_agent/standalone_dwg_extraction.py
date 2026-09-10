@@ -486,7 +486,13 @@ def validate_standalone_inspection_result(
                 )
             ):
                 _fail("GROUP_COVERAGE_MISMATCH")
-    normalized["inspection_sha256"] = standalone_inspection_result_sha256(normalized)
+    supplied_checksum = _sha256(
+        result["inspection_sha256"], "CHECKSUM_INVALID"
+    )
+    expected_checksum = standalone_inspection_result_sha256(normalized)
+    if supplied_checksum != expected_checksum:
+        _fail("CHECKSUM_MISMATCH")
+    normalized["inspection_sha256"] = supplied_checksum
     return deepcopy(normalized)
 
 
@@ -774,7 +780,11 @@ def validate_standalone_extraction_result(
         "source_handle_to_candidate_handle": mappings,
         "result_sha256": "",
     }
-    normalized["result_sha256"] = standalone_extraction_result_sha256(normalized)
+    supplied_checksum = _sha256(result["result_sha256"], "CHECKSUM_INVALID")
+    expected_checksum = standalone_extraction_result_sha256(normalized)
+    if supplied_checksum != expected_checksum:
+        _fail("CHECKSUM_MISMATCH")
+    normalized["result_sha256"] = supplied_checksum
     if plan is not None:
         expected_plan = build_standalone_extraction_plan(plan)
         if (
