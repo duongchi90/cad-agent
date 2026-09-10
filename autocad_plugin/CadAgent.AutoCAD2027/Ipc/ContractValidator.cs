@@ -1202,12 +1202,13 @@ public static class ContractValidator
             return;
         }
 
-        var hasValue = TryGetProperty(field, "value", out var value)
-            && value.ValueKind != JsonValueKind.Null;
+        var hasValueProperty = TryGetProperty(field, "value", out var value);
+        var hasValue = hasValueProperty && value.ValueKind != JsonValueKind.Null;
+        var hasReasonProperty = TryGetProperty(field, "reason", out _);
         var hasReason = TryGetString(field, "reason", out var reason);
         if (status == ViewportFieldStatuses.Observed)
         {
-            if (!hasValue || hasReason)
+            if (!hasValue || hasReasonProperty)
             {
                 errors.Add($"{displayName} OBSERVED requires only a value");
                 return;
@@ -1218,7 +1219,7 @@ public static class ContractValidator
 
         if (status == ViewportFieldStatuses.Unsupported)
         {
-            if (!hasReason || hasValue)
+            if (!hasReason || hasValueProperty)
             {
                 errors.Add($"{displayName} UNSUPPORTED requires only a reason");
                 return;
@@ -1232,7 +1233,7 @@ public static class ContractValidator
 
         if (status == ViewportFieldStatuses.Error)
         {
-            if (!hasReason || hasValue)
+            if (!hasReason || hasValueProperty)
             {
                 errors.Add($"{displayName} ERROR requires only a reason");
                 return;

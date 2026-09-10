@@ -206,6 +206,32 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void ViewportQueryResultRejectsNullOptionalFieldProperties()
+    {
+        foreach (var fieldState in new[]
+        {
+            JsonSerializer.SerializeToElement(new { status = "OBSERVED", value = 1.0, reason = (string?)null }),
+            JsonSerializer.SerializeToElement(new { status = "ERROR", reason = "PROPERTY_READ_FAILED", value = (double?)null })
+        })
+        {
+            var payload = ValidViewportPayload();
+            var fieldProperties = payload["fields"]
+                .EnumerateObject()
+                .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+            fieldProperties["width"] = fieldState;
+            payload["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+
+            var validation = ContractValidator.ValidateResult(ViewportResult(payload));
+
+            Assert.False(validation.IsValid);
+            Assert.Contains(
+                validation.Errors,
+                error => error.Contains("value", StringComparison.OrdinalIgnoreCase)
+                    || error.Contains("reason", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
     public void AcceptsMechanicalBomOnlyWithEmptyParameters()
     {
         var request = ValidRequest("mechanical_bom");

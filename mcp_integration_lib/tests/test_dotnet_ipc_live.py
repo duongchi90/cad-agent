@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -46,6 +47,72 @@ _PLUGIN_DLL_PATH = (
     / "net10.0-windows"
     / "CadAgent.AutoCAD2027.dll"
 )
+
+
+def _assert_viewport_field_semantics(
+    test_case: unittest.TestCase,
+    fields: dict[str, object],
+) -> None:
+    expected_fields = {
+        "center_point",
+        "width",
+        "height",
+        "view_center",
+        "view_height",
+        "view_target",
+        "twist_angle",
+    }
+    test_case.assertEqual(expected_fields, set(fields))
+    vector_lengths = {
+        "center_point": 3,
+        "view_center": 2,
+        "view_target": 3,
+    }
+    positive_fields = {"width", "height", "view_height"}
+
+    for field_name, field in fields.items():
+        test_case.assertIsInstance(field, dict)
+        if not isinstance(field, dict):
+            continue
+        status = field.get("status")
+        if status == "OBSERVED":
+            test_case.assertEqual({"status", "value"}, set(field))
+            value = field["value"]
+            if field_name in vector_lengths:
+                test_case.assertIsInstance(value, list)
+                if not isinstance(value, list):
+                    continue
+                test_case.assertEqual(vector_lengths[field_name], len(value))
+                for component in value:
+                    test_case.assertIsInstance(component, (int, float))
+                    test_case.assertNotIsInstance(component, bool)
+                    try:
+                        finite = math.isfinite(float(component))
+                    except (OverflowError, ValueError):
+                        finite = False
+                    test_case.assertTrue(finite)
+            else:
+                test_case.assertIsInstance(value, (int, float))
+                test_case.assertNotIsInstance(value, bool)
+                try:
+                    finite = math.isfinite(float(value))
+                except (OverflowError, ValueError):
+                    finite = False
+                test_case.assertTrue(finite)
+                if field_name in positive_fields:
+                    test_case.assertGreater(value, 0)
+            continue
+        if status == "UNSUPPORTED":
+            test_case.assertEqual(
+                {"status": "UNSUPPORTED", "reason": "PROPERTY_UNAVAILABLE"},
+                field,
+            )
+            continue
+        if status == "ERROR":
+            test_case.assertEqual({"status", "reason"}, set(field))
+            test_case.assertIn(field["reason"], {"PROPERTY_READ_FAILED", "INVALID_VALUE"})
+            continue
+        test_case.fail(f"unsupported viewport field status for {field_name}: {status!r}")
 
 
 def _normalized_live_ipc_root(value: str | None) -> str | None:
@@ -710,18 +777,7 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 self.assertEqual(payload["dbmod_before"], payload["dbmod_after"])
                 self.assertEqual(dbmod_before, payload["dbmod_before"])
                 fields = payload["fields"]
-                expected_fields = {
-                    "center_point",
-                    "width",
-                    "height",
-                    "view_center",
-                    "view_height",
-                    "view_target",
-                    "twist_angle",
-                }
-                self.assertEqual(expected_fields, set(fields))
-                for field in fields.values():
-                    self.assertIn(field["status"], {"OBSERVED", "UNSUPPORTED", "ERROR"})
+                _assert_viewport_field_semantics(self, fields)
                 self.assertFalse(request_path(dotnet_client.ipc_dir, query_request_id).exists())
                 self.assertFalse(result_path(dotnet_client.ipc_dir, query_request_id).exists())
 
