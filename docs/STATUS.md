@@ -16,6 +16,34 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## Current standalone DWG extraction checkpoint (2026-09-11)
+
+- Branch-local implementation head:
+  `codex/audit-text-style-compat-20260910`, with standalone extraction code at
+  `94719ca3e854dd3bb6b668217924c85e3d07c214` and the evidence record update
+  currently staged for the next documentation commit.
+- Task 6 is **Partially verified**: the opt-in live gate and all offline
+  contract/provenance paths are present, but the approved private BVTL source,
+  operator fixture, AutoCAD Mechanical/File IPC session, and disposable
+  candidate prerequisites were unavailable in this run. The live gate is
+  therefore `SKIP`/`NOT RUN`, not PASS; no source, accepted drawing, candidate,
+  or production CAD state was mutated.
+- SOL's fresh bounded review of the candidate identity remediation returned
+  `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`. The raw
+  filesystem identity remains internal for cleanup rechecks; the public
+  `candidate_output_identity.file_id` is the schema-valid opaque
+  `candidate-file-<sha256(raw identity)>`.
+- Verification on the exact remediation head exited `0`: C# `237 passed`;
+  offline Python `3277 passed`, `21 deselected`, `74 subtests`; offline IPC
+  JUnit `134` tests with `0` failures, `0` errors, `0` skipped; real-data
+  unavailable probe `2 skipped`; AutoCAD unavailable probe `17 skipped`;
+  `git diff --check` passed. The intentional causal RED oracle remains a
+  diagnostic expected failure and is not a product failure.
+- The single bounded next action is to run the existing opt-in Task 6 live
+  gate on the already-approved Windows/AutoCAD/File IPC boundary. If any
+  prerequisite remains absent, record the exact `SKIP`/`NOT RUN` state and do
+  not infer live PASS or promote a candidate.
+
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 
 - The final viewport implementation remediation was pushed as

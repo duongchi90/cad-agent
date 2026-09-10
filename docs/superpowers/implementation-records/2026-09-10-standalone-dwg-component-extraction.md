@@ -84,10 +84,10 @@ Evidence captured on the remediation head `94719ca3e854dd3bb6b668217924c85e3d07c
 - `git diff --check`: pass; verification left the repository clean.
 
 The preceding hash-binding remediation had SOL status `VERDICT=PASS`, with
-`MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`. SOL subsequently identified the
-candidate identity interoperability defect described above; it is remediated
-in the second commit and is pending fresh SOL re-review. No live CAD verdict
-is inferred from these offline results.
+`MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`. SOL's fresh re-review of the
+candidate-identity remediation at `0e4387e` also returned
+`VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`. No live CAD
+verdict is inferred from these offline results.
 
 ## Reuse dossier classification
 
