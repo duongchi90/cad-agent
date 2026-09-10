@@ -618,6 +618,118 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                 original_sha256=original_sha256,
             )
 
+    def test_disposable_dxf_viewport_query_is_read_only_and_cleans_up(self) -> None:
+        test_directory = Path(tempfile.mkdtemp(prefix="cad_agent_viewport_live_", dir=r"C:\temp"))
+        drawing_path = test_directory / "viewport_live.dxf"
+        original_sha256 = ""
+
+        try:
+            drawing_document = ezdxf.new("R2010")
+            layout = drawing_document.layouts.new("ViewportTest")
+            viewport = layout.add_viewport(
+                center=(10, 10),
+                size=(20, 15),
+                view_center_point=(0, 0),
+                view_height=100,
+            )
+            viewport_handle = str(viewport.dxf.handle).upper()
+            drawing_document.saveas(drawing_path)
+            original_sha256 = _sha256(drawing_path)
+
+            expected_full_path = normalize_windows_absolute_path(str(drawing_path))
+            hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
+            legacy_client = FileIPCLiveMCPClient(
+                ipc_dir=os.environ["CAD_AGENT_FILE_IPC_DIR"],
+                trigger=make_windows_dispatch_trigger(hwnd),
+                raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
+                bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
+            )
+            dotnet_client = DotNetIPCClient(
+                ipc_dir=os.environ["CAD_AGENT_DOTNET_IPC_DIR"],
+                trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+                timeout_s=20.0,
+            )
+
+            with _disposable_drawing_cleanup(dotnet_client, str(drawing_path)) as mark_closed:
+                legacy_client.drawing_open(str(drawing_path))
+                dbmod_before_values = legacy_client.drawing_get_variables(["DBMOD"])
+                self.assertIn("DBMOD", dbmod_before_values)
+                dbmod_before = dbmod_before_values["DBMOD"]
+
+                health_request_id = "dotnet-live-viewport-health"
+                health = dotnet_client.health(
+                    expected_full_path,
+                    request_id=health_request_id,
+                )
+                self.assertTrue(health["success"])
+                plugin_identity = health["payload"]["plugin_version"]
+                self.assertEqual("1.0.0", plugin_identity)
+                self.assertFalse(health["changed"])
+                self.assertFalse(request_path(dotnet_client.ipc_dir, health_request_id).exists())
+                self.assertFalse(result_path(dotnet_client.ipc_dir, health_request_id).exists())
+
+                query_request_id = "dotnet-live-viewport-query"
+                result = dotnet_client.viewport_query(
+                    expected_full_path,
+                    drawing_sha256=original_sha256,
+                    handle=viewport_handle,
+                    request_id=query_request_id,
+                )
+
+                self.assertTrue(result["success"])
+                self.assertEqual(expected_full_path, result["drawing_full_path"])
+                self.assertFalse(result["changed"])
+                self.assertEqual([viewport_handle], result["entity_handles"])
+                self.assertEqual([], result["errors"])
+                payload = result["payload"]
+                self.assertEqual("viewport-query-result-1.0", payload["schema_version"])
+                self.assertEqual(viewport_handle, payload["handle"])
+                self.assertEqual("VIEWPORT", payload["type"])
+                self.assertEqual("VIEWPORTS", payload["layer"])
+                self.assertEqual(original_sha256, payload["drawing_sha256_before"])
+                self.assertEqual(original_sha256, payload["drawing_sha256_after"])
+                self.assertEqual(payload["dbmod_before"], payload["dbmod_after"])
+                self.assertEqual(dbmod_before, payload["dbmod_before"])
+                fields = payload["fields"]
+                expected_fields = {
+                    "center_point",
+                    "width",
+                    "height",
+                    "view_center",
+                    "view_height",
+                    "view_target",
+                    "twist_angle",
+                }
+                self.assertEqual(expected_fields, set(fields))
+                for field in fields.values():
+                    self.assertIn(field["status"], {"OBSERVED", "UNSUPPORTED", "ERROR"})
+                self.assertFalse(request_path(dotnet_client.ipc_dir, query_request_id).exists())
+                self.assertFalse(result_path(dotnet_client.ipc_dir, query_request_id).exists())
+
+                dbmod_after_values = legacy_client.drawing_get_variables(["DBMOD"])
+                self.assertEqual(dbmod_before, dbmod_after_values.get("DBMOD"))
+                self.assertEqual(original_sha256, _sha256(drawing_path))
+
+                close_request_id = "dotnet-live-viewport-close"
+                close = dotnet_client.close_disposable(
+                    expected_full_path,
+                    disposable=True,
+                    save_changes=False,
+                    request_id=close_request_id,
+                )
+                self.assertTrue(close["success"])
+                self.assertFalse(close["changed"])
+                self.assertTrue(close["payload"]["closed_without_saving"])
+                mark_closed()
+                self.assertFalse(request_path(dotnet_client.ipc_dir, close_request_id).exists())
+                self.assertFalse(result_path(dotnet_client.ipc_dir, close_request_id).exists())
+        finally:
+            _cleanup_disposable_fixture_directory(
+                test_directory,
+                drawing_path,
+                original_sha256=original_sha256,
+            )
+
 
 @unittest.skipUnless(
     _s2c_live_prerequisites_available(),

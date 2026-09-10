@@ -10,7 +10,7 @@
 
 **Spec:** This document is the design/spec and the implementation plan for the capability.
 
-**Status:** in progress; SOL design review passed; Tasks 1-3 complete, Task 4 pending bounded checkpoints.
+**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added, live gate SKIP because prerequisites are absent; authoritative verification and reviews pending.
 
 **Approval date:** 2026-09-10; SOL design review passed with `VERDICT=PASS`, `HUMAN_GATE=NO`.
 
@@ -224,8 +224,8 @@ Expected: FAIL because the client method and operation allowlist are absent.
 - Consume the existing AutoCAD Mechanical 2027 File IPC dispatcher and `CAD_AGENT_AUTOCAD_HWND` prerequisites.
 - Produce one live result bound to a disposable DXF, the plugin binary hash, request ID, source hash, DBMOD before/after, and cleanup state.
 
-- [ ] **Step 1: Add an opt-in live test that creates a disposable DXF under `C:\temp`, opens it through the existing owner, queries one known viewport handle, asserts all seven observed values or explicit statuses, asserts `changed=false`, and closes the disposable drawing without saving.** The test must record the candidate hash before and after and must not use `BVTL.dwg`.
-- [ ] **Step 2: Run the focused live marker with prerequisites.**
+- [x] **Step 1: Add an opt-in live test that creates a disposable DXF under `C:\temp`, opens it through the existing owner, queries one generated known viewport handle, asserts all seven observed values or explicit statuses, asserts `changed=false`, and closes the disposable drawing without saving.** The test records the candidate hash before and after and never uses `BVTL.dwg`.
+- [x] **Step 2: Run the focused live marker with prerequisites.** Result: `SKIP` (exit 0), because `CAD_AGENT_FILE_IPC`, matching File/.NET IPC roots, `CAD_AGENT_AUTOCAD_HWND`, and `CAD_AGENT_AUTOCAD_LISP_PATH` are absent. No live operation was attempted. The complete live-harness file characterization passed 9 tests with 7 expected skips.
 
 Run:
 
