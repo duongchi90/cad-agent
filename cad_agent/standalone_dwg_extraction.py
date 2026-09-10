@@ -999,6 +999,8 @@ def build_standalone_provenance_context(
     normalized_reference, normalized_observation = _validate_source_dara(
         source_reference, observation, source_artifact_bytes
     )
+    if normalized_reference["run_id"] != approved_plan["run_id"]:
+        _fail("PROVENANCE_SCOPE_MISMATCH")
     if normalized_reference["artifact_sha256"] != extraction["source_drawing_sha256"]:
         _fail("SOURCE_HASH_MISMATCH")
     normalized = {

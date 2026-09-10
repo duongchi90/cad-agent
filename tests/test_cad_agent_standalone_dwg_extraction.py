@@ -481,3 +481,64 @@ def test_extraction_request_identity_is_independent_from_inspection_request(
             plan=approved_plan,
             inspection_result=inspection,
         )
+
+
+def test_provenance_rejects_source_dara_from_different_run() -> None:
+    module = _module()
+    source_bytes = b"standalone-source"
+    candidate_bytes = b"standalone-candidate"
+    import hashlib
+
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
+    inspection = _inspection_result()
+    inspection["source_identity"]["sha256"] = source_sha
+    inspection["source_sha256_before"] = source_sha
+    inspection["source_sha256_after"] = source_sha
+    inspection["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        inspection
+    )
+    extraction = _extraction_result()
+    extraction["source_drawing_sha256"] = source_sha
+    extraction["candidate_output_sha256"] = candidate_sha
+    extraction["result_sha256"] = module.standalone_extraction_result_sha256(
+        extraction
+    )
+    plan = _extraction_plan()
+    plan["inspection_id"] = inspection["inspection_id"]
+    plan["inspection_sha256"] = inspection["inspection_sha256"]
+    plan["source_drawing_sha256"] = source_sha
+
+    from cad_agent.drawing_artifact_reference import (
+        issue_drawing_artifact_reference,
+        observe_drawing_artifact_currentness,
+    )
+
+    source_reference = issue_drawing_artifact_reference(
+        run_id="foreign-run-001",
+        project_id="project-001",
+        drawing_id="drawing-001",
+        artifact_role="BASELINE",
+        artifact_bytes=source_bytes,
+        upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "baseline-evidence-foreign-run",
+            "evidence_sha256": "1" * 64,
+        },
+    )
+    source_observation = observe_drawing_artifact_currentness(
+        reference=source_reference,
+        artifact_bytes=source_bytes,
+        observation_evidence_sha256="2" * 64,
+    )
+
+    with pytest.raises(
+        module.StandaloneDwgExtractionError, match="PROVENANCE_SCOPE_MISMATCH"
+    ):
+        module.build_standalone_provenance_context(
+            source_reference=source_reference,
+            source_current_observation=source_observation,
+            plan=plan,
+            inspection_result=inspection,
+            extraction_result=extraction,
+        )
