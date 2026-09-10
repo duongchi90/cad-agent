@@ -49,7 +49,7 @@
 
 ## Exact implementation allowlist
 
-The implementation branch may create or modify only the files named in the tasks below. In particular, it must not modify `cad_agent/native_dwg_provenance.py`, `cad_agent/drawing_artifact_reference.py`, `cad_agent/drawing_query.py`, `autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadExactBaseXrefReader.cs`, or any exact-base-Xref schema/example. The required R3/R4 extension is explicitly bounded to `cad_agent/component_view_registry.py`, `cad_agent/candidate_revision.py`, and their named tests; no other owner may be widened silently.
+The implementation branch may create or modify only the files named in the tasks below. In particular, it must not modify `cad_agent/native_dwg_provenance.py`, `cad_agent/drawing_artifact_reference.py`, `cad_agent/drawing_query.py`, `autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadExactBaseXrefReader.cs`, or any exact-base-Xref schema/example. The required R3/R4 extension is explicitly bounded to `cad_agent/component_view_registry.py`, `cad_agent/candidate_revision.py`, and their named tests; no other owner may be widened silently. The top-level File IPC envelope schemas are an explicit exception for the two new operation enum/conditional branches only; every existing operation and branch must remain unchanged in intent and covered by regression assertions.
 
 ## File and ownership map
 
@@ -61,6 +61,8 @@ The implementation branch may create or modify only the files named in the tasks
 | `contracts/autocad-ipc/operations/standalone-dwg-component-inspection-result.schema.json` | Closed inspection result schema. |
 | `contracts/autocad-ipc/operations/standalone-dwg-component-extraction.schema.json` | Closed approved extraction request/plan schema. |
 | `contracts/autocad-ipc/operations/standalone-dwg-component-extraction-result.schema.json` | Closed extraction result/evidence schema. |
+| `contracts/autocad-ipc/request.schema.json` | Existing File IPC request envelope; Task 5 adds only the two standalone operation enum/conditional `$ref` branches and preserves every existing operation branch. |
+| `contracts/autocad-ipc/result.schema.json` | Existing File IPC result envelope; Task 5 adds only the two standalone operation enum/conditional payload `$ref` branches and preserves every existing operation branch. |
 | `contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json` | Non-private schema example. |
 | `contracts/autocad-ipc/examples/standalone-dwg-component-inspection.result.json` | Non-private schema example. |
 | `contracts/autocad-ipc/examples/standalone-dwg-component-extraction.request.json` | Non-private schema example with `EMPTY_NEW_DATABASE`. |
@@ -124,7 +126,7 @@ git commit -m "docs: record standalone DWG extraction reuse dossier"
 
 - [ ] **Step 1: Write Python RED tests for closed packets.** Add tests with concrete names and expected failure codes: `test_inspection_rejects_unknown_or_missing_fields`, `test_inspection_rejects_duplicate_handles_and_empty_groups`, `test_inspection_rejects_non_hash_bound_or_non_hex_handles`, `test_extraction_plan_requires_empty_new_database_and_no_candidate_input`, `test_extraction_rejects_invalid_transform_or_fabricated_approval`, `test_result_rejects_source_mutation_or_false_save`, and `test_result_hash_and_mapping_are_deterministic`.
 
-- [ ] **Step 2: Write C# schema RED tests.** Extend `ContractTests.cs` with `StandaloneDwgComponentOperationsAreAllowlistedWithClosedSchemaBranches`, `StandaloneDwgComponentExamplesRoundTrip`, `StandaloneDwgComponentRequestsRejectXrefOnlyFields`, and `StandaloneDwgComponentResultsRequireCandidateOnlySerialization`. Run the focused C# test filter and confirm RED because the operation names and schema files do not yet exist.
+- [ ] **Step 2: Write C# schema RED tests.** Extend `ContractTests.cs` with `StandaloneDwgComponentOperationsAreAllowlistedWithClosedSchemaBranches`, `StandaloneDwgComponentExamplesRoundTrip`, `StandaloneDwgComponentRequestsRejectXrefOnlyFields`, and `StandaloneDwgComponentResultsRequireCandidateOnlySerialization`. The allowlist test must assert that all existing operation enum entries remain present while the two new operations and their envelope branches are still RED until Task 5 owns the top-level schema additions and C# validator/model branches.
 
 - [ ] **Step 3: Define the exact request/result fields.** Use the spec's required fields verbatim. The inspection request contains `schema_version`, `request_id`, `run_id`, `source_drawing_path`, `source_drawing_sha256`, `source_setup_audit_sha256`, `selection_groups`, `expected_dbmod`, and `approval=null`. The extraction request contains the bound inspection IDs/hashes, `source_drawing_sha256`, `candidate_output_path`, literal `candidate_base_model=EMPTY_NEW_DATABASE`, `components`, `transform_policy`, and an explicit approval object. The result contains source before/after hashes and DBMOD, `source_mutated`, `save_performed`, candidate identity/hash, one-to-one handle mappings, component evidence, and a result checksum. Do not add `candidate_input_path` or `candidate_input_sha256`.
 
@@ -140,7 +142,7 @@ git add contracts/autocad-ipc/operations contracts/autocad-ipc/examples mcp_inte
 git commit -m "test: define standalone DWG extraction contracts"
 ```
 
-Expected result before implementation: the newly added contract tests remain RED until the validators and C# model branches are added; the commit must not be described as runtime support.
+Expected result before implementation: the newly added contract tests remain RED until the validators, C# model branches, and the explicitly assigned top-level request/result envelope branches are added; the commit must not be described as runtime support.
 
 ## Task 2: Implement Python validation and detached provenance inputs
 
@@ -239,6 +241,8 @@ The R3/R4 extension is required by the current owner behavior. Do not create an 
 **Files:**
 - Modify: `mcp_integration_lib/dotnet_ipc.py`.
 - Modify: `mcp_integration_lib/tests/test_dotnet_ipc.py`.
+- Modify: `contracts/autocad-ipc/request.schema.json` only for the two standalone operation enum/conditional parameter `$ref` branches.
+- Modify: `contracts/autocad-ipc/result.schema.json` only for the two standalone operation enum/conditional payload `$ref` branches.
 - Modify: `autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractModels.cs`.
 - Modify: `autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractValidator.cs`.
 - Modify: `autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs`.
@@ -251,11 +255,11 @@ The R3/R4 extension is required by the current owner behavior. Do not create an 
 
 - [ ] **Step 1: Add Python IPC RED tests.** Add `test_standalone_inspection_sends_closed_parameters`, `test_standalone_extraction_binds_approval_and_empty_base`, `test_standalone_rejects_candidate_input_before_trigger`, `test_standalone_rejects_source_or_other_write_targets`, `test_standalone_rejects_mismatched_result_identity`, and `test_standalone_cleanup_failure_is_not_success`. Confirm the fake dispatcher is not called for local validation failures.
 
-- [ ] **Step 2: Add the C# contract branches.** Add request/result model branches and exact schema routing in `ContractModels.cs` and `ContractValidator.cs`. Reject unknown fields, Xref-only fields, candidate input fields, non-absolute paths, reparse roots, invalid handles, invalid hashes, invalid transforms, and missing approval on extraction.
+- [ ] **Step 2: Add the C# contract branches.** Add only the two standalone operation enum/conditional `$ref` branches to the top-level request/result schemas, then add request/result model branches and exact schema routing in `ContractModels.cs` and `ContractValidator.cs`. Preserve every existing operation enum entry and conditional branch; regression assertions must prove the existing exact-base-Xref branches and all prior operation entries remain unchanged. Reject unknown fields, Xref-only fields, candidate input fields, non-absolute paths, reparse roots, invalid handles, invalid hashes, invalid transforms, and missing approval on extraction.
 
 - [ ] **Step 3: Add dispatcher routing.** Route only the two new operation names to `AutoCadStandaloneDwgComponentReader`. Preserve the existing operation allowlist, request/result envelope, single-request lease behavior, timeout semantics, and path/hash identity checks. Do not route the new operations through `AutoCadExactBaseXrefReader`.
 
-- [ ] **Step 4: Add dispatcher and schema tests.** Assert that inspection is read-only, extraction uses a fresh preflight, candidate output is returned only after successful serialization/readback, and exact-base-Xref tests still pass unchanged.
+- [ ] **Step 4: Add dispatcher and schema tests.** Assert that inspection is read-only, extraction uses a fresh preflight, candidate output is returned only after successful serialization/readback, both top-level envelope branches resolve to the four closed standalone schemas, all prior operation/branch regression assertions remain green, and exact-base-Xref tests still pass unchanged.
 
 - [ ] **Step 5: Run focused Python and C# tests, then commit.**
 
@@ -263,7 +267,7 @@ The R3/R4 extension is required by the current owner behavior. Do not create an 
 .\.venv-py311\Scripts\python.exe -m pytest -q -p no:cacheprovider mcp_integration_lib/tests/test_dotnet_ipc.py
 dotnet test autocad_plugin/CadAgent.AutoCAD2027.Tests/CadAgent.AutoCAD2027.Tests.csproj --filter "FullyQualifiedName~ContractTests|FullyQualifiedName~OperationDispatcherTests"
 git diff --check
-git add mcp_integration_lib/dotnet_ipc.py mcp_integration_lib/tests/test_dotnet_ipc.py autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractModels.cs autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractValidator.cs autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/OperationDispatcherTests.cs autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/ContractTests.cs
+git add contracts/autocad-ipc/request.schema.json contracts/autocad-ipc/result.schema.json mcp_integration_lib/dotnet_ipc.py mcp_integration_lib/tests/test_dotnet_ipc.py autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractModels.cs autocad_plugin/CadAgent.AutoCAD2027/Ipc/ContractValidator.cs autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/OperationDispatcherTests.cs autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/ContractTests.cs
 git commit -m "feat: route standalone DWG extraction through File IPC"
 ```
 

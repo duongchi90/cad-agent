@@ -918,6 +918,21 @@ public sealed class ContractTests
                 .Select(value => value.GetString())
                 .ToArray();
 
+            var existingOperations = new[]
+            {
+                "health",
+                "review",
+                "close_disposable",
+                "mechanical_bom",
+                "drawing_setup_audit",
+                "visual_evidence_export",
+                "native_render_evidence",
+                "viewport_query",
+                "exact_base_xref_inspection",
+                "exact_base_xref_extraction",
+            };
+
+            Assert.All(existingOperations, operation => Assert.Contains(operation, operations));
             Assert.Contains("standalone_dwg_component_inspection", operations);
             Assert.Contains("standalone_dwg_component_extraction", operations);
         }
