@@ -237,6 +237,13 @@ then adapted into existing component/view and candidate-revision evidence,
 with the source hash and extraction evidence as the immutable provenance
 reference.
 
+`save_performed` has one closed meaning: it is `true` only after the newly
+created disposable database has been serialized to `candidate_output_path`,
+the write has completed, and the output can be re-opened/read back for the
+hash-bound result. It does not mean that the source document or any other
+AutoCAD document was saved. A successful extraction result must have
+`save_performed=true`; a false value is never a usable candidate result.
+
 ## 6. Execution and safety invariants
 
 ### 6.1 Source safety
@@ -255,17 +262,22 @@ reference.
 - Candidate creation starts from `EMPTY_NEW_DATABASE`; no candidate input
   artifact is opened, copied, hashed, or used as a provenance ancestor.
 - Source and candidate must resolve to different identities and hashes.
-- Destination creation is the only allowed mutation in this capability.
+- Serialization of the new candidate database to `candidate_output_path` is
+  the sole permitted file write and the sole permitted document mutation in
+  this capability.
 - The result must be re-openable/readable and hash-bound before any later
   candidate review.
-- Production promotion, accepted-DXF mutation, and AutoCAD save are outside
-  this operation.
+- Source saves, saves of any other document, production promotion,
+  accepted-DXF mutation, and any AutoCAD session-state save are outside this
+  operation and are forbidden.
 
 ### 6.3 Failure and rollback
 
 - Preflight failures create no candidate output.
 - A non-absent output path or any request to provide a candidate input artifact
   is rejected before destination creation.
+- Any write target other than the exact planned `candidate_output_path`, or
+  any result that claims `save_performed=false`, is rejected fail-closed.
 - If candidate creation fails after a file is created, cleanup may delete only
   the exact output whose captured identity still matches the operation's
   creation identity.
@@ -302,9 +314,11 @@ existing test owners:
    rejects it for S3A.
 3. Source invariants: read-only mode, source hash, DBMOD, path identity, and
    no source save are verified before/after both inspection and extraction.
-4. Candidate invariants: absent destination, non-aliasing path, exact
+4. Candidate invariants: absent destination, non-aliasing path, candidate-only
+   serialization, `save_performed=true` on success, re-openable output, exact
    source-to-candidate handle mapping, deterministic result hash, and
-   identity-checked cleanup on failure.
+   identity-checked cleanup on failure. Attempts to write the source or any
+   other document fail closed.
 5. Reuse integration: DARA currentness, component/view provenance, candidate
    revision/state, and drawing-query readback all bind to the same source and
    candidate identities; no native full-drawing restriction is weakened.
