@@ -402,8 +402,13 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
                 Mappings = mappings
             };
         }
-        catch
+        catch (Exception exception)
         {
+            if (candidateCreated && candidateIdentity is null)
+            {
+                throw BuildRetainedCandidateCleanupFailure(outputPath, exception);
+            }
+
             if (candidateCreated && candidateIdentity is not null
                 && !DeleteCandidateIfIdentityMatches(outputPath, candidateIdentity))
             {
@@ -418,6 +423,13 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
 
     public bool IsCandidatePathAbsent(string path) =>
         !File.Exists(path) && !Directory.Exists(path);
+
+    internal static StandaloneDwgComponentPolicyException BuildRetainedCandidateCleanupFailure(
+        string outputPath,
+        Exception identityCaptureException) =>
+        new(
+            StandaloneDwgComponentPolicy.CleanupFailedCode,
+            $"CANDIDATE_RETAINED_UNVERIFIED: candidate output was serialized but its identity could not be captured; cleanup was not attempted without a usable identity; candidate_path='{outputPath}'; candidate_identity=UNAVAILABLE; cause={identityCaptureException.Message}");
 
     public string CaptureCandidateIdentity(string path)
     {

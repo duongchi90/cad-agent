@@ -235,6 +235,21 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
         Assert.Equal("candidate-identity-001", database.LastDeletedIdentity);
     }
 
+    [Fact]
+    public void ReportsRetainedCandidateWhenIdentityCaptureFailsAfterSave()
+    {
+        var outputPath = Path.Combine(_root, "candidate", "retained-output.dwg");
+
+        var error = AutoCadStandaloneDwgComponentDatabase.BuildRetainedCandidateCleanupFailure(
+            outputPath,
+            new InvalidOperationException("identity capture failed"));
+
+        Assert.Equal(StandaloneDwgComponentPolicy.CleanupFailedCode, error.Code);
+        Assert.Contains("CANDIDATE_RETAINED_UNVERIFIED", error.Message, StringComparison.Ordinal);
+        Assert.Contains(outputPath, error.Message, StringComparison.Ordinal);
+        Assert.Contains("cleanup was not attempted", error.Message, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         try
