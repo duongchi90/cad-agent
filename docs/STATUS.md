@@ -109,6 +109,12 @@
 - No automated trust bypass, retry loop, source/candidate mutation, or live-pass
   claim is permitted. Until that human-gated health check occurs, the live
   viewport gate remains `NOT RUN` and the branch remains **Partially verified**.
+- The already-approved DLL is present at
+  `autocad_plugin/CadAgent.AutoCAD2027/bin/x64/Release/net10.0-windows/CadAgent.AutoCAD2027.dll`
+  with size `455168` bytes and SHA-256
+  `427c5a80c2c9c1f070a14aad0c311ad9fb94c5d6b31b6f74a13228a48bef1286`.
+  This identity check is read-only; it does not establish that AutoCAD has
+  loaded the DLL.
 
 ## Current canonical snapshot (2026-09-09)
 
