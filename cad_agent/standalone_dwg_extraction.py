@@ -613,13 +613,19 @@ def _normalize_standalone_extraction_plan(
         ):
             _fail("PLAN_INSPECTION_MISMATCH")
         expected_groups = {
-            group["group_id"]: set(group["source_handles"])
+            group["group_id"]: group
             for group in inspection["groups"]
         }
         for component in normalized["components"]:
-            if component["group_id"] not in expected_groups or not set(
-                component["source_handles"]
-            ).issubset(expected_groups[component["group_id"]]):
+            inspected = expected_groups.get(component["group_id"])
+            if (
+                inspected is None
+                or component["logical_component_id"]
+                != inspected["logical_component_id"]
+                or not set(component["source_handles"]).issubset(
+                    set(inspected["source_handles"])
+                )
+            ):
                 _fail("PLAN_INSPECTION_MISMATCH")
         if _path_key(normalized["candidate_output_path"]) == _path_key(
             inspection["source_identity"]["path"]
@@ -1013,13 +1019,26 @@ def build_standalone_provenance_context(
     if normalized_reference["artifact_sha256"] != extraction["source_drawing_sha256"]:
         _fail("SOURCE_HASH_MISMATCH")
     source_path = inspection["source_identity"]["path"]
+    inspected_groups = {
+        group["group_id"]: group for group in inspection["groups"]
+    }
     group_by_source_handle: dict[str, dict[str, object]] = {}
     selected_groups: list[dict[str, object]] = []
-    for group in inspection["groups"]:
+    for planned in approved_plan["components"]:
+        inspected = inspected_groups.get(planned["group_id"])
+        if (
+            inspected is None
+            or planned["logical_component_id"]
+            != inspected["logical_component_id"]
+            or not set(planned["source_handles"]).issubset(
+                set(inspected["source_handles"])
+            )
+        ):
+            _fail("PLAN_INSPECTION_MISMATCH")
         selected = {
-            "group_id": group["group_id"],
-            "logical_component_id": group["logical_component_id"],
-            "source_handles": sorted(group["source_handles"]),
+            "group_id": planned["group_id"],
+            "logical_component_id": planned["logical_component_id"],
+            "source_handles": sorted(planned["source_handles"]),
         }
         selected_groups.append(selected)
         for source_handle in selected["source_handles"]:

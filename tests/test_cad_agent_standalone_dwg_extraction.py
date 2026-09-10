@@ -446,6 +446,73 @@ def test_composes_staged_standalone_r3_and_root_r4_binding() -> None:
             extraction_result=unapproved,
         )
 
+
+def test_composition_uses_only_the_approved_subset_of_inspected_groups() -> None:
+    module = _module()
+    source_bytes = b"standalone-source"
+    candidate_bytes = b"standalone-candidate"
+    import hashlib
+
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
+    inspection = _inspection_result()
+    inspection["source_identity"]["sha256"] = source_sha
+    inspection["source_sha256_before"] = source_sha
+    inspection["source_sha256_after"] = source_sha
+    inspection["groups"].append(
+        {
+            "group_id": "group-002",
+            "logical_component_id": "component-002",
+            "source_handles": ["C3D4"],
+            "entity_types": ["INSERT"],
+            "layers": ["BODY"],
+            "signature_sha256": "f" * 64,
+        }
+    )
+    inspection["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        inspection
+    )
+    extraction = _extraction_result()
+    extraction["source_drawing_sha256"] = source_sha
+    extraction["candidate_output_sha256"] = candidate_sha
+    extraction["result_sha256"] = module.standalone_extraction_result_sha256(
+        extraction
+    )
+    plan = _extraction_plan()
+    plan["inspection_sha256"] = inspection["inspection_sha256"]
+    plan["source_drawing_sha256"] = source_sha
+    provenance = module.build_standalone_provenance_context(
+        source_artifact_bytes=source_bytes,
+        run_id="standalone-run-001",
+        project_id="project-001",
+        drawing_id="drawing-001",
+        source_upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "baseline-evidence-subset-001",
+            "evidence_sha256": "7" * 64,
+        },
+        observation_evidence_sha256="8" * 64,
+        plan=plan,
+        inspection_result=inspection,
+        extraction_result=extraction,
+    )
+    composed = module.compose_standalone_candidate_binding(
+        provenance_context=provenance,
+        candidate_id="standalone-candidate-001",
+        source_artifact_bytes=source_bytes,
+        candidate_artifact_bytes=candidate_bytes,
+        candidate_upstream_evidence={
+            "evidence_kind": "R3_CANDIDATE_CUSTODY",
+            "evidence_id": "r3-candidate-subset-001",
+            "evidence_sha256": "9" * 64,
+        },
+        candidate_observation_evidence_sha256="a" * 64,
+    )
+    assert [group["group_id"] for group in provenance["selected_groups"]] == [
+        "group-001"
+    ]
+    assert len(composed["registry"]["components"]) == 1
+
     drifted = deepcopy(extraction)
     drifted["source_dbmod_before"] = 1
     drifted["source_dbmod_after"] = 1
