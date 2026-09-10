@@ -63,6 +63,7 @@ public sealed class AutoCadStandaloneDwgComponentReader
                 _database.ActiveDocumentFullPath);
             EnsureActiveSourceIsNotOutput(outputPath);
             snapshot = _database.ExtractToNewCandidate(plan);
+            snapshot = ExposeSchemaSafeCandidateIdentity(snapshot);
             _policy.ValidateExtractionSnapshot(plan, snapshot);
             return new StandaloneDwgComponentExtractionSnapshot
             {
@@ -81,14 +82,15 @@ public sealed class AutoCadStandaloneDwgComponentReader
         {
             errors.Add(FormatError(exception));
             if (snapshot?.CandidateCreated == true
-                && !string.IsNullOrWhiteSpace(snapshot.CandidateOutputIdentity)
+                && !string.IsNullOrWhiteSpace(
+                    snapshot.CandidateCleanupIdentity ?? snapshot.CandidateOutputIdentity)
                 && !string.IsNullOrWhiteSpace(outputPath))
             {
                 try
                 {
                     if (!_database.DeleteCandidateIfIdentityMatches(
                             outputPath,
-                            snapshot.CandidateOutputIdentity))
+                            snapshot.CandidateCleanupIdentity ?? snapshot.CandidateOutputIdentity!))
                     {
                         errors.Add(
                             $"{StandaloneDwgComponentPolicy.CleanupFailedCode}: candidate identity recheck refused cleanup");
@@ -103,6 +105,29 @@ public sealed class AutoCadStandaloneDwgComponentReader
 
             return StandaloneDwgComponentExtractionSnapshot.Failure(errors, snapshot);
         }
+    }
+
+    private static StandaloneDwgComponentCandidateSnapshot ExposeSchemaSafeCandidateIdentity(
+        StandaloneDwgComponentCandidateSnapshot snapshot)
+    {
+        var rawIdentity = snapshot.CandidateOutputIdentity
+            ?? throw new InvalidOperationException("candidate output identity is missing");
+        return new StandaloneDwgComponentCandidateSnapshot
+        {
+            CandidateCreated = snapshot.CandidateCreated,
+            CandidateOutputPath = snapshot.CandidateOutputPath,
+            CandidateCleanupIdentity = rawIdentity,
+            CandidateOutputIdentity = StandaloneDwgComponentPolicy.OpaqueCandidateFileId(rawIdentity),
+            CandidateOutputSha256 = snapshot.CandidateOutputSha256,
+            SourceMutated = snapshot.SourceMutated,
+            SourceSha256Before = snapshot.SourceSha256Before,
+            SourceSha256After = snapshot.SourceSha256After,
+            SourceDbmodBefore = snapshot.SourceDbmodBefore,
+            SourceDbmodAfter = snapshot.SourceDbmodAfter,
+            SavePerformed = snapshot.SavePerformed,
+            Reopenable = snapshot.Reopenable,
+            Mappings = snapshot.Mappings
+        };
     }
 
     private void EnsureActiveSource(string? requestedSourcePath)

@@ -189,6 +189,63 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void StandaloneExtractionSerializesOpaqueIdentityFromRawFilesystemCapture()
+    {
+        var fixture = StandaloneDispatcherFixture();
+        try
+        {
+            var rawIdentity = $@"{fixture.OutputPath}|42|638000000000000000|638000000000000001";
+            var database = new StubStandaloneDatabase
+            {
+                ActiveDocumentFullPath = fixture.SourcePath,
+                IsSourceReadOnly = true,
+                SourceSha256 = fixture.SourceSha256,
+                ExtractionSnapshot = new StandaloneDwgComponentCandidateSnapshot
+                {
+                    CandidateCreated = true,
+                    CandidateOutputPath = fixture.OutputPath,
+                    CandidateOutputIdentity = rawIdentity,
+                    CandidateOutputSha256 = new string('d', 64),
+                    SourceMutated = false,
+                    SourceSha256Before = fixture.SourceSha256,
+                    SourceSha256After = fixture.SourceSha256,
+                    SourceDbmodBefore = 0,
+                    SourceDbmodAfter = 0,
+                    SavePerformed = true,
+                    Reopenable = true,
+                    Mappings = new[]
+                    {
+                        new StandaloneDwgComponentHandleMapping
+                        {
+                            SourceHandle = "A1B2",
+                            CandidateHandle = "E001"
+                        }
+                    }
+                }
+            };
+            var gateway = new StubDrawingGateway { ActiveDocumentFullPath = fixture.SourcePath };
+            var dispatcher = CreateDispatcher(
+                gateway,
+                standaloneReaderFactory: () => new AutoCadStandaloneDwgComponentReader(
+                    database,
+                    new StandaloneDwgComponentPolicy(fixture.Root)));
+
+            var result = dispatcher.Dispatch(fixture.ExtractionRequest);
+
+            Assert.True(result.Success);
+            Assert.True(ContractValidator.ValidateResult(result).IsValid);
+            var fileId = result.Payload!["candidate_output_identity"].GetProperty("file_id").GetString();
+            Assert.Equal(StandaloneDwgComponentPolicy.OpaqueCandidateFileId(rawIdentity), fileId);
+            Assert.DoesNotContain("\\", fileId);
+            Assert.DoesNotContain("|", fileId);
+        }
+        finally
+        {
+            Directory.Delete(fixture.Root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ExactBaseXrefInspectionRoutesFreshReadOnlySnapshotToResult()
     {
         var fixture = InspectionDispatcherFixture();

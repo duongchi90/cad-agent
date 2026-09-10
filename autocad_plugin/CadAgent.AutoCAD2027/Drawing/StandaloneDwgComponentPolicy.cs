@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using CadAgent.AutoCAD2027.Ipc;
 
@@ -66,6 +67,19 @@ public sealed class StandaloneDwgComponentPolicy
     }
 
     public string DisposableRoot => _disposableRoot;
+
+    public static string OpaqueCandidateFileId(string rawIdentity)
+    {
+        if (string.IsNullOrWhiteSpace(rawIdentity))
+        {
+            throw new ArgumentException("raw candidate identity is required", nameof(rawIdentity));
+        }
+
+        var digest = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(rawIdentity)))
+            .ToLowerInvariant();
+        return "candidate-file-" + digest;
+    }
 
     public void ValidateInspectionRequest(StandaloneDwgComponentInspectionRequest request)
     {

@@ -190,6 +190,9 @@ public sealed class StandaloneDwgComponentCandidateSnapshot
 
     public string? CandidateOutputPath { get; init; }
 
+    // Raw filesystem identity is kept for the internal cleanup recheck only.
+    public string? CandidateCleanupIdentity { get; init; }
+
     public string? CandidateOutputIdentity { get; init; }
 
     public string? CandidateOutputSha256 { get; init; }

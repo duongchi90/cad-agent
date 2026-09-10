@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import importlib
 import json
 import os
@@ -36,6 +37,7 @@ from mcp_integration_lib.dotnet_ipc import (
 from cad_agent.standalone_dwg_extraction import (
     standalone_extraction_result_sha256,
     standalone_inspection_result_sha256,
+    validate_standalone_extraction_result,
 )
 
 
@@ -885,6 +887,21 @@ class DotNetIPCClientTests(unittest.TestCase):
         self.assertNotIn("candidate_input_path", request["parameters"])
         self.assertEqual(fixture["approval"], request["approval"])
         self.assertEqual(fixture["extraction_payload"], result["payload"])
+
+    def test_standalone_result_accepts_opaque_id_for_raw_filesystem_identity(self) -> None:
+        fixture = _standalone_fixture()
+        raw_identity = (
+            r"C:\temp\standalone-candidate.dwg|42|638000000000000000|"
+            "638000000000000001"
+        )
+        payload = copy.deepcopy(fixture["extraction_payload"])
+        payload["candidate_output_identity"]["file_id"] = (
+            "candidate-file-" + hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()
+        )
+        payload["result_sha256"] = standalone_extraction_result_sha256(payload)
+
+        validated = validate_standalone_extraction_result(payload)
+        self.assertEqual(payload["result_sha256"], validated["result_sha256"])
 
     def test_standalone_rejects_candidate_input_before_trigger(self) -> None:
         fixture = _standalone_fixture()

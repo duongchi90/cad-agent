@@ -236,6 +236,27 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
     }
 
     [Fact]
+    public void ExposesSchemaSafeCandidateIdWhileCleanupKeepsRawFilesystemIdentity()
+    {
+        var rawIdentity = $@"{_outputPath}|42|638000000000000000|638000000000000001";
+        var database = Database();
+        database.Candidate = Candidate(
+            CandidateOutputIdentity: rawIdentity,
+            Reopenable: false);
+
+        var result = Reader(database).Extract(Plan());
+
+        Assert.False(result.Success);
+        Assert.Equal(rawIdentity, database.LastDeletedIdentity);
+        Assert.NotNull(result.Evidence);
+        Assert.Equal(
+            StandaloneDwgComponentPolicy.OpaqueCandidateFileId(rawIdentity),
+            result.Evidence!.CandidateOutputIdentity);
+        Assert.DoesNotContain("\\", result.Evidence.CandidateOutputIdentity!);
+        Assert.DoesNotContain("|", result.Evidence.CandidateOutputIdentity!);
+    }
+
+    [Fact]
     public void ReportsRetainedCandidateWhenIdentityCaptureFailsAfterSave()
     {
         var outputPath = Path.Combine(_root, "candidate", "retained-output.dwg");
@@ -396,12 +417,13 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
 
     private StandaloneDwgComponentCandidateSnapshot Candidate(
         string? CandidateOutputPath = null,
+        string? CandidateOutputIdentity = null,
         bool Reopenable = true,
         IReadOnlyList<StandaloneDwgComponentHandleMapping>? Mappings = null) => new()
         {
             CandidateCreated = true,
             CandidateOutputPath = CandidateOutputPath ?? _outputPath,
-            CandidateOutputIdentity = "candidate-identity-001",
+            CandidateOutputIdentity = CandidateOutputIdentity ?? "candidate-identity-001",
             CandidateOutputSha256 = OutputHash,
             SourceMutated = false,
             SourceSha256Before = SourceHash,
