@@ -299,3 +299,25 @@ mutated. Live Task-6 acceptance remains `NOT RUN`, not `PASS`. Detailed
 private evidence is at
 `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration34-evidence.txt`;
 fresh SOL review of this live boundary is required.
+
+## Iteration 35 Start-tab bootstrap-owner primitive diagnostic
+
+SOL classified iteration 34 as a bootstrap-owner defect and authorized exactly
+one bounded diagnostic focused only on creating the disposable blank document
+through an existing AutoCAD-native mechanism. Repository code was not changed,
+`BVTL.dwg` was not opened, and the Task-6 dispatcher was not loaded. A fresh
+AutoCAD Mechanical 2027 process was observed at `[Start]`; the existing native
+startup-script route (`acad.exe /nologo /b <script>`) with a disposable script
+containing only `_.QNEW` transitioned the same process to
+`[Drawing1.dwg]` in the observed session.
+
+The blank session was closed through the native process close path without
+saving. The source hash remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`, and the
+disposable extraction root remained empty. A separate LISP sentinel probe did
+not produce output, so it is not used as dispatcher evidence. This diagnostic
+proves only the candidate native Start-to-blank primitive; dispatcher load,
+FileIPC ping, source read-only open, extraction, and live acceptance remain
+`NOT RUN`. Fresh SOL review is required before any production-owner change.
+Private evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-owner-diagnostic-iteration35-evidence.txt`.

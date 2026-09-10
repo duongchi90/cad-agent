@@ -140,6 +140,20 @@
   evidence is at
   `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration34-evidence.txt`;
   fresh SOL review is pending.
+- SOL classified iteration 34 as a Start-tab bootstrap-owner defect and
+  authorized one bounded primitive diagnostic. Without changing repository
+  code or opening `BVTL.dwg`, a fresh AutoCAD Mechanical 2027 process was
+  observed at `[Start]`; the existing native startup-script route
+  (`acad.exe /nologo /b <script>` with only `_.QNEW`) then produced
+  `[Drawing1.dwg]` in the same process. The blank session was closed without
+  saving, the disposable root stayed empty, and source SHA
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8` stayed
+  unchanged. Dispatcher/LISP, FileIPC ping, source read-only open, extraction,
+  and live acceptance remain **NOT RUN**. This proves a candidate existing
+  native bootstrap primitive; no production owner change has been made.
+  Private evidence is at
+  `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-owner-diagnostic-iteration35-evidence.txt`;
+  fresh SOL review is pending.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 
