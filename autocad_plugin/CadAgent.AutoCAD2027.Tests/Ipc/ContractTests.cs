@@ -80,6 +80,107 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void ViewportQueryRequiresOneHexHandleAndSourceHash()
+    {
+        var parameters = new Dictionary<string, JsonElement>
+        {
+            ["handle"] = JsonSerializer.SerializeToElement("126BABE")
+        };
+        var missingHash = ValidRequest("viewport_query") with
+        {
+            DrawingSha256 = null,
+            Parameters = parameters
+        };
+
+        var missingHashValidation = ContractValidator.ValidateRequest(missingHash);
+
+        Assert.False(missingHashValidation.IsValid);
+        Assert.Contains(
+            missingHashValidation.Errors,
+            error => error.Contains("drawing_sha256", StringComparison.OrdinalIgnoreCase));
+
+        var valid = missingHash with { DrawingSha256 = new string('a', 64) };
+
+        Assert.True(ContractValidator.ValidateRequest(valid).IsValid);
+    }
+
+    [Fact]
+    public void ViewportQueryRejectsExtraParameters()
+    {
+        var parameters = new Dictionary<string, JsonElement>
+        {
+            ["handle"] = JsonSerializer.SerializeToElement("126BABE"),
+            ["unexpected"] = JsonSerializer.SerializeToElement("value")
+        };
+        var request = ValidRequest("viewport_query") with
+        {
+            DrawingSha256 = new string('a', 64),
+            Parameters = parameters
+        };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("unexpected", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ViewportQueryResultRequiresClosedFieldEntries()
+    {
+        var valid = ViewportResult();
+
+        Assert.True(ContractValidator.ValidateResult(valid).IsValid);
+
+        var missingFields = ValidViewportPayload();
+        missingFields.Remove("fields");
+        var missingFieldsValidation = ContractValidator.ValidateResult(
+            valid with { Payload = missingFields });
+
+        Assert.False(missingFieldsValidation.IsValid);
+        Assert.Contains(
+            missingFieldsValidation.Errors,
+            error => error.Contains("fields", StringComparison.OrdinalIgnoreCase));
+
+        var fieldsWithExtra = ValidViewportPayload();
+        var fieldProperties = fieldsWithExtra["fields"]
+            .EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+        fieldProperties["unexpected"] = JsonSerializer.SerializeToElement(
+            new { status = "OBSERVED", value = 1.0 });
+        fieldsWithExtra["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+        var extraFieldValidation = ContractValidator.ValidateResult(
+            valid with { Payload = fieldsWithExtra });
+
+        Assert.False(extraFieldValidation.IsValid);
+        Assert.Contains(
+            extraFieldValidation.Errors,
+            error => error.Contains("unsupported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ViewportQueryResultRejectsNonFiniteObservedValues()
+    {
+        var payload = ValidViewportPayload();
+        var fieldProperties = payload["fields"]
+            .EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+        fieldProperties["width"] = JsonSerializer.SerializeToElement(
+            new { status = "OBSERVED", value = "NaN" });
+        payload["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+
+        var validation = ContractValidator.ValidateResult(
+            ViewportResult(payload));
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("finite", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("number", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void AcceptsMechanicalBomOnlyWithEmptyParameters()
     {
         var request = ValidRequest("mechanical_bom");
@@ -786,6 +887,50 @@ public sealed class ContractTests
         Parameters = new Dictionary<string, JsonElement>(),
         Approval = null
     };
+
+    private static IpcResult ViewportResult(
+        Dictionary<string, JsonElement>? payload = null) => new()
+    {
+        RequestId = "viewport-request-001",
+        Success = true,
+        Operation = "viewport_query",
+        DrawingFullPath = @"C:\drawings\sample.dwg",
+        Changed = false,
+        EntityHandles = new List<string> { "126BABE" },
+        Warnings = new List<string>(),
+        Errors = new List<string>(),
+        StartedAt = DateTimeOffset.Parse("2026-09-10T00:00:00Z"),
+        CompletedAt = DateTimeOffset.Parse("2026-09-10T00:00:01Z"),
+        Payload = payload ?? ValidViewportPayload()
+    };
+
+    private static Dictionary<string, JsonElement> ValidViewportPayload()
+    {
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            schema_version = "viewport-query-result-1.0",
+            handle = "126BABE",
+            type = "VIEWPORT",
+            layer = "0",
+            fields = new
+            {
+                center_point = new { status = "OBSERVED", value = new[] { 0.0, 0.0, 0.0 } },
+                width = new { status = "OBSERVED", value = 100.0 },
+                height = new { status = "OBSERVED", value = 50.0 },
+                view_center = new { status = "OBSERVED", value = new[] { 10.0, 20.0 } },
+                view_height = new { status = "OBSERVED", value = 200.0 },
+                view_target = new { status = "OBSERVED", value = new[] { 0.0, 0.0, 0.0 } },
+                twist_angle = new { status = "OBSERVED", value = 0.0 }
+            },
+            drawing_sha256_before = new string('a', 64),
+            drawing_sha256_after = new string('a', 64),
+            dbmod_before = 0,
+            dbmod_after = 0
+        });
+
+        return payload.EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+    }
 
     private static IpcRequest NativeRenderRequest() => new()
     {

@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/viewport-query-result.schema.json",
+  "title": "CadAgent VIEWPORT-by-handle query result payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "handle",
+    "type",
+    "layer",
+    "fields",
+    "drawing_sha256_before",
+    "drawing_sha256_after",
+    "dbmod_before",
+    "dbmod_after"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "viewport-query-result-1.0"
+    },
+    "handle": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9A-F]+$"
+    },
+    "type": {
+      "const": "VIEWPORT"
+    },
+    "layer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fields": {
+      "$ref": "#/$defs/fields"
+    },
+    "drawing_sha256_before": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "drawing_sha256_after": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dbmod_before": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "dbmod_after": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "finiteScalar": {
+      "type": "number"
+    },
+    "positiveScalar": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "point2": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/finiteScalar"
+        },
+        {
+          "$ref": "#/$defs/finiteScalar"
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "point3": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/finiteScalar"
+        },
+        {
+          "$ref": "#/$defs/finiteScalar"
+        },
+        {
+          "$ref": "#/$defs/finiteScalar"
+        }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "observedScalar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "value"
+      ],
+      "properties": {
+        "status": {
+          "const": "OBSERVED"
+        },
+        "value": {
+          "$ref": "#/$defs/finiteScalar"
+        }
+      }
+    },
+    "observedPositiveScalar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "value"
+      ],
+      "properties": {
+        "status": {
+          "const": "OBSERVED"
+        },
+        "value": {
+          "$ref": "#/$defs/positiveScalar"
+        }
+      }
+    },
+    "observedPoint2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "value"
+      ],
+      "properties": {
+        "status": {
+          "const": "OBSERVED"
+        },
+        "value": {
+          "$ref": "#/$defs/point2"
+        }
+      }
+    },
+    "observedPoint3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "value"
+      ],
+      "properties": {
+        "status": {
+          "const": "OBSERVED"
+        },
+        "value": {
+          "$ref": "#/$defs/point3"
+        }
+      }
+    },
+    "unsupportedOrError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "UNSUPPORTED",
+            "ERROR"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "PROPERTY_UNAVAILABLE",
+            "PROPERTY_READ_FAILED",
+            "INVALID_VALUE"
+          ]
+        }
+      }
+    },
+    "centerPointField": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/observedPoint3"
+        },
+        {
+          "$ref": "#/$defs/unsupportedOrError"
+        }
+      ]
+    },
+    "viewCenterField": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/observedPoint2"
+        },
+        {
+          "$ref": "#/$defs/unsupportedOrError"
+        }
+      ]
+    },
+    "viewTargetField": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/observedPoint3"
+        },
+        {
+          "$ref": "#/$defs/unsupportedOrError"
+        }
+      ]
+    },
+    "scalarField": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/observedScalar"
+        },
+        {
+          "$ref": "#/$defs/unsupportedOrError"
+        }
+      ]
+    },
+    "positiveScalarField": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/observedPositiveScalar"
+        },
+        {
+          "$ref": "#/$defs/unsupportedOrError"
+        }
+      ]
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "center_point",
+        "width",
+        "height",
+        "view_center",
+        "view_height",
+        "view_target",
+        "twist_angle"
+      ],
+      "properties": {
+        "center_point": {
+          "$ref": "#/$defs/centerPointField"
+        },
+        "width": {
+          "$ref": "#/$defs/positiveScalarField"
+        },
+        "height": {
+          "$ref": "#/$defs/positiveScalarField"
+        },
+        "view_center": {
+          "$ref": "#/$defs/viewCenterField"
+        },
+        "view_height": {
+          "$ref": "#/$defs/positiveScalarField"
+        },
+        "view_target": {
+          "$ref": "#/$defs/viewTargetField"
+        },
+        "twist_angle": {
+          "$ref": "#/$defs/scalarField"
+        }
+      }
+    }
+  }
+}

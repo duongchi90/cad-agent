@@ -35,6 +35,7 @@
         "drawing_setup_audit",
         "visual_evidence_export",
         "native_render_evidence",
+        "viewport_query",
         "exact_base_xref_inspection",
         "exact_base_xref_extraction"
       ]
@@ -99,6 +100,82 @@
             "type": "string"
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "viewport_query"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "changed": {
+            "const": false
+          },
+          "entity_handles": {
+            "maxItems": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": true
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "required": [
+                "payload"
+              ],
+              "properties": {
+                "entity_handles": {
+                  "minItems": 1,
+                  "maxItems": 1
+                },
+                "payload": {
+                  "$ref": "operations/viewport-query-result.schema.json"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": false
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "properties": {
+                "entity_handles": {
+                  "maxItems": 0
+                },
+                "payload": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              }
+            }
+          }
+        ]
       }
     },
     {

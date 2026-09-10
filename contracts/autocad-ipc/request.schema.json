@@ -32,6 +32,7 @@
         "drawing_setup_audit",
         "visual_evidence_export",
         "native_render_evidence",
+        "viewport_query",
         "exact_base_xref_inspection",
         "exact_base_xref_extraction"
       ]
@@ -77,6 +78,35 @@
         "properties": {
           "parameters": {
             "$ref": "operations/health.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "viewport_query"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "drawing_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "parameters": {
+            "$ref": "operations/viewport-query.schema.json"
+          },
+          "approval": {
+            "const": null
           }
         }
       }

@@ -19,6 +19,7 @@ public static class ContractConstants
             "drawing_setup_audit",
             "visual_evidence_export",
             "native_render_evidence",
+            "viewport_query",
             "exact_base_xref_inspection",
             "exact_base_xref_extraction"
         };

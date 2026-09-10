@@ -42,6 +42,9 @@ public static class ContractValidator
     private static readonly Regex LowercaseSha256Pattern =
         new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    private static readonly Regex ViewportHandlePattern =
+        new("^[0-9A-Fa-f]+$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static readonly Regex VisualEvidenceCapturedAtPattern =
         new("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -125,6 +128,10 @@ public static class ContractValidator
         {
             ValidateNativeRenderEvidenceRequest(request, errors);
         }
+        else if (string.Equals(request.Operation, ViewportQueryOperationNames.Operation, StringComparison.Ordinal))
+        {
+            ValidateViewportQueryRequest(request, errors);
+        }
 
         if (request.Operation is ExactBaseXrefOperationNames.Inspection
             or ExactBaseXrefOperationNames.Extraction)
@@ -195,6 +202,10 @@ public static class ContractValidator
             {
                 errors.Add("native_render_evidence failure results must contain an empty payload");
             }
+        }
+        if (string.Equals(result.Operation, ViewportQueryOperationNames.Operation, StringComparison.Ordinal))
+        {
+            ValidateViewportQueryResult(result, errors);
         }
         if (string.Equals(result.Operation, ExactBaseXrefOperationNames.Inspection, StringComparison.Ordinal))
         {
@@ -379,6 +390,36 @@ public static class ContractValidator
         if (parameters.Keys.Any(key => !string.Equals(key, "handles", StringComparison.Ordinal)))
         {
             errors.Add("review parameters contain unsupported fields");
+        }
+    }
+
+    private static void ValidateViewportQueryRequest(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        if (request.DrawingSha256 is null || !LowercaseSha256Pattern.IsMatch(request.DrawingSha256))
+        {
+            errors.Add("viewport_query drawing_sha256 must be a lowercase SHA-256");
+        }
+        if (request.Approval.HasValue && request.Approval.Value.ValueKind != JsonValueKind.Null)
+        {
+            errors.Add("viewport_query approval is not allowed");
+        }
+
+        var parameters = request.Parameters!;
+        if (parameters.Count != 1 || !parameters.ContainsKey("handle"))
+        {
+            errors.Add("viewport_query parameters must contain only one handle");
+        }
+        foreach (var unsupported in parameters.Keys.Where(key => !string.Equals(key, "handle", StringComparison.Ordinal)))
+        {
+            errors.Add($"viewport_query parameters contain unsupported field '{unsupported}'");
+        }
+
+        if (!TryGetString(parameters, "handle", out var handle)
+            || !ViewportHandlePattern.IsMatch(handle))
+        {
+            errors.Add("viewport_query parameters.handle must be a non-empty hexadecimal handle");
         }
     }
 
@@ -997,6 +1038,236 @@ public static class ContractValidator
         if (!TryGetString(reference, "id", out var id) || !VisualEvidenceIdentifierPattern.IsMatch(id))
         {
             errors.Add("measurement reference id must be a stable identifier");
+        }
+    }
+
+    private static void ValidateViewportQueryResult(
+        IpcResult result,
+        ICollection<string> errors)
+    {
+        if (result.Changed)
+        {
+            errors.Add("viewport_query results must be read-only and report changed=false");
+        }
+
+        if (result.Success)
+        {
+            if (result.EntityHandles?.Count != 1)
+            {
+                errors.Add("successful viewport_query results must contain exactly one entity handle");
+            }
+            ValidateViewportQueryPayload(result.Payload, result.EntityHandles, errors);
+            return;
+        }
+
+        if ((result.EntityHandles?.Count ?? 0) != 0)
+        {
+            errors.Add("failed viewport_query results must contain no entity handles");
+        }
+        if (result.Payload is not null && result.Payload.Count != 0)
+        {
+            errors.Add("failed viewport_query results must contain an empty payload");
+        }
+    }
+
+    private static void ValidateViewportQueryPayload(
+        IReadOnlyDictionary<string, JsonElement>? payload,
+        IReadOnlyList<string>? entityHandles,
+        ICollection<string> errors)
+    {
+        if (payload is null)
+        {
+            errors.Add("viewport_query payload must be an object");
+            return;
+        }
+
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schema_version",
+            "handle",
+            "type",
+            "layer",
+            "fields",
+            "drawing_sha256_before",
+            "drawing_sha256_after",
+            "dbmod_before",
+            "dbmod_after"
+        };
+        foreach (var missing in required.Except(payload.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload is missing '{missing}'");
+        }
+        foreach (var unsupported in payload.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload contains unsupported field '{unsupported}'");
+        }
+
+        if (!TryGetString(payload, "schema_version", out var schemaVersion)
+            || !string.Equals(schemaVersion, ViewportQueryOperationNames.ResultSchemaVersion, StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload schema_version is unsupported");
+        }
+        if (!TryGetString(payload, "handle", out var handle)
+            || !ViewportHandlePattern.IsMatch(handle)
+            || !string.Equals(handle, handle.ToUpperInvariant(), StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload handle is invalid");
+        }
+        if (entityHandles?.Count == 1
+            && !string.Equals(entityHandles[0], handle, StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload handle does not match entity_handles");
+        }
+        if (!TryGetString(payload, "type", out var type)
+            || !string.Equals(type, ViewportQueryOperationNames.ViewportType, StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload type must be VIEWPORT");
+        }
+        if (!TryGetString(payload, "layer", out _))
+        {
+            errors.Add("viewport_query payload layer must be a non-empty string");
+        }
+
+        if (!TryGetString(payload, "drawing_sha256_before", out var hashBefore)
+            || !LowercaseSha256Pattern.IsMatch(hashBefore))
+        {
+            errors.Add("viewport_query payload drawing_sha256_before must be a lowercase SHA-256");
+        }
+        if (!TryGetString(payload, "drawing_sha256_after", out var hashAfter)
+            || !LowercaseSha256Pattern.IsMatch(hashAfter))
+        {
+            errors.Add("viewport_query payload drawing_sha256_after must be a lowercase SHA-256");
+        }
+        if (!string.IsNullOrEmpty(hashBefore)
+            && !string.IsNullOrEmpty(hashAfter)
+            && string.Equals(hashBefore, hashAfter, StringComparison.Ordinal) == false)
+        {
+            errors.Add("viewport_query payload drawing hashes must be equal");
+        }
+        if (!TryGetInt64(payload, "dbmod_before", out var dbmodBefore)
+            || !TryGetInt64(payload, "dbmod_after", out var dbmodAfter))
+        {
+            errors.Add("viewport_query payload DBMOD values must be non-negative integers");
+        }
+        else if (dbmodBefore != dbmodAfter)
+        {
+            errors.Add("viewport_query payload DBMOD values must be equal");
+        }
+
+        if (!TryGetProperty(payload, "fields", out var fields)
+            || fields.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("viewport_query payload fields must be an object");
+            return;
+        }
+
+        var requiredFields = ViewportQueryOperationNames.FieldNames;
+        var presentFields = fields.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var missing in requiredFields.Except(presentFields, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload fields is missing '{missing}'");
+        }
+        foreach (var unsupported in presentFields.Except(requiredFields, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload fields contains unsupported field '{unsupported}'");
+        }
+        foreach (var fieldName in requiredFields)
+        {
+            if (TryGetProperty(fields, fieldName, out var field))
+            {
+                ValidateViewportField(fieldName, field, errors);
+            }
+        }
+    }
+
+    private static void ValidateViewportField(
+        string fieldName,
+        JsonElement field,
+        ICollection<string> errors)
+    {
+        var displayName = $"viewport_query payload fields.{fieldName}";
+        ValidateClosedObject(
+            field,
+            new HashSet<string>(StringComparer.Ordinal) { "status" },
+            displayName,
+            errors,
+            "value",
+            "reason");
+
+        if (!TryGetString(field, "status", out var status))
+        {
+            errors.Add($"{displayName}.status is invalid");
+            return;
+        }
+
+        var hasValue = TryGetProperty(field, "value", out var value)
+            && value.ValueKind != JsonValueKind.Null;
+        var hasReason = TryGetString(field, "reason", out var reason);
+        if (status == ViewportFieldStatuses.Observed)
+        {
+            if (!hasValue || hasReason)
+            {
+                errors.Add($"{displayName} OBSERVED requires only a value");
+                return;
+            }
+            ValidateViewportObservedValue(fieldName, value, errors);
+            return;
+        }
+
+        if (status is not (ViewportFieldStatuses.Unsupported or ViewportFieldStatuses.Error))
+        {
+            errors.Add($"{displayName}.status is unsupported");
+            return;
+        }
+        if (!hasReason || hasValue)
+        {
+            errors.Add($"{displayName} {status} requires only a reason");
+            return;
+        }
+        if (reason is not (ViewportFieldReasons.PropertyUnavailable
+            or ViewportFieldReasons.PropertyReadFailed
+            or ViewportFieldReasons.InvalidValue))
+        {
+            errors.Add($"{displayName}.reason is unsupported");
+        }
+    }
+
+    private static void ValidateViewportObservedValue(
+        string fieldName,
+        JsonElement value,
+        ICollection<string> errors)
+    {
+        var expectsVector = fieldName is "center_point" or "view_center" or "view_target";
+        if (!expectsVector)
+        {
+            if (value.ValueKind != JsonValueKind.Number
+                || !value.TryGetDouble(out var number)
+                || !double.IsFinite(number))
+            {
+                errors.Add($"viewport_query payload fields.{fieldName}.value must be a finite number");
+                return;
+            }
+            if (fieldName is "width" or "height" or "view_height" && number <= 0)
+            {
+                errors.Add($"viewport_query payload fields.{fieldName}.value must be positive");
+            }
+            return;
+        }
+
+        var expectedLength = fieldName == "view_center" ? 2 : 3;
+        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != expectedLength)
+        {
+            errors.Add($"viewport_query payload fields.{fieldName}.value must contain {expectedLength} finite numbers");
+            return;
+        }
+        if (value.EnumerateArray().Any(item =>
+                item.ValueKind != JsonValueKind.Number
+                || !item.TryGetDouble(out var number)
+                || !double.IsFinite(number)))
+        {
+            errors.Add($"viewport_query payload fields.{fieldName}.value must contain finite numbers");
         }
     }
 
