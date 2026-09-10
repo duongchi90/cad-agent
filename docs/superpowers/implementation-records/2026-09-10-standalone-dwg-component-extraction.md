@@ -232,3 +232,26 @@ source, candidate, accepted drawing, production CAD, or reviewed HEAD was
 mutated. This diagnostic does not test the read-only source-open path; live
 acceptance remains `NOT RUN`. Detailed private evidence is at
 `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-diagnostic-iteration31-evidence.txt`.
+
+## Iteration 32 explicit Start-tab bootstrap remediation
+
+SOL's fresh review identified that the iteration-31 native text-delivery
+return did not prove AutoLISP execution while AutoCAD was on the documentless
+`[Start]` tab. The bounded remediation at code HEAD
+`d79860b91ff34cef9e1898d353a98f6809dc445a` adds an explicit opt-in
+`bootstrap_start_tab` path to the existing File IPC client. When the positive
+Start-tab probe succeeds, the path creates one disposable blank document with
+`_.QNEW`, loads the existing dispatcher, and requires one successful FileIPC
+ping before source `drawing_open(..., read_only=True)` is allowed. Load or
+ping failure closes the blank document without saving. A real active document
+does not trigger `_.QNEW`, and the default writable path remains unchanged.
+
+Focused owner tests passed (`21` drawing-open tests; `41` combined FileIPC and
+Task-6 tests excluding the intentional causal-RED diagnostic, with one live
+prerequisite skip). Authoritative verification passed with C# `238`, offline
+Python `3369`, and offline IPC `134` tests, with zero product failures; the
+private real-data and AutoCAD Mechanical gates remain unavailable, and live
+Task-6 acceptance remains `NOT RUN`. The code/plan commit is pushed and the
+fresh SOL review is pending. Private evidence and recoverable resume state are
+at `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-context-iteration32-evidence.txt`
+and `C:\temp\cad-agent-task6-live-20260911\wait-safe-resume-state-iteration32.txt`.

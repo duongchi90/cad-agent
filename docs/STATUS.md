@@ -97,6 +97,21 @@
   source hash remained unchanged. Task-6 live acceptance is still **NOT RUN**.
   Private evidence is at
   `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-diagnostic-iteration31-evidence.txt`.
+- SOL's fresh review of that diagnostic identified the root cause: a native
+  text-delivery return does not prove AutoLISP execution on the documentless
+  `[Start]` tab. The bounded remediation at code HEAD
+  `d79860b91ff34cef9e1898d353a98f6809dc445a` adds an explicit opt-in
+  `bootstrap_start_tab` path in the existing File IPC client. With a positive
+  Start-tab probe it creates one disposable blank document with `_.QNEW`, loads
+  the existing dispatcher, requires a successful FileIPC ping, and only then
+  allows source `drawing_open(..., read_only=True)`; load/ping failures close
+  the blank document without saving. A real active document does not trigger
+  `_.QNEW`, and the default writable path is preserved. The code/plan commit
+  is pushed; focused owner tests pass (`21` drawing-open tests; `41` combined
+  FileIPC/Task-6 tests excluding the intentional causal-RED diagnostic, with
+  one live prerequisite skip); authoritative verification reports C# `238`,
+  offline Python `3369`, and offline IPC `134` with zero product failures.
+  Fresh SOL review is pending; live acceptance remains **NOT RUN**.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 
