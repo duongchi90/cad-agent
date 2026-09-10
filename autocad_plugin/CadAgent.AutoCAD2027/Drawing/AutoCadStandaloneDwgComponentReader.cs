@@ -28,6 +28,7 @@ public sealed class AutoCadStandaloneDwgComponentReader
         {
             _policy.ValidateInspectionRequest(request);
             EnsureActiveSource(request.SourceDrawingPath);
+            EnsureSourceReadOnly();
             var snapshot = _database.ReadSelectedEntities(request);
             if (!snapshot.Success)
             {
@@ -54,6 +55,7 @@ public sealed class AutoCadStandaloneDwgComponentReader
         try
         {
             _policy.ValidateExtractionPlan(plan);
+            EnsureSourceReadOnly();
             outputPath = _policy.NormalizeCandidateOutputPath(
                 plan,
                 _database,
@@ -131,6 +133,16 @@ public sealed class AutoCadStandaloneDwgComponentReader
         }
     }
 
+    private void EnsureSourceReadOnly()
+    {
+        if (_database.IsSourceReadOnly != true)
+        {
+            throw new StandaloneDwgComponentPolicyException(
+                StandaloneDwgComponentPolicy.SourceReadOnlyRequiredCode,
+                "source read-only custody was not positively verified");
+        }
+    }
+
     private static string FormatError(Exception exception) => exception switch
     {
         StandaloneDwgComponentPolicyException policyException =>
@@ -150,6 +162,21 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
 
     public string? ActiveDocumentFullPath => _document.Database?.Filename;
 
+    public bool? IsSourceReadOnly
+    {
+        get
+        {
+            try
+            {
+                return _document.IsReadOnly;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
     internal static string ContractEntityType(Entity entity) =>
         entity is BlockReference
             ? StandaloneDwgComponentEntityTypeContract.Insert
@@ -158,6 +185,7 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
     public StandaloneDwgComponentInspectionSnapshot ReadSelectedEntities(
         StandaloneDwgComponentInspectionRequest request)
     {
+        var sourceReadOnlyBefore = RequireReadOnlySource();
         var database = _document.Database
             ?? throw new InvalidOperationException("the active AutoCAD document has no database");
         var sourcePath = ContractValidator.NormalizeWindowsAbsolutePath(
@@ -209,14 +237,18 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
 
         var sourceAfter = StandaloneDwgComponentPolicy.ComputeSha256(sourcePath);
         var dbmodAfter = ReadDbmod();
+        var sourceReadOnlyAfter = RequireReadOnlySource();
         return new StandaloneDwgComponentInspectionSnapshot
         {
             Success = true,
             DrawingFullPath = sourcePath,
             Changed = sourceBefore != sourceAfter || dbmodBefore != dbmodAfter,
-            ReadOnly = true,
+            ReadOnly = sourceReadOnlyBefore && sourceReadOnlyAfter,
             IsXrefSource = false,
-            Eligible = sourceBefore == sourceAfter && dbmodBefore == dbmodAfter,
+            Eligible = sourceReadOnlyBefore
+                && sourceReadOnlyAfter
+                && sourceBefore == sourceAfter
+                && dbmodBefore == dbmodAfter,
             SourceSha256Before = sourceBefore,
             SourceSha256After = sourceAfter,
             DbmodBefore = dbmodBefore,
@@ -230,6 +262,7 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
     public StandaloneDwgComponentCandidateSnapshot ExtractToNewCandidate(
         StandaloneDwgComponentExtractionPlan plan)
     {
+        RequireReadOnlySource();
         var database = _document.Database
             ?? throw new InvalidOperationException("the active AutoCAD document has no database");
         var sourcePath = ContractValidator.NormalizeWindowsAbsolutePath(
@@ -324,6 +357,7 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
             var reopenable = ReopenAndHash(outputPath, outputHash);
             var sourceAfter = StandaloneDwgComponentPolicy.ComputeSha256(sourcePath);
             var dbmodAfter = ReadDbmod();
+            RequireReadOnlySource();
             return new StandaloneDwgComponentCandidateSnapshot
             {
                 CandidateCreated = true,
@@ -396,6 +430,18 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
         {
             return false;
         }
+    }
+
+    private bool RequireReadOnlySource()
+    {
+        if (IsSourceReadOnly != true)
+        {
+            throw new StandaloneDwgComponentPolicyException(
+                StandaloneDwgComponentPolicy.SourceReadOnlyRequiredCode,
+                "source document is not positively verified as read-only");
+        }
+
+        return true;
     }
 
     private static StandaloneDwgComponentBounds Bounds(Extents3d extents) => new()

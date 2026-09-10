@@ -121,7 +121,7 @@ public sealed class StandaloneDwgComponentInspectionSnapshot
             Success = false,
             DrawingFullPath = drawingFullPath,
             Changed = false,
-            ReadOnly = true,
+            ReadOnly = false,
             Eligible = false,
             Entities = Array.Empty<StandaloneDwgComponentEntitySnapshot>(),
             Warnings = Array.Empty<string>(),
@@ -242,6 +242,8 @@ public sealed class StandaloneDwgComponentExtractionSnapshot
 public interface IStandaloneDwgComponentDatabase
 {
     string? ActiveDocumentFullPath { get; }
+
+    bool? IsSourceReadOnly { get; }
 
     StandaloneDwgComponentInspectionSnapshot ReadSelectedEntities(
         StandaloneDwgComponentInspectionRequest request);

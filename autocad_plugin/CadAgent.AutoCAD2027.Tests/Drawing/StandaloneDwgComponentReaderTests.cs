@@ -76,6 +76,46 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
     }
 
     [Fact]
+    public void RejectsUnverifiedSourceCustodyBeforeInspection()
+    {
+        var database = Database();
+        database.IsSourceReadOnly = null;
+
+        var result = Reader(database).Inspect(Request());
+
+        Assert.False(result.Success);
+        Assert.False(result.ReadOnly);
+        Assert.Contains(result.Errors, error => error.Contains(
+            StandaloneDwgComponentPolicy.SourceReadOnlyRequiredCode,
+            StringComparison.Ordinal));
+        Assert.Equal(0, database.InspectionCallCount);
+    }
+
+    [Fact]
+    public void RejectsWritableSourceBeforeCandidateCreation()
+    {
+        var database = Database();
+        database.IsSourceReadOnly = false;
+
+        var result = Reader(database).Extract(Plan());
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains(
+            StandaloneDwgComponentPolicy.SourceReadOnlyRequiredCode,
+            StringComparison.Ordinal));
+        Assert.Equal(0, database.ExtractionCallCount);
+    }
+
+    [Fact]
+    public void VerifiedReadOnlySourcePassesInspectionAndExtraction()
+    {
+        var database = Database();
+
+        Assert.True(Reader(database).Inspect(Request()).Success);
+        Assert.True(Reader(database).Extract(Plan()).Success);
+    }
+
+    [Fact]
     public void RejectsSourceHashOrDbmodDrift()
     {
         var database = Database();
@@ -325,11 +365,15 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
 
         public string? ActiveDocumentFullPath => _sourcePath;
 
+        public bool? IsSourceReadOnly { get; set; } = true;
+
         public StandaloneDwgComponentInspectionSnapshot Inspection { get; set; } = new();
 
         public StandaloneDwgComponentCandidateSnapshot Candidate { get; set; } = new();
 
         public int ExtractionCallCount { get; private set; }
+
+        public int InspectionCallCount { get; private set; }
 
         public StandaloneDwgComponentExtractionPlan? LastPlan { get; private set; }
 
@@ -340,7 +384,11 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
         public string? LastDeletedIdentity { get; private set; }
 
         public StandaloneDwgComponentInspectionSnapshot ReadSelectedEntities(
-            StandaloneDwgComponentInspectionRequest request) => Inspection;
+            StandaloneDwgComponentInspectionRequest request)
+        {
+            InspectionCallCount++;
+            return Inspection;
+        }
 
         public StandaloneDwgComponentCandidateSnapshot ExtractToNewCandidate(
             StandaloneDwgComponentExtractionPlan plan)

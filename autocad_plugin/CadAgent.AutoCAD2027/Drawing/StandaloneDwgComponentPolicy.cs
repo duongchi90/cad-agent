@@ -22,6 +22,7 @@ public sealed class StandaloneDwgComponentPolicy
     public const string XrefOnlySourceContractCode = "S3C_XREF_ONLY_SOURCE_CONTRACT";
     public const string ExactHandlesRequiredCode = "S3C_EXACT_HANDLES_REQUIRED";
     public const string SourceHashOrDbmodDriftCode = "S3C_SOURCE_HASH_OR_DBMOD_DRIFT";
+    public const string SourceReadOnlyRequiredCode = "S3C_SOURCE_READ_ONLY_REQUIRED";
     public const string SourceIdentityMismatchCode = "S3C_SOURCE_IDENTITY_MISMATCH";
     public const string CandidateBaseCode = "S3C_EMPTY_CANDIDATE_REQUIRED";
     public const string CandidatePathUnsafeCode = "S3C_CANDIDATE_PATH_UNSAFE";
