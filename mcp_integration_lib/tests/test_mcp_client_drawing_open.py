@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import mcp_integration_lib.mcp_client as mcp_client_module
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
     MCPToolError,
@@ -247,6 +248,206 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         self.assertEqual([], command_sequences)
         self.assertEqual(1, len(raw_commands))
+
+    def test_opt_in_start_tab_bootstrap_precedes_source_open_and_can_close(self):
+        raw_commands = []
+        command_sequences = []
+        dispatches = []
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        def dispatch(command, params):
+            dispatches.append((command, params))
+            if command == "ping":
+                return {"ready": True}
+            if command == "drawing-get-variables":
+                return {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
+            raise AssertionError(f"unexpected dispatch: {command}")
+
+        client._dispatch = dispatch
+
+        self.assertEqual({"path": "C:/work/source.dxf"}, client.drawing_open("C:/work/source.dxf"))
+        self.assertEqual(["_.QNEW"], command_sequences)
+        self.assertTrue(client._start_tab_bootstrap_active)
+        self.assertEqual(2, [command for command, _ in dispatches].count("ping"))
+        bootstrap_load_index = next(
+            index for index, command in enumerate(raw_commands)
+            if '(load "C:/tools/mcp_dispatch.lsp")' in command
+        )
+        source_open_index = next(
+            index for index, command in enumerate(raw_commands)
+            if 'vla-open mcp-docs "C:/work/source.dxf"' in command
+        )
+        self.assertLess(bootstrap_load_index, source_open_index)
+
+        client.close_start_tab_bootstrap()
+        self.assertFalse(client._start_tab_bootstrap_active)
+        self.assertIn('command-s "_.CLOSE" "_N"', raw_commands[-1])
+
+    def test_start_tab_bootstrap_does_not_run_when_real_document_is_active(self):
+        raw_commands = []
+        command_sequences = []
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: False,
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+        client._dispatch = lambda command, params: (
+            {"DWGPREFIX": "C:/work/", "DWGNAME": "active.dxf"}
+            if command == "drawing-get-variables"
+            else {"ready": True}
+        )
+
+        self.assertEqual({"path": "C:/work/active.dxf"}, client.drawing_open("C:/work/active.dxf"))
+        self.assertEqual([], command_sequences)
+        self.assertFalse(client._start_tab_bootstrap_active)
+        self.assertTrue(any("vla-open mcp-docs" in command for command in raw_commands))
+
+    def test_start_tab_bootstrap_requires_positive_probe(self):
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=lambda command: self.fail("raw LISP must not run"),
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=lambda command: self.fail("QNEW must not run"),
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        with self.assertRaisesRegex(MCPToolError, "START_TAB_BOOTSTRAP_PROBE_REQUIRED"):
+            client.drawing_open("C:/work/source.dxf")
+
+    def test_start_tab_bootstrap_ping_failure_closes_blank_without_source_open(self):
+        raw_commands = []
+        command_sequences = []
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+        client._dispatch = lambda command, params: (
+            (_ for _ in ()).throw(MCPTimeoutError("bootstrap ping timeout"))
+            if command == "ping"
+            else {}
+        )
+
+        with self.assertRaisesRegex(MCPTimeoutError, "bootstrap ping timeout"):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertEqual(["_.QNEW"], command_sequences)
+        self.assertFalse(client._start_tab_bootstrap_active)
+        self.assertTrue(any('(load "C:/tools/mcp_dispatch.lsp")' in command for command in raw_commands))
+        self.assertIn('command-s "_.CLOSE" "_N"', raw_commands[-1])
+        self.assertFalse(any("vla-open mcp-docs" in command for command in raw_commands))
+
+    def test_start_tab_bootstrap_load_failure_closes_blank_without_source_open(self):
+        raw_commands = []
+        command_sequences = []
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+            if '(load "C:/tools/mcp_dispatch.lsp")' in command:
+                raise MCPToolError("bootstrap load failed")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        with self.assertRaisesRegex(MCPToolError, "bootstrap load failed"):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertEqual(["_.QNEW"], command_sequences)
+        self.assertFalse(client._start_tab_bootstrap_active)
+        self.assertIn('command-s "_.CLOSE" "_N"', raw_commands[-1])
+        self.assertFalse(any("vla-open mcp-docs" in command for command in raw_commands))
+
+    def test_start_tab_bootstrap_command_failure_fails_closed_before_source_open(self):
+        raw_commands = []
+        command_sequences = []
+
+        def command_trigger(command):
+            command_sequences.append(command)
+            raise MCPToolError("QNEW failed")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_commands.append,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_trigger,
+            start_tab_no_document_probe=lambda: True,
+            bootstrap_start_tab=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        with self.assertRaisesRegex(MCPToolError, "QNEW failed"):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertEqual(["_.QNEW"], command_sequences)
+        self.assertEqual([], raw_commands)
+
+    def test_start_tab_probe_factory_requires_positive_integer_window_handle(self):
+        factory = getattr(mcp_client_module, "make_windows_start_tab_no_document_probe", None)
+        self.assertTrue(callable(factory))
+        for invalid in (0, -1, None, "123", 1.5, True):
+            with self.subTest(hwnd=invalid):
+                with self.assertRaises(ValueError):
+                    factory(invalid)
+
+    def test_start_tab_probe_matches_only_start_window_title(self):
+        class FakeUser32:
+            def __init__(self):
+                self.title = "Autodesk AutoCAD 2027 - [Start]"
+
+            def GetWindowTextLengthW(self, hwnd):
+                return len(self.title)
+
+            def GetWindowTextW(self, hwnd, buffer, length):
+                buffer.value = self.title
+                return len(self.title)
+
+        fake_user32 = FakeUser32()
+        with patch.object(mcp_client_module.ctypes.windll, "user32", fake_user32):
+            probe = mcp_client_module.make_windows_start_tab_no_document_probe(9001)
+            self.assertTrue(probe())
+            fake_user32.title = "Autodesk AutoCAD 2027 - [Drawing1.dwg]"
+            self.assertFalse(probe())
 
     def test_com_activation_failure_without_start_tab_proof_fails_closed(self):
         raw_commands = []

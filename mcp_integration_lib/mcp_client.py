@@ -273,7 +273,8 @@ class FileIPCLiveMCPClient:
                  document_settle_s: float = 2.0,
                  command_trigger: Optional[Callable[[str], None]] = None,
                  start_tab_no_document_probe: Optional[Callable[[], bool]] = None,
-                 legacy_fixture_mode: Optional[bool] = None) -> None:
+                 legacy_fixture_mode: Optional[bool] = None,
+                 bootstrap_start_tab: bool = False) -> None:
         self._dir = _validate_file_ipc_root(ipc_dir)
         self._root_identity = _file_ipc_root_identity(self._dir)
         self._trigger = trigger
@@ -290,7 +291,11 @@ class FileIPCLiveMCPClient:
         self._document_settle_s = document_settle_s
         self._command_trigger = command_trigger
         self._start_tab_no_document_probe = start_tab_no_document_probe
+        if type(bootstrap_start_tab) is not bool:
+            raise TypeError("bootstrap_start_tab must be a bool")
+        self._bootstrap_start_tab = bootstrap_start_tab
         self._active_drawing_path: Optional[str] = None
+        self._start_tab_bootstrap_active = False
         self._last_exchange_evidence: Optional[Dict[str, Any]] = None
 
     @property
@@ -425,6 +430,8 @@ class FileIPCLiveMCPClient:
     def drawing_open(self, path: str, *, read_only: bool = False) -> Dict[str, Any]:
         if type(read_only) is not bool:
             raise ValueError("read_only must be a bool")
+        if self._bootstrap_start_tab:
+            self.ensure_start_tab_bootstrap()
         if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
             normalized_path = path.replace("\\", "/").replace('"', '\\"')
             expected_path = _normalized_autocad_path(path)
@@ -458,19 +465,7 @@ class FileIPCLiveMCPClient:
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
                 time.sleep(self._document_settle_s)
                 self._active_drawing_path = expected_path
-                self._assert_root_unchanged()
-                root_literal = _autolisp_string_literal(str(self._dir).replace("\\", "/"))
-                loader_literal = _autolisp_string_literal(
-                    self._bootstrap_lisp_path.replace("\\", "/")
-                )
-                self._raw_lisp_trigger(
-                    "(progn (setq *cad-agent-file-ipc-root* "
-                    + root_literal
-                    + ") (load "
-                    + loader_literal
-                    + "))"
-                )
-                time.sleep(self._document_settle_s)
+                self._load_dispatcher_for_active_document()
                 self._wait_for_dispatcher()
                 variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
                 active_path = _normalized_autocad_path(
@@ -491,6 +486,80 @@ class FileIPCLiveMCPClient:
         result = self._dispatch("drawing-open", {"path": path})
         self._active_drawing_path = _normalized_autocad_path(path)
         return result
+
+    def ensure_start_tab_bootstrap(self) -> bool:
+        """Create a disposable blank document only for an opt-in Start-tab path."""
+        if not self._bootstrap_start_tab:
+            return False
+        if self._start_tab_bootstrap_active:
+            return False
+        if self._start_tab_no_document_probe is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_PROBE_REQUIRED")
+        if self._raw_lisp_trigger is None or self._bootstrap_lisp_path is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_LISP_REQUIRED")
+        if self._command_trigger is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_COMMAND_REQUIRED")
+        try:
+            start_tab = bool(self._start_tab_no_document_probe())
+        except Exception as exc:
+            raise MCPToolError("START_TAB_BOOTSTRAP_PROBE_FAILED") from exc
+        if not start_tab:
+            return False
+
+        self._command_trigger("_.QNEW")
+        self._start_tab_bootstrap_active = True
+        try:
+            self._load_dispatcher_for_active_document()
+            self._wait_for_dispatcher()
+        except Exception:
+            try:
+                self.close_start_tab_bootstrap()
+            except Exception:
+                pass
+            raise
+        return True
+
+    def close_start_tab_bootstrap(self) -> None:
+        """Close the tracked unsaved bootstrap document without saving it."""
+        if not self._start_tab_bootstrap_active:
+            return
+        if self._raw_lisp_trigger is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_LISP_REQUIRED")
+        self._raw_lisp_trigger(
+            '(progn (vl-load-com) '
+            '(setq mcp-bootstrap-doc '
+            '(vla-get-ActiveDocument (vlax-get-acad-object))) '
+            '(if (= (vla-get-FullName mcp-bootstrap-doc) "") '
+            '(command-s "_.CLOSE" "_N") '
+            '(princ "START_TAB_BOOTSTRAP_CLOSE_TARGET_MISMATCH")))'
+        )
+        time.sleep(self._document_settle_s)
+        if self._start_tab_no_document_probe is not None:
+            try:
+                if not self._start_tab_no_document_probe():
+                    raise MCPToolError("START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED")
+            except MCPToolError:
+                raise
+            except Exception as exc:
+                raise MCPToolError("START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED") from exc
+        self._start_tab_bootstrap_active = False
+
+    def _load_dispatcher_for_active_document(self) -> None:
+        if self._raw_lisp_trigger is None or self._bootstrap_lisp_path is None:
+            raise MCPToolError("File IPC dispatcher bootstrap is not configured")
+        self._assert_root_unchanged()
+        root_literal = _autolisp_string_literal(str(self._dir).replace("\\", "/"))
+        loader_literal = _autolisp_string_literal(
+            self._bootstrap_lisp_path.replace("\\", "/")
+        )
+        self._raw_lisp_trigger(
+            "(progn (setq *cad-agent-file-ipc-root* "
+            + root_literal
+            + ") (load "
+            + loader_literal
+            + "))"
+        )
+        time.sleep(self._document_settle_s)
 
     def _start_tab_no_document_is_proven(self, error: Exception) -> bool:
         message = str(error).casefold()
@@ -855,6 +924,33 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
 def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
     """Return a trigger that types a complete AutoLISP expression in AutoCAD."""
     return _make_windows_text_trigger(hwnd)
+
+
+def make_windows_start_tab_no_document_probe(hwnd: int) -> Callable[[], bool]:
+    """Return a probe that positively recognizes AutoCAD's documentless Start tab."""
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+
+    def probe() -> bool:
+        user32 = ctypes.windll.user32
+        get_window_text_length = user32.GetWindowTextLengthW
+        get_window_text = user32.GetWindowTextW
+        try:
+            get_window_text_length.argtypes = [wintypes.HWND]
+            get_window_text_length.restype = ctypes.c_int
+            get_window_text.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            get_window_text.restype = ctypes.c_int
+        except (AttributeError, TypeError):
+            pass
+        length = int(get_window_text_length(hwnd))
+        if length <= 0:
+            return False
+        title = ctypes.create_unicode_buffer(length + 1)
+        if int(get_window_text(hwnd, title, len(title))) <= 0:
+            return False
+        return title.value.rstrip().casefold().endswith("[start]")
+
+    return probe
 
 
 def make_windows_command_trigger(hwnd: int) -> Callable[[str], None]:

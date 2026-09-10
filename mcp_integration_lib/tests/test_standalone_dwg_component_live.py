@@ -34,7 +34,9 @@ from mcp_integration_lib.dotnet_ipc import (
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
     make_windows_dispatch_trigger,
+    make_windows_command_trigger,
     make_windows_lisp_trigger,
+    make_windows_start_tab_no_document_probe,
 )
 
 
@@ -239,6 +241,9 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
         trigger=make_windows_dispatch_trigger(hwnd),
         raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
         bootstrap_lisp_path=environment["CAD_AGENT_AUTOCAD_LISP_PATH"],
+        command_trigger=make_windows_command_trigger(hwnd),
+        start_tab_no_document_probe=make_windows_start_tab_no_document_probe(hwnd),
+        bootstrap_start_tab=True,
     )
     dotnet_client = DotNetIPCClient(
         ipc_dir=environment["CAD_AGENT_DOTNET_IPC_DIR"],
@@ -468,6 +473,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
         assert legacy_client.drawing_get_variables(["DBMOD"])["DBMOD"] == expected_dbmod
         legacy_client.drawing_close(save_changes=False)
         active_path = None
+        legacy_client.close_start_tab_bootstrap()
     finally:
         if (
             candidate_opened
@@ -497,3 +503,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
                     candidate_output_path.unlink()
             except OSError:
                 pass
+        try:
+            legacy_client.close_start_tab_bootstrap()
+        except Exception:
+            pass
