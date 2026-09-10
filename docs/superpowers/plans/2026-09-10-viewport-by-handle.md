@@ -10,7 +10,7 @@
 
 **Spec:** This document is the design/spec and the implementation plan for the capability.
 
-**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added and live gate SKIP because prerequisites are absent; authoritative verification passed at final remediation head `9c2ccbfa358be53b0192591d7153edd542363551`; first-pass independent reviews found material findings, code and evidence remediation are pushed, requirements/architecture and security/operations re-reviews passed, and the correctness/test provenance recheck is pending this synchronization.
+**Status:** in progress; SOL design review passed; Tasks 1-3 complete; Task 4 live test added and live gate SKIP because prerequisites are absent; authoritative verification passed at final remediation head `9c2ccbfa358be53b0192591d7153edd542363551`; first-pass independent reviews found material findings, code and evidence remediation are pushed, and all three required re-reviews now pass. The branch remains partially verified because live AutoCAD/private fidelity evidence is unavailable.
 
 **Approval date:** 2026-09-10; SOL design review passed with `VERDICT=PASS`, `HUMAN_GATE=NO`.
 
@@ -247,13 +247,13 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 
 Record the exact exit code, test counts, live-gate state, plugin identity, and disposable artifact paths in the implementation plan and `docs/STATUS.md`.
 
-- [ ] **Step 4: Request three bounded reviews required for AutoCAD/File IPC/architecture scope:** requirements/architecture, correctness/test, and security/operations. First-pass reviews identified evidence-binding drift plus protocol-test hardening gaps; code remediation `e9e692315621682e9d150e1b3cb54a1d71893f2d` and strictness remediation `9c2ccbfa358be53b0192591d7153edd542363551` address those findings. Requirements/architecture and security/operations re-reviews passed; correctness/test found one final stale STATUS binding, being closed by this documentation synchronization. Each reviewer receives the compact packet from `docs/templates/`, the exact contract/schema diff, focused test output, live-gate state, and no private customer drawing.
+- [x] **Step 4: Request three bounded reviews required for AutoCAD/File IPC/architecture scope:** requirements/architecture, correctness/test, and security/operations. First-pass reviews identified evidence-binding drift plus protocol-test hardening gaps; code remediation `e9e692315621682e9d150e1b3cb54a1d71893f2d` and strictness remediation `9c2ccbfa358be53b0192591d7153edd542363551` address those findings. Final re-reviews on the unchanged implementation head passed for requirements/architecture, correctness/test, and security/operations; the docs-only provenance closure is recorded on the follow-up head `795b9cdef4a5971e5cee1a09489e29eafda4aaa2`. Each reviewer received the compact packet from `docs/templates/`, the exact contract/schema diff, focused test output, live-gate state, and no private customer drawing.
 - [x] **Step 5: Update `docs/STATUS.md` only with evidence that actually ran.** `BVTL.dwg`, the PDF, and the frozen disposable page-1 DXF remain outside Git.
-- [ ] **Step 6: Run `git diff --check`, confirm no P0/P1 remains, and stop for design/implementation approval before using the new owner against `BVTL.dwg`.**
+- [x] **Step 6: Run `git diff --check`, confirm no P0/P1 remains, and stop for design/implementation approval before using the new owner against `BVTL.dwg`.** `git diff --check` passed; all three final reviews returned `MATERIAL_FINDING=NONE`; no unverified owner use, source mutation, candidate promotion, or live CAD action is authorized by this checkpoint.
 
 ## Verification and gate record
 
-Until implementation begins, the design checkpoint itself is the only completed action. No production code, AutoCAD source, FileIPC result, or Git history was changed by this plan creation.
+The implementation and review checkpoint is complete through the deterministic boundary. No AutoCAD source, FileIPC live result, or candidate mutation was performed by this plan execution.
 
 When the plan is executed, the required evidence is:
 
@@ -264,5 +264,7 @@ When the plan is executed, the required evidence is:
 - source/candidate/plugin hashes and DBMOD before/after;
 - `git diff --check` result and final branch/head;
 - three independent review reports with scope, impact, evidence, and verification.
+
+Final review closure: requirements/architecture, correctness/test, and security/operations each returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` on the unchanged implementation head `9c2ccbfa358be53b0192591d7153edd542363551`. The documentation closure is on `795b9cdef4a5971e5cee1a09489e29eafda4aaa2`.
 
 The new owner must not be used to approve or promote the current page-1 candidate until a fresh registration oracle consumes its result and SOL returns a new verdict.

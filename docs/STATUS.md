@@ -57,14 +57,13 @@
   reject null-present optional field keys, and assert the live plugin binary
   path/SHA-256. Focused remediation evidence is Python `143 passed, 50
   subtests`, C# `43 passed`, live harness `9 passed, 7 skipped`, Ruff `PASS`,
-  and `git diff --check PASS`. Requirements/architecture and
-  security/operations re-reviews passed; correctness/test is awaiting the
-  final provenance rescan after this status synchronization.
+  and `git diff --check PASS`. Requirements/architecture, correctness/test,
+  and security/operations final re-reviews all passed with
+  `MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`.
 - This branch remains **Partially verified**: deterministic contracts, owner,
   dispatcher, client, test harness, remediation, and authoritative verification
   passed, but live viewport evidence and private fidelity evidence remain
-  `NOT RUN`/unavailable, and final correctness/test provenance closure is
-  pending. The source drawing
+  `NOT RUN`/unavailable. The source drawing
   hash remains `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
 
 ## Current canonical snapshot (2026-09-09)
