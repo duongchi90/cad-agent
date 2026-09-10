@@ -10,15 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-10-standalone-dwg-component-extraction-provenance-design.md`
 
-**Status:** planned
+**Status:** implementation complete; opt-in live gate pending/unavailable
 
 **Base SHA:** `4cc6df980a3a78122edcff533de70ae646700b58`
 
-**SOL review:** Initial plan review returned `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`; this docs-only correction records the required R3/R4 boundary extension. The corrected plan must be re-reviewed before implementation or CAD mutation.
+**SOL review:** Initial plan review returned `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`; the required R3/R4 boundary extension was implemented and independently reviewed. Task 5 hash binding and the Task 6 candidate-identity remediation both received `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, `HUMAN_GATE=NO`. The live gate remains a separate opt-in boundary.
 
-**Completion Head SHA:** not applicable at plan creation; record the final implementation/evidence commit here only when implementation is complete.
+**Completion Head SHA:** `94719ca3e854dd3bb6b668217924c85e3d07c214` for the implementation; evidence/status documentation is recorded on the branch at `94d1c05a973db3c678369fa50fa505c8307fedd2`.
 
-**Plan-time verification:** `tests/test_reuse_rebaseline_docs.py` — `3 passed`; `git diff --check` — PASS; no runtime, private-data, or live-CAD gate was run for this plan-only change.
+**Plan-time verification:** historical plan-time docs check was `3 passed`; final implementation verification is recorded in `docs/superpowers/implementation-records/2026-09-10-standalone-dwg-component-extraction.md` and `docs/STATUS.md`.
 
 **Required gates:** `scripts/verify.ps1` and `git diff --check` before an implementation completion claim. The `autocad_mechanical` File IPC/AutoCAD Mechanical 2027 gate is required for extraction/handle/save behavior; missing prerequisites are `SKIP` or `NOT RUN`, never PASS. Private real-drawing evidence remains outside Git and is required only when the affected acceptance path is exercised.
 
