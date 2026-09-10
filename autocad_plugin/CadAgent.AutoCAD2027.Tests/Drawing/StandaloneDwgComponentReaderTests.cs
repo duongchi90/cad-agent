@@ -54,6 +54,28 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
     }
 
     [Fact]
+    public void ContractStyleInsertAcceptsBlockReferenceAndRejectsMismatchedType()
+    {
+        Assert.Equal(
+            "INSERT",
+            StandaloneDwgComponentEntityTypeContract.FromNativeTypeName("BlockReference"));
+
+        var accepted = Reader(Database()).Inspect(Request());
+
+        Assert.True(accepted.Success);
+
+        var mismatchedDatabase = Database();
+        mismatchedDatabase.Inspection = Inspection(entityType: "BLOCK");
+
+        var rejected = Reader(mismatchedDatabase).Inspect(Request());
+
+        Assert.False(rejected.Success);
+        Assert.Contains(rejected.Errors, error => error.Contains(
+            StandaloneDwgComponentPolicy.SourceIdentityMismatchCode,
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RejectsSourceHashOrDbmodDrift()
     {
         var database = Database();
@@ -194,7 +216,7 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
                 GroupId = "group-001",
                 LogicalComponentId = "component-001",
                 SourceHandles = new[] { "A1B2" },
-                ExpectedEntityTypes = new[] { "BLOCK" },
+                ExpectedEntityTypes = new[] { "INSERT" },
                 SourceLayerExpectations = new[] { "BODY" }
             }
         }
@@ -237,6 +259,7 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
         bool IsXrefSource = false,
         string? sourceSha256After = null,
         int dbmodAfter = 0,
+        string entityType = "INSERT",
         IReadOnlyList<StandaloneDwgComponentEntitySnapshot>? entities = null) => new()
         {
             Success = true,
@@ -254,7 +277,7 @@ public sealed class StandaloneDwgComponentReaderTests : IDisposable
                 new StandaloneDwgComponentEntitySnapshot
                 {
                     SourceHandle = "A1B2",
-                    EntityType = "BLOCK",
+                    EntityType = entityType,
                     Layer = "BODY",
                     Bounds = new StandaloneDwgComponentBounds
                     {

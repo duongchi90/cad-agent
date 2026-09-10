@@ -1,5 +1,15 @@
 namespace CadAgent.AutoCAD2027.Drawing;
 
+internal static class StandaloneDwgComponentEntityTypeContract
+{
+    public const string Insert = "INSERT";
+
+    public static string FromNativeTypeName(string nativeTypeName) =>
+        string.Equals(nativeTypeName, "BlockReference", StringComparison.Ordinal)
+            ? Insert
+            : nativeTypeName.ToUpperInvariant();
+}
+
 public static class StandaloneDwgComponentOperationNames
 {
     public const string Inspection = "standalone_dwg_component_inspection";

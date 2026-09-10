@@ -150,6 +150,11 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
 
     public string? ActiveDocumentFullPath => _document.Database?.Filename;
 
+    internal static string ContractEntityType(Entity entity) =>
+        entity is BlockReference
+            ? StandaloneDwgComponentEntityTypeContract.Insert
+            : StandaloneDwgComponentEntityTypeContract.FromNativeTypeName(entity.GetType().Name);
+
     public StandaloneDwgComponentInspectionSnapshot ReadSelectedEntities(
         StandaloneDwgComponentInspectionRequest request)
     {
@@ -195,7 +200,7 @@ public sealed class AutoCadStandaloneDwgComponentDatabase : IStandaloneDwgCompon
                 entities.Add(new StandaloneDwgComponentEntitySnapshot
                 {
                     SourceHandle = handle,
-                    EntityType = entity is BlockReference ? "BLOCK" : entity.GetType().Name.ToUpperInvariant(),
+                    EntityType = ContractEntityType(entity),
                     Layer = entity.Layer,
                     Bounds = Bounds(extents)
                 });
