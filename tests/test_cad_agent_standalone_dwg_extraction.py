@@ -308,3 +308,45 @@ def test_provenance_context_requires_verified_inspection_and_result_checksums() 
             inspection_result=forged,
             extraction_result=extraction,
         )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda result: result["components"][0].__setitem__(
+            "group_id", "unapproved-group"
+        ),
+        lambda result: result["components"][0].__setitem__(
+            "logical_component_id", "unapproved-component"
+        ),
+        lambda result: result["components"][0]["source_handles"].__setitem__(
+            0, "B2C3"
+        ),
+    ],
+    ids=["group", "logical-component", "source-handle"],
+)
+def test_result_plan_binding_rejects_unapproved_selection(mutator) -> None:
+    module = _module()
+    plan = _extraction_plan()
+    result = _extraction_result()
+    mutator(result)
+    result["result_sha256"] = module.standalone_extraction_result_sha256(result)
+    with pytest.raises(module.StandaloneDwgExtractionError, match="PLAN_SELECTION_MISMATCH"):
+        module.validate_standalone_extraction_result(result, plan=plan)
+
+
+def test_result_inspection_binding_rejects_source_dbmod_drift() -> None:
+    module = _module()
+    plan = _extraction_plan()
+    inspection = _inspection_result()
+    inspection["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        inspection
+    )
+    result = _extraction_result()
+    result["source_dbmod_before"] = 1
+    result["source_dbmod_after"] = 1
+    result["result_sha256"] = module.standalone_extraction_result_sha256(result)
+    with pytest.raises(module.StandaloneDwgExtractionError, match="DBMOD_MISMATCH"):
+        module.validate_standalone_extraction_result(
+            result, plan=plan, inspection_result=inspection
+        )

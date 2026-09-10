@@ -740,9 +740,31 @@ def validate_standalone_extraction_result(
         _absolute_path(source_path, "SOURCE_PATH_INVALID")
     ):
         _fail("OUTPUT_ALIASES_SOURCE")
+    expected_plan = (
+        build_standalone_extraction_plan(plan) if plan is not None else None
+    )
     components, source_handles, candidate_handles = _result_components(
         result["components"]
     )
+    if expected_plan is not None:
+        expected_selection = {
+            (
+                component["group_id"],
+                component["logical_component_id"],
+                tuple(component["source_handles"]),
+            )
+            for component in expected_plan["components"]
+        }
+        actual_selection = {
+            (
+                component["group_id"],
+                component["logical_component_id"],
+                tuple(component["source_handles"]),
+            )
+            for component in components
+        }
+        if actual_selection != expected_selection:
+            _fail("PLAN_SELECTION_MISMATCH")
     mappings_raw = result["source_handle_to_candidate_handle"]
     if not isinstance(mappings_raw, list) or not mappings_raw:
         _fail("MAPPING_INVALID")
@@ -785,8 +807,7 @@ def validate_standalone_extraction_result(
     if supplied_checksum != expected_checksum:
         _fail("CHECKSUM_MISMATCH")
     normalized["result_sha256"] = supplied_checksum
-    if plan is not None:
-        expected_plan = build_standalone_extraction_plan(plan)
+    if expected_plan is not None:
         if (
             normalized["request_id"] != expected_plan["request_id"]
             or normalized["run_id"] != expected_plan["run_id"]
@@ -800,6 +821,17 @@ def validate_standalone_extraction_result(
         inspection = validate_standalone_inspection_result(inspection_result)
         if normalized["source_drawing_sha256"] != inspection["source_sha256_before"]:
             _fail("SOURCE_HASH_MISMATCH")
+        if (
+            normalized["source_dbmod_before"] != inspection["dbmod_before"]
+            or normalized["source_dbmod_after"] != inspection["dbmod_after"]
+        ):
+            _fail("DBMOD_MISMATCH")
+        if expected_plan is not None and (
+            expected_plan["inspection_id"] != inspection["inspection_id"]
+            or expected_plan["inspection_sha256"] != inspection["inspection_sha256"]
+            or expected_plan["request_id"] != inspection["request_id"]
+        ):
+            _fail("PLAN_INSPECTION_MISMATCH")
         if _path_key(normalized["candidate_output_identity"]["path"]) == _path_key(
             inspection["source_identity"]["path"]
         ):
