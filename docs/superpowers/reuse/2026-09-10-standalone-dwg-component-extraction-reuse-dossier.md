@@ -40,8 +40,8 @@ behavior remains unchanged in intent and acceptance rules.
 
 | Existing owner | Reuse decision and exact seam |
 | --- | --- |
-| `cad_agent/native_dwg_provenance.py` | Reuse `validate_native_dwg_provenance`, `build_native_dwg_provenance`, `build_native_dwg_r3_inputs`, and `compose_native_dwg_query_binding` as the full-drawing reference and custody model. Do not widen this owner to component lineage; its `NATIVE_DWG_FULL_DRAWING` mode and empty R3 inputs remain unchanged. |
-| `cad_agent/drawing_artifact_reference.py` | Reuse `issue_drawing_artifact_reference`, `validate_drawing_artifact_reference`, `observe_drawing_artifact_currentness`, `validate_drawing_artifact_current_observation`, and `require_current_drawing_artifact_reference` for source/candidate identity and currentness. The adapter composes these records; it does not create a second artifact reference format. |
+| `cad_agent/native_dwg_provenance.py` | `REFERENCE/REGRESSION_ONLY` for this capability. Its `validate_native_dwg_provenance`, `build_native_dwg_provenance`, `build_native_dwg_r3_inputs`, and `compose_native_dwg_query_binding` remain callable only for the existing full-drawing path and regression coverage; the standalone subset path must not call or copy them. Their `NATIVE_DWG_FULL_DRAWING` mode and empty R3 inputs remain unchanged. |
+| `cad_agent/drawing_artifact_reference.py` | Reuse `issue_drawing_artifact_reference`, `validate_drawing_artifact_reference`, `observe_drawing_artifact_currentness`, `validate_drawing_artifact_current_observation`, and `require_current_drawing_artifact_reference` for standalone source/candidate identity and currentness. Together with the hash-bound standalone inspection/extraction result checksum, these are the standalone provenance inputs; the adapter composes these records and does not create a second artifact reference format. |
 | `cad_agent/component_view_registry.py` | Reuse `build_component_view_registry`, `validate_component_view_registry`, `component_view_registry_sha256`, `component_view_registry_provenance_evidence`, `finalize_component_view_correspondence`, and `project_linked_view_impacts`. The measured gap is the required versioned standalone mode for non-empty selected components. |
 | `cad_agent/candidate_revision.py` | Reuse `build_candidate_revision`, `validate_candidate_revision`, `build_candidate_revision_state`, `validate_candidate_revision_state`, and `transition_candidate_revision_state`. The measured gap is the explicit `_normalize_registry` branch for the exact standalone R3 schema/mode; unknown modes must not fall through to base-CAD. |
 | `cad_agent/drawing_query.py` | Reuse `validate_entity_query`, `validate_drawing_observation`, `observe_drawing`, `validate_entity_query_result`, and `query_entities` only after candidate handles are bound. It is not a source extraction owner and is not changed by Task 0. |
@@ -51,7 +51,20 @@ behavior remains unchanged in intent and acceptance rules.
 
 ## AutoCAD/.NET reuse map
 
-The new reader is an adapter over the existing AutoCAD `Database` boundary:
+The new reader is an adapter over the existing AutoCAD `Database` boundary.
+It does not call the full-drawing native-DWG provenance builders:
+
+- `native_dwg_provenance.py` requires full-drawing custody, equal source and
+  candidate entity counts/signatures, and a DXF candidate.
+- `build_native_dwg_r3_inputs` intentionally emits empty components and views.
+- Those contracts are correct for the existing full-drawing path but are not
+  source/candidate provenance seams for selected-component extraction.
+- Standalone currentness is therefore bound by DARA source/candidate
+  references and observations plus the hash-bound standalone
+  inspection/extraction result checksum, then consumed by the required R3/R4
+  standalone mode.
+
+The AutoCAD-side reuse boundary is:
 
 1. Open the standalone source read-only and validate its path/hash/currentness
    through the closed operation policy.
@@ -99,6 +112,8 @@ behavior:
   standalone source identity.
 - Therefore R3 and R4 must be extended together and version-bound. An R3-only
   extension would be an integration dead-end and is forbidden by this plan.
+- The native-DWG full-drawing provenance module is not a callable subset
+  extraction seam; it remains a reference/regression owner only.
 
 Compatibility invariants:
 
@@ -133,11 +148,11 @@ Stop implementation and request a fresh bounded review if any of these occur:
 - Spec/plan review: SOL `VERDICT=PASS`, `MATERIAL_FINDING=NONE`,
   `HUMAN_GATE=NO` on commit `400686ce8cc6c191b121b5ba11ab964dbfc521d4`.
 - Owner inspection: fresh `rg` inspection of the named Python, File IPC, and
-  AutoCAD owner files at the reviewed base; no source files changed.
+  AutoCAD owner files at the reviewed base; the full-drawing native-DWG
+  preconditions and empty R3 inputs were checked; no source files changed.
 - Focused docs test: `tests/test_reuse_rebaseline_docs.py` — `3 passed`.
 - Formatting: `git diff --check` — `PASS`.
 - Private/live CAD gate: `NOT RUN` for Task 0; no live or private drawing
   evidence is claimed.
 - Mutation boundary: docs-only dossier creation; no production code, CAD,
   source drawing, candidate, or DXF mutation.
-

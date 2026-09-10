@@ -4,7 +4,7 @@
 
 **Goal:** Add one bounded standalone-DWG component extraction capability that reuses the existing custody, provenance, candidate-revision, File IPC, and AutoCAD owners while producing only a disposable, hash-bound candidate.
 
-**Architecture:** Keep `STANDALONE_DWG_COMPONENT_EXTRACTION_WITH_PROVENANCE` as a thin `cad_agent` orchestration adapter. Add a separate closed File IPC operation family and AutoCAD-side reader for a standalone source; never route the source through the exact-base-Xref reader. Feed the validated result into the existing DARA/R3/R4 authorities, with one required versioned standalone R3 provenance mode and its minimal explicit R4 recognition/binding branch because the current native full-drawing rule cannot represent selected component lineage.
+**Architecture:** Keep `STANDALONE_DWG_COMPONENT_EXTRACTION_WITH_PROVENANCE` as a thin `cad_agent` orchestration adapter. Add a separate closed File IPC operation family and AutoCAD-side reader for a standalone source; never route the source through the exact-base-Xref reader. Feed the validated result into DARA/R3/R4, with one required versioned standalone R3 provenance mode and its minimal explicit R4 recognition/binding branch because the current native full-drawing rule cannot represent selected component lineage. Treat `native_dwg_provenance.py` as a full-drawing reference/regression owner only; standalone currentness comes from DARA plus the hash-bound standalone result checksum.
 
 **Tech Stack:** Windows, Python 3.11, the existing `cad_agent` contracts and validators, `mcp_integration_lib.dotnet_ipc`, AutoCAD Mechanical 2027 .NET plugin, JSON File IPC, pytest, and the existing C# test project.
 
@@ -36,7 +36,7 @@
 - Serialization to the exact `candidate_output_path` is the sole allowed file/document write; source saves, other-document/session saves, production promotion, and accepted-DXF mutation are forbidden.
 - `save_performed=true` means only that disposable candidate serialization completed and the output was re-opened/read back and hash-bound; a false value is never a usable success result.
 - Candidate cleanup may delete only the exact output whose captured identity still matches the failed operation; cleanup failure is a material failure.
-- Existing DARA, component/view registry, candidate-revision, drawing-query, and File IPC/.NET owners remain authoritative; no second transport, writer, registry, manifest, or truth store is introduced.
+- Existing DARA, component/view registry, candidate-revision, drawing-query, and File IPC/.NET owners remain authoritative; `native_dwg_provenance.py` remains reference/regression-only for standalone work; no second transport, writer, registry, manifest, or truth store is introduced.
 - `PAGE2_REUSED` groups may enter this capability. Page-1 deltas, text, dimensions, title-block content, and unresolved visual discrepancies remain in the existing page-1 fidelity/review path.
 - Real/customer drawings, annotations, credentials, generated private DXF/DWG files, and live AutoCAD state remain workstation-only.
 - Human approval remains required for ambiguous recognition, unverified calibration, production mutation, and any promotion beyond the disposable candidate boundary.
@@ -89,7 +89,7 @@ The implementation branch may create or modify only the files named in the tasks
 - Consumes: the approved spec, current `4cc6df9` tree, existing owner modules, exact-base-Xref contracts, and official File IPC/.NET owners.
 - Produces: a truthful classification for every dependency and a measured reason the standalone capability is missing.
 
-- [ ] **Step 1: Record the internal owner map.** Name the exact existing functions/classes in `drawing_artifact_reference.py`, `component_view_registry.py`, `candidate_revision.py`, `drawing_query.py`, and `mcp_integration_lib/dotnet_ipc.py` that will be called or composed. State explicitly that `native_dwg_provenance.py` remains a full-drawing owner and is not copied or widened.
+- [ ] **Step 1: Record the internal owner map.** Name the exact existing functions/classes in `drawing_artifact_reference.py`, `component_view_registry.py`, `candidate_revision.py`, `drawing_query.py`, and `mcp_integration_lib/dotnet_ipc.py` that will be called or composed. State explicitly that `native_dwg_provenance.py` is reference/regression-only for standalone work: its full-drawing builders and empty R3-input builder are not called or copied, and it is not widened.
 
 - [ ] **Step 2: Record the AutoCAD/.NET reuse map.** Identify `OperationDispatcher`, `ContractValidator`, the existing JSON File IPC store/lease/path guards, and the existing AutoCAD database cloning pattern in the exact-base reader. Classify the new standalone reader as `EXTEND_WITH_ADAPTER`, not a replacement transport or a modification of the Xref owner.
 
@@ -319,7 +319,7 @@ Acceptance requires all of the following:
 ## Plan self-review
 
 - Spec coverage: source custody/currentness, explicit selection, `EMPTY_NEW_DATABASE`, candidate-only serialization, result hashing, mapping, transforms, fail-closed cleanup, DARA/R3/R4 binding, File IPC ownership, page-1 boundary, and live/private gates each have a named task.
-- Reuse coverage: existing Python custody/currentness, component/view, candidate-revision, drawing-query, File IPC, dispatcher, policy, and AutoCAD database boundaries are named; no second engine, writer, transport, or truth store is planned.
+- Reuse coverage: existing DARA custody/currentness, component/view, candidate-revision, drawing-query, File IPC, dispatcher, policy, and AutoCAD database boundaries are named; native-DWG full-drawing provenance is reference/regression-only; no second engine, writer, transport, or truth store is planned.
 - Registry safety: the required versioned R3 mode and explicit R4 recognition branch are bounded by RED tests and preserve the native full-drawing empty-component restriction.
 - Placeholder scan: no unfinished placeholder or unspecified implementation step is used; future file names, operation names, test names, commands, and expected states are explicit.
 - Type/interface consistency: the Python adapter calls the two named IPC methods; the IPC methods use the two named operation names; the dispatcher routes those names to the named standalone reader; the reader returns the named inspection/extraction result families consumed by the adapter.

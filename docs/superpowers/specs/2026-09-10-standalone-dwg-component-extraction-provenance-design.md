@@ -74,8 +74,10 @@ does not reserve a public module name.
 
 ### 4.2 Existing owners to reuse
 
-- `cad_agent.native_dwg_provenance`: source/candidate custody, native-DWG
-  currentness and readback identity.
+- `cad_agent.native_dwg_provenance`: reference/regression owner for
+  full-drawing native-DWG custody, currentness, and readback identity. The
+  standalone component path must not call its full-drawing builders or its
+  intentionally empty R3-input builder.
 - `cad_agent.drawing_artifact_reference`: source and disposable-candidate
   artifact references and current observations.
 - `cad_agent.component_view_registry`: component/view lineage and impact
@@ -106,6 +108,10 @@ therefore include one bounded, versioned R3/R4 extension as a single change:
   mode. It must bind the same source identity, candidate identity, selected
   handles, and registry checksum into the candidate revision; it must not
   broaden the generic base-CAD fallback or accept an unknown registry mode.
+- Standalone currentness/provenance input comes from DARA source/candidate
+  references and observations plus the hash-bound standalone
+  inspection/extraction result checksum. It does not come from the
+  full-drawing native-DWG provenance packet.
 - The extension is tested RED-first at both owners, including the current
   rejection codes, then GREEN with adversarial cross-lineage, stale-hash,
   duplicate-handle, mislabeled-full-drawing, and `REUSED_FROM_BASE_CAD`
@@ -338,7 +344,9 @@ existing test owners:
    `XREF=0` is inspectable; the exact-base-Xref contract remains unchanged and
    rejects it for S3A.
 3. Source invariants: read-only mode, source hash, DBMOD, path identity, and
-   no source save are verified before/after both inspection and extraction.
+   no source save are verified before/after both inspection and extraction;
+   standalone currentness is bound through DARA and the standalone result
+   checksum, not the full-drawing native-DWG builder.
 4. Candidate invariants: absent destination, non-aliasing path, candidate-only
    serialization, `save_performed=true` on success, re-openable output, exact
    source-to-candidate handle mapping, deterministic result hash, and
