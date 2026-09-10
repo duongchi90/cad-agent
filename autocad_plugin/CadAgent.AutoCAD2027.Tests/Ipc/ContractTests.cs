@@ -181,6 +181,31 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void ViewportQueryResultRejectsMismatchedFieldStateReasons()
+    {
+        foreach (var fieldState in new[]
+        {
+            new { status = "UNSUPPORTED", reason = "PROPERTY_READ_FAILED" },
+            new { status = "ERROR", reason = "PROPERTY_UNAVAILABLE" }
+        })
+        {
+            var payload = ValidViewportPayload();
+            var fieldProperties = payload["fields"]
+                .EnumerateObject()
+                .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+            fieldProperties["width"] = JsonSerializer.SerializeToElement(fieldState);
+            payload["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+
+            var validation = ContractValidator.ValidateResult(ViewportResult(payload));
+
+            Assert.False(validation.IsValid);
+            Assert.Contains(
+                validation.Errors,
+                error => error.Contains("reason", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
     public void AcceptsMechanicalBomOnlyWithEmptyParameters()
     {
         var request = ValidRequest("mechanical_bom");

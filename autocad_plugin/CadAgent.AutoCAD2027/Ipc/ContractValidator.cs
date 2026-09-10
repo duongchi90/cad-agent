@@ -1216,22 +1216,36 @@ public static class ContractValidator
             return;
         }
 
-        if (status is not (ViewportFieldStatuses.Unsupported or ViewportFieldStatuses.Error))
+        if (status == ViewportFieldStatuses.Unsupported)
         {
-            errors.Add($"{displayName}.status is unsupported");
+            if (!hasReason || hasValue)
+            {
+                errors.Add($"{displayName} UNSUPPORTED requires only a reason");
+                return;
+            }
+            if (reason != ViewportFieldReasons.PropertyUnavailable)
+            {
+                errors.Add($"{displayName}.reason must be PROPERTY_UNAVAILABLE for UNSUPPORTED");
+            }
             return;
         }
-        if (!hasReason || hasValue)
+
+        if (status == ViewportFieldStatuses.Error)
         {
-            errors.Add($"{displayName} {status} requires only a reason");
+            if (!hasReason || hasValue)
+            {
+                errors.Add($"{displayName} ERROR requires only a reason");
+                return;
+            }
+            if (reason is not (ViewportFieldReasons.PropertyReadFailed
+                or ViewportFieldReasons.InvalidValue))
+            {
+                errors.Add($"{displayName}.reason must be PROPERTY_READ_FAILED or INVALID_VALUE for ERROR");
+            }
             return;
         }
-        if (reason is not (ViewportFieldReasons.PropertyUnavailable
-            or ViewportFieldReasons.PropertyReadFailed
-            or ViewportFieldReasons.InvalidValue))
-        {
-            errors.Add($"{displayName}.reason is unsupported");
-        }
+
+        errors.Add($"{displayName}.status is unsupported");
     }
 
     private static void ValidateViewportObservedValue(

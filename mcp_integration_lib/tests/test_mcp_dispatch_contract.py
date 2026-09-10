@@ -777,6 +777,15 @@ def test_viewport_query_is_allowlisted_and_schema_bound() -> None:
             / "viewport-query.schema.json"
         ).read_text(encoding="utf-8")
     )
+    result_operation_schema = json.loads(
+        (
+            REPO_ROOT
+            / "contracts"
+            / "autocad-ipc"
+            / "operations"
+            / "viewport-query-result.schema.json"
+        ).read_text(encoding="utf-8")
+    )
 
     assert "viewport_query" in SUPPORTED_OPERATIONS
     assert "viewport_query" in request_schema["properties"]["operation"]["enum"]
@@ -791,6 +800,13 @@ def test_viewport_query_is_allowlisted_and_schema_bound() -> None:
     )
     assert operation_schema["additionalProperties"] is False
     assert operation_schema["required"] == ["handle"]
+    result_defs = result_operation_schema["$defs"]
+    for field_schema_ref in result_defs["fields"]["properties"].values():
+        field_schema_name = field_schema_ref["$ref"].rsplit("/", 1)[-1]
+        field_schema = result_defs[field_schema_name]
+        refs = {item["$ref"] for item in field_schema["oneOf"] if "$ref" in item}
+        assert "#/$defs/unsupportedField" in refs
+        assert "#/$defs/errorField" in refs
 
 
 def test_python_file_ipc_command_surface_is_exact_and_closed() -> None:

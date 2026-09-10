@@ -154,7 +154,7 @@
         }
       }
     },
-    "unsupportedOrError": {
+    "unsupportedField": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -163,14 +163,26 @@
       ],
       "properties": {
         "status": {
-          "enum": [
-            "UNSUPPORTED",
-            "ERROR"
-          ]
+          "const": "UNSUPPORTED"
+        },
+        "reason": {
+          "const": "PROPERTY_UNAVAILABLE"
+        }
+      }
+    },
+    "errorField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "const": "ERROR"
         },
         "reason": {
           "enum": [
-            "PROPERTY_UNAVAILABLE",
             "PROPERTY_READ_FAILED",
             "INVALID_VALUE"
           ]
@@ -183,7 +195,10 @@
           "$ref": "#/$defs/observedPoint3"
         },
         {
-          "$ref": "#/$defs/unsupportedOrError"
+          "$ref": "#/$defs/unsupportedField"
+        },
+        {
+          "$ref": "#/$defs/errorField"
         }
       ]
     },
@@ -193,7 +208,10 @@
           "$ref": "#/$defs/observedPoint2"
         },
         {
-          "$ref": "#/$defs/unsupportedOrError"
+          "$ref": "#/$defs/unsupportedField"
+        },
+        {
+          "$ref": "#/$defs/errorField"
         }
       ]
     },
@@ -203,7 +221,10 @@
           "$ref": "#/$defs/observedPoint3"
         },
         {
-          "$ref": "#/$defs/unsupportedOrError"
+          "$ref": "#/$defs/unsupportedField"
+        },
+        {
+          "$ref": "#/$defs/errorField"
         }
       ]
     },
@@ -213,7 +234,10 @@
           "$ref": "#/$defs/observedScalar"
         },
         {
-          "$ref": "#/$defs/unsupportedOrError"
+          "$ref": "#/$defs/unsupportedField"
+        },
+        {
+          "$ref": "#/$defs/errorField"
         }
       ]
     },
@@ -223,7 +247,10 @@
           "$ref": "#/$defs/observedPositiveScalar"
         },
         {
-          "$ref": "#/$defs/unsupportedOrError"
+          "$ref": "#/$defs/unsupportedField"
+        },
+        {
+          "$ref": "#/$defs/errorField"
         }
       ]
     },

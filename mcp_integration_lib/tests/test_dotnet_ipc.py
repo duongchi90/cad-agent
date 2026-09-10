@@ -254,6 +254,32 @@ def _result(request: dict[str, object], payload: dict[str, object] | None = None
     }
 
 
+def _viewport_query_payload(
+    *,
+    drawing_sha256: str = "a" * 64,
+    handle: str = "126BABE",
+) -> dict[str, object]:
+    return {
+        "schema_version": "viewport-query-result-1.0",
+        "handle": handle,
+        "type": "VIEWPORT",
+        "layer": "VIEWPORTS",
+        "fields": {
+            "center_point": {"status": "OBSERVED", "value": [0.0, 0.0, 0.0]},
+            "width": {"status": "OBSERVED", "value": 20.0},
+            "height": {"status": "OBSERVED", "value": 15.0},
+            "view_center": {"status": "OBSERVED", "value": [0.0, 0.0]},
+            "view_height": {"status": "OBSERVED", "value": 100.0},
+            "view_target": {"status": "OBSERVED", "value": [0.0, 0.0, 0.0]},
+            "twist_angle": {"status": "OBSERVED", "value": 0.0},
+        },
+        "drawing_sha256_before": drawing_sha256,
+        "drawing_sha256_after": drawing_sha256,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+    }
+
+
 def _exact_base_fixture() -> dict[str, object]:
     fixture_path = Path(__file__).resolve().parent / "fixtures" / "exact-base-xref-inspection.json"
     return json.loads(fixture_path.read_text(encoding="utf-8"))
@@ -353,9 +379,18 @@ def _nested_mapping_keys(value: object) -> set[str]:
 
 
 class FakeDispatcher:
-    def __init__(self, ipc_dir: Path, payload: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        ipc_dir: Path,
+        payload: dict[str, object] | None = None,
+        *,
+        entity_handles: list[str] | None = None,
+        result_drawing_full_path: str | None = None,
+    ) -> None:
         self.ipc_dir = ipc_dir
         self.payload = payload or {}
+        self.entity_handles = entity_handles
+        self.result_drawing_full_path = result_drawing_full_path
         self.requests: list[dict[str, object]] = []
         self.request_bytes = b""
 
@@ -365,9 +400,14 @@ class FakeDispatcher:
         self.request_bytes = request_files[0].read_bytes()
         request = json.loads(self.request_bytes.decode("utf-8"))
         self.requests.append(request)
+        result = _result(request, self.payload)
+        if self.entity_handles is not None:
+            result["entity_handles"] = self.entity_handles
+        if self.result_drawing_full_path is not None:
+            result["drawing_full_path"] = self.result_drawing_full_path
         atomic_write_json(
             result_path(self.ipc_dir, str(request["request_id"])),
-            _result(request, self.payload),
+            result,
         )
 
     @staticmethod
@@ -676,7 +716,11 @@ class DotNetIPCClientTests(unittest.TestCase):
     def test_viewport_query_sends_one_handle_and_required_hash(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
-            dispatcher = FakeDispatcher(ipc_dir)
+            dispatcher = FakeDispatcher(
+                ipc_dir,
+                _viewport_query_payload(),
+                entity_handles=["126BABE"],
+            )
             client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
 
             client.viewport_query(
@@ -692,6 +736,62 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertEqual("a" * 64, request["drawing_sha256"])
             self.assertEqual({"handle": "126BABE"}, request["parameters"])
             self.assertIsNone(request["approval"])
+
+    def test_viewport_query_rejects_malformed_success_result(self) -> None:
+        with TemporaryDirectory() as temporary:
+            payload = _viewport_query_payload()
+            del payload["fields"]["width"]
+            dispatcher = FakeDispatcher(
+                Path(temporary),
+                payload,
+                entity_handles=["126BABE"],
+            )
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "viewport_query payload"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    handle="126BABE",
+                )
+
+    def test_viewport_query_rejects_result_binding_mismatch(self) -> None:
+        with TemporaryDirectory() as temporary:
+            dispatcher = FakeDispatcher(
+                Path(temporary),
+                _viewport_query_payload(),
+                entity_handles=["126BABE"],
+                result_drawing_full_path=r"C:\\drawings\\other.dwg",
+            )
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "drawing_full_path"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    handle="126BABE",
+                )
+
+    def test_viewport_query_rejects_mismatched_field_reason(self) -> None:
+        with TemporaryDirectory() as temporary:
+            payload = _viewport_query_payload()
+            payload["fields"]["width"] = {
+                "status": "UNSUPPORTED",
+                "reason": "PROPERTY_READ_FAILED",
+            }
+            dispatcher = FakeDispatcher(
+                Path(temporary),
+                payload,
+                entity_handles=["126BABE"],
+            )
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "reason"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    handle="126BABE",
+                )
 
     def test_viewport_query_rejects_missing_hash(self) -> None:
         with TemporaryDirectory() as temporary:

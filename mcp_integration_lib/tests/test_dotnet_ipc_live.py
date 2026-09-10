@@ -35,6 +35,18 @@ from mcp_integration_lib.mcp_client import (
     make_windows_lisp_trigger,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PLUGIN_DLL_PATH = (
+    _REPO_ROOT
+    / "autocad_plugin"
+    / "CadAgent.AutoCAD2027"
+    / "bin"
+    / "x64"
+    / "Release"
+    / "net10.0-windows"
+    / "CadAgent.AutoCAD2027.dll"
+)
+
 
 def _normalized_live_ipc_root(value: str | None) -> str | None:
     if not value:
@@ -662,8 +674,15 @@ class DotNetIPCLiveSmokeTests(unittest.TestCase):
                     request_id=health_request_id,
                 )
                 self.assertTrue(health["success"])
-                plugin_identity = health["payload"]["plugin_version"]
+                health_payload = health["payload"]
+                plugin_identity = health_payload["plugin_version"]
                 self.assertEqual("1.0.0", plugin_identity)
+                expected_plugin_path = normalize_windows_absolute_path(str(_PLUGIN_DLL_PATH.resolve()))
+                self.assertEqual(
+                    expected_plugin_path,
+                    normalize_windows_absolute_path(health_payload["plugin_binary_path"]),
+                )
+                self.assertEqual(_sha256(_PLUGIN_DLL_PATH), health_payload["plugin_binary_sha256"])
                 self.assertFalse(health["changed"])
                 self.assertFalse(request_path(dotnet_client.ipc_dir, health_request_id).exists())
                 self.assertFalse(result_path(dotnet_client.ipc_dir, health_request_id).exists())
