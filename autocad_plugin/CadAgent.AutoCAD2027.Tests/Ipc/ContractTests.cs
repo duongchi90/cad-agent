@@ -1006,6 +1006,30 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void StandaloneDwgComponentRequestsBindEnvelopeHashToSourceHash()
+    {
+        var requests = new[]
+        {
+            ContractJson.DeserializeRequest(File.ReadAllText(
+                RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json"))),
+            ContractJson.DeserializeRequest(File.ReadAllText(
+                RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.request.json")))
+        };
+
+        foreach (var request in requests)
+        {
+            var mismatched = request with { DrawingSha256 = new string('b', 64) };
+
+            var validation = ContractValidator.ValidateRequest(mismatched);
+
+            Assert.False(validation.IsValid);
+            Assert.Contains(validation.Errors, error =>
+                error.Contains("hash", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("drawing_sha256", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
     public void StandaloneDwgComponentRequestsRejectXrefOnlyFields()
     {
         var request = ContractJson.DeserializeRequest(File.ReadAllText(

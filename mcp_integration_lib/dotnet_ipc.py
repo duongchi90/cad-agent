@@ -785,6 +785,11 @@ class DotNetIPCClient:
             _STANDALONE_DWG_COMPONENT_EXTRACTION,
         }:
             self._validate_exact_base_xref_hash(normalized_sha256, "drawing_sha256")
+            if normalized_sha256 != normalized_parameters["source_drawing_sha256"]:
+                raise ValueError(
+                    "standalone envelope drawing_sha256 must match "
+                    "parameters.source_drawing_sha256"
+                )
             source_path = (
                 normalized_parameters.get("source_drawing_path")
                 if normalized_operation == _STANDALONE_DWG_COMPONENT_INSPECTION

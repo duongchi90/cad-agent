@@ -829,6 +829,42 @@ class DotNetIPCClientTests(unittest.TestCase):
         self.assertIsNone(request["approval"])
         self.assertEqual(fixture["inspection_payload"], result["payload"])
 
+    def test_standalone_rejects_envelope_hash_mismatch_before_trigger(self) -> None:
+        fixture = _standalone_fixture()
+        cases = (
+            (
+                "standalone_dwg_component_inspection",
+                fixture["inspection_request"],
+                None,
+            ),
+            (
+                "standalone_dwg_component_extraction",
+                fixture["plan"],
+                fixture["approval"],
+            ),
+        )
+
+        for operation, parameters, approval in cases:
+            with self.subTest(operation=operation), TemporaryDirectory() as temporary:
+                trigger_calls = 0
+
+                def trigger() -> None:
+                    nonlocal trigger_calls
+                    trigger_calls += 1
+
+                client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+                with self.assertRaises(ValueError):
+                    client.request(
+                        operation,
+                        fixture["inspection_request"]["source_drawing_path"],
+                        drawing_sha256="b" * 64,
+                        parameters=parameters,
+                        approval=approval,
+                    )
+
+                self.assertEqual(0, trigger_calls)
+                self.assertEqual([], list(Path(temporary).glob("cadagent_dotnet_*.json")))
+
     def test_standalone_extraction_binds_approval_and_empty_base(self) -> None:
         fixture = _standalone_fixture()
         with TemporaryDirectory() as temporary:

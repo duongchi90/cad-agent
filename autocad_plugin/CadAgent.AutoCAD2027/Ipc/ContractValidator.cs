@@ -176,6 +176,7 @@ public static class ContractValidator
             ValidateStandaloneIdentifier(parameters, "request_id", "standalone inspection", errors);
             ValidateStandaloneIdentifier(parameters, "run_id", "standalone inspection", errors);
             ValidateStandaloneHash(parameters, "source_drawing_sha256", "standalone inspection", errors);
+            ValidateStandaloneEnvelopeHashBinding(request, parameters, "standalone inspection", errors);
             ValidateStandaloneHash(parameters, "source_setup_audit_sha256", "standalone inspection", errors);
             if (!TryGetString(parameters, "source_drawing_path", out var sourcePath)
                 || !TryNormalizeWindowsAbsolutePath(sourcePath, out var normalizedSource)
@@ -213,6 +214,7 @@ public static class ContractValidator
             {
                 ValidateStandaloneHash(parameters, name, "standalone extraction", errors);
             }
+            ValidateStandaloneEnvelopeHashBinding(request, parameters, "standalone extraction", errors);
             if (!TryGetString(parameters, "candidate_base_model", out var baseModel)
                 || baseModel != "EMPTY_NEW_DATABASE")
             {
@@ -2557,6 +2559,20 @@ public static class ContractValidator
             || !LowercaseSha256Pattern.IsMatch(value))
         {
             errors.Add($"{displayName}.{name} must be a lowercase SHA-256");
+        }
+    }
+
+    private static void ValidateStandaloneEnvelopeHashBinding(
+        IpcRequest request,
+        IReadOnlyDictionary<string, JsonElement> parameters,
+        string displayName,
+        ICollection<string> errors)
+    {
+        if (request.DrawingSha256 is not null
+            && TryGetString(parameters, "source_drawing_sha256", out var sourceHash)
+            && !string.Equals(request.DrawingSha256, sourceHash, StringComparison.Ordinal))
+        {
+            errors.Add($"{displayName} source_drawing_sha256 must match envelope drawing_sha256");
         }
     }
 
