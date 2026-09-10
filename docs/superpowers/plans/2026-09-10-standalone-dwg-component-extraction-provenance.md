@@ -4,7 +4,7 @@
 
 **Goal:** Add one bounded standalone-DWG component extraction capability that reuses the existing custody, provenance, candidate-revision, File IPC, and AutoCAD owners while producing only a disposable, hash-bound candidate.
 
-**Architecture:** Keep `STANDALONE_DWG_COMPONENT_EXTRACTION_WITH_PROVENANCE` as a thin `cad_agent` orchestration adapter. Add a separate closed File IPC operation family and AutoCAD-side reader for a standalone source; never route the source through the exact-base-Xref reader. Feed the validated result into the existing DARA/R3/R4 authorities, adding one minimal versioned R3 provenance mode only if a failing contract test proves the current native full-drawing rule cannot represent the selected component lineage.
+**Architecture:** Keep `STANDALONE_DWG_COMPONENT_EXTRACTION_WITH_PROVENANCE` as a thin `cad_agent` orchestration adapter. Add a separate closed File IPC operation family and AutoCAD-side reader for a standalone source; never route the source through the exact-base-Xref reader. Feed the validated result into the existing DARA/R3/R4 authorities, with one required versioned standalone R3 provenance mode and its minimal explicit R4 recognition/binding branch because the current native full-drawing rule cannot represent selected component lineage.
 
 **Tech Stack:** Windows, Python 3.11, the existing `cad_agent` contracts and validators, `mcp_integration_lib.dotnet_ipc`, AutoCAD Mechanical 2027 .NET plugin, JSON File IPC, pytest, and the existing C# test project.
 
@@ -14,7 +14,7 @@
 
 **Base SHA:** `4cc6df980a3a78122edcff533de70ae646700b58`
 
-**SOL review:** `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, `HUMAN_GATE=NO`; the review approved creation of this docs-only implementation plan and explicitly forbids implementation or CAD mutation until the plan is reviewed.
+**SOL review:** Initial plan review returned `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`; this docs-only correction records the required R3/R4 boundary extension. The corrected plan must be re-reviewed before implementation or CAD mutation.
 
 **Completion Head SHA:** not applicable at plan creation; record the final implementation/evidence commit here only when implementation is complete.
 
@@ -43,7 +43,7 @@
 
 ## Exact implementation allowlist
 
-The implementation branch may create or modify only the files named in the tasks below. In particular, it must not modify `cad_agent/native_dwg_provenance.py`, `cad_agent/drawing_artifact_reference.py`, `cad_agent/drawing_query.py`, `cad_agent/candidate_revision.py`, `autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadExactBaseXrefReader.cs`, or any exact-base-Xref schema/example. If an existing owner cannot represent a required standalone binding, stop with a named RED and request a new bounded review rather than widening the allowlist silently.
+The implementation branch may create or modify only the files named in the tasks below. In particular, it must not modify `cad_agent/native_dwg_provenance.py`, `cad_agent/drawing_artifact_reference.py`, `cad_agent/drawing_query.py`, `autocad_plugin/CadAgent.AutoCAD2027/Drawing/AutoCadExactBaseXrefReader.cs`, or any exact-base-Xref schema/example. The required R3/R4 extension is explicitly bounded to `cad_agent/component_view_registry.py`, `cad_agent/candidate_revision.py`, and their named tests; no other owner may be widened silently.
 
 ## File and ownership map
 
@@ -72,8 +72,10 @@ The implementation branch may create or modify only the files named in the tasks
 | `autocad_plugin/CadAgent.AutoCAD2027.Tests/Drawing/StandaloneDwgComponentReaderTests.cs` | Offline fake-database tests for source invariants, explicit selection, empty candidate, candidate-only serialization, mappings, and cleanup. |
 | `autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/OperationDispatcherTests.cs` | Add routing and closed-result tests for the new operations; existing exact-base-Xref routing tests remain unchanged. |
 | `autocad_plugin/CadAgent.AutoCAD2027.Tests/Ipc/ContractTests.cs` | Add schema/example/allowlist tests for the new operations. |
-| `cad_agent/component_view_registry.py` | Conditional minimal versioned standalone provenance mode only if the RED in Task 4 proves the current native full-drawing mode cannot carry component bindings. |
-| `tests/test_cad_agent_component_view_registry.py` | Conditional RED/GREEN coverage for that minimal mode; no change to existing native full-drawing restrictions. |
+| `cad_agent/component_view_registry.py` | Required minimal versioned `STANDALONE_DWG_COMPONENTS` provenance mode; existing native full-drawing restrictions remain unchanged. |
+| `tests/test_cad_agent_component_view_registry.py` | RED/GREEN coverage for the required standalone mode and adversarial lineage cases. |
+| `cad_agent/candidate_revision.py` | Required explicit R4 recognition/binding branch for `component-view-registry-standalone-dwg-1.0`; no generic fallback broadening. |
+| `tests/test_cad_agent_candidate_revision.py` | RED/GREEN coverage that the new R3 mode binds into R4 and existing modes remain unchanged. |
 | `docs/superpowers/reuse/2026-09-10-standalone-dwg-component-extraction-reuse-dossier.md` | Internal/external reuse evidence, ownership decision, license/security/reproducibility notes, and measured gap record. |
 | `docs/superpowers/implementation-records/2026-09-10-standalone-dwg-component-extraction.md` | Final implementation/evidence record only after the implementation gates pass; never store private drawing bytes or paths. |
 
@@ -196,34 +198,34 @@ git add autocad_plugin/CadAgent.AutoCAD2027/Drawing/StandaloneDwgComponentModels
 git commit -m "feat: add standalone DWG disposable reader"
 ```
 
-## Task 4: Prove or reject the minimal R3 lineage extension
+## Task 4: Add the required versioned R3/R4 standalone lineage extension
 
 **Files:**
-- Test first: `tests/test_cad_agent_component_view_registry.py`.
-- Conditional modify: `cad_agent/component_view_registry.py` only if the RED proves the current registry cannot carry standalone component provenance.
+- Test first: `tests/test_cad_agent_component_view_registry.py`, `tests/test_cad_agent_candidate_revision.py`.
+- Modify: `cad_agent/component_view_registry.py`, `cad_agent/candidate_revision.py`.
 
 **Interfaces:**
 - Consumes: the standalone provenance context and candidate handle mappings from Task 2.
-- Produces: a versioned, minimal component/view registry context that keeps source handles and candidate handles bound to the standalone source.
+- Produces: a versioned, minimal component/view registry context plus an explicit R4 recognition/binding branch that keeps source handles and candidate handles bound to the standalone source.
 
-- [ ] **Step 1: Write the RED against the current owner.** Assert that a standalone context with non-empty selected components is either accepted by an existing closed mode or is rejected with the current native full-drawing empty-component rule. Record the exact failure code and do not change the registry before this test is RED.
+- [ ] **Step 1: Write the RED against the current owners.** Assert the current R3 rejection for a standalone context with non-empty selected components and the current R4 fallback/rejection when that registry is presented to candidate revision. Record the exact failure codes before changing either owner.
 
-- [ ] **Step 2: If the existing owner is sufficient, keep the file unchanged.** Extend only the adapter tests to prove DARA/R3/R4 and drawing-query all bind the same source/candidate identities. This is the preferred outcome.
+- [ ] **Step 2: Add the versioned R3 mode.** Add exactly `component-view-registry-standalone-dwg-1.0` with provenance mode `STANDALONE_DWG_COMPONENTS` and only the minimum exact source/candidate path/hash, selected-group, handle-binding, and provenance-checksum fields. Preserve `NATIVE_DWG_FULL_DRAWING` and generated behavior byte-for-byte in intent.
 
-- [ ] **Step 3: If the RED proves insufficiency, add one versioned mode.** Add a standalone provenance mode and the smallest new upstream-context fields needed for exact source path/hash, selected source groups, candidate path binding, and provenance checksum. Preserve `NATIVE_DWG_FULL_DRAWING` behavior and its empty-component rule byte-for-byte in intent; do not weaken or bypass its validation.
+- [ ] **Step 3: Add the explicit R4 branch.** Extend `candidate_revision.py` to recognize only the exact standalone R3 schema/mode and bind its source identity, candidate identity, selected handles, and registry checksum. Do not route the new mode through the generic base-CAD handoff; reject unknown modes and preserve all existing R4 branches.
 
-- [ ] **Step 4: Add adversarial tests.** Reject a full-drawing packet mislabeled as standalone, a standalone packet with `REUSED_FROM_BASE_CAD`, a candidate handle owned by two components, an unbound source handle, stale source/candidate hashes, and a component/view link pointing to a different candidate revision.
+- [ ] **Step 4: Add adversarial tests.** Reject a full-drawing packet mislabeled as standalone, a standalone packet with `REUSED_FROM_BASE_CAD`, a candidate handle owned by two components, an unbound source handle, stale source/candidate hashes, an unknown registry mode, and a component/view link pointing to a different candidate revision.
 
 - [ ] **Step 5: Commit only the measured extension.**
 
 ```text
-.\.venv-py311\Scripts\python.exe -m pytest -q -p no:cacheprovider tests/test_cad_agent_component_view_registry.py tests/test_cad_agent_standalone_dwg_extraction.py
+.\.venv-py311\Scripts\python.exe -m pytest -q -p no:cacheprovider tests/test_cad_agent_component_view_registry.py tests/test_cad_agent_candidate_revision.py tests/test_cad_agent_standalone_dwg_extraction.py
 git diff --check
-git add tests/test_cad_agent_component_view_registry.py cad_agent/component_view_registry.py
-git commit -m "feat: bind standalone extraction lineage in R3"
+git add tests/test_cad_agent_component_view_registry.py cad_agent/component_view_registry.py tests/test_cad_agent_candidate_revision.py cad_agent/candidate_revision.py
+git commit -m "feat: bind standalone extraction lineage in R3 and R4"
 ```
 
-If the current registry passes the RED without a code change, do not create a no-op commit and record `R3_EXTENSION=NOT_NEEDED` in the implementation record.
+The R3/R4 extension is required by the current owner behavior. Do not create an R3-only change that leaves candidate-revision normalization unable to recognize the new mode.
 
 ## Task 5: Wire the existing File IPC/.NET boundary
 
@@ -318,7 +320,7 @@ Acceptance requires all of the following:
 
 - Spec coverage: source custody/currentness, explicit selection, `EMPTY_NEW_DATABASE`, candidate-only serialization, result hashing, mapping, transforms, fail-closed cleanup, DARA/R3/R4 binding, File IPC ownership, page-1 boundary, and live/private gates each have a named task.
 - Reuse coverage: existing Python custody/currentness, component/view, candidate-revision, drawing-query, File IPC, dispatcher, policy, and AutoCAD database boundaries are named; no second engine, writer, transport, or truth store is planned.
-- Registry safety: R3 changes are conditional on a concrete failing test and preserve the native full-drawing empty-component restriction.
+- Registry safety: the required versioned R3 mode and explicit R4 recognition branch are bounded by RED tests and preserve the native full-drawing empty-component restriction.
 - Placeholder scan: no unfinished placeholder or unspecified implementation step is used; future file names, operation names, test names, commands, and expected states are explicit.
 - Type/interface consistency: the Python adapter calls the two named IPC methods; the IPC methods use the two named operation names; the dispatcher routes those names to the named standalone reader; the reader returns the named inspection/extraction result families consumed by the adapter.
 - Mutation boundary: the plan permits only disposable candidate serialization in the future live operation and forbids source, accepted, session-state, production, and private-artifact mutation.

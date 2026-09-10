@@ -80,14 +80,39 @@ does not reserve a public module name.
   artifact references and current observations.
 - `cad_agent.component_view_registry`: component/view lineage and impact
   binding; the implementation must preserve native full-drawing restrictions
-  and use a reviewed extension only if the current registry cannot represent
-  standalone component provenance.
+  and add the required versioned standalone-component mode described below.
 - `cad_agent.candidate_revision`: candidate revision/state and current-pointer
-  binding.
+  binding; its registry normalization must add an explicit recognition/binding
+  branch for the versioned standalone-component mode rather than falling
+  through to the base-CAD handoff path.
 - `cad_agent.drawing_query`: read-only inspection of the resulting bound
   candidate, not source extraction.
 - Existing `mcp_integration_lib.dotnet_ipc` and the AutoCAD .NET dispatcher:
   the only live transport boundary.
+
+### 4.2.1 Required R3/R4 standalone-lineage extension
+
+Fresh source inspection shows that the current R3/R4 owners cannot carry this
+capability as an adapter-only change: the component/view registry rejects
+non-empty native-DWG component selections, while candidate-revision
+normalization recognizes only the existing generated/native-DWG modes and
+otherwise falls through to base-CAD handoff. The implementation plan must
+therefore include one bounded, versioned R3/R4 extension as a single change:
+
+- R3 adds `component-view-registry-standalone-dwg-1.0` with provenance mode
+  `STANDALONE_DWG_COMPONENTS` and only the minimum exact source/candidate
+  path/hash, selected-group, handle-binding, and provenance-checksum fields.
+- R4 adds an explicit recognition/binding branch for that exact R3 schema and
+  mode. It must bind the same source identity, candidate identity, selected
+  handles, and registry checksum into the candidate revision; it must not
+  broaden the generic base-CAD fallback or accept an unknown registry mode.
+- The extension is tested RED-first at both owners, including the current
+  rejection codes, then GREEN with adversarial cross-lineage, stale-hash,
+  duplicate-handle, mislabeled-full-drawing, and `REUSED_FROM_BASE_CAD`
+  cases.
+
+`NATIVE_DWG_FULL_DRAWING`, generated mode, base-CAD handoff, and all existing
+exact-base-Xref behavior remain unchanged in intent and acceptance rules.
 
 ### 4.3 New AutoCAD-side capability to design, not implement here
 
@@ -296,10 +321,10 @@ unresolved visual discrepancy remain in the existing page-1 fidelity/review
 path. The extraction result cannot authorize those deltas.
 
 The component/view registry must link reused groups to their exact source
-handles and candidate handles. If the current registry's native full-drawing
-mode cannot carry this mixed lineage without violating its empty-component
-rule, the implementation plan must propose a versioned, minimal registry
-extension and stop for architecture review; it must not bypass validation.
+handles and candidate handles. Standalone component lineage uses the required
+versioned R3 mode and its explicit R4 recognition/binding extension described
+in section 4.2.1. It must not be mislabeled as native full-drawing, routed
+through base-CAD fallback, or accepted by bypassing validation.
 
 ## 8. Verification plan (future implementation only)
 
@@ -319,8 +344,9 @@ existing test owners:
    source-to-candidate handle mapping, deterministic result hash, and
    identity-checked cleanup on failure. Attempts to write the source or any
    other document fail closed.
-5. Reuse integration: DARA currentness, component/view provenance, candidate
-   revision/state, and drawing-query readback all bind to the same source and
+5. Reuse integration: DARA currentness, the required versioned standalone R3
+   component/view provenance, explicit R4 candidate-revision recognition and
+   binding, and drawing-query readback all bind to the same source and
    candidate identities; no native full-drawing restriction is weakened.
 6. IPC/.NET contract tests: operation allowlisting, closed payloads, lease and
    path guards, no second transport, and no production/accepted target.
