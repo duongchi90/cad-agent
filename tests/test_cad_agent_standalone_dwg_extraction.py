@@ -273,6 +273,10 @@ def test_provenance_context_requires_verified_inspection_and_result_checksums() 
     extraction["result_sha256"] = module.standalone_extraction_result_sha256(
         extraction
     )
+    plan = _extraction_plan()
+    plan["inspection_id"] = inspection["inspection_id"]
+    plan["inspection_sha256"] = inspection["inspection_sha256"]
+    plan["source_drawing_sha256"] = source_sha
 
     context = module.build_standalone_provenance_context(
         source_artifact_bytes=source_bytes,
@@ -285,6 +289,7 @@ def test_provenance_context_requires_verified_inspection_and_result_checksums() 
             "evidence_sha256": "1" * 64,
         },
         observation_evidence_sha256="2" * 64,
+        plan=plan,
         inspection_result=inspection,
         extraction_result=extraction,
     )
@@ -305,8 +310,54 @@ def test_provenance_context_requires_verified_inspection_and_result_checksums() 
                 "evidence_sha256": "1" * 64,
             },
             observation_evidence_sha256="2" * 64,
+            plan=plan,
             inspection_result=forged,
             extraction_result=extraction,
+        )
+
+    unapproved = deepcopy(extraction)
+    unapproved["components"][0]["group_id"] = "unapproved-group"
+    unapproved["result_sha256"] = module.standalone_extraction_result_sha256(
+        unapproved
+    )
+    with pytest.raises(
+        module.StandaloneDwgExtractionError, match="PLAN_SELECTION_MISMATCH"
+    ):
+        module.build_standalone_provenance_context(
+            source_artifact_bytes=source_bytes,
+            run_id="standalone-run-001",
+            project_id="project-001",
+            drawing_id="drawing-001",
+            source_upstream_evidence={
+                "evidence_kind": "BASELINE_CUSTODY",
+                "evidence_id": "baseline-evidence-001",
+                "evidence_sha256": "1" * 64,
+            },
+            observation_evidence_sha256="2" * 64,
+            plan=plan,
+            inspection_result=inspection,
+            extraction_result=unapproved,
+        )
+
+    drifted = deepcopy(extraction)
+    drifted["source_dbmod_before"] = 1
+    drifted["source_dbmod_after"] = 1
+    drifted["result_sha256"] = module.standalone_extraction_result_sha256(drifted)
+    with pytest.raises(module.StandaloneDwgExtractionError, match="DBMOD_MISMATCH"):
+        module.build_standalone_provenance_context(
+            source_artifact_bytes=source_bytes,
+            run_id="standalone-run-001",
+            project_id="project-001",
+            drawing_id="drawing-001",
+            source_upstream_evidence={
+                "evidence_kind": "BASELINE_CUSTODY",
+                "evidence_id": "baseline-evidence-001",
+                "evidence_sha256": "1" * 64,
+            },
+            observation_evidence_sha256="2" * 64,
+            plan=plan,
+            inspection_result=inspection,
+            extraction_result=drifted,
         )
 
 

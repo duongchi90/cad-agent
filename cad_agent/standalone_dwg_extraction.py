@@ -920,6 +920,8 @@ def build_standalone_provenance_context(
     candidate_output_sha256: str | None = None,
     inspection_result: Mapping[str, object] | None = None,
     extraction_result: Mapping[str, object] | None = None,
+    plan: Mapping[str, object] | None = None,
+    extraction_plan: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build only the detached pre-R3 provenance context.
 
@@ -930,11 +932,23 @@ def build_standalone_provenance_context(
 
     if source_current_observation is not None and source_observation is not None:
         _fail("SOURCE_BASELINE_INVALID")
+    if plan is not None and extraction_plan is not None:
+        _fail("PROVENANCE_INPUT_MISSING")
+    approved_plan_input = plan if plan is not None else extraction_plan
+    if approved_plan_input is None:
+        _fail("PROVENANCE_INPUT_MISSING")
     observation = source_current_observation or source_observation
     if extraction_result is None or inspection_result is None:
         _fail("PROVENANCE_INPUT_MISSING")
     inspection = validate_standalone_inspection_result(inspection_result)
-    extraction = validate_standalone_extraction_result(extraction_result)
+    approved_plan = _normalize_standalone_extraction_plan(
+        approved_plan_input, inspection_result=inspection
+    )
+    extraction = validate_standalone_extraction_result(
+        extraction_result,
+        plan=approved_plan,
+        inspection_result=inspection,
+    )
     if "failure_code" in extraction:
         _fail("EXTRACTION_NOT_SUCCESSFUL")
     if extraction["source_drawing_sha256"] != inspection["source_sha256_before"]:
