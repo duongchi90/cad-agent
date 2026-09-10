@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import hashlib
 import math
 import ntpath
 from pathlib import Path
@@ -153,8 +154,12 @@ _PROVENANCE_FIELDS = frozenset(
         "provenance_mode",
         "source_reference",
         "source_current_observation",
+        "source_path",
+        "source_sha256",
         "candidate_output_identity",
         "candidate_output_sha256",
+        "selected_groups",
+        "handle_bindings",
         "inspection_sha256",
         "extraction_result_sha256",
         "provenance_sha256",
@@ -200,6 +205,10 @@ def _sha256(value: object, code: str) -> str:
     if type(value) is not str or _SHA256_RE.fullmatch(value) is None:
         _fail(code)
     return value
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
 
 
 def _integer(value: object, code: str) -> int:
@@ -1003,19 +1012,270 @@ def build_standalone_provenance_context(
         _fail("PROVENANCE_SCOPE_MISMATCH")
     if normalized_reference["artifact_sha256"] != extraction["source_drawing_sha256"]:
         _fail("SOURCE_HASH_MISMATCH")
+    source_path = inspection["source_identity"]["path"]
+    group_by_source_handle: dict[str, dict[str, object]] = {}
+    selected_groups: list[dict[str, object]] = []
+    for group in inspection["groups"]:
+        selected = {
+            "group_id": group["group_id"],
+            "logical_component_id": group["logical_component_id"],
+            "source_handles": sorted(group["source_handles"]),
+        }
+        selected_groups.append(selected)
+        for source_handle in selected["source_handles"]:
+            group_by_source_handle[str(source_handle).casefold()] = selected
+    selected_groups.sort(key=lambda item: str(item["group_id"]))
+    handle_bindings: list[dict[str, object]] = []
+    for mapping in extraction["source_handle_to_candidate_handle"]:
+        group = group_by_source_handle.get(
+            str(mapping["source_handle"]).casefold()
+        )
+        if group is None:
+            _fail("EXTRACTION_COMPONENT_MISMATCH")
+        handle_bindings.append(
+            {
+                "group_id": group["group_id"],
+                "source_handle": str(mapping["source_handle"]).upper(),
+                "candidate_handle": str(mapping["candidate_handle"]).upper(),
+            }
+        )
+    handle_bindings.sort(
+        key=lambda item: (str(item["group_id"]), str(item["source_handle"]))
+    )
     normalized = {
         "schema_version": STANDALONE_PRE_R3_PROVENANCE_SCHEMA_VERSION,
         "provenance_mode": STANDALONE_PROVENANCE_MODE,
         "source_reference": normalized_reference,
         "source_current_observation": normalized_observation,
+        "source_path": source_path,
+        "source_sha256": normalized_reference["artifact_sha256"],
         "candidate_output_identity": candidate_identity,
         "candidate_output_sha256": candidate_sha,
+        "selected_groups": selected_groups,
+        "handle_bindings": handle_bindings,
         "inspection_sha256": inspection["inspection_sha256"],
         "extraction_result_sha256": extraction["result_sha256"],
         "provenance_sha256": "",
     }
     normalized["provenance_sha256"] = standalone_provenance_context_sha256(normalized)
     return deepcopy(normalized)
+
+
+def compose_standalone_candidate_binding(
+    *,
+    provenance_context: Mapping[str, object],
+    candidate_id: str,
+    source_artifact_bytes: bytes,
+    candidate_artifact_bytes: bytes,
+    candidate_upstream_evidence: Mapping[str, object] | None = None,
+    candidate_observation_evidence_sha256: str | None = None,
+    candidate_reference: Mapping[str, object] | None = None,
+    candidate_observation: Mapping[str, object] | None = None,
+    views: object = (),
+    root_mutation_evidence: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Compose the staged standalone pre-R3, R3, and root-R4 evidence.
+
+    The source BASELINE is consumed from the detached pre-R3 context.  The
+    candidate R3 reference is either consumed as an already-issued reference
+    or issued only after the exact standalone registry binding exists.  No
+    pre-R3 candidate reference is created.
+    """
+
+    from cad_agent import candidate_revision as _candidate_revision
+    from cad_agent import component_view_registry as _registry
+    from cad_agent import drawing_artifact_reference as _dara
+
+    normalized_provenance = _closed(
+        provenance_context, _PROVENANCE_FIELDS, "PROVENANCE_SCHEMA_INVALID"
+    )
+    if normalized_provenance["schema_version"] != STANDALONE_PRE_R3_PROVENANCE_SCHEMA_VERSION:
+        _fail("PROVENANCE_SCHEMA_INVALID")
+    if normalized_provenance["provenance_mode"] != STANDALONE_PROVENANCE_MODE:
+        _fail("PROVENANCE_MODE_INVALID")
+    if not isinstance(source_artifact_bytes, bytes) or not isinstance(
+        candidate_artifact_bytes, bytes
+    ):
+        _fail("ARTIFACT_BYTES_INVALID")
+    if normalized_provenance["source_sha256"] != _sha256_bytes(source_artifact_bytes):
+        _fail("SOURCE_HASH_MISMATCH")
+    if normalized_provenance["candidate_output_sha256"] != _sha256_bytes(
+        candidate_artifact_bytes
+    ):
+        _fail("CANDIDATE_HASH_MISMATCH")
+    if normalized_provenance["provenance_sha256"] != standalone_provenance_context_sha256(
+        normalized_provenance
+    ):
+        _fail("PROVENANCE_CHECKSUM_MISMATCH")
+    candidate_id = _identifier(candidate_id, "CANDIDATE_ID_INVALID")
+
+    try:
+        source_reference, source_observation = _validate_source_dara(
+            normalized_provenance["source_reference"],
+            normalized_provenance["source_current_observation"],
+            source_artifact_bytes,
+        )
+    except StandaloneDwgExtractionError:
+        raise
+
+    upstream_context = {
+        "provenance_mode": STANDALONE_PROVENANCE_MODE,
+        "candidate": {
+            "candidate_id": candidate_id,
+            "candidate_drawing_sha256": normalized_provenance[
+                "candidate_output_sha256"
+            ],
+        },
+        "standalone_dwg_provenance": deepcopy(normalized_provenance),
+    }
+    component_inputs: list[dict[str, object]] = []
+    bindings_by_source = {
+        str(item["source_handle"]).casefold(): item
+        for item in normalized_provenance["handle_bindings"]
+    }
+    candidate_path = normalized_provenance["candidate_output_identity"]["path"]
+    for group in normalized_provenance["selected_groups"]:
+        source_refs: list[str] = []
+        semantic_ref = None
+        candidate_bindings: list[dict[str, object]] = []
+        for source_handle in group["source_handles"]:
+            primitive_ref, current_semantic_ref = _registry.standalone_dwg_projection_refs(
+                group_id=group["group_id"],
+                logical_component_id=group["logical_component_id"],
+                source_handle=source_handle,
+            )
+            source_refs.append(primitive_ref)
+            semantic_ref = current_semantic_ref
+            handle_binding = bindings_by_source[str(source_handle).casefold()]
+            candidate_bindings.append(
+                {
+                    "target_namespace": "CANDIDATE",
+                    "candidate_id": candidate_id,
+                    "entity_handle": handle_binding["candidate_handle"],
+                    "block_name": "STANDALONE:" + str(group["group_id"]),
+                    "legacy_uuid": str(group["logical_component_id"]),
+                    "relative_path": candidate_path,
+                    "captured_at_utc": "STANDALONE_DWG_EXTRACTION",
+                }
+            )
+        component_inputs.append(
+            {
+                "component_type": "STANDALONE_COMPONENT",
+                "origin_class": "RECONSTRUCTED_NEW",
+                "source_projection_refs": source_refs,
+                "semantic_projection_refs": [semantic_ref],
+                "candidate_entity_bindings": candidate_bindings,
+            }
+        )
+
+    registry = _registry.build_component_view_registry(
+        upstream_context=upstream_context,
+        components=component_inputs,
+        views=views,
+    )
+    registry_provenance = _registry.component_view_registry_provenance_evidence(
+        registry, upstream_context=upstream_context
+    )
+    binding = {
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+        "provenance_sha256": registry_provenance["provenance_sha256"],
+    }
+
+    if candidate_reference is None:
+        if candidate_upstream_evidence is None:
+            _fail("CANDIDATE_CUSTODY_EVIDENCE_MISSING")
+        candidate_reference = _dara.issue_drawing_artifact_reference(
+            run_id=source_reference["run_id"],
+            project_id=source_reference["project_id"],
+            drawing_id=source_reference["drawing_id"],
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=candidate_artifact_bytes,
+            upstream_evidence=candidate_upstream_evidence,
+            r3_provenance_binding=binding,
+        )
+    else:
+        candidate_reference = _dara.validate_drawing_artifact_reference(
+            candidate_reference, expected_artifact_role="R3_CANDIDATE"
+        )
+        if candidate_reference["r3_provenance_binding"] != binding:
+            _fail("R3_PROVENANCE_BINDING_MISMATCH")
+    if candidate_reference["artifact_sha256"] != normalized_provenance[
+        "candidate_output_sha256"
+    ]:
+        _fail("CANDIDATE_HASH_MISMATCH")
+    if candidate_observation is None:
+        if candidate_observation_evidence_sha256 is None:
+            _fail("CANDIDATE_CURRENTNESS_EVIDENCE_MISSING")
+        candidate_observation = _dara.observe_drawing_artifact_currentness(
+            reference=candidate_reference,
+            artifact_bytes=candidate_artifact_bytes,
+            observation_evidence_sha256=candidate_observation_evidence_sha256,
+        )
+    else:
+        candidate_observation = _dara.validate_drawing_artifact_current_observation(
+            candidate_observation
+        )
+    try:
+        _dara.require_current_drawing_artifact_reference(
+            reference=candidate_reference,
+            observation=candidate_observation,
+            artifact_bytes=candidate_artifact_bytes,
+        )
+    except Exception as error:
+        raise StandaloneDwgExtractionError("CANDIDATE_CURRENTNESS_INVALID") from error
+
+    component_ids = [item["component_id"] for item in registry["components"]]
+    impact = _registry.project_linked_view_impacts(
+        registry=registry,
+        component_ids=component_ids,
+        upstream_context=upstream_context,
+    )
+    change_impact = {
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+        "impact": impact,
+        "provenance_evidence": registry_provenance,
+        "upstream_context": upstream_context,
+        "root_candidate_reference": deepcopy(candidate_reference),
+        "root_candidate_observation": deepcopy(candidate_observation),
+        "root_candidate_artifact_bytes": candidate_artifact_bytes,
+    }
+    mutation = dict(root_mutation_evidence or {})
+    if not mutation:
+        mutation = {
+            "evidence_kind": "R4_ROOT_PRE_REPAIR",
+            "evidence_id": "standalone-r4-root-" + str(registry["registry_snapshot_sha256"])[
+                :16
+            ],
+            "r3_candidate_reference_id": candidate_reference["reference_id"],
+            "r3_candidate_reference_sha256": candidate_reference["reference_sha256"],
+            "candidate_artifact_sha256": candidate_reference["artifact_sha256"],
+            "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+        }
+    candidate_revision = _candidate_revision.build_candidate_revision(
+        registry=registry,
+        base_cad_handoff=None,
+        baseline_context={
+            "reference": source_reference,
+            "observation": source_observation,
+            "artifact_bytes": source_artifact_bytes,
+        },
+        parent_candidate=None,
+        change_impact=change_impact,
+        mutation_evidence=mutation,
+        schema_version=_candidate_revision.CANDIDATE_REVISION_V11_SCHEMA_VERSION,
+        candidate_kind=_candidate_revision.CANDIDATE_REVISION_ROOT_KIND,
+    )
+    return {
+        "upstream_context": upstream_context,
+        "component_inputs": deepcopy(component_inputs),
+        "registry": registry,
+        "registry_provenance": registry_provenance,
+        "candidate_reference": deepcopy(candidate_reference),
+        "candidate_observation": deepcopy(candidate_observation),
+        "change_impact": change_impact,
+        "mutation_evidence": mutation,
+        "candidate_revision": candidate_revision,
+    }
 
 
 __all__ = [
@@ -1034,4 +1294,5 @@ __all__ = [
     "standalone_extraction_result_sha256",
     "build_standalone_provenance_context",
     "standalone_provenance_context_sha256",
+    "compose_standalone_candidate_binding",
 ]

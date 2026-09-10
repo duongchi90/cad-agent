@@ -286,6 +286,22 @@ def _accepted_r3_material(
     }
 
 
+def test_standalone_r4_uses_explicit_candidate_branch_without_base_cad_handoff() -> None:
+    r3_tests = _accepted_r3_test_module()
+    context = r3_tests._standalone_pre_r3_context()
+    registry = r3.build_component_view_registry(
+        upstream_context=context,
+        components=r3_tests._standalone_component_inputs(r3, context),
+    )
+    assert candidate_module._normalize_registry(registry, None, context) == registry
+    with pytest.raises(CandidateRevisionError, match="STANDALONE_DWG_HANDOFF_FORBIDDEN"):
+        candidate_module._normalize_registry(
+            registry,
+            _accepted_r3_material()["context"]["reuse_handoff"],
+            context,
+        )
+
+
 def _mutation_evidence(material: dict[str, object], tag: str) -> dict[str, object]:
     child = material["child_reference"]
     evidence = {

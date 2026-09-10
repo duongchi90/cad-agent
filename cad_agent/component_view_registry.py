@@ -17,8 +17,12 @@ COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION = "component-view-registry-1.1"
 COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION = (
     "component-view-registry-native-dwg-1.0"
 )
+COMPONENT_VIEW_REGISTRY_STANDALONE_DWG_SCHEMA_VERSION = (
+    "component-view-registry-standalone-dwg-1.0"
+)
 _GENERATED_PROVENANCE_MODE = "GENERATED_MECHANICAL_" + chr(80) + "ILOT"
 _NATIVE_DWG_PROVENANCE_MODE = "NATIVE_DWG_FULL_DRAWING"
+_STANDALONE_DWG_PROVENANCE_MODE = "STANDALONE_DWG_COMPONENTS"
 
 _CONTEXT_FIELDS = frozenset(
     {
@@ -36,6 +40,33 @@ _GENERATED_CONTEXT_FIELDS = frozenset(
 )
 _NATIVE_DWG_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "native_dwg_provenance"}
+)
+_STANDALONE_DWG_CONTEXT_FIELDS = frozenset(
+    {"provenance_mode", "candidate", "standalone_dwg_provenance"}
+)
+_STANDALONE_DWG_PROVENANCE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "provenance_mode",
+        "source_reference",
+        "source_current_observation",
+        "source_path",
+        "source_sha256",
+        "candidate_output_identity",
+        "candidate_output_sha256",
+        "selected_groups",
+        "handle_bindings",
+        "inspection_sha256",
+        "extraction_result_sha256",
+        "provenance_sha256",
+    }
+)
+_STANDALONE_DWG_CANDIDATE_IDENTITY_FIELDS = frozenset({"path", "file_id"})
+_STANDALONE_DWG_GROUP_FIELDS = frozenset(
+    {"group_id", "logical_component_id", "source_handles"}
+)
+_STANDALONE_DWG_HANDLE_BINDING_FIELDS = frozenset(
+    {"group_id", "source_handle", "candidate_handle"}
 )
 _CANDIDATE_FIELDS = frozenset({"candidate_id", "candidate_drawing_sha256"})
 _INPUT_COMPONENT_FIELDS = frozenset(
@@ -183,6 +214,21 @@ _NATIVE_DWG_DRAWING_BINDING_FIELDS = frozenset(
         "calibration_mode",
     }
 )
+_STANDALONE_DWG_UPSTREAM_BINDING_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "source_path",
+        "source_sha256",
+        "candidate_id",
+        "candidate_path",
+        "candidate_drawing_sha256",
+        "selected_groups",
+        "handle_bindings",
+        "inspection_sha256",
+        "extraction_result_sha256",
+        "provenance_sha256",
+    }
+)
 _NATIVE_DWG_ROOT_FIELDS = _ROOT_FIELDS | frozenset({"drawing_binding"})
 _BASE_SOURCE_FIELDS = frozenset({"source_id", "sha256", "revision"})
 _ORIGIN_CLASSES = frozenset(
@@ -254,6 +300,33 @@ def _text(value: object, code: str) -> str:
     if any(ord(char) < 32 or ord(char) == 127 for char in value):
         _fail(code)
     return value
+
+
+def _path_key(value: str) -> str:
+    return value.replace("/", "\\").rstrip("\\").casefold()
+
+
+def standalone_dwg_projection_refs(
+    *, group_id: str, logical_component_id: str, source_handle: str
+) -> tuple[str, str]:
+    """Return deterministic primitive/semantic refs for one standalone handle."""
+
+    source = {
+        "group_id": group_id,
+        "logical_component_id": logical_component_id,
+        "source_handle": source_handle.upper(),
+    }
+    primitive_ref = canonical_json_sha256(
+        {"identity_kind": "standalone-dwg-source-handle-v1", **source}
+    )
+    semantic_ref = canonical_json_sha256(
+        {
+            "identity_kind": "standalone-dwg-selected-group-v1",
+            "group_id": group_id,
+            "logical_component_id": logical_component_id,
+        }
+    )
+    return primitive_ref, semantic_ref
 
 
 def _sha_list(value: object, code: str) -> list[str]:
@@ -561,12 +634,235 @@ def _native_dwg_upstream_context(
     }
 
 
+def _standalone_dwg_upstream_context(
+    upstream_context: Mapping[str, object],
+) -> dict[str, object]:
+    context = _closed(
+        upstream_context,
+        _STANDALONE_DWG_CONTEXT_FIELDS,
+        "UPSTREAM_CONTEXT_INVALID",
+    )
+    if context["provenance_mode"] != _STANDALONE_DWG_PROVENANCE_MODE:
+        _fail("PROVENANCE_MODE_INVALID")
+    candidate = _closed(
+        context["candidate"], _CANDIDATE_FIELDS, "CANDIDATE_INVALID"
+    )
+    candidate_id = _identifier(candidate["candidate_id"], "CANDIDATE_INVALID")
+    candidate_sha256 = _sha256(
+        candidate["candidate_drawing_sha256"], "CANDIDATE_INVALID"
+    )
+    provenance_raw = context["standalone_dwg_provenance"]
+    if isinstance(provenance_raw, Mapping) and (
+        provenance_raw.get("profile_id") is not None
+        or provenance_raw.get("scope") is not None
+        or provenance_raw.get("source_readback") is not None
+        or provenance_raw.get("candidate_readback") is not None
+    ):
+        _fail("STANDALONE_FULL_DRAWING_FORBIDDEN")
+    provenance = _closed(
+        provenance_raw,
+        _STANDALONE_DWG_PROVENANCE_FIELDS,
+        "STANDALONE_PROVENANCE_INVALID",
+    )
+    if provenance["schema_version"] != "standalone-dwg-pre-r3-provenance-1.0":
+        _fail("STANDALONE_PROVENANCE_INVALID")
+    if provenance["provenance_mode"] != _STANDALONE_DWG_PROVENANCE_MODE:
+        _fail("STANDALONE_PROVENANCE_MODE_INVALID")
+    try:
+        source_reference = _dara.validate_drawing_artifact_reference(
+            provenance["source_reference"], expected_artifact_role="BASELINE"
+        )
+        source_observation = _dara.validate_drawing_artifact_current_observation(
+            provenance["source_current_observation"]
+        )
+    except Exception as exc:
+        raise ComponentViewRegistryError("STANDALONE_SOURCE_BASELINE_INVALID") from exc
+    if (
+        source_observation["reference_id"] != source_reference["reference_id"]
+        or source_observation["reference_sha256"]
+        != source_reference["reference_sha256"]
+        or source_observation["comparison"] != "CURRENT"
+    ):
+        _fail("STANDALONE_SOURCE_BASELINE_STALE")
+    source_path = _text(provenance["source_path"], "STANDALONE_PATH_INVALID")
+    source_sha256 = _sha256(provenance["source_sha256"], "STANDALONE_HASH_INVALID")
+    if source_sha256 != source_reference["artifact_sha256"]:
+        _fail("STANDALONE_SOURCE_HASH_MISMATCH")
+    candidate_identity = _closed(
+        provenance["candidate_output_identity"],
+        _STANDALONE_DWG_CANDIDATE_IDENTITY_FIELDS,
+        "STANDALONE_CANDIDATE_IDENTITY_INVALID",
+    )
+    candidate_path = _text(candidate_identity["path"], "STANDALONE_PATH_INVALID")
+    _text(candidate_identity["file_id"], "STANDALONE_CANDIDATE_IDENTITY_INVALID")
+    if _path_key(source_path) == _path_key(candidate_path):
+        _fail("STANDALONE_OUTPUT_ALIASES_SOURCE")
+    if provenance["candidate_output_sha256"] != candidate_sha256:
+        _fail("STANDALONE_CANDIDATE_HASH_MISMATCH")
+    for field in ("inspection_sha256", "extraction_result_sha256", "provenance_sha256"):
+        _sha256(provenance[field], "STANDALONE_PROVENANCE_INVALID")
+    expected_provenance_sha256 = canonical_json_sha256(
+        {
+            key: deepcopy(value)
+            for key, value in provenance.items()
+            if key != "provenance_sha256"
+        }
+    )
+    if provenance["provenance_sha256"] != expected_provenance_sha256:
+        _fail("STANDALONE_PROVENANCE_CHECKSUM_MISMATCH")
+
+    selected_groups: list[dict[str, object]] = []
+    group_ids: set[str] = set()
+    source_handles: dict[str, str] = {}
+    group_by_id: dict[str, dict[str, object]] = {}
+    if type(provenance["selected_groups"]) is not list or not provenance["selected_groups"]:
+        _fail("STANDALONE_SELECTED_GROUPS_INVALID")
+    for raw_group in provenance["selected_groups"]:
+        if isinstance(raw_group, Mapping) and raw_group.get("origin_class") == "REUSED_FROM_BASE_CAD":
+            _fail("STANDALONE_BASE_CAD_REUSE_FORBIDDEN")
+        group = _closed(
+            raw_group,
+            _STANDALONE_DWG_GROUP_FIELDS,
+            "STANDALONE_SELECTED_GROUP_INVALID",
+        )
+        group_id = _identifier(group["group_id"], "STANDALONE_SELECTED_GROUP_INVALID")
+        logical_component_id = _identifier(
+            group["logical_component_id"], "STANDALONE_SELECTED_GROUP_INVALID"
+        )
+        handles = group["source_handles"]
+        if type(handles) is not list or not handles:
+            _fail("STANDALONE_SELECTED_GROUP_INVALID")
+        normalized_handles: list[str] = []
+        for handle in handles:
+            raw_handle = _text(handle, "STANDALONE_SOURCE_HANDLE_INVALID")
+            normalized = _identifier(
+                raw_handle.upper(), "STANDALONE_SOURCE_HANDLE_INVALID"
+            )
+            if normalized.casefold() in source_handles:
+                _fail("STANDALONE_SOURCE_HANDLE_DUPLICATE")
+            source_handles[normalized.casefold()] = group_id
+            normalized_handles.append(normalized)
+        if group_id in group_ids:
+            _fail("STANDALONE_GROUP_DUPLICATE")
+        group_ids.add(group_id)
+        normalized_group = {
+            "group_id": group_id,
+            "logical_component_id": logical_component_id,
+            "source_handles": sorted(normalized_handles),
+        }
+        selected_groups.append(normalized_group)
+        group_by_id[group_id] = normalized_group
+
+    bindings: list[dict[str, object]] = []
+    bound_sources: set[str] = set()
+    bound_candidates: set[str] = set()
+    if type(provenance["handle_bindings"]) is not list:
+        _fail("STANDALONE_HANDLE_BINDINGS_INVALID")
+    for raw_binding in provenance["handle_bindings"]:
+        binding = _closed(
+            raw_binding,
+            _STANDALONE_DWG_HANDLE_BINDING_FIELDS,
+            "STANDALONE_HANDLE_BINDING_INVALID",
+        )
+        group_id = _identifier(binding["group_id"], "STANDALONE_HANDLE_BINDING_INVALID")
+        source_handle = _identifier(
+            _text(
+                binding["source_handle"], "STANDALONE_HANDLE_BINDING_INVALID"
+            ).upper(),
+            "STANDALONE_HANDLE_BINDING_INVALID",
+        )
+        candidate_handle = _identifier(
+            _text(
+                binding["candidate_handle"], "STANDALONE_HANDLE_BINDING_INVALID"
+            ).upper(),
+            "STANDALONE_HANDLE_BINDING_INVALID",
+        )
+        if group_id not in group_by_id:
+            _fail("STANDALONE_HANDLE_BINDING_INVALID")
+        if source_handles.get(source_handle.casefold()) != group_id:
+            _fail("STANDALONE_SOURCE_HANDLE_UNBOUND")
+        if source_handle.casefold() in bound_sources:
+            _fail("STANDALONE_SOURCE_HANDLE_DUPLICATE")
+        if candidate_handle.casefold() in bound_candidates:
+            _fail("STANDALONE_CANDIDATE_HANDLE_DUPLICATE")
+        bound_sources.add(source_handle.casefold())
+        bound_candidates.add(candidate_handle.casefold())
+        bindings.append(
+            {
+                "group_id": group_id,
+                "source_handle": source_handle,
+                "candidate_handle": candidate_handle,
+            }
+        )
+    if bound_sources != set(source_handles):
+        _fail("STANDALONE_SOURCE_HANDLE_UNBOUND")
+    bindings.sort(key=lambda item: (str(item["group_id"]), str(item["source_handle"])))
+    selected_groups.sort(key=lambda item: str(item["group_id"]))
+
+    primitive_index: dict[str, str] = {}
+    semantic_index: dict[str, str] = {}
+    generated_binding_by_projection: dict[str, dict[str, object]] = {}
+    binding_by_source = {
+        str(item["source_handle"]).casefold(): item for item in bindings
+    }
+    for group in selected_groups:
+        semantic_for_group = standalone_dwg_projection_refs(
+            group_id=str(group["group_id"]),
+            logical_component_id=str(group["logical_component_id"]),
+            source_handle=str(group["source_handles"][0]),
+        )[1]
+        semantic_index[semantic_for_group] = semantic_for_group
+        for source_handle in group["source_handles"]:
+            primitive_ref, _ = standalone_dwg_projection_refs(
+                group_id=str(group["group_id"]),
+                logical_component_id=str(group["logical_component_id"]),
+                source_handle=str(source_handle),
+            )
+            primitive_index[primitive_ref] = primitive_ref
+            binding = binding_by_source[str(source_handle).casefold()]
+            generated_binding_by_projection[primitive_ref] = {
+                "target_namespace": "CANDIDATE",
+                "candidate_id": candidate_id,
+                "entity_handle": binding["candidate_handle"],
+                "block_name": "STANDALONE:" + str(group["group_id"]),
+                "legacy_uuid": str(group["logical_component_id"]),
+                "relative_path": candidate_path,
+                "captured_at_utc": "STANDALONE_DWG_EXTRACTION",
+            }
+    upstream_bindings = {
+        "provenance_mode": _STANDALONE_DWG_PROVENANCE_MODE,
+        "source_path": source_path,
+        "source_sha256": source_sha256,
+        "candidate_id": candidate_id,
+        "candidate_path": candidate_path,
+        "candidate_drawing_sha256": candidate_sha256,
+        "selected_groups": deepcopy(selected_groups),
+        "handle_bindings": deepcopy(bindings),
+        "inspection_sha256": provenance["inspection_sha256"],
+        "extraction_result_sha256": provenance["extraction_result_sha256"],
+        "provenance_sha256": provenance["provenance_sha256"],
+    }
+    return {
+        "provenance_mode": _STANDALONE_DWG_PROVENANCE_MODE,
+        "registry_schema_version": COMPONENT_VIEW_REGISTRY_STANDALONE_DWG_SCHEMA_VERSION,
+        "packet": provenance,
+        "handoff": None,
+        "upstream_bindings": upstream_bindings,
+        "primitive_index": primitive_index,
+        "semantic_index": semantic_index,
+        "generated_binding_by_projection": generated_binding_by_projection,
+        "standalone_group_by_id": group_by_id,
+    }
+
+
 def _upstream_context(upstream_context: object) -> dict[str, object]:
     if isinstance(upstream_context, Mapping):
         if upstream_context.get("provenance_mode") == _GENERATED_PROVENANCE_MODE:
             return _generated_upstream_context(upstream_context)
         if upstream_context.get("provenance_mode") == _NATIVE_DWG_PROVENANCE_MODE:
             return _native_dwg_upstream_context(upstream_context)
+        if upstream_context.get("provenance_mode") == _STANDALONE_DWG_PROVENANCE_MODE:
+            return _standalone_dwg_upstream_context(upstream_context)
     context = _closed(
         upstream_context, _CONTEXT_FIELDS, "UPSTREAM_CONTEXT_INVALID"
     )
@@ -842,7 +1138,9 @@ def _normalize_input_component(
     if origin_class not in _ORIGIN_CLASSES:
         _fail("ORIGIN_CLASS_INVALID")
     generated = state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
-    if generated and origin_class != "RECONSTRUCTED_NEW":
+    standalone = state["provenance_mode"] == _STANDALONE_DWG_PROVENANCE_MODE
+    generated_like = generated or standalone
+    if generated_like and origin_class != "RECONSTRUCTED_NEW":
         _fail("GENERATED_ORIGIN_INVALID")
 
     source_refs = _sha_list(
@@ -854,7 +1152,7 @@ def _normalize_input_component(
     )
 
     raw_base_reference = component.get("base_cad_provenance_ref")
-    if generated:
+    if generated_like:
         if raw_base_reference is not None:
             _fail("GENERATED_BASE_PROVENANCE_FORBIDDEN")
         base_reference = None
@@ -874,9 +1172,9 @@ def _normalize_input_component(
         origin_class=origin_class,
         base_reference=base_reference,
         generated_binding_by_projection=(
-            state["generated_binding_by_projection"] if generated else None
+            state["generated_binding_by_projection"] if generated_like else None
         ),
-        source_projection_refs=source_refs if generated else None,
+        source_projection_refs=source_refs if generated_like else None,
     )
 
     identity_base_source = (
@@ -1577,7 +1875,11 @@ def validate_component_view_registry(
             else (
                 _NATIVE_DWG_UPSTREAM_BINDING_FIELDS
                 if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE
-                else _UPSTREAM_BINDING_FIELDS
+                else (
+                    _STANDALONE_DWG_UPSTREAM_BINDING_FIELDS
+                    if state["provenance_mode"] == _STANDALONE_DWG_PROVENANCE_MODE
+                    else _UPSTREAM_BINDING_FIELDS
+                )
             )
         ),
         "UPSTREAM_BINDINGS_INVALID",
@@ -1970,6 +2272,8 @@ __all__ = [
     "COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION",
     "COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION",
     "COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION",
+    "COMPONENT_VIEW_REGISTRY_STANDALONE_DWG_SCHEMA_VERSION",
+    "standalone_dwg_projection_refs",
     "ComponentViewRegistryError",
     "build_component_view_registry",
     "validate_component_view_registry",

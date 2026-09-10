@@ -254,6 +254,29 @@ def _normalize_registry(
         }:
             _fail("NATIVE_DWG_UPSTREAM_INVALID")
         return registry
+    if (
+        registry["schema_version"]
+        == _r3.COMPONENT_VIEW_REGISTRY_STANDALONE_DWG_SCHEMA_VERSION
+    ):
+        if handoff is not None:
+            _fail("STANDALONE_DWG_HANDOFF_FORBIDDEN")
+        if upstream.get("provenance_mode") != "STANDALONE_DWG_COMPONENTS":
+            _fail("STANDALONE_DWG_UPSTREAM_INVALID")
+        if set(upstream) != {
+            "provenance_mode",
+            "source_path",
+            "source_sha256",
+            "candidate_id",
+            "candidate_path",
+            "candidate_drawing_sha256",
+            "selected_groups",
+            "handle_bindings",
+            "inspection_sha256",
+            "extraction_result_sha256",
+            "provenance_sha256",
+        }:
+            _fail("STANDALONE_DWG_UPSTREAM_INVALID")
+        return registry
     if handoff is None:
         _fail("BASE_CAD_HANDOFF_INVALID")
     if upstream["candidate_drawing_sha256"] != handoff["candidate_output_sha256"]:
@@ -699,6 +722,15 @@ def _normalize_root_inputs(
             "upstream_bindings"
         ]["candidate_drawing_sha256"]:
             _fail("NATIVE_DWG_CANDIDATE_MISMATCH")
+    elif normalized_registry["schema_version"] == (
+        _r3.COMPONENT_VIEW_REGISTRY_STANDALONE_DWG_SCHEMA_VERSION
+    ):
+        if handoff is not None:
+            _fail("STANDALONE_DWG_HANDOFF_FORBIDDEN")
+        if root_reference["artifact_sha256"] != normalized_registry[
+            "upstream_bindings"
+        ]["candidate_drawing_sha256"]:
+            _fail("STANDALONE_DWG_CANDIDATE_MISMATCH")
     else:
         if handoff is None:
             _fail("BASE_CAD_HANDOFF_INVALID")

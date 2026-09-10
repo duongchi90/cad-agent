@@ -315,6 +315,73 @@ def test_provenance_context_requires_verified_inspection_and_result_checksums() 
             extraction_result=extraction,
         )
 
+
+def test_composes_staged_standalone_r3_and_root_r4_binding() -> None:
+    module = _module()
+    source_bytes = b"standalone-source"
+    candidate_bytes = b"standalone-candidate"
+    import hashlib
+
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    candidate_sha = hashlib.sha256(candidate_bytes).hexdigest()
+    inspection = _inspection_result()
+    inspection["source_identity"]["sha256"] = source_sha
+    inspection["source_sha256_before"] = source_sha
+    inspection["source_sha256_after"] = source_sha
+    inspection["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        inspection
+    )
+    extraction = _extraction_result()
+    extraction["source_drawing_sha256"] = source_sha
+    extraction["candidate_output_sha256"] = candidate_sha
+    extraction["result_sha256"] = module.standalone_extraction_result_sha256(
+        extraction
+    )
+    plan = _extraction_plan()
+    plan["inspection_sha256"] = inspection["inspection_sha256"]
+    plan["source_drawing_sha256"] = source_sha
+    provenance = module.build_standalone_provenance_context(
+        source_artifact_bytes=source_bytes,
+        run_id="standalone-run-001",
+        project_id="project-001",
+        drawing_id="drawing-001",
+        source_upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "baseline-evidence-001",
+            "evidence_sha256": "1" * 64,
+        },
+        observation_evidence_sha256="2" * 64,
+        plan=plan,
+        inspection_result=inspection,
+        extraction_result=extraction,
+    )
+
+    composed = module.compose_standalone_candidate_binding(
+        provenance_context=provenance,
+        candidate_id="standalone-candidate-001",
+        source_artifact_bytes=source_bytes,
+        candidate_artifact_bytes=candidate_bytes,
+        candidate_upstream_evidence={
+            "evidence_kind": "R3_CANDIDATE_CUSTODY",
+            "evidence_id": "r3-candidate-evidence-001",
+            "evidence_sha256": "3" * 64,
+        },
+        candidate_observation_evidence_sha256="4" * 64,
+    )
+    assert composed["registry"]["schema_version"] == (
+        "component-view-registry-standalone-dwg-1.0"
+    )
+    assert composed["candidate_revision"]["upstream_bindings"]["source_sha256"] == source_sha
+    assert composed["candidate_revision"]["upstream_bindings"][
+        "candidate_drawing_sha256"
+    ] == candidate_sha
+    assert composed["candidate_revision"]["upstream_bindings"][
+        "extraction_result_sha256"
+    ] == extraction["result_sha256"]
+    assert composed["candidate_revision"]["change_scope"][
+        "registry_snapshot_sha256"
+    ] == composed["registry"]["registry_snapshot_sha256"]
+
     unapproved = deepcopy(extraction)
     unapproved["components"][0]["group_id"] = "unapproved-group"
     unapproved["result_sha256"] = module.standalone_extraction_result_sha256(
