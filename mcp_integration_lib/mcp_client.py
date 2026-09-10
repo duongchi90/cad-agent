@@ -9,6 +9,7 @@ import ntpath
 import os
 import re
 import secrets
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
@@ -264,6 +265,167 @@ def _autolisp_string_literal(value: str) -> str:
         raise ValueError("IPC_ROOT_INVALID")
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+
+@dataclass(frozen=True)
+class WindowsStartTabBootstrapBindings:
+    """Window-bound triggers and probes for an owned AutoCAD session."""
+
+    hwnd: int
+    command_trigger: Callable[[str], None]
+    raw_lisp_trigger: Callable[[str], None]
+    dispatch_trigger: Callable[[], None]
+    start_tab_no_document_probe: Callable[[], bool]
+    document_ready_probe: Callable[[], bool]
+
+
+class WindowsAutoCADStartTabSession:
+    """Own a disposable AutoCAD startup-script session for Start-tab bootstrap."""
+
+    def __init__(
+        self,
+        acad_executable: str,
+        script_directory: str,
+        *,
+        timeout_s: float = 30.0,
+        poll_interval_s: float = 0.1,
+        process_launcher: Optional[Callable[[Path, Path], Any]] = None,
+        window_finder: Optional[Callable[[int], int]] = None,
+        window_closer: Optional[Callable[[int], None]] = None,
+        start_probe_factory: Optional[Callable[[int], Callable[[], bool]]] = None,
+        document_ready_probe_factory: Optional[
+            Callable[[int], Callable[[], bool]]
+        ] = None,
+        bindings_factory: Optional[
+            Callable[[int], WindowsStartTabBootstrapBindings]
+        ] = None,
+    ) -> None:
+        executable = Path(acad_executable).resolve()
+        script_root = Path(script_directory).resolve()
+        if executable.name.casefold() != "acad.exe":
+            raise ValueError("acad_executable must name acad.exe")
+        if not script_root.is_dir():
+            raise ValueError("script_directory must be an existing directory")
+        if timeout_s < 0 or poll_interval_s < 0:
+            raise ValueError("session timeouts must not be negative")
+        self._acad_executable = executable
+        self._script_directory = script_root
+        self._timeout_s = timeout_s
+        self._poll_interval_s = poll_interval_s
+        self._process_launcher = process_launcher or _launch_windows_autocad_with_script
+        self._window_finder = window_finder or _find_windows_main_window_for_pid
+        self._window_closer = window_closer or _close_windows_main_window
+        self._start_probe_factory = (
+            start_probe_factory or make_windows_start_tab_no_document_probe
+        )
+        self._document_ready_probe_factory = (
+            document_ready_probe_factory
+            or make_windows_start_tab_document_ready_probe
+        )
+        self._bindings_factory = bindings_factory
+        self._process: Any = None
+        self._hwnd: Optional[int] = None
+        self._script_path: Optional[Path] = None
+
+    @property
+    def hwnd(self) -> Optional[int]:
+        return self._hwnd
+
+    def launch_blank_document(self) -> WindowsStartTabBootstrapBindings:
+        if self._process is not None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_SESSION_ALREADY_STARTED")
+        script_path = self._script_directory / (
+            f"cad-agent-start-tab-{uuid.uuid4().hex}.scr"
+        )
+        script_path.write_bytes(b"_.QNEW\r\n")
+        self._script_path = script_path
+        try:
+            process = self._process_launcher(self._acad_executable, script_path)
+            pid = int(process.pid)
+            if pid <= 0:
+                raise MCPToolError("START_TAB_BOOTSTRAP_PROCESS_ID_INVALID")
+            self._process = process
+            deadline = time.monotonic() + self._timeout_s
+            while True:
+                if process.poll() is not None:
+                    raise MCPToolError("START_TAB_BOOTSTRAP_PROCESS_EXITED")
+                candidate = int(self._window_finder(pid) or 0)
+                if candidate > 0 and self._start_probe_factory(candidate)():
+                    self._hwnd = candidate
+                    if self._bindings_factory is not None:
+                        return self._bindings_factory(candidate)
+                    return WindowsStartTabBootstrapBindings(
+                        hwnd=candidate,
+                        command_trigger=make_windows_command_trigger(candidate),
+                        raw_lisp_trigger=make_windows_lisp_trigger(candidate),
+                        dispatch_trigger=make_windows_dispatch_trigger(candidate),
+                        start_tab_no_document_probe=self._start_probe_factory(candidate),
+                        document_ready_probe=self._document_ready_probe_factory(candidate),
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MCPTimeoutError(
+                        "START_TAB_BOOTSTRAP_START_NOT_OBSERVED"
+                    )
+                time.sleep(min(self._poll_interval_s, remaining))
+        except Exception:
+            self.close_without_save(best_effort=True)
+            raise
+
+    def close_without_save(self, *, best_effort: bool = False) -> None:
+        process = self._process
+        hwnd = self._hwnd
+        try:
+            if process is not None and process.poll() is None:
+                if hwnd is not None:
+                    try:
+                        self._window_closer(hwnd)
+                    except Exception:
+                        if not best_effort:
+                            raise
+                elif not best_effort:
+                    raise MCPToolError("START_TAB_BOOTSTRAP_CLOSE_TARGET_MISSING")
+
+                deadline = time.monotonic() + self._timeout_s
+                if not self._wait_for_process_exit(process, deadline):
+                    if not best_effort:
+                        raise MCPTimeoutError(
+                            "START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED"
+                        )
+                    terminate = getattr(process, "terminate", None)
+                    if callable(terminate):
+                        try:
+                            terminate()
+                        except Exception:
+                            pass
+                        self._wait_for_process_exit(
+                            process, time.monotonic() + self._timeout_s
+                        )
+        except Exception:
+            if not best_effort:
+                raise
+        finally:
+            if self._script_path is not None:
+                try:
+                    self._script_path.unlink(missing_ok=True)
+                except OSError:
+                    if not best_effort:
+                        raise
+            if process is not None and process.poll() is not None:
+                self._process = None
+                self._hwnd = None
+            elif process is None:
+                self._hwnd = None
+            if best_effort or self._process is None:
+                self._script_path = None
+
+    def _wait_for_process_exit(self, process: Any, deadline: float) -> bool:
+        while process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(self._poll_interval_s, remaining))
+        return True
+
 class FileIPCLiveMCPClient:
     """Minimal File IPC client for a loaded AutoLISP MCP dispatcher."""
     def __init__(self, ipc_dir: str, trigger: Optional[Callable[[], None]] = None,
@@ -276,7 +438,11 @@ class FileIPCLiveMCPClient:
                  legacy_fixture_mode: Optional[bool] = None,
                  bootstrap_start_tab: bool = False,
                  bootstrap_document_ready_probe: Optional[Callable[[], bool]] = None,
-                 bootstrap_document_ready_timeout_s: Optional[float] = None) -> None:
+                 bootstrap_document_ready_timeout_s: Optional[float] = None,
+                 bootstrap_start_tab_session_factory: Optional[
+                     Callable[[], WindowsAutoCADStartTabSession]
+                 ] = None,
+                 bootstrap_document_setup_hook: Optional[Callable[[], None]] = None) -> None:
         self._dir = _validate_file_ipc_root(ipc_dir)
         self._root_identity = _file_ipc_root_identity(self._dir)
         self._trigger = trigger
@@ -299,11 +465,14 @@ class FileIPCLiveMCPClient:
             if bootstrap_document_ready_timeout_s is None
             else bootstrap_document_ready_timeout_s
         )
+        self._bootstrap_start_tab_session_factory = bootstrap_start_tab_session_factory
+        self._bootstrap_document_setup_hook = bootstrap_document_setup_hook
         if type(bootstrap_start_tab) is not bool:
             raise TypeError("bootstrap_start_tab must be a bool")
         self._bootstrap_start_tab = bootstrap_start_tab
         self._active_drawing_path: Optional[str] = None
         self._start_tab_bootstrap_active = False
+        self._start_tab_bootstrap_session: Optional[WindowsAutoCADStartTabSession] = None
         self._last_exchange_evidence: Optional[Dict[str, Any]] = None
 
     @property
@@ -501,32 +670,72 @@ class FileIPCLiveMCPClient:
             return False
         if self._start_tab_bootstrap_active:
             return False
-        if self._start_tab_no_document_probe is None:
-            raise MCPToolError("START_TAB_BOOTSTRAP_PROBE_REQUIRED")
-        if self._raw_lisp_trigger is None or self._bootstrap_lisp_path is None:
+        if (
+            self._bootstrap_start_tab_session_factory is None
+            and (self._raw_lisp_trigger is None or self._bootstrap_lisp_path is None)
+        ):
             raise MCPToolError("START_TAB_BOOTSTRAP_LISP_REQUIRED")
-        if self._command_trigger is None:
-            raise MCPToolError("START_TAB_BOOTSTRAP_COMMAND_REQUIRED")
         try:
-            start_tab = bool(self._start_tab_no_document_probe())
-        except Exception as exc:
-            raise MCPToolError("START_TAB_BOOTSTRAP_PROBE_FAILED") from exc
-        if not start_tab:
-            return False
+            if self._bootstrap_start_tab_session_factory is not None:
+                session = self._bootstrap_start_tab_session_factory()
+                if session is None:
+                    raise MCPToolError("START_TAB_BOOTSTRAP_SESSION_REQUIRED")
+                self._start_tab_bootstrap_session = session
+                bindings = session.launch_blank_document()
+                self._apply_start_tab_bootstrap_bindings(bindings)
+            else:
+                if self._start_tab_no_document_probe is None:
+                    raise MCPToolError("START_TAB_BOOTSTRAP_PROBE_REQUIRED")
+                if self._command_trigger is None:
+                    raise MCPToolError("START_TAB_BOOTSTRAP_COMMAND_REQUIRED")
+                try:
+                    start_tab = bool(self._start_tab_no_document_probe())
+                except Exception as exc:
+                    raise MCPToolError("START_TAB_BOOTSTRAP_PROBE_FAILED") from exc
+                if not start_tab:
+                    return False
+                self._command_trigger("_.QNEW")
 
-        self._command_trigger("_.QNEW")
-        self._wait_for_bootstrap_document()
-        self._start_tab_bootstrap_active = True
-        try:
+            self._wait_for_bootstrap_document()
+            self._start_tab_bootstrap_active = True
+            if self._bootstrap_document_setup_hook is not None:
+                self._bootstrap_document_setup_hook()
+                time.sleep(self._document_settle_s)
             self._load_dispatcher_for_active_document()
             self._wait_for_dispatcher()
         except Exception:
             try:
-                self.close_start_tab_bootstrap()
+                if self._start_tab_bootstrap_session is not None:
+                    self._start_tab_bootstrap_session.close_without_save(best_effort=True)
+                    self._start_tab_bootstrap_session = None
+                    self._start_tab_bootstrap_active = False
+                elif self._start_tab_bootstrap_active:
+                    self.close_start_tab_bootstrap()
             except Exception:
                 pass
             raise
         return True
+
+    def _apply_start_tab_bootstrap_bindings(
+        self,
+        bindings: WindowsStartTabBootstrapBindings,
+    ) -> None:
+        if type(bindings.hwnd) is not int or bindings.hwnd <= 0:
+            raise MCPToolError("START_TAB_BOOTSTRAP_WINDOW_INVALID")
+        required = (
+            bindings.command_trigger,
+            bindings.raw_lisp_trigger,
+            bindings.dispatch_trigger,
+            bindings.start_tab_no_document_probe,
+            bindings.document_ready_probe,
+        )
+        if not all(callable(value) for value in required):
+            raise MCPToolError("START_TAB_BOOTSTRAP_BINDINGS_INVALID")
+        self._command_trigger = bindings.command_trigger
+        self._raw_lisp_trigger = bindings.raw_lisp_trigger
+        self._trigger = bindings.dispatch_trigger
+        self._start_tab_no_document_probe = bindings.start_tab_no_document_probe
+        self._bootstrap_document_ready_probe = bindings.document_ready_probe
 
     def _wait_for_bootstrap_document(self) -> None:
         probe = self._bootstrap_document_ready_probe
@@ -547,6 +756,11 @@ class FileIPCLiveMCPClient:
     def close_start_tab_bootstrap(self) -> None:
         """Close the tracked unsaved bootstrap document without saving it."""
         if not self._start_tab_bootstrap_active:
+            return
+        if self._start_tab_bootstrap_session is not None:
+            self._start_tab_bootstrap_session.close_without_save()
+            self._start_tab_bootstrap_session = None
+            self._start_tab_bootstrap_active = False
             return
         if self._raw_lisp_trigger is None:
             raise MCPToolError("START_TAB_BOOTSTRAP_LISP_REQUIRED")
@@ -971,6 +1185,112 @@ def make_windows_start_tab_document_ready_probe(hwnd: int) -> Callable[[], bool]
         return title is not None and not title.casefold().endswith("[start]")
 
     return probe
+
+
+def make_windows_start_tab_session_factory(
+    acad_executable: str,
+    script_directory: str,
+    *,
+    timeout_s: float = 30.0,
+    poll_interval_s: float = 0.1,
+) -> Callable[[], WindowsAutoCADStartTabSession]:
+    """Create a factory for disposable AutoCAD sessions bootstrapped by a script."""
+    executable = Path(acad_executable).resolve()
+    script_root = Path(script_directory).resolve()
+    if executable.name.casefold() != "acad.exe" or not executable.is_file():
+        raise ValueError("acad_executable must be an existing acad.exe")
+    if not script_root.is_dir():
+        raise ValueError("script_directory must be an existing directory")
+
+    def factory() -> WindowsAutoCADStartTabSession:
+        return WindowsAutoCADStartTabSession(
+            str(executable),
+            str(script_root),
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+
+    return factory
+
+
+def _launch_windows_autocad_with_script(
+    executable: Path,
+    script_path: Path,
+) -> Any:
+    return subprocess.Popen(
+        [str(executable), "/nologo", "/b", str(script_path)],
+        close_fds=True,
+    )
+
+
+def _find_windows_main_window_for_pid(pid: int) -> int:
+    if type(pid) is not int or pid <= 0:
+        raise ValueError("pid must be a positive integer")
+    user32 = ctypes.windll.user32
+    enum_windows = user32.EnumWindows
+    get_window_thread_process_id = user32.GetWindowThreadProcessId
+    is_window_visible = user32.IsWindowVisible
+    get_window_text_length = user32.GetWindowTextLengthW
+    get_window_text = user32.GetWindowTextW
+    try:
+        enum_windows.argtypes = [
+            ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM),
+            wintypes.LPARAM,
+        ]
+        enum_windows.restype = wintypes.BOOL
+        get_window_thread_process_id.argtypes = [
+            wintypes.HWND,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        get_window_thread_process_id.restype = wintypes.DWORD
+        is_window_visible.argtypes = [wintypes.HWND]
+        is_window_visible.restype = wintypes.BOOL
+        get_window_text_length.argtypes = [wintypes.HWND]
+        get_window_text_length.restype = ctypes.c_int
+        get_window_text.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        get_window_text.restype = ctypes.c_int
+    except (AttributeError, TypeError):
+        pass
+
+    windows: list[int] = []
+
+    def callback(window: int, _lparam: int) -> bool:
+        observed_pid = wintypes.DWORD()
+        if not get_window_thread_process_id(window, ctypes.byref(observed_pid)):
+            return True
+        if int(observed_pid.value) != pid or not is_window_visible(window):
+            return True
+        length = int(get_window_text_length(window))
+        if length <= 0:
+            return True
+        title = ctypes.create_unicode_buffer(length + 1)
+        if int(get_window_text(window, title, len(title))) > 0:
+            windows.append(int(window))
+        return True
+
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    enum_windows(callback_type(callback), 0)
+    if len(windows) == 1:
+        return windows[0]
+    return 0
+
+
+def _close_windows_main_window(hwnd: int) -> None:
+    if type(hwnd) is not int or hwnd <= 0:
+        raise ValueError("hwnd must be a positive integer")
+    post_message = ctypes.windll.user32.PostMessageW
+    try:
+        post_message.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        post_message.restype = wintypes.BOOL
+    except (AttributeError, TypeError):
+        pass
+    if not post_message(hwnd, 0x0010, 0, 0):
+        raise MCPToolError("START_TAB_BOOTSTRAP_CLOSE_REQUEST_FAILED")
 
 
 def _make_windows_main_window_title_reader(hwnd: int) -> Callable[[], Optional[str]]:

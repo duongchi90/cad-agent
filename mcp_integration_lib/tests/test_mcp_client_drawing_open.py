@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import mcp_integration_lib.mcp_client as mcp_client_module
@@ -357,6 +358,146 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             client.drawing_open("C:/work/source.dxf")
 
         self.assertEqual(["_.QNEW"], command_sequences)
+        self.assertEqual([], raw_commands)
+        self.assertFalse(client._start_tab_bootstrap_active)
+
+    def test_start_tab_session_script_is_qnew_only_and_binds_launched_process(self):
+        process = SimpleNamespace(pid=7301, poll=lambda: None)
+        launch_calls = []
+        close_calls = []
+
+        def launch(executable, script_path):
+            launch_calls.append((executable, script_path, script_path.read_bytes()))
+            return process
+
+        def close_window(hwnd):
+            close_calls.append(hwnd)
+            process.poll = lambda: 0
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=lambda pid: 8801 if pid == process.pid else 0,
+            window_closer=close_window,
+            start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=lambda hwnd: SimpleNamespace(hwnd=hwnd),
+        )
+
+        bindings = session.launch_blank_document()
+        self.assertEqual(8801, bindings.hwnd)
+        self.assertEqual(1, len(launch_calls))
+        self.assertEqual(b"_.QNEW\r\n", launch_calls[0][2])
+        self.assertNotIn(b"BVTL", launch_calls[0][2])
+        self.assertNotIn(b"SAVE", launch_calls[0][2])
+
+        session.close_without_save()
+        self.assertEqual([8801], close_calls)
+        self.assertFalse(launch_calls[0][1].exists())
+
+    def test_start_tab_session_best_effort_terminates_owned_process_after_close_timeout(self):
+        process = SimpleNamespace(pid=7302, poll=lambda: None)
+        terminate_calls = []
+
+        def terminate():
+            terminate_calls.append(True)
+            process.poll = lambda: 0
+
+        process.terminate = terminate
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            timeout_s=0,
+            poll_interval_s=0,
+            process_launcher=lambda executable, script_path: process,
+            window_finder=lambda pid: 8802,
+            window_closer=lambda hwnd: None,
+            start_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=lambda hwnd: SimpleNamespace(hwnd=hwnd),
+        )
+
+        session.launch_blank_document()
+        session.close_without_save(best_effort=True)
+
+        self.assertEqual([True], terminate_calls)
+        self.assertFalse(session._script_path)
+
+    def test_opt_in_start_tab_uses_startup_session_not_keyboard_qnew(self):
+        events = []
+        raw_commands = []
+        session = SimpleNamespace(
+            launch_blank_document=lambda: (
+                events.append("launch"),
+                SimpleNamespace(
+                    hwnd=8801,
+                    command_trigger=lambda command: events.append(("command", command)),
+                    raw_lisp_trigger=lambda command: (
+                        raw_commands.append(command), events.append(("lisp", command))
+                    ),
+                    dispatch_trigger=lambda: events.append("dispatch"),
+                    start_tab_no_document_probe=lambda: True,
+                    document_ready_probe=lambda: True,
+                ),
+            )[1],
+            close_without_save=lambda: events.append("close"),
+        )
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            bootstrap_start_tab=True,
+            bootstrap_start_tab_session_factory=lambda: session,
+            bootstrap_document_setup_hook=lambda: events.append("setup"),
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+        client._dispatch = lambda command, params: (
+            {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
+            if command == "drawing-get-variables"
+            else {"ready": True}
+        )
+
+        self.assertEqual({"path": "C:/work/source.dxf"}, client.drawing_open("C:/work/source.dxf"))
+        self.assertEqual("launch", events[0])
+        self.assertLess(events.index("setup"), next(i for i, event in enumerate(events) if isinstance(event, tuple) and event[0] == "lisp"))
+        self.assertFalse(any(event == ("command", "_.QNEW") for event in events))
+        self.assertTrue(any('(load "C:/tools/mcp_dispatch.lsp")' in command for command in raw_commands))
+        client.close_start_tab_bootstrap()
+        self.assertIn("close", events)
+
+    def test_start_tab_session_readiness_timeout_closes_owned_process_before_source_open(self):
+        raw_commands = []
+        events = []
+        def close_without_save(*, best_effort=False):
+            events.append("close")
+        session = SimpleNamespace(
+            launch_blank_document=lambda: SimpleNamespace(
+                hwnd=8801,
+                command_trigger=lambda command: events.append(("command", command)),
+                raw_lisp_trigger=raw_commands.append,
+                dispatch_trigger=lambda: None,
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: False,
+            ),
+            close_without_save=close_without_save,
+        )
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            bootstrap_start_tab=True,
+            bootstrap_start_tab_session_factory=lambda: session,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        with self.assertRaisesRegex(MCPTimeoutError, "START_TAB_BOOTSTRAP_DOCUMENT_NOT_READY"):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertIn("close", events)
         self.assertEqual([], raw_commands)
         self.assertFalse(client._start_tab_bootstrap_active)
 
