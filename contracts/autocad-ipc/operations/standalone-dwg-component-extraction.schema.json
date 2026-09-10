@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/standalone-dwg-component-extraction.schema.json",
+  "title": "CadAgent standalone DWG component extraction request parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_id",
+    "request_id",
+    "run_id",
+    "inspection_id",
+    "inspection_sha256",
+    "source_drawing_sha256",
+    "candidate_output_path",
+    "candidate_base_model",
+    "components",
+    "transform_policy",
+    "approval"
+  ],
+  "properties": {
+    "plan_id": { "$ref": "#/$defs/identifier" },
+    "request_id": { "$ref": "#/$defs/identifier" },
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "inspection_id": { "$ref": "#/$defs/identifier" },
+    "inspection_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+    "source_drawing_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+    "candidate_output_path": { "$ref": "#/$defs/absoluteWindowsPath" },
+    "candidate_base_model": { "const": "EMPTY_NEW_DATABASE" },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/component" }
+    },
+    "transform_policy": {
+      "const": "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY"
+    },
+    "approval": { "$ref": "#/$defs/approval" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "absoluteWindowsPath": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32767,
+      "pattern": "^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)"
+    },
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "hexHandle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Fa-f]+$"
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rotation_degrees", "translation", "uniform_scale"],
+      "properties": {
+        "rotation_degrees": { "type": "number" },
+        "translation": { "$ref": "#/$defs/point" },
+        "uniform_scale": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_id",
+        "logical_component_id",
+        "source_handles",
+        "transform"
+      ],
+      "properties": {
+        "group_id": { "$ref": "#/$defs/identifier" },
+        "logical_component_id": { "$ref": "#/$defs/identifier" },
+        "source_handles": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/hexHandle" }
+        },
+        "transform": { "$ref": "#/$defs/transform" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "status"],
+      "properties": {
+        "reference": { "$ref": "#/$defs/identifier" },
+        "status": { "const": "APPROVED" }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "request_id": "standalone-inspection-request-001",
+  "schema_version": "1.0",
+  "operation": "standalone_dwg_component_inspection",
+  "drawing_full_path": "C:\\synthetic\\source\\standalone-source.dwg",
+  "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "parameters": {
+    "schema_version": "standalone-dwg-component-inspection-1.0",
+    "request_id": "standalone-inspection-request-001",
+    "run_id": "standalone-run-001",
+    "source_drawing_path": "C:\\synthetic\\source\\standalone-source.dwg",
+    "source_drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_setup_audit_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "selection_groups": [
+      {
+        "group_id": "group-001",
+        "logical_component_id": "component-001",
+        "source_handles": ["A1B2"],
+        "expected_entity_types": ["INSERT"],
+        "source_layer_expectations": ["BODY"]
+      }
+    ],
+    "expected_dbmod": 0,
+    "approval": null
+  },
+  "approval": null
+}

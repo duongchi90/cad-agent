@@ -900,6 +900,133 @@ public sealed class ContractTests
                 .GetInt32());
     }
 
+    [Fact]
+    public void StandaloneDwgComponentOperationsAreAllowlistedWithClosedSchemaBranches()
+    {
+        using var requestSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/request.schema.json")));
+        using var resultSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/result.schema.json")));
+
+        foreach (var schema in new[] { requestSchema, resultSchema })
+        {
+            var operations = schema.RootElement
+                .GetProperty("properties")
+                .GetProperty("operation")
+                .GetProperty("enum")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .ToArray();
+
+            Assert.Contains("standalone_dwg_component_inspection", operations);
+            Assert.Contains("standalone_dwg_component_extraction", operations);
+        }
+
+        Assert.Equal(
+            "operations/standalone-dwg-component-inspection.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "standalone_dwg_component_inspection")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/standalone-dwg-component-extraction.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "standalone_dwg_component_extraction")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/standalone-dwg-component-inspection-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "standalone_dwg_component_inspection")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/standalone-dwg-component-extraction-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "standalone_dwg_component_extraction")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentExamplesRoundTrip()
+    {
+        var inspectionRequest = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json")));
+        var inspectionResult = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.result.json")));
+        var extractionRequest = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.request.json")));
+        var extractionResult = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.result.json")));
+
+        Assert.True(ContractValidator.ValidateRequest(inspectionRequest).IsValid);
+        Assert.True(ContractValidator.ValidateResult(inspectionResult).IsValid);
+        Assert.True(ContractValidator.ValidateRequest(extractionRequest).IsValid);
+        Assert.True(ContractValidator.ValidateResult(extractionResult).IsValid);
+        Assert.Equal("standalone_dwg_component_inspection", inspectionRequest.Operation);
+        Assert.Equal("standalone_dwg_component_extraction", extractionRequest.Operation);
+        Assert.Null(inspectionRequest.Approval);
+        Assert.Equal(
+            "standalone-dwg-component-inspection-result-1.0",
+            inspectionResult.Payload!["schema_version"].GetString());
+        Assert.Equal(
+            "EMPTY_NEW_DATABASE",
+            extractionRequest.Parameters!["candidate_base_model"].GetString());
+        Assert.Equal(
+            "standalone-dwg-component-extraction-result-1.0",
+            extractionResult.Payload!["schema_version"].GetString());
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentRequestsRejectXrefOnlyFields()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json")));
+        var parameters = request.Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters["xref_name"] = JsonSerializer.SerializeToElement("BASE_XREF");
+        request = request with { Parameters = parameters };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error =>
+            error.Contains("xref", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentResultsRequireCandidateOnlySerialization()
+    {
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.result.json")));
+        var payload = result.Payload!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        payload["source_save_performed"] = JsonSerializer.SerializeToElement(true);
+        result = result with { Payload = payload };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error =>
+            error.Contains("source", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("candidate", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("supported", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static JsonElement FindOperationBranch(JsonElement schema, string operation)
     {
         return schema.GetProperty("allOf")

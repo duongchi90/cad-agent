@@ -1,0 +1,43 @@
+{
+  "request_id": "standalone-inspection-request-001",
+  "success": true,
+  "operation": "standalone_dwg_component_inspection",
+  "drawing_full_path": "C:\\synthetic\\source\\standalone-source.dwg",
+  "changed": false,
+  "entity_handles": [],
+  "warnings": [],
+  "errors": [],
+  "started_at": "2026-09-10T00:00:00Z",
+  "completed_at": "2026-09-10T00:00:01Z",
+  "payload": {
+    "schema_version": "standalone-dwg-component-inspection-result-1.0",
+    "inspection_id": "standalone-inspection-001",
+    "request_id": "standalone-inspection-request-001",
+    "source_identity": {
+      "path": "C:\\synthetic\\source\\standalone-source.dwg",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dbmod": 0,
+      "xref_count": 0
+    },
+    "source_sha256_before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_sha256_after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dbmod_before": 0,
+    "dbmod_after": 0,
+    "read_only": true,
+    "groups": [
+      {
+        "group_id": "group-001",
+        "logical_component_id": "component-001",
+        "source_handles": ["A1B2"],
+        "entity_types": ["INSERT"],
+        "layers": ["BODY"],
+        "signature_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "warnings": [],
+    "conflicts": [],
+    "changed": false,
+    "eligible": true,
+    "inspection_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "request_id": "standalone-extraction-request-001",
+  "schema_version": "1.0",
+  "operation": "standalone_dwg_component_extraction",
+  "drawing_full_path": "C:\\synthetic\\source\\standalone-source.dwg",
+  "drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "parameters": {
+    "plan_id": "standalone-plan-001",
+    "request_id": "standalone-extraction-request-001",
+    "run_id": "standalone-run-001",
+    "inspection_id": "standalone-inspection-001",
+    "inspection_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "source_drawing_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate_output_path": "C:\\synthetic\\existing-candidate.dwg",
+    "candidate_base_model": "EMPTY_NEW_DATABASE",
+    "components": [
+      {
+        "group_id": "group-001",
+        "logical_component_id": "component-001",
+        "source_handles": ["A1B2"],
+        "transform": {
+          "rotation_degrees": 0.0,
+          "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
+          "uniform_scale": 1.0
+        }
+      }
+    ],
+    "transform_policy": "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY",
+    "approval": {
+      "reference": "approval-standalone-001",
+      "status": "APPROVED"
+    }
+  },
+  "approval": {
+    "reference": "approval-standalone-001",
+    "status": "APPROVED"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "request_id": "standalone-extraction-request-001",
+  "success": false,
+  "operation": "standalone_dwg_component_extraction",
+  "drawing_full_path": "C:\\synthetic\\source\\standalone-source.dwg",
+  "changed": false,
+  "entity_handles": [],
+  "warnings": [],
+  "errors": ["CANDIDATE_OUTPUT_NOT_ABSENT"],
+  "started_at": "2026-09-10T00:00:00Z",
+  "completed_at": "2026-09-10T00:00:01Z",
+  "payload": {
+    "schema_version": "standalone-dwg-component-extraction-result-1.0",
+    "request_id": "standalone-extraction-request-001",
+    "run_id": "standalone-run-001",
+    "failure_code": "CANDIDATE_OUTPUT_NOT_ABSENT",
+    "candidate_output_path": "C:\\synthetic\\existing-candidate.dwg",
+    "source_mutated": false,
+    "save_performed": false
+  }
+}
