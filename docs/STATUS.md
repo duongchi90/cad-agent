@@ -143,6 +143,23 @@
   it does not authorize production promotion or claim that the page-1 drawing
   workflow is complete.
 
+## SOL connector verification follow-up (2026-09-10)
+
+- GitHub independently exposes branch
+  `codex/audit-text-style-compat-20260910` at
+  `6fc95824beff73782d03ba955b2aa8b29df3df28`, so the live evidence record is
+  pushed and readable from the canonical repository surface.
+- The existing read-only Codex workspace connector then returned
+  `USER_NOT_LOGGED_IN` / `asdk_app_6aa23e5941188191bcc379ec7942dbee is not
+  connected` on both fresh status and file reads. This is a connector-account
+  failure, not a Git, source, or evidence failure.
+- One bounded controller recovery was attempted with the configured narrow root.
+  `On` failed Quick Tunnel readiness (`metadata=-1`, `mcp=-1`, timeout) before
+  any Worker KV update; `Doctor` reported no runtime state. The controller was
+  then returned to intentional `Off` and confirmed no managed devspace or tunnel
+  process remained. No AutoCAD, source drawing, candidate, or Git evidence was
+  rerun or changed.
+
 ## Current canonical snapshot (2026-09-09)
 
 - Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
