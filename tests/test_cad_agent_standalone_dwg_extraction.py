@@ -5,6 +5,9 @@ import importlib
 
 import pytest
 
+from cad_agent import candidate_revision as candidate_revision_module
+from cad_agent import drawing_artifact_reference as dara
+
 
 MODULE_NAME = "cad_agent.standalone_dwg_extraction"
 SHA = "a" * 64
@@ -381,6 +384,43 @@ def test_composes_staged_standalone_r3_and_root_r4_binding() -> None:
     assert composed["candidate_revision"]["change_scope"][
         "registry_snapshot_sha256"
     ] == composed["registry"]["registry_snapshot_sha256"]
+
+    foreign_source_bytes = b"standalone-source-foreign"
+    foreign_reference = dara.issue_drawing_artifact_reference(
+        run_id="standalone-run-001",
+        project_id="project-001",
+        drawing_id="drawing-001",
+        artifact_role="BASELINE",
+        artifact_bytes=foreign_source_bytes,
+        upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "baseline-evidence-foreign-001",
+            "evidence_sha256": "5" * 64,
+        },
+    )
+    foreign_observation = dara.observe_drawing_artifact_currentness(
+        reference=foreign_reference,
+        artifact_bytes=foreign_source_bytes,
+        observation_evidence_sha256="6" * 64,
+    )
+    with pytest.raises(
+        candidate_revision_module.CandidateRevisionError,
+        match="STANDALONE_SOURCE_MISMATCH",
+    ):
+        candidate_revision_module.build_candidate_revision(
+            registry=composed["registry"],
+            base_cad_handoff=None,
+            baseline_context={
+                "reference": foreign_reference,
+                "observation": foreign_observation,
+                "artifact_bytes": foreign_source_bytes,
+            },
+            parent_candidate=None,
+            change_impact=composed["change_impact"],
+            mutation_evidence=composed["mutation_evidence"],
+            schema_version=candidate_revision_module.CANDIDATE_REVISION_V11_SCHEMA_VERSION,
+            candidate_kind=candidate_revision_module.CANDIDATE_REVISION_ROOT_KIND,
+        )
 
     unapproved = deepcopy(extraction)
     unapproved["components"][0]["group_id"] = "unapproved-group"

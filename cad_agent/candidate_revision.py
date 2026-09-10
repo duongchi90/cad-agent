@@ -731,6 +731,10 @@ def _normalize_root_inputs(
             "upstream_bindings"
         ]["candidate_drawing_sha256"]:
             _fail("STANDALONE_DWG_CANDIDATE_MISMATCH")
+        if baseline_reference["artifact_sha256"] != normalized_registry[
+            "upstream_bindings"
+        ]["source_sha256"]:
+            _fail("STANDALONE_SOURCE_MISMATCH")
     else:
         if handoff is None:
             _fail("BASE_CAD_HANDOFF_INVALID")
