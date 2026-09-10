@@ -20,14 +20,15 @@
 
 - Branch-local implementation head:
   `codex/audit-text-style-compat-20260910`, with standalone extraction code at
-  `a17032275a628328dcad0fd15166e413faee3663`; current status/evidence
-  documentation is being refreshed on top of that code head.
+  `a17032275a628328dcad0fd15166e413faee3663`; the read-only-open remediation
+  is pushed at `1e17f159a2bd089f9797876beb769a872dee45b0`.
 - Task 6 is **Partially verified**: all offline contract/provenance paths pass,
-  and a bounded read-only AutoCAD Mechanical 2027/File IPC bootstrap confirmed
-  health and setup-audit invariants on the approved BVTL source. The truthful
-  private operator fixture was absent, so standalone inspection/extraction and
-  disposable-candidate prerequisites remain `NOT RUN`, not PASS; no source,
-  accepted drawing, candidate, or production CAD state was mutated.
+  and the private fixture is now prepared from the approved BVTL inventory. A
+  bounded live attempt confirmed health/setup-audit, then correctly failed
+  closed at standalone inspection because the existing writable open path did
+  not establish `Document.IsReadOnly=true`. Live acceptance remains `NOT RUN`
+  (no successful inspection/extraction/query); no source, accepted drawing,
+  candidate, or production CAD state was mutated.
 - SOL's fresh bounded review of the candidate identity remediation returned
   `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`. The raw
   filesystem identity remains internal for cleanup rechecks; the public
@@ -46,10 +47,20 @@
   unavailable probe `2 skipped`; AutoCAD unavailable probe `17 skipped`;
   `git diff --check` passed. The intentional causal RED oracle remains a
   diagnostic expected failure and is not a product failure.
-- The live Task 6 gate remains `NOT RUN` because the truthful private fixture
-  is absent. No source, accepted drawing, candidate, or production CAD state
-  was mutated. The next bounded action is fresh SOL review of this contract
-  remediation; do not invent a fixture alias or promote a candidate.
+- SOL's fresh review of the first live attempt identified that
+  `FileIPCLiveMCPClient.drawing_open` opened the approved source writable. The
+  bounded remediation at `1e17f159a2bd089f9797876beb769a872dee45b0` adds an
+  opt-in `read_only=True` branch that emits AutoCAD `vla-open` with
+  `:vlax-true`; the default path remains writable for disposable candidates
+  and existing callers. Focused `drawing_open` tests pass `12`; authoritative
+  verification on this commit reports C# `238`, offline Python `3354`, and
+  offline IPC `134` with zero product failures. The code commit is pushed;
+  fresh SOL review is pending before another live attempt.
+- The live Task 6 gate remains `NOT RUN` as acceptance: the previous attempt
+  failed closed on `S3C_SOURCE_READ_ONLY_REQUIRED`, and the read-only-open
+  remediation is awaiting review. No source, accepted drawing, candidate, or
+  production CAD state was mutated. Do not weaken the policy, change source
+  metadata, or promote a candidate.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 

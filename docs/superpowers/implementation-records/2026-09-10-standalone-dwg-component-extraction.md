@@ -2,7 +2,8 @@
 
 Date: 2026-09-11
 Branch: `codex/audit-text-style-compat-20260910`
-Implementation/evidence commits: `a1fece80b1efae831d442626c6454a0ae23533d0`,
+Implementation/evidence commits: `1e17f159a2bd089f9797876beb769a872dee45b0`,
+`a1fece80b1efae831d442626c6454a0ae23533d0`,
 `94719ca3e854dd3bb6b668217924c85e3d07c214`, and
 `a17032275a628328dcad0fd15166e413faee3663`
 
@@ -122,7 +123,39 @@ only coordinates those owners and records truthful live availability.
 Source and accepted drawings were not modified. No private artifact was added
 to Git. No production candidate was promoted.
 
-The remaining risk is explicitly live-gated: the approved `BVTL.dwg` source,
-AutoCAD Mechanical 2027 session, operator fixture, and File IPC prerequisites
-were not available in this run. Therefore this record is implementation and
+The remaining risk is explicitly live-gated: one bounded attempt had the
+approved `BVTL.dwg` source, AutoCAD Mechanical 2027 session, operator fixture,
+and File IPC prerequisites available, but it correctly failed closed at
+`S3C_SOURCE_READ_ONLY_REQUIRED` because the existing open path opened the
+source writable. Therefore this record remains implementation and
 offline-contract evidence, not live CAD acceptance or release evidence.
+
+## Read-only source-open remediation and iteration 27
+
+SOL's fresh review of the live finding identified the existing owner boundary:
+`FileIPCLiveMCPClient.drawing_open` called AutoCAD `vla-open` without its
+read-only argument. The bounded remediation in commit
+`1e17f159a2bd089f9797876beb769a872dee45b0` adds an explicit keyword
+`read_only=True` opt-in. Only the standalone Task-6 source-open call uses it;
+candidate opens remain on the default writable path. The `S3C` read-only policy
+was not weakened, and the source/fixture/accepted drawing were not changed.
+
+Regression evidence on the pushed code commit:
+
+- `test_mcp_client_drawing_open.py`: `12 passed`, including the exact
+  `:vlax-true` read-only call, active-document path verification, and the
+  unchanged writable default signature.
+- Focused FileIPC/Task-6 owner set: `32 passed`, one live prerequisite skip,
+  and one intentional causal-RED diagnostic.
+- `scripts/verify.ps1`: exit `0`; C# `238 passed`, offline Python `3354`
+  passed, offline IPC `134` passed, real-data `2 skipped`, AutoCAD Mechanical
+  `17 skipped`, and `git diff --check` passed.
+
+Iteration-27 live evidence is private at
+`C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration27-evidence.txt`.
+The gate reached health, setup audit, and standalone inspection dispatch, then
+failed closed with `S3C_SOURCE_READ_ONLY_REQUIRED`. No candidate was created;
+the disposable root was empty and the source hash remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+Live acceptance remains `NOT RUN` until SOL reviews this remediation and a new
+attempt actually passes inspection/extraction/query.
