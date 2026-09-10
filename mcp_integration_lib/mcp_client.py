@@ -422,11 +422,14 @@ class FileIPCLiveMCPClient:
     def entity_list(self, layer: Optional[str] = None) -> List[Dict[str, Any]]:
         return self._dispatch("entity-list", {k: v for k, v in {"layer": layer}.items() if v is not None}).get("entities", [])
 
-    def drawing_open(self, path: str) -> Dict[str, Any]:
+    def drawing_open(self, path: str, *, read_only: bool = False) -> Dict[str, Any]:
+        if type(read_only) is not bool:
+            raise ValueError("read_only must be a bool")
         if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
             normalized_path = path.replace("\\", "/").replace('"', '\\"')
             expected_path = _normalized_autocad_path(path)
             active_path = ""
+            read_only_argument = " :vlax-true" if read_only else ""
             for attempt in range(2):
                 try:
                     self._raw_lisp_trigger(
@@ -441,7 +444,7 @@ class FileIPCLiveMCPClient:
                         '(strcase mcp-target-path)) '
                         '(setq mcp-open-doc mcp-candidate-doc))) '
                         '(if (not mcp-open-doc) '
-                        '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"))) '
+                        '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"' + read_only_argument + '))) '
                         '(vla-activate mcp-open-doc))'
                     )
                 except (MCPTimeoutError, MCPToolError) as exc:

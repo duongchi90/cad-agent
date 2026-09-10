@@ -252,7 +252,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
     candidate_hash: str | None = None
 
     try:
-        legacy_client.drawing_open(str(source_path))
+        legacy_client.drawing_open(str(source_path), read_only=True)
         active_path = expected_source_path
         source_variables = legacy_client.drawing_get_variables(["DBMOD"])
         assert type(source_variables.get("DBMOD")) is int

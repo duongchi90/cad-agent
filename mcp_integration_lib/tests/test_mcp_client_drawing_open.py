@@ -134,6 +134,58 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertEqual("c:\\work\\already-active.dxf", client._active_drawing_path)
         self.assertEqual(target_path, active_document["full_name"])
 
+    def test_read_only_open_requests_read_only_and_still_verifies_active_document(self):
+        raw_commands = []
+        command_sequences = []
+        target_path = "C:/work/read-only.dxf"
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+        def dispatch(command, params):
+            if command == "ping":
+                return {}
+            if command == "drawing-get-variables":
+                return {"DWGPREFIX": "C:/work/", "DWGNAME": "read-only.dxf"}
+            raise AssertionError(f"unexpected dispatch: {command}")
+
+        client._dispatch = dispatch
+
+        self.assertEqual(
+            {"path": target_path},
+            client.drawing_open(target_path, read_only=True),
+        )
+        self.assertIn(
+            '(vla-open mcp-docs "C:/work/read-only.dxf" :vlax-true)',
+            raw_commands[0],
+        )
+        self.assertEqual("c:\\work\\read-only.dxf", client._active_drawing_path)
+        self.assertEqual([], command_sequences)
+
+    def test_default_open_preserves_writable_vla_open_signature(self):
+        raw_commands = []
+        client = self._client(raw_commands, [])
+
+        client._dispatch = lambda command, params: (
+            {"DWGPREFIX": "C:/work/", "DWGNAME": "writable.dxf"}
+            if command == "drawing-get-variables"
+            else {}
+        )
+
+        self.assertEqual({"path": "C:/work/writable.dxf"}, client.drawing_open("C:/work/writable.dxf"))
+        self.assertIn('(vla-open mcp-docs "C:/work/writable.dxf")', raw_commands[0])
+        self.assertNotIn(":vlax-true", raw_commands[0])
+
     def test_com_activation_failure_falls_back_only_with_positive_start_tab_proof(self):
         raw_commands = []
         command_sequences = []
