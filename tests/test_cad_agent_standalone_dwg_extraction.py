@@ -185,6 +185,31 @@ def test_extraction_plan_requires_empty_new_database_and_no_candidate_input() ->
         module.build_standalone_extraction_plan(candidate_input)
 
 
+def test_page1_delta_group_is_rejected_by_extraction_plan() -> None:
+    """A page-1-only delta cannot enter the standalone reuse plan uninspected."""
+
+    module = _module()
+    request = _inspection_request()
+    inspection = _inspection_result()
+    inspection["inspection_sha256"] = module.standalone_inspection_result_sha256(
+        inspection
+    )
+    plan = _extraction_plan()
+    plan["inspection_sha256"] = inspection["inspection_sha256"]
+    page1_delta = deepcopy(plan)
+    page1_delta["components"][0]["group_id"] = "cargo-side-frame"
+    page1_delta["components"][0]["logical_component_id"] = "cargo-side-frame"
+
+    with pytest.raises(
+        module.StandaloneDwgExtractionError, match="PLAN_INSPECTION_MISMATCH"
+    ):
+        module.build_standalone_extraction_plan(
+            page1_delta,
+            inspection_result=inspection,
+            inspection_request=request,
+        )
+
+
 def test_extraction_rejects_invalid_transform_or_fabricated_approval() -> None:
     module = _module()
     invalid_transform = _extraction_plan()
