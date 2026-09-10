@@ -76,6 +76,18 @@
   unavailable probe `17 skipped`, Ruff and `git diff --check` passed. A fresh
   SOL review of `a21bf814545bbaa3148ce34a7940661be76e1b6d` is pending before
   another live attempt.
+- SOL then returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and
+  `HUMAN_GATE=NO` for that remediation. One fresh AutoCAD Mechanical 2027
+  attempt was made with `BVTL.dwg` not already open and the approved fixture
+  configured. It failed closed before the first source-open call because the
+  existing dispatcher did not become ready: `MCPTimeoutError`,
+  `request_id=630d574a66d5`, after `14.54s`. No health/setup audit,
+  inspection, extraction, candidate, or query ran; live acceptance remains
+  **NOT RUN**, not PASS. AutoCAD was on `[Start]` and closed without a drawing,
+  the disposable root stayed empty, and the source hash remained
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+  Private evidence is at
+  `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration30-evidence.txt`.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 

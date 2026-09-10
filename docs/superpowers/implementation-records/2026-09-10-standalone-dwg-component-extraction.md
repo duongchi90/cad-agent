@@ -186,3 +186,26 @@ AutoCAD state were not changed. This is implementation and offline-contract
 evidence only. Live acceptance remains `NOT RUN` pending a fresh SOL review of
 `a21bf814545bbaa3148ce34a7940661be76e1b6d`; only after `VERDICT=PASS` may the
 standalone live inspection/extraction/query gate be attempted again.
+
+## Iteration 30 live session bootstrap result
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the fail-closed remediation. One fresh opt-in live gate was then attempted
+with AutoCAD Mechanical 2027 started without `BVTL.dwg` already open, the
+approved fixture and source hashes configured, and the existing plugin/dispatcher
+bootstrap route. The attempt stopped before `drawing_open(read_only=True)`:
+
+- `MCPTimeoutError`: AutoCAD dispatcher did not become ready;
+  `request_id=630d574a66d5`.
+- Pytest result: `1 failed, 1 deselected` in `14.54s`.
+- No health, setup audit, inspection, extraction, candidate creation, query,
+  or cleanup gate ran.
+- AutoCAD was on `[Start]` and closed without a drawing. The source hash stayed
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`, and the
+  disposable root remained empty.
+
+This is a session/bootstrap readiness finding, not a read-only-path result.
+Live acceptance therefore remains `NOT RUN`. The detailed private evidence is
+at `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration30-evidence.txt`.
+No retry or production-code mutation was made after the bounded failure; the
+next action is held for a fresh SOL decision on the existing bootstrap path.
