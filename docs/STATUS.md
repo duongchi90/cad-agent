@@ -21,7 +21,7 @@
 - Branch-local implementation head:
   `codex/audit-text-style-compat-20260910`, with standalone extraction code at
   `94719ca3e854dd3bb6b668217924c85e3d07c214`; current status/evidence
-  documentation is committed and pushed at `ae5d5357a5aecedba7dc83a76c368e5c070aded1`.
+  documentation is committed and pushed at `eb5361493b4b466b905223964642c453086a853d`.
 - Task 6 is **Partially verified**: the opt-in live gate and all offline
   contract/provenance paths are present, but the approved private BVTL source,
   operator fixture, AutoCAD Mechanical/File IPC session, and disposable
