@@ -126,6 +126,20 @@
   offline Python `3372`, zero product failures, and the expected causal-RED
   diagnostic. Private real-data/AutoCAD gates and live Task-6 remain
   **NOT RUN**. Fresh SOL review of `8040adb` is pending.
+- SOL then returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and
+  `HUMAN_GATE=NO` for the readiness hardening. Exactly one fresh opt-in live
+  Task-6 attempt was run with AutoCAD Mechanical 2027 initially on `[Start]`
+  and `BVTL.dwg` closed. `_.QNEW` was delivered, but the bounded readiness
+  probe never observed a non-`[Start]` document within `10.26s`; the gate
+  failed closed with `START_TAB_BOOTSTRAP_DOCUMENT_NOT_READY` before LISP,
+  FileIPC ping, source-open, inspection, extraction, candidate creation, or
+  query. AutoCAD remained on `[Start]` and was closed without saving; the
+  disposable root stayed empty and source hash
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8` stayed
+  unchanged. Live Task-6 acceptance remains **NOT RUN**, not PASS. Private
+  evidence is at
+  `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration34-evidence.txt`;
+  fresh SOL review is pending.
 
 ## VIEWPORT-by-handle branch checkpoint (2026-09-10)
 

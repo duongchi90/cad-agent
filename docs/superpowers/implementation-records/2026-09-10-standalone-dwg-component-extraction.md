@@ -277,3 +277,25 @@ product failures; the causal-RED diagnostic remains intentionally failing and
 private real-data/AutoCAD Mechanical prerequisites remain skipped. No live
 Task-6 gate was rerun, no source/candidate/accepted drawing was touched, and
 fresh SOL review of `8040adb54629a533dbfdb3efe1cb2ef0da92fa8e` is required.
+
+## Iteration 34 fresh live readiness result
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the iteration-33 readiness hardening. Exactly one fresh opt-in Task-6 live
+attempt was run with AutoCAD Mechanical 2027 initially on `[Start]`, the
+approved fixture and source hashes configured, and `BVTL.dwg` not open. The
+native command trigger delivered `_.QNEW`, but the bounded readiness probe did
+not observe a non-`[Start]` document within `10.26s`; the gate failed closed
+with `START_TAB_BOOTSTRAP_DOCUMENT_NOT_READY` before LISP load, FileIPC ping,
+source `drawing_open(read_only=True)`, health, setup audit, inspection,
+extraction, candidate creation, or query.
+
+Postcondition inspection showed AutoCAD still on `[Start]`; it was closed
+without saving. The disposable root remained empty and source
+`BVTL.dwg` retained SHA-256
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`. No
+source, accepted drawing, candidate, production CAD, or reviewed HEAD was
+mutated. Live Task-6 acceptance remains `NOT RUN`, not `PASS`. Detailed
+private evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration34-evidence.txt`;
+fresh SOL review of this live boundary is required.
