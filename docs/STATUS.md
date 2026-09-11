@@ -1,4 +1,35 @@
 # CAD Agent Status
+## Current bootstrap observability remediation (iteration 51)
+- SOL returned `VERDICT=BLOCKED`, `HUMAN_GATE=NO`, and authorized exactly one
+  non-live observability-only remediation after the timing classification
+  remained inconclusive. The remediation does not change the 30-second
+  timeout, bootstrap commands, readiness semantics, FileIPC behavior, or CAD
+  operations.
+- Code/test checkpoint is pushed at
+  `4a0d33c02db56a71d99ffe207bc031c5bdfb80c5`. A shared privacy-safe
+  `BootstrapTimingRecorder` records monotonic events for `process_launch`,
+  `start_window_observed`, `completion_wait_start`,
+  `document_ready_transition`, `completion_marker_observed`,
+  `completion_timeout`, and `cleanup_start`/`cleanup_end`. Recorder failures
+  are swallowed so observability cannot alter fail-closed bootstrap behavior.
+  The opt-in live harness passes one recorder through the session/client and
+  emits `BOOTSTRAP_TIMING_EVENTS` for future evidence; no live run was made.
+- TDD RED/GREEN: the new timing tests first failed because the recorder API
+  was absent, then the focused owner suite passed `38` tests with `6`
+  subtests; the unavailable standalone live gate reported `SKIP` because its
+  AutoCAD/FileIPC prerequisites were absent. Ruff and `git diff --check` pass.
+- Authoritative `scripts/verify.ps1` exits `0` on this clean commit: C# `238`
+  passed; offline Python JUnit `3385` with zero failures/errors/skips
+  (`3305` passed, `21` deselected, `80` subtests); offline IPC JUnit `134`
+  clean; causal-RED expected one negative failure handled; real-data `2`
+  skipped; AutoCAD Mechanical `17` skipped; AutoCAD live and M2 remain
+  `NOT RUN`.
+- No AutoCAD/FileIPC live retry, source drawing open, candidate operation,
+  production CAD mutation, or reviewed-state mutation was performed. Fresh
+  SOL review is required before any live run.
+- Repository-readable implementation record:
+  `docs/superpowers/implementation-records/2026-09-11-bootstrap-observability-remediation-iteration51.md`.
+
 ## Current bootstrap timing reconstruction (iteration 50)
 - SOL's single bounded action was a non-live reconstruction from retained
   iteration-43/45/47/49 evidence only. No code, AutoCAD, FileIPC, source,
