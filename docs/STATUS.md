@@ -1,4 +1,12 @@
 # CAD Agent Status
+## Current code checkpoint (iteration 48)
+- SOL's iteration-47 finding isolated a remaining execution-framing difference: the production startup script still evaluated dispatcher-root assignment, `(load mcp_dispatch.lsp)`, and the marker writer inside one enclosing AutoLISP `progn`, while iteration 43 only live-proved a marker write after dispatcher-load return.
+- The bounded non-live remediation is pushed at code HEAD `a9c8fa9f7f67d8562e17d55cce383bf975eb3761`. Production now emits the dispatcher-root assignment/load as one completed top-level expression and the canonical completion-marker writer as a separate following top-level expression; marker path/token validation and stale/wrong-token cleanup are unchanged.
+- TDD RED/GREEN: the byte-for-byte full-script framing assertion failed before the change and focused owner checks passed afterward: 33 passed and 6 subtests. Ruff and `git diff --check` passed.
+- Authoritative `scripts/verify.ps1` exits 0 on code `a9c8fa9`: C# 238 passed; offline Python JUnit 3381 with zero failures/errors/skips (3301 passed, 21 deselected, 80 subtests); offline IPC JUnit 134 clean; causal-red expected one negative failure handled; real-data 2 skipped; AutoCAD Mechanical 17 skipped. Live AutoCAD and M2 remain NOT RUN.
+- No bootstrap or Task-6 live retry was made after this remediation. No source, accepted drawing, candidate, or production CAD state was mutated. Fresh SOL review is required before any live retry.
+- Evidence and resume state: `C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-framing-remediation-iteration48-evidence.txt` and `C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration48.txt`.
+
 ## Current live proof boundary (iteration 47)
 - SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for the canonical completion-marker remediation, authorizing exactly one fresh bootstrap-only live proof on code `636a81e186133a24c36d3e0c6b0b67a918fceb3e`: observe/consume the unique marker, then send exactly one claim-bound FileIPC readiness ping; no BVTL.dwg open or Task-6 extraction/query.
 - The proof failed closed at the first boundary with `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED`. The production unique same-root `.marker` was not observed; claim-bound ping attempts were 0 and the ping boundary was not reached.

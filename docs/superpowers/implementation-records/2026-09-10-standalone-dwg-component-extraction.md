@@ -653,3 +653,39 @@ Private evidence and recoverable resume state are recorded at:
 
 Fresh SOL diagnosis of this first-failure boundary is required before another
 bootstrap or live Task-6 attempt.
+
+## Iteration 48 full-script framing remediation
+
+SOL's iteration-47 review isolated the remaining material difference to
+execution framing. The iteration-43 live diagnostic proved a marker write after
+`DISPATCHER_LOAD_RETURN`, but the production owner still evaluated dispatcher
+root assignment, `(load mcp_dispatch.lsp)`, and the marker writer inside one
+enclosing AutoLISP `progn`. SOL authorized exactly one non-live remediation and
+no bootstrap or Task-6 live retry.
+
+The bounded fix is pushed at code HEAD
+`a9c8fa9f7f67d8562e17d55cce383bf975eb3761`. The startup script now emits one
+complete top-level expression for the IPC-root assignment and dispatcher load,
+then a separate following top-level expression for the canonical marker writer.
+The unique same-root `.marker`, exact
+`CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token, exact-content validation, and
+stale/wrong-token cleanup remain unchanged.
+
+TDD RED changed the owner test to assert the complete startup-script bytes,
+including CRLF command boundaries, order, and the absence of the previous
+combined framing; it failed against the old script. GREEN focused owner checks
+report 33 passed and 6 subtests, with Ruff and `git diff --check` passing. The
+authoritative `scripts/verify.ps1` exited 0: C# 238 passed; offline Python
+JUnit 3381 with zero failures/errors/skips (3301 passed, 21 deselected, 80
+subtests); offline IPC JUnit 134 clean; causal-red expected one negative
+failure handled; real-data 2 skipped; AutoCAD Mechanical 17 skipped. Live
+AutoCAD and M2 Mechanical remain NOT RUN.
+
+No live retry was made after this remediation. No source, accepted drawing,
+candidate, or production CAD state was mutated. Evidence and resume state are
+recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-framing-remediation-iteration48-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration48.txt
+
+Fresh SOL review of this pushed remediation is required before any live retry.
