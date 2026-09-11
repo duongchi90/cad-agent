@@ -1,4 +1,33 @@
 # CAD Agent Status
+## Current bootstrap stage-localization remediation (iteration 54)
+- SOL's iteration-53 review localized the remaining marker-timeout boundary to
+  the post-document-ready startup-script path. The exact marker was still
+  absent about `28.610s` after `document_ready_transition`, while retained
+  stage evidence had previously shown the QNEW-to-ACK sequence completing in
+  `0.7392299s`. SOL authorized exactly one non-live observability-only
+  remediation; no live retry was allowed.
+- Code/test checkpoint `486e2dd72911c5b67b59216a2877b338e03eddc4` adds four
+  fixed-token, privacy-safe stage markers and monotonic timing observations:
+  `post_qnew_entry`, `netload_return`, `dispatcher_load_return`, and
+  `completion_marker_writer_return`. Each path is unique to the owned script,
+  stays inside the exact disposable IPC root, is best-effort observed without
+  changing the 30-second deadline or success semantics, and is removed during
+  cleanup. The existing bootstrap commands, completion marker contract,
+  readiness/FileIPC semantics, and fail-closed behavior remain unchanged.
+- TDD RED/GREEN: focused stage-script/order/partial-failure cleanup assertions
+  first failed because the stage markers were absent; the focused owner suite
+  passed `38` tests. Ruff and `git diff --check` pass.
+- Authoritative `scripts/verify.ps1` completed on the clean code commit:
+  .NET `238` passed; offline Python JUnit `3386` with zero
+  failures/errors/skips (`3306` passed, `21` deselected, `80` subtests);
+  offline IPC JUnit `134` clean; causal-RED expected one negative failure
+  handled; real-data `2` unavailable skips; AutoCAD Mechanical `17`
+  unavailable skips; AutoCAD live and M2 remain `NOT RUN`.
+- No live retry, source open, extraction, query, candidate operation, FileIPC
+  request, or CAD mutation was performed. Fresh SOL review is required before
+  any live proof. Repository-readable record:
+  `docs/superpowers/implementation-records/2026-09-11-bootstrap-stage-localization-remediation-iteration54.md`.
+
 ## Current bootstrap-only live proof (iteration 53)
 - SOL's iteration-52 review returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`,
   and authorized exactly one fresh bootstrap-only live proof on code head
