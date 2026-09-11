@@ -1,4 +1,32 @@
 # CAD Agent Status
+## Current focused-receiver causal diagnostic (iteration 64)
+- Fresh SOL diagnosis of iteration 63 returned
+  `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
+  disposable focused-receiver causal diagnostic on unchanged reviewed code
+  `65fc23ba610091e236f19ee93f8cee69f96d4ce9`. The diagnostic reached QNEW and
+  same-HWND document-ready, captured the current owned GUI-thread focus, sent
+  only the existing `post_qnew_entry` marker expression with the same UTF-16
+  `WM_CHAR` framing directly to that exact focus HWND, waited for the marker,
+  then closed and cleaned up.
+- Owned session: main HWND/PID `5181128/29312`, GUI thread `19756`. Focus before
+  send was owned visible HWND `13044028`, class
+  `Afx:00007FF77AB10000:28:0000000000000000:0000000000000002:00000000329103CD`.
+  All 299 code units returned success from `PostMessageW` when sent directly to
+  that focus HWND, but the exact `CAD_AGENT_START_TAB_POST_QNEW_ENTRY` marker
+  was absent. This rules out a simple MDIClient-versus-focus-child target swap
+  as a sufficient repair; semantic command consumption is still unproven.
+- The initial close call reported
+  `MCPTimeoutError: START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED`; bounded fallback
+  cleanup closed the exact disposable PID `29312` without saving and a follow-up
+  process check confirmed it absent. The proof root
+  `C:/temp/cad-agent-task6-live-20260911/focused-receiver-proof-iteration64`
+  is empty. No focus workaround, retry, NETLOAD, dispatcher, FileIPC, Task-6,
+  source, candidate, DXF, or production mutation occurred.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-focused-receiver-causal-diagnostic-iteration64.md`.
+  Fresh SOL diagnosis is required before any further trigger or implementation
+  change.
+
 ## Current receiver-identity diagnostic (iteration 63)
 - Fresh SOL diagnosis of iteration 62 returned
   `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
