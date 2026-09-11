@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Current bootstrap-only stage-timing proof (iteration 56)
+- SOL's iteration-55 review returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`,
+  and authorized exactly one fresh bootstrap-only live proof on code
+  `b4c8776191b353921944fc4feba3a264bcf39d3e` with
+  `stage_timing_enabled=True` and the unchanged `timeout_s=30.0`. The proof
+  did not open BVTL.dwg or run Task-6 extraction/query/candidate operations.
+- The proof failed closed with
+  `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED`. Timing was
+  `process_launch -> start_window_observed -> completion_wait_start`, then
+  `document_ready_transition` about `2.640s` after the wait began, followed by
+  `completion_timeout` at `30.000s`. None of the four stage events
+  (`post_qnew_entry`, `netload_return`, `dispatcher_load_return`,
+  `completion_marker_writer_return`) was observed, the exact completion marker
+  was absent, and the claim-bound FileIPC ping was not attempted (`0`).
+- Evidence is recorded at
+  `C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-only-live-proof-iteration56-evidence.txt`.
+  The owned proof root was empty and removed; the pre-existing user AutoCAD
+  process was preserved. No source, candidate, accepted drawing, or
+  production CAD state was mutated.
+- Fresh SOL diagnosis is required before another bootstrap or live Task-6
+  attempt. Repository-readable record:
+  `docs/superpowers/implementation-records/2026-09-11-bootstrap-only-stage-timing-proof-iteration56.md`.
+
 ## Current bootstrap stage-localization opt-in correction (iteration 55)
 - SOL's iteration-54 review found that the stage writers were enabled for
   every bootstrap session with an IPC root, which violated the authorized
