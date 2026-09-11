@@ -1,4 +1,35 @@
 # CAD Agent Status
+## Current demand-load semantic health oracle (iteration 76)
+- Fresh SOL diagnosis of iteration 75 returned `VERDICT=CLEAR_CONTINUE` and
+  `HUMAN_GATE=NO`, authorizing exactly one fresh reversible demand-load
+  semantic health oracle. The epoch pre-created one unique existing
+  `.NET/FileIPC` health request, staged and temporarily installed the proven
+  bundle, and launched one disposable AutoCAD with the verified default DWT
+  via `/t` and a temporary `/b` script containing only `CADAGENT_DISPATCH`.
+  It did not require CadAgent to be loaded before command invocation and used
+  no WM_CHAR/PostMessageW, focus manipulation, additional operation, Task-6,
+  source/candidate/DXF, registry mutation, or retry.
+- The owned session reached document-ready on HWND `6295198` / PID `31780`.
+  The exact matching health result for request
+  `health-cadagent-demandload-iter76-20260911` reported
+  `schema_version=1.0`, `operation=health`, `success=true`, `changed=false`,
+  and empty `errors`; the result's read-only payload identified AutoCAD
+  Mechanical 2027 and the installed plugin binary.
+- After the matching result, read-only owned-PID inspection found exactly one
+  demand-loaded `CadAgent.AutoCAD2027.dll` at the installed bundle path.
+  Source/staged/installed SHA-256 was identical:
+  `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`.
+  The oracle passed. Cleanup verified PID `31780`, the exact temporary
+  installed bundle, request/result pair, and startup script absent; the
+  verified default DWT hash remained
+  `B4F8B4EA726BAB4B50049F4AA54BA6540F52BD14961F851F49DA705CDC292D42`.
+- Proof is retained at
+  `C:/temp/cad-agent-task6-live-20260911/demandload-semantic-health-iteration76/demandload-health-proof.json`.
+  Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-demandload-semantic-health-oracle-iteration76.md`.
+  Fresh SOL review is required before any Task-6 or source/candidate/DXF
+  action.
+
 ## Current command-demand loading repair (iteration 75)
 - Fresh SOL diagnosis of iteration 74 returned `VERDICT=MATERIAL_FINDING`,
   localizing the startup-script race to command activation depending on
