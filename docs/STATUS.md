@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Current-main real-PDF run-pdf oracle (iteration 80)
+- Fresh SOL review of iteration 79 returned `VERDICT=CLEAR_CONTINUE`,
+  confirmed the environment prerequisite as `PROVEN_CURRENT`, and authorized
+  exactly one current-main `run-pdf` oracle at
+  `e8fc0092ee46750e50de0ea408fd91811cae10c2` using the repository-owned
+  `.venv-py311`, approved source SHA
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`,
+  calibration `STATUS-e48f3970-144dpi-1to40`, `144` DPI, and
+  `7.055555555556` mm/px. `HUMAN_GATE=NO`.
+- The exact clean detached worktree stayed at the authorized SHA and clean.
+  The one run completed the existing manifest/stage contract for all 9 PDF
+  pages in a new isolated output root. Manifest SHA-256 is
+  `f7c7b1afbd52f8f504dafbcb9b6efb416ee332b88260a01aea2414ab9d650eaf`.
+- Current-main stage states are complete for rendered PNG `9/9`, Primitive IR
+  `9/9`, Semantic IR `9/9`, staged DXF `9/9`, and SHA-bound build evidence
+  `9/9`. The manifest source SHA matches the approved source and the source
+  remained unchanged after execution.
+- The result is `release_profile=DRAFT_REFERENCE` with
+  `authoritative_release_eligible=false`. No retry, AutoCAD/FileIPC,
+  persistence/reopen, visual, dimension, provider/M2, or production-code
+  action was performed. The source-to-run-pdf gate is now
+  `PROVEN_CURRENT`; downstream acceptance gates remain `NOT_PROVEN` pending a
+  fresh SOL decision.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-current-main-run-pdf-oracle-iteration80.md`.
+
 ## Current-main real-PDF environment prerequisite (iteration 79)
 - Fresh SOL diagnosis of iteration 78 returned
   `VERDICT=MATERIAL_FINDING`, localized the failure to the repository-owned
