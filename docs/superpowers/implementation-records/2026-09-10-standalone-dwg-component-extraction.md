@@ -478,3 +478,33 @@ Live Task-6 acceptance remains NOT RUN, not PASS. This observation provides no d
 - C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration42.txt
 
 Fresh SOL diagnosis of this first-failure boundary is required before another live attempt.
+
+## Iteration 43 bootstrap-only staged completion diagnostic
+
+SOL classified the iteration-42 completion-ack timeout as a bootstrap-owner
+diagnostic boundary and authorized exactly one fresh bootstrap-only staged
+diagnostic. The diagnostic launched one owned AutoCAD Mechanical 2027 blank
+session with the approved release plugin and repository dispatcher. It did not
+open `BVTL.dwg`, send a claim-bound FileIPC ping, run Task 6, or alter any
+source, accepted drawing, candidate, or production CAD state.
+
+The same-root staged script positively emitted markers for:
+
+- `QNEW_COMPLETE`
+- `NETLOAD_RETURN`
+- `DISPATCHER_LOAD_RETURN`
+- `ACK_WRITE_RETURN`
+
+The session nevertheless failed closed with
+`START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 94.39 seconds. The final
+marker was placed after the acknowledgement conditional, so it proves that the
+script reached the final expression but does not independently prove that the
+`.ready` file was successfully opened and written. No `.ready` file remained
+after session cleanup. No acad.exe process remained, the disposable candidate
+root was empty, and the approved `BVTL.dwg` SHA-256 remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+
+Live Task-6 acceptance remains **NOT RUN**, not PASS. The diagnostic provides no
+dispatcher, visual, geometry, extraction, or query fidelity verdict. The
+diagnostic root is `C:/temp/cad-agent-task6-live-20260911/bootstrap-stage-iteration43`.
+Fresh SOL diagnosis is required before another bootstrap or live Task-6 run.

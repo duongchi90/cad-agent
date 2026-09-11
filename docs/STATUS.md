@@ -1,4 +1,11 @@
 # CAD Agent Status
+## Current bootstrap diagnostic boundary (iteration 43)
+- SOL authorized exactly one bootstrap-only staged completion diagnostic after the iteration-42 completion-ack timeout. It used a fresh owned AutoCAD Mechanical 2027 session, the approved release plugin, and the repository dispatcher, with no BVTL.dwg/source-open call and no Task-6 retry.
+- The diagnostic positively observed all four staged marker files in the same disposable root: `QNEW_COMPLETE`, `NETLOAD_RETURN`, `DISPATCHER_LOAD_RETURN`, and `ACK_WRITE_RETURN`. The final marker was emitted after the acknowledgement conditional, so it proves the script reached that final expression but does not by itself prove that the `.ready` file was successfully opened/written.
+- `WindowsAutoCADStartTabSession` still failed closed with `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 94.39 seconds. The claim-bound FileIPC ping, BVTL.dwg source open, health, setup audit, inspection, extraction, candidate creation/query, and source reopen were not reached. Live Task-6 acceptance remains NOT RUN, not PASS.
+- Cleanup is verified: no acad.exe process remains, the diagnostic root has only the four stage markers and no `.ready` file, the disposable candidate root is empty, and BVTL.dwg SHA-256 remains `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`. No source, accepted drawing, candidate, or production CAD state was mutated.
+- Diagnostic root: `C:/temp/cad-agent-task6-live-20260911/bootstrap-stage-iteration43`. The checkpoint is pushed in this documentation commit. Fresh SOL diagnosis is pending; do not retry the bootstrap or live Task 6 before a new verdict.
+
 ## Current live boundary (iteration 42)
 - SOL authorized one fresh live Task-6 gate on code c415b90139f58d3f76de7e3f15f5dc4c3e68e40a. The owned startup session did not observe its exact completion acknowledgement within the bounded timeout and failed closed with START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED after 53.89s.
 - The gate stopped before the claim-bound FileIPC ping, BVTL.dwg source open, health, setup audit, standalone inspection, extraction, candidate creation, query, or source reopen. Live acceptance remains NOT RUN, not PASS.
