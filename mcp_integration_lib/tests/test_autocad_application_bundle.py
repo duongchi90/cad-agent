@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+import shutil
+import tempfile
 import xml.etree.ElementTree as ET
 
 
@@ -16,6 +19,11 @@ PLUGIN_DLL = (
     / "net10.0-windows"
     / "CadAgent.AutoCAD2027.dll"
 )
+EXPECTED_PLUGIN_SHA256 = "BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest().upper()
 
 
 def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
@@ -40,6 +48,27 @@ def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
     assert entry.attrib["AppName"] == "CadAgent.AutoCAD2027"
     assert entry.attrib["LoadOnAutoCADStartup"] == "True"
 
+    bundle_root = BUNDLE_MANIFEST.parent.resolve()
     module_path = (BUNDLE_MANIFEST.parent / entry.attrib["ModuleName"]).resolve()
-    assert module_path == PLUGIN_DLL.resolve()
-    assert module_path.is_file()
+    assert module_path.is_relative_to(bundle_root), (
+        "Issue #409 RED: ComponentEntry ModuleName escapes CadAgent.bundle"
+    )
+
+    assert PLUGIN_DLL.is_file()
+    assert _sha256(PLUGIN_DLL) == EXPECTED_PLUGIN_SHA256
+
+    with tempfile.TemporaryDirectory(prefix="cadagent-bundle-stage-") as staging:
+        staged_bundle = Path(staging) / "CadAgent.bundle"
+        shutil.copytree(BUNDLE_MANIFEST.parent, staged_bundle)
+        staged_module = staged_bundle / "Contents" / "Windows" / "CadAgent.AutoCAD2027.dll"
+        staged_module.parent.mkdir(parents=True)
+        shutil.copy2(PLUGIN_DLL, staged_module)
+
+        staged_manifest = staged_bundle / "PackageContents.xml"
+        staged_root = ET.parse(staged_manifest).getroot()
+        staged_entry = staged_root.findall("./Components/ComponentEntry")[0]
+        staged_module_path = (staged_manifest.parent / staged_entry.attrib["ModuleName"]).resolve()
+
+        assert staged_module_path.is_relative_to(staged_bundle.resolve())
+        assert staged_module_path == staged_module.resolve()
+        assert _sha256(staged_module_path) == EXPECTED_PLUGIN_SHA256

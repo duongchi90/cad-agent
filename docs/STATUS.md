@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Current bundle-contained module packaging repair (iteration 69)
+- Fresh SOL diagnosis of iteration 68 returned
+  `VERDICT=MATERIAL_FINDING`, identified that the previous `ModuleName` escaped
+  `CadAgent.bundle`, and authorized exactly one TDD packaging-contract repair.
+  The scope excluded installation/copy into AutoCAD, registry, live AutoCAD,
+  dispatcher, WM_CHAR, FileIPC, Task-6, source, candidate, and DXF mutation.
+- The regression test was changed first and correctly failed on the old
+  parent-relative path with
+  `Issue #409 RED: ComponentEntry ModuleName escapes CadAgent.bundle`.
+- The manifest now uses the bundle-contained path
+  `./Contents/Windows/CadAgent.AutoCAD2027.dll`. The focused test then passed
+  `1 passed in 0.56s`; it stages a disposable bundle, copies the existing
+  approved Release DLL into that staged `Contents/Windows` directory, verifies
+  containment, and matches SHA-256
+  `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`.
+- No generated DLL is committed. AutoCAD installation/copy and the fresh live
+  module-presence oracle remain separate gates and were not run.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-cadagent-bundle-contained-module-repair-iteration69.md`.
+  Fresh SOL diagnosis is required before any installation/copy or live oracle.
+
 ## Current CadAgent autoload bundle contract (iteration 68)
 - Fresh SOL diagnosis of iteration 67 returned
   `VERDICT=MATERIAL_FINDING`, identified the genuinely missing plugin

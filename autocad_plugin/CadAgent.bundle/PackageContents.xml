@@ -12,7 +12,7 @@
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
     <ComponentEntry AppName="CadAgent.AutoCAD2027"
                     Version="0.0.0"
-                    ModuleName="../CadAgent.AutoCAD2027/bin/x64/Release/net10.0-windows/CadAgent.AutoCAD2027.dll"
+                    ModuleName="./Contents/Windows/CadAgent.AutoCAD2027.dll"
                     LoadOnAutoCADStartup="True" />
   </Components>
 </ApplicationPackage>
