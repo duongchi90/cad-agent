@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Current bootstrap-only live proof (iteration 59)
+- Fresh SOL review of pushed code `65fc23ba610091e236f19ee93f8cee69f96d4ce9`
+  returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`,
+  authorizing exactly one bootstrap-only live proof. The proof was bounded to
+  one owned disposable AutoCAD Mechanical 2027 session and the sequence
+  `QNEW -> same-HWND document-ready -> NETLOAD -> dispatcher LISP load ->
+  exact completion acknowledgement -> close/cleanup`; it did not open or
+  mutate BVTL.dwg, any source drawing, candidate, DXF, or accepted artifact.
+- The proof failed closed with
+  `MCPTimeoutError: START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED`. Timing was
+  `process_launch -> start_window_observed -> document_ready_transition ->
+  completion_wait_start -> completion_timeout`; none of the four opt-in stage
+  markers or the exact completion marker was observed.
+- Cleanup completed for the owned disposable process and root. The root had no
+  remaining entries, the pre-existing AutoCAD process remained running, and no
+  source/candidate/DXF/FileIPC mutation was performed. This is a bootstrap
+  owner finding, not a live Task-6 acceptance result; do not retry bootstrap or
+  Task-6 until fresh SOL diagnosis.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-bootstrap-only-live-proof-iteration59.md`.
+
 ## Current two-phase Start-tab bootstrap remediation (iteration 57)
 - Fresh SOL diagnosis of iteration 56 returned `VERDICT=MATERIAL_FINDING`,
   `HUMAN_GATE=NO`, and authorized exactly one non-live two-phase bootstrap-owner
