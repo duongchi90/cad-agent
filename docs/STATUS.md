@@ -1,4 +1,36 @@
 # CAD Agent Status
+## Current command-delivery owner inventory (iteration 65)
+- Fresh SOL diagnosis of iteration 64 returned
+  `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized one non-live
+  reuse-first inventory. The inventory inspected the existing Python/.NET/
+  AutoCAD integration surfaces and ran only focused offline trigger-contract
+  tests; it did not modify production code or perform another live retry.
+- The existing semantic owner is already present: Python
+  `mcp_integration_lib/dotnet_ipc.py` writes one request, invokes the existing
+  `CADAGENT_DISPATCH` command trigger, and polls the exact result file; the
+  AutoCAD plugin's `[CommandMethod("CADAGENT_DISPATCH")]` reads that request,
+  calls `OperationDispatcher.Dispatch`, and persists a validated `IpcResult`
+  through `JsonFileStore.WriteResult` before any disposable close scheduling.
+  The result's matching `request_id`, schema, `success`, and error/payload
+  fields are the semantic acknowledgement owner. No second transport is
+  justified by this inventory.
+- Smallest reuse proposal for a future bounded implementation is therefore to
+  keep the existing .NET File IPC owner and `DotNetIPCClient` contract, and
+  bind the relevant bootstrap/dispatch boundary to its matching result-file
+  acknowledgement. This proposal does not claim that the plugin is available
+  before NETLOAD or that it solves the pre-plugin bootstrap boundary; that
+  prerequisite remains separately unproven. No production write is authorized
+  by this inventory.
+- The causal RED oracle is the existing marked test
+  `test_enqueue_true_without_receiver_consumption_is_causal_red`: with every
+  `PostMessageW` call returning true but receiver consumption false, the
+  current trigger returns without a handler acknowledgement. It ran as the
+  expected RED (`1 failed, 1 passed, 18 deselected`), while the focused
+  `DotNetIPCClient` enqueue/result tests ran `3 passed` with no cache writes.
+- Exact inventory, proposal, search boundary, and oracle evidence are recorded
+  in `docs/superpowers/implementation-records/2026-09-11-command-delivery-owner-inventory-iteration65.md`.
+  Fresh SOL diagnosis is required before any implementation or live retry.
+
 ## Current focused-receiver causal diagnostic (iteration 64)
 - Fresh SOL diagnosis of iteration 63 returned
   `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
