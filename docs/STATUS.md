@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Current bootstrap timing reconstruction (iteration 50)
+- SOL's single bounded action was a non-live reconstruction from retained
+  iteration-43/45/47/49 evidence only. No code, AutoCAD, FileIPC, source,
+  candidate, or reviewed-HEAD mutation was performed.
+- The retained iteration-43 stage markers show exact deltas of
+  `QNEW_COMPLETE -> ACK_WRITE_RETURN = 0.7392299s` and
+  `DISPATCHER_LOAD_RETURN -> ACK_WRITE_RETURN = 0.0009978s`.
+- The current owner/test semantics use a fresh `timeout_s=30.0` completion
+  wait after the `[Start]` window/start probe is observed. None of the
+  retained iterations 43/45/47/49 records the process-launch time,
+  `[Start]` observation, Drawing1 transition, or production timeout instant.
+  The proof-root creation timestamps are setup metadata and cannot substitute
+  for those missing anchors.
+- Therefore `BUDGET_CLASSIFICATION=INCONCLUSIVE_FOR_30S_COMPLETION_DEADLINE`.
+  The evidence does not prove a late marker and does not prove a broken marker
+  writer. No syntax change or live retry is justified by this reconstruction.
+- Private evidence and recoverable state:
+  `C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-timing-reconstruction-iteration50-evidence.txt` and
+  `C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration50.txt`.
+  Fresh SOL review is pending; remain in WAIT_SAFE.
+
 ## Current live proof boundary (iteration 49)
 - SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for iteration 48 and authorized exactly one fresh bootstrap-only live proof on code `a9c8fa9f7f67d8562e17d55cce383bf975eb3761`: exact unique `.marker` observation/validation, then exactly one claim-bound FileIPC readiness ping; no BVTL.dwg open or Task-6 extraction/query/candidate operation.
 - The proof failed closed at the first boundary with `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 57.547 seconds for the bounded process including cleanup. The production unique same-root `.marker` was not observed; claim-bound ping attempts were 0 and the ping boundary was not reached.
