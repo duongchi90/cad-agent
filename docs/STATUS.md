@@ -1,4 +1,28 @@
 # CAD Agent Status
+## Current CadAgent autoload bundle contract (iteration 68)
+- Fresh SOL diagnosis of iteration 67 returned
+  `VERDICT=MATERIAL_FINDING`, identified the genuinely missing plugin
+  availability owner, and authorized exactly one TDD implementation of a
+  repository-owned Autodesk ApplicationPlugins bundle contract. The bounded
+  scope excluded installation/copy, registry, live AutoCAD, dispatcher,
+  WM_CHAR, FileIPC, Task-6, source, candidate, and DXF mutation.
+- RED was observed first in
+  `mcp_integration_lib/tests/test_autocad_application_bundle.py`: with no
+  manifest present, the intended assertion failed with
+  `Issue #409 RED: repository-owned CadAgent ApplicationPlugins manifest is absent`.
+- GREEN was then observed after adding
+  `autocad_plugin/CadAgent.bundle/PackageContents.xml`: the focused test ran
+  `1 passed in 0.03s`. It verifies the Win64 AutoCAD `R26.0` boundary, exactly
+  one CadAgent component, `LoadOnAutoCADStartup=True`, and a relative module
+  path resolving to the existing Release `CadAgent.AutoCAD2027.dll`.
+- The existing .NET/FileIPC semantic owner and dispatcher remain unchanged;
+  no second transport, CadMind reuse, registry owner, or installer subsystem
+  was introduced. Installation and the fresh disposable module-presence oracle
+  remain separate live gates and were not run.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-cadagent-autoload-bundle-contract-iteration68.md`.
+  Fresh SOL diagnosis is required before any installation/copy or live oracle.
+
 ## Current plugin availability owner inventory (iteration 67)
 - Fresh SOL diagnosis of iteration 66 returned
   `VERDICT=MATERIAL_FINDING`, identified the first open boundary as plugin
