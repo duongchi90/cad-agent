@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 import shutil
 import tempfile
+import uuid
 import xml.etree.ElementTree as ET
 
 
@@ -31,6 +32,11 @@ def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
     root = ET.parse(BUNDLE_MANIFEST).getroot()
     assert root.tag == "ApplicationPackage"
     assert root.attrib["AutodeskProduct"] == "AutoCAD"
+    product_code = root.attrib.get("ProductCode", "")
+    assert product_code, (
+        "Issue #409 RED: ApplicationPackage ProductCode is required for local deployment"
+    )
+    uuid.UUID(product_code)
 
     runtime = root.find("RuntimeRequirements")
     assert runtime is not None

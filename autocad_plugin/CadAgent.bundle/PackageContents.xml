@@ -3,6 +3,7 @@
                     AutodeskProduct="AutoCAD"
                     ProductType="Application"
                     Name="CadAgent"
+                    ProductCode="E5B9D36B-3E99-4B9E-BF2E-4D9AD2A6A709"
                     AppVersion="0.0.0"
                     FriendlyVersion="0.0.0"
                     Description="CadAgent for AutoCAD Mechanical 2027"
