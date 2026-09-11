@@ -160,6 +160,36 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             document_settle_s=0,
         )
 
+    def _runtime_bindings_factory(self, session_ref, events):
+        def raw_lisp(expression):
+            events.append(("lisp", expression))
+            session = session_ref["session"]
+            for _event_name, stage_path, token in session._stage_marker_paths:
+                if token in expression:
+                    stage_path.write_text(token + "\n", encoding="ascii")
+            if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression:
+                session._completion_marker_path.write_text(
+                    mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN + "\n",
+                    encoding="ascii",
+                )
+
+        def command(command_text):
+            events.append(("command", command_text))
+
+        def factory(hwnd):
+            return SimpleNamespace(
+                hwnd=hwnd,
+                command_trigger=command,
+                raw_lisp_trigger=raw_lisp,
+                dispatch_trigger=_claim_bound_trigger(lambda: None),
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: True,
+                dispatcher_preloaded=False,
+                bootstrap_completion_confirmed=False,
+            )
+
+        return factory
+
         def dispatch(command, params):
             if command == "ping":
                 return {}
@@ -381,14 +411,6 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             return process
 
         def find_window(pid):
-            for event_name, token in mcp_client_module._START_TAB_STAGE_MARKERS:
-                stage = launch_calls[0][1].parent / (
-                    launch_calls[0][1].stem + ".stage-" + event_name.replace("_", "-")
-                )
-                stage.write_text(token + "\n", encoding="ascii")
-            launch_calls[0][1].with_suffix(".marker").write_text(
-                "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
-            )
             return 8801 if pid == process.pid else 0
 
         def close_window(hwnd):
@@ -409,7 +431,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=self._runtime_bindings_factory(
+                (session_ref := {}), []
+            ),
         )
+        session_ref["session"] = session
 
         bindings = session.launch_blank_document()
         self.assertEqual(8801, bindings.hwnd)
@@ -417,7 +443,6 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertTrue(bindings.bootstrap_completion_confirmed)
         self.assertEqual(1, len(launch_calls))
         script = launch_calls[0][2].decode("utf-8")
-        marker_path = launch_calls[0][1].with_suffix(".marker")
         stage_paths = sorted(
             launch_calls[0][1].parent.glob(launch_calls[0][1].stem + ".stage-*")
         )
@@ -425,75 +450,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertTrue(all(path.parent == Path(self._ipc_dir) for path in stage_paths))
         self.assertEqual(4, len({path.name for path in stage_paths}))
 
-        def stage_expression(path, token):
-            return (
-                '(progn (setq cad-agent-stage-file (open "'
-                + path.as_posix()
-                + '" "w")) (if cad-agent-stage-file (progn (write-line '
-                + '"'
-                + token
-                + '"'
-                + " cad-agent-stage-file) (close cad-agent-stage-file))))"
-            )
-
-        stage_by_name = {
-            "post-qnew-entry": next(
-                path for path in stage_paths if path.name.endswith(".stage-post-qnew-entry")
-            ),
-            "netload-return": next(
-                path for path in stage_paths if path.name.endswith(".stage-netload-return")
-            ),
-            "dispatcher-load-return": next(
-                path
-                for path in stage_paths
-                if path.name.endswith(".stage-dispatcher-load-return")
-            ),
-            "completion-marker-writer-return": next(
-                path
-                for path in stage_paths
-                if path.name.endswith(".stage-completion-marker-writer-return")
-            ),
-        }
-        expected_script = "\r\n".join(
-            [
-                "_.QNEW",
-                stage_expression(
-                    stage_by_name["post-qnew-entry"],
-                    "CAD_AGENT_START_TAB_POST_QNEW_ENTRY",
-                ),
-                "_.NETLOAD",
-                '"' + plugin_path.as_posix() + '"',
-                "",
-                stage_expression(
-                    stage_by_name["netload-return"],
-                    "CAD_AGENT_START_TAB_NETLOAD_RETURN",
-                ),
-                '(progn (setq *cad-agent-file-ipc-root* "'
-                + Path(self._ipc_dir).as_posix()
-                + '") (load "'
-                + lisp_path.as_posix()
-                + '"))',
-                stage_expression(
-                    stage_by_name["dispatcher-load-return"],
-                    "CAD_AGENT_START_TAB_DISPATCHER_LOAD_RETURN",
-                ),
-                '(progn (setq cad-agent-stage-file (open "'
-                + marker_path.as_posix()
-                + '" "w")) (if cad-agent-stage-file (progn (write-line '
-                + '"CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"'
-                + " cad-agent-stage-file) (close cad-agent-stage-file))))",
-                stage_expression(
-                    stage_by_name["completion-marker-writer-return"],
-                    "CAD_AGENT_START_TAB_COMPLETION_MARKER_WRITER_RETURN",
-                ),
-            ]
-        ) + "\r\n"
-        self.assertEqual(expected_script, script)
-        self.assertNotIn(
-            '(load "' + lisp_path.as_posix() + '") '
-            + '(progn (setq cad-agent-stage-file',
-            script,
-        )
+        self.assertEqual("_.QNEW\r\n", script)
         self.assertNotIn("BVTL", script)
         self.assertNotIn("SAVE", script)
         self.assertNotIn("EXTRACTION", script)
@@ -504,20 +461,90 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
         self.assertEqual([], list(launch_calls[0][1].parent.glob(launch_calls[0][1].stem + ".stage-*")))
 
+    def test_start_tab_runtime_bootstrap_follows_document_ready(self):
+        process = SimpleNamespace(pid=7313, poll=lambda: None)
+        launch_calls = []
+        runtime_events = []
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        plugin_path = Path(self._ipc_dir) / "CadAgent.AutoCAD2027.dll"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        plugin_path.write_bytes(b"test plugin")
+
+        def launch(executable, script_path):
+            launch_calls.append((executable, script_path, script_path.read_bytes()))
+            return process
+
+        def runtime_lisp(expression):
+            runtime_events.append(("lisp", expression))
+            for event_name, stage_path, token in session._stage_marker_paths:
+                if token in expression:
+                    stage_path.write_text(token + "\n", encoding="ascii")
+            if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression:
+                session._completion_marker_path.write_text(
+                    mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN + "\n",
+                    encoding="ascii",
+                )
+
+        def runtime_command(command):
+            runtime_events.append(("command", command))
+
+        def bindings_factory(hwnd):
+            return SimpleNamespace(
+                hwnd=hwnd,
+                command_trigger=runtime_command,
+                raw_lisp_trigger=runtime_lisp,
+                dispatch_trigger=_claim_bound_trigger(lambda: None),
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: True,
+                dispatcher_preloaded=False,
+                bootstrap_completion_confirmed=False,
+            )
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_plugin_path=str(plugin_path),
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=str(self._ipc_dir),
+            stage_timing_enabled=True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=lambda pid: 8813,
+            window_closer=lambda hwnd: setattr(process, "poll", lambda: 0),
+            start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=bindings_factory,
+        )
+
+        bindings = session.launch_blank_document()
+
+        self.assertEqual(b"_.QNEW\r\n", launch_calls[0][2])
+        self.assertEqual(
+            ["lisp", "command", "lisp", "lisp", "lisp", "lisp", "lisp"],
+            [kind for kind, _ in runtime_events],
+        )
+        self.assertIn("CAD_AGENT_START_TAB_POST_QNEW_ENTRY", runtime_events[0][1])
+        self.assertIn("_.NETLOAD", runtime_events[1][1])
+        self.assertIn("CAD_AGENT_START_TAB_NETLOAD_RETURN", runtime_events[2][1])
+        self.assertIn('(load "' + lisp_path.as_posix() + '")', runtime_events[3][1])
+        self.assertTrue(bindings.dispatcher_preloaded)
+        self.assertTrue(bindings.bootstrap_completion_confirmed)
+
+        session.close_without_save()
+
     def test_start_tab_stage_localization_is_opt_in_and_default_script_is_unchanged(self):
         process = SimpleNamespace(pid=7305, poll=lambda: None)
         launch_calls = []
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
         lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        session_ref = {}
 
         def launch(executable, script_path):
             launch_calls.append((executable, script_path, script_path.read_bytes()))
             return process
 
         def find_window(pid):
-            launch_calls[0][1].with_suffix(".marker").write_text(
-                "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
-            )
             return 8805
 
         session = mcp_client_module.WindowsAutoCADStartTabSession(
@@ -532,27 +559,13 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_closer=lambda hwnd: setattr(process, "poll", lambda: 0),
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=self._runtime_bindings_factory(session_ref, []),
         )
+        session_ref["session"] = session
 
         session.launch_blank_document()
         script_path = launch_calls[0][1]
-        marker_path = script_path.with_suffix(".marker")
-        expected_script = "\r\n".join(
-            [
-                "_.QNEW",
-                '(progn (setq *cad-agent-file-ipc-root* "'
-                + Path(self._ipc_dir).as_posix()
-                + '") (load "'
-                + lisp_path.as_posix()
-                + '"))',
-                '(progn (setq cad-agent-stage-file (open "'
-                + marker_path.as_posix()
-                + '" "w")) (if cad-agent-stage-file (progn (write-line '
-                + '"CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"'
-                + " cad-agent-stage-file) (close cad-agent-stage-file))))",
-            ]
-        ) + "\r\n"
-        self.assertEqual(expected_script, launch_calls[0][2].decode("utf-8"))
+        self.assertEqual("_.QNEW\r\n", launch_calls[0][2].decode("utf-8"))
         self.assertEqual([], list(script_path.parent.glob(script_path.stem + ".stage-*")))
         session.close_without_save()
 
@@ -563,23 +576,13 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
         lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
         script_holder = []
+        session_ref = {}
 
         def launch(executable, script_path):
             script_holder.append(script_path)
             return process
 
         def find_window(pid):
-            marker = script_holder[0].with_suffix(".marker")
-            for event_name, token in mcp_client_module._START_TAB_STAGE_MARKERS:
-                stage = script_holder[0].parent / (
-                    script_holder[0].stem
-                    + ".stage-"
-                    + event_name.replace("_", "-")
-                )
-                stage.write_text(token + "\n", encoding="ascii")
-            marker.write_text(
-                "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
-            )
             return 8810
 
         def close_window(hwnd):
@@ -599,7 +602,9 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             document_ready_probe_factory=lambda hwnd: lambda: True,
             stage_timing_enabled=True,
             timing_recorder=timing,
+            bindings_factory=self._runtime_bindings_factory(session_ref, []),
         )
+        session_ref["session"] = session
 
         session.launch_blank_document()
         session.close_without_save()
@@ -608,12 +613,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [
                 "process_launch",
                 "start_window_observed",
+                "document_ready_transition",
                 "completion_wait_start",
                 "post_qnew_entry",
-                "netload_return",
                 "dispatcher_load_return",
                 "completion_marker_writer_return",
-                "document_ready_transition",
                 "completion_marker_observed",
                 "cleanup_start",
                 "cleanup_end",
@@ -621,7 +625,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [event.name for event in timing.events],
         )
         self.assertEqual(
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
             [event.monotonic_s for event in timing.events],
         )
 
@@ -659,23 +663,18 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         )
 
     def test_start_tab_timing_records_completion_timeout_and_cleanup(self):
-        ticks = iter((21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0))
+        ticks = iter(
+            (21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 31.0)
+        )
         timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
         process = SimpleNamespace(pid=7312, poll=lambda: None)
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
         lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
         script_holder = []
+        session_ref = {}
 
         def launch(executable, script_path):
             script_holder.append(script_path)
-            for event_name, token in mcp_client_module._START_TAB_STAGE_MARKERS[:2]:
-                stage = script_path.parent / (
-                    script_path.stem + ".stage-" + event_name.replace("_", "-")
-                )
-                stage.write_text(token + "\n", encoding="ascii")
-            script_path.with_suffix(".marker").write_text(
-                "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
-            )
             return process
 
         def close_window(hwnd):
@@ -695,7 +694,29 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             document_ready_probe_factory=lambda hwnd: lambda: True,
             stage_timing_enabled=True,
             timing_recorder=timing,
+            bindings_factory=(
+                lambda hwnd: SimpleNamespace(
+                    hwnd=hwnd,
+                    command_trigger=lambda command: None,
+                    raw_lisp_trigger=lambda expression: (
+                        [
+                            stage_path.write_text(token + "\n", encoding="ascii")
+                            for _event_name, stage_path, token in session_ref["session"]._stage_marker_paths
+                            if token in expression
+                        ],
+                        session_ref["session"]._completion_marker_path.write_text(
+                            "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
+                        )
+                        if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression
+                        else None,
+                    ),
+                    dispatch_trigger=_claim_bound_trigger(lambda: None),
+                    start_tab_no_document_probe=lambda: True,
+                    document_ready_probe=lambda: True,
+                )
+            ),
         )
+        session_ref["session"] = session
 
         with self.assertRaisesRegex(
             MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
@@ -706,10 +727,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [
                 "process_launch",
                 "start_window_observed",
+                "document_ready_transition",
                 "completion_wait_start",
                 "post_qnew_entry",
-                "netload_return",
-                "document_ready_transition",
+                "dispatcher_load_return",
+                "completion_marker_writer_return",
                 "completion_timeout",
                 "cleanup_start",
                 "cleanup_end",
@@ -717,7 +739,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [event.name for event in timing.events],
         )
         self.assertEqual(
-            [21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0],
+            [21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0],
             [event.monotonic_s for event in timing.events],
         )
         self.assertFalse(script_holder[0].with_suffix(".marker").exists())
@@ -732,12 +754,10 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
         lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
         launch_calls = []
+        session_ref = {}
 
         def launch(executable, script_path):
             launch_calls.append(script_path)
-            script_path.with_suffix(".marker").write_text(
-                "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
-            )
             return process
 
         def close_window(hwnd):
@@ -756,7 +776,24 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
             timing_recorder=FailingTimingRecorder(),
+            bindings_factory=(
+                lambda hwnd: SimpleNamespace(
+                    hwnd=hwnd,
+                    command_trigger=lambda command: None,
+                    raw_lisp_trigger=lambda expression: (
+                        session_ref["session"]._completion_marker_path.write_text(
+                            "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
+                        )
+                        if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression
+                        else None
+                    ),
+                    dispatch_trigger=_claim_bound_trigger(lambda: None),
+                    start_tab_no_document_probe=lambda: True,
+                    document_ready_probe=lambda: True,
+                )
+            ),
         )
+        session_ref["session"] = session
 
         with self.assertRaisesRegex(
             MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
@@ -770,14 +807,12 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         process = SimpleNamespace(pid=7304, poll=lambda: None)
         launch_calls = []
         close_calls = []
+        session_ref = {}
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
         lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
 
         def launch(executable, script_path):
             launch_calls.append((executable, script_path))
-            script_path.with_suffix(".marker").write_text(
-                "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
-            )
             return process
 
         def close_window(hwnd):
@@ -796,7 +831,24 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=(
+                lambda hwnd: SimpleNamespace(
+                    hwnd=hwnd,
+                    command_trigger=lambda command: None,
+                    raw_lisp_trigger=lambda expression: (
+                        session_ref["session"]._completion_marker_path.write_text(
+                            "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
+                        )
+                        if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression
+                        else None
+                    ),
+                    dispatch_trigger=_claim_bound_trigger(lambda: None),
+                    start_tab_no_document_probe=lambda: True,
+                    document_ready_probe=lambda: True,
+                )
+            ),
         )
+        session_ref["session"] = session
         with self.assertRaisesRegex(
             MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
         ):
@@ -1002,6 +1054,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         process = SimpleNamespace(pid=7303, poll=lambda: None)
         launch_calls = []
         close_calls = []
+        session_ref = {}
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
         lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
 
@@ -1025,7 +1078,24 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=(
+                lambda hwnd: SimpleNamespace(
+                    hwnd=hwnd,
+                    command_trigger=lambda command: None,
+                    raw_lisp_trigger=lambda expression: (
+                        session_ref["session"]._completion_marker_path.write_text(
+                            "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
+                        )
+                        if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression
+                        else None
+                    ),
+                    dispatch_trigger=_claim_bound_trigger(lambda: None),
+                    start_tab_no_document_probe=lambda: True,
+                    document_ready_probe=lambda: True,
+                )
+            ),
         )
+        session_ref["session"] = session
 
         with self.assertRaisesRegex(
             MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"

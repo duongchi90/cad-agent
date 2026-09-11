@@ -12,7 +12,7 @@ import secrets
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
@@ -490,47 +490,11 @@ class WindowsAutoCADStartTabSession:
         return self._timing_recorder.events
 
     def _startup_script_bytes(self) -> bytes:
-        lines = ["_.QNEW"]
-        if self._stage_marker_paths:
-            lines.append(self._stage_marker_expression("post_qnew_entry"))
-        if self._bootstrap_plugin_path is not None:
-            lines.extend(
-                [
-                    "_.NETLOAD",
-                    _autolisp_string_literal(
-                        str(self._bootstrap_plugin_path).replace("\\", "/")
-                    ),
-                    "",
-                ]
-            )
-            if self._stage_marker_paths:
-                lines.append(self._stage_marker_expression("netload_return"))
-        if self._bootstrap_lisp_path is not None and self._ipc_root is not None:
-            if self._completion_marker_path is None:
-                raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
-            root_literal = _autolisp_string_literal(
-                str(self._ipc_root).replace("\\", "/")
-            )
-            lisp_literal = _autolisp_string_literal(
-                str(self._bootstrap_lisp_path).replace("\\", "/")
-            )
-            lines.append(
-                "(progn (setq *cad-agent-file-ipc-root* "
-                + root_literal
-                + ") (load "
-                + lisp_literal
-                + "))"
-            )
-            if self._stage_marker_paths:
-                lines.append(self._stage_marker_expression("dispatcher_load_return"))
-            lines.append(
-                _start_tab_completion_marker_expression(self._completion_marker_path)
-            )
-            if self._stage_marker_paths:
-                lines.append(
-                    self._stage_marker_expression("completion_marker_writer_return")
-                )
-        return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+        # Keep the owned /b script at the proven phase boundary.  Any action
+        # after QNEW must be sent to the same HWND only after document-ready
+        # confirmation; this avoids AutoCAD consuming the remaining script
+        # while it is still leaving the Start tab.
+        return b"_.QNEW\r\n"
 
     def _stage_marker_expression(self, event_name: str) -> str:
         for name, path, token in self._stage_marker_paths:
@@ -576,33 +540,32 @@ class WindowsAutoCADStartTabSession:
                         self._timing_recorder, "start_window_observed"
                     )
                     self._hwnd = candidate
-                    completion_confirmed = self._bootstrap_lisp_path is None
-                    if not completion_confirmed:
-                        try:
-                            document_ready_probe = self._document_ready_probe_factory(
-                                candidate
-                            )
-                        except Exception:
-                            document_ready_probe = None
-                        self._wait_for_completion_ack(
-                            document_ready_probe=document_ready_probe
-                        )
-                        completion_confirmed = True
                     if self._bindings_factory is not None:
-                        return self._bindings_factory(candidate)
-                    return WindowsStartTabBootstrapBindings(
-                        hwnd=candidate,
-                        command_trigger=make_windows_command_trigger(candidate),
-                        raw_lisp_trigger=make_windows_lisp_trigger(candidate),
-                        dispatch_trigger=make_windows_dispatch_trigger(candidate),
-                        start_tab_no_document_probe=self._start_probe_factory(candidate),
-                        document_ready_probe=self._document_ready_probe_factory(candidate),
-                        dispatcher_preloaded=(
-                            self._bootstrap_lisp_path is not None
-                            and completion_confirmed
-                        ),
-                        bootstrap_completion_confirmed=completion_confirmed,
+                        bindings = self._bindings_factory(candidate)
+                    else:
+                        bindings = WindowsStartTabBootstrapBindings(
+                            hwnd=candidate,
+                            command_trigger=make_windows_command_trigger(candidate),
+                            raw_lisp_trigger=make_windows_lisp_trigger(candidate),
+                            dispatch_trigger=make_windows_dispatch_trigger(candidate),
+                            start_tab_no_document_probe=self._start_probe_factory(candidate),
+                            document_ready_probe=self._document_ready_probe_factory(candidate),
+                        )
+                    runtime_required = (
+                        self._bootstrap_plugin_path is not None
+                        or self._bootstrap_lisp_path is not None
                     )
+                    if runtime_required:
+                        document_ready_probe = self._document_ready_probe_factory(candidate)
+                        self._wait_for_document_ready(document_ready_probe)
+                        self._run_process_bound_runtime_bootstrap(bindings)
+                        bindings = self._confirm_bootstrap_bindings(bindings)
+                    elif isinstance(bindings, WindowsStartTabBootstrapBindings):
+                        bindings = replace(
+                            bindings,
+                            bootstrap_completion_confirmed=True,
+                        )
+                    return bindings
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise MCPTimeoutError(
@@ -612,6 +575,98 @@ class WindowsAutoCADStartTabSession:
         except Exception:
             self.close_without_save(best_effort=True)
             raise
+
+    def _wait_for_document_ready(
+        self, document_ready_probe: Callable[[], bool]
+    ) -> None:
+        deadline = time.monotonic() + self._timeout_s
+        while True:
+            try:
+                if bool(document_ready_probe()):
+                    _record_bootstrap_timing_once(
+                        self._timing_recorder, "document_ready_transition"
+                    )
+                    return
+            except Exception:
+                pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise MCPTimeoutError("START_TAB_BOOTSTRAP_DOCUMENT_NOT_READY")
+            time.sleep(min(self._poll_interval_s, remaining))
+
+    def _run_process_bound_runtime_bootstrap(
+        self, bindings: WindowsStartTabBootstrapBindings
+    ) -> None:
+        if self._stage_marker_paths:
+            bindings.raw_lisp_trigger(self._stage_marker_expression("post_qnew_entry"))
+        if self._bootstrap_plugin_path is not None:
+            plugin_literal = _autolisp_string_literal(
+                str(self._bootstrap_plugin_path).replace("\\", "/")
+            )
+            bindings.command_trigger("_.NETLOAD\r" + plugin_literal + "\r")
+            if self._stage_marker_paths:
+                bindings.raw_lisp_trigger(
+                    self._stage_marker_expression("netload_return")
+                )
+        if self._bootstrap_lisp_path is None:
+            return
+        if self._ipc_root is None or self._completion_marker_path is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
+        bindings.raw_lisp_trigger(self._dispatcher_load_expression())
+        if self._stage_marker_paths:
+            bindings.raw_lisp_trigger(
+                self._stage_marker_expression("dispatcher_load_return")
+            )
+        bindings.raw_lisp_trigger(
+            _start_tab_completion_marker_expression(self._completion_marker_path)
+        )
+        if self._stage_marker_paths:
+            bindings.raw_lisp_trigger(
+                self._stage_marker_expression("completion_marker_writer_return")
+            )
+        self._wait_for_completion_ack()
+
+    def _dispatcher_load_expression(self) -> str:
+        if self._bootstrap_lisp_path is None or self._ipc_root is None:
+            raise MCPToolError("File IPC dispatcher bootstrap is not configured")
+        root_literal = _autolisp_string_literal(
+            str(self._ipc_root).replace("\\", "/")
+        )
+        lisp_literal = _autolisp_string_literal(
+            str(self._bootstrap_lisp_path).replace("\\", "/")
+        )
+        return (
+            "(progn (setq *cad-agent-file-ipc-root* "
+            + root_literal
+            + ") (load "
+            + lisp_literal
+            + "))"
+        )
+
+    def _confirm_bootstrap_bindings(
+        self, bindings: WindowsStartTabBootstrapBindings
+    ) -> WindowsStartTabBootstrapBindings:
+        if isinstance(bindings, WindowsStartTabBootstrapBindings):
+            return replace(
+                bindings,
+                dispatcher_preloaded=self._bootstrap_lisp_path is not None,
+                bootstrap_completion_confirmed=True,
+            )
+        try:
+            bindings.dispatcher_preloaded = self._bootstrap_lisp_path is not None
+            bindings.bootstrap_completion_confirmed = True
+            return bindings
+        except (AttributeError, TypeError):
+            return WindowsStartTabBootstrapBindings(
+                hwnd=bindings.hwnd,
+                command_trigger=bindings.command_trigger,
+                raw_lisp_trigger=bindings.raw_lisp_trigger,
+                dispatch_trigger=bindings.dispatch_trigger,
+                start_tab_no_document_probe=bindings.start_tab_no_document_probe,
+                document_ready_probe=bindings.document_ready_probe,
+                dispatcher_preloaded=self._bootstrap_lisp_path is not None,
+                bootstrap_completion_confirmed=True,
+            )
 
     def close_without_save(self, *, best_effort: bool = False) -> None:
         _record_bootstrap_timing(self._timing_recorder, "cleanup_start")
