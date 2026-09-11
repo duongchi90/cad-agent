@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Current-main DRAFT_REFERENCE owner/write-set closure (iteration 85)
+- Fresh SOL review of iteration 84 required one offline closure of the exact
+  existing owner and write-set before any implementation.
+- The existing owner is `cad_agent.manifest.classify_draft_reference`, reached
+  by `cad_agent.pdf.new_pdf_manifest` and `cad_agent.pdf.read_pdf_manifest`.
+  It forces `release_profile=DRAFT_REFERENCE`,
+  `authoritative_release_eligible=false`, and rejects conflicting claims.
+- The immediate production consumers are `cad_agent.cli` and
+  `cad_agent.mechanical_pilot`; they read the PDF manifest for run/source
+  binding but do not consume or promote `authoritative_release_eligible`.
+  No second acceptance authority was found.
+- Exact write-set closure is `MODIFY NONE / CREATE NONE`: the existing owner
+  already enforces `DRAFT_REFERENCE => NON_AUTHORITATIVE_ONLY`. The existing
+  `cad_agent.source_fusion` owner remains the authoritative boundary and still
+  rejects non-`READY` custody.
+- Causal RED suite passed under `.venv-py311` with cache disabled: the draft
+  manifest path stayed non-authoritative, all three unsafe release claims were
+  rejected, and non-`READY` custody returned `CUSTODY_NOT_READY` — `5 passed,
+  232 deselected`.
+- No production code, source, custody, candidate, DXF, or live CAD state was
+  mutated. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-draft-reference-owner-write-set-closure-iteration85.md`.
+
 ## Current-main DRAFT_REFERENCE policy-split characterization (iteration 84)
 - Fresh SOL review of the owner request to remove approved-root and
   identity-key requirements returned `VERDICT=MATERIAL_FINDING` and
