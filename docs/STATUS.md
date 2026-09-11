@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Current-main document-ready probe characterization (iteration 93)
+- Fresh SOL review of iteration 92 required one offline characterization of
+  the startup readiness predicate. Canonical `origin/main` at
+  `e8fc0092ee46750e50de0ea408fd91811cae10c2` does not contain the executor
+  branch's `WindowsAutoCADStartTabSession`, document-ready probe, timing
+  recorder, or title-reader symbols; the iteration-76/90/92 live epochs
+  exercised the executor-branch owner instead.
+- On that branch, readiness is title-only: the owned HWND title is read with
+  `GetWindowTextLengthW`/`GetWindowTextW`; `[start]` means not ready and any
+  non-empty non-`[start]` title means ready. Probe exceptions and missing
+  titles collapse to false inside the bounded polling loop.
+- Iterations 76 and 90 recorded `document_ready_observed=true`; iteration 92
+  found an owned HWND but recorded false. None of the private proofs captured
+  raw title samples, title API outcomes, poll counts, or timing events, so the
+  distinction between persistent Start-tab and title-reader false negative is
+  not proven.
+- The cheapest future read-only discriminator is the existing raw title reader
+  on the exact owned HWND at timeout plus existing timing events: `[start]`
+  supports `AUTOCAD_WINDOW_PRESENT_BUT_DOCUMENT_NOT_READY`, a non-empty
+  non-`[start]` sample with a false Boolean supports
+  `DOCUMENT_READY_PROBE_FALSE_NEGATIVE_OR_RACE`, and an empty/missing title
+  remains unresolved. No live retry, code change, or CAD/source/DXF mutation
+  occurred. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-document-ready-probe-characterization-iteration93.md`.
+- Focused offline branch tests passed: `40 tests, OK`.
+
 ## Current-main exact page-1 drawing-open discriminator live epoch (iteration 92)
 - Fresh SOL review authorized one read-only discriminator epoch using the
   verified DWT plus the demand-load `CADAGENT_DISPATCH` bootstrap pattern.
