@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Current command-demand loading repair (iteration 75)
+- Fresh SOL diagnosis of iteration 74 returned `VERDICT=MATERIAL_FINDING`,
+  localizing the startup-script race to command activation depending on
+  startup-load timing. The authorized scope was one offline TDD manifest repair
+  only; no AutoCAD install/launch, FileIPC, Task-6, additional command,
+  second transport, source/candidate/DXF, registry mutation, or retry occurred.
+- The test first produced RED because `LoadOnCommandInvocation` was absent.
+  The existing `PackageContents.xml` now preserves the same bundle, DLL, and
+  ProductCode owner while declaring `LoadOnAutoCADStartup=False`,
+  `LoadOnCommandInvocation=True`, and exactly one global/local
+  `CADAGENT_DISPATCH` command mapping. Focused GREEN passed `1 passed in
+  1.86s`.
+- Authoritative `scripts/verify.ps1` ran from a clean detached worktree at
+  commit `4de9399` and exited `0`: .NET `238 succeeded`, dotnet IPC `82
+  passed` with `52` subtests, offline `3309 passed` with `80` subtests,
+  causal RED `1 failed` as the expected negative oracle, real-data `2
+  skipped`, and AutoCAD Mechanical `17 skipped`. No Autodesk Managed DLLs
+  were copied; live CAD/FileIPC remains `NOT RUN`.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-command-demand-loading-repair-iteration75.md`.
+
 ## Current startup-script health oracle (iteration 74)
 - Fresh SOL diagnosis of iteration 73 returned `VERDICT=MATERIAL_FINDING`,
   localizing the remaining boundary to external command activation and
