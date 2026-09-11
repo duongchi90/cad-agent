@@ -1,4 +1,28 @@
 # CAD Agent Status
+## Current-main exact page-1 drawing-open stage localization (iteration 91)
+- Fresh SOL review of iteration 90 required one offline characterization of
+  the existing `FileIPCLiveMCPClient.drawing_open` stages. The ordered path is
+  raw-LISP COM open/activate, client-side expected-path assignment, raw-LISP
+  dispatcher load, FileIPC ping readiness, then `DWGPREFIX`/`DWGNAME` active
+  path verification.
+- Iteration 90 reached the post-open FileIPC dispatcher ping timeout. Because
+  active-document identity is only read after ping, that result cannot
+  distinguish candidate activation failure from candidate activation followed
+  by dispatcher non-readiness. No candidate-content defect is inferred.
+- The cheapest existing discriminator is one read-only .NET
+  `DotNetIPCClient.health(drawing_full_path=None)` result after raw-LISP
+  activation and settle, before FileIPC load/ping. Its returned active path
+  proves or fails to prove candidate activation; a later ping timeout can
+  then be classified without adding an owner.
+- Classification is `STAGE_LOCALIZATION=PASS` with
+  `CANDIDATE_OPEN_NOT_PROVEN` still the current live state and
+  `SETUP_READBACK=NOT_RUN`. No live retry, source/candidate/DXF mutation,
+  production-code change, or AutoCAD mutation occurred. Exact evidence is
+  recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-drawing-open-stage-localization-iteration91.md`.
+- Focused offline tests passed with the standard-library runner: `40 tests,
+  OK`.
+
 ## Current-main exact page-1 demand-load/setup live oracle (iteration 90)
 - Fresh SOL review of iteration 89 authorized exactly one live read-only epoch
   using the proven iteration-76 verified-DWT + `/b CADAGENT_DISPATCH` pattern;
