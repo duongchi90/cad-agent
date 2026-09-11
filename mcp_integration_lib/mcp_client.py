@@ -412,11 +412,10 @@ class WindowsAutoCADStartTabSession:
                 + root_literal
                 + ") (load "
                 + lisp_literal
-                + ") "
-                + _start_tab_completion_marker_expression(
-                    self._completion_marker_path
-                )
-                + ")"
+                + "))"
+            )
+            lines.append(
+                _start_tab_completion_marker_expression(self._completion_marker_path)
             )
         return ("\r\n".join(lines) + "\r\n").encode("utf-8")
 

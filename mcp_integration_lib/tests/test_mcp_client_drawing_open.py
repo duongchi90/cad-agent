@@ -410,25 +410,29 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertTrue(bindings.bootstrap_completion_confirmed)
         self.assertEqual(1, len(launch_calls))
         script = launch_calls[0][2].decode("utf-8")
-        self.assertTrue(script.startswith("_.QNEW\r\n"))
-        self.assertIn("_.NETLOAD\r\n", script)
-        self.assertIn(plugin_path.as_posix(), script)
-        self.assertIn(
-            '(setq *cad-agent-file-ipc-root* "'
-            + Path(self._ipc_dir).as_posix()
-            + '")',
-            script,
-        )
-        self.assertIn('(load "' + lisp_path.as_posix() + '")', script)
-        self.assertIn("CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE", script)
         marker_path = launch_calls[0][1].with_suffix(".marker")
-        self.assertIn(marker_path.as_posix(), script)
-        self.assertIn(
-            '(progn (setq cad-agent-stage-file (open "'
-            + marker_path.as_posix()
-            + '" "w")) (if cad-agent-stage-file (progn (write-line '
-            + '"CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"'
-            + " cad-agent-stage-file) (close cad-agent-stage-file))))",
+        expected_script = "\r\n".join(
+            [
+                "_.QNEW",
+                "_.NETLOAD",
+                '"' + plugin_path.as_posix() + '"',
+                "",
+                '(progn (setq *cad-agent-file-ipc-root* "'
+                + Path(self._ipc_dir).as_posix()
+                + '") (load "'
+                + lisp_path.as_posix()
+                + '"))',
+                '(progn (setq cad-agent-stage-file (open "'
+                + marker_path.as_posix()
+                + '" "w")) (if cad-agent-stage-file (progn (write-line '
+                + '"CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"'
+                + " cad-agent-stage-file) (close cad-agent-stage-file))))",
+            ]
+        ) + "\r\n"
+        self.assertEqual(expected_script, script)
+        self.assertNotIn(
+            '(load "' + lisp_path.as_posix() + '") '
+            + '(progn (setq cad-agent-stage-file',
             script,
         )
         self.assertNotIn("BVTL", script)
