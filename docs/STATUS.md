@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Current-main real-PDF environment prerequisite (iteration 79)
+- Fresh SOL diagnosis of iteration 78 returned
+  `VERDICT=MATERIAL_FINDING`, localized the failure to the repository-owned
+  environment prerequisite, and authorized only the existing
+  `scripts/bootstrap.ps1` owner plus a read-only `fitz` probe at exact main
+  `e8fc0092ee46750e50de0ea408fd91811cae10c2`. `HUMAN_GATE=NO`.
+- The clean detached worktree
+  `C:/temp/cad-agent-real-pdf-current-main-iter78` remained at that SHA and
+  clean before and after. Bootstrap reported lock contract PASS and
+  environment contract PASS; `scripts/check_environment.py` against the
+  repository lock also reported PASS for all 40 locked distributions. The
+  lock SHA-256 was
+  `d4739cc0c3b523ab11069178680f534fa436e4e64e30e07c30d1f07e652d784d`.
+- The exact repository-owned interpreter imported `fitz` successfully as
+  PyMuPDF `1.28.0` from
+  `C:/temp/cad-agent-real-pdf-current-main-iter78/.venv-py311/Lib/site-packages/fitz/__init__.py`.
+  The approved source remained unchanged at SHA-256
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
+- The previous `run-pdf` oracle was not retried, and no downstream gate or
+  source/candidate/DXF/production-code mutation was performed. The environment
+  prerequisite is `PROVEN_CURRENT`, while the current-main source-to-run-pdf
+  manifest/page gate remains `NOT_PROVEN` pending a fresh SOL authorization.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-environment-prerequisite-iteration79.md`.
+
 ## Current-main real-PDF run-pdf oracle (iteration 78)
 - Fresh SOL diagnosis of iteration 77 returned `VERDICT=CLEAR_CONTINUE`,
   `HUMAN_GATE=NO`, and authorized exactly one disposable current-main
