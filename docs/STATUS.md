@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Current-main exact page-1 DRAFT_REFERENCE downstream inventory (iteration 87)
+- Fresh SOL review of iteration 86 authorized one read-only inventory of the
+  exact iteration-80/81 page-1 identity chain, explicitly skipping
+  DARA/R3/R4/source-fusion as non-applicable to the Owner's PDF
+  `DRAFT_REFERENCE` lane.
+- The exact chain remains bound: manifest SHA
+  `f7c7b1afbd52f8f504dafbcb9b6efb416ee332b88260a01aea2414ab9d650eaf`, page-1
+  DXF SHA
+  `167a3955a84e24c40c81112ad696eb08f943f4b2721d56891bef8620a731a714`, and
+  page-1 build-evidence SHA
+  `16053d029396a8efc029001991068207c60e4484538eb1f21a765dec2250d659`.
+- The manifest explicitly remains `DRAFT_REFERENCE`,
+  `authoritative_release_eligible=false`, and
+  `drawing_setup_evidence=null`. The isolated staged root contains only
+  render/IR/DXF/build evidence artifacts; no setup/readback,
+  persistence/reopen, or independent visual-review artifact exists. Page-1
+  build evidence reports `dimension_count=0`.
+- Ordered downstream classification is: `SETUP_READBACK=NOT_PROVEN` (first
+  unproven gate), `PERSISTENCE_REOPEN=NOT_PROVEN`, `VISUAL=NOT_PROVEN`, and
+  `DIMENSION=NOT_PROVEN`. No AutoCAD/FileIPC or mutation was performed.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-exact-page1-draft-reference-downstream-inventory-iteration87.md`.
+
 ## Current-main PDF lane/source-fusion call-site closure (iteration 86)
 - SOL changed the product decision: PDF `DRAFT_REFERENCE` may continue using
   SHA-bound run-pdf/candidate evidence without approved-root or identity-key
