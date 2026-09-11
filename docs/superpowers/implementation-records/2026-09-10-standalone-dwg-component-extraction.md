@@ -464,3 +464,17 @@ No live Task-6 retry was made after this remediation. Approved BVTL.dwg SHA rema
 - C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration41.txt
 
 Fresh SOL review of this pushed remediation is required before another live attempt.
+Fresh SOL review of this pushed remediation is required before another live attempt.
+
+## Iteration 42 fresh live gate
+
+SOL returned PASS for iteration 41 and authorized exactly one fresh opt-in live Task-6 gate on code c415b90139f58d3f76de7e3f15f5dc4c3e68e40a. The owned startup session reached the startup window observation but did not observe the exact completion acknowledgement within the bounded timeout. It failed closed with START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED after 53.89 seconds.
+
+The claim-bound FileIPC readiness ping was not sent, and the approved BVTL.dwg source was not opened. Health, setup audit, standalone inspection, extraction, candidate creation, candidate reopen/query, and source reopen were not reached. Cleanup left no acad.exe process, no candidate, and no completion acknowledgement. The approved source SHA remained 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8; no source, accepted drawing, candidate, or production CAD state was mutated.
+
+Live Task-6 acceptance remains NOT RUN, not PASS. This observation provides no dispatcher, visual, geometry, extraction, or query fidelity verdict. Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-live-gate-iteration42-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration42.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another live attempt.

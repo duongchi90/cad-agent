@@ -1,4 +1,9 @@
 # CAD Agent Status
+## Current live boundary (iteration 42)
+- SOL authorized one fresh live Task-6 gate on code c415b90139f58d3f76de7e3f15f5dc4c3e68e40a. The owned startup session did not observe its exact completion acknowledgement within the bounded timeout and failed closed with START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED after 53.89s.
+- The gate stopped before the claim-bound FileIPC ping, BVTL.dwg source open, health, setup audit, standalone inspection, extraction, candidate creation, query, or source reopen. Live acceptance remains NOT RUN, not PASS.
+- Cleanup is verified: no acad.exe process remains, the disposable candidate directory and completion acknowledgement are empty, and BVTL.dwg SHA-256 remains 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8. No source, accepted drawing, candidate, or production CAD state was mutated.
+- Evidence and resume state: C:/temp/cad-agent-task6-live-20260911/task6-live-gate-iteration42-evidence.txt and C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration42.txt. Fresh SOL diagnosis is pending; do not retry live Task 6 before verdict.
 ## Current iteration 41 checkpoint
 - SOL's iteration-40 diagnosis identified an ordering gap: document-ready did not prove that the owned startup script had finished NETLOAD and dispatcher load. Code HEAD c415b90139f58d3f76de7e3f15f5dc4c3e68e40a now writes a unique completion acknowledgement after those steps, waits for it with the bounded session timeout, and exposes dispatcher_preloaded only after confirmation.
 - Owned bootstrap bindings without bootstrap_completion_confirmed are rejected before any readiness ping; cleanup removes the acknowledgement file as well as the startup script. Explicit legacy fixture behavior is unchanged.
