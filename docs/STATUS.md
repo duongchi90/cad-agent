@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Current bootstrap timing anchor correction (iteration 52)
+- SOL's iteration-51 review found that `document_ready_transition` was
+  unreachable on the marker-timeout path: `launch_blank_document()` waited for
+  marker acknowledgement before the client ran its normal document-ready
+  check. The bounded correction is pushed at
+  `871db5fb29e944d894ff83d12a6fb4a4695f82bc`.
+- While the owned session waits for marker acknowledgement, it now best-effort
+  polls the existing same-HWND document-ready probe and records the first
+  positive `document_ready_transition` on the shared timing recorder. The
+  observation does not gate success, alter any timeout/deadline, or change
+  bootstrap commands, readiness/FileIPC semantics, or CAD operations. The
+  later normal client check deduplicates the shared transition.
+- TDD RED/GREEN: the new deduplication/timeout assertions first failed because
+  `record_once` and the in-wait probe path were absent; the focused owner suite
+  passed `39` tests with `6` subtests. Ruff and `git diff --check` pass.
+- Authoritative `scripts/verify.ps1` exits `0` on the clean implementation
+  commit: C# `238` passed; offline Python JUnit `3386` with zero
+  failures/errors/skips (`3306` passed, `21` deselected, `80` subtests);
+  offline IPC JUnit `134` clean; causal-RED expected one negative failure
+  handled; real-data `2` skipped; AutoCAD Mechanical `17` skipped; AutoCAD
+  live and M2 remain `NOT RUN`.
+- No live retry, source open, candidate operation, FileIPC request, or CAD
+  mutation was performed. Fresh SOL review is required before any live run.
+- Repository-readable record:
+  `docs/superpowers/implementation-records/2026-09-11-bootstrap-timing-anchor-correction-iteration52.md`.
+
 ## Current bootstrap observability remediation (iteration 51)
 - SOL returned `VERDICT=BLOCKED`, `HUMAN_GATE=NO`, and authorized exactly one
   non-live observability-only remediation after the timing classification
