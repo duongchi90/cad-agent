@@ -1,4 +1,22 @@
 # CAD Agent Status
+## Current-main exact page-1 setup/readback live oracle (iteration 88)
+- Fresh SOL review of iteration 87 authorized exactly one live, read-only
+  setup/readback oracle for the exact page-1 candidate SHA
+  `167a3955a84e24c40c81112ad696eb08f943f4b2721d56891bef8620a731a714`.
+- The existing `WindowsAutoCADStartTabSession` and File/.NET IPC dispatcher
+  path were used. AutoCAD 2027 was installed, but no pre-existing `acad.exe`
+  session was available.
+- The owned bootstrap failed closed before candidate open with
+  `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED`. Therefore
+  `drawing_setup_audit` was not invoked and no setup/readback PASS is claimed.
+- Cleanup was verified: no `acad.exe` process remained and the dedicated IPC
+  root was empty. The candidate SHA remained unchanged.
+- Classification is `SETUP_READBACK=NOT_RUN`; persistence/reopen, visual, and
+  dimension remain `NOT_PROVEN`. The failed live epoch was not retried. No
+  production code, source, custody artifact, candidate DXF, or live CAD state
+  was mutated. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-setup-readback-live-oracle-iteration88.md`.
+
 ## Current-main exact page-1 DRAFT_REFERENCE downstream inventory (iteration 87)
 - Fresh SOL review of iteration 86 authorized one read-only inventory of the
   exact iteration-80/81 page-1 identity chain, explicitly skipping
