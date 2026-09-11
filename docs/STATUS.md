@@ -1,4 +1,34 @@
 # CAD Agent Status
+## Current two-phase Start-tab bootstrap remediation (iteration 57)
+- Fresh SOL diagnosis of iteration 56 returned `VERDICT=MATERIAL_FINDING`,
+  `HUMAN_GATE=NO`, and authorized exactly one non-live two-phase bootstrap-owner
+  remediation. The defect was that the owned `/b` startup script did not
+  reliably continue after `_.QNEW`, so the post-QNEW plugin, dispatcher, and
+  completion stages were never reached even after same-HWND document readiness.
+- Code/test checkpoint `4bdf197f828737510c1defc39956cf922a3ea28c` is pushed on
+  `codex/audit-text-style-compat-20260910`. The owned startup script now emits
+  only `_.QNEW\r\n`. After positive same-HWND document-ready confirmation, the
+  existing process-bound trigger path runs the opt-in stage marker, NETLOAD,
+  dispatcher LISP load, exact completion-marker writer, and completion wait in
+  order. Claim-bound dispatch is still unavailable until the exact marker is
+  confirmed; failures still close the owned session and remove markers/scripts.
+- Stage timing remains diagnostic opt-in only (`False` by default), source-path
+  prohibition and timeout values remain unchanged, and no source drawing,
+  candidate, accepted drawing, FileIPC request, or live CAD state was touched.
+- TDD RED/GREEN: the new phase-order test first reproduced the pre-fix
+  completion timeout, then the focused owner suite passed `40` tests with `6`
+  subtests. Ruff and `git diff --check` pass.
+- Authoritative `scripts/verify.ps1` completed with exit `0` on clean code head:
+  .NET `238` passed; offline Python JUnit `3388` with zero failures/errors/
+  skips (`3308` passed, `21` deselected, `80` subtests); offline IPC JUnit
+  `134` clean; causal-RED expected one negative failure handled; real-data `2`
+  unavailable skips; AutoCAD Mechanical `17` unavailable skips; AutoCAD live
+  and M2 remain `NOT RUN`.
+- No live retry is authorized or implied. Fresh SOL review of this pushed code
+  is required before any bootstrap-only live proof or Task-6 operation.
+  Repository-readable record:
+  `docs/superpowers/implementation-records/2026-09-11-two-phase-start-tab-bootstrap-remediation-iteration57.md`.
+
 ## Current bootstrap-only stage-timing proof (iteration 56)
 - SOL's iteration-55 review returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`,
   and authorized exactly one fresh bootstrap-only live proof on code
