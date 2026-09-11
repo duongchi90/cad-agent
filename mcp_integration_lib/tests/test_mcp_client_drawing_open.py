@@ -380,7 +380,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             return process
 
         def find_window(pid):
-            launch_calls[0][1].with_suffix(".ready").write_text(
+            launch_calls[0][1].with_suffix(".marker").write_text(
                 "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
             )
             return 8801 if pid == process.pid else 0
@@ -422,7 +422,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertIn('(load "' + lisp_path.as_posix() + '")', script)
         self.assertIn("CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE", script)
         self.assertIn(
-            launch_calls[0][1].with_suffix(".ready").as_posix(),
+            launch_calls[0][1].with_suffix(".marker").as_posix(),
             script,
         )
         self.assertNotIn("BVTL", script)
@@ -432,7 +432,46 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         session.close_without_save()
         self.assertEqual([8801], close_calls)
         self.assertFalse(launch_calls[0][1].exists())
-        self.assertFalse(launch_calls[0][1].with_suffix(".ready").exists())
+        self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
+
+    def test_start_tab_session_rejects_wrong_completion_marker_and_cleans_it(self):
+        process = SimpleNamespace(pid=7304, poll=lambda: None)
+        launch_calls = []
+        close_calls = []
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+
+        def launch(executable, script_path):
+            launch_calls.append((executable, script_path))
+            script_path.with_suffix(".marker").write_text(
+                "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
+            )
+            return process
+
+        def close_window(hwnd):
+            close_calls.append(hwnd)
+            process.poll = lambda: 0
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=self._ipc_dir,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=lambda pid: 8806,
+            window_closer=close_window,
+            start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+        )
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
+        ):
+            session.launch_blank_document()
+
+        self.assertEqual([8806], close_calls)
+        self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
 
     def test_start_tab_session_best_effort_terminates_owned_process_after_close_timeout(self):
         process = SimpleNamespace(pid=7302, poll=lambda: None)

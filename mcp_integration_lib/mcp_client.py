@@ -267,6 +267,7 @@ def _autolisp_string_literal(value: str) -> str:
 
 
 _START_TAB_BOOTSTRAP_COMPLETION_TOKEN = "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"
+_START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX = ".marker"
 
 
 @dataclass(frozen=True)
@@ -351,7 +352,7 @@ class WindowsAutoCADStartTabSession:
         self._process: Any = None
         self._hwnd: Optional[int] = None
         self._script_path: Optional[Path] = None
-        self._completion_ack_path: Optional[Path] = None
+        self._completion_marker_path: Optional[Path] = None
 
     @property
     def hwnd(self) -> Optional[int]:
@@ -370,7 +371,7 @@ class WindowsAutoCADStartTabSession:
                 ]
             )
         if self._bootstrap_lisp_path is not None and self._ipc_root is not None:
-            if self._completion_ack_path is None:
+            if self._completion_marker_path is None:
                 raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
             root_literal = _autolisp_string_literal(
                 str(self._ipc_root).replace("\\", "/")
@@ -379,7 +380,7 @@ class WindowsAutoCADStartTabSession:
                 str(self._bootstrap_lisp_path).replace("\\", "/")
             )
             completion_literal = _autolisp_string_literal(
-                str(self._completion_ack_path).replace("\\", "/")
+                str(self._completion_marker_path).replace("\\", "/")
             )
             completion_token_literal = _autolisp_string_literal(
                 _START_TAB_BOOTSTRAP_COMPLETION_TOKEN
@@ -389,11 +390,11 @@ class WindowsAutoCADStartTabSession:
                 + root_literal
                 + ") (load "
                 + lisp_literal
-                + ") (setq mcp-bootstrap-completion-file (open "
+                + ") (setq cad-agent-stage-file (open "
                 + completion_literal
-                + ' "w")) (if mcp-bootstrap-completion-file (progn (write-line '
+                + ' "w")) (if cad-agent-stage-file (progn (write-line '
                 + completion_token_literal
-                + " mcp-bootstrap-completion-file) (close mcp-bootstrap-completion-file))))"
+                + " cad-agent-stage-file) (close cad-agent-stage-file))))"
             )
         return ("\r\n".join(lines) + "\r\n").encode("utf-8")
 
@@ -403,13 +404,13 @@ class WindowsAutoCADStartTabSession:
         script_path = self._script_directory / (
             f"cad-agent-start-tab-{uuid.uuid4().hex}.scr"
         )
-        completion_ack_path = (
-            self._ipc_root / f"{script_path.stem}.ready"
+        completion_marker_path = (
+            self._ipc_root / f"{script_path.stem}{_START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX}"
             if self._ipc_root is not None
-            else script_path.with_suffix(".ready")
+            else script_path.with_suffix(_START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX)
         )
-        completion_ack_path.unlink(missing_ok=True)
-        self._completion_ack_path = completion_ack_path
+        completion_marker_path.unlink(missing_ok=True)
+        self._completion_marker_path = completion_marker_path
         script_path.write_bytes(self._startup_script_bytes())
         self._script_path = script_path
         try:
@@ -493,9 +494,9 @@ class WindowsAutoCADStartTabSession:
                 except OSError:
                     if not best_effort:
                         raise
-            if self._completion_ack_path is not None:
+            if self._completion_marker_path is not None:
                 try:
-                    self._completion_ack_path.unlink(missing_ok=True)
+                    self._completion_marker_path.unlink(missing_ok=True)
                 except OSError:
                     if not best_effort:
                         raise
@@ -506,7 +507,7 @@ class WindowsAutoCADStartTabSession:
                 self._hwnd = None
             if best_effort or self._process is None:
                 self._script_path = None
-                self._completion_ack_path = None
+                self._completion_marker_path = None
 
     def _wait_for_process_exit(self, process: Any, deadline: float) -> bool:
         while process.poll() is None:
@@ -517,7 +518,7 @@ class WindowsAutoCADStartTabSession:
         return True
 
     def _wait_for_completion_ack(self) -> None:
-        path = self._completion_ack_path
+        path = self._completion_marker_path
         if path is None:
             raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
         deadline = time.monotonic() + self._timeout_s
