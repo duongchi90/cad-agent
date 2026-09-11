@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Current-main page-1 bootstrap-owner characterization (iteration 89)
+- Fresh SOL review of iteration 88 localized the first causal boundary to
+  `WindowsAutoCADStartTabSession` completion confirmation, before candidate
+  open and before `drawing_setup_audit`.
+- Offline inspection confirms that document-ready is only an intermediate
+  state. The owner accepts bindings only after a same-root marker file exists
+  with the exact `CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token. The AutoLISP
+  writer is conditional on `open` returning a handle and emits no failure
+  marker; the later writer-return stage marker proves expression delivery, not
+  successful completion-file creation/readback.
+- Therefore the exact measured missing condition is
+  `COMPLETION_MARKER_SUCCESSFUL_CREATE_AND_READBACK=NOT_PROVEN`. No narrower
+  filesystem or AutoCAD root cause is inferred, and no live retry was made.
+- The already-proven iteration-76 demand-load/semantic-health oracle provides
+  the smallest existing reuse path: verified DWT plus `/b CADAGENT_DISPATCH`,
+  one matching read-only health result (`success=true`, `changed=false`,
+  `errors=[]`), then the existing read-only drawing-open/setup-audit owners.
+- This characterization has `MODIFY NONE / CREATE NONE`. Exact evidence is
+  recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-bootstrap-owner-characterization-iteration89.md`.
+- Focused offline completion-owner checks passed with cache disabled: `8
+  passed, 32 deselected`.
+
 ## Current-main exact page-1 setup/readback live oracle (iteration 88)
 - Fresh SOL review of iteration 87 authorized exactly one live, read-only
   setup/readback oracle for the exact page-1 candidate SHA
