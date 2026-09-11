@@ -379,6 +379,12 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             launch_calls.append((executable, script_path, script_path.read_bytes()))
             return process
 
+        def find_window(pid):
+            launch_calls[0][1].with_suffix(".ready").write_text(
+                "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
+            )
+            return 8801 if pid == process.pid else 0
+
         def close_window(hwnd):
             close_calls.append(hwnd)
             process.poll = lambda: 0
@@ -392,7 +398,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             timeout_s=0.01,
             poll_interval_s=0,
             process_launcher=launch,
-            window_finder=lambda pid: 8801 if pid == process.pid else 0,
+            window_finder=find_window,
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
@@ -401,6 +407,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         bindings = session.launch_blank_document()
         self.assertEqual(8801, bindings.hwnd)
         self.assertTrue(bindings.dispatcher_preloaded)
+        self.assertTrue(bindings.bootstrap_completion_confirmed)
         self.assertEqual(1, len(launch_calls))
         script = launch_calls[0][2].decode("utf-8")
         self.assertTrue(script.startswith("_.QNEW\r\n"))
@@ -413,6 +420,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             script,
         )
         self.assertIn('(load "' + lisp_path.as_posix() + '")', script)
+        self.assertIn("CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE", script)
+        self.assertIn(
+            launch_calls[0][1].with_suffix(".ready").as_posix(),
+            script,
+        )
         self.assertNotIn("BVTL", script)
         self.assertNotIn("SAVE", script)
         self.assertNotIn("EXTRACTION", script)
@@ -420,6 +432,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         session.close_without_save()
         self.assertEqual([8801], close_calls)
         self.assertFalse(launch_calls[0][1].exists())
+        self.assertFalse(launch_calls[0][1].with_suffix(".ready").exists())
 
     def test_start_tab_session_best_effort_terminates_owned_process_after_close_timeout(self):
         process = SimpleNamespace(pid=7302, poll=lambda: None)
@@ -466,6 +479,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     start_tab_no_document_probe=lambda: True,
                     document_ready_probe=lambda: True,
                     dispatcher_preloaded=True,
+                    bootstrap_completion_confirmed=True,
                 ),
             )[1],
             close_without_save=lambda: events.append("close"),
@@ -515,6 +529,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 start_tab_no_document_probe=lambda: True,
                 document_ready_probe=lambda: True,
                 dispatcher_preloaded=True,
+                bootstrap_completion_confirmed=True,
             ),
             close_without_save=close_without_save,
         )
@@ -555,6 +570,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 dispatch_trigger=_claim_bound_trigger(lambda: None),
                 start_tab_no_document_probe=lambda: True,
                 document_ready_probe=lambda: False,
+                bootstrap_completion_confirmed=True,
             ),
             close_without_save=close_without_save,
         )
@@ -574,6 +590,79 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertIn("close", events)
         self.assertEqual([], raw_commands)
         self.assertFalse(client._start_tab_bootstrap_active)
+
+    def test_start_tab_session_rejects_unconfirmed_bootstrap_before_dispatch(self):
+        events = []
+        session = SimpleNamespace(
+            launch_blank_document=lambda: SimpleNamespace(
+                hwnd=8805,
+                command_trigger=lambda command: events.append(("command", command)),
+                raw_lisp_trigger=lambda command: events.append(("lisp", command)),
+                dispatch_trigger=_claim_bound_trigger(lambda: events.append("dispatch")),
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: True,
+                dispatcher_preloaded=True,
+                bootstrap_completion_confirmed=False,
+            ),
+            close_without_save=lambda **kwargs: events.append(("close", kwargs)),
+        )
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            bootstrap_start_tab=True,
+            bootstrap_start_tab_session_factory=lambda: session,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+        client._dispatch = lambda command, params: self.fail(
+            "dispatcher must not run before bootstrap completion acknowledgement"
+        )
+
+        with self.assertRaisesRegex(
+            MCPToolError, "START_TAB_BOOTSTRAP_COMPLETION_REQUIRED"
+        ):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertNotIn("dispatch", events)
+        self.assertIn(("close", {"best_effort": True}), events)
+
+    def test_start_tab_session_requires_completion_ack_after_document_ready(self):
+        process = SimpleNamespace(pid=7303, poll=lambda: None)
+        launch_calls = []
+        close_calls = []
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+
+        def launch(executable, script_path):
+            launch_calls.append((executable, script_path))
+            return process
+
+        def close_window(hwnd):
+            close_calls.append(hwnd)
+            process.poll = lambda: 0
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=str(self._ipc_dir),
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=lambda pid: 8805,
+            window_closer=close_window,
+            start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+        )
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
+        ):
+            session.launch_blank_document()
+
+        self.assertEqual([8805], close_calls)
+        self.assertFalse(session._script_path)
 
     def test_start_tab_session_rejects_unclaimed_dispatcher_trigger(self):
         events = []
