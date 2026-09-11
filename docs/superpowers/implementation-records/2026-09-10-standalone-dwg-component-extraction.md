@@ -448,3 +448,19 @@ Private evidence and resume state are recorded at:
 
 Fresh SOL review of this pushed remediation is required before another live
 Task-6 attempt.
+Fresh SOL diagnosis of this first-failure boundary is required before another live attempt.
+
+## Iteration 41 startup-script completion-order remediation
+
+SOL's iteration-40 diagnosis identified that document readiness did not prove the owned startup script had finished NETLOAD and dispatcher load. The bounded remediation is pushed at code HEAD c415b90139f58d3f76de7e3f15f5dc4c3e68e40a.
+
+The startup script now writes one unique completion acknowledgement into the matching File/.NET IPC root only after QNEW, optional NETLOAD, and dispatcher load return. WindowsAutoCADStartTabSession waits for that exact token using the existing bounded timeout before returning bindings; dispatcher_preloaded is true only after confirmation. FileIPCLiveMCPClient rejects bootstrap bindings without bootstrap_completion_confirmed before any readiness ping, and cleanup removes the acknowledgement file. Explicit legacy fixture behavior remains unchanged.
+
+The RED tests reproduced both failures: document-ready alone was insufficient, and the client could otherwise ping before completion. The GREEN owner set reports 52 passed, 1 skipped, 1 deselected, and 9 subtests; Ruff and git diff --check pass. Authoritative .\scripts\verify.ps1 exits 0: C# 238 passed; offline Python JUnit 3380 tests with zero failures, errors, or skips (3300 passed, 21 deselected, 80 subtests); offline IPC JUnit 134 with zero failures/errors/skips; real-data unavailable probe 2 skipped; AutoCAD Mechanical unavailable probe 17 skipped; causal-RED handled as expected.
+
+No live Task-6 retry was made after this remediation. Approved BVTL.dwg SHA remains 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8; no source, accepted drawing, candidate, or production CAD state was mutated. Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-completion-remediation-iteration41-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration41.txt
+
+Fresh SOL review of this pushed remediation is required before another live attempt.

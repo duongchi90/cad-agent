@@ -1,4 +1,9 @@
 # CAD Agent Status
+## Current iteration 41 checkpoint
+- SOL's iteration-40 diagnosis identified an ordering gap: document-ready did not prove that the owned startup script had finished NETLOAD and dispatcher load. Code HEAD c415b90139f58d3f76de7e3f15f5dc4c3e68e40a now writes a unique completion acknowledgement after those steps, waits for it with the bounded session timeout, and exposes dispatcher_preloaded only after confirmation.
+- Owned bootstrap bindings without bootstrap_completion_confirmed are rejected before any readiness ping; cleanup removes the acknowledgement file as well as the startup script. Explicit legacy fixture behavior is unchanged.
+- Focused owner checks: 52 passed, 1 skipped, 1 deselected, 9 subtests; Ruff and git diff --check PASS. Authoritative .\scripts\verify.ps1 exits 0: C# 238 passed; offline Python JUnit 3380 tests with zero failures/errors/skips (3300 passed, 21 deselected, 80 subtests); offline IPC 134 clean; real-data 2 skipped; AutoCAD Mechanical 17 skipped; expected causal-RED handled.
+- No live retry was made after this remediation. Approved BVTL.dwg SHA-256 remains 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8. Fresh SOL review is pending before another live gate.
 ## Current live boundary (iteration 40)
 - SOL approved one fresh live Task-6 gate on code HEAD 386808924829062613d4658af937b98916a0db08. The gate started the owned opt-in bootstrap and stopped at the first claim-bound dispatcher readiness ping: request 05c05ae0456e timed out after 41.81s.
 - The failure occurred before BVTL.dwg source open, health, setup audit, standalone inspection, extraction, candidate creation, candidate query, or source reopen. Live Task-6 acceptance remains NOT RUN, not PASS.
