@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Current-main exact page-1 drawing-open discriminator live epoch (iteration 92)
+- Fresh SOL review authorized one read-only discriminator epoch using the
+  verified DWT plus the demand-load `CADAGENT_DISPATCH` bootstrap pattern.
+- The owned AutoCAD session reached a window handle, but the existing
+  document-ready probe did not become true within the bounded startup window.
+  The epoch therefore stopped before bootstrap-health consumption, raw-LISP
+  candidate activation, and the one planned `.NET health(None)` discriminator.
+- No FileIPC dispatcher load/ping or `drawing_setup_audit` was invoked. The
+  candidate remains `CANDIDATE_OPEN_NOT_PROVEN`; no candidate-content defect is
+  inferred.
+- Cleanup verified the owned PID, temporary bundle, startup script, and both
+  health request/result pairs were absent. Candidate and DWT SHA values were
+  unchanged. Normal close confirmation timed out, but exact-PID fallback
+  cleanup succeeded; this is a cleanup warning, not a semantic pass.
+- Classification is `LIVE_EPOCH=FAIL`, `DOCUMENT_READY=NOT_PROVEN`,
+  `DISCRIMINATOR_HEALTH=NOT_RUN`, `FILEIPC_LOAD_PING=NOT_RUN`, and
+  `SETUP_READBACK=NOT_RUN`. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-drawing-open-discriminator-live-epoch-iteration92.md`.
+
 ## Current-main exact page-1 drawing-open stage localization (iteration 91)
 - Fresh SOL review of iteration 90 required one offline characterization of
   the existing `FileIPCLiveMCPClient.drawing_open` stages. The ordered path is
