@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Current-main source-custody prerequisite inventory (iteration 83)
+- Fresh SOL review of iteration 82 localized the first boundary to real source
+  custody materialization and authorized one read-only inventory for approved
+  source SHA
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
+- The fresh run-pdf manifest
+  `f7c7b1afbd52f8f504dafbcb9b6efb416ee332b88260a01aea2414ab9d650eaf` has no
+  source-bundle, source-custody, source-fusion, approved-root, or identity-key
+  reference. The only repository SourceBundle fixture is valid but foreign to
+  this source identity (bundle `BUNDLE-20260805-001`, run `RUN-20260805-001`,
+  bundle SHA
+  `47c8d9d984ffc1e4831d201b0a28eedfe735f3be5040e7557451f1435f5fce3b`).
+- Existing SourceIntegrity owners require caller-supplied approved-root
+  authority, identity-key bytes/revision, policy limits, and source bundle;
+  no authorized exact-source custody record or recognized local source-key
+  provider was found. No key bytes or private paths were read or recorded.
+- `SOURCE_CUSTODY_PREREQUISITES_FOR_EXACT_SOURCE=NOT_AVAILABLE_FOR_EXISTING_OWNER`.
+  `HUMAN_GATE=YES` for approved-root authority and matching identity-key
+  material. No source-fusion/DARA/R3/R4 or mutation was performed.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-source-custody-prerequisite-inventory-iteration83.md`.
+
 ## Current-main DARA/R3/R4 characterization (iteration 82)
 - Fresh SOL review of iteration 81 returned `VERDICT=CLEAR_CONTINUE` and
   authorized exactly one read-only characterization for the same fresh page-1
