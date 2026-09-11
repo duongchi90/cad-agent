@@ -22,6 +22,14 @@
 
 ---
 
+## Iteration 39 claim-binding addendum
+
+SOL found that applying the owned startup-session trigger did not recompute the client's legacy-mode state. The bounded follow-up requires the trigger to advertise claim capability and flips the client to non-legacy mode before the first readiness ping. A non-claim-bound trigger is rejected closed, while explicit legacy fixture callers outside the opt-in bootstrap route retain their existing behavior.
+
+The remediation is pushed at code HEAD 386808924829062613d4658af937b98916a0db08. Focused checks pass (50 passed, 1 skipped, 1 deselected, 9 subtests); authoritative verification exits 0 with C# 238 passed, offline Python JUnit 3378 with zero product failures/errors/skips, offline IPC 134 clean, and unavailable-state probes of real-data 2 skipped and AutoCAD Mechanical 17 skipped. The causal-RED oracle remains an expected diagnostic failure. Live Task 6 is still NOT RUN.
+
+Send this exact pushed state for fresh SOL review; do not run another live gate until a new bounded verdict arrives.
+
 ### Task 1: Add the opt-in bootstrap owner and regression coverage
 
 **Files:**

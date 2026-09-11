@@ -417,3 +417,21 @@ Private evidence and recoverable state are recorded at:
 
 Fresh SOL review of this pushed remediation is required before another live
 Task-6 attempt.
+
+## Iteration 39 claim-binding remediation
+
+SOL's fresh review of exact synced code/docs state identified a claim-binding contract break: the startup-session client was constructed without an initial trigger, so it derived legacy fixture mode before the owned startup bindings were applied. The resulting readiness ping could therefore carry no claim.
+
+The bounded remediation was implemented and pushed at code HEAD 386808924829062613d4658af937b98916a0db08. The bootstrap-binding owner now fails closed unless the supplied trigger explicitly advertises claim capability, then switches the client to non-legacy mode before the first readiness ping. Explicit legacy fixture behavior outside the opt-in startup route remains unchanged.
+
+Focused owner checks report 50 passed, 1 skipped, 1 deselected, and 9 subtests; Ruff and git diff --check pass. The authoritative .\scripts\verify.ps1 exited 0 on the clean code head: C# 238 passed; offline Python JUnit 3378 tests with zero failures, errors, or skips (3298 passed, 21 deselected, 80 subtests); offline IPC JUnit 134 with zero failures/errors/skips; real-data unavailable probe 2 skipped; AutoCAD Mechanical unavailable probe 17 skipped; and the causal-RED oracle recorded its expected single negative failure.
+
+AutoCAD live and M2 Mechanical gates were NOT RUN because their prerequisites were absent. No live Task-6 retry was made after this remediation, and the approved source SHA remained 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8.
+
+Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-claim-binding-remediation-iteration39-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration39.txt
+
+Fresh SOL review of this pushed remediation is required before another live
+Task-6 attempt.

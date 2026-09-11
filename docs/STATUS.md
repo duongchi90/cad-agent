@@ -1,5 +1,12 @@
 # CAD Agent Status
 
+## Current iteration 39 checkpoint
+- SOL's review of code HEAD a44dabb25e490408ccc1b6dffb0e1dff3b17069d found that the bootstrap-bound dispatcher trigger could still leave the client in legacy fixture mode, making the readiness ping claimless.
+- The bounded remediation is pushed at code HEAD 386808924829062613d4658af937b98916a0db08. Owned startup bindings now reject a trigger that is not explicitly claim-capable and switch to non-legacy mode before the first readiness ping; explicit legacy fixture callers outside the opt-in startup route are unchanged.
+- Focused owner checks: 50 passed, 1 skipped, 1 deselected, 9 subtests; Ruff and git diff --check pass. Authoritative .\scripts\verify.ps1 exits 0: C# 238 passed; offline Python JUnit 3378 tests with zero failures/errors/skips (3298 passed, 21 deselected, 80 subtests); offline IPC 134 with zero failures/errors/skips.
+- Unavailable-state probes: real-data 2 skipped and AutoCAD Mechanical 17 skipped. The causal-RED oracle is the expected 1 negative failure. AutoCAD live and M2 Mechanical remain NOT RUN.
+- No live retry was made; source SHA remains 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8, and no source, accepted drawing, candidate, or production CAD state was mutated. Fresh SOL review is pending.
+
 ## Status vocabulary
 
 - **Verified:** the named command ran successfully on the named commit and
