@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Current-main candidate/build exact-identity binding (iteration 81)
+- Fresh SOL review of iteration 80 returned `VERDICT=CLEAR_CONTINUE` and
+  authorized exactly one read-only identity-binding oracle for the fresh
+  page-1 staged DXF/build-evidence pair. `HUMAN_GATE=NO`.
+- From manifest SHA
+  `f7c7b1afbd52f8f504dafbcb9b6efb416ee332b88260a01aea2414ab9d650eaf`, the
+  actual page-1 DXF SHA
+  `167a3955a84e24c40c81112ad696eb08f943f4b2721d56891bef8620a731a714`
+  matched both the manifest stage and `build_evidence.dxf.sha256`. The actual
+  page-1 build-evidence SHA
+  `16053d029396a8efc029001991068207c60e4484538eb1f21a765dec2250d659`
+  matched its manifest stage, and `build_result.output_path` resolved to the
+  exact staged DXF.
+- Page identity, approved source SHA
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`,
+  calibration reference/scale/DPI, draft profile, and exact current-main
+  execution context all matched through the manifest and pre-bound oracle
+  context. The composed gate is `PROVEN_CURRENT`.
+- The build-evidence schema directly contains only `dxf` and `build_result`;
+  it does not duplicate source or execution-context fields. This was recorded
+  explicitly and was not treated as release approval. No downstream gate or
+  mutation was performed.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-candidate-build-identity-binding-iteration81.md`.
+
 ## Current-main real-PDF run-pdf oracle (iteration 80)
 - Fresh SOL review of iteration 79 returned `VERDICT=CLEAR_CONTINUE`,
   confirmed the environment prerequisite as `PROVEN_CURRENT`, and authorized
