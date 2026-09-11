@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Current-main real-PDF run-pdf oracle (iteration 78)
+- Fresh SOL diagnosis of iteration 77 returned `VERDICT=CLEAR_CONTINUE`,
+  `HUMAN_GATE=NO`, and authorized exactly one disposable current-main
+  `run-pdf` oracle at `e8fc0092ee46750e50de0ea408fd91811cae10c2` using only
+  approved source SHA
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75` and
+  calibration `STATUS-e48f3970-144dpi-1to40`, `144` DPI,
+  `7.055555555556` mm/px. The command and identity were pre-bound in an
+  external context file; outputs were isolated outside Git.
+- The single oracle failed closed before render/page stages because the clean
+  detached worktree's Python environment lacked the existing `fitz`
+  dependency: `ModuleNotFoundError: No module named 'fitz'`. The generated
+  manifest is retained at
+  `C:/temp/cad-agent-real-pdf-current-main-iter78-run/staged/pdf-run-manifest.json`,
+  SHA-256
+  `d1050dc93adb37e4ea185a0a02d32d30e867595cdc608b714cd7f8e7955f39fe`, with
+  `render.state=pending`, zero pages, and zero completed page stages.
+- Source SHA after the failed oracle remained unchanged; the detached
+  worktree and main worktree had no project modifications. No retry,
+  bootstrap, candidate/build consumption, DARA/R3/R4, AutoCAD/FileIPC,
+  persistence/reopen, visual, dimension, provider, M2, source/candidate/DXF,
+  or production-code action was performed. The current-main gate remains
+  `NOT_PROVEN` due the missing prerequisite, not a product-pass claim.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-current-main-run-pdf-oracle-iteration78.md`.
+
 ## Real-PDF exact-identity acceptance inventory (iteration 77)
 - Fresh `origin/main` is `e8fc0092ee46750e50de0ea408fd91811cae10c2`.
   This inventory follows canonical Issue #409 and is read-only; it does not
