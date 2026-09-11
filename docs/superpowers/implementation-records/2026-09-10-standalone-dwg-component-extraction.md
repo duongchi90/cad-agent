@@ -689,3 +689,33 @@ recorded at:
 - C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration48.txt
 
 Fresh SOL review of this pushed remediation is required before any live retry.
+
+## Iteration 49 bootstrap-only live proof
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+iteration 48 and authorized exactly one fresh bootstrap-only live proof on code
+HEAD `a9c8fa9f7f67d8562e17d55cce383bf975eb3761`. The proof required one owned
+AutoCAD Mechanical 2027 blank session, exact observation and validation of the
+unique completion marker, then exactly one claim-bound FileIPC readiness ping.
+It passed no BVTL.dwg path and did not run source open, Task 6 extraction,
+query, candidate, save, or accepted-drawing operations.
+
+The proof failed closed at the first boundary with
+`START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 57.547 seconds for the
+bounded process including cleanup. The production owner did not observe the
+unique same-root `.marker`; claim-bound FileIPC ping attempts were zero and
+the ping boundary was not reached. No marker or FileIPC validity verdict is
+inferred.
+
+Cleanup was verified: the owned blank session used close-without-save cleanup,
+the dedicated proof root was empty, and no acad.exe process remained. No source,
+accepted drawing, candidate, production CAD, or Task-6 state was mutated. Live
+Task-6 acceptance remains **NOT RUN**, not PASS.
+
+Private evidence and recoverable resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-only-live-proof-iteration49-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration49.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another
+bootstrap or live Task-6 attempt.

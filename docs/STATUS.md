@@ -1,4 +1,10 @@
 # CAD Agent Status
+## Current live proof boundary (iteration 49)
+- SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for iteration 48 and authorized exactly one fresh bootstrap-only live proof on code `a9c8fa9f7f67d8562e17d55cce383bf975eb3761`: exact unique `.marker` observation/validation, then exactly one claim-bound FileIPC readiness ping; no BVTL.dwg open or Task-6 extraction/query/candidate operation.
+- The proof failed closed at the first boundary with `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 57.547 seconds for the bounded process including cleanup. The production unique same-root `.marker` was not observed; claim-bound ping attempts were 0 and the ping boundary was not reached.
+- Cleanup is verified: the owned blank session was closed without save, the dedicated proof root is empty, and no acad.exe process remains. No source path was passed; no source, accepted drawing, candidate, production CAD, or Task-6 state was mutated. Live Task-6 acceptance remains NOT RUN, not PASS.
+- Evidence and resume state: `C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-only-live-proof-iteration49-evidence.txt` and `C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration49.txt`. Fresh SOL diagnosis is required; do not retry bootstrap or live Task 6 before a new bounded verdict.
+
 ## Current code checkpoint (iteration 48)
 - SOL's iteration-47 finding isolated a remaining execution-framing difference: the production startup script still evaluated dispatcher-root assignment, `(load mcp_dispatch.lsp)`, and the marker writer inside one enclosing AutoLISP `progn`, while iteration 43 only live-proved a marker write after dispatcher-load return.
 - The bounded non-live remediation is pushed at code HEAD `a9c8fa9f7f67d8562e17d55cce383bf975eb3761`. Production now emits the dispatcher-root assignment/load as one completed top-level expression and the canonical completion-marker writer as a separate following top-level expression; marker path/token validation and stale/wrong-token cleanup are unchanged.
