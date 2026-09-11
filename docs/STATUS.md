@@ -1,4 +1,28 @@
 # CAD Agent Status
+## Current bootstrap-only live proof (iteration 53)
+- SOL's iteration-52 review returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`,
+  and authorized exactly one fresh bootstrap-only live proof on code head
+  `871db5fb29e944d894ff83d12a6fb4a4695f82bc`. The proof kept
+  `timeout_s=30.0`, used the shared timing recorder, required the exact
+  completion marker, and allowed exactly one claim-bound FileIPC readiness
+  ping only after marker confirmation. No source drawing, Task-6 extraction,
+  query, candidate, save, or accepted-drawing operation was in scope.
+- The proof failed closed at the first boundary with
+  `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED`. The timing sequence shows
+  `start_window_observed` and `completion_wait_start` at the same recorded
+  instant, `document_ready_transition` about `1.406s` later, and
+  `completion_timeout` about `30.016s` after the completion wait began. The
+  completion marker was not observed, so the claim-bound FileIPC ping was not
+  attempted (`ping_attempts=0`).
+- Cleanup evidence is recorded at
+  `C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-only-live-proof-iteration53-evidence.txt`.
+  The owned proof root was empty and removed after cleanup. The pre-existing
+  user AutoCAD process was preserved; no source, candidate, accepted drawing,
+  or production CAD state was mutated.
+- Fresh SOL diagnosis is required before another bootstrap or live Task-6
+  attempt. Repository-readable record:
+  `docs/superpowers/implementation-records/2026-09-11-bootstrap-only-live-proof-iteration53.md`.
+
 ## Current bootstrap timing anchor correction (iteration 52)
 - SOL's iteration-51 review found that `document_ready_transition` was
   unreachable on the marker-timeout path: `launch_blank_document()` waited for
