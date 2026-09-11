@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Current foreground-identity diagnostic (iteration 61)
+- Fresh SOL diagnosis of iteration 60 returned `VERDICT=MATERIAL_FINDING`,
+  `HUMAN_GATE=NO`, and authorized one read-only foreground-identity
+  diagnostic on unchanged code. The diagnostic launched one disposable QNEW
+  session, waited for same-HWND document-ready, recorded owned and actual
+  foreground identity, then closed and cleaned up. It did not call the raw
+  trigger, use a SetForegroundWindow workaround, load NETLOAD/dispatcher,
+  issue FileIPC/Task-6, or access source/candidate/DXF.
+- Observation after document-ready: owned HWND/PID were `7867904/10328` and
+  foreground HWND/PID were also `7867904/10328`; foreground process was
+  `acad.exe` at the approved AutoCAD 2027 path with title `Autodesk AutoCAD
+  2027`. The diagnostic therefore captured a matching foreground identity at
+  its observation point, without inferring that the earlier trigger failure is
+  resolved.
+- Cleanup succeeded and the owned proof root was empty. No source, candidate,
+  DXF, FileIPC, or production CAD state changed. Fresh SOL diagnosis is
+  required before any trigger retry or production-code change.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-foreground-identity-diagnostic-iteration61.md`.
+
 ## Current first-boundary post-QNEW diagnostic (iteration 60)
 - Fresh SOL diagnosis of iteration 59 returned `VERDICT=MATERIAL_FINDING`,
   `HUMAN_GATE=NO`, and localized the first causal boundary to
