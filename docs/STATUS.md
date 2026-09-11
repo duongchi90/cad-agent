@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Current startup-script health oracle (iteration 74)
+- Fresh SOL diagnosis of iteration 73 returned `VERDICT=MATERIAL_FINDING`,
+  localizing the remaining boundary to external command activation and
+  authorizing exactly one fresh startup-script health oracle. The epoch
+  pre-created one unique health request, installed the proven bundle, launched
+  one disposable AutoCAD with a verified local default DWT via `/t` and a
+  temporary `/b` script containing only `CADAGENT_DISPATCH`, and excluded
+  QNEW-in-script, WM_CHAR/PostMessageW, focus manipulation, additional
+  operations, Task-6, source/candidate/DXF, registry mutation, production
+  changes, and retry.
+- The session reached document-ready on HWND `6293526` / PID `24412`, but
+  exact owned-PID module inspection found zero installed CadAgent matches
+  (`exact_installed_module_matches=0`, `module_paths=[]`). Source and
+  installed DLL SHA-256 still matched
+  `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`.
+  The epoch stopped before waiting for a health result; no semantic PASS or
+  FileIPC defect is inferred.
+- Cleanup verified PID `24412`, the exact installed bundle, the exact request/
+  result pair, and the temporary script absent. The verified default DWT hash
+  remained unchanged. Proof is retained at
+  `C:/temp/cad-agent-task6-live-20260911/startup-script-health-dispatch-iteration74/startup-health-dispatch-proof.json`.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-startup-script-health-oracle-iteration74.md`.
+  Fresh SOL diagnosis is required; no retry is authorized by this epoch.
+
 ## Current semantic health-dispatch oracle (iteration 73)
 - Fresh SOL diagnosis of iteration 72 returned `VERDICT=CLEAR_CONTINUE`,
   `HUMAN_GATE=NO`, and authorized exactly one fresh reversible semantic health
