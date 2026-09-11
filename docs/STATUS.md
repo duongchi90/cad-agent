@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Current autoload availability oracle (iteration 70)
+- Fresh SOL diagnosis of iteration 69 returned `VERDICT=CLEAR_CONTINUE`,
+  `HUMAN_GATE=NO`, and authorized exactly one reversible user-scoped
+  availability epoch. The epoch staged the complete repository bundle with
+  the existing Release DLL, copied it temporarily to the current user's
+  Autodesk `ApplicationPlugins`, launched one fresh disposable AutoCAD with
+  `_.QNEW` only, observed same-HWND document-ready, inspected the owned PID,
+  and cleaned up. No dispatcher, WM_CHAR/raw-LISP, FileIPC, Task-6, source,
+  candidate, DXF, registry mutation, or retry occurred.
+- Source/staged/installed DLL SHA-256 was
+  `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`.
+  Document-ready was observed on HWND `3280488` / PID `33640`.
+- Read-only module inspection completed but found zero exact matches for the
+  installed bundle module and no CadAgent module paths
+  (`exact_installed_module_matches=0`, `module_paths=[]`). The negative result
+  localizes the open boundary to plugin availability/autoload; it does not
+  infer a cause or a dispatcher/FileIPC defect.
+- Initial close reported
+  `START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED`; bounded exact-PID cleanup then
+  confirmed PID `33640` absent. The exact temporary installed
+  `CadAgent.bundle` was removed and verified absent. Proof is retained at
+  `C:/temp/cad-agent-task6-live-20260911/autoload-availability-iteration70/availability-proof.json`.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-autoload-availability-oracle-iteration70.md`.
+  Fresh SOL diagnosis is required; no retry is authorized by this epoch.
+
 ## Current bundle-contained module packaging repair (iteration 69)
 - Fresh SOL diagnosis of iteration 68 returned
   `VERDICT=MATERIAL_FINDING`, identified that the previous `ModuleName` escaped
