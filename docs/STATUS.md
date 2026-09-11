@@ -1,4 +1,10 @@
 # CAD Agent Status
+## Current live proof boundary (iteration 45)
+- SOL returned PASS for iteration 44 and authorized exactly one fresh bootstrap-only live proof on the marker remediation: one owned AutoCAD Mechanical 2027 blank session, positive per-session `.marker` observation/consumption, then exactly one claim-bound FileIPC readiness ping; no BVTL.dwg open or Task-6 extraction/query.
+- The proof failed closed at the first boundary: `WindowsAutoCADStartTabSession` did not observe `START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` marker completion after 68.11 seconds. The claim-bound ping was not reached. The repository HEAD was docs `d75aa27`; the production code/test files were byte-identical to code commit `4d05c46`.
+- Cleanup is verified: no acad.exe process remains, the proof root is empty, and BVTL.dwg SHA-256 remains `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`. No source, accepted drawing, candidate, or production CAD state was mutated. Live Task-6 acceptance remains NOT RUN, not PASS.
+- Proof root: `C:/temp/cad-agent-task6-live-20260911/bootstrap-proof-iteration45`. Fresh SOL diagnosis is pending; do not run another bootstrap/live proof before a new bounded verdict.
+
 ## Current code checkpoint (iteration 44)
 - SOL's iteration-43 finding isolated the failure to the `.ready` completion primitive: the owned script reached QNEW, NETLOAD, dispatcher load, and the final conditional, but the `.ready` file was not observed. The bounded remediation is pushed at code HEAD `4d05c46e3710bc7f5e23e0cd3f84438f19c74a09`.
 - The owned startup session now uses the same live-proven same-root marker-writing primitive from iteration 43, with one unique per-session `.marker` path under the exact IPC root and the exact `CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token. It validates exact marker content and removes the marker during cleanup; bootstrap confirmation and dispatcher-preloaded state remain false until the marker is observed.
