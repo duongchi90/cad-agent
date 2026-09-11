@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Current bootstrap stage-localization opt-in correction (iteration 55)
+- SOL's iteration-54 review found that the stage writers were enabled for
+  every bootstrap session with an IPC root, which violated the authorized
+  opt-in boundary. The correction is pushed at code head
+  `b4c8776191b353921944fc4feba3a264bcf39d3e`.
+- `WindowsAutoCADStartTabSession` and its factory now default
+  `stage_timing_enabled=False`. Only the bounded standalone Task-6 diagnostic
+  harness that emits `BOOTSTRAP_TIMING_EVENTS` passes `True`; normal bootstrap
+  sessions generate no stage paths, stage script expressions, or extra file
+  writes. Opt-in mode retains the four fixed-token same-root stage markers,
+  monotonic observation, cleanup, and fail-closed semantics.
+- TDD RED/GREEN: the default-script regression first failed because stage
+  expressions were unconditional and the opt-in parameter was absent; the
+  focused owner suite passed `39` tests. Ruff and `git diff --check` pass.
+- Authoritative `scripts/verify.ps1` completed on clean code head: .NET `238`
+  passed; offline Python JUnit `3387` with zero failures/errors/skips (`3307`
+  passed, `21` deselected, `80` subtests); offline IPC JUnit `134` clean;
+  causal-RED expected one negative failure handled; real-data `2` unavailable
+  skips; AutoCAD Mechanical `17` unavailable skips; AutoCAD live and M2 remain
+  `NOT RUN`.
+- No live retry, source open, extraction, query, candidate operation, FileIPC
+  request, or CAD mutation was performed. Fresh SOL review is required before
+  any live proof. Repository-readable record:
+  `docs/superpowers/implementation-records/2026-09-11-bootstrap-stage-localization-opt-in-correction-iteration55.md`.
+
 ## Current bootstrap stage-localization remediation (iteration 54)
 - SOL's iteration-53 review localized the remaining marker-timeout boundary to
   the post-document-ready startup-script path. The exact marker was still
