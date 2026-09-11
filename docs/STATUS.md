@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Current-main exact page-1 demand-load/setup live oracle (iteration 90)
+- Fresh SOL review of iteration 89 authorized exactly one live read-only epoch
+  using the proven iteration-76 verified-DWT + `/b CADAGENT_DISPATCH` pattern;
+  the Start-tab completion marker was not used.
+- Semantic health passed on the owned AutoCAD 2027 session: matching health
+  result had `success=true`, `changed=false`, `errors=[]`, expected host, and
+  exactly one expected installed module with matching SHA-256.
+- The existing read-only `FileIPCLiveMCPClient.drawing_open` path then failed
+  closed at dispatcher readiness with
+  `MCPTimeoutError: AutoCAD dispatcher did not become ready` (request
+  `23afdf5ebdeb`). Candidate-open semantic success was not established and
+  `drawing_setup_audit` was not invoked.
+- Cleanup and identity invariants passed: owned PID, bundle, requests/results,
+  and unique FileIPC root were absent; DWT and exact page-1 candidate SHA
+  remained unchanged. No retry or mutation occurred.
+- Classification is `SEMANTIC_HEALTH=PASS`,
+  `CANDIDATE_READ_ONLY_OPEN=NOT_PROVEN`, `SETUP_READBACK=NOT_RUN`, with
+  persistence/visual/dimension still `NOT_PROVEN`. Exact evidence is recorded
+  in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-demandload-setup-live-oracle-iteration90.md`.
+
 ## Current-main page-1 bootstrap-owner characterization (iteration 89)
 - Fresh SOL review of iteration 88 localized the first causal boundary to
   `WindowsAutoCADStartTabSession` completion confirmation, before candidate
