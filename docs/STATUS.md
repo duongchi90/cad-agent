@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Current semantic health-dispatch oracle (iteration 73)
+- Fresh SOL diagnosis of iteration 72 returned `VERDICT=CLEAR_CONTINUE`,
+  `HUMAN_GATE=NO`, and authorized exactly one fresh reversible semantic health
+  oracle through the existing `CADAGENT_DISPATCH` and .NET/FileIPC path. The
+  epoch staged the proven bundle, launched one fresh disposable AutoCAD with
+  `_.QNEW` only, confirmed module identity, wrote one unique health request,
+  and entered the existing trigger. No second request, additional operation,
+  workaround, Task-6, source, candidate, DXF, registry mutation, or retry
+  occurred.
+- Pre-dispatch availability passed again: document-ready was observed on HWND
+  `3673852` / PID `16864`; exactly one installed CadAgent module matched the
+  expected path and source/staged/installed SHA-256
+  `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`.
+- The existing trigger failed closed at its foreground ownership precondition
+  with `DotNetIPCError: WINDOW_FOREGROUND_INVALID`, before its `PostMessageW`
+  loop. No matching health result was produced, so semantic dispatch is
+  `NOT RUN`/non-PASS at this boundary and no FileIPC or plugin defect is
+  inferred.
+- Cleanup verified PID `16864` absent, the exact temporary installed bundle
+  absent, and the exact request/result pair absent. Proof is retained at
+  `C:/temp/cad-agent-task6-live-20260911/semantic-health-dispatch-iteration73/health-dispatch-proof.json`.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-semantic-health-dispatch-oracle-iteration73.md`.
+  Fresh SOL diagnosis is required; no retry is authorized by this epoch.
+
 ## Current autoload availability oracle after ProductCode repair (iteration 72)
 - Fresh SOL diagnosis of iteration 71 returned `VERDICT=CLEAR_CONTINUE`,
   `HUMAN_GATE=NO`, and authorized exactly one fresh reversible user-scoped
