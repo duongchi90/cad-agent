@@ -418,6 +418,19 @@ Private evidence and recoverable state are recorded at:
 Fresh SOL review of this pushed remediation is required before another live
 Task-6 attempt.
 
+## Iteration 40 fresh live gate
+
+SOL returned PASS for iteration 39 and authorized exactly one fresh opt-in live Task-6 gate on code HEAD 386808924829062613d4658af937b98916a0db08. The gate started the owned startup-session route and stopped at the first claim-bound dispatcher readiness boundary: request 05c05ae0456e timed out after 41.81 seconds.
+
+The failure occurred before opening the approved BVTL.dwg source, health, setup audit, standalone inspection, extraction, candidate creation, candidate reopen/query, or source reopen. Cleanup was verified: no acad.exe process remained and the disposable candidate directory was empty. The approved source SHA remained 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8; Git remained clean at docs HEAD 0dfebd63d5ac31e175279acb751928c751115d90. No source, accepted drawing, candidate, or production CAD state was mutated.
+
+Live Task-6 acceptance remains NOT RUN, not PASS. This observation does not provide a visual, geometry, extraction, or query fidelity verdict. Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-live-gate-iteration40-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration40.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another live attempt.
+
 ## Iteration 39 claim-binding remediation
 
 SOL's fresh review of exact synced code/docs state identified a claim-binding contract break: the startup-session client was constructed without an initial trigger, so it derived legacy fixture mode before the owned startup bindings were applied. The resulting readiness ping could therefore carry no claim.

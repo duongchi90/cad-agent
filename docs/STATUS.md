@@ -1,4 +1,9 @@
 # CAD Agent Status
+## Current live boundary (iteration 40)
+- SOL approved one fresh live Task-6 gate on code HEAD 386808924829062613d4658af937b98916a0db08. The gate started the owned opt-in bootstrap and stopped at the first claim-bound dispatcher readiness ping: request 05c05ae0456e timed out after 41.81s.
+- The failure occurred before BVTL.dwg source open, health, setup audit, standalone inspection, extraction, candidate creation, candidate query, or source reopen. Live Task-6 acceptance remains NOT RUN, not PASS.
+- Cleanup is verified: no acad.exe process remains, the disposable candidate directory is empty, BVTL.dwg SHA-256 remains 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8, and Git remains clean at docs HEAD 0dfebd63d5ac31e175279acb751928c751115d90. No source, accepted drawing, candidate, or production CAD state was mutated.
+- Private evidence and resume state: C:/temp/cad-agent-task6-live-20260911/task6-live-gate-iteration40-evidence.txt and C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration40.txt. Fresh SOL diagnosis is pending; do not retry live Task 6 before its next bounded verdict.
 
 ## Current iteration 39 checkpoint
 - SOL's review of code HEAD a44dabb25e490408ccc1b6dffb0e1dff3b17069d found that the bootstrap-bound dispatcher trigger could still leave the client in legacy fixture mode, making the readiness ping claimless.
