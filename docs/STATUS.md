@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Current AutoCAD bundle ProductCode contract repair (iteration 71)
+- Fresh SOL diagnosis of iteration 70 returned
+  `VERDICT=MATERIAL_FINDING`, identifying the missing required local-deployment
+  `ApplicationPackage/@ProductCode`. The authorized scope was one offline TDD
+  manifest repair only; bundle installation, AutoCAD retry, dispatcher,
+  WM_CHAR/raw-LISP, FileIPC, Task-6, source/candidate/DXF, registry mutation,
+  and `UpgradeCode` were excluded.
+- The test first produced causal RED because `ProductCode` was absent. The
+  manifest now contains exactly one stable repository-owned GUID
+  `E5B9D36B-3E99-4B9E-BF2E-4D9AD2A6A709`; focused GREEN passed `1 passed in
+  0.50s`.
+- Authoritative `scripts/verify.ps1` ran from a clean detached worktree at
+  commit `9f81d67` and exited `0`: .NET `238 succeeded`, dotnet IPC `82
+  passed` with `52` subtests, offline `3309 passed` with `80` subtests,
+  causal RED `1 failed` as the expected negative oracle, real-data `2
+  skipped`, and AutoCAD Mechanical `17 skipped`. No Autodesk Managed DLLs
+  were copied; live CAD/FileIPC remains `NOT RUN`.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-product-code-contract-repair-iteration71.md`.
+
 ## Current autoload availability oracle (iteration 70)
 - Fresh SOL diagnosis of iteration 69 returned `VERDICT=CLEAR_CONTINUE`,
   `HUMAN_GATE=NO`, and authorized exactly one reversible user-scoped
