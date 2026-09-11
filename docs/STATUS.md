@@ -1,4 +1,35 @@
 # CAD Agent Status
+## Current receiver-identity diagnostic (iteration 63)
+- Fresh SOL diagnosis of iteration 62 returned
+  `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
+  observation-only receiver-identity diagnostic on unchanged reviewed code
+  `65fc23ba610091e236f19ee93f8cee69f96d4ce9`. The diagnostic used one fresh
+  disposable QNEW session, waited for same-HWND document-ready, enumerated the
+  owned child-window hierarchy, captured the owner GUI thread's active/focus/
+  capture identities, compared the result with the existing trigger's
+  `MDIClient` selection, then closed and cleaned up.
+- The owned AutoCAD main window was HWND `7406996`, PID `29440`, class
+  `AfxMDIFrame140u`. The hierarchy contained two owned `MDIClient` windows:
+  visible HWND `8521664` and hidden HWND `5244534`. The existing trigger would
+  select the unique visible owned `MDIClient` `8521664`; receiver selection is
+  not ambiguous in this epoch.
+- GUI thread `23156` reported active HWND `7406996` (the main frame), focus HWND
+  `5180418` (an owned visible Afx child), and capture HWND `0` (none). Thus the
+  trigger's selected receiver is not the actual focused child. This observation
+  narrows the delivery boundary but does not by itself prove that the receiver
+  mismatch caused the absent marker.
+- The initial close call reported
+  `MCPTimeoutError: START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED`; the exact owned
+  disposable process was cleaned up with the bounded fallback and was confirmed
+  absent afterward. The proof root
+  `C:/temp/cad-agent-task6-live-20260911/receiver-identity-proof-iteration63`
+  is empty. No WM_CHAR/raw-LISP/command, focus workaround, NETLOAD, dispatcher,
+  FileIPC, Task-6, source, candidate, DXF, or production mutation occurred.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-receiver-identity-diagnostic-iteration63.md`.
+  Fresh SOL diagnosis is required before any trigger retry or implementation
+  change.
+
 ## Current trigger-time foreground trace (iteration 62)
 - Fresh SOL diagnosis of iteration 61 returned
   `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
