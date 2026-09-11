@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Current trigger-time foreground trace (iteration 62)
+- Fresh SOL diagnosis of iteration 61 returned
+  `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
+  trigger-time foreground-trace diagnostic on unchanged reviewed code
+  `65fc23ba610091e236f19ee93f8cee69f96d4ce9`. The diagnostic used one fresh
+  disposable QNEW session, waited for same-HWND document-ready, started
+  read-only high-frequency foreground sampling, invoked only the existing
+  `post_qnew_entry` raw-LISP marker once, then stopped sampling and closed the
+  disposable process.
+- The existing trigger returned without an exception, but the exact
+  `CAD_AGENT_START_TAB_POST_QNEW_ENTRY` marker was absent. Sampling recorded
+  one stable foreground identity transition over 9 samples: HWND `5705374`,
+  PID `9184`, process `acad.exe`, title `Autodesk AutoCAD 2027`. No transient
+  foreground identity change was observed in the sampled sequence, but the
+  absent marker means process-bound command delivery is still not proven.
+- The initial bounded close call timed out; the exact owned disposable PID was
+  then verified as `acad` with title `Autodesk AutoCAD 2027 - [Drawing1.dwg]`
+  and closed without saving. The proof root
+  `C:/temp/cad-agent-task6-live-20260911/foreground-trace-proof-iteration62`
+  is empty. No NETLOAD, dispatcher, FileIPC, Task-6, source, candidate, DXF,
+  or production-CAD state was touched, and no production code changed.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-trigger-time-foreground-trace-iteration62.md`.
+  Fresh SOL diagnosis is required before any retry or implementation change.
+
 ## Current foreground-identity diagnostic (iteration 61)
 - Fresh SOL diagnosis of iteration 60 returned `VERDICT=MATERIAL_FINDING`,
   `HUMAN_GATE=NO`, and authorized one read-only foreground-identity
