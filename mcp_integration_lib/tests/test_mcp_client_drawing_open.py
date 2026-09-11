@@ -446,7 +446,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
 
     def test_start_tab_timing_records_monotonic_lifecycle_events_in_order(self):
-        ticks = iter((1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
+        ticks = iter((1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0))
         timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
         process = SimpleNamespace(pid=7310, poll=lambda: None)
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
@@ -478,6 +478,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_finder=find_window,
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
             timing_recorder=timing,
         )
 
@@ -489,6 +490,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 "process_launch",
                 "start_window_observed",
                 "completion_wait_start",
+                "document_ready_transition",
                 "completion_marker_observed",
                 "cleanup_start",
                 "cleanup_end",
@@ -496,7 +498,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [event.name for event in timing.events],
         )
         self.assertEqual(
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
             [event.monotonic_s for event in timing.events],
         )
 
@@ -515,8 +517,26 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertEqual(["document_ready_transition"], [event.name for event in timing.events])
         self.assertEqual([11.0], [event.monotonic_s for event in timing.events])
 
+    def test_start_tab_timing_deduplicates_document_ready_transition(self):
+        ticks = iter((11.0, 12.0))
+        timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
+        timing.record_once("document_ready_transition")
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            timing_recorder=timing,
+            bootstrap_document_ready_probe=lambda: True,
+            bootstrap_document_ready_timeout_s=0,
+        )
+
+        client._wait_for_bootstrap_document()
+
+        self.assertEqual(
+            [("document_ready_transition", 11.0)],
+            [(event.name, event.monotonic_s) for event in timing.events],
+        )
+
     def test_start_tab_timing_records_completion_timeout_and_cleanup(self):
-        ticks = iter((21.0, 22.0, 23.0, 24.0, 25.0, 26.0))
+        ticks = iter((21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0))
         timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
         process = SimpleNamespace(pid=7312, poll=lambda: None)
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
@@ -544,6 +564,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_finder=lambda pid: 8812,
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
             timing_recorder=timing,
         )
 
@@ -557,6 +578,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 "process_launch",
                 "start_window_observed",
                 "completion_wait_start",
+                "document_ready_transition",
                 "completion_timeout",
                 "cleanup_start",
                 "cleanup_end",
@@ -564,7 +586,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [event.name for event in timing.events],
         )
         self.assertEqual(
-            [21.0, 22.0, 23.0, 24.0, 25.0, 26.0],
+            [21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0],
             [event.monotonic_s for event in timing.events],
         )
         self.assertFalse(script_holder[0].with_suffix(".marker").exists())
@@ -600,6 +622,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_finder=lambda pid: 8811,
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
             timing_recorder=FailingTimingRecorder(),
         )
 

@@ -48,6 +48,11 @@ class BootstrapTimingRecorder:
             )
         )
 
+    def record_once(self, event_name: str) -> None:
+        if any(event.name == event_name for event in self._events):
+            return
+        self.record(event_name)
+
     @property
     def events(self) -> tuple[BootstrapTimingEvent, ...]:
         return tuple(self._events)
@@ -61,6 +66,22 @@ def _record_bootstrap_timing(
         return
     try:
         recorder.record(event_name)
+    except Exception:
+        pass
+
+
+def _record_bootstrap_timing_once(
+    recorder: Optional[BootstrapTimingRecorder], event_name: str
+) -> None:
+    """Record a shared transition once while keeping observation best effort."""
+    if recorder is None:
+        return
+    try:
+        record_once = getattr(recorder, "record_once", None)
+        if callable(record_once):
+            record_once(event_name)
+        else:
+            recorder.record(event_name)
     except Exception:
         pass
 
@@ -497,7 +518,15 @@ class WindowsAutoCADStartTabSession:
                     self._hwnd = candidate
                     completion_confirmed = self._bootstrap_lisp_path is None
                     if not completion_confirmed:
-                        self._wait_for_completion_ack()
+                        try:
+                            document_ready_probe = self._document_ready_probe_factory(
+                                candidate
+                            )
+                        except Exception:
+                            document_ready_probe = None
+                        self._wait_for_completion_ack(
+                            document_ready_probe=document_ready_probe
+                        )
                         completion_confirmed = True
                     if self._bindings_factory is not None:
                         return self._bindings_factory(candidate)
@@ -588,7 +617,11 @@ class WindowsAutoCADStartTabSession:
             time.sleep(min(self._poll_interval_s, remaining))
         return True
 
-    def _wait_for_completion_ack(self) -> None:
+    def _wait_for_completion_ack(
+        self,
+        *,
+        document_ready_probe: Optional[Callable[[], bool]] = None,
+    ) -> None:
         path = self._completion_marker_path
         if path is None:
             raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
@@ -596,7 +629,18 @@ class WindowsAutoCADStartTabSession:
             self._timing_recorder, "completion_wait_start"
         )
         deadline = time.monotonic() + self._timeout_s
+        document_ready_observed = False
         while True:
+            if document_ready_probe is not None and not document_ready_observed:
+                try:
+                    if bool(document_ready_probe()):
+                        _record_bootstrap_timing_once(
+                            self._timing_recorder,
+                            "document_ready_transition",
+                        )
+                        document_ready_observed = True
+                except Exception:
+                    pass
             try:
                 if (
                     path.is_file()
@@ -958,7 +1002,7 @@ class FileIPCLiveMCPClient:
         while True:
             try:
                 if bool(probe()):
-                    _record_bootstrap_timing(
+                    _record_bootstrap_timing_once(
                         self._timing_recorder, "document_ready_transition"
                     )
                     return
