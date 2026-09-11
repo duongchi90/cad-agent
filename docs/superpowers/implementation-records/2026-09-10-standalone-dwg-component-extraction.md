@@ -581,3 +581,45 @@ Evidence and resume state are recorded at:
 
 Fresh SOL diagnosis of this first-failure boundary is required before another
 bootstrap or live Task-6 attempt.
+
+## Iteration 46 canonical completion-marker differential remediation
+
+SOL's iteration-45 review confirmed that the marker remediation was not live-
+valid and required exactly one non-live production-versus-diagnostic
+completion-marker differential. No bootstrap or Task-6 live retry was made.
+
+The differential captured the exact production startup-script bytes from code
+HEAD `4d05c46e3710bc7f5e23e0cd3f84438f19c74a09` and compared them with the
+iteration-43 live-proven staged marker writer. The resolved per-session marker
+path and exact `CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token matched, but the
+production expression lacked the diagnostic's canonical nested `progn` form.
+The pre-fix assertion recorded
+`PRODUCTION_CONTAINS_DIAGNOSTIC_EXPRESSION=False`.
+
+The bounded fix is pushed at code HEAD
+`636a81e186133a24c36d3e0c6b0b67a918fceb3e`. Production now uses
+`_start_tab_completion_marker_path` and
+`_start_tab_completion_marker_expression` so the startup owner emits the exact
+same-root `open`/`write-line`/`close` expression, exact token, and per-session
+`.marker` path. Existing exact-content validation and stale/wrong-token
+cleanup remain in force.
+
+TDD RED changed the owner test to require the exact canonical writer syntax;
+the test failed against the pre-fix production script. GREEN focused owner
+checks report 33 passed and 6 subtests, with Ruff and `git diff --check`
+passing. The authoritative `scripts/verify.ps1` exited 0: C# 238 passed;
+offline Python JUnit 3381 with zero failures/errors/skips (3301 passed, 21
+deselected, 80 subtests); offline IPC JUnit 134 clean; causal-red expected
+one negative failure handled; real-data 2 skipped; AutoCAD Mechanical 17
+skipped. Live AutoCAD and M2 Mechanical remain NOT RUN.
+
+The code commit is pushed separately from this documentation checkpoint. No
+source, accepted drawing, candidate, or production CAD state was mutated. The
+approved `BVTL.dwg` SHA-256 remains
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+Evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-completion-marker-differential-remediation-iteration46-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration46.txt
+
+Fresh SOL review of this pushed remediation is required before any live retry.
