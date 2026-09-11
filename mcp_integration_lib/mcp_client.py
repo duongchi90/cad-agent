@@ -270,6 +270,34 @@ _START_TAB_BOOTSTRAP_COMPLETION_TOKEN = "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"
 _START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX = ".marker"
 
 
+def _start_tab_completion_marker_path(
+    script_path: Path, ipc_root: Optional[Path]
+) -> Path:
+    """Resolve the unique completion marker inside the exact owned root."""
+    if ipc_root is not None:
+        return ipc_root / (
+            f"{script_path.stem}{_START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX}"
+        )
+    return script_path.with_suffix(_START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX)
+
+
+def _start_tab_completion_marker_expression(marker_path: Path) -> str:
+    """Build the canonical AutoLISP marker writer proven by live diagnostics."""
+    marker_literal = _autolisp_string_literal(
+        str(marker_path).replace("\\", "/")
+    )
+    token_literal = _autolisp_string_literal(
+        _START_TAB_BOOTSTRAP_COMPLETION_TOKEN
+    )
+    return (
+        "(progn (setq cad-agent-stage-file (open "
+        + marker_literal
+        + ' "w")) (if cad-agent-stage-file (progn (write-line '
+        + token_literal
+        + " cad-agent-stage-file) (close cad-agent-stage-file))))"
+    )
+
+
 @dataclass(frozen=True)
 class WindowsStartTabBootstrapBindings:
     """Window-bound triggers and probes for an owned AutoCAD session."""
@@ -379,22 +407,16 @@ class WindowsAutoCADStartTabSession:
             lisp_literal = _autolisp_string_literal(
                 str(self._bootstrap_lisp_path).replace("\\", "/")
             )
-            completion_literal = _autolisp_string_literal(
-                str(self._completion_marker_path).replace("\\", "/")
-            )
-            completion_token_literal = _autolisp_string_literal(
-                _START_TAB_BOOTSTRAP_COMPLETION_TOKEN
-            )
             lines.append(
                 "(progn (setq *cad-agent-file-ipc-root* "
                 + root_literal
                 + ") (load "
                 + lisp_literal
-                + ") (setq cad-agent-stage-file (open "
-                + completion_literal
-                + ' "w")) (if cad-agent-stage-file (progn (write-line '
-                + completion_token_literal
-                + " cad-agent-stage-file) (close cad-agent-stage-file))))"
+                + ") "
+                + _start_tab_completion_marker_expression(
+                    self._completion_marker_path
+                )
+                + ")"
             )
         return ("\r\n".join(lines) + "\r\n").encode("utf-8")
 
@@ -404,10 +426,8 @@ class WindowsAutoCADStartTabSession:
         script_path = self._script_directory / (
             f"cad-agent-start-tab-{uuid.uuid4().hex}.scr"
         )
-        completion_marker_path = (
-            self._ipc_root / f"{script_path.stem}{_START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX}"
-            if self._ipc_root is not None
-            else script_path.with_suffix(_START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX)
+        completion_marker_path = _start_tab_completion_marker_path(
+            script_path, self._ipc_root
         )
         completion_marker_path.unlink(missing_ok=True)
         self._completion_marker_path = completion_marker_path

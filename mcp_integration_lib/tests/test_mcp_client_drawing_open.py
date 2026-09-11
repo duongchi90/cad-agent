@@ -421,8 +421,14 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         )
         self.assertIn('(load "' + lisp_path.as_posix() + '")', script)
         self.assertIn("CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE", script)
+        marker_path = launch_calls[0][1].with_suffix(".marker")
+        self.assertIn(marker_path.as_posix(), script)
         self.assertIn(
-            launch_calls[0][1].with_suffix(".marker").as_posix(),
+            '(progn (setq cad-agent-stage-file (open "'
+            + marker_path.as_posix()
+            + '" "w")) (if cad-agent-stage-file (progn (write-line '
+            + '"CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"'
+            + " cad-agent-stage-file) (close cad-agent-stage-file))))",
             script,
         )
         self.assertNotIn("BVTL", script)
