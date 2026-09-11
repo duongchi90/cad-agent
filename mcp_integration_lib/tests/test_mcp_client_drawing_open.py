@@ -160,6 +160,26 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             document_settle_s=0,
         )
 
+        def dispatch(command, params):
+            if command == "ping":
+                return {}
+            if command == "drawing-get-variables":
+                return {"DWGPREFIX": "C:/work/", "DWGNAME": "read-only.dxf"}
+            raise AssertionError(f"unexpected dispatch: {command}")
+
+        client._dispatch = dispatch
+
+        self.assertEqual(
+            {"path": target_path},
+            client.drawing_open(target_path, read_only=True),
+        )
+        self.assertIn(
+            '(vla-open mcp-docs "C:/work/read-only.dxf" :vlax-true)',
+            raw_commands[0],
+        )
+        self.assertEqual("c:\\work\\read-only.dxf", client._active_drawing_path)
+        self.assertEqual([], command_sequences)
+
     def _runtime_bindings_factory(self, session_ref, events):
         def raw_lisp(expression):
             events.append(("lisp", expression))
@@ -189,26 +209,6 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             )
 
         return factory
-
-        def dispatch(command, params):
-            if command == "ping":
-                return {}
-            if command == "drawing-get-variables":
-                return {"DWGPREFIX": "C:/work/", "DWGNAME": "read-only.dxf"}
-            raise AssertionError(f"unexpected dispatch: {command}")
-
-        client._dispatch = dispatch
-
-        self.assertEqual(
-            {"path": target_path},
-            client.drawing_open(target_path, read_only=True),
-        )
-        self.assertIn(
-            '(vla-open mcp-docs "C:/work/read-only.dxf" :vlax-true)',
-            raw_commands[0],
-        )
-        self.assertEqual("c:\\work\\read-only.dxf", client._active_drawing_path)
-        self.assertEqual([], command_sequences)
 
     def test_default_open_preserves_writable_vla_open_signature(self):
         raw_commands = []
