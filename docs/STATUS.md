@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Current-main DRAFT_REFERENCE policy-split characterization (iteration 84)
+- Fresh SOL review of the owner request to remove approved-root and
+  identity-key requirements returned `VERDICT=MATERIAL_FINDING` and
+  `HUMAN_GATE=NO` for one offline architecture/TDD characterization.
+- The existing PDF owner creates the exact source manifest as
+  `release_profile=DRAFT_REFERENCE` with
+  `authoritative_release_eligible=false`; the source SHA is
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
+- The smallest existing authoritative acceptance boundary is
+  `cad_agent.source_fusion.build_source_fusion_packet`, through the existing
+  locator validators. It calls the existing custody validator and rejects a
+  non-`READY` custody record with the causal error `CUSTODY_NOT_READY`.
+- Existing focused test `test_task4_rejects_non_ready_custody` passed (`1
+  passed, 226 deselected`) under `.venv-py311` with the cache provider
+  disabled. No production code, source, candidate, DXF, custody, or live CAD
+  state was mutated.
+- The bounded future write-set, if separately approved, is only a thin
+  DRAFT_REFERENCE policy/acceptance adapter plus focused tests. The
+  `source-custody-1.0` and authoritative source-fusion contracts must remain
+  unchanged; authoritative promotion must continue to require `READY`
+  custody. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-draft-reference-policy-characterization-iteration84.md`.
+
 ## Current-main source-custody prerequisite inventory (iteration 83)
 - Fresh SOL review of iteration 82 localized the first boundary to real source
   custody materialization and authorized one read-only inventory for approved
