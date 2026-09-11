@@ -427,6 +427,7 @@ class WindowsAutoCADStartTabSession:
             Callable[[int], WindowsStartTabBootstrapBindings]
         ] = None,
         timing_recorder: Optional[BootstrapTimingRecorder] = None,
+        stage_timing_enabled: bool = False,
     ) -> None:
         executable = Path(acad_executable).resolve()
         script_root = Path(script_directory).resolve()
@@ -436,6 +437,8 @@ class WindowsAutoCADStartTabSession:
             raise ValueError("script_directory must be an existing directory")
         if timeout_s < 0 or poll_interval_s < 0:
             raise ValueError("session timeouts must not be negative")
+        if type(stage_timing_enabled) is not bool:
+            raise ValueError("stage_timing_enabled must be a bool")
         self._acad_executable = executable
         self._script_directory = script_root
         self._timeout_s = timeout_s
@@ -470,6 +473,7 @@ class WindowsAutoCADStartTabSession:
         )
         self._bindings_factory = bindings_factory
         self._timing_recorder = timing_recorder or BootstrapTimingRecorder()
+        self._stage_timing_enabled = stage_timing_enabled
         self._process: Any = None
         self._hwnd: Optional[int] = None
         self._script_path: Optional[Path] = None
@@ -545,8 +549,10 @@ class WindowsAutoCADStartTabSession:
         )
         completion_marker_path.unlink(missing_ok=True)
         self._completion_marker_path = completion_marker_path
-        self._stage_marker_paths = _start_tab_stage_marker_paths(
-            script_path, self._ipc_root
+        self._stage_marker_paths = (
+            _start_tab_stage_marker_paths(script_path, self._ipc_root)
+            if self._stage_timing_enabled
+            else ()
         )
         self._observed_stage_markers.clear()
         for _, stage_path, _ in self._stage_marker_paths:
@@ -1537,6 +1543,7 @@ def make_windows_start_tab_session_factory(
     timeout_s: float = 30.0,
     poll_interval_s: float = 0.1,
     timing_recorder: Optional[BootstrapTimingRecorder] = None,
+    stage_timing_enabled: bool = False,
 ) -> Callable[[], WindowsAutoCADStartTabSession]:
     """Create a factory for disposable AutoCAD sessions bootstrapped by a script."""
     executable = Path(acad_executable).resolve()
@@ -1556,6 +1563,7 @@ def make_windows_start_tab_session_factory(
             timeout_s=timeout_s,
             poll_interval_s=poll_interval_s,
             timing_recorder=timing_recorder,
+            stage_timing_enabled=stage_timing_enabled,
         )
 
     return factory

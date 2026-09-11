@@ -401,6 +401,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             bootstrap_plugin_path=str(plugin_path),
             bootstrap_lisp_path=str(lisp_path),
             ipc_root=str(self._ipc_dir),
+            stage_timing_enabled=True,
             timeout_s=0.01,
             poll_interval_s=0,
             process_launcher=launch,
@@ -503,6 +504,58 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
         self.assertEqual([], list(launch_calls[0][1].parent.glob(launch_calls[0][1].stem + ".stage-*")))
 
+    def test_start_tab_stage_localization_is_opt_in_and_default_script_is_unchanged(self):
+        process = SimpleNamespace(pid=7305, poll=lambda: None)
+        launch_calls = []
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+
+        def launch(executable, script_path):
+            launch_calls.append((executable, script_path, script_path.read_bytes()))
+            return process
+
+        def find_window(pid):
+            launch_calls[0][1].with_suffix(".marker").write_text(
+                "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
+            )
+            return 8805
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=str(self._ipc_dir),
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=find_window,
+            window_closer=lambda hwnd: setattr(process, "poll", lambda: 0),
+            start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+        )
+
+        session.launch_blank_document()
+        script_path = launch_calls[0][1]
+        marker_path = script_path.with_suffix(".marker")
+        expected_script = "\r\n".join(
+            [
+                "_.QNEW",
+                '(progn (setq *cad-agent-file-ipc-root* "'
+                + Path(self._ipc_dir).as_posix()
+                + '") (load "'
+                + lisp_path.as_posix()
+                + '"))',
+                '(progn (setq cad-agent-stage-file (open "'
+                + marker_path.as_posix()
+                + '" "w")) (if cad-agent-stage-file (progn (write-line '
+                + '"CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"'
+                + " cad-agent-stage-file) (close cad-agent-stage-file))))",
+            ]
+        ) + "\r\n"
+        self.assertEqual(expected_script, launch_calls[0][2].decode("utf-8"))
+        self.assertEqual([], list(script_path.parent.glob(script_path.stem + ".stage-*")))
+        session.close_without_save()
+
     def test_start_tab_timing_records_monotonic_lifecycle_events_in_order(self):
         ticks = iter((1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0))
         timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
@@ -544,6 +597,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
+            stage_timing_enabled=True,
             timing_recorder=timing,
         )
 
@@ -639,6 +693,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             window_closer=close_window,
             start_probe_factory=lambda hwnd: lambda: True,
             document_ready_probe_factory=lambda hwnd: lambda: True,
+            stage_timing_enabled=True,
             timing_recorder=timing,
         )
 

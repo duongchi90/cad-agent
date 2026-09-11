@@ -248,6 +248,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
             timeout_s=30.0,
             poll_interval_s=0.1,
             timing_recorder=timing,
+            stage_timing_enabled=True,
         )
         session = factory()
         session_holder["session"] = session
