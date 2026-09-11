@@ -14,6 +14,11 @@
     <ComponentEntry AppName="CadAgent.AutoCAD2027"
                     Version="0.0.0"
                     ModuleName="./Contents/Windows/CadAgent.AutoCAD2027.dll"
-                    LoadOnAutoCADStartup="True" />
+                    LoadOnAutoCADStartup="False"
+                    LoadOnCommandInvocation="True">
+      <Commands GroupName="CadAgent">
+        <Command Global="CADAGENT_DISPATCH" Local="CADAGENT_DISPATCH" />
+      </Commands>
+    </ComponentEntry>
   </Components>
 </ApplicationPackage>

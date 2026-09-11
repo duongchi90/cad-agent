@@ -49,7 +49,18 @@ def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
     assert len(entries) == 1
     entry = entries[0]
     assert entry.attrib["AppName"] == "CadAgent.AutoCAD2027"
-    assert entry.attrib["LoadOnAutoCADStartup"] == "True"
+    assert entry.attrib["LoadOnCommandInvocation"] == "True", (
+        "Issue #409 RED: CadAgent dispatch must use command-demand loading"
+    )
+    assert entry.attrib["LoadOnAutoCADStartup"] == "False", (
+        "Issue #409 RED: command-demand loading must not depend on startup timing"
+    )
+    commands = entry.findall("./Commands/Command")
+    assert len(commands) == 1
+    assert commands[0].attrib == {
+        "Global": "CADAGENT_DISPATCH",
+        "Local": "CADAGENT_DISPATCH",
+    }
 
     bundle_root = BUNDLE_MANIFEST.parent.resolve()
     module_path = (BUNDLE_MANIFEST.parent / entry.attrib["ModuleName"]).resolve()
