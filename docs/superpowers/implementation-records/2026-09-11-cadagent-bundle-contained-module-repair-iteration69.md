@@ -72,6 +72,21 @@ Release DLL at runtime and compare the staged copy to that value, preserving
 the intended byte-for-byte staging check without assuming build metadata is
 stable across worktrees.
 
+After that test-only correction, the authoritative `scripts/verify.ps1` gate
+ran from a clean detached worktree at commit `be98bde` and exited `0`:
+
+```text
+.NET build/test: 238 succeeded; build warnings were reported but no failures
+dotnet_ipc: 82 passed, 52 subtests passed
+offline: 3309 passed, 21 deselected, 80 subtests passed
+causal RED: 1 failed, 19 deselected (expected negative oracle)
+real_data unavailable-state: 2 skipped (prerequisite absent)
+autocad_mechanical unavailable-state: 17 skipped (live IPC prerequisites absent)
+```
+
+The verifier also confirmed that no Autodesk Managed DLLs were copied to build
+output. The live CAD/FileIPC gate remains `NOT RUN`, not a pass.
+
 ## Remaining gate
 
 This iteration proves the deploy-time bundle layout contract offline only.

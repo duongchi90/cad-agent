@@ -16,8 +16,14 @@
 - The first clean-worktree verification exposed a stale hardcoded SHA from an
   earlier build (`0F3DA87B96D022D2B493F802ADB3FE165F0EE2F404924F62196367E6DCBB919F`
   was the fresh approved input). The test now derives the approved input hash
-  at runtime and compares the staged copy to it; the authoritative gate is
-  being rerun after this test-only correction.
+  at runtime and compares the staged copy to it. After that test-only
+  correction, authoritative `scripts/verify.ps1` ran from a clean detached
+  worktree at commit `be98bde` and exited `0`: .NET build/test `238
+  succeeded`, offline Python `3309 passed` with `80` subtests, causal RED
+  failed exactly as expected (`1 failed`), real-data unavailable state was
+  `2 skipped`, and AutoCAD Mechanical unavailable state was `17 skipped`.
+  No Autodesk Managed DLLs were copied to build output; live CAD/FileIPC
+  remains `NOT RUN`, not a pass.
 - No generated DLL is committed. AutoCAD installation/copy and the fresh live
   module-presence oracle remain separate gates and were not run.
 - Exact evidence is recorded in
