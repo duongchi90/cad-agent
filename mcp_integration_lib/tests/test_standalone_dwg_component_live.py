@@ -32,6 +32,7 @@ from mcp_integration_lib.dotnet_ipc import (
     result_path,
 )
 from mcp_integration_lib.mcp_client import (
+    BootstrapTimingRecorder,
     FileIPCLiveMCPClient,
     make_windows_start_tab_session_factory,
 )
@@ -235,6 +236,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
     assert _path_key(plan["candidate_output_path"]) == _path_key(candidate_output_path)
 
     session_holder: dict[str, object] = {}
+    timing = BootstrapTimingRecorder()
 
     def create_start_tab_session():
         factory = make_windows_start_tab_session_factory(
@@ -245,6 +247,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
             ipc_root=environment["CAD_AGENT_FILE_IPC_DIR"],
             timeout_s=30.0,
             poll_interval_s=0.1,
+            timing_recorder=timing,
         )
         session = factory()
         session_holder["session"] = session
@@ -262,6 +265,7 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
         bootstrap_lisp_path=environment["CAD_AGENT_AUTOCAD_LISP_PATH"],
         bootstrap_start_tab=True,
         bootstrap_start_tab_session_factory=create_start_tab_session,
+        timing_recorder=timing,
     )
     dotnet_client = DotNetIPCClient(
         ipc_dir=environment["CAD_AGENT_DOTNET_IPC_DIR"],
@@ -525,3 +529,16 @@ def test_standalone_bvtl_live_gate_binds_source_candidate_and_query() -> None:
             legacy_client.close_start_tab_bootstrap()
         except Exception:
             pass
+        print(
+            "BOOTSTRAP_TIMING_EVENTS="
+            + json.dumps(
+                [
+                    {
+                        "name": event.name,
+                        "monotonic_s": event.monotonic_s,
+                    }
+                    for event in timing.events
+                ],
+                separators=(",", ":"),
+            )
+        )

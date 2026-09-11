@@ -25,6 +25,46 @@ class MCPToolError(RuntimeError):
     """An MCP operation failed."""
 
 
+@dataclass(frozen=True)
+class BootstrapTimingEvent:
+    """One privacy-safe monotonic timestamp from the disposable bootstrap path."""
+
+    name: str
+    monotonic_s: float
+
+
+class BootstrapTimingRecorder:
+    """Collect optional bootstrap timing without affecting runtime behavior."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._events: List[BootstrapTimingEvent] = []
+
+    def record(self, event_name: str) -> None:
+        self._events.append(
+            BootstrapTimingEvent(
+                name=event_name,
+                monotonic_s=float(self._clock()),
+            )
+        )
+
+    @property
+    def events(self) -> tuple[BootstrapTimingEvent, ...]:
+        return tuple(self._events)
+
+
+def _record_bootstrap_timing(
+    recorder: Optional[BootstrapTimingRecorder], event_name: str
+) -> None:
+    """Best-effort observability must never change the bootstrap outcome."""
+    if recorder is None:
+        return
+    try:
+        recorder.record(event_name)
+    except Exception:
+        pass
+
+
 def _normalized_autocad_path(path: str) -> str:
     """Normalize an AutoCAD Windows document path for identity comparison."""
     return ntpath.normpath(path.replace("/", "\\")).casefold()
@@ -335,6 +375,7 @@ class WindowsAutoCADStartTabSession:
         bindings_factory: Optional[
             Callable[[int], WindowsStartTabBootstrapBindings]
         ] = None,
+        timing_recorder: Optional[BootstrapTimingRecorder] = None,
     ) -> None:
         executable = Path(acad_executable).resolve()
         script_root = Path(script_directory).resolve()
@@ -377,6 +418,7 @@ class WindowsAutoCADStartTabSession:
             or make_windows_start_tab_document_ready_probe
         )
         self._bindings_factory = bindings_factory
+        self._timing_recorder = timing_recorder or BootstrapTimingRecorder()
         self._process: Any = None
         self._hwnd: Optional[int] = None
         self._script_path: Optional[Path] = None
@@ -385,6 +427,10 @@ class WindowsAutoCADStartTabSession:
     @property
     def hwnd(self) -> Optional[int]:
         return self._hwnd
+
+    @property
+    def timing_events(self) -> tuple[BootstrapTimingEvent, ...]:
+        return self._timing_recorder.events
 
     def _startup_script_bytes(self) -> bytes:
         lines = ["_.QNEW"]
@@ -433,6 +479,7 @@ class WindowsAutoCADStartTabSession:
         script_path.write_bytes(self._startup_script_bytes())
         self._script_path = script_path
         try:
+            _record_bootstrap_timing(self._timing_recorder, "process_launch")
             process = self._process_launcher(self._acad_executable, script_path)
             pid = int(process.pid)
             if pid <= 0:
@@ -444,6 +491,9 @@ class WindowsAutoCADStartTabSession:
                     raise MCPToolError("START_TAB_BOOTSTRAP_PROCESS_EXITED")
                 candidate = int(self._window_finder(pid) or 0)
                 if candidate > 0 and self._start_probe_factory(candidate)():
+                    _record_bootstrap_timing(
+                        self._timing_recorder, "start_window_observed"
+                    )
                     self._hwnd = candidate
                     completion_confirmed = self._bootstrap_lisp_path is None
                     if not completion_confirmed:
@@ -475,6 +525,7 @@ class WindowsAutoCADStartTabSession:
             raise
 
     def close_without_save(self, *, best_effort: bool = False) -> None:
+        _record_bootstrap_timing(self._timing_recorder, "cleanup_start")
         process = self._process
         hwnd = self._hwnd
         try:
@@ -527,6 +578,7 @@ class WindowsAutoCADStartTabSession:
             if best_effort or self._process is None:
                 self._script_path = None
                 self._completion_marker_path = None
+            _record_bootstrap_timing(self._timing_recorder, "cleanup_end")
 
     def _wait_for_process_exit(self, process: Any, deadline: float) -> bool:
         while process.poll() is None:
@@ -540,6 +592,9 @@ class WindowsAutoCADStartTabSession:
         path = self._completion_marker_path
         if path is None:
             raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
+        _record_bootstrap_timing(
+            self._timing_recorder, "completion_wait_start"
+        )
         deadline = time.monotonic() + self._timeout_s
         while True:
             try:
@@ -548,11 +603,17 @@ class WindowsAutoCADStartTabSession:
                     and path.read_text(encoding="ascii").strip()
                     == _START_TAB_BOOTSTRAP_COMPLETION_TOKEN
                 ):
+                    _record_bootstrap_timing(
+                        self._timing_recorder, "completion_marker_observed"
+                    )
                     return
             except (OSError, UnicodeError):
                 pass
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                _record_bootstrap_timing(
+                    self._timing_recorder, "completion_timeout"
+                )
                 raise MCPTimeoutError(
                     "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
                 )
@@ -574,7 +635,8 @@ class FileIPCLiveMCPClient:
                  bootstrap_start_tab_session_factory: Optional[
                      Callable[[], WindowsAutoCADStartTabSession]
                  ] = None,
-                 bootstrap_document_setup_hook: Optional[Callable[[], None]] = None) -> None:
+                 bootstrap_document_setup_hook: Optional[Callable[[], None]] = None,
+                 timing_recorder: Optional[BootstrapTimingRecorder] = None) -> None:
         self._dir = _validate_file_ipc_root(ipc_dir)
         self._root_identity = _file_ipc_root_identity(self._dir)
         self._trigger = trigger
@@ -599,6 +661,7 @@ class FileIPCLiveMCPClient:
         )
         self._bootstrap_start_tab_session_factory = bootstrap_start_tab_session_factory
         self._bootstrap_document_setup_hook = bootstrap_document_setup_hook
+        self._timing_recorder = timing_recorder or BootstrapTimingRecorder()
         self._bootstrap_dispatcher_preloaded = False
         if type(bootstrap_start_tab) is not bool:
             raise TypeError("bootstrap_start_tab must be a bool")
@@ -614,6 +677,10 @@ class FileIPCLiveMCPClient:
         if self._last_exchange_evidence is None:
             return None
         return dict(self._last_exchange_evidence)
+
+    @property
+    def timing_events(self) -> tuple[BootstrapTimingEvent, ...]:
+        return self._timing_recorder.events
 
     def _assert_root_unchanged(self) -> None:
         try:
@@ -891,6 +958,9 @@ class FileIPCLiveMCPClient:
         while True:
             try:
                 if bool(probe()):
+                    _record_bootstrap_timing(
+                        self._timing_recorder, "document_ready_transition"
+                    )
                     return
             except Exception:
                 pass
@@ -1343,6 +1413,7 @@ def make_windows_start_tab_session_factory(
     ipc_root: Optional[str] = None,
     timeout_s: float = 30.0,
     poll_interval_s: float = 0.1,
+    timing_recorder: Optional[BootstrapTimingRecorder] = None,
 ) -> Callable[[], WindowsAutoCADStartTabSession]:
     """Create a factory for disposable AutoCAD sessions bootstrapped by a script."""
     executable = Path(acad_executable).resolve()
@@ -1361,6 +1432,7 @@ def make_windows_start_tab_session_factory(
             ipc_root=ipc_root,
             timeout_s=timeout_s,
             poll_interval_s=poll_interval_s,
+            timing_recorder=timing_recorder,
         )
 
     return factory

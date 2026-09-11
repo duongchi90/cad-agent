@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import mcp_integration_lib.mcp_client as mcp_client_module
 from mcp_integration_lib.mcp_client import (
+    BootstrapTimingRecorder,
     FileIPCLiveMCPClient,
     MCPToolError,
     MCPTimeoutError,
@@ -443,6 +444,172 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertEqual([8801], close_calls)
         self.assertFalse(launch_calls[0][1].exists())
         self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
+
+    def test_start_tab_timing_records_monotonic_lifecycle_events_in_order(self):
+        ticks = iter((1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
+        timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
+        process = SimpleNamespace(pid=7310, poll=lambda: None)
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        script_holder = []
+
+        def launch(executable, script_path):
+            script_holder.append(script_path)
+            return process
+
+        def find_window(pid):
+            marker = script_holder[0].with_suffix(".marker")
+            marker.write_text(
+                "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
+            )
+            return 8810
+
+        def close_window(hwnd):
+            process.poll = lambda: 0
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=self._ipc_dir,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=find_window,
+            window_closer=close_window,
+            start_probe_factory=lambda hwnd: lambda: True,
+            timing_recorder=timing,
+        )
+
+        session.launch_blank_document()
+        session.close_without_save()
+
+        self.assertEqual(
+            [
+                "process_launch",
+                "start_window_observed",
+                "completion_wait_start",
+                "completion_marker_observed",
+                "cleanup_start",
+                "cleanup_end",
+            ],
+            [event.name for event in timing.events],
+        )
+        self.assertEqual(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            [event.monotonic_s for event in timing.events],
+        )
+
+    def test_start_tab_timing_records_document_ready_transition(self):
+        ticks = iter((11.0,))
+        timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            timing_recorder=timing,
+            bootstrap_document_ready_probe=lambda: True,
+            bootstrap_document_ready_timeout_s=0,
+        )
+
+        client._wait_for_bootstrap_document()
+
+        self.assertEqual(["document_ready_transition"], [event.name for event in timing.events])
+        self.assertEqual([11.0], [event.monotonic_s for event in timing.events])
+
+    def test_start_tab_timing_records_completion_timeout_and_cleanup(self):
+        ticks = iter((21.0, 22.0, 23.0, 24.0, 25.0, 26.0))
+        timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
+        process = SimpleNamespace(pid=7312, poll=lambda: None)
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        script_holder = []
+
+        def launch(executable, script_path):
+            script_holder.append(script_path)
+            script_path.with_suffix(".marker").write_text(
+                "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
+            )
+            return process
+
+        def close_window(hwnd):
+            process.poll = lambda: 0
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=self._ipc_dir,
+            timeout_s=0,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=lambda pid: 8812,
+            window_closer=close_window,
+            start_probe_factory=lambda hwnd: lambda: True,
+            timing_recorder=timing,
+        )
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
+        ):
+            session.launch_blank_document()
+
+        self.assertEqual(
+            [
+                "process_launch",
+                "start_window_observed",
+                "completion_wait_start",
+                "completion_timeout",
+                "cleanup_start",
+                "cleanup_end",
+            ],
+            [event.name for event in timing.events],
+        )
+        self.assertEqual(
+            [21.0, 22.0, 23.0, 24.0, 25.0, 26.0],
+            [event.monotonic_s for event in timing.events],
+        )
+        self.assertFalse(script_holder[0].with_suffix(".marker").exists())
+
+    def test_timing_recorder_failure_preserves_completion_timeout_and_cleanup(self):
+        class FailingTimingRecorder:
+            def record(self, event_name):
+                raise RuntimeError("timing sink unavailable")
+
+        process = SimpleNamespace(pid=7311, poll=lambda: None)
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        launch_calls = []
+
+        def launch(executable, script_path):
+            launch_calls.append(script_path)
+            script_path.with_suffix(".marker").write_text(
+                "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
+            )
+            return process
+
+        def close_window(hwnd):
+            process.poll = lambda: 0
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=self._ipc_dir,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=launch,
+            window_finder=lambda pid: 8811,
+            window_closer=close_window,
+            start_probe_factory=lambda hwnd: lambda: True,
+            timing_recorder=FailingTimingRecorder(),
+        )
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
+        ):
+            session.launch_blank_document()
+
+        self.assertEqual(1, len(launch_calls))
+        self.assertFalse(launch_calls[0].with_suffix(".marker").exists())
 
     def test_start_tab_session_rejects_wrong_completion_marker_and_cleans_it(self):
         process = SimpleNamespace(pid=7304, poll=lambda: None)
