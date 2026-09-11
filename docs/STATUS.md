@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Current-main PDF lane/source-fusion call-site closure (iteration 86)
+- SOL changed the product decision: PDF `DRAFT_REFERENCE` may continue using
+  SHA-bound run-pdf/candidate evidence without approved-root or identity-key
+  custody. The authoritative `source-custody-1.0` and source-fusion contracts
+  remain unchanged.
+- A current-main production call-site audit found no PDF-lane caller that sends
+  a `DRAFT_REFERENCE` manifest into `build_source_fusion_packet`. The PDF CLI
+  and PDF pilot bind source/page/stage hashes only; source-fusion consumers are
+  separate authoritative/R3 owners and retain the `READY` custody guard.
+- Existing focused workflow evidence passed under `.venv-py311` with cache
+  disabled: PDF CLI run/resume, PDF pilot binding from a PDF manifest without
+  custody/key, and non-`READY` source-fusion rejection — `3 passed, 240
+  deselected`.
+- Therefore the immediate-consumer RED is absent in current main and no
+  minimal GREEN code change is required: `MODIFY NONE / CREATE NONE` remains
+  the exact write-set. The PDF draft lane already continues without key while
+  authoritative promotion remains fail-closed.
+- No production code, source, custody, candidate, DXF, or live CAD state was
+  mutated. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-pdf-lane-source-fusion-call-site-closure-iteration86.md`.
+
 ## Current-main DRAFT_REFERENCE owner/write-set closure (iteration 85)
 - Fresh SOL review of iteration 84 required one offline closure of the exact
   existing owner and write-set before any implementation.
