@@ -1,8 +1,8 @@
 # First-Boundary Post-QNEW Marker Diagnostic — Iteration 60
 
-Date: 2026-09-11 (Asia/Saigon)  
-Branch: `codex/audit-text-style-compat-20260910`  
-Reviewed code head: `65fc23ba610091e236f19ee93f8cee69f96d4ce9`  
+Date: 2026-09-11 (Asia/Saigon)
+Branch: `codex/audit-text-style-compat-20260910`
+Reviewed code head: `65fc23ba610091e236f19ee93f8cee69f96d4ce9`
 Evidence/docs head before this record: `17d823c0d64d6968275677eefc03f2ea57a26f46`
 
 ## Authority and boundary
