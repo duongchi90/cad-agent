@@ -1,4 +1,37 @@
 # CAD Agent Status
+## Current plugin availability owner inventory (iteration 67)
+- Fresh SOL diagnosis of iteration 66 returned
+  `VERDICT=MATERIAL_FINDING`, identified the first open boundary as plugin
+  availability before semantic dispatch, and authorized one non-live
+  reuse-first inventory. The inventory inspected repository metadata and the
+  scoped AutoCAD 2027 ApplicationPlugins/registry surfaces only; it did not
+  install, register, start AutoCAD, retry NETLOAD/WM_CHAR, invoke
+  `CADAGENT_DISPATCH`, touch FileIPC, mutate CAD, or change production code.
+- The repository contains no CadAgent `PackageContents.xml`, bundle manifest,
+  add-in, registry owner, or equivalent autoload metadata. The installed
+  ApplicationPlugins locations contain an unrelated `CadMind.bundle` whose
+  manifest demonstrates `LoadOnAutoCADStartup=True` for CadMind only; it is
+  not a valid CadAgent owner and was not reused.
+- Read-only searches under the current/user and machine Autodesk AutoCAD
+  registry roots found no CadAgent demand-load/startup registration. The only
+  CadAgent registry hits were NetLoad dialog filename MRU history entries.
+  Therefore no existing CadAgent availability owner was found.
+- Smallest reuse proposal: keep the existing CadAgent project and semantic
+  .NET/FileIPC owner, and use the already demonstrated Autodesk
+  `ApplicationPlugins/PackageContents.xml` `LoadOnAutoCADStartup` mechanism
+  only after an independently authorized CadAgent bundle/configuration exists.
+  This inventory does not introduce that configuration.
+- Exact next oracle, once that owner exists: one fresh disposable `/b` session
+  with read-only owned-PID module inspection asserting the approved
+  `CadAgent.AutoCAD2027.dll` path and SHA-256 before any
+  `CADAGENT_DISPATCH`/WM_CHAR/FileIPC action, then exact-PID cleanup. Iteration
+  66 remains the negative control: pre-QNEW `NETLOAD` reached document-ready
+  with zero matching CadAgent modules.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-plugin-availability-owner-inventory-iteration67.md`.
+  Fresh SOL diagnosis is required before any installation/configuration or
+  live causal oracle.
+
 ## Current pre-plugin NETLOAD module oracle (iteration 66)
 - Fresh SOL diagnosis of iteration 65 returned
   `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
