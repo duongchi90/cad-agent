@@ -19,6 +19,13 @@
   no second transport, CadMind reuse, registry owner, or installer subsystem
   was introduced. Installation and the fresh disposable module-presence oracle
   remain separate live gates and were not run.
+- Authoritative `scripts/verify.ps1` ran from a clean detached worktree at
+  commit `3aea830` and exited `0`: .NET build/test `238 succeeded`, offline
+  Python `3309 passed` with `80` subtests, the causal RED gate failed exactly
+  as expected (`1 failed`), real-data unavailable state was `2 skipped`, and
+  AutoCAD Mechanical unavailable state was `17 skipped`. The live CAD/FileIPC
+  gate is `NOT RUN`, not a pass; no Autodesk Managed DLLs were copied to build
+  output.
 - Exact evidence is recorded in
   `docs/superpowers/implementation-records/2026-09-11-cadagent-autoload-bundle-contract-iteration68.md`.
   Fresh SOL diagnosis is required before any installation/copy or live oracle.

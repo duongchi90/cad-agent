@@ -83,3 +83,20 @@ offline path/attribute checks. Installation/copy into AutoCAD's
 `ApplicationPlugins` directory and the fresh disposable module-presence oracle
 remain separate live actions requiring a fresh SOL authorization. No live gate
 was run in this iteration.
+
+## Authoritative verification
+
+The authoritative `scripts/verify.ps1` gate ran from a clean detached worktree
+at commit `3aea830` and exited `0`:
+
+```text
+.NET build/test: 238 succeeded; build warnings were reported but no failures
+dotnet_ipc: 82 passed, 52 subtests passed
+offline: 3309 passed, 21 deselected, 80 subtests passed
+causal RED: 1 failed, 19 deselected (expected negative oracle)
+real_data unavailable-state: 2 skipped (prerequisite absent)
+autocad_mechanical unavailable-state: 17 skipped (live IPC prerequisites absent)
+```
+
+The live CAD/FileIPC gate was therefore `NOT RUN`, not a pass. The verifier
+also reported that no Autodesk Managed DLLs were copied to build output.
