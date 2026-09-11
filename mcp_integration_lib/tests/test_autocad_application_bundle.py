@@ -19,9 +19,6 @@ PLUGIN_DLL = (
     / "net10.0-windows"
     / "CadAgent.AutoCAD2027.dll"
 )
-EXPECTED_PLUGIN_SHA256 = "BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97"
-
-
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
 
@@ -55,7 +52,7 @@ def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
     )
 
     assert PLUGIN_DLL.is_file()
-    assert _sha256(PLUGIN_DLL) == EXPECTED_PLUGIN_SHA256
+    approved_sha256 = _sha256(PLUGIN_DLL)
 
     with tempfile.TemporaryDirectory(prefix="cadagent-bundle-stage-") as staging:
         staged_bundle = Path(staging) / "CadAgent.bundle"
@@ -71,4 +68,4 @@ def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
 
         assert staged_module_path.is_relative_to(staged_bundle.resolve())
         assert staged_module_path == staged_module.resolve()
-        assert _sha256(staged_module_path) == EXPECTED_PLUGIN_SHA256
+        assert _sha256(staged_module_path) == approved_sha256

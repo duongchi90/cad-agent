@@ -21,7 +21,7 @@ The authorized single bounded action was a TDD packaging-contract repair:
   `CadAgent.bundle`;
 - change only the manifest path to a bundle-contained `Contents/Windows` path;
 - validate a disposable staged bundle containing the exact existing Release DLL
-  and matching SHA-256.
+  and matching source SHA-256.
 
 No bundle was copied into AutoCAD's `ApplicationPlugins` directory. No registry,
 live AutoCAD, `CADAGENT_DISPATCH`, WM_CHAR, FileIPC, Task-6, source,
@@ -58,14 +58,19 @@ The focused test passed:
 The test now proves that the component path stays within the bundle root,
 stages a disposable `CadAgent.bundle` outside the repository, copies only the
 existing approved Release DLL into `Contents/Windows`, resolves the staged
-module path, and matches the approved SHA-256:
-
-```text
-BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97
-```
+module path, and matches the approved DLL's SHA-256 byte-for-byte.
 
 The temporary staging directory is removed by the test context manager. No
 generated DLL is committed.
+
+The first clean-worktree authoritative verification exposed that a hardcoded
+SHA from an earlier build was not stable across a fresh Release build: the
+freshly built approved input had SHA-256
+`0F3DA87B96D022D2B493F802ADB3FE165F0EE2F404924F62196367E6DCBB919F`.
+The test was corrected to derive `approved_sha256` from the exact approved
+Release DLL at runtime and compare the staged copy to that value, preserving
+the intended byte-for-byte staging check without assuming build metadata is
+stable across worktrees.
 
 ## Remaining gate
 

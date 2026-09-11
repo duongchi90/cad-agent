@@ -12,8 +12,12 @@
   `./Contents/Windows/CadAgent.AutoCAD2027.dll`. The focused test then passed
   `1 passed in 0.56s`; it stages a disposable bundle, copies the existing
   approved Release DLL into that staged `Contents/Windows` directory, verifies
-  containment, and matches SHA-256
-  `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`.
+  containment, and matches the approved DLL byte-for-byte by SHA-256.
+- The first clean-worktree verification exposed a stale hardcoded SHA from an
+  earlier build (`0F3DA87B96D022D2B493F802ADB3FE165F0EE2F404924F62196367E6DCBB919F`
+  was the fresh approved input). The test now derives the approved input hash
+  at runtime and compares the staged copy to it; the authoritative gate is
+  being rerun after this test-only correction.
 - No generated DLL is committed. AutoCAD installation/copy and the fresh live
   module-presence oracle remain separate gates and were not run.
 - Exact evidence is recorded in
