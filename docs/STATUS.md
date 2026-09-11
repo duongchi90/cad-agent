@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Current first-boundary post-QNEW diagnostic (iteration 60)
+- Fresh SOL diagnosis of iteration 59 returned `VERDICT=MATERIAL_FINDING`,
+  `HUMAN_GATE=NO`, and localized the first causal boundary to
+  `POST_QNEW_PROCESS_BOUND_COMMAND_EXECUTION_NOT_PROVEN`. SOL authorized one
+  narrower disposable diagnostic on unchanged code: QNEW, same-HWND
+  document-ready, one existing `post_qnew_entry` raw-LISP marker, exact-marker
+  wait, then close/cleanup. NETLOAD, dispatcher load, FileIPC, Task-6, source,
+  candidate, DXF, and retry were explicitly excluded.
+- The diagnostic reached QNEW and same-HWND document-ready. The first
+  process-bound marker trigger was rejected immediately with
+  `MCPToolError: WINDOW_FOREGROUND_INVALID`; no marker was observed and no
+  downstream bootstrap action was attempted.
+- Cleanup completed for the owned disposable process and root. The root had no
+  remaining entries and no source/candidate/DXF/FileIPC mutation occurred.
+  This is a first-boundary live diagnostic result, not a Task-6 acceptance
+  result. Fresh SOL diagnosis is required before any retry or implementation
+  change.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-post-qnew-marker-diagnostic-iteration60.md`.
+
 ## Current bootstrap-only live proof (iteration 59)
 - Fresh SOL review of pushed code `65fc23ba610091e236f19ee93f8cee69f96d4ce9`
   returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO`,
