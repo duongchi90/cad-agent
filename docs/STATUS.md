@@ -1,4 +1,33 @@
 # CAD Agent Status
+## Current pre-plugin NETLOAD module oracle (iteration 66)
+- Fresh SOL diagnosis of iteration 65 returned
+  `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized exactly one
+  disposable pre-plugin bootstrap causal oracle using the existing `/b`
+  startup-script owner. The temporary script order was
+  `_.NETLOAD -> approved Release CadAgent DLL -> _.QNEW`; after same-HWND
+  document-ready, only read-only owned-PID module inspection ran. No
+  `CADAGENT_DISPATCH`, raw-LISP/WM_CHAR trigger, FileIPC, Task-6, source,
+  candidate, DXF, save, or production change was allowed.
+- The fresh owned AutoCAD session reached document-ready with HWND `3215182`
+  and PID `32568`. The inspected module list had zero exact matches for the
+  approved Release DLL
+  `autocad_plugin/CadAgent.AutoCAD2027/bin/x64/Release/net10.0-windows/CadAgent.AutoCAD2027.dll`
+  (SHA-256 `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`)
+  and zero CadAgent-named modules. Therefore plugin availability after the
+  pre-QNEW NETLOAD script is not proven; no cause is inferred beyond this
+  boundary.
+- The initial close call reported
+  `MCPTimeoutError: START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED`; bounded fallback
+  closed the exact disposable PID `32568` without saving and confirmed it
+  absent. The proof root
+  `C:/temp/cad-agent-task6-live-20260911/pre-plugin-netload-proof-iteration66`
+  is empty. No source, candidate, accepted drawing, DXF, FileIPC request, or
+  production CAD state changed.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-pre-plugin-netload-module-oracle-iteration66.md`.
+  Fresh SOL diagnosis is required before any implementation, dispatcher call,
+  or retry.
+
 ## Current command-delivery owner inventory (iteration 65)
 - Fresh SOL diagnosis of iteration 64 returned
   `VERDICT=MATERIAL_FINDING`, `HUMAN_GATE=NO`, and authorized one non-live
