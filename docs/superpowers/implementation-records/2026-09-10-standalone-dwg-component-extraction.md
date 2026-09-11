@@ -508,3 +508,44 @@ Live Task-6 acceptance remains **NOT RUN**, not PASS. The diagnostic provides no
 dispatcher, visual, geometry, extraction, or query fidelity verdict. The
 diagnostic root is `C:/temp/cad-agent-task6-live-20260911/bootstrap-stage-iteration43`.
 Fresh SOL diagnosis is required before another bootstrap or live Task-6 run.
+
+## Iteration 44 completion-marker remediation
+
+SOL's iteration-43 review isolated the remaining bootstrap defect to the
+completion acknowledgement primitive. The staged diagnostic had reached the
+dispatcher-load return and the final conditional, while the production owner
+waited for a `.ready` file that was never observed. SOL authorized one bounded
+non-live owner remediation and no live retry.
+
+The remediation is pushed at code HEAD
+`4d05c46e3710bc7f5e23e0cd3f84438f19c74a09`. The owned startup session now uses
+the same live-proven same-root `open`/`write-line`/`close` marker primitive used
+by the staged diagnostic, with a unique per-session `.marker` path derived from
+the owned startup script and placed under the exact IPC root. It emits the
+exact `CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token only after dispatcher load
+returns, validates exact marker content, and removes the marker during cleanup.
+`dispatcher_preloaded` and `bootstrap_completion_confirmed` remain false until
+the marker is positively observed. Existing fail-closed ping and source-open
+ordering is unchanged.
+
+TDD RED changed the owner test to require the marker path and added wrong-token
+rejection with cleanup; both failed against the previous `.ready` owner. GREEN
+focused checks report 53 passed, 1 skipped, 1 deselected, and 9 subtests, with
+Ruff and `git diff --check` passing. The authoritative `scripts/verify.ps1`
+exited 0: C# 238 passed; offline Python JUnit 3381 with zero failures/errors/
+skips (3301 passed, 21 deselected, 80 subtests); offline IPC JUnit 134 clean;
+the causal-red oracle recorded its expected one negative failure; real-data 2
+skipped; AutoCAD Mechanical 17 skipped. AutoCAD live and M2 Mechanical were
+NOT RUN.
+
+No live bootstrap or Task-6 retry was made after this remediation. The
+approved `BVTL.dwg` SHA-256 remains
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`; no
+source, accepted drawing, candidate, or production CAD state was mutated.
+Evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-completion-marker-remediation-iteration44-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration44.txt
+
+Fresh SOL review of this pushed remediation is required before another live
+Task-6 attempt.
