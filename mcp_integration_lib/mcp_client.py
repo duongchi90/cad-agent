@@ -329,6 +329,15 @@ def _autolisp_string_literal(value: str) -> str:
 
 _START_TAB_BOOTSTRAP_COMPLETION_TOKEN = "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"
 _START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX = ".marker"
+_START_TAB_STAGE_MARKERS = (
+    ("post_qnew_entry", "CAD_AGENT_START_TAB_POST_QNEW_ENTRY"),
+    ("netload_return", "CAD_AGENT_START_TAB_NETLOAD_RETURN"),
+    ("dispatcher_load_return", "CAD_AGENT_START_TAB_DISPATCHER_LOAD_RETURN"),
+    (
+        "completion_marker_writer_return",
+        "CAD_AGENT_START_TAB_COMPLETION_MARKER_WRITER_RETURN",
+    ),
+)
 
 
 def _start_tab_completion_marker_path(
@@ -344,18 +353,39 @@ def _start_tab_completion_marker_path(
 
 def _start_tab_completion_marker_expression(marker_path: Path) -> str:
     """Build the canonical AutoLISP marker writer proven by live diagnostics."""
+    return _start_tab_stage_marker_expression(
+        marker_path, _START_TAB_BOOTSTRAP_COMPLETION_TOKEN
+    )
+
+
+def _start_tab_stage_marker_expression(marker_path: Path, token: str) -> str:
+    """Build a fixed-token, same-root stage marker writer."""
     marker_literal = _autolisp_string_literal(
         str(marker_path).replace("\\", "/")
     )
-    token_literal = _autolisp_string_literal(
-        _START_TAB_BOOTSTRAP_COMPLETION_TOKEN
-    )
+    token_literal = _autolisp_string_literal(token)
     return (
         "(progn (setq cad-agent-stage-file (open "
         + marker_literal
         + ' "w")) (if cad-agent-stage-file (progn (write-line '
         + token_literal
         + " cad-agent-stage-file) (close cad-agent-stage-file))))"
+    )
+
+
+def _start_tab_stage_marker_paths(
+    script_path: Path, ipc_root: Optional[Path]
+) -> tuple[tuple[str, Path, str], ...]:
+    if ipc_root is None:
+        return ()
+    root = ipc_root
+    return tuple(
+        (
+            event_name,
+            root / f"{script_path.stem}.stage-{event_name.replace('_', '-')}",
+            token,
+        )
+        for event_name, token in _START_TAB_STAGE_MARKERS
     )
 
 
@@ -444,6 +474,8 @@ class WindowsAutoCADStartTabSession:
         self._hwnd: Optional[int] = None
         self._script_path: Optional[Path] = None
         self._completion_marker_path: Optional[Path] = None
+        self._stage_marker_paths: tuple[tuple[str, Path, str], ...] = ()
+        self._observed_stage_markers: set[str] = set()
 
     @property
     def hwnd(self) -> Optional[int]:
@@ -455,6 +487,8 @@ class WindowsAutoCADStartTabSession:
 
     def _startup_script_bytes(self) -> bytes:
         lines = ["_.QNEW"]
+        if self._stage_marker_paths:
+            lines.append(self._stage_marker_expression("post_qnew_entry"))
         if self._bootstrap_plugin_path is not None:
             lines.extend(
                 [
@@ -465,6 +499,8 @@ class WindowsAutoCADStartTabSession:
                     "",
                 ]
             )
+            if self._stage_marker_paths:
+                lines.append(self._stage_marker_expression("netload_return"))
         if self._bootstrap_lisp_path is not None and self._ipc_root is not None:
             if self._completion_marker_path is None:
                 raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
@@ -481,10 +517,22 @@ class WindowsAutoCADStartTabSession:
                 + lisp_literal
                 + "))"
             )
+            if self._stage_marker_paths:
+                lines.append(self._stage_marker_expression("dispatcher_load_return"))
             lines.append(
                 _start_tab_completion_marker_expression(self._completion_marker_path)
             )
+            if self._stage_marker_paths:
+                lines.append(
+                    self._stage_marker_expression("completion_marker_writer_return")
+                )
         return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+    def _stage_marker_expression(self, event_name: str) -> str:
+        for name, path, token in self._stage_marker_paths:
+            if name == event_name:
+                return _start_tab_stage_marker_expression(path, token)
+        raise MCPToolError("START_TAB_BOOTSTRAP_STAGE_MARKER_REQUIRED")
 
     def launch_blank_document(self) -> WindowsStartTabBootstrapBindings:
         if self._process is not None:
@@ -497,6 +545,12 @@ class WindowsAutoCADStartTabSession:
         )
         completion_marker_path.unlink(missing_ok=True)
         self._completion_marker_path = completion_marker_path
+        self._stage_marker_paths = _start_tab_stage_marker_paths(
+            script_path, self._ipc_root
+        )
+        self._observed_stage_markers.clear()
+        for _, stage_path, _ in self._stage_marker_paths:
+            stage_path.unlink(missing_ok=True)
         script_path.write_bytes(self._startup_script_bytes())
         self._script_path = script_path
         try:
@@ -599,6 +653,12 @@ class WindowsAutoCADStartTabSession:
                 except OSError:
                     if not best_effort:
                         raise
+            for _, stage_path, _ in self._stage_marker_paths:
+                try:
+                    stage_path.unlink(missing_ok=True)
+                except OSError:
+                    if not best_effort:
+                        raise
             if process is not None and process.poll() is not None:
                 self._process = None
                 self._hwnd = None
@@ -607,6 +667,8 @@ class WindowsAutoCADStartTabSession:
             if best_effort or self._process is None:
                 self._script_path = None
                 self._completion_marker_path = None
+                self._stage_marker_paths = ()
+                self._observed_stage_markers.clear()
             _record_bootstrap_timing(self._timing_recorder, "cleanup_end")
 
     def _wait_for_process_exit(self, process: Any, deadline: float) -> bool:
@@ -631,6 +693,7 @@ class WindowsAutoCADStartTabSession:
         deadline = time.monotonic() + self._timeout_s
         document_ready_observed = False
         while True:
+            self._observe_stage_markers()
             if document_ready_probe is not None and not document_ready_observed:
                 try:
                     if bool(document_ready_probe()):
@@ -662,6 +725,22 @@ class WindowsAutoCADStartTabSession:
                     "START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED"
                 )
             time.sleep(min(self._poll_interval_s, remaining))
+
+    def _observe_stage_markers(self) -> None:
+        for event_name, stage_path, token in self._stage_marker_paths:
+            if event_name in self._observed_stage_markers:
+                continue
+            try:
+                if (
+                    stage_path.is_file()
+                    and stage_path.read_text(encoding="ascii").strip() == token
+                ):
+                    _record_bootstrap_timing_once(
+                        self._timing_recorder, event_name
+                    )
+                    self._observed_stage_markers.add(event_name)
+            except (OSError, UnicodeError):
+                pass
 
 class FileIPCLiveMCPClient:
     """Minimal File IPC client for a loaded AutoLISP MCP dispatcher."""

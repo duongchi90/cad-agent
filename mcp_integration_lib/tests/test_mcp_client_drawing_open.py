@@ -381,6 +381,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             return process
 
         def find_window(pid):
+            for event_name, token in mcp_client_module._START_TAB_STAGE_MARKERS:
+                stage = launch_calls[0][1].parent / (
+                    launch_calls[0][1].stem + ".stage-" + event_name.replace("_", "-")
+                )
+                stage.write_text(token + "\n", encoding="ascii")
             launch_calls[0][1].with_suffix(".marker").write_text(
                 "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
             )
@@ -412,22 +417,74 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertEqual(1, len(launch_calls))
         script = launch_calls[0][2].decode("utf-8")
         marker_path = launch_calls[0][1].with_suffix(".marker")
+        stage_paths = sorted(
+            launch_calls[0][1].parent.glob(launch_calls[0][1].stem + ".stage-*")
+        )
+        self.assertEqual(4, len(stage_paths))
+        self.assertTrue(all(path.parent == Path(self._ipc_dir) for path in stage_paths))
+        self.assertEqual(4, len({path.name for path in stage_paths}))
+
+        def stage_expression(path, token):
+            return (
+                '(progn (setq cad-agent-stage-file (open "'
+                + path.as_posix()
+                + '" "w")) (if cad-agent-stage-file (progn (write-line '
+                + '"'
+                + token
+                + '"'
+                + " cad-agent-stage-file) (close cad-agent-stage-file))))"
+            )
+
+        stage_by_name = {
+            "post-qnew-entry": next(
+                path for path in stage_paths if path.name.endswith(".stage-post-qnew-entry")
+            ),
+            "netload-return": next(
+                path for path in stage_paths if path.name.endswith(".stage-netload-return")
+            ),
+            "dispatcher-load-return": next(
+                path
+                for path in stage_paths
+                if path.name.endswith(".stage-dispatcher-load-return")
+            ),
+            "completion-marker-writer-return": next(
+                path
+                for path in stage_paths
+                if path.name.endswith(".stage-completion-marker-writer-return")
+            ),
+        }
         expected_script = "\r\n".join(
             [
                 "_.QNEW",
+                stage_expression(
+                    stage_by_name["post-qnew-entry"],
+                    "CAD_AGENT_START_TAB_POST_QNEW_ENTRY",
+                ),
                 "_.NETLOAD",
                 '"' + plugin_path.as_posix() + '"',
                 "",
+                stage_expression(
+                    stage_by_name["netload-return"],
+                    "CAD_AGENT_START_TAB_NETLOAD_RETURN",
+                ),
                 '(progn (setq *cad-agent-file-ipc-root* "'
                 + Path(self._ipc_dir).as_posix()
                 + '") (load "'
                 + lisp_path.as_posix()
                 + '"))',
+                stage_expression(
+                    stage_by_name["dispatcher-load-return"],
+                    "CAD_AGENT_START_TAB_DISPATCHER_LOAD_RETURN",
+                ),
                 '(progn (setq cad-agent-stage-file (open "'
                 + marker_path.as_posix()
                 + '" "w")) (if cad-agent-stage-file (progn (write-line '
                 + '"CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"'
                 + " cad-agent-stage-file) (close cad-agent-stage-file))))",
+                stage_expression(
+                    stage_by_name["completion-marker-writer-return"],
+                    "CAD_AGENT_START_TAB_COMPLETION_MARKER_WRITER_RETURN",
+                ),
             ]
         ) + "\r\n"
         self.assertEqual(expected_script, script)
@@ -444,9 +501,10 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertEqual([8801], close_calls)
         self.assertFalse(launch_calls[0][1].exists())
         self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
+        self.assertEqual([], list(launch_calls[0][1].parent.glob(launch_calls[0][1].stem + ".stage-*")))
 
     def test_start_tab_timing_records_monotonic_lifecycle_events_in_order(self):
-        ticks = iter((1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0))
+        ticks = iter((1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0))
         timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
         process = SimpleNamespace(pid=7310, poll=lambda: None)
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
@@ -459,6 +517,13 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         def find_window(pid):
             marker = script_holder[0].with_suffix(".marker")
+            for event_name, token in mcp_client_module._START_TAB_STAGE_MARKERS:
+                stage = script_holder[0].parent / (
+                    script_holder[0].stem
+                    + ".stage-"
+                    + event_name.replace("_", "-")
+                )
+                stage.write_text(token + "\n", encoding="ascii")
             marker.write_text(
                 "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE\n", encoding="ascii"
             )
@@ -490,6 +555,10 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 "process_launch",
                 "start_window_observed",
                 "completion_wait_start",
+                "post_qnew_entry",
+                "netload_return",
+                "dispatcher_load_return",
+                "completion_marker_writer_return",
                 "document_ready_transition",
                 "completion_marker_observed",
                 "cleanup_start",
@@ -498,7 +567,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [event.name for event in timing.events],
         )
         self.assertEqual(
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
             [event.monotonic_s for event in timing.events],
         )
 
@@ -536,7 +605,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         )
 
     def test_start_tab_timing_records_completion_timeout_and_cleanup(self):
-        ticks = iter((21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0))
+        ticks = iter((21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0))
         timing = BootstrapTimingRecorder(clock=lambda: next(ticks))
         process = SimpleNamespace(pid=7312, poll=lambda: None)
         lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
@@ -545,6 +614,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         def launch(executable, script_path):
             script_holder.append(script_path)
+            for event_name, token in mcp_client_module._START_TAB_STAGE_MARKERS[:2]:
+                stage = script_path.parent / (
+                    script_path.stem + ".stage-" + event_name.replace("_", "-")
+                )
+                stage.write_text(token + "\n", encoding="ascii")
             script_path.with_suffix(".marker").write_text(
                 "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
             )
@@ -578,6 +652,8 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 "process_launch",
                 "start_window_observed",
                 "completion_wait_start",
+                "post_qnew_entry",
+                "netload_return",
                 "document_ready_transition",
                 "completion_timeout",
                 "cleanup_start",
@@ -586,10 +662,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             [event.name for event in timing.events],
         )
         self.assertEqual(
-            [21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0],
+            [21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0],
             [event.monotonic_s for event in timing.events],
         )
         self.assertFalse(script_holder[0].with_suffix(".marker").exists())
+        self.assertEqual([], list(script_holder[0].parent.glob(script_holder[0].stem + ".stage-*")))
 
     def test_timing_recorder_failure_preserves_completion_timeout_and_cleanup(self):
         class FailingTimingRecorder:
