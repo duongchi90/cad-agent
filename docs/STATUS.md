@@ -1,4 +1,36 @@
 # CAD Agent Status
+## Real-PDF exact-identity acceptance inventory (iteration 77)
+- Fresh `origin/main` is `e8fc0092ee46750e50de0ea408fd91811cae10c2`.
+  This inventory follows canonical Issue #409 and is read-only; it does not
+  launch AutoCAD, run FileIPC, mutate code, source/candidate/DXF, retry a
+  provider, or open a new subsystem.
+- The approved private source `202607092308.pdf` is present outside Git and
+  hashes to
+  `e48f39702ff75c72b4cda208128f8e00abf77b9660df9589427b7d923988dc75`.
+  The source-identity gate is `PROVEN_CURRENT`.
+- The available `run-pdf` evidence binds that source hash, approved manual
+  calibration `STATUS-e48f3970-144dpi-1to40`, `144` DPI, and
+  `7.055555555556` mm/px. Its exact private root is outside Git; the outer
+  manifest SHA-256 is
+  `90fc43a14dcd52517de273f98e57bc7c1b860c86257cc406080180176953b261` and
+  the manifest records all 36/36 page stages completed. However, the manifest
+  contains no code commit/owner identity, and the historical evidence is not
+  bound to fresh `origin/main`.
+- Relevant owners changed after the historical P1 evidence identity, including
+  `cad_agent/cli.py`, `cad_agent/drawing_contracts.py`,
+  `cad_agent/drawing_setup.py`, `cad_agent/fidelity.py`,
+  `mcp_integration_lib/mcp_dispatch.lsp`, and
+  `primitive_ir_lib/dimension_observer.py`. Therefore
+  `SOURCE_SHA_BOUND_RUN_PDF_MANIFEST_STAGE_ON_CURRENT_MAIN` is
+  `PROVEN_OTHER_IDENTITY`, not current-main proof, and is the
+  `FIRST_UNPROVEN_GATE` for this lane.
+- The candidate/build, DARA/R3/R4, setup/readback, persistence/reopen, visual,
+  and dimension gates were not entered after the first unproven gate and remain
+  `NOT_PROVEN` for the current-main identity. Historical artifacts were not
+  promoted across the identity boundary.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-exact-identity-inventory-iteration77.md`.
+
 ## Current demand-load semantic health oracle (iteration 76)
 - Fresh SOL diagnosis of iteration 75 returned `VERDICT=CLEAR_CONTINUE` and
   `HUMAN_GATE=NO`, authorizing exactly one fresh reversible demand-load
