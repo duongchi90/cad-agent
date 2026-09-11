@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Current autoload availability oracle after ProductCode repair (iteration 72)
+- Fresh SOL diagnosis of iteration 71 returned `VERDICT=CLEAR_CONTINUE`,
+  `HUMAN_GATE=NO`, and authorized exactly one fresh reversible user-scoped
+  availability epoch using the repaired ProductCode manifest. The epoch staged
+  the complete repository bundle with the exact Release DLL, copied it
+  temporarily to the current user's Autodesk `ApplicationPlugins`, launched
+  one fresh disposable AutoCAD with `_.QNEW` only, observed same-HWND
+  document-ready, inspected the owned PID, and cleaned up. No dispatcher,
+  WM_CHAR/raw-LISP, FileIPC, Task-6, source, candidate, DXF, registry
+  mutation, or retry occurred.
+- Source/staged/installed SHA-256 was identical:
+  `BBBD43CC8AFC6558454A003145811F775E4BAC557BF4AFA4153A188D26828A97`.
+  Document-ready was observed on HWND `5047694` / PID `32152`.
+- Read-only module inspection found exactly one installed CadAgent module at
+  the expected bundle-contained path, with matching SHA-256
+  (`exact_installed_module_matches=1`). The oracle passed.
+- Initial close reported `START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED`; bounded
+  exact-PID cleanup confirmed PID `32152` absent, and the exact temporary
+  installed `CadAgent.bundle` was removed and verified absent. Proof is
+  retained at
+  `C:/temp/cad-agent-task6-live-20260911/autoload-availability-iteration71/availability-proof.json`.
+- Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-autoload-availability-oracle-iteration72.md`.
+  Fresh SOL review is required before any downstream dispatcher/FileIPC or
+  Task-6 action.
+
 ## Current AutoCAD bundle ProductCode contract repair (iteration 71)
 - Fresh SOL diagnosis of iteration 70 returned
   `VERDICT=MATERIAL_FINDING`, identifying the missing required local-deployment
