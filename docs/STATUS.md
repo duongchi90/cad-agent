@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Current-main DARA/R3/R4 characterization (iteration 82)
+- Fresh SOL review of iteration 81 returned `VERDICT=CLEAR_CONTINUE` and
+  authorized exactly one read-only characterization for the same fresh page-1
+  identity. `HUMAN_GATE=NO`.
+- The run-pdf manifest SHA
+  `f7c7b1afbd52f8f504dafbcb9b6efb416ee332b88260a01aea2414ab9d650eaf` and
+  page-1 DXF SHA
+  `167a3955a84e24c40c81112ad696eb08f943f4b2721d56891bef8620a731a714` were
+  used without mutation. Existing owners rejected the missing source-fusion,
+  reuse/base-CAD, DARA, R3, and R4 prerequisites with explicit contract
+  errors; no synthetic or historical provenance was reused.
+- The first causal missing input is
+  `VALIDATED_SOURCE_BUNDLE_AND_READY_SOURCE_CUSTODY_FOR_SOURCE_FUSION`.
+  The run-pdf manifest has raw source/configuration/page/stage identity but no
+  validated source bundle/custody, locators, render provenance, observations,
+  tolerance policy, or fusion input hash. Therefore
+  `DARA_R3_R4_SAME_IDENTITY_BINDING=NOT_PROVEN` and the characterization stops
+  at this boundary.
+- No source/candidate/DXF/code/live CAD mutation or downstream gate was
+  performed. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-11-real-pdf-dara-r3-r4-characterization-iteration82.md`.
+
 ## Current-main candidate/build exact-identity binding (iteration 81)
 - Fresh SOL review of iteration 80 returned `VERDICT=CLEAR_CONTINUE` and
   authorized exactly one read-only identity-binding oracle for the fresh
