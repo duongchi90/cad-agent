@@ -20,8 +20,9 @@ runtime:
 
 ## Bounded repair
 
-- The bundle assertion now reports `SKIP` when its existing .NET build artifact
-  is absent; the full verifier remains the owner that runs it after the build.
+- The bundle assertion now uses the dedicated `autocad_bundle` gate. Hosted
+  verification records `all-skipped` when its existing .NET build artifact is
+  absent; the full verifier remains the owner that runs it after the build.
 - The two test assertions compare resolved path identity, preserving the
   production startup expression and marker-root behavior.
 - The new record removes `git diff --check` trailing whitespace.

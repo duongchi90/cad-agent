@@ -26,6 +26,7 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
 
 
+@pytest.mark.autocad_bundle
 def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
     if not PLUGIN_DLL.is_file():
         pytest.skip(

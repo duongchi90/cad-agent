@@ -12,8 +12,10 @@
   contract: the bundle test ran without its existing Release x64 DLL build
   prerequisite, and two Windows assertions compared short-name and canonical
   path spellings lexically.
-- The bounded repair skips the bundle assertion only when its build artifact is
-  absent and compares the affected paths after resolution. Production startup
+- The bounded repair assigns the bundle assertion to a dedicated
+  `autocad_bundle` gate: hosted mode records `all-skipped` without the build
+  artifact, while the full verifier runs it after the existing .NET build;
+  affected path assertions compare resolved identity. Production startup
   behavior is unchanged.
 - SourceCustody HMAC/identity-key remains fail-closed and unchanged; page 1
   remains key-free `DRAFT_REFERENCE` / `MODIFY NONE`.

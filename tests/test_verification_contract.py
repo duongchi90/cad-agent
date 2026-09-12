@@ -65,6 +65,10 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("--junitxml", script)
         self.assertIn("importlib.metadata", script)
         self.assertIn("not real_data and not autocad_mechanical", script)
+        self.assertIn("not autocad_bundle", script)
+        self.assertIn("autocad-bundle.xml", script)
+        self.assertIn("autocad bundle unavailable-state probe", script)
+        self.assertIn("autocad bundle artifact", script)
         self.assertIn("real-data-unavailable.xml", script)
         self.assertIn("autocad-mechanical-unavailable.xml", script)
         self.assertIn("causal_red", script)
@@ -81,7 +85,7 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn('$causalRedExitCode -ne 1', script)
         self.assertIn("Failures -ne 1", script)
         self.assertIn(
-            '"not real_data and not autocad_mechanical and not causal_red"',
+            '"not real_data and not autocad_mechanical and not autocad_bundle and not causal_red"',
             script,
         )
 

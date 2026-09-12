@@ -221,6 +221,7 @@ $dotnetIpcJunitPath = Join-Path $artifactDir "dotnet-ipc.xml"
 $realDataJunitPath = Join-Path $artifactDir "real-data-unavailable.xml"
 $autocadJunitPath = Join-Path $artifactDir "autocad-mechanical-unavailable.xml"
 $autocadLiveJunitPath = Join-Path $artifactDir "autocad-mechanical-live.xml"
+$autocadBundleJunitPath = Join-Path $artifactDir "autocad-bundle.xml"
 $causalRedJunitPath = Join-Path $artifactDir "causal-red.xml"
 New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
@@ -235,9 +236,28 @@ $testTargets = @(
     "mcp_integration_lib/tests",
     "agent_lib/tests"
 )
+$autocadBundleTestTargets = @(
+    "mcp_integration_lib/tests/test_autocad_application_bundle.py"
+)
 
 Push-Location $repoRoot
 try {
+    if ($SkipAutoCADDotNet) {
+        Invoke-PytestGate `
+            -Name "autocad bundle unavailable-state probe" `
+            -Targets $autocadBundleTestTargets `
+            -MarkerExpression "autocad_bundle" `
+            -JUnitPath $autocadBundleJunitPath `
+            -ExpectedState "all-skipped"
+    } else {
+        Invoke-PytestGate `
+            -Name "autocad bundle artifact" `
+            -Targets $autocadBundleTestTargets `
+            -MarkerExpression "autocad_bundle" `
+            -JUnitPath $autocadBundleJunitPath `
+            -ExpectedState "offline"
+    }
+
     $dotnetIpcTestTargets = @(
         "mcp_integration_lib/tests/test_dotnet_ipc.py"
     )
@@ -251,7 +271,7 @@ try {
     Invoke-PytestGate `
         -Name "offline" `
         -Targets $testTargets `
-        -MarkerExpression "not real_data and not autocad_mechanical and not causal_red" `
+        -MarkerExpression "not real_data and not autocad_mechanical and not autocad_bundle and not causal_red" `
         -JUnitPath $junitPath `
         -ExpectedState "offline"
 
