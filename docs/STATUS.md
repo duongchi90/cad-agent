@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — live foreground diagnostic (iteration 128)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-foreground-diagnostic-iteration128.md; proof C:\temp\cad-agent-task6-live-20260911\foreground-stage-diagnostic-iteration128-proof.json; one disposable live diagnostic; document_ready=True; foreground_handoff_succeeded=True; owned HWND=1246720/PID=26208; plugin_bootstrap_invoked=False; raw_lisp_invoked=False; runtime_bootstrap_invoked=False; cleanup_clean=True; PID absent; stage root absent; default DWT unchanged; no candidate/PDF/source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_FOREGROUND_DIAGNOSTIC_PLUGIN_BOOTSTRAP_AND_RAW_LISP_ACK_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable read-only live epoch through the existing plugin/bootstrap and raw-LISP ACK path, with exact candidate identity and one health call, then no-save cleanup; stop at the first causal failure and do not infer visual/dimension acceptance
+HUMAN_GATE=NO
+```
+
+## Current live diagnostic boundary (iteration 128)
+- One disposable AutoCAD session reached `document_ready=True`; the
+  instrumented foreground helper succeeded for owned HWND `1246720` (PID
+  `26208`). The session was closed without save, the owned PID and stage root
+  were absent afterward, and the default DWT hash was unchanged.
+- This diagnostic intentionally stopped immediately after the foreground
+  result. It did not bootstrap the plugin, invoke raw-LISP, open the candidate,
+  call health, or inspect visual/dimension fidelity.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — foreground-stage instrumentation (iteration 127)
 ```text
 STATE=VERIFIED
