@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Current raw-LISP command-consumption characterization (iteration 99)
+- Fresh SOL review required characterization of the existing
+  `make_windows_lisp_trigger` / `_make_windows_text_trigger` boundary.
+  `PostMessageW=True` and a trigger return prove only native enqueue-path
+  success, not AutoCAD receiver consumption or AutoLISP evaluation. The
+  intentional `causal_red` test demonstrates this distinction; its positive
+  receiver ACK is only a test-double model.
+- The smallest existing semantic oracle is the exact temporary stage-marker
+  writer/observer: `_start_tab_stage_marker_expression` writes a fixed token
+  outside the CAD drawing and `_observe_stage_markers` records the exact
+  `post_qnew_entry` event. Exact token readback proves that marker expression
+  was consumed/evaluated. The completion marker is a larger bootstrap-coupled
+  oracle; health/FileIPC is downstream.
+- This oracle is CAD-side-effect-free but writes one disposable evidence file.
+  If all filesystem side effects are disallowed, no side-effect-free semantic
+  command-consumption oracle exists in the current owner.
+- Future placement is one disposable epoch after bounded document-ready and
+  before candidate/health/FileIPC: one existing `post_qnew_entry` marker
+  trigger, exact-token wait, then cleanup. `PostMessageW=True` without that
+  marker remains `RAW_LISP_CONSUMPTION=NOT_PROVEN`. No live retry, code change,
+  or CAD/source/DXF mutation occurred. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-raw-lisp-command-consumption-characterization-iteration99.md`.
+
 ## Current raw-LISP foreground oracle (iteration 98)
 - Fresh SOL review authorized exactly one disposable live read-only oracle
   around one existing raw-LISP trigger. The existing bounded document-ready
