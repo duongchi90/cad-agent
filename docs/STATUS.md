@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP ACK characterized (iteration 139)
+```text
+STATE=VERIFIED_CHARACTERIZATION
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-ack-characterization-iteration139.md; proof C:\temp\cad-agent-task6-live-20260911\raw-lisp-ack-characterization-iteration139-proof.json; production_files_modified=False; live_epoch_started=False; exact callback/marker/order/wait-cleanup characterization; exact WM_CHAR/UTF-16LE framing characterization; direct live-harness forwarding inventory; no production/live/plugin/candidate/health/source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_ACK_CAUSAL_OWNER_NOT_DISTINGUISHED
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one offline-only causal oracle for the cheapest unresolved ACK owner identified by this characterization, preserving the existing public timeout contract and forbidding live retry or production/source/DXF/CAD/key-policy mutation
+HUMAN_GATE=NO
+```
+
+## Current raw-LISP ACK boundary (iteration 139)
+- The existing path was characterized offline: one callback receives the
+  generated expression; the exact marker is under the validated IPC root and
+  before activation; exact-marker write allows the dispatcher path to proceed,
+  while missing-marker returns the existing bounded timeout and cleans up.
+- Native framing is `ESC ESC + expression + CR`, sent as UTF-16LE `WM_CHAR`
+  units to the one discovered owned receiver. The live harness forwards
+  `bindings.raw_lisp_trigger` directly and observes only the ACK sender return.
+- The live timeout is not assigned a speculative cause. Receiver
+  non-consumption, framing/delivery, marker construction/path, marker write,
+  and harness observation remain separate possible owners for the next oracle.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — post-self-attach raw-LISP boundary (iteration 138)
 ```text
 STATE=CLASSIFIED
