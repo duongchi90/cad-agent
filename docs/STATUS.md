@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — post-handoff live boundary (iteration 124)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-post-handoff-live-boundary-iteration124.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration124-proof.json; document-ready=True; failure=AttributeError: function 'GetCurrentThreadId' not found; candidate_open_call_count=0; raw_lisp_ack_returned=False; health_call_count=0; cleanup warnings=none; PID/IPC/scripts cleaned; candidate and DWT hashes unchanged
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=GETCURRENTTHREADID_BOUND_TO_WRONG_WIN32_DLL
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and authorization for one offline TDD correction that obtains GetCurrentThreadId from kernel32 while keeping user32 AttachThreadInput/ShowWindow/SetForegroundWindow, exact-HWND fail-closed readback, and no live retry until offline verification passes
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 124)
+- The one authorized post-repair epoch reached document-ready, then exposed a
+  production binding defect before plugin bootstrap: `GetCurrentThreadId` was
+  looked up on `user32` instead of `kernel32`.
+- No raw-LISP, FileIPC, candidate open, active-document identity, or health
+  result was obtained. Cleanup and candidate/DWT integrity remained clean.
+- The key-free page-1 `DRAFT_REFERENCE` policy remains `MODIFY NONE`; the
+  authoritative SourceCustody HMAC contract was not changed or bypassed.
+
 ## Canonical checkpoint — foreground handoff repair (iteration 123)
 ```text
 STATE=VERIFIED
