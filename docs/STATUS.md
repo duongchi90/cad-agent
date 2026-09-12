@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — authoritative receipt contract GREEN (iteration 161)
+    STATE=OFFLINE_GREEN_VERIFIED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-authoritative-receipt-contract-green-iteration161.md; verified-code-head 19debd00b63dc1483659993280bcd1facc9893ac; focused owner 78 passed + 9 subtests; focused verifier/project contract 17 passed; full scripts/verify.ps1 exit 0 (offline JUnit 3414, receipt contract JUnit 1 pass, C# 238, .NET IPC 134, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); no production-after-GREEN/live/transport/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_EVALUATOR_RECEIPT_AND_STARTUP_COMPLETION_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact verified HEAD; if clear, authorize at most one disposable read-only live marker oracle through the existing startup owner, stopping at the first absent/wrong marker and forbidding retry, downstream FileIPC, viewport, source, DXF, or CAD mutation
+    HUMAN_GATE=NO
+
+## Authoritative receipt contract GREEN (iteration 161)
+- The approved private-owner GREEN now classifies exact marker readback as a
+  combined evaluator receipt and keeps receiver-only consumption explicitly
+  `NOT_SEPARATELY_OBSERVABLE`.
+- The verifier was reconciled from the stale expected-RED contract to a
+  passing receipt-contract gate. It checks exact positive classification and
+  missing/wrong/unreadable fail-closed behavior with one owner test.
+- The full offline/build verification is green. Real AutoCAD causality,
+  startup completion, and downstream FileIPC/viewport remain unproven and
+  were not invoked by this checkpoint.
+
 ## Canonical checkpoint — evaluator receipt causal RED (iteration 160)
     STATE=CAUSAL_RED_CHARACTERIZED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-receipt-causal-red-iteration160.md; verified-code-head ee174db267fc23da6570968eea40865c510ea0de; focused normal 91 passed + 1 deselected + 9 subtests; full scripts/verify.ps1 exit 0 (offline JUnit 3414, C# 238, .NET IPC 134, causal RED 1 test/1 intentional failure, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); no production/live/transport/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
