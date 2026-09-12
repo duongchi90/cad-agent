@@ -1,4 +1,22 @@
 # CAD Agent Status
+## Canonical checkpoint — live prerequisite recheck (iteration 115)
+```text
+STATE=WAIT_SAFE
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-prerequisite-recheck-iteration115.md; prior pushed HEAD b08816e3c9c587a199c3a78f2dc7d0e5d65608b7; fresh read-only recheck found no acad.exe and all six live prerequisites absent; LiveEpochStarted=False
+VERDICT=SKIP_LIVE_PREREQUISITES_UNAVAILABLE
+FIRST_UNSATISFIED_BOUNDARY=LIVE_ACCEPTANCE_PREREQUISITES_ABSENT
+NEXT_SINGLE_BOUNDED_ACTION=Remain WAIT_SAFE; at the next natural checkpoint recheck the same prerequisites only; if all become available run exactly one previously authorized disposable read-only epoch against the hash-bound page_01.dxf, otherwise retain SKIP/NOT_RUN; do not retry partially or mutate source/DXF/CAD
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 115)
+- SOL reviewed iteration 114 as `CLEAR_CONTINUE` and confirmed the key-free
+  draft policy with `MODIFY NONE`.
+- The fresh prerequisite recheck again found no AutoCAD process and no live
+  prerequisites, so the single live epoch remains `SKIP/NOT RUN`.
+- No raw-LISP, FileIPC, AutoCAD, source/DXF/CAD, retry, or cleanup mutation
+  occurred.
+
 ## Canonical checkpoint — live acceptance prerequisite classification (iteration 114)
 ```text
 STATE=CLASSIFIED
