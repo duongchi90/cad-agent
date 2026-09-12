@@ -1,4 +1,21 @@
 # CAD Agent Status
+## Canonical checkpoint — post-harness live foreground boundary (iteration 120)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-post-harness-live-foreground-boundary-iteration120.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration120-proof.json; document-ready=True; WINDOW_FOREGROUND_INVALID during plugin bootstrap; candidate_open_call_count=0; health_call_count=0; PID/IPC/scripts cleaned; candidate and DWT hashes unchanged
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=WINDOW_FOREGROUND_INVALID_DURING_PLUGIN_BOOTSTRAP
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and one bounded foreground/bootstrap diagnostic or corrective action; do not retry candidate activation, call health, or mutate source/DXF/CAD until authorized
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 120)
+- The corrected harness was used, but plugin bootstrap failed the existing
+  foreground guard before candidate activation.
+- The post-repair ACK placement, candidate active identity, and health remain
+  unproven; no candidate/source/DXF/CAD mutation occurred.
+- Cleanup and hash integrity checks passed.
+
 ## Canonical checkpoint — disposable harness ACK forwarding repair (iteration 119)
 ```text
 STATE=VERIFIED
