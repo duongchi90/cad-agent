@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — post-repair live harness boundary (iteration 118)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-post-repair-live-harness-boundary-iteration118.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration118-proof.json; document-ready=True; harness TypeError occurred before production raw-LISP sender; production expression not sent; health_call_count=0; PID absent after cleanup; candidate and DWT hashes unchanged
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=DISPOSABLE_HARNESS_ACK_WRAPPER_SIGNATURE_MISMATCH
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; repair only the disposable harness callback signature offline, then await explicit authorization before any new live epoch; do not infer ACK, candidate identity, health, visual, or dimension success
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 118)
+- The post-repair epoch did not reach the production raw-LISP sender because
+  the disposable observation wrapper rejected the new `ack_before` keyword.
+- No ACK, candidate active identity, or health result was observed; cleanup
+  and candidate/DWT integrity checks passed.
+- This harness-only failure does not invalidate the offline placement repair;
+  a new live epoch requires fresh bounded authorization after the harness is
+  corrected.
+
 ## Canonical checkpoint — raw-LISP ACK placement repair (iteration 117)
 ```text
 STATE=IMPLEMENTED
