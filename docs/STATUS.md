@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — startup completion oracle (iteration 152)
+    STATE=OFFLINE_GREEN
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-completion-oracle-iteration152.md; mcp_integration_lib/tests/test_startup_completion_oracle.py; scripts/verify.ps1 offline JUnit 3410 pass, C# 238 pass, DotNet IPC 134 pass, expected causal RED 1 failure, real-data 2 skip, AutoCAD 17 skip, live/M2 NOT RUN; HEAD d7eba568b8d950e3c6713ae122417f7f9cae934c
+    VERDICT=CLEAR_CONTINUE
+    FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_STARTUP_COMPLETION_CAUSALITY_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the four-state completion oracle; if causal defect is found authorize only the smallest existing-owner repair, otherwise separately authorize one disposable live epoch with no retry
+    HUMAN_GATE=NO
+
+## Startup completion oracle (iteration 152)
+- The existing startup load expression, marker-writer expression, and Python
+  observer were exercised independently across four deterministic cases:
+  NOT_EVALUATED, EVALUATED_MARKER_NOT_WRITTEN, MARKER_WRITTEN_NOT_OBSERVED,
+  and EVALUATED_AND_OBSERVED. All classifications matched and the public
+  timeout remained fail-closed.
+- This offline oracle found no production-owner defect and does not identify
+  which real AutoCAD stage failed in iteration 151. No live retry followed;
+  the next step is SOL review.
+- No drawing/source/DXF/CAD/provider/M2 or key-policy mutation occurred. The
+  SourceCustody HMAC/identity-key contract remains fail-closed and unchanged.
+
+## Canonical checkpoint — startup preload completion boundary (iteration 151)
 ## Canonical checkpoint — startup preload completion boundary (iteration 151)
     STATE=CLASSIFIED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-preload-completion-boundary-iteration151.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-dispatcher-live-iteration151-proof.json; HEAD 851d9797dfcea52f12acc12dbd1b3f9289719f93; exactly one live epoch; completion marker not confirmed; no client/File IPC/drawing-open; candidate/DWT unchanged; cleanup clean
