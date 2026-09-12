@@ -12,6 +12,7 @@ import secrets
 import subprocess
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -1978,11 +1979,43 @@ def make_windows_start_tab_document_ready_probe(hwnd: int) -> Callable[[], bool]
     return probe
 
 
+def _resolve_bundle_plugin_path(bundle_path: str) -> str:
+    """Resolve the single existing DLL declared by a disposable bundle manifest."""
+    bundle_root = Path(bundle_path).resolve()
+    if not bundle_root.is_dir():
+        raise ValueError("bootstrap_bundle_path must be an existing directory")
+    manifest_path = bundle_root / "PackageContents.xml"
+    if not manifest_path.is_file():
+        raise ValueError("bootstrap_bundle_path must contain PackageContents.xml")
+
+    try:
+        manifest_root = ET.parse(manifest_path).getroot()
+    except ET.ParseError as exc:
+        raise ValueError("bootstrap bundle manifest must be valid XML") from exc
+    entries = manifest_root.findall("./Components/ComponentEntry")
+    if len(entries) != 1:
+        raise ValueError("bootstrap bundle manifest must contain exactly one ComponentEntry")
+
+    module_name = entries[0].attrib.get("ModuleName", "")
+    module_path = Path(module_name)
+    if not module_name or module_path.is_absolute():
+        raise ValueError("bootstrap bundle ModuleName must be a non-empty relative path")
+    resolved_module_path = (bundle_root / module_name.replace("/", os.sep)).resolve()
+    if not resolved_module_path.is_relative_to(bundle_root):
+        raise ValueError("bootstrap bundle ModuleName must remain inside the bundle root")
+    if resolved_module_path.suffix.casefold() != ".dll":
+        raise ValueError("bootstrap bundle ModuleName must name a DLL")
+    if not resolved_module_path.is_file():
+        raise ValueError("bootstrap bundle ModuleName must name an existing DLL")
+    return str(resolved_module_path)
+
+
 def make_windows_start_tab_session_factory(
     acad_executable: str,
     script_directory: str,
     *,
     bootstrap_plugin_path: Optional[str] = None,
+    bootstrap_bundle_path: Optional[str] = None,
     bootstrap_lisp_path: Optional[str] = None,
     ipc_root: Optional[str] = None,
     timeout_s: float = 30.0,
@@ -1997,12 +2030,21 @@ def make_windows_start_tab_session_factory(
         raise ValueError("acad_executable must be an existing acad.exe")
     if not script_root.is_dir():
         raise ValueError("script_directory must be an existing directory")
+    if bootstrap_plugin_path is not None and bootstrap_bundle_path is not None:
+        raise ValueError(
+            "bootstrap_plugin_path and bootstrap_bundle_path are mutually exclusive"
+        )
+    resolved_bootstrap_plugin_path = bootstrap_plugin_path
+    if bootstrap_bundle_path is not None:
+        resolved_bootstrap_plugin_path = _resolve_bundle_plugin_path(
+            bootstrap_bundle_path
+        )
 
     def factory() -> WindowsAutoCADStartTabSession:
         return WindowsAutoCADStartTabSession(
             str(executable),
             str(script_root),
-            bootstrap_plugin_path=bootstrap_plugin_path,
+            bootstrap_plugin_path=resolved_bootstrap_plugin_path,
             bootstrap_lisp_path=bootstrap_lisp_path,
             ipc_root=ipc_root,
             timeout_s=timeout_s,

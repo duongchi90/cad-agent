@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — AutoCAD discovery/load binding GREEN (iteration 168)
+    STATE=OFFLINE_GREEN_VERIFIED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-discovery-load-binding-green-iteration168.md; parent RED f62e71a3e5c1bab402448a5a6dae5af32ac93f92; existing startup owner now resolves exactly one in-root manifest DLL; focused bundle/startup contracts 7 PASS; ruff/diff-check PASS; no AutoCAD/live/install/registry/env/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
+    VERDICT=CLEAR_CONTINUE
+    MATERIAL_FINDING=NONE_FOR_BUNDLE_ROOT_STARTUP_BINDING
+    FIRST_UNSATISFIED_BOUNDARY=TRUTHFUL_AUTOCAD_DISCOVERY_OR_PLUGIN_LOAD_AND_STARTUP_RECEIPT_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact GREEN; if clear and truthful prerequisites are present, run read-only preflight then at most one disposable live module/startup oracle; otherwise keep LIVE_ORACLE=NOT_RUN and continue with the next approved offline boundary
+    HUMAN_GATE=NO
+
+## AutoCAD discovery/load binding GREEN (iteration 168)
+- The existing startup factory now accepts an optional disposable bundle root,
+  parses exactly one `ComponentEntry`, validates a relative in-root DLL
+  `ModuleName`, and forwards that resolved file through the existing direct
+  plugin bootstrap owner.
+- Focused bundle and startup completion contracts passed: `7 passed in 2.57s`.
+  Ruff and `git diff --check` passed.
+- This is offline binding evidence only. AutoCAD discovery/plugin load,
+  startup receipt, and all downstream live CAD/FileIPC/viewport work remain
+  `NOT_RUN`.
+
 ## Canonical checkpoint — AutoCAD discovery/load binding causal RED (iteration 167)
     STATE=CAUSAL_RED_CHARACTERIZED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-discovery-load-binding-causal-red-iteration167.md; parent audit 10dd2dd19869036f6768de858bf8fc8d09366ea9; exact test-only RED; bundle/staging contracts 2 PASS and binding contract 1 intentional RED; ruff/diff-check PASS; no production/live/install/registry/env/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
