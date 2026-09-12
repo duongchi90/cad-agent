@@ -1,4 +1,28 @@
 # CAD Agent Status
+## Canonical checkpoint — native-outcome diagnostic precondition (iteration 131)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-native-outcome-diagnostic-precondition-iteration131.md; proof C:\temp\cad-agent-task6-live-20260911\foreground-native-outcome-diagnostic-iteration131-proof.json; exactly one authorized disposable live foreground/native-outcome diagnostic; document_ready=True; target=HWND 1115332/PID 21416/thread 23412; foreground_before=HWND 1115332/PID 21416/thread 23412; foreground_after=HWND 1115332/PID 21416/thread 23412; helper returned without handoff; native calls only GetForegroundWindow; attach/ShowWindow/SetForegroundWindow/detach outcomes NOT OBSERVED; plugin/raw-LISP/candidate/health NOT RUN; cleanup clean; DWT unchanged; no source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=FOREGROUND_HANDOFF_NATIVE_OUTCOME_NOT_OBSERVED_BECAUSE_TARGET_ALREADY_FOREGROUND
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and authorization for one bounded disposable diagnostic that establishes a foreign foreground precondition before invoking the instrumented helper, then captures native outcomes; no behavioral repair, full epoch, plugin/raw-LISP/candidate/health, or source/DXF/CAD mutation until authorized
+HUMAN_GATE=NO
+```
+
+## Current native diagnostic boundary (iteration 131)
+- The authorized diagnostic reached `document_ready=True`, but the owned
+  AutoCAD HWND was already the exact foreground window before the helper ran.
+  The helper therefore returned at its early exact-match guard; no
+  `AttachThreadInput`, `ShowWindow`, `SetForegroundWindow`, or detach call was
+  attempted, so their native return values remain unobserved.
+- Target and foreground snapshots were identical before and after the helper;
+  cleanup was clean, the owned PID and disposable stage root were absent, and
+  the default DWT hash was unchanged. The diagnostic did not enter any plugin,
+  raw-LISP, candidate, health, visual, or dimension path.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — native outcome instrumentation verified (iteration 130)
 ```text
 STATE=VERIFIED
