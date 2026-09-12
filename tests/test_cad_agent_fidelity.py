@@ -1887,6 +1887,15 @@ def test_text_reconstruction_sizes_from_visible_glyphs_but_keeps_ocr_anchor() ->
     assert 0.0 < sizing["width_factor"] <= 2.0
     assert sizing["insertion_px"] == [ocr_bbox[0], ocr_bbox[3]]
 
+    tight_bbox = [28, 20, 145, 41]
+    tight = fidelity_module._derive_text_reconstruction_size(
+        image, "VISIBLE", tight_bbox, 0.1,
+    )
+    assert tight["glyph_bbox_px"] == tight_bbox
+    assert tight["height_mm"] == pytest.approx((tight_bbox[3] - tight_bbox[1]) * 0.1)
+    assert tight["width_factor"] == 1.0
+    assert tight["insertion_px"] == [tight_bbox[0], tight_bbox[3]]
+
 
 def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:
     from cad_agent.fidelity import _select_fidelity_geometry
