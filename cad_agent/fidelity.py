@@ -41,7 +41,65 @@ class FidelityError(ValueError):
     """Raised for an unsafe or unsupported fidelity-layout request."""
 
 
-def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
+def _source_support_identity(
+    line: Any,
+    crop_gray: np.ndarray,
+    source_edges: np.ndarray,
+) -> tuple[float, float, float] | None:
+    """Return a coarse identity for the source raster line supporting ``line``."""
+    dx = line.p2_px[0] - line.p1_px[0]
+    dy = line.p2_px[1] - line.p1_px[1]
+    length = math.hypot(dx, dy)
+    if length == 0.0:
+        return None
+    normal = (-dy / length, dx / length)
+    offsets = (0.0, -1.0, 1.0, -2.0, 2.0)
+    best: tuple[float, float, float] | None = None
+    for offset in offsets:
+        start = (
+            line.p1_px[0] + normal[0] * offset,
+            line.p1_px[1] + normal[1] * offset,
+        )
+        end = (
+            line.p2_px[0] + normal[0] * offset,
+            line.p2_px[1] + normal[1] * offset,
+        )
+        support = np.zeros(source_edges.shape, dtype=np.uint8)
+        cv2.line(
+            support,
+            tuple(round(value) for value in start),
+            tuple(round(value) for value in end),
+            1,
+            1,
+            lineType=cv2.LINE_8,
+        )
+        pixels = support > 0
+        if not np.any(pixels):
+            continue
+        darkness = float(np.clip(255.0 - crop_gray[pixels].astype(np.float32), 0.0, 255.0).mean())
+        edges = float(np.count_nonzero(source_edges[pixels]))
+        score = (darkness, edges)
+        if best is None or score > best[:2]:
+            best = (darkness, edges, offset)
+    if best is None or (best[0] <= 0.0 and best[1] <= 0.0):
+        return None
+    offset = best[2]
+    shifted_start = (
+        line.p1_px[0] + normal[0] * offset,
+        line.p1_px[1] + normal[1] * offset,
+    )
+    support_offset = normal[0] * shifted_start[0] + normal[1] * shifted_start[1]
+    if normal[0] < 0.0 or (normal[0] == 0.0 and normal[1] < 0.0):
+        normal = (-normal[0], -normal[1])
+        support_offset = -support_offset
+    return (round(normal[0], 3), round(normal[1], 3), round(support_offset, 1))
+
+
+def _filter_fidelity_geometry(
+    raw: RawGeometry,
+    *,
+    source_support: dict[str, tuple[float, float, float]] | None = None,
+) -> RawGeometry:
     """Remove only sub-12-pixel strokes from a review-only raw candidate."""
     retained: list[Any] = []
     for line in raw.lines:
@@ -52,6 +110,12 @@ def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
             index for index, existing in enumerate(retained)
             if max(abs(start[0] - existing[0][0]), abs(start[1] - existing[0][1]),
                    abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
+            and not (
+                source_support is not None
+                and line.id in source_support
+                and existing[2].id in source_support
+                and source_support[line.id] != source_support[existing[2].id]
+            )
         ), None)
         if duplicate_index is None:
             retained.append((start, end, line))
@@ -94,7 +158,13 @@ def _select_fidelity_geometry(raw: RawGeometry, crop: np.ndarray, scale: float) 
     source_edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
     mask = np.full(crop.shape[:2], 255, dtype=np.uint8)
     baseline_edges = _raw_geometry_edges(raw, crop.shape[:2])
-    filtered = _filter_fidelity_geometry(raw)
+    crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    source_support = {
+        line.id: identity
+        for line in raw.lines
+        if (identity := _source_support_identity(line, crop_gray, source_edges)) is not None
+    }
+    filtered = _filter_fidelity_geometry(raw, source_support=source_support)
     filtered_edges = _raw_geometry_edges(filtered, crop.shape[:2])
     baseline = {"edge_metric": _edge_metrics(source_edges, baseline_edges, mask), "line_entities": len(raw.lines), "circle_entities": len(raw.circles)}
     filtered_report = {"edge_metric": _edge_metrics(source_edges, filtered_edges, mask), "line_entities": len(filtered.lines), "circle_entities": len(filtered.circles)}
