@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — authoritative raw-LISP ACK verification (iteration 112)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-authoritative-verification-raw-lisp-ack-iteration112.md; scripts/verify.ps1 completed at feb1d07; .NET 238 passed; offline Python 3313 passed, 21 deselected, 80 subtests; offline JUnit tests=3393 failures=0 errors=0 skipped=0; causal-red 1 expected failure; real-data 2 skipped; AutoCAD unavailable 17 skipped; git diff --check clean; tracked tree clean
+VERDICT=PASS_WITH_RECORDED_UNAVAILABLE_LIVE_GATES
+FIRST_UNSATISFIED_BOUNDARY=LIVE_RAW_LISP_RECEIVER_ACK_AND_CANDIDATE_ACTIVE_IDENTITY_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this authoritative offline verification; only after clear review may one separately authorized read-only live acceptance epoch run, with no source/DXF/CAD mutation
+HUMAN_GATE=NO
+```
+
+## Current authoritative raw-LISP ACK verification (iteration 112)
+- The full offline gate is green at `feb1d07`: .NET 238, offline Python 3313,
+  offline JUnit 3393, with the intentional causal-red and unavailable live
+  gates recorded separately rather than promoted to PASS.
+- Claimed/live `drawing_open` still requires the same-expression exact marker;
+  legacy enqueue-only behavior is confined to unclaimed offline fixture mode.
+- Live receiver ACK and candidate active-document identity remain unproven
+  until a separately reviewed read-only AutoCAD epoch. No live or source/DXF/
+  CAD mutation occurred.
+
 ## Canonical checkpoint — raw-LISP ACK legacy-fixture compatibility (iteration 111)
 ```text
 STATE=IMPLEMENTED
