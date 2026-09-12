@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP seam oracle verified (iteration 143)
+```text
+STATE=VERIFIED_SEAM_ORACLE
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-four-observable-seam-oracle-iteration143.md; proof C:\temp\cad-agent-task6-live-20260911\raw-lisp-four-observable-seam-oracle-iteration143-proof.json; five deterministic four-observable cases; all_classifications_match=True; all negative cases preserved RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED; positive observer success=True; exact expression/framing reused; cleanup clean; production_files_modified=False; live_epoch_started=False; no production/live/plugin/candidate/health/source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_RECEIVER_CONSUMPTION_AND_EVALUATION_NOT_PROVEN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable read-only live epoch using the four-observable evidence plan, adding only receiver/evaluator/marker/observer diagnostics and stopping at the first boundary; no retry or production/source/DXF/CAD/key-policy mutation
+HUMAN_GATE=NO
+```
+
+## Current raw-LISP seam boundary (iteration 143)
+- Offline evidence now separates receiver non-consumption, consumption without
+  evaluator entry, marker-write failure, marker non-observation, and full ACK
+  success with four independent observables while preserving the public
+  timeout contract.
+- The real AutoCAD receiver/evaluator has not been instrumented or proven by
+  this offline oracle. No live retry or production change followed it.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — raw-LISP live owner inspection (iteration 142)
 ```text
 STATE=VERIFIED_OWNER_INSPECTION
