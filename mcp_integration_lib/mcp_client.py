@@ -1689,67 +1689,142 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
     set_native_signature(set_foreground_window, [wintypes.HWND], wintypes.BOOL)
     set_native_signature(get_foreground_window, [], wintypes.HWND)
 
-    if int(get_foreground_window() or 0) == hwnd:
+    current_foreground_hwnd = int(get_foreground_window() or 0)
+    if current_foreground_hwnd == hwnd:
         return
 
-    foreground_hwnd = int(get_foreground_window() or 0)
-    if foreground_hwnd <= 0:
-        raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+    def foreground_snapshot(window: int) -> dict[str, object]:
+        if window <= 0:
+            return {"hwnd": window, "pid": None}
+        process_id = wintypes.DWORD()
+        try:
+            if not get_window_thread_process_id(window, ctypes.byref(process_id)):
+                return {"hwnd": window, "pid": None}
+        except Exception:
+            return {"hwnd": window, "pid": None}
+        return {"hwnd": window, "pid": int(process_id.value)}
+
+    def foreground_failure(
+        stage: str,
+        *,
+        before: dict[str, object],
+        after_set: Optional[dict[str, object]] = None,
+        after_detach: Optional[dict[str, object]] = None,
+        cause: Optional[BaseException] = None,
+    ) -> MCPToolError:
+        diagnostic: dict[str, object] = {
+            "stage": stage,
+            "foreground_before": before,
+            "foreground_after_set": after_set,
+            "foreground_after_detach": after_detach,
+        }
+        if cause is not None:
+            diagnostic["native_error"] = type(cause).__name__
+        error = MCPToolError("WINDOW_FOREGROUND_INVALID")
+        error._foreground_handoff_diagnostic = diagnostic
+        return error
+
+    foreground_before = foreground_snapshot(current_foreground_hwnd)
+    if current_foreground_hwnd <= 0:
+        raise foreground_failure("ATTACH_FAILED", before=foreground_before)
 
     def window_thread_id(window: int) -> int:
         process_id = wintypes.DWORD()
-        thread_id = int(
-            get_window_thread_process_id(window, ctypes.byref(process_id)) or 0
-        )
+        try:
+            thread_id = int(
+                get_window_thread_process_id(window, ctypes.byref(process_id)) or 0
+            )
+        except Exception as exc:
+            raise foreground_failure("ATTACH_FAILED", before=foreground_before) from exc
         if thread_id <= 0:
-            raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+            raise foreground_failure("ATTACH_FAILED", before=foreground_before)
         return thread_id
 
     try:
         caller_thread_id = int(get_current_thread_id() or 0)
-        foreground_thread_id = window_thread_id(foreground_hwnd)
+        foreground_thread_id = window_thread_id(current_foreground_hwnd)
     except MCPToolError:
         raise
     except Exception as exc:
-        raise MCPToolError("WINDOW_FOREGROUND_INVALID") from exc
+        raise foreground_failure(
+            "ATTACH_FAILED", before=foreground_before, cause=exc
+        ) from exc
     if caller_thread_id <= 0:
-        raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+        raise foreground_failure("ATTACH_FAILED", before=foreground_before)
 
     attached = False
     failure: Optional[MCPToolError] = None
+    foreground_after_set: Optional[dict[str, object]] = None
+    foreground_after_detach: Optional[dict[str, object]] = None
     try:
         try:
             attached = bool(
                 attach_thread_input(caller_thread_id, foreground_thread_id, True)
             )
         except Exception as exc:
-            failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
-            failure.__cause__ = exc
+            failure = foreground_failure(
+                "ATTACH_FAILED", before=foreground_before, cause=exc
+            )
         if not attached and failure is None:
-            failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+            failure = foreground_failure("ATTACH_FAILED", before=foreground_before)
         if attached:
             try:
                 show_window(hwnd, 9)
                 set_foreground_window(hwnd)
-                if int(get_foreground_window() or 0) != hwnd:
-                    failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+                foreground_after_set = foreground_snapshot(
+                    int(get_foreground_window() or 0)
+                )
+                if int(foreground_after_set["hwnd"]) != hwnd:
+                    failure = foreground_failure(
+                        "EXACT_HWND_READBACK_MISMATCH",
+                        before=foreground_before,
+                        after_set=foreground_after_set,
+                    )
             except MCPToolError as exc:
                 failure = exc
             except Exception as exc:
-                failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
-                failure.__cause__ = exc
+                failure = foreground_failure(
+                    "SHOW_OR_SET_NATIVE_ERROR",
+                    before=foreground_before,
+                    after_set=foreground_after_set,
+                    cause=exc,
+                )
     finally:
         if attached:
+            detach_failure: Optional[MCPToolError] = None
             try:
                 detached = bool(
-                    attach_thread_input(caller_thread_id, foreground_thread_id, False)
+                    attach_thread_input(
+                        caller_thread_id, foreground_thread_id, False
+                    )
                 )
-                if not detached and failure is None:
-                    failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+                foreground_after_detach = foreground_snapshot(
+                    int(get_foreground_window() or 0)
+                )
+                if not detached:
+                    detach_failure = foreground_failure(
+                        "DETACH_FAILED",
+                        before=foreground_before,
+                        after_set=foreground_after_set,
+                        after_detach=foreground_after_detach,
+                    )
             except Exception as exc:
+                detach_failure = foreground_failure(
+                    "DETACH_FAILED",
+                    before=foreground_before,
+                    after_set=foreground_after_set,
+                    after_detach=foreground_after_detach,
+                    cause=exc,
+                )
+            if failure is not None:
+                diagnostic = failure._foreground_handoff_diagnostic
+                diagnostic["foreground_after_detach"] = foreground_after_detach
+            if detach_failure is not None:
                 if failure is None:
-                    failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
-                    failure.__cause__ = exc
+                    failure = detach_failure
+                else:
+                    diagnostic = failure._foreground_handoff_diagnostic
+                    diagnostic["detach_stage"] = "DETACH_FAILED"
     if failure is not None:
         raise failure
 
