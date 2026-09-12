@@ -653,7 +653,9 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             launch_calls[0][1].parent.glob(launch_calls[0][1].stem + ".stage-*")
         )
         self.assertEqual(4, len(stage_paths))
-        self.assertTrue(all(path.parent == Path(self._ipc_dir) for path in stage_paths))
+        self.assertTrue(
+            all(path.parent.resolve() == Path(self._ipc_dir).resolve() for path in stage_paths)
+        )
         self.assertEqual(4, len({path.name for path in stage_paths}))
 
         self.assertEqual("_.QNEW\r\n", script)
@@ -738,7 +740,9 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertIn("CAD_AGENT_START_TAB_POST_QNEW_ENTRY", runtime_events[0][1])
         self.assertIn("_.NETLOAD", runtime_events[1][1])
         self.assertIn("CAD_AGENT_START_TAB_NETLOAD_RETURN", runtime_events[2][1])
-        self.assertIn('(load "' + lisp_path.as_posix() + '")', runtime_events[3][1])
+        self.assertIn(
+            '(load "' + lisp_path.resolve().as_posix() + '")', runtime_events[3][1]
+        )
         self.assertIn(
             mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN,
             runtime_events[3][1],

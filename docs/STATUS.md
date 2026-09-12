@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — hosted Integration portability repair (iteration 156)
+    STATE=FOCUSED_GREEN_PENDING_FULL_GATE
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-hosted-integration-portability-repair-iteration156.md; exact-head hosted run 34679437929 had 3 failures; focused 49 passed + 6 subtests; Ruff PASS; git diff --check PASS; no production/key/schema/transport/source/DXF/CAD/candidate mutation
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=EXACT_HEAD_HOSTED_VERIFICATION_TERMINAL_PASS
+    NEXT_SINGLE_BOUNDED_ACTION=Run the authoritative full scripts/verify.ps1 on the clean committed state, push, and inspect the exact-head hosted check
+    HUMAN_GATE=NO
+
+## Hosted Integration portability repair (iteration 156)
+- The first real hosted Integration boundary was isolated to the verification
+  contract: the bundle test ran without its existing Release x64 DLL build
+  prerequisite, and two Windows assertions compared short-name and canonical
+  path spellings lexically.
+- The bounded repair skips the bundle assertion only when its build artifact is
+  absent and compares the affected paths after resolution. Production startup
+  behavior is unchanged.
+- SourceCustody HMAC/identity-key remains fail-closed and unchanged; page 1
+  remains key-free `DRAFT_REFERENCE` / `MODIFY NONE`.
+
 ## Canonical checkpoint — evaluator-entry ACK implementation (iteration 155)
     STATE=OFFLINE_GREEN
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-entry-ack-implementation-iteration155.md; verified code HEAD dee0758fafd3b9068cbfb37e6ab8974a4a99d0de; focused 52 passed + 6 subtests; scripts/verify.ps1 PASS (offline JUnit 3412, C# 238, .NET IPC 134; causal RED 1 expected failure; real-data 2 SKIP; AutoCAD 17 SKIP; live/M2 NOT RUN); no key/C#/schema/transport/source/DXF/CAD/candidate mutation

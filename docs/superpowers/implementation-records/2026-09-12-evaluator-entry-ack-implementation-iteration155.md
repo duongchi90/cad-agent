@@ -1,7 +1,7 @@
 # Evaluator-Entry ACK Implementation — Iteration 155
 
-Date: 2026-09-12 (Asia/Saigon)  
-Issue: exact page-1 candidate activation / startup evaluator boundary  
+Date: 2026-09-12 (Asia/Saigon)
+Issue: exact page-1 candidate activation / startup evaluator boundary
 Verified code HEAD: `dee0758fafd3b9068cbfb37e6ab8974a4a99d0de`
 
 ## Authorization and bounded scope

@@ -7,6 +7,8 @@ import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_MANIFEST = REPO_ROOT / "autocad_plugin" / "CadAgent.bundle" / "PackageContents.xml"
@@ -25,6 +27,10 @@ def _sha256(path: Path) -> str:
 
 
 def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
+    if not PLUGIN_DLL.is_file():
+        pytest.skip(
+            "SKIP: bundle assembly is produced by the AutoCAD .NET build gate"
+        )
     assert BUNDLE_MANIFEST.is_file(), (
         "Issue #409 RED: repository-owned CadAgent ApplicationPlugins manifest is absent"
     )
