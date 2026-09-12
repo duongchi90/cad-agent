@@ -1,4 +1,41 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP delivery-path characterization (iteration 103)
+```text
+STATE=EXECUTED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-delivery-path-causal-characterization-iteration103.md; reviewed HEAD 8eb2bbe4bdab88ff03444fbb6a8d7a34fe551630; focused owner/framing tests 5 passed, 15 deselected; causal-red 1 failed, 19 deselected as expected; historical iteration-63/64 evidence
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_CONSUMPTION_ACK_ABSENT_IN_CURRENT_OWNER
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of iteration 103; keep live retry, candidate activation, health, FileIPC, and production mutation stopped until the next bounded action is authorized
+HUMAN_GATE=NO
+```
+
+## Current raw-LISP delivery-path causal characterization (iteration 103)
+- Fresh SOL review required one offline, reuse-only characterization of the
+  current `_make_windows_text_trigger` / `make_windows_lisp_trigger` owner.
+  The owner selects exactly one visible owned `MDIClient`, rechecks PID and
+  top-level foreground identity, and posts `WM_CHAR` (`0x0102`) code units for
+  UTF-16LE `ESC ESC + expression + CR`. The final `CR` is only a `WM_CHAR`
+  `U+000D`; no separate `VK_RETURN` key sequence is sent.
+- Focused owner/framing/receiver tests passed `5 passed, 15 deselected`. The
+  marked causal-red test remained the expected failure (`1 failed, 19
+  deselected`): native `PostMessageW=TRUE` can coexist with modeled receiver
+  consumption false. The owner has no receiver callback, queue-drain result,
+  or AutoLISP evaluation result.
+- Historical evidence shows a visible owned `MDIClient` distinct from the
+  actual focused child (iteration 63), while sending the same 299-code-unit
+  framing directly to that focused child still produced no marker (iteration
+  64). Iteration 102 likewise returned from one current-owner trigger with no
+  exact marker or `post_qnew_entry` event. A simple target swap is therefore
+  not a sufficient explanation.
+- The existing observables can expose a target/control mismatch, verify the
+  intended outgoing framing, or prove evaluation when the exact stage marker
+  appears. They cannot distinguish `WRONG_RECEIVER_OR_CONTROL`,
+  `FRAME_OR_TERMINATOR_NOT_CONSUMED`, and `RECEIVER_ACCEPTED_BUT_AUTOLISP_NOT_EVALUATED`
+  in a live three-way result. The first causal gap remains
+  `RAW_LISP_RECEIVER_CONSUMPTION_ACK=ABSENT_IN_CURRENT_OWNER`; no production
+  change or live retry is justified. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-raw-lisp-delivery-path-causal-characterization-iteration103.md`.
+
 ## Current raw-LISP consumption oracle (iteration 102)
 - Fresh SOL review authorized exactly one disposable live read-only epoch using
   the executor-branch owner, verified DWT, `CADAGENT_DISPATCH` startup, and the
