@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Canonical checkpoint — benign foreign-window precondition boundary (iteration 132)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-benign-foreign-window-precondition-boundary-iteration132.md; proof C:\temp\cad-agent-task6-live-20260911\foreground-native-outcome-diagnostic-iteration132-proof.json; exactly one authorized disposable native-outcome diagnostic; document_ready=True; owned target=HWND 722044/PID 28764/thread 22612; benign target=HWND 787684/PID 28852/thread 22856; benign SetForegroundWindow result=0; foreign_precondition_verified=False; production helper NOT INVOKED; plugin/raw-LISP/candidate/health NOT RUN; cleanup clean; DWT unchanged; no source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=FOREIGN_FOREGROUND_PRECONDITION_SETFOREGROUNDWINDOW_FAILED_IN_DISPOSABLE_HARNESS
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and authorization to repair the disposable benign-window callback/signature, re-establish and verify the foreign foreground precondition, then invoke the unchanged production helper exactly once; no production behavioral repair or full live epoch until authorized
+HUMAN_GATE=NO
+```
+
+## Current benign-window diagnostic boundary (iteration 132)
+- The diagnostic reached `document_ready=True` and created a separate benign
+  window owned by the harness, but `SetForegroundWindow` returned `0` and the
+  foreground remained another window. The production foreground helper was
+  therefore not invoked, so no native handoff outcomes were captured.
+- The disposable window callback emitted an `OverflowError` from an incomplete
+  `DefWindowProcW` signature. This is isolated to the diagnostic harness; no
+  production code, plugin, raw-LISP, candidate, PDF, DXF, or CAD state changed.
+- Cleanup was clean, the owned AutoCAD PID and stage root were absent, and the
+  default DWT hash was unchanged. The page-1 PDF remains key-free
+  `DRAFT_REFERENCE` with `MODIFY NONE`; the authoritative SourceCustody
+  HMAC/identity-key contract was not removed or bypassed.
+
 ## Canonical checkpoint — native-outcome diagnostic precondition (iteration 131)
 ```text
 STATE=CLASSIFIED
