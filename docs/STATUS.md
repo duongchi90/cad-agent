@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — ready-dispatcher live boundary (iteration 147)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-ready-dispatcher-live-boundary-iteration147.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-dispatcher-live-iteration147-proof.json; HEAD 9e5773f53aebae39c75a1bce89d9de6c3748756a
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=DISPATCHER_READY_STATE_NOT_PROPAGATED_TO_LIVE_CLIENT
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize one offline readiness-propagation characterization and causal RED, with no live retry until reviewed
+HUMAN_GATE=NO
+```
+
+## Ready-dispatcher live boundary (iteration 147)
+- Exactly one SOL-authorized disposable read-only epoch reached
+  `document_ready=True`, but the direct-binding harness did not propagate the
+  startup binding's `dispatcher_preloaded=True` into the new
+  `FileIPCLiveMCPClient` instance.
+- The client therefore selected raw-LISP; the oracle forbade that fallback and
+  stopped at `RAW_LISP_FALLBACK_FORBIDDEN_IN_ITERATION147` before any File IPC
+  request/result, active-path readback, candidate identity, or health call.
+- Candidate and default DWT hashes were unchanged; cleanup was clean. No live
+  retry or production/drawing/key-policy mutation occurred. The next step is
+  offline readiness propagation characterization after SOL review.
+
 ## Canonical checkpoint — ready-dispatcher drawing-open offline GREEN (iteration 146)
 ```text
 STATE=OFFLINE_GREEN
