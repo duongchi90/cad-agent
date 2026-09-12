@@ -6,6 +6,7 @@ from mcp_integration_lib.mcp_client import (
     MCPTimeoutError,
     WindowsAutoCADStartTabSession,
     _START_TAB_BOOTSTRAP_COMPLETION_TOKEN,
+    _START_TAB_EVALUATOR_ENTRY_TOKEN,
     _start_tab_completion_marker_expression,
 )
 
@@ -22,9 +23,13 @@ def _exercise(mode: str, root):
         poll_interval_s=0,
     )
     marker = root / "completion.marker"
+    evaluator_entry_marker = root / "evaluator-entry.marker"
     alternate_marker = root / "alternate.marker"
     session._completion_marker_path = marker
-    load_expression = session._dispatcher_load_expression()
+    session._evaluator_entry_marker_path = evaluator_entry_marker
+    load_expression = session._dispatcher_load_expression(
+        evaluator_entry_marker_path=evaluator_entry_marker
+    )
     marker_expression = _start_tab_completion_marker_expression(marker)
     observation = {
         "load_expression_exact": (
@@ -46,6 +51,10 @@ def _exercise(mode: str, root):
             observation["load_attempted"] = True
             if mode == "NOT_EVALUATED":
                 raise RuntimeError("simulated evaluator did not enter")
+            evaluator_entry_marker.write_text(
+                _START_TAB_EVALUATOR_ENTRY_TOKEN + "\n",
+                encoding="ascii",
+            )
             observation["load_consumed"] = True
             return
         if expression != marker_expression:

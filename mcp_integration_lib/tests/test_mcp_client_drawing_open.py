@@ -379,6 +379,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             events.append(("lisp", expression))
             _record_drawing_open_ack(expression)
             session = session_ref["session"]
+            if mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN in expression:
+                session._evaluator_entry_marker_path.write_text(
+                    mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN + "\n",
+                    encoding="ascii",
+                )
             for _event_name, stage_path, token in session._stage_marker_paths:
                 if token in expression:
                     stage_path.write_text(token + "\n", encoding="ascii")
@@ -677,6 +682,11 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         def runtime_lisp(expression):
             runtime_events.append(("lisp", expression))
+            if mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN in expression:
+                session._evaluator_entry_marker_path.write_text(
+                    mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN + "\n",
+                    encoding="ascii",
+                )
             for event_name, stage_path, token in session._stage_marker_paths:
                 if token in expression:
                     stage_path.write_text(token + "\n", encoding="ascii")
@@ -729,10 +739,127 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertIn("_.NETLOAD", runtime_events[1][1])
         self.assertIn("CAD_AGENT_START_TAB_NETLOAD_RETURN", runtime_events[2][1])
         self.assertIn('(load "' + lisp_path.as_posix() + '")', runtime_events[3][1])
+        self.assertIn(
+            mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN,
+            runtime_events[3][1],
+        )
+        self.assertLess(
+            runtime_events[3][1].index(
+                mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN
+            ),
+            runtime_events[3][1].index("(setq *cad-agent-file-ipc-root*"),
+        )
         self.assertTrue(bindings.dispatcher_preloaded)
         self.assertTrue(bindings.bootstrap_completion_confirmed)
 
         session.close_without_save()
+        self.assertEqual([], list(Path(self._ipc_dir).glob("*.evaluator-entry")))
+
+    def test_start_tab_runtime_bootstrap_requires_evaluator_entry_before_completion(self):
+        process = SimpleNamespace(pid=7314, poll=lambda: None)
+        raw_expressions = []
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        session_ref = {}
+
+        def raw_lisp(expression):
+            raw_expressions.append(expression)
+            if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression:
+                session_ref["session"]._completion_marker_path.write_text(
+                    mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN + "\n",
+                    encoding="ascii",
+                )
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=str(self._ipc_dir),
+            timeout_s=0,
+            poll_interval_s=0,
+            process_launcher=lambda executable, script_path: process,
+            window_finder=lambda pid: 8814,
+            window_closer=lambda hwnd: setattr(process, "poll", lambda: 0),
+            start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=lambda hwnd: SimpleNamespace(
+                hwnd=hwnd,
+                command_trigger=lambda command: None,
+                raw_lisp_trigger=raw_lisp,
+                dispatch_trigger=_claim_bound_trigger(lambda: None),
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: True,
+            ),
+        )
+        session_ref["session"] = session
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "STARTUP_EVALUATOR_ENTRY_NOT_CONFIRMED"
+        ):
+            session.launch_blank_document()
+
+        self.assertEqual(1, len(raw_expressions))
+        self.assertIn(
+            mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN,
+            raw_expressions[0],
+        )
+        self.assertNotIn(
+            mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN,
+            raw_expressions[0],
+        )
+        self.assertEqual([], list(Path(self._ipc_dir).glob("*.evaluator-entry")))
+        self.assertEqual([], list(Path(self._ipc_dir).glob("*.marker")))
+
+    def test_start_tab_runtime_bootstrap_rejects_wrong_evaluator_entry_marker(self):
+        process = SimpleNamespace(pid=7315, poll=lambda: None)
+        raw_expressions = []
+        lisp_path = Path(self._ipc_dir) / "mcp_dispatch.lsp"
+        lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+        session_ref = {}
+
+        def raw_lisp(expression):
+            raw_expressions.append(expression)
+            if mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN in expression:
+                session_ref["session"]._evaluator_entry_marker_path.write_text(
+                    "WRONG_EVALUATOR_ENTRY_TOKEN\n", encoding="ascii"
+                )
+            if mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN in expression:
+                session_ref["session"]._completion_marker_path.write_text(
+                    mcp_client_module._START_TAB_BOOTSTRAP_COMPLETION_TOKEN + "\n",
+                    encoding="ascii",
+                )
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            bootstrap_lisp_path=str(lisp_path),
+            ipc_root=str(self._ipc_dir),
+            timeout_s=0,
+            poll_interval_s=0,
+            process_launcher=lambda executable, script_path: process,
+            window_finder=lambda pid: 8815,
+            window_closer=lambda hwnd: setattr(process, "poll", lambda: 0),
+            start_probe_factory=lambda hwnd: lambda: True,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+            bindings_factory=lambda hwnd: SimpleNamespace(
+                hwnd=hwnd,
+                command_trigger=lambda command: None,
+                raw_lisp_trigger=raw_lisp,
+                dispatch_trigger=_claim_bound_trigger(lambda: None),
+                start_tab_no_document_probe=lambda: True,
+                document_ready_probe=lambda: True,
+            ),
+        )
+        session_ref["session"] = session
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "STARTUP_EVALUATOR_ENTRY_NOT_CONFIRMED"
+        ):
+            session.launch_blank_document()
+
+        self.assertEqual(1, len(raw_expressions))
+        self.assertEqual([], list(Path(self._ipc_dir).glob("*.evaluator-entry")))
+        self.assertEqual([], list(Path(self._ipc_dir).glob("*.marker")))
 
     def test_start_tab_stage_localization_is_opt_in_and_default_script_is_unchanged(self):
         process = SimpleNamespace(pid=7305, poll=lambda: None)
@@ -900,6 +1027,12 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     hwnd=hwnd,
                     command_trigger=lambda command: None,
                     raw_lisp_trigger=lambda expression: (
+                        session_ref["session"]._evaluator_entry_marker_path.write_text(
+                            mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN + "\n",
+                            encoding="ascii",
+                        )
+                        if mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN in expression
+                        else None,
                         [
                             stage_path.write_text(token + "\n", encoding="ascii")
                             for _event_name, stage_path, token in session_ref["session"]._stage_marker_paths
@@ -982,6 +1115,12 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     hwnd=hwnd,
                     command_trigger=lambda command: None,
                     raw_lisp_trigger=lambda expression: (
+                        session_ref["session"]._evaluator_entry_marker_path.write_text(
+                            mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN + "\n",
+                            encoding="ascii",
+                        )
+                        if mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN in expression
+                        else None,
                         session_ref["session"]._completion_marker_path.write_text(
                             "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
                         )
@@ -1037,6 +1176,12 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     hwnd=hwnd,
                     command_trigger=lambda command: None,
                     raw_lisp_trigger=lambda expression: (
+                        session_ref["session"]._evaluator_entry_marker_path.write_text(
+                            mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN + "\n",
+                            encoding="ascii",
+                        )
+                        if mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN in expression
+                        else None,
                         session_ref["session"]._completion_marker_path.write_text(
                             "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
                         )
@@ -1288,6 +1433,12 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     hwnd=hwnd,
                     command_trigger=lambda command: None,
                     raw_lisp_trigger=lambda expression: (
+                        session_ref["session"]._evaluator_entry_marker_path.write_text(
+                            mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN + "\n",
+                            encoding="ascii",
+                        )
+                        if mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN in expression
+                        else None,
                         session_ref["session"]._completion_marker_path.write_text(
                             "WRONG_BOOTSTRAP_TOKEN\n", encoding="ascii"
                         )

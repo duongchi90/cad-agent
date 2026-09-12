@@ -329,6 +329,8 @@ def _autolisp_string_literal(value: str) -> str:
 
 _START_TAB_BOOTSTRAP_COMPLETION_TOKEN = "CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE"
 _START_TAB_BOOTSTRAP_COMPLETION_MARKER_SUFFIX = ".marker"
+_START_TAB_EVALUATOR_ENTRY_TOKEN = "CAD_AGENT_START_TAB_EVALUATOR_ENTRY"
+_START_TAB_EVALUATOR_ENTRY_MARKER_SUFFIX = ".evaluator-entry"
 _START_TAB_STAGE_MARKERS = (
     ("post_qnew_entry", "CAD_AGENT_START_TAB_POST_QNEW_ENTRY"),
     ("netload_return", "CAD_AGENT_START_TAB_NETLOAD_RETURN"),
@@ -355,6 +357,22 @@ def _start_tab_completion_marker_expression(marker_path: Path) -> str:
     """Build the canonical AutoLISP marker writer proven by live diagnostics."""
     return _start_tab_stage_marker_expression(
         marker_path, _START_TAB_BOOTSTRAP_COMPLETION_TOKEN
+    )
+
+
+def _start_tab_evaluator_entry_marker_path(
+    script_path: Path, ipc_root: Path
+) -> Path:
+    """Resolve the unique evaluator-entry marker inside the exact owned root."""
+    return ipc_root / (
+        f"{script_path.stem}{_START_TAB_EVALUATOR_ENTRY_MARKER_SUFFIX}"
+    )
+
+
+def _start_tab_evaluator_entry_marker_expression(marker_path: Path) -> str:
+    """Build the fixed-token marker for startup evaluator entry."""
+    return _start_tab_stage_marker_expression(
+        marker_path, _START_TAB_EVALUATOR_ENTRY_TOKEN
     )
 
 
@@ -485,6 +503,7 @@ class WindowsAutoCADStartTabSession:
         self._hwnd: Optional[int] = None
         self._script_path: Optional[Path] = None
         self._completion_marker_path: Optional[Path] = None
+        self._evaluator_entry_marker_path: Optional[Path] = None
         self._stage_marker_paths: tuple[tuple[str, Path, str], ...] = ()
         self._observed_stage_markers: set[str] = set()
 
@@ -520,6 +539,17 @@ class WindowsAutoCADStartTabSession:
         )
         completion_marker_path.unlink(missing_ok=True)
         self._completion_marker_path = completion_marker_path
+        if self._bootstrap_lisp_path is not None and self._ipc_root is not None:
+            evaluator_entry_marker_path = _start_tab_evaluator_entry_marker_path(
+                script_path, self._ipc_root
+            )
+            if evaluator_entry_marker_path.exists():
+                raise MCPToolError(
+                    "START_TAB_BOOTSTRAP_EVALUATOR_ENTRY_PATH_CONFLICT"
+                )
+            self._evaluator_entry_marker_path = evaluator_entry_marker_path
+        else:
+            self._evaluator_entry_marker_path = None
         self._stage_marker_paths = (
             _start_tab_stage_marker_paths(script_path, self._ipc_root)
             if self._stage_timing_enabled
@@ -619,7 +649,14 @@ class WindowsAutoCADStartTabSession:
             return
         if self._ipc_root is None or self._completion_marker_path is None:
             raise MCPToolError("START_TAB_BOOTSTRAP_COMPLETION_PATH_REQUIRED")
-        bindings.raw_lisp_trigger(self._dispatcher_load_expression())
+        if self._evaluator_entry_marker_path is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_EVALUATOR_ENTRY_PATH_REQUIRED")
+        bindings.raw_lisp_trigger(
+            self._dispatcher_load_expression(
+                evaluator_entry_marker_path=self._evaluator_entry_marker_path
+            )
+        )
+        self._wait_for_evaluator_entry_ack()
         if self._stage_marker_paths:
             bindings.raw_lisp_trigger(
                 self._stage_marker_expression("dispatcher_load_return")
@@ -633,7 +670,9 @@ class WindowsAutoCADStartTabSession:
             )
         self._wait_for_completion_ack()
 
-    def _dispatcher_load_expression(self) -> str:
+    def _dispatcher_load_expression(
+        self, *, evaluator_entry_marker_path: Optional[Path] = None
+    ) -> str:
         if self._bootstrap_lisp_path is None or self._ipc_root is None:
             raise MCPToolError("File IPC dispatcher bootstrap is not configured")
         root_literal = _autolisp_string_literal(
@@ -642,12 +681,22 @@ class WindowsAutoCADStartTabSession:
         lisp_literal = _autolisp_string_literal(
             str(self._bootstrap_lisp_path).replace("\\", "/")
         )
-        return (
+        dispatcher_expression = (
             "(progn (setq *cad-agent-file-ipc-root* "
             + root_literal
             + ") (load "
             + lisp_literal
             + "))"
+        )
+        if evaluator_entry_marker_path is None:
+            return dispatcher_expression
+        return (
+            "(progn "
+            + _start_tab_evaluator_entry_marker_expression(
+                evaluator_entry_marker_path
+            )
+            + " "
+            + dispatcher_expression[7:]
         )
 
     def _confirm_bootstrap_bindings(
@@ -721,6 +770,18 @@ class WindowsAutoCADStartTabSession:
                 except OSError:
                     if not best_effort:
                         raise
+            if self._evaluator_entry_marker_path is not None:
+                if self._evaluator_entry_marker_path.parent != self._ipc_root:
+                    if not best_effort:
+                        raise MCPToolError(
+                            "START_TAB_BOOTSTRAP_EVALUATOR_ENTRY_ROOT_CHANGED"
+                        )
+                else:
+                    try:
+                        self._evaluator_entry_marker_path.unlink(missing_ok=True)
+                    except OSError:
+                        if not best_effort:
+                            raise
             for _, stage_path, _ in self._stage_marker_paths:
                 try:
                     stage_path.unlink(missing_ok=True)
@@ -735,6 +796,7 @@ class WindowsAutoCADStartTabSession:
             if best_effort or self._process is None:
                 self._script_path = None
                 self._completion_marker_path = None
+                self._evaluator_entry_marker_path = None
                 self._stage_marker_paths = ()
                 self._observed_stage_markers.clear()
             _record_bootstrap_timing(self._timing_recorder, "cleanup_end")
@@ -746,6 +808,26 @@ class WindowsAutoCADStartTabSession:
                 return False
             time.sleep(min(self._poll_interval_s, remaining))
         return True
+
+    def _wait_for_evaluator_entry_ack(self) -> None:
+        path = self._evaluator_entry_marker_path
+        if path is None:
+            raise MCPToolError("START_TAB_BOOTSTRAP_EVALUATOR_ENTRY_PATH_REQUIRED")
+        deadline = time.monotonic() + self._timeout_s
+        while True:
+            try:
+                if (
+                    path.is_file()
+                    and path.read_text(encoding="ascii").strip()
+                    == _START_TAB_EVALUATOR_ENTRY_TOKEN
+                ):
+                    return
+            except (OSError, UnicodeError):
+                pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise MCPTimeoutError("STARTUP_EVALUATOR_ENTRY_NOT_CONFIRMED")
+            time.sleep(min(self._poll_interval_s, remaining))
 
     def _wait_for_completion_ack(
         self,
