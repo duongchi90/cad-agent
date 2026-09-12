@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -28,6 +29,8 @@ def _sha256(path: Path) -> str:
 
 @pytest.mark.autocad_bundle
 def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
+    if os.environ.get("CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED") == "1":
+        pytest.skip("SKIP: AutoCAD .NET build gate was explicitly skipped")
     if not PLUGIN_DLL.is_file():
         pytest.skip(
             "SKIP: bundle assembly is produced by the AutoCAD .NET build gate"

@@ -243,12 +243,18 @@ $autocadBundleTestTargets = @(
 Push-Location $repoRoot
 try {
     if ($SkipAutoCADDotNet) {
-        Invoke-PytestGate `
-            -Name "autocad bundle unavailable-state probe" `
-            -Targets $autocadBundleTestTargets `
-            -MarkerExpression "autocad_bundle" `
-            -JUnitPath $autocadBundleJunitPath `
-            -ExpectedState "all-skipped"
+        $previousBundleBuildSkipped = $env:CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED
+        $env:CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED = "1"
+        try {
+            Invoke-PytestGate `
+                -Name "autocad bundle unavailable-state probe" `
+                -Targets $autocadBundleTestTargets `
+                -MarkerExpression "autocad_bundle" `
+                -JUnitPath $autocadBundleJunitPath `
+                -ExpectedState "all-skipped"
+        } finally {
+            $env:CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED = $previousBundleBuildSkipped
+        }
     } else {
         Invoke-PytestGate `
             -Name "autocad bundle artifact" `

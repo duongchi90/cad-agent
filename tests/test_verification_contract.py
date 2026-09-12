@@ -69,6 +69,7 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("autocad-bundle.xml", script)
         self.assertIn("autocad bundle unavailable-state probe", script)
         self.assertIn("autocad bundle artifact", script)
+        self.assertIn("CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED", script)
         self.assertIn("real-data-unavailable.xml", script)
         self.assertIn("autocad-mechanical-unavailable.xml", script)
         self.assertIn("causal_red", script)
