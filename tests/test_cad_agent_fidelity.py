@@ -138,11 +138,10 @@ def test_dimension_observation_persists_stable_line_endpoint_evidence(tmp_path: 
     assert set(candidate["nearby_lines"][0]) >= {"id", "p1_px", "p2_px", "bbox_px", "length_px"}
 
 
-@pytest.mark.causal_red
-def test_dimension_reconstruction_red_preserves_source_observed_normal_distance_for_1355_and_1525(
+def test_dimension_reconstruction_preserves_source_observed_normal_distance_for_1355_and_1525(
     tmp_path: Path,
 ) -> None:
-    """RED: source-observed dimension placement must beat synthetic bbox offset."""
+    """Source-observed dimension placement must beat synthetic bbox offset."""
     from cad_agent.fidelity import run_fidelity_dimension_reconstruct, sha256_file
 
     source = tmp_path / "drawing.pdf"
