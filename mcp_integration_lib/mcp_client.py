@@ -572,7 +572,15 @@ class WindowsAutoCADStartTabSession:
                 if process.poll() is not None:
                     raise MCPToolError("START_TAB_BOOTSTRAP_PROCESS_EXITED")
                 candidate = int(self._window_finder(pid) or 0)
-                if candidate > 0 and self._start_probe_factory(candidate)():
+                start_tab_ready = (
+                    candidate > 0 and self._start_probe_factory(candidate)()
+                )
+                document_ready = (
+                    candidate > 0
+                    and not start_tab_ready
+                    and self._document_ready_probe_factory(candidate)()
+                )
+                if start_tab_ready or document_ready:
                     _record_bootstrap_timing(
                         self._timing_recorder, "start_window_observed"
                     )

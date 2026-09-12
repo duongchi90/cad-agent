@@ -669,6 +669,35 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertFalse(launch_calls[0][1].with_suffix(".marker").exists())
         self.assertEqual([], list(launch_calls[0][1].parent.glob(launch_calls[0][1].stem + ".stage-*")))
 
+    def test_start_tab_session_accepts_already_document_ready_owned_window(self):
+        process = SimpleNamespace(pid=7302, poll=lambda: None)
+        close_calls = []
+
+        def close_window(hwnd):
+            close_calls.append(hwnd)
+            process.poll = lambda: 0
+
+        session = mcp_client_module.WindowsAutoCADStartTabSession(
+            acad_executable="C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+            script_directory=self._ipc_dir,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            process_launcher=lambda executable, script_path: process,
+            window_finder=lambda pid: 8802,
+            window_closer=close_window,
+            start_probe_factory=lambda hwnd: lambda: False,
+            document_ready_probe_factory=lambda hwnd: lambda: True,
+        )
+
+        bindings = session.launch_blank_document()
+
+        self.assertEqual(8802, bindings.hwnd)
+        self.assertFalse(bindings.start_tab_no_document_probe())
+        self.assertTrue(bindings.document_ready_probe())
+        self.assertTrue(bindings.bootstrap_completion_confirmed)
+        session.close_without_save()
+        self.assertEqual([8802], close_calls)
+
     def test_start_tab_runtime_bootstrap_follows_document_ready(self):
         process = SimpleNamespace(pid=7313, poll=lambda: None)
         launch_calls = []
