@@ -1,4 +1,28 @@
 # CAD Agent Status
+## Canonical checkpoint — post-foreground diagnostic live boundary (iteration 129)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-post-foreground-diagnostic-live-boundary-iteration129.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration129-proof.json; exactly one authorized disposable full live epoch; failure=MCPToolError: WINDOW_FOREGROUND_INVALID; internal_stage=EXACT_HWND_READBACK_MISMATCH; foreground_before=HWND 4786026/PID 14048; foreground_after_set=HWND 4786026/PID 14048; foreground_after_detach=HWND 4786026/PID 14048; candidate_open_call_count=0; raw_lisp_ack_returned=False; health_call_count=0; cleanup warnings=none; PID/IPC/scripts cleaned; candidate and DWT unchanged; no source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=EXACT_HWND_READBACK_MISMATCH_DURING_PLUGIN_BOOTSTRAP_TRIGGER
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and authorization for one smallest bounded foreground handoff repair or diagnostic addressing the exact readback mismatch; do not retry the full epoch, invoke raw-LISP/candidate/health, or mutate source/DXF/CAD until authorized
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 129)
+- The single authorized full epoch reached the existing plugin/bootstrap
+  boundary, then failed closed before any command delivery because the
+  instrumented foreground helper observed the same foreign HWND `4786026` / PID
+  `14048` before and after the handoff attempt. The internal stage was
+  `EXACT_HWND_READBACK_MISMATCH` and the public error remained
+  `WINDOW_FOREGROUND_INVALID`.
+- No candidate open, raw-LISP ACK, active-document identity, or health result
+  was obtained. Cleanup was clean, the owned AutoCAD PID and disposable IPC/
+  script roots were absent, and candidate/DWT hashes were unchanged.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — live foreground diagnostic (iteration 128)
 ```text
 STATE=CLASSIFIED
