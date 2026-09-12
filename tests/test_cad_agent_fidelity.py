@@ -251,6 +251,139 @@ def test_dimension_reconstruction_preserves_source_observed_normal_distance_for_
     )
 
 
+@pytest.mark.causal_red
+def test_dimension_line_base_separation_red_for_1355_and_1525(tmp_path: Path) -> None:
+    """The dimension line base and the independently placed text must not share a point."""
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct, sha256_file
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    rendered = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+
+    fixtures = [
+        {
+            "candidate_id": "rawtext-bd621064",
+            "value": 1355.0,
+            "bbox_px": [1732, 1168, 1785, 1186],
+            "line_id": "rawline-5c0fc7e1",
+            "p1_px": [1645.0, 1189.0],
+            "p2_px": [1871.0, 1189.0],
+        },
+        {
+            "candidate_id": "rawtext-6044e704",
+            "value": 1525.0,
+            "bbox_px": [1732, 1198, 1785, 1216],
+            "line_id": "rawline-2e7a2d81",
+            "p1_px": [1630.0, 1219.0],
+            "p2_px": [1886.0, 1219.0],
+        },
+    ]
+    observation_path = output / "dimension-observation.json"
+    observation_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_human_approval",
+        "source": manifest["source"],
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "candidates": [
+            {
+                "text": {
+                    "id": item["candidate_id"],
+                    "content": str(int(item["value"])),
+                    "bbox_px": item["bbox_px"],
+                    "rotation_deg": 0.0,
+                    "confidence": 1.0,
+                    "source": "test_fixture",
+                    "semantic_role": "dimension_value",
+                    "parsed_value": item["value"],
+                },
+                "nearby_line_ids": [item["line_id"]],
+                "nearby_lines": [{
+                    "id": item["line_id"],
+                    "p1_px": item["p1_px"],
+                    "p2_px": item["p2_px"],
+                    "bbox_px": [*item["p1_px"], *item["p2_px"]],
+                    "length_px": item["p2_px"][0] - item["p1_px"][0],
+                }],
+                "state": "needs_human_approval",
+            }
+            for item in fixtures
+        ],
+        "unresolved": [],
+    }), encoding="utf-8")
+
+    base_dxf = output / "base.dxf"
+    ezdxf.new("R2010").saveas(base_dxf)
+    approval_path = output / "dimension-approval.json"
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-dimension-mappings",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": {"path": observation_path.name, "sha256": sha256_file(observation_path)},
+        "base_dxf": {"path": base_dxf.name, "sha256": sha256_file(base_dxf)},
+        "approval_reference": "approved-test",
+        "mappings": [
+            {"candidate_id": item["candidate_id"], "line_evidence_id": item["line_id"]}
+            for item in fixtures
+        ],
+    }), encoding="utf-8")
+
+    result = run_fidelity_dimension_reconstruct(
+        source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+    )
+    dimensions = {str(entity.dxf.text): entity for entity in ezdxf.readfile(result).modelspace().query("DIMENSION")}
+    scale = float(manifest["pages"][0]["pixel_to_paper_mm"]["used"])
+    height_px = int(json.loads(
+        (output / manifest["pages"][0]["artifacts"]["layout_audit"]["artifact"]).read_text()
+    )["source_page"]["render_height_px"])
+
+    base_separation_failures = []
+    for item in fixtures:
+        p1 = (item["p1_px"][0] * scale, (height_px - item["p1_px"][1]) * scale)
+        p2 = (item["p2_px"][0] * scale, (height_px - item["p2_px"][1]) * scale)
+        line_midpoint = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        length = (dx**2 + dy**2) ** 0.5
+        normal = (-dy / length, dx / length)
+        bbox = item["bbox_px"]
+        text_center = (
+            ((bbox[0] + bbox[2]) / 2.0) * scale,
+            (height_px - (bbox[1] + bbox[3]) / 2.0) * scale,
+        )
+        expected_text_distance = normal[0] * (text_center[0] - line_midpoint[0]) + normal[1] * (text_center[1] - line_midpoint[1])
+        dimension = dimensions[str(int(item["value"]))]
+
+        assert (dimension.dxf.defpoint2.x, dimension.dxf.defpoint2.y) == pytest.approx(p1)
+        assert (dimension.dxf.defpoint3.x, dimension.dxf.defpoint3.y) == pytest.approx(p2)
+        base_vector = (
+            dimension.dxf.defpoint.x - line_midpoint[0],
+            dimension.dxf.defpoint.y - line_midpoint[1],
+        )
+        actual_base_normal_distance = normal[0] * base_vector[0] + normal[1] * base_vector[1]
+        if actual_base_normal_distance != pytest.approx(0.0, abs=1e-9):
+            base_separation_failures.append({
+                "value": item["value"],
+                "actual_normal_distance": actual_base_normal_distance,
+                "base": (dimension.dxf.defpoint.x, dimension.dxf.defpoint.y),
+                "line_midpoint": line_midpoint,
+            })
+        actual_text_distance = normal[0] * (dimension.dxf.text_midpoint.x - line_midpoint[0]) + normal[1] * (
+            dimension.dxf.text_midpoint.y - line_midpoint[1]
+        )
+        assert actual_text_distance == pytest.approx(expected_text_distance, abs=1e-9)
+
+    assert not base_separation_failures, (
+        "dimension base must remain on the selected source line while text placement is independent: "
+        f"failures={base_separation_failures}"
+    )
+
+
 def test_dimension_reconstruction_emits_approved_native_dimension(tmp_path: Path) -> None:
     from cad_agent.fidelity import run_fidelity_dimension_reconstruct
 
