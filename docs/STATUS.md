@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — AutoCAD evaluator/receiver receipt adapter design (iteration 159)
+    STATE=DESIGN_PROPOSED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-evaluator-receiver-receipt-adapter-design-iteration159.md; exact-head 9d81a09f5f4fe4753fbc444af52412cb2afdfa2c; existing same-expression AutoLISP marker writer/observer selected as supported semantic mechanism; receiver-only ACK absent; no implementation/live/transport/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_OR_EVALUATOR_RECEIPT_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact-head design; only if clear may one causal RED be added for a concrete shared-lifecycle gap, with no live retry or transport change
+    HUMAN_GATE=NO
+
+## AutoCAD evaluator/receiver receipt adapter design (iteration 159)
+- The supported semantic mechanism is the existing same-expression AutoLISP
+  marker writer and exact path/token observer in the current raw-LISP owner.
+  It proves a combined evaluator receipt when observed; it does not expose the
+  internal Windows queue transition separately.
+- The contract is one marker, one existing raw-LISP send, bounded exact
+  readback, root-safe cleanup, and fail-closed timeout/error behavior. The
+  native `PostMessageW` return remains enqueue-only evidence.
+- No implementation is authorized by this record. The next step is a fresh
+  SOL design review; only a concrete causal RED may unlock the minimal private
+  owner/test write-set.
+
 ## Canonical checkpoint — receiver-consumption ACK reuse decision (iteration 158)
     STATE=CHARACTERIZED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-receiver-consumption-ack-reuse-decision-iteration158.md; exact-head e66a7d74a78e93dce425049427a6e4b3784cd21f; focused 31 passed + 1 deselected + 3 subtests; scripts/verify.ps1 exit 0 (offline JUnit 3413, C# 238, .NET IPC 134, intentional causal RED 1, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); owner/history scan found no production receiver callback/queue-drain/evaluator hook; no production/live/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
