@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+from pathlib import Path
 import textwrap
 import unittest
 from unittest.mock import patch
@@ -579,6 +580,42 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self.assertEqual(
             user32.drain_receiver_queue(),
             [True] * len(EXPECTED_FRAMED_TEXT),
+        )
+
+    def test_marker_only_receiver_oracle_separates_enqueue_from_consumption(self) -> None:
+        marker = Path(
+            r"C:\temp\cad-agent-marker-only-oracle\ipc\entry.evaluator-entry"
+        )
+        expression = mcp_client._start_tab_evaluator_entry_marker_expression(marker)
+        expected_frame = "\x1b\x1b" + expression + "\r"
+        self.assertIn(mcp_client._START_TAB_EVALUATOR_ENTRY_TOKEN, expression)
+        self.assertIn(str(marker).replace("\\", "/"), expression)
+
+        observations = []
+        for consumed in (False, True):
+            user32 = RecordingUser32(
+                post_returns=[1] * len(expected_frame),
+                receiver_consumption=[consumed] * len(expected_frame),
+            )
+            result = self._run_current_trigger(user32, text=expression)
+            acknowledgements = user32.drain_receiver_queue()
+            observations.append(
+                (
+                    "RECEIVER_CONSUMED"
+                    if acknowledgements and all(acknowledgements)
+                    else "ENQUEUED_ONLY",
+                    result,
+                    len(user32.post_calls),
+                    "".join(chr(call[3]) for call in user32.message_calls),
+                )
+            )
+
+        self.assertEqual(
+            observations,
+            [
+                ("ENQUEUED_ONLY", None, len(expected_frame), expected_frame),
+                ("RECEIVER_CONSUMED", None, len(expected_frame), expected_frame),
+            ],
         )
 
     def test_bounded_native_delivery_uses_postmessage_enqueue(self) -> None:
