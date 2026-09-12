@@ -1,4 +1,35 @@
 # CAD Agent Status
+## Canonical checkpoint — semantic result owner and key-free draft disposition (iteration 104)
+```text
+STATE=EXECUTED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-semantic-result-owner-reuse-gate-iteration104.md; current-head focused owner tests 3 passed, 79 deselected; PDF policy/custody tests 5 passed, 232 deselected; prior live semantic-health proof iteration 76
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_CONSUMPTION_ACK_ABSENT_IN_CURRENT_OWNER; AUTHORITATIVE_SOURCE_CUSTODY_KEYLESS_PROMOTION_REMAINS_REJECTED_BY_DESIGN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of iteration 104; keep raw-LISP retry, live health/FileIPC, candidate activation, authoritative key removal, and production mutation stopped until the next bounded action is authorized
+HUMAN_GATE=NO
+```
+
+## Current semantic result owner and key-free DRAFT_REFERENCE disposition (iteration 104)
+- The smallest reusable semantic result owner is the existing managed
+  `DotNetIPCClient.request/health` -> `CADAGENT_DISPATCH` -> `JsonFileStore`
+  request/result path. Its exact matching result gives a bounded terminal
+  success or failure at the command/result boundary; `PostMessageW=True` alone
+  remains enqueue-only evidence.
+- Fresh focused owner tests passed `3 passed, 79 deselected`. Fresh PDF
+  policy/custody tests passed `5 passed, 232 deselected`. No live operation was
+  repeated in this offline characterization; iteration 76 remains the prior
+  live proof of the existing semantic-health owner.
+- The owner's requested key is the source-integrity `identity-key` requirement,
+  not an API key stored in the repository. The PDF page-1 `DRAFT_REFERENCE`
+  lane already runs without approved-root or identity-key custody. No key
+  removal is required for that draft workflow.
+- Authoritative `source-custody-1.0`/source-fusion remains fail-closed on
+  `READY` custody. Removing its identity-key requirement would be a separate
+  behavior-changing security/design decision. The raw-LISP receiver ACK is
+  still absent, and no live retry, health/FileIPC call, candidate activation,
+  production code, source, or DXF mutation was performed. Exact evidence is in
+  `docs/superpowers/implementation-records/2026-09-12-semantic-result-owner-reuse-gate-iteration104.md`.
+
 ## Canonical checkpoint — raw-LISP delivery-path characterization (iteration 103)
 ```text
 STATE=EXECUTED
