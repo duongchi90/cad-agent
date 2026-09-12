@@ -95,6 +95,15 @@ No production write is made in iteration 154. Any implementation would first
 need a failing regression test, then the smallest private owner change, full
 offline verification, and a fresh SOL decision before a live epoch.
 
+## Verification
+
+After committing this record and the canonical status update at
+`fc4683c19f97849eaea995a967ce39645289cd62`, `scripts/verify.ps1` completed
+successfully. It reported offline JUnit `3410` with zero failures/errors,
+C# `238` passed, .NET IPC `134` passed, the expected causal RED `1` failed,
+real-data `2` skipped, and AutoCAD Mechanical `17` skipped because live
+prerequisites were absent. AutoCAD live and M2 were `NOT RUN`.
+
 ## Fail-closed, rollback, and acceptance oracle
 
 - Allocate and remove the unique entry marker under the already validated
@@ -114,7 +123,7 @@ offline verification, and a fresh SOL decision before a live epoch.
 
 ```text
 STATE=DESIGNED
-EVIDENCE=This record; mcp_integration_lib/mcp_client.py; mcp_integration_lib/mcp_dispatch.lsp; autocad_plugin/CadAgent.AutoCAD2027/Commands/CadAgentCommands.cs; autocad_plugin/CadAgent.bundle/PackageContents.xml; mcp_integration_lib/tests/test_file_ipc_windows_trigger.py causal RED (1 failed, 26 deselected); HEAD 79ccb910fcf251254669f8d5cab801f878796069
+EVIDENCE=This record; mcp_integration_lib/mcp_client.py; mcp_integration_lib/mcp_dispatch.lsp; autocad_plugin/CadAgent.AutoCAD2027/Commands/CadAgentCommands.cs; autocad_plugin/CadAgent.bundle/PackageContents.xml; mcp_integration_lib/tests/test_file_ipc_windows_trigger.py causal RED (1 failed, 26 deselected); scripts/verify.ps1 PASS (offline JUnit 3410, C# 238, .NET IPC 134; real-data 2 SKIP; AutoCAD 17 SKIP; live/M2 NOT RUN); HEAD fc4683c19f97849eaea995a967ce39645289cd62
 VERDICT=MATERIAL_FINDING
 FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_EVALUATOR_ENTRY_NOT_PROVEN
 NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this existing-marker same-expression seam; authorize implementation only if the exact owner, write-set, fail-closed contract, and live oracle are accepted

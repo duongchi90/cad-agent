@@ -1,7 +1,7 @@
 # CAD Agent Status
 ## Canonical checkpoint — evaluator-entry ACK reuse decision (iteration 154)
     STATE=DESIGNED
-    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-entry-ack-reuse-decision-iteration154.md; mcp_integration_lib/mcp_client.py; mcp_integration_lib/mcp_dispatch.lsp; autocad_plugin/CadAgent.AutoCAD2027/Commands/CadAgentCommands.cs; autocad_plugin/CadAgent.bundle/PackageContents.xml; causal RED 1 failed, 26 deselected; HEAD 79ccb910fcf251254669f8d5cab801f878796069; no production/live/CAD/DXF/candidate/SourceCustody mutation
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-entry-ack-reuse-decision-iteration154.md; mcp_integration_lib/mcp_client.py; mcp_integration_lib/mcp_dispatch.lsp; autocad_plugin/CadAgent.AutoCAD2027/Commands/CadAgentCommands.cs; autocad_plugin/CadAgent.bundle/PackageContents.xml; causal RED 1 failed, 26 deselected; scripts/verify.ps1 PASS (offline JUnit 3410, C# 238, .NET IPC 134; real-data 2 SKIP; AutoCAD 17 SKIP; live/M2 NOT RUN); HEAD fc4683c19f97849eaea995a967ce39645289cd62; no production/live/CAD/DXF/candidate/SourceCustody mutation
     VERDICT=MATERIAL_FINDING
     FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_EVALUATOR_ENTRY_NOT_PROVEN
     NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the existing-marker same-expression seam; authorize implementation only if the exact owner, write-set, fail-closed contract, and live oracle are accepted
