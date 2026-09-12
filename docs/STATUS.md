@@ -1,11 +1,11 @@
 # CAD Agent Status
-## Canonical checkpoint — R1C executor binding causal RED (iteration 170)
-    STATE=CAUSAL_RED_CHARACTERIZED
-    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-r1c-executor-binding-causal-red-iteration170.md; test-only RED at current PDF executor -> existing R1C owner boundary; exact pre-change HEAD b3460eb8eec273069740e0106bc04f683187efca; no production/live/source/CAD mutation
-    VERDICT=MATERIAL_FINDING
-    MATERIAL_FINDING=R1C_EXECUTOR_BINDING_GAP
-    FIRST_UNSATISFIED_BOUNDARY=R1C_OWNER_CONFIGURATION_NOT_EXPOSED_TO_CURRENT_EXECUTOR
-    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact RED; authorize at most one minimal existing-executor binding to caller-configured SourceIntegrity/SourceFusion owners; no raw-key bridge API, new provider/store, bypass, source/CAD/live/provider/M2 mutation
+## Canonical checkpoint — R1C executor binding offline GREEN (iteration 171)
+    STATE=OFFLINE_GREEN_VERIFIED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-r1c-executor-binding-green-iteration171.md; implementation commit f2e6c54; existing PDF executor now binds caller-supplied R1C configuration to inspect_source_bundle; no live/source/CAD mutation
+    VERDICT=REVIEW_PENDING_AFTER_HEAD_MOVE
+    MATERIAL_FINDING=R1C_EXECUTOR_BINDING_GAP_RESOLVED_OFFLINE
+    FIRST_UNSATISFIED_BOUNDARY=AUTHENTIC_SOURCE_BUNDLE_CUSTODY_AND_SOURCE_FUSION_INPUTS_FOR_EXACT_PDF
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the exact pushed GREEN HEAD; if clear, materialize authentic exact-PDF inputs only through existing SourceBundle/SourceIntegrity/SourceFusion owners; no raw-key bridge API, provider/store, bypass, source/CAD/live/provider/M2 mutation
     HUMAN_GATE=NO
 
 ## R1C executor binding causal RED (iteration 170)
