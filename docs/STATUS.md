@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Current raw-LISP foreground guard characterization (iteration 96)
+- Fresh SOL review required one offline characterization of the existing
+  `make_windows_lisp_trigger` owner. Its exact foreground predicate is
+  `GetForegroundWindow() == hwnd`, after one optional `ShowWindow(hwnd, 9)` /
+  `SetForegroundWindow(hwnd)` attempt, and again before every `PostMessageW`
+  character enqueue. PID ownership and exactly one visible owned `MDIClient`
+  are separate guards.
+- Iteration 95 had `DOCUMENT_READY=PROVEN` on owned HWND `460582` / PID `1748`,
+  then failed with `WINDOW_FOREGROUND_INVALID`; no foreground identity was
+  captured at the guard readback and no `PostMessageW` delivery or health call
+  occurred. The evidence therefore cannot distinguish an actually non-
+  foreground owner from a foreground race/false negative.
+- Historical iterations 61/62/73 provide respectively a point-in-time
+  matching foreground observation, a trigger-time trace with no marker
+  consumption, and the same guard failure before delivery. Focused offline
+  guard tests passed (`8 passed, 12 deselected, 3 subtests passed`); the full
+  module's one failure is the intentional `causal_red` receiver-ACK test, not
+  a foreground failure.
+- Cheapest future read-only oracle is one high-frequency foreground
+  HWND/PID/process/title trace around the existing single raw-LISP trigger,
+  classified only as `OWNED_HWND_NOT_FOREGROUND` versus
+  `FOREGROUND_GUARD_FALSE_NEGATIVE_OR_RACE`. No live retry, workaround,
+  production-code change, or CAD/source/DXF mutation occurred. Exact evidence
+  is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-foreground-guard-characterization-iteration96.md`.
+
 ## Current-main exact page-1 candidate-activation discriminator (iteration 95)
 - Fresh SOL review authorized exactly one live, read-only candidate-activation
   discriminator epoch using the executor-branch owner, verified DWT, and
