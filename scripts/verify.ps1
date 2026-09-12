@@ -195,7 +195,7 @@ function Invoke-PytestGate {
     Write-Host "$Name JUnit: tests=$($totals.Tests) failures=$($totals.Failures) errors=$($totals.Errors) skipped=$($totals.Skipped)"
 }
 
-function Invoke-CausalRedGate {
+function Invoke-ReceiptContractGate {
     param(
         [string]$Name,
         [string[]]$Targets,
@@ -203,13 +203,13 @@ function Invoke-CausalRedGate {
     )
     & $PythonExe -m pytest @Targets -q -m "causal_red" -p no:cacheprovider `
         "--junitxml=$JUnitPath"
-    $causalRedExitCode = $LASTEXITCODE
-    if ($causalRedExitCode -ne 1) {
-        throw "$Name must fail with pytest exit code 1; found $causalRedExitCode."
+    $receiptContractExitCode = $LASTEXITCODE
+    if ($receiptContractExitCode -ne 0) {
+        throw "$Name must pass with pytest exit code 0; found $receiptContractExitCode."
     }
     $totals = Get-JUnitTotals -Path $JUnitPath
-    if ($totals.Tests -ne 1 -or $totals.Failures -ne 1 -or $totals.Errors -ne 0 -or $totals.Skipped -ne 0) {
-        throw "$Name produced invalid expected-RED JUnit totals: $($totals | Out-String)"
+    if ($totals.Tests -ne 1 -or $totals.Failures -ne 0 -or $totals.Errors -ne 0 -or $totals.Skipped -ne 0) {
+        throw "$Name produced invalid receipt-contract JUnit totals: $($totals | Out-String)"
     }
     Write-Host "$Name JUnit: tests=$($totals.Tests) failures=$($totals.Failures) errors=$($totals.Errors) skipped=$($totals.Skipped)"
 }
@@ -222,7 +222,7 @@ $realDataJunitPath = Join-Path $artifactDir "real-data-unavailable.xml"
 $autocadJunitPath = Join-Path $artifactDir "autocad-mechanical-unavailable.xml"
 $autocadLiveJunitPath = Join-Path $artifactDir "autocad-mechanical-live.xml"
 $autocadBundleJunitPath = Join-Path $artifactDir "autocad-bundle.xml"
-$causalRedJunitPath = Join-Path $artifactDir "causal-red.xml"
+$receiptContractJunitPath = Join-Path $artifactDir "receipt-contract.xml"
 New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
 $tesseractDir = Split-Path -Parent $tesseractPath
@@ -281,10 +281,10 @@ try {
         -JUnitPath $junitPath `
         -ExpectedState "offline"
 
-    Invoke-CausalRedGate `
-        -Name "causal RED negative oracle" `
+    Invoke-ReceiptContractGate `
+        -Name "receipt contract owner" `
         -Targets @("mcp_integration_lib/tests/test_mcp_client_drawing_open.py") `
-        -JUnitPath $causalRedJunitPath
+        -JUnitPath $receiptContractJunitPath
 
     $specializedVariables = @(
         "CAD_AGENT_REAL_IMAGE",
