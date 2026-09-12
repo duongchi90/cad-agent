@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — kernel32 binding correction (iteration 125)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-kernel32-binding-correction-iteration125.md; pushed code commit 8967722f6a502d7a4a31b28ddbba30e88879bbff; focused Windows-trigger 23 passed/1 deselected/3 subtests; DotNetIPC 82 passed/52 subtests; Ruff passed; scripts/verify.ps1 exit 0; .NET 238 passed; offline Python 3319 passed/21 deselected/80 subtests; offline JUnit tests=3399 failures=0 errors=0 skipped=0; causal-red 1 expected failure; real-data 2 skipped; AutoCAD 17 skipped; live marker/M2 NOT RUN; clean tree; no live rerun or source/DXF/CAD mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_KERNEL32_BINDING_LIVE_FOREGROUND_HANDOFF_AND_RAW_LISP_ACK_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review, then if clear run exactly one disposable read-only live epoch against the same hash-bound page_01.dxf with the corrected owner; require exact foreground handoff, same-expression ACK before activation, exact active-document identity, one health call, no-save cleanup, and stop at first causal failure
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 125)
+- The narrow native binding defect from iteration 124 is corrected: the helper
+  uses `kernel32.GetCurrentThreadId`, while all window APIs remain on `user32`.
+- Offline focused and authoritative verification is green. No live epoch has
+  run after this correction, so foreground handoff, raw-LISP ACK, candidate
+  identity, health, visual fidelity, and dimensions remain unproven.
+- No plugin/raw-LISP/FileIPC/source/DXF/CAD/key-policy mutation occurred. The
+  key-free page-1 `DRAFT_REFERENCE` policy remains `MODIFY NONE`; SourceCustody
+  HMAC remains unchanged.
+
 ## Canonical checkpoint — post-handoff live boundary (iteration 124)
 ```text
 STATE=CLASSIFIED
