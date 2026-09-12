@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from itertools import count
 from unittest.mock import Mock, patch
 
@@ -12,6 +14,7 @@ from agent_lib.codex_worker import (
     _issue_task6_result,
 )
 from agent_lib.codex_worker_process import WorkerCleanupResult
+from cad_agent.drawing_contracts import canonical_json_sha256
 
 
 SHA_CANDIDATE = "a" * 64
@@ -97,6 +100,8 @@ def _cleanup() -> WorkerCleanupResult:
 
 
 def _provider_result(scope: dict[str, object], task6: CodexWorkerResult) -> dict[str, object]:
+    if getattr(task6, "response_id", None) is not None:
+        return {"task6_result": task6}
     regions = copy.deepcopy(scope["regions"])
     for region in regions:
         region.update({"status": "PASS"})
@@ -194,6 +199,115 @@ def _valid_inputs() -> dict[str, object]:
     }
 
 
+def _responses_valid_inputs() -> dict[str, object]:
+    from cad_agent.responses_provider import (
+        RESPONSES_MODEL,
+        ResponsesRequest,
+        execute_responses_attempt,
+        responses_input_payload,
+    )
+
+    scope = _scope(run_id=f"run-{next(_RUN_IDS)}")
+
+    class Client:
+        def create(self, payload: dict[str, object]) -> dict[str, object]:
+            del payload
+            regions = copy.deepcopy(scope["regions"])
+            for region in regions:
+                region["status"] = "PASS"
+            return {
+                "id": "resp_visual_1",
+                "status": "completed",
+                "model": RESPONSES_MODEL,
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {"provider_verdict": "PASS", "regions": regions}
+                                ),
+                            }
+                        ],
+                    }
+                ],
+                "error": None,
+                "incomplete_details": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+
+        def retrieve(self, response_id: str) -> dict[str, object]:
+            raise AssertionError(response_id)
+
+        def cancel(self, response_id: str) -> dict[str, object]:
+            raise AssertionError(response_id)
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["provider_verdict", "regions"],
+        "properties": {
+            "provider_verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
+            "regions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                "required": [
+                    "region_id",
+                    "view_id",
+                    "sheet_id",
+                    "layout_id",
+                    "criticality",
+                    "status",
+                ],
+                "properties": {
+                    "region_id": {"type": "string"},
+                    "view_id": {"type": "string"},
+                    "sheet_id": {"type": "string"},
+                    "layout_id": {"type": "string"},
+                    "criticality": {"type": "string", "enum": ["CRITICAL", "NORMAL"]},
+                    "status": {"type": "string", "enum": ["PASS", "FAIL"]},
+                    },
+                },
+            },
+        },
+    }
+    schema_bytes = json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
+    input_payload = responses_input_payload(
+        input_text="review",
+        input_image_data_url="data:image/png;base64,AA==",
+    )
+    task6 = execute_responses_attempt(
+        ResponsesRequest(
+            request_id="request-responses-1",
+            run_id=scope["run_id"],
+            task6_epoch_id="epoch-responses-1",
+            model=RESPONSES_MODEL,
+            input_text="review",
+            input_image_data_url="data:image/png;base64,AA==",
+            input_sha256=canonical_json_sha256(input_payload),
+            schema_name="r5_visual_verdict",
+            schema_bytes=schema_bytes,
+            schema_sha256=hashlib.sha256(schema_bytes).hexdigest(),
+            validator_version="r5-validator-1",
+            candidate_revision_sha256=SHA_CANDIDATE,
+            candidate_state_sha256=SHA_STATE,
+            request_sha256="6" * 64,
+            timeout_seconds=5.0,
+        ),
+        client=Client(),
+    )
+    return {
+        "server_scope": scope,
+        "provider_result": _provider_result(scope, task6),
+        "authoritative_state": _owner_state(scope, task6),
+        "post_provider_state": _owner_state(scope, task6),
+    }
+
+
 def _owner_patches() -> tuple[Mock, Mock, Mock, Mock]:
     def normalize_scope(
         payload: object, *, contract: str, server_scope: object
@@ -278,6 +392,64 @@ def test_valid_owner_context_finalizes_deterministically_without_provider_hash_a
     assert result["task6_thread_id"] == "thread-1"
     assert result["verdict_id"] == result["verdict_sha256"]
     assert all("evidence_sha256" not in region for region in result["regions"])
+
+
+def test_responses_task6_result_reuses_r5_sealing_without_codex_attestation() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    inputs = _responses_valid_inputs()
+    scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    consume = Mock()
+    with (
+        patch.object(module, "validate_visual_contract", scope_validator),
+        patch.object(module, "validate_candidate_revision_state", candidate_validator),
+        patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
+        patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+        patch.object(module, "consume_responses_task6_result", consume),
+    ):
+        result = module.finalize_visual_verdict(**inputs)
+
+    assert result["task6_epoch_id"] == "epoch-responses-1"
+    assert result["task6_response_id"] == "resp_visual_1"
+    assert "task6_thread_id" not in result
+    assert "task6_turn_id" not in result
+    consume.assert_called_once()
+
+
+def test_responses_provider_result_cannot_override_current_candidate_binding() -> None:
+    inputs = _responses_valid_inputs()
+    inputs["authoritative_state"]["candidate_revision_state"][
+        "current_candidate_revision_sha256"
+    ] = SHA_CHANGED
+    inputs["post_provider_state"]["candidate_revision_state"][
+        "current_candidate_revision_sha256"
+    ] = SHA_CHANGED
+    inputs["server_scope"]["candidate_revision_sha256"] = SHA_CHANGED
+    with pytest.raises(Exception, match="candidate|current|scope"):
+        module = __import__("cad_agent.visual_supervisor_adapter", fromlist=["finalize_visual_verdict"])
+        scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+        with (
+            patch.object(module, "validate_visual_contract", scope_validator),
+            patch.object(module, "validate_candidate_revision_state", candidate_validator),
+            patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
+            patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+        ):
+            module.finalize_visual_verdict(**inputs)
+
+
+def test_responses_path_rejects_caller_filled_codex_attestation() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    inputs = _responses_valid_inputs()
+    scope_validator, candidate_validator, dara_validator, evidence_validator = _owner_patches()
+    with (
+        patch.object(module, "validate_visual_contract", scope_validator),
+        patch.object(module, "validate_candidate_revision_state", candidate_validator),
+        patch.object(module, "require_current_drawing_artifact_reference", dara_validator),
+        patch.object(module, "validate_visual_evidence_freshness", evidence_validator),
+    ):
+        with pytest.raises(Exception, match="Codex|attestation|inference"):
+            module.finalize_visual_verdict(**inputs, authority_context=object())
 
 
 def test_provider_evidence_hash_is_not_an_adapter_authority_field() -> None:
@@ -564,6 +736,36 @@ def test_r5_b4_public_result_validator_accepts_only_closed_identity_sealed_resul
     mutated["verdict"] = "FAIL"
     with pytest.raises(Exception, match="R5_VERDICT_RESULT_INVALID|hash|verdict"):
         module.validate_visual_verdict_result(mutated)
+
+
+def test_responses_result_uses_epoch_and_provider_response_identity_without_codex_thread() -> None:
+    import cad_agent.visual_supervisor_adapter as module
+
+    result = _sealed_b4_result()
+    result.pop("task6_thread_id")
+    result.pop("task6_turn_id")
+    result["task6_epoch_id"] = "epoch-1"
+    result["task6_response_id"] = "resp_1"
+    payload = {
+        key: copy.deepcopy(value)
+        for key, value in result.items()
+        if key not in {"verdict_id", "verdict_sha256"}
+    }
+    digest = canonical_json_sha256(payload)
+    result["verdict_id"] = digest
+    result["verdict_sha256"] = digest
+
+    validated = module.validate_visual_verdict_result(
+        result,
+        expected_request_sha256=result["request_sha256"],
+        expected_candidate_revision_sha256=SHA_CANDIDATE,
+        expected_candidate_state_sha256=SHA_STATE,
+        expected_latest_mutation_sha256=SHA_MUTATION,
+    )
+
+    assert validated["task6_epoch_id"] == "epoch-1"
+    assert validated["task6_response_id"] == "resp_1"
+    assert "task6_thread_id" not in validated
 
 
 def test_r5_b4_revalidates_request_binding_before_emitting_identity_result() -> None:
