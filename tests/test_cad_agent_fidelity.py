@@ -1944,3 +1944,34 @@ def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None
     assert quality["selected_profile"] == "filtered"
     assert quality["filtered"]["edge_metric"]["f1"] > quality["baseline"]["edge_metric"]["f1"]
     assert [line.id for line in selected.lines] == ["main"]
+
+
+def test_fidelity_geometry_preserves_distinct_parallel_source_rows() -> None:
+    from cad_agent.fidelity import _filter_fidelity_geometry
+
+    raw = RawGeometry(lines=[
+        RawLine("source-row-363", (593.0, 363.0), (1139.0, 363.0), 0.621, (593.0, 363.0, 1139.0, 363.0)),
+        RawLine("source-row-365", (592.0, 365.0), (1139.0, 365.0), 0.621, (592.0, 365.0, 1139.0, 365.0)),
+    ])
+
+    selected = _filter_fidelity_geometry(raw)
+
+    assert len(selected.lines) == 2
+    assert {(line.p1_px, line.p2_px) for line in selected.lines} == {
+        ((593.0, 363.0), (1139.0, 363.0)),
+        ((592.0, 365.0), (1139.0, 365.0)),
+    }
+
+
+def test_fidelity_geometry_still_deduplicates_near_identical_rows() -> None:
+    from cad_agent.fidelity import _filter_fidelity_geometry
+
+    raw = RawGeometry(lines=[
+        RawLine("duplicate-a", (100.0, 120.0), (200.0, 120.0), 0.6, (100.0, 120.0, 200.0, 120.0)),
+        RawLine("duplicate-b", (101.0, 121.0), (201.0, 121.0), 0.9, (101.0, 121.0, 201.0, 121.0)),
+    ])
+
+    selected = _filter_fidelity_geometry(raw)
+
+    assert len(selected.lines) == 1
+    assert selected.lines[0].id == "duplicate-b"
