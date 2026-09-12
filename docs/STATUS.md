@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP live owner inspection (iteration 142)
+```text
+STATE=VERIFIED_OWNER_INSPECTION
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-live-owner-inspection-iteration142.md; proof C:\temp\cad-agent-task6-live-20260911\raw-lisp-live-owner-inspection-iteration142-proof.json; owners and source lines mapped for native receiver/framing, drawing_open ACK expression, AutoCAD evaluator/marker write, Python ACK observation, live harness forwarding, and post-ACK File IPC dispatcher; four-observable offline classification oracle defined; production_files_modified=False; live_epoch_started=False; no production/live/plugin/candidate/health/source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=LIVE_RECEIVER_CONSUMPTION_VS_EVALUATION_VS_MARKER_OBSERVATION_NOT_DISTINGUISHED
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one offline-only receiver/evaluator/observer seam oracle using the four independent observables and exact existing expression/framing, then stop for review
+HUMAN_GATE=NO
+```
+
+## Current raw-LISP live owner boundary (iteration 142)
+- The native receiver/framing owner, expression/marker owner, AutoCAD
+  evaluator/marker-write owner, Python ACK observer, live harness forwarding,
+  and post-ACK dispatcher boundary are now mapped from the existing sources.
+- The timeout remains unassigned among receiver consumption, evaluation,
+  marker write, and observation. The next oracle must record those independently
+  rather than infer a cause from timeout.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — post-framing live raw-LISP ACK boundary (iteration 141)
 ```text
 STATE=CLASSIFIED
