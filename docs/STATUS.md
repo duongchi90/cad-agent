@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — live candidate activation ACK boundary (iteration 116)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-candidate-activation-ack-boundary-iteration116.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration116-proof.json; AutoCAD document-ready=True; drawing_open call count=1; RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED; health_call_count=0; PID absent after cleanup; candidate and DWT hashes unchanged
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of iteration 116; keep candidate, source, DXF, and production code unchanged until a bounded corrective or diagnostic action is authorized; do not retry the live epoch or infer candidate/health/visual success
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 116)
+- The authorized live epoch reached AutoCAD document-ready and invoked the
+  exact candidate `drawing_open` once, but the same-expression raw-LISP ACK
+  was not confirmed.
+- The epoch stopped before `DotNetIPCClient.health`; candidate active identity
+  and downstream visual/dimension fidelity remain unproven.
+- The owned process and disposable roots were cleaned without warnings, and
+  candidate/DWT hashes remained unchanged.
+
 ## Canonical checkpoint — live prerequisite recheck (iteration 115)
 ```text
 STATE=WAIT_SAFE
