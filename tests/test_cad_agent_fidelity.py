@@ -1944,3 +1944,27 @@ def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None
     assert quality["selected_profile"] == "filtered"
     assert quality["filtered"]["edge_metric"]["f1"] > quality["baseline"]["edge_metric"]["f1"]
     assert [line.id for line in selected.lines] == ["main"]
+
+
+def test_source_support_component_identity_controls_parallel_line_deduplication() -> None:
+    from cad_agent.fidelity import _select_fidelity_geometry
+
+    crop = np.full((140, 220, 3), 255, dtype=np.uint8)
+    cv2.line(crop, (20, 30), (180, 30), (0, 0, 0), 1)
+    cv2.line(crop, (20, 32), (180, 32), (0, 0, 0), 1)
+    cv2.rectangle(crop, (20, 70), (180, 71), (0, 0, 0), -1)
+    raw = RawGeometry(lines=[
+        RawLine("required-a", (20.0, 30.0), (180.0, 30.0), 1.0, (20.0, 30.0, 180.0, 30.0)),
+        RawLine("required-b", (20.0, 32.0), (180.0, 32.0), 1.0, (20.0, 32.0, 180.0, 32.0)),
+        RawLine("semantic-a", (20.0, 70.0), (180.0, 70.0), 0.8, (20.0, 70.0, 180.0, 70.0)),
+        RawLine("semantic-b", (20.0, 71.0), (180.0, 71.0), 0.9, (20.0, 71.0, 180.0, 71.0)),
+        RawLine("noise", (20.0, 110.0), (26.0, 110.0), 0.2, (20.0, 110.0, 26.0, 110.0)),
+    ])
+
+    selected, quality = _select_fidelity_geometry(raw, crop, 1.0)
+
+    assert quality["selected_profile"] == "filtered"
+    assert [line.id for line in selected.lines if line.id.startswith("required-")] == [
+        "required-a", "required-b",
+    ]
+    assert [line.id for line in selected.lines if line.id.startswith("semantic-")] == ["semantic-b"]
