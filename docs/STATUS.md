@@ -1,4 +1,28 @@
 # CAD Agent Status
+## Canonical checkpoint — receiver/evaluation oracle reuse decision (iteration 145)
+```text
+STATE=DESIGN_PROPOSED
+EVIDENCE=docs/superpowers/specs/2026-09-12-receiver-evaluation-oracle-reuse-decision.md; iteration 144 live proof and docs/superpowers/implementation-records/2026-09-12-live-receiver-observability-boundary-iteration144.md; existing-owner inspection of mcp_client.py, mcp_dispatch.lsp, dotnet_ipc.py, and CadAgent.AutoCAD2027 command/dispatcher owners
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=RECEIVER_CONSUMPTION_OBSERVABLE_ABSENT_IN_CURRENT_LIVE_OWNER
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the reuse decision; if clear authorize the causal RED and only the bounded client/AutoLISP/test write-set in the proposed design
+HUMAN_GATE=NO
+```
+
+## Receiver/evaluation oracle reuse decision (iteration 145)
+- Existing File IPC plus `mcp_dispatch.lsp` already owns a semantic
+  `drawing-open` request/result exchange. The measured gap is that live
+  `FileIPCLiveMCPClient` bypasses it whenever raw-LISP bootstrap bindings are
+  present, and the dispatcher operation does not yet consume `read_only`.
+- Proposed next seam: after dispatcher-ready proof, reuse that existing
+  claim-bound File IPC operation and result as the evaluator-entry oracle;
+  preserve raw-LISP only for bootstrap/not-ready paths. No production mutation,
+  live retry, candidate/health, source/DXF/CAD change, or key-policy change is
+  authorized before SOL review.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`; the
+  authoritative SourceCustody HMAC/identity-key contract remains fail-closed
+  and unchanged.
+
 ## Canonical checkpoint — live receiver observability boundary (iteration 144)
 ```text
 STATE=CLASSIFIED
