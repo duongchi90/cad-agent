@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — live prerequisite preflight (iteration 162)
+    STATE=LIVE_PREREQUISITES_ABSENT
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-prerequisite-preflight-iteration162.md; preflight-code-head 139e53db2cf697baf3ba24fbd43b688aaf168c24; local/GitHub main e8fc0092ee46750e50de0ea408fd91811cae10c2; local bridge health 1.0.0 OK; AutoCAD executable exists; AutoCAD process/HWND/document-ready absent; IPC/LISP/disposable-DWG env all unset; bundle-declared plugin DLL absent; no launch/APPLOAD/LISP/FileIPC/viewport/CAD/source/DXF/candidate/key mutation
+    LIVE_ORACLE=NOT_RUN
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=TRUTHFUL_AUTOCAD_PROCESS_HWND_DOCUMENT_AND_PLUGIN_SESSION_NOT_AVAILABLE
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact preflight; if all prerequisites later become truthfully present, rerun only this read-only preflight before any disposable marker oracle; otherwise continue only with the next approved offline boundary
+    HUMAN_GATE=NO
+
+## Live prerequisite preflight (iteration 162)
+- The local bridge is healthy and the AutoCAD 2027 executable exists, but no
+  AutoCAD process/session is present. Consequently process-bound HWND,
+  document-ready, loaded-plugin identity, IPC root, and live LISP configuration
+  cannot be truthfully observed.
+- The Release plugin build exists and its hash is recorded, but the module path
+  declared by the repository bundle is absent; a build artifact is not a
+  loaded-plugin identity.
+- The live oracle is therefore `NOT_RUN`. No readiness repair or AutoCAD launch
+  was performed to manufacture a prerequisite.
+
 ## Canonical checkpoint — authoritative receipt contract GREEN (iteration 161)
     STATE=OFFLINE_GREEN_VERIFIED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-authoritative-receipt-contract-green-iteration161.md; verified-code-head 19debd00b63dc1483659993280bcd1facc9893ac; focused owner 78 passed + 9 subtests; focused verifier/project contract 17 passed; full scripts/verify.ps1 exit 0 (offline JUnit 3414, receipt contract JUnit 1 pass, C# 238, .NET IPC 134, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); no production-after-GREEN/live/transport/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
