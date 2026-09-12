@@ -1823,7 +1823,7 @@ def run_fidelity_dimension_reconstruct(
         if text_value is not None:
             dimension_text = format(text_value, "g") if isinstance(text_value, (int, float)) else str(text_value)
         dimension = model.add_linear_dim(
-            base=location,
+            base=midpoint,
             p1=p1,
             p2=p2,
             location=location,
