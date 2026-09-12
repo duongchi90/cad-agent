@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — startup preload completion boundary (iteration 151)
+    STATE=CLASSIFIED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-preload-completion-boundary-iteration151.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-dispatcher-live-iteration151-proof.json; HEAD 851d9797dfcea52f12acc12dbd1b3f9289719f93; exactly one live epoch; completion marker not confirmed; no client/File IPC/drawing-open; candidate/DWT unchanged; cleanup clean
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize one offline startup-completion owner characterization and causal RED, with no live retry until completion-marker causality is reviewed
+    HUMAN_GATE=NO
+
+## Startup preload completion boundary (iteration 151)
+- Supplying the existing dispatcher LISP and IPC-root parameters moved the
+  failure to the startup completion-marker boundary:
+  START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED.
+- The client was never constructed and no File IPC/drawing-open or downstream
+  evidence was produced. Candidate/DWT hashes and cleanup remained clean.
+- The next step is an offline owner characterization of completion-marker
+  writing/evaluation/observation. No live retry or key-policy mutation is
+  authorized before fresh SOL review.
+
+## Canonical checkpoint — startup preload contract (iteration 150)
 ## Canonical checkpoint — startup preload contract (iteration 150)
     STATE=OFFLINE_GREEN
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-preload-contract-iteration150.md; temp RED/GREEN startup owner characterization; commit 0809478af8d1c5b7b6eb78de774aa5745279f160; scripts/verify.ps1 offline JUnit 3406 pass, C# 238 pass, DotNet IPC 134 pass, expected causal RED 1 failure, real-data 2 skip, AutoCAD 17 skip, live/M2 NOT RUN
