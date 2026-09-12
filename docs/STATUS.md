@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — evaluator-entry ACK implementation (iteration 155)
+    STATE=OFFLINE_GREEN
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-entry-ack-implementation-iteration155.md; verified code HEAD dee0758fafd3b9068cbfb37e6ab8974a4a99d0de; focused 52 passed + 6 subtests; scripts/verify.ps1 PASS (offline JUnit 3412, C# 238, .NET IPC 134; causal RED 1 expected failure; real-data 2 SKIP; AutoCAD 17 SKIP; live/M2 NOT RUN); no key/C#/schema/transport/source/DXF/CAD/candidate mutation
+    VERDICT=CLEAR_CONTINUE
+    FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_STARTUP_EVALUATOR_ENTRY_AND_COMPLETION_NOT_PROVEN_AFTER_PRIVATE_REPAIR
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of offline GREEN; if clear authorize exactly one disposable read-only live diagnostic through the repaired startup owner, stopping at the first entry/completion boundary and forbidding downstream client/File IPC unless both exact markers are observed
+    HUMAN_GATE=NO
+
+## Evaluator-entry ACK implementation (iteration 155)
+- The existing startup raw-LISP owner now places a unique fixed-token
+  evaluator-entry marker first in the same expression as IPC-root assignment
+  and dispatcher load, then waits for exact path/token readback before the
+  existing completion marker.
+- Missing/wrong/unreadable/timeout entry markers fail closed before completion,
+  client, File IPC, or retry; cleanup remains root-validated and no-save.
+- Offline GREEN is verified, but real AutoCAD evaluator/marker causality is
+  still unproven. Fresh SOL review is required before exactly one live
+  diagnostic. SourceCustody HMAC/identity-key remains unchanged and
+  fail-closed; page 1 remains key-free `DRAFT_REFERENCE` / `MODIFY NONE`.
+
 ## Canonical checkpoint — evaluator-entry ACK reuse decision (iteration 154)
     STATE=DESIGNED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-entry-ack-reuse-decision-iteration154.md; mcp_integration_lib/mcp_client.py; mcp_integration_lib/mcp_dispatch.lsp; autocad_plugin/CadAgent.AutoCAD2027/Commands/CadAgentCommands.cs; autocad_plugin/CadAgent.bundle/PackageContents.xml; causal RED 1 failed, 26 deselected; scripts/verify.ps1 PASS (offline JUnit 3410, C# 238, .NET IPC 134; real-data 2 SKIP; AutoCAD 17 SKIP; live/M2 NOT RUN); HEAD fc4683c19f97849eaea995a967ce39645289cd62; no production/live/CAD/DXF/candidate/SourceCustody mutation
