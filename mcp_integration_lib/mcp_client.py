@@ -1658,6 +1658,7 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
 def _reacquire_windows_foreground(hwnd: int) -> None:
     """Reacquire one owned top-level window without weakening exact readback."""
     user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
 
     def set_native_signature(function: Any, argtypes: list[Any], restype: Any) -> None:
         try:
@@ -1668,7 +1669,7 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
             pass
 
     get_window_thread_process_id = user32.GetWindowThreadProcessId
-    get_current_thread_id = user32.GetCurrentThreadId
+    get_current_thread_id = kernel32.GetCurrentThreadId
     attach_thread_input = user32.AttachThreadInput
     show_window = user32.ShowWindow
     set_foreground_window = user32.SetForegroundWindow

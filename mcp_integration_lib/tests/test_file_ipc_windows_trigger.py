@@ -41,6 +41,7 @@ class RecordingKernel32:
         self.last_error = 0
         self.set_calls: list[int] = []
         self.get_calls: list[int] = []
+        self.current_thread_id_calls = 0
 
     def SetLastError(self, error):
         self.set_calls.append(error)
@@ -49,6 +50,10 @@ class RecordingKernel32:
     def GetLastError(self):
         self.get_calls.append(self.last_error)
         return self.last_error
+
+    def GetCurrentThreadId(self):
+        self.current_thread_id_calls += 1
+        return CURRENT_THREAD_ID
 
     def set_native_error(self, error: int) -> None:
         """Model the native call's thread error without inventing a user32 API."""
@@ -132,9 +137,6 @@ class RecordingUser32:
         self._pid_call_counts[hwnd] = call_index + 1
         pid_pointer._obj.value = sequence[min(call_index, len(sequence) - 1)]
         return self.thread_ids.get(hwnd, 1)
-
-    def GetCurrentThreadId(self):
-        return CURRENT_THREAD_ID
 
     def AttachThreadInput(self, source_thread, target_thread, attach):
         self.attach_calls.append((source_thread, target_thread, attach))
@@ -344,7 +346,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
     def test_foreground_handoff_attaches_and_detaches_before_exact_readback(self) -> None:
         user32 = ReacquiringUser32(foreground_hwnd=FOREIGN_HWND)
 
-        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
             mcp_client._reacquire_windows_foreground(OWNED_HWND)
 
         self.assertEqual(
@@ -358,6 +363,7 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             user32.focus_calls,
             [("ShowWindow", OWNED_HWND), ("SetForegroundWindow", OWNED_HWND)],
         )
+        self.assertEqual(user32.kernel32.current_thread_id_calls, 1)
 
     def test_foreground_handoff_attach_failure_fails_closed_before_show(self) -> None:
         user32 = RecordingUser32(
@@ -365,7 +371,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             attach_thread_result=0,
         )
 
-        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
             with self.assertRaises(MCPToolError):
                 mcp_client._reacquire_windows_foreground(OWNED_HWND)
 
@@ -381,7 +390,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             set_foreground_exception=RuntimeError("native denial"),
         )
 
-        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
             with self.assertRaises(MCPToolError):
                 mcp_client._reacquire_windows_foreground(OWNED_HWND)
 
@@ -399,7 +411,10 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             set_foreground_result=1,
         )
 
-        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
             with self.assertRaises(MCPToolError):
                 mcp_client._reacquire_windows_foreground(OWNED_HWND)
 
