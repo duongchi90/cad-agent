@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 import mcp_integration_lib.mcp_client as mcp_client_module
 from mcp_integration_lib.mcp_client import (
     BootstrapTimingRecorder,
@@ -76,6 +78,52 @@ class RawLispConsumptionAckTests(unittest.TestCase):
 
         self.assertEqual(1, len(raw_commands))
         self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    @pytest.mark.causal_red
+    def test_evaluator_receipt_contract_is_exact_and_fail_closed(self):
+        token = mcp_client_module._START_TAB_EVALUATOR_ENTRY_TOKEN
+
+        for mode, marker_value in (("missing", None), ("wrong", "WRONG_TOKEN")):
+            raw_commands = []
+
+            def raw_trigger(expression, *, marker_value=marker_value):
+                raw_commands.append(expression)
+                if marker_value is not None:
+                    marker_match = re.search(r'\(open "([^"]+)" "w"\)', expression)
+                    self.assertIsNotNone(marker_match)
+                    Path(marker_match.group(1)).write_text(
+                        marker_value + "\n", encoding="ascii"
+                    )
+
+            client = self._client(raw_trigger)
+            with self.subTest(mode=mode):
+                with self.assertRaisesRegex(
+                    MCPTimeoutError, "RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED"
+                ):
+                    client._send_raw_lisp_with_ack("(princ \"receipt-red\")", token)
+                self.assertEqual(1, len(raw_commands))
+                self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+        raw_commands = []
+
+        def exact_raw_trigger(expression):
+            raw_commands.append(expression)
+            marker_match = re.search(r'\(open "([^"]+)" "w"\)', expression)
+            self.assertIsNotNone(marker_match)
+            Path(marker_match.group(1)).write_text(token + "\n", encoding="ascii")
+
+        client = self._client(exact_raw_trigger)
+        receipt = client._send_raw_lisp_with_ack("(princ \"receipt-green\")", token)
+
+        self.assertEqual(1, len(raw_commands))
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+        self.assertEqual(
+            {
+                "raw_lisp_evaluator_receipt": "CONFIRMED",
+                "receiver_consumption": "NOT_SEPARATELY_OBSERVABLE",
+            },
+            receipt,
+        )
 
     def test_drawing_open_does_not_claim_receiver_success_for_wrong_ack(self):
         raw_commands = []

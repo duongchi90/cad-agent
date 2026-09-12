@@ -1,8 +1,8 @@
-"""Corrected RED contract for the existing Windows File-IPC trigger owner.
+"""Offline characterization for the existing Windows File-IPC trigger owner.
 
 This file is deliberately offline.  The native user32 double records the
 current owner's calls but never starts AutoCAD, COM, File IPC, or a second
-transport.  The RED assertions identify the missing execution-proof-capable
+transport.  The causal characterization identifies the missing execution-proof-capable
 boundary without inventing a public receipt or ACK schema.
 """
 from __future__ import annotations
@@ -13,8 +13,6 @@ from pathlib import Path
 import textwrap
 import unittest
 from unittest.mock import patch
-
-import pytest
 
 from mcp_integration_lib import mcp_client
 from mcp_integration_lib.mcp_client import (
@@ -545,8 +543,7 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self.assertEqual(user32.send_calls, [])
         self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
 
-    @pytest.mark.causal_red
-    def test_enqueue_true_without_receiver_consumption_is_causal_red(self) -> None:
+    def test_enqueue_true_without_receiver_consumption_is_classified(self) -> None:
         """The current trigger returns after enqueue without a handler ACK."""
         user32 = RecordingUser32(
             post_returns=[1] * len(EXPECTED_FRAMED_TEXT),
@@ -569,8 +566,7 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         )
         self.assertEqual(
             classification,
-            "RECEIVER_CONSUMED",
-            "PostMessageW TRUE must not stand in for receiver/handler consumption ACK",
+            "POSTMESSAGE_ENQUEUED_BUT_RECEIVER_CONSUMPTION_UNOBSERVED",
         )
 
     def test_receiver_consumption_ack_is_a_distinct_positive_oracle_path(self) -> None:
