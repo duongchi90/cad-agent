@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — startup completion live diagnostic (iteration 153)
+    STATE=CLASSIFIED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-completion-live-diagnostic-iteration153.md; proof C:\temp\cad-agent-task6-live-20260911\startup-completion-live-diagnostic-iteration153-proof.json; HEAD df6a1e38b94759566eabd33e87e93d91359d8935; exactly one diagnostic epoch; evaluator-entry ACK not proven; no marker/client/File IPC; candidate/DWT unchanged; cleanup clean
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_EVALUATOR_ENTRY_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize one bounded next action for the unowned evaluator-entry acknowledgement seam, with no retry and no downstream client/File IPC work
+    HUMAN_GATE=NO
+
+## Startup completion live diagnostic (iteration 153)
+- The approved live diagnostic reached document-ready and observed one native
+  raw-LISP dispatcher-load trigger return, but no evaluator-entry ACK is owned
+  by the current path. It stopped before the marker writer and before client
+  construction.
+- The exact result is EVALUATOR_ENTRY_NOT_PROVEN, not a claim that evaluation
+  failed. Candidate/DWT hashes and cleanup stayed clean.
+- No live retry, downstream File IPC/drawing-open, or key-policy mutation
+  occurred. Fresh SOL review is required for the next bounded action.
+
+## Canonical checkpoint — startup completion oracle (iteration 152)
 ## Canonical checkpoint — startup completion oracle (iteration 152)
     STATE=OFFLINE_GREEN
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-completion-oracle-iteration152.md; mcp_integration_lib/tests/test_startup_completion_oracle.py; scripts/verify.ps1 offline JUnit 3410 pass, C# 238 pass, DotNet IPC 134 pass, expected causal RED 1 failure, real-data 2 skip, AutoCAD 17 skip, live/M2 NOT RUN; HEAD d7eba568b8d950e3c6713ae122417f7f9cae934c
