@@ -1,4 +1,22 @@
 # CAD Agent Status
+## Canonical checkpoint — disposable harness ACK forwarding repair (iteration 119)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-harness-ack-forwarding-repair-iteration119.md; disposable harness callback repair; harness-ack-forwarding-regression-iteration119.py output `harness ack forwarding: PASS`; production tree unchanged from pushed HEAD 6ab0f89ea81a07352454893b0eb10239cba4d9e7
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_HARNESS_REPAIR_LIVE_RAW_LISP_ACK_AND_CANDIDATE_ACTIVE_IDENTITY_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Run exactly one new disposable read-only live epoch against the same hash-bound page_01.dxf using the corrected harness: same-expression ACK before activation -> exact active-document identity -> one DotNetIPCClient.health(candidate_path) -> no-save cleanup; stop at first causal failure and do not retry or mutate source/DXF/CAD
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 119)
+- The disposable harness now forwards the current `ack_before` owner keyword
+  and its focused regression passed.
+- Production code remains the iteration-117 placement repair; no live result
+  has been obtained after correcting the harness.
+- The next action is exactly one valid disposable read-only epoch, with no
+  retry after its first causal failure.
+
 ## Canonical checkpoint — post-repair live harness boundary (iteration 118)
 ```text
 STATE=CLASSIFIED
