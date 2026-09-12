@@ -1,4 +1,22 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP ACK placement repair (iteration 117)
+```text
+STATE=IMPLEMENTED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-ack-placement-repair-iteration117.md; pushed executor HEAD 7a1d85688d7d4eb21ca8f6e80c43ec78ccac5b42; pre-change RED 1 failed/5 passed; focused ACK/fallback 46 passed with 6 subtests; full scripts/verify.ps1 exit 0; .NET 238 passed; offline Python 3315 passed with 21 deselected and 80 subtests; offline JUnit tests=3395 failures=0 errors=0 skipped=0; causal-red 1 expected failure; real-data 2 skipped; AutoCAD 17 skipped; no live rerun or source/DXF/CAD mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_REPAIR_LIVE_RAW_LISP_ACK_AND_CANDIDATE_ACTIVE_IDENTITY_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the placement repair and authoritative verification; only after clear review may one exact disposable read-only live epoch rerun against the hash-bound page_01.dxf, with same-expression ACK before activation, one health call, and no-save cleanup
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 117)
+- The ACK writer is now placed before activation in the same owner-built
+  expression, with causal and focused regression coverage.
+- Authoritative offline verification is green; the exact post-repair live
+  ACK, candidate identity, and health result have not yet been rerun.
+- No candidate/source/DXF/CAD mutation occurred, and the key-free page-1
+  `DRAFT_REFERENCE` policy remains `MODIFY NONE`.
+
 ## Canonical checkpoint — live candidate activation ACK boundary (iteration 116)
 ```text
 STATE=CLASSIFIED
