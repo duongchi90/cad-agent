@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — harness fail-closed branch repaired (iteration 135)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-harness-fail-closed-branch-repair-iteration135.md; disposable harness tests 4 passed; stale foreign_verified absent; syntax check passed; production foreground helper unchanged; no live rerun, plugin/raw-LISP/candidate/health, or source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_HARNESS_FAIL_CLOSED_BRANCH_REPAIR_LIVE_NATIVE_OUTCOME_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable read-only native-outcome diagnostic with repaired harness, verified benign foreign HWND/PID foreground first, then invoke unchanged production helper exactly once and capture all native outcomes; stop immediately afterward
+HUMAN_GATE=NO
+```
+
+## Current harness boundary (iteration 135)
+- The stale fail-closed reference was replaced with the bounded precondition
+  result. A focused spy regression proves `verified=False` returns without
+  invoking the production helper.
+- Four offline harness tests pass, including pointer-width `DefWindowProcW`
+  signatures and exact/non-exact precondition gating. Production foreground
+  behavior remains unchanged; no live retry followed the repair.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — repaired harness live precondition failure (iteration 134)
 ```text
 STATE=CLASSIFIED
