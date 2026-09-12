@@ -1007,7 +1007,7 @@ class FileIPCLiveMCPClient:
             read_only_argument = " :vlax-true" if read_only else ""
             for attempt in range(2):
                 try:
-                    self._send_raw_lisp_with_ack(
+                    self._send_drawing_open_raw_lisp(
                         '(progn (vl-load-com) '
                         '(setq mcp-docs (vla-get-Documents (vlax-get-acad-object)) '
                         'mcp-target-path (findfile "' + normalized_path + '") '
@@ -1234,6 +1234,14 @@ class FileIPCLiveMCPClient:
                 last_error = exc
                 time.sleep(self._poll)
         raise MCPTimeoutError(f"AutoCAD dispatcher did not become ready: {last_error}")
+
+    def _send_drawing_open_raw_lisp(self, expression: str, token: str) -> None:
+        if self._legacy_fixture_mode:
+            if self._raw_lisp_trigger is None:
+                raise MCPToolError("RAW_LISP_TRIGGER_REQUIRED")
+            self._raw_lisp_trigger(expression)
+            return
+        self._send_raw_lisp_with_ack(expression, token)
 
     def _send_raw_lisp_with_ack(self, expression: str, token: str) -> bool:
         """Send one owner-built expression and require its exact marker receipt."""

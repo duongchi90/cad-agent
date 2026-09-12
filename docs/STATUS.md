@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP ACK legacy-fixture compatibility (iteration 111)
+```text
+STATE=IMPLEMENTED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-ack-legacy-fixture-compatibility-iteration111.md; focused ACK/opening 44 passed; phase-4 compatibility 6 passed; Windows-trigger non-causal-red 19 passed; iteration-110 full verify exposed exactly six legacy-fixture failures
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=AUTHORITATIVE_FULL_VERIFY_AFTER_LEGACY_FIXTURE_COMPATIBILITY_REPAIR
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the legacy_fixture_mode compatibility repair, then rerun clean-tree scripts/verify.ps1; no live acceptance epoch yet
+HUMAN_GATE=NO
+```
+
+## Current raw-LISP ACK compatibility boundary (iteration 111)
+- The same-expression exact marker ACK is mandatory for the claimed/live raw
+  LISP opening path and remains separate from active-document identity and
+  managed dispatcher success.
+- The pre-existing `legacy_fixture_mode` distinction is preserved for
+  unclaimed offline fixtures; it does not affect the live CLI path, whose
+  dispatch trigger is claim-bound.
+- No live AutoCAD epoch, candidate activation, health/FileIPC, source/DXF/CAD,
+  or authoritative custody-policy mutation occurred.
+
 ## Canonical checkpoint — raw-LISP consumption ACK implementation (iteration 110)
 ```text
 STATE=IMPLEMENTED
