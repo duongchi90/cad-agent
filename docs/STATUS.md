@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — post-framing live raw-LISP ACK boundary (iteration 141)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-post-framing-live-ack-boundary-iteration141.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration141-proof.json; exactly one authorized disposable read-only live epoch; document_ready=True; raw_lisp_ack_returned=False; failure=MCPTimeoutError: RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED; candidate identity/health NOT RUN; health_call_count=0; cleanup warnings=0; AutoCAD PID 22892 absent; candidate SHA-256 unchanged at 167a3955a84e24c40c81112ad696eb08f943f4b2721d56891bef8620a731a714; default DWT SHA-256 unchanged at b4f8b4ea726bab4b50049f4aa54ba6540f52bd14961f851f49da705cdc292d42; no retry or source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=LIVE_RAW_LISP_RECEIVER_ACK_NOT_CONFIRMED_AFTER_FULL_EXPRESSION_FRAMING_ORACLE
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize one offline-only inspection of the live receiver/dispatcher ownership and ACK observation seam, without production mutation or another live retry until the owner is identified
+HUMAN_GATE=NO
+```
+
+## Current post-framing live boundary (iteration 141)
+- The repaired foreground path and full-expression offline framing oracle are
+  past; the one authorized live epoch still failed at real raw-LISP receiver
+  ACK confirmation. Candidate identity and health were not run.
+- Cleanup was clean and candidate/DWT hashes were unchanged. No retry or
+  source/DXF/CAD mutation occurred.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — full raw-LISP expression framing verified (iteration 140)
 ```text
 STATE=VERIFIED_CAUSAL_ORACLE
