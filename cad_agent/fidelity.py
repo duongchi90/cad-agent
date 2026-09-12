@@ -1863,11 +1863,15 @@ def run_fidelity_dimension_reconstruct(
         midpoint = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
         normal = (-dy / length, dx / length)
         text_center_px = ((float(bbox[0]) + float(bbox[2])) / 2.0, (float(bbox[1]) + float(bbox[3])) / 2.0)
-        line_center_px = ((float(p1_px[0]) + float(p2_px[0])) / 2.0, (float(p1_px[1]) + float(p2_px[1])) / 2.0)
-        side = normal[0] * (text_center_px[0] - line_center_px[0]) + normal[1] * (line_center_px[1] - text_center_px[1])
-        direction = 1.0 if side >= 0 else -1.0
-        offset = max(6.0, (float(bbox[3]) - float(bbox[1])) * scale * 1.5)
-        location = (midpoint[0] + normal[0] * direction * offset, midpoint[1] + normal[1] * direction * offset)
+        text_center = (text_center_px[0] * scale, (height_px - text_center_px[1]) * scale)
+        source_signed_normal_distance = (
+            normal[0] * (text_center[0] - midpoint[0])
+            + normal[1] * (text_center[1] - midpoint[1])
+        )
+        location = (
+            midpoint[0] + normal[0] * source_signed_normal_distance,
+            midpoint[1] + normal[1] * source_signed_normal_distance,
+        )
         text_value = candidate["text"].get("parsed_value")
         dimension_text = "<>"
         if text_value is not None:
