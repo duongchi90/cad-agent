@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — startup preload contract (iteration 150)
+    STATE=OFFLINE_GREEN
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-preload-contract-iteration150.md; temp RED/GREEN startup owner characterization; commit 0809478af8d1c5b7b6eb78de774aa5745279f160; scripts/verify.ps1 offline JUnit 3406 pass, C# 238 pass, DotNet IPC 134 pass, expected causal RED 1 failure, real-data 2 skip, AutoCAD 17 skip, live/M2 NOT RUN
+    VERDICT=CLEAR_CONTINUE
+    FIRST_UNSATISFIED_BOUNDARY=LIVE_STARTUP_DISPATCHER_PRELOAD_AND_FILE_IPC_DRAWING_OPEN_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable read-only live epoch with bootstrap_lisp_path and ipc_root supplied to the startup owner, requiring truthful dispatcher_preloaded and exact File IPC request/result/active-path evidence, with no retry or raw fallback
+    HUMAN_GATE=NO
+
+## Startup preload contract (iteration 150)
+- The causal RED reproduced plugin-only startup returning
+  dispatcher_preloaded=False. The existing startup owner derives truthful
+  preload readiness from its own bootstrap_lisp_path/IPC-root contract.
+- The bounded GREEN characterization supplied the existing paired parameters
+  and proved dispatcher_preloaded=True, bootstrap completion, and a
+  claim-bound trigger before client construction. The repository regression
+  and authoritative offline gate pass.
+- The next live epoch must use that parameter wiring. No live retry, drawing
+  mutation, or key-policy change is authorized before fresh SOL review.
+
+## Canonical checkpoint — ready-dispatcher live preload boundary (iteration 149)
 ## Canonical checkpoint — ready-dispatcher live preload boundary (iteration 149)
     STATE=CLASSIFIED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-ready-dispatcher-live-preload-boundary-iteration149.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-dispatcher-live-iteration149-proof.json; HEAD 2fa3040996d7cf5b33d73ae340516cd31deffbf7; exactly one disposable live epoch; client binding applied but dispatcher_preloaded=False; raw fallback forbidden; no File IPC request/result; candidate/DWT unchanged; cleanup clean
