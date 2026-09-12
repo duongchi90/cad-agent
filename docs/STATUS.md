@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — R1C executor binding causal RED (iteration 170)
+    STATE=CAUSAL_RED_CHARACTERIZED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-r1c-executor-binding-causal-red-iteration170.md; test-only RED at current PDF executor -> existing R1C owner boundary; exact pre-change HEAD b3460eb8eec273069740e0106bc04f683187efca; no production/live/source/CAD mutation
+    VERDICT=MATERIAL_FINDING
+    MATERIAL_FINDING=R1C_EXECUTOR_BINDING_GAP
+    FIRST_UNSATISFIED_BOUNDARY=R1C_OWNER_CONFIGURATION_NOT_EXPOSED_TO_CURRENT_EXECUTOR
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact RED; authorize at most one minimal existing-executor binding to caller-configured SourceIntegrity/SourceFusion owners; no raw-key bridge API, new provider/store, bypass, source/CAD/live/provider/M2 mutation
+    HUMAN_GATE=NO
+
+## R1C executor binding causal RED (iteration 170)
+- The test constructs a complete disposable R1C configuration with approved
+  root, test-only identity material, policy limits, and an exact validated
+  SourceBundle.
+- Focused result: `1 failed in 0.17s`; fixture/hash assertions pass and the
+  only failure is the absent `r1c_configuration` binding on the existing
+  `cad_agent.pdf.run_pdf_stages` executor.
+- No implementation, source/CAD/live operation, provider/M2 action, or
+  production key/store was added. `LIVE_ORACLE=NOT_RUN`.
+
 ## Canonical checkpoint — live prerequisite preflight (iteration 169)
     STATE=LIVE_PREREQUISITES_ABSENT
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-prerequisite-preflight-iteration169.md; exact HEAD fd992106f0e4fa8aeaba5c83b89a87ea01aa55b2; GitHub main e8fc0092ee46750e50de0ea408fd91811cae10c2; hosted checks terminal SUCCESS; read-only preflight confirms executable present but AutoCAD process/HWND/document-ready/IPC/LISP/disposable-DWG/plugin identity absent; no live operation or mutation
