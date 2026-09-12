@@ -1,4 +1,28 @@
 # CAD Agent Status
+## Canonical checkpoint — repaired harness live precondition failure (iteration 134)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-repaired-harness-live-precondition-failure-iteration134.md; proof C:\temp\cad-agent-task6-live-20260911\foreground-native-outcome-diagnostic-iteration134-proof.json; exactly one authorized disposable diagnostic; document_ready=True; owned target=HWND 1181088/PID 14728/thread 5700; benign target=HWND 919106/PID 27836/thread 20716; benign SetForegroundWindow result=0; foreign_precondition_verified=False; production helper NOT INVOKED; harness NameError=foreign_verified; plugin/raw-LISP/candidate/health NOT RUN; cleanup clean; DWT unchanged; no source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=DISPOSABLE_HARNESS_FAIL_CLOSED_BRANCH_REFERENCES_STALE_FOREIGN_VERIFIED_NAME
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and authorization for one offline-only disposable harness repair replacing the stale branch variable with the bounded precondition result, plus focused regression; no live retry, production repair, plugin/raw-LISP/candidate/health, or source/DXF/CAD mutation until authorized
+HUMAN_GATE=NO
+```
+
+## Current repaired-harness boundary (iteration 134)
+- The benign window still did not become foreground (`SetForegroundWindow=0`,
+  exact readback false), so the production helper was correctly not invoked.
+  The harness then raised `NameError: foreign_verified is not defined` in its
+  fail-closed branch because that branch still referenced the old variable
+  name after the bounded routine was introduced.
+- This is isolated to the disposable harness. Cleanup was clean, AutoCAD/PID
+  and stage roots were absent, and the default DWT hash was unchanged. No
+  production helper, plugin, raw-LISP, candidate, health, PDF, DXF, CAD, or
+  key-policy path was touched.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — disposable harness repair verified (iteration 133)
 ```text
 STATE=VERIFIED
