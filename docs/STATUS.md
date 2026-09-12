@@ -1,4 +1,30 @@
 # CAD Agent Status
+## Canonical checkpoint — authoritative verification from clean tree (iteration 108)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-authoritative-verification-clean-tree-iteration108.md; scripts/verify.ps1 exit 0; .NET 238 passed, 0 failed, 0 skipped; offline Python 3309 passed, 21 deselected, 80 subtests passed; offline JUnit tests=3389 failures=0 errors=0 skipped=0; git diff --check clean; tracked tree clean
+VERDICT=PASS_WITH_RECORDED_UNAVAILABLE_LIVE_GATES
+FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_CONSUMPTION_ACK_ABSENT_IN_CURRENT_OWNER
+NEXT_SINGLE_BOUNDED_ACTION=Send clean-tree verification and current raw-LISP boundary to SOL for fresh review; preserve key-free PDF DRAFT_REFERENCE and keep live retry, candidate activation, and production/source/DXF/CAD mutation stopped until separately authorized
+HUMAN_GATE=NO
+```
+
+## Current authoritative verification from clean tree (iteration 108)
+- The local Git disposition is resolved without changing the report: the
+  pre-existing CadMind experiment report remains outside Git through local
+  `.git/info/exclude`, preserving its contents and keeping private/generated
+  artifact references out of the repository.
+- `scripts/verify.ps1` completed successfully at commit
+  `78c09fbeaf359d1e1720bfe79ccd9a7757bed5f2`: .NET `238 passed`, offline
+  Python `3309 passed`, `80 subtests passed`; `git diff --check` and tracked
+  worktree cleanliness were confirmed afterward.
+- The intentional causal-red test remains a documented negative oracle
+  (`1 failed, 19 deselected`) and is not claimed as a product pass. Private
+  real-data and AutoCAD live gates remain explicitly `SKIP`/`NOT RUN` because
+  their prerequisites are unavailable. The raw-LISP receiver-consumption ACK
+  remains the first unsatisfied boundary. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-authoritative-verification-clean-tree-iteration108.md`.
+
 ## Canonical checkpoint — managed candidate-activation owner decision (iteration 107)
 ```text
 STATE=EXECUTED
