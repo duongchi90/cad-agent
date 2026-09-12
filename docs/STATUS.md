@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — live receiver observability boundary (iteration 144)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-receiver-observability-boundary-iteration144.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-diagnostic-iteration144-proof.json; exactly one authorized disposable live diagnostic; document_ready=True; one raw-LISP callback; 997 WM_CHAR posts to receiver HWND 1377516; all PostMessageW results=1; receiver/evaluator/marker observables NOT_PROVEN because current owner exposes enqueue only; python_ack_observer_read_exact_token=False; failure=MCPTimeoutError: RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED; candidate identity/health NOT RUN; health_call_count=0; cleanup clean; candidate/DWT unchanged; no retry or source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=RECEIVER_CONSUMPTION_OBSERVABLE_ABSENT_IN_CURRENT_LIVE_OWNER
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize one bounded design/reuse decision for an approved receiver-side acknowledgement seam or supported evaluation oracle, with no production mutation or live retry until that seam is approved
+HUMAN_GATE=NO
+```
+
+## Current live receiver observability boundary (iteration 144)
+- One live diagnostic confirmed the existing path reaches the raw-LISP callback
+  and enqueues all 997 `WM_CHAR` units successfully, but the owner exposes no
+  receiver-consumption callback or queue-drain receipt. The marker was not
+  observed and the public ACK timeout remained fail-closed.
+- Receiver consumption, evaluator entry, and marker-write success remain
+  `NOT_PROVEN`, not false. Candidate identity and health remain downstream and
+  were not run.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — raw-LISP seam oracle verified (iteration 143)
 ```text
 STATE=VERIFIED_SEAM_ORACLE
