@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import uuid
 import xml.etree.ElementTree as ET
 
 import pytest
+
+import mcp_integration_lib.mcp_client as mcp_client
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -148,3 +152,67 @@ def test_autocad2027_bundle_packaging_owner_stages_release_dll() -> None:
         entry = manifest_root.findall("./Components/ComponentEntry")[0]
         resolved_module = (output_bundle / entry.attrib["ModuleName"]).resolve()
         assert resolved_module == staged_module.resolve()
+
+
+@pytest.mark.autocad_bundle
+def test_autocad2027_bundle_binds_to_existing_startup_owner_causal_red(
+    tmp_path: Path,
+) -> None:
+    if os.environ.get("CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED") == "1":
+        pytest.skip("SKIP: AutoCAD .NET build gate was explicitly skipped")
+    if not PLUGIN_DLL.is_file():
+        pytest.skip(
+            "SKIP: bundle assembly is produced by the AutoCAD .NET build gate"
+        )
+
+    output_bundle = tmp_path / "CadAgent.bundle"
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(PACKAGING_OWNER),
+            "-ManifestPath",
+            str(BUNDLE_MANIFEST),
+            "-SourceDll",
+            str(PLUGIN_DLL),
+            "-OutputBundle",
+            str(output_bundle),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+    manifest_root = ET.parse(output_bundle / "PackageContents.xml").getroot()
+    entry = manifest_root.findall("./Components/ComponentEntry")[0]
+    resolved_module = (output_bundle / entry.attrib["ModuleName"]).resolve()
+    assert resolved_module.is_file()
+
+    factory_signature = inspect.signature(mcp_client.make_windows_start_tab_session_factory)
+    assert "bootstrap_bundle_path" in factory_signature.parameters, (
+        "Issue #424 RED: startup owner lacks bundle-root-to-plugin binding"
+    )
+
+    acad_executable = tmp_path / "acad.exe"
+    acad_executable.write_bytes(b"test-only executable placeholder")
+    factory = mcp_client.make_windows_start_tab_session_factory(
+        str(acad_executable),
+        str(tmp_path),
+        bootstrap_bundle_path=str(output_bundle),
+    )
+    session = factory()
+    assert session._bootstrap_plugin_path == resolved_module
+
+    commands: list[str] = []
+    session._run_process_bound_runtime_bootstrap(
+        SimpleNamespace(
+            command_trigger=commands.append,
+            raw_lisp_trigger=lambda expression: None,
+        )
+    )
+    assert commands == [f'_.NETLOAD\r"{resolved_module.as_posix()}"\r']

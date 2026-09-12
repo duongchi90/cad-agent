@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — AutoCAD discovery/load binding causal RED (iteration 167)
+    STATE=CAUSAL_RED_CHARACTERIZED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-discovery-load-binding-causal-red-iteration167.md; parent audit 10dd2dd19869036f6768de858bf8fc8d09366ea9; exact test-only RED; bundle/staging contracts 2 PASS and binding contract 1 intentional RED; ruff/diff-check PASS; no production/live/install/registry/env/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
+    VERDICT=MATERIAL_FINDING
+    MATERIAL_FINDING=AUTOCAD_DISCOVERY_LOAD_OWNER_GAP
+    FIRST_UNSATISFIED_BOUNDARY=STAGED_BUNDLE_ROOT_NOT_BOUND_TO_EXISTING_STARTUP_OWNER
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact RED; if clear authorize only the minimal existing startup-owner bundle-root binding and focused GREEN; no live install/launch or downstream dispatcher/FileIPC/viewport/live mutation
+    HUMAN_GATE=NO
+
+## AutoCAD discovery/load binding causal RED (iteration 167)
+- The test stages a disposable bundle, resolves its manifest-declared DLL,
+  and then requires the existing startup factory to accept
+  `bootstrap_bundle_path` and bind that exact DLL as its direct
+  `bootstrap_plugin_path`/`NETLOAD` target.
+- RED is localized at the absent startup-owner binding. Existing bundle and
+  packager contracts remain green: `2 passed, 1 failed`; Ruff and diff-check
+  passed.
+- No production binding or live operation was added. `LIVE_ORACLE=NOT_RUN`.
+
 ## Canonical checkpoint — AutoCAD discovery/load owner audit (iteration 166)
     STATE=OFFLINE_DISCOVERY_LOAD_OWNER_AUDITED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-discovery-load-owner-audit-iteration166.md; exact HEAD 6ce8271221e7a4a027d0edf991e818d58c783220; hosted checks terminal SUCCESS; manifest demand-load, packager staging, startup direct-NETLOAD owner, and tests inspected; no install/launch/registry/env/dispatcher/FileIPC/viewport/live/source/DXF/CAD/key mutation
