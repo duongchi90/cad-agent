@@ -14,6 +14,7 @@ from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 from primitive_ir_lib.text_extraction import RawText
 from cad_agent.fidelity import (
     FidelityError,
+    _filter_fidelity_geometry,
     new_fidelity_manifest,
     run_fidelity_overlays,
     run_fidelity_pdf,
@@ -45,6 +46,20 @@ from cad_agent.cli import (
     main,
 )
 from mcp_integration_lib.mcp_client import FakeMCPClient
+
+
+def test_fidelity_geometry_preserves_complete_extent_across_adjacent_collinear_fragments() -> None:
+    raw = RawGeometry(lines=[
+        RawLine("fragment-a", (100.0, 120.0), (150.0, 120.0), 0.6, (100.0, 120.0, 150.0, 120.0)),
+        RawLine("fragment-b", (151.0, 120.0), (200.0, 120.0), 0.6, (151.0, 120.0, 200.0, 120.0)),
+    ])
+
+    selected = _filter_fidelity_geometry(raw)
+
+    assert len(selected.lines) == 1
+    assert selected.lines[0].p1_px == (100.0, 120.0)
+    assert selected.lines[0].p2_px == (200.0, 120.0)
+    assert selected.lines[0].p1_px[1] == selected.lines[0].p2_px[1] == 120.0
 
 
 def _pdf(path: Path) -> None:
