@@ -1022,6 +1022,7 @@ class FileIPCLiveMCPClient:
                         '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"' + read_only_argument + '))) '
                         '(vla-activate mcp-open-doc))',
                         _RAW_LISP_DRAWING_OPEN_ACK_TOKEN,
+                        ack_before="(vla-activate mcp-open-doc)",
                     )
                 except (MCPTimeoutError, MCPToolError) as exc:
                     if str(exc) == _RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED:
@@ -1235,15 +1236,27 @@ class FileIPCLiveMCPClient:
                 time.sleep(self._poll)
         raise MCPTimeoutError(f"AutoCAD dispatcher did not become ready: {last_error}")
 
-    def _send_drawing_open_raw_lisp(self, expression: str, token: str) -> None:
+    def _send_drawing_open_raw_lisp(
+        self,
+        expression: str,
+        token: str,
+        *,
+        ack_before: Optional[str] = None,
+    ) -> None:
         if self._legacy_fixture_mode:
             if self._raw_lisp_trigger is None:
                 raise MCPToolError("RAW_LISP_TRIGGER_REQUIRED")
             self._raw_lisp_trigger(expression)
             return
-        self._send_raw_lisp_with_ack(expression, token)
+        self._send_raw_lisp_with_ack(expression, token, ack_before=ack_before)
 
-    def _send_raw_lisp_with_ack(self, expression: str, token: str) -> bool:
+    def _send_raw_lisp_with_ack(
+        self,
+        expression: str,
+        token: str,
+        *,
+        ack_before: Optional[str] = None,
+    ) -> bool:
         """Send one owner-built expression and require its exact marker receipt."""
         if self._raw_lisp_trigger is None:
             raise MCPToolError("RAW_LISP_TRIGGER_REQUIRED")
@@ -1252,13 +1265,21 @@ class FileIPCLiveMCPClient:
         marker_path = self._dir / f"{_RAW_LISP_DRAWING_OPEN_ACK_PREFIX}{marker_id}.txt"
         if marker_path.exists():
             raise MCPToolError("RAW_LISP_ACK_PATH_CONFLICT")
-        wrapped_expression = (
-            "(progn "
-            + expression
-            + " "
-            + _start_tab_stage_marker_expression(marker_path, token)
-            + ")"
-        )
+        marker_expression = _start_tab_stage_marker_expression(marker_path, token)
+        if ack_before is None:
+            wrapped_expression = "(progn " + expression + " " + marker_expression + ")"
+        else:
+            marker_position = expression.rfind(ack_before)
+            if marker_position < 0:
+                raise MCPToolError("RAW_LISP_ACK_PLACEMENT_INVALID")
+            wrapped_expression = (
+                "(progn "
+                + expression[:marker_position]
+                + marker_expression
+                + " "
+                + expression[marker_position:]
+                + ")"
+            )
         root_safe_for_cleanup = True
         try:
             self._raw_lisp_trigger(wrapped_expression)

@@ -148,6 +148,58 @@ class RawLispConsumptionAckTests(unittest.TestCase):
         self.assertIn("drawing-get-variables", dispatches)
         self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
 
+    def test_ack_receipt_alone_never_implies_active_document_success(self):
+        raw_commands = []
+
+        def raw_trigger(expression):
+            raw_commands.append(expression)
+            _record_drawing_open_ack(expression)
+
+        client = self._client(raw_trigger)
+
+        def dispatch(command, params):
+            if command == "ping":
+                return {}
+            if command == "drawing-get-variables":
+                return {"DWGPREFIX": "C:/work/", "DWGNAME": "different.dxf"}
+            raise AssertionError(f"unexpected dispatch: {command}")
+
+        client._dispatch = dispatch
+
+        with self.assertRaisesRegex(
+            MCPToolError, "AutoCAD did not activate requested drawing"
+        ):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertGreaterEqual(len(raw_commands), 1)
+        self.assertIn(
+            "CAD_AGENT_DRAWING_OPEN_RECEIVER_EVALUATED", raw_commands[0]
+        )
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_drawing_open_ack_marker_precedes_activation(self):
+        raw_commands = []
+
+        def raw_trigger(expression):
+            raw_commands.append(expression)
+            _record_drawing_open_ack(expression)
+
+        client = self._client(raw_trigger)
+        client._dispatch = self._active_document_dispatch
+
+        self.assertEqual(
+            {"path": "C:/work/source.dxf"},
+            client.drawing_open("C:/work/source.dxf"),
+        )
+
+        expression = raw_commands[0]
+        marker_position = expression.index(
+            "CAD_AGENT_DRAWING_OPEN_RECEIVER_EVALUATED"
+        )
+        activation_position = expression.index("(vla-activate mcp-open-doc)")
+        self.assertLess(marker_position, activation_position)
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
 
 class DrawingOpenFallbackTests(unittest.TestCase):
     def setUp(self):
