@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — ready-dispatcher live preload boundary (iteration 149)
+    STATE=CLASSIFIED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-ready-dispatcher-live-preload-boundary-iteration149.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-dispatcher-live-iteration149-proof.json; HEAD 2fa3040996d7cf5b33d73ae340516cd31deffbf7; exactly one disposable live epoch; client binding applied but dispatcher_preloaded=False; raw fallback forbidden; no File IPC request/result; candidate/DWT unchanged; cleanup clean
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=LIVE_STARTUP_DISPATCHER_PRELOADED_CERTIFICATE_FALSE
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize one offline startup-preload owner characterization and causal RED, with no live retry until the truthful claim-bound readiness path is reviewed
+    HUMAN_GATE=NO
+
+## Ready-dispatcher live preload boundary (iteration 149)
+- The single authorized live epoch reached document_ready=True and called the
+  existing binding-application method, but the client remained
+  dispatcher_preloaded=False because the startup session was constructed with
+  bootstrap_plugin_path only and no bootstrap_lisp_path/IPC-root preload
+  contract.
+- The harness correctly stopped at the forbidden raw-LISP fallback before any
+  semantic File IPC request/result, active-path readback, or candidate/health
+  check. Candidate/DWT hashes and cleanup were unchanged/clean.
+- The prior wrapper's missing-field default is explicitly not treated as live
+  readiness evidence. The next step is offline owner characterization; no
+  live retry or key-policy mutation is allowed.
+
+## Canonical checkpoint — ready-dispatcher readiness propagation (iteration 148)
 ## Canonical checkpoint — ready-dispatcher readiness propagation (iteration 148)
 ```text
 STATE=OFFLINE_GREEN
