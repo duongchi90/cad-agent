@@ -96,13 +96,12 @@ class RawLispConsumptionAckTests(unittest.TestCase):
                     )
 
             client = self._client(raw_trigger)
-            with self.subTest(mode=mode):
-                with self.assertRaisesRegex(
-                    MCPTimeoutError, "RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED"
-                ):
-                    client._send_raw_lisp_with_ack("(princ \"receipt-red\")", token)
-                self.assertEqual(1, len(raw_commands))
-                self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+            with self.assertRaisesRegex(
+                MCPTimeoutError, "RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED"
+            ):
+                client._send_raw_lisp_with_ack("(princ \"receipt-red\")", token)
+            self.assertEqual(1, len(raw_commands), mode)
+            self.assertEqual([], list(Path(self._ipc_dir).iterdir()), mode)
 
         raw_commands = []
 
