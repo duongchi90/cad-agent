@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Current raw-LISP consumption oracle (iteration 102)
+- Fresh SOL review authorized exactly one disposable live read-only epoch using
+  the executor-branch owner, verified DWT, `CADAGENT_DISPATCH` startup, and the
+  existing bounded document-ready wait. `DOCUMENT_READY=PROVEN` on owned HWND
+  `1902374` / PID `10580`.
+- Exactly one existing `post_qnew_entry` stage-marker raw-LISP expression was
+  triggered. The trigger returned without an exception, but the exact fixed
+  token `CAD_AGENT_START_TAB_POST_QNEW_ENTRY` was not observed within the
+  existing 60-second bound and the existing timing observer did not record the
+  `post_qnew_entry` event. Classification is
+  `RAW_LISP_CONSUMPTION=NOT_PROVEN`; trigger return is enqueue-path evidence,
+  not receiver/evaluation acknowledgement.
+- Candidate activation, health, FileIPC, setup, persistence, focus workaround,
+  retry, timeout/code change, and CAD/source/DXF mutation were not run. Cleanup
+  had no warnings; PID, temporary bundle, script, and marker were absent and
+  the verified DWT SHA was unchanged. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-raw-lisp-consumption-oracle-iteration102.md`
+  and the disposable proof under
+  `C:\temp\cad-agent-task6-live-20260911\raw-lisp-consumption-iteration102\`.
+- The first unsatisfied boundary remains receiver consumption. Candidate
+  activation stays downstream pending fresh SOL review; no retry or production
+  mutation is authorized by this result.
+
 ## Current raw-LISP command-consumption characterization (iteration 99)
 - Fresh SOL review required characterization of the existing
   `make_windows_lisp_trigger` / `_make_windows_text_trigger` boundary.
