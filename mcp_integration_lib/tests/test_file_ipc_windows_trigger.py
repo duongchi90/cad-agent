@@ -562,8 +562,14 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             [0x0102] * len(EXPECTED_FRAMED_TEXT),
         )
         self.assertTrue(all(result == 1 for result in user32.post_results))
-        self.assertTrue(
-            acknowledgements and all(acknowledged for acknowledged in acknowledgements),
+        classification = (
+            "RECEIVER_CONSUMED"
+            if acknowledgements and all(acknowledgements)
+            else "POSTMESSAGE_ENQUEUED_BUT_RECEIVER_CONSUMPTION_UNOBSERVED"
+        )
+        self.assertEqual(
+            classification,
+            "RECEIVER_CONSUMED",
             "PostMessageW TRUE must not stand in for receiver/handler consumption ACK",
         )
 
