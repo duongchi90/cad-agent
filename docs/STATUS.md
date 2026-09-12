@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — bundle packaging owner causal RED (iteration 164)
+    STATE=CAUSAL_RED_CHARACTERIZED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-bundle-packaging-owner-causal-red-iteration164.md; exact HEAD f5d9a296884a7634e10565bfcdc69bc839ee4a74; test-only contract; existing bundle test 1 PASS and new owner test 1 intentional RED; no production/package/live/CAD/source/DXF/key mutation
+    VERDICT=MATERIAL_FINDING
+    MATERIAL_FINDING=BUNDLE_PACKAGING_OWNER_GAP
+    FIRST_UNSATISFIED_BOUNDARY=DETERMINISTIC_BUNDLE_STAGING_OWNER_ABSENT
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact RED; authorize at most one minimal owner-local packaging implementation only if the contract is accepted, then run focused GREEN; no AutoCAD launch/retry or downstream dispatcher/FileIPC/viewport/live mutation
+    HUMAN_GATE=NO
+
+## Bundle packaging owner causal RED (iteration 164)
+- One test-only contract now requires the future deterministic owner surface
+  `scripts/package_autocad_bundle.ps1` to stage the real Release DLL under
+  `CadAgent.bundle/Contents/Windows` with exact bytes/hash and manifest-path
+  identity.
+- TDD RED is confirmed at the intended missing-owner assertion: focused run
+  `1 failed in 0.12s`; nearest existing bundle contract remains green, for a
+  combined `1 failed, 1 passed in 0.69s`.
+- No owner implementation, generated DLL, AutoCAD/live operation, or
+  production/package mutation was performed. `LIVE_ORACLE=NOT_RUN`.
+
 ## Canonical checkpoint — bundle packaging owner audit (iteration 163)
     STATE=BUNDLE_PACKAGING_OWNER_AUDITED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-bundle-packaging-owner-audit-iteration163.md; exact HEAD abcfe7dfb0c88e492496eee8b299579f68670b52; PR #424 head matches; base/main e8fc0092ee46750e50de0ea408fd91811cae10c2; hosted checks terminal SUCCESS; manifest present; Release DLL present; bundle Contents/Windows target absent; no packaging/build/bootstrap owner maps Release output into declared bundle target; worktree clean before evidence record; no AutoCAD/live/package/source/DXF/CAD/key mutation

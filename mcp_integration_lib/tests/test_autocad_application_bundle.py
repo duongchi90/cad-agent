@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import uuid
 import xml.etree.ElementTree as ET
@@ -23,6 +24,9 @@ PLUGIN_DLL = (
     / "net10.0-windows"
     / "CadAgent.AutoCAD2027.dll"
 )
+PACKAGING_OWNER = REPO_ROOT / "scripts" / "package_autocad_bundle.ps1"
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
 
@@ -96,3 +100,51 @@ def test_autocad2027_bundle_autoloads_existing_cadagent_assembly() -> None:
         assert staged_module_path.is_relative_to(staged_bundle.resolve())
         assert staged_module_path == staged_module.resolve()
         assert _sha256(staged_module_path) == approved_sha256
+
+
+@pytest.mark.autocad_bundle
+def test_autocad2027_bundle_packaging_owner_stages_release_dll() -> None:
+    if os.environ.get("CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED") == "1":
+        pytest.skip("SKIP: AutoCAD .NET build gate was explicitly skipped")
+    if not PLUGIN_DLL.is_file():
+        pytest.skip(
+            "SKIP: bundle assembly is produced by the AutoCAD .NET build gate"
+        )
+
+    assert BUNDLE_MANIFEST.is_file()
+    assert PACKAGING_OWNER.is_file(), (
+        "Issue #424 RED: deterministic AutoCAD bundle packaging owner is absent"
+    )
+
+    with tempfile.TemporaryDirectory(prefix="cadagent-bundle-owner-") as staging:
+        output_bundle = Path(staging) / "CadAgent.bundle"
+        completed = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(PACKAGING_OWNER),
+                "-ManifestPath",
+                str(BUNDLE_MANIFEST),
+                "-SourceDll",
+                str(PLUGIN_DLL),
+                "-OutputBundle",
+                str(output_bundle),
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        staged_module = output_bundle / "Contents" / "Windows" / "CadAgent.AutoCAD2027.dll"
+        assert staged_module.is_file()
+        assert _sha256(staged_module) == _sha256(PLUGIN_DLL)
+
+        manifest_root = ET.parse(output_bundle / "PackageContents.xml").getroot()
+        entry = manifest_root.findall("./Components/ComponentEntry")[0]
+        resolved_module = (output_bundle / entry.attrib["ModuleName"]).resolve()
+        assert resolved_module == staged_module.resolve()
