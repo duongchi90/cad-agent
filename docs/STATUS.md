@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Canonical checkpoint — native AttachThreadInput failure (iteration 136)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-native-attach-failure-iteration136.md; proof C:\temp\cad-agent-task6-live-20260911\foreground-native-outcome-diagnostic-iteration136-proof.json; exactly one authorized disposable native-outcome diagnostic; document_ready=True; foreign precondition verified HWND 3540730/PID 26992/thread 14952; owned target HWND 9045722/PID 21928/thread 24944; caller_thread_id=14952; foreground_thread_id=14952; AttachThreadInput attach_result=0; stage=ATTACH_FAILED; ShowWindow/SetForegroundWindow/detach NOT CALLED; production helper invoked once; plugin/raw-LISP/candidate/health NOT RUN; cleanup clean; DWT unchanged; no source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=ATTACH_THREAD_INPUT_ATTACH_RESULT_FALSE
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and authorization for one smallest offline TDD repair or diagnostic addressing the AttachThreadInput attach-result failure while preserving the exact-HWND fail-closed contract; no live retry, plugin/raw-LISP/candidate/health, or source/DXF/CAD mutation until authorized
+HUMAN_GATE=NO
+```
+
+## Current native boundary (iteration 136)
+- The benign foreign precondition was proven with exact HWND readback. The
+  unchanged production helper then called once with owned AutoCAD target
+  `9045722` / PID `21928` / thread `24944`; caller thread `14952` and
+  foreground thread `14952` were captured.
+- `AttachThreadInput(..., attach=True)` returned `0`, producing
+  `ATTACH_FAILED`. Therefore `ShowWindow`, `SetForegroundWindow`, and detach
+  did not run; the public error remained `WINDOW_FOREGROUND_INVALID`.
+- No plugin/raw-LISP/candidate/health path was entered. Cleanup was clean and
+  candidate/PDF/source/DXF/CAD/key-policy state was untouched. The page-1 PDF
+  remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`; the authoritative
+  SourceCustody HMAC/identity-key contract was not removed or bypassed.
+
 ## Canonical checkpoint — harness fail-closed branch repaired (iteration 135)
 ```text
 STATE=VERIFIED
