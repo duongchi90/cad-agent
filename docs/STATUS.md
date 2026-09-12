@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Canonical checkpoint — ready-dispatcher drawing-open offline GREEN (iteration 146)
+```text
+STATE=OFFLINE_GREEN
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-ready-dispatcher-drawing-open-iteration146.md; commit 9c868af7870c18dfd3cc5302a3b7f77e7e227ab9; focused route/owner tests; scripts/verify.ps1 with offline JUnit 3404 pass, dotnet IPC 134 pass, C# 238 pass, expected causal RED 1 failure, real-data 2 skip, AutoCAD 17 skip, live NOT RUN
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=LIVE_FILE_IPC_DRAWING_OPEN_SEMANTIC_RESULT_NOT_PROVEN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable live epoch through the ready claim-bound dispatcher, then stop at the first unsatisfied boundary
+HUMAN_GATE=NO
+```
+
+## Ready-dispatcher drawing-open offline GREEN (iteration 146)
+- The approved offline RED reproduced the defect: with a ready, claim-bound
+  dispatcher, `drawing_open(read_only=True)` still entered the raw-LISP ACK path
+  and timed out.
+- Minimal GREEN now routes that ready path through the existing File IPC
+  `drawing-open` result and passes the optional Boolean to the existing
+  AutoLISP `vla-Open` owner. Raw-LISP remains the bootstrap/not-ready path;
+  timeout, claim, path, cleanup, and no-retry fail-closed rules remain intact.
+- Focused and authoritative offline verification passed. The existing raw
+  WM_CHAR causal RED remains intentionally failing, live acceptance is still
+  `NOT RUN`, and no drawing/source/DXF/CAD/provider/M2 state was changed.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`; the
+  authoritative SourceCustody HMAC/identity-key contract remains fail-closed
+  and unchanged.
+
 ## Canonical checkpoint — receiver/evaluation oracle reuse decision (iteration 145)
 ```text
 STATE=DESIGN_PROPOSED
