@@ -1729,6 +1729,7 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
             "show_window_result": show_window_result,
             "set_foreground_result": set_foreground_result,
             "detach_result": detach_result,
+            "attach_not_required": caller_thread_id == foreground_thread_id,
             "foreground_before": before,
             "foreground_after_set": after_set,
             "foreground_after_detach": after_detach,
@@ -1772,18 +1773,19 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
     foreground_after_set: Optional[dict[str, object]] = None
     foreground_after_detach: Optional[dict[str, object]] = None
     try:
-        try:
-            attach_result = attach_thread_input(
-                caller_thread_id, foreground_thread_id, True
-            )
-            attached = bool(attach_result)
-        except Exception as exc:
-            failure = foreground_failure(
-                "ATTACH_FAILED", before=foreground_before, cause=exc
-            )
-        if not attached and failure is None:
-            failure = foreground_failure("ATTACH_FAILED", before=foreground_before)
-        if attached:
+        if caller_thread_id != foreground_thread_id:
+            try:
+                attach_result = attach_thread_input(
+                    caller_thread_id, foreground_thread_id, True
+                )
+                attached = bool(attach_result)
+            except Exception as exc:
+                failure = foreground_failure(
+                    "ATTACH_FAILED", before=foreground_before, cause=exc
+                )
+            if not attached and failure is None:
+                failure = foreground_failure("ATTACH_FAILED", before=foreground_before)
+        if attached or caller_thread_id == foreground_thread_id:
             try:
                 show_window_result = show_window(hwnd, 9)
                 set_foreground_result = set_foreground_window(hwnd)

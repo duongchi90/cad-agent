@@ -397,6 +397,31 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             "ATTACH_FAILED",
         )
 
+    def test_foreground_handoff_skips_invalid_self_attach_and_detach(self) -> None:
+        user32 = ReacquiringUser32(
+            foreground_hwnd=FOREIGN_HWND,
+            thread_ids={
+                OWNED_HWND: CURRENT_THREAD_ID,
+                FOREIGN_HWND: CURRENT_THREAD_ID,
+            },
+        )
+
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
+            mcp_client._reacquire_windows_foreground(OWNED_HWND)
+
+        self.assertEqual(user32.attach_calls, [])
+        self.assertEqual(
+            user32.focus_calls,
+            [
+                ("ShowWindow", OWNED_HWND),
+                ("SetForegroundWindow", OWNED_HWND),
+            ],
+        )
+        self.assertEqual(user32.foreground_hwnd, OWNED_HWND)
+
     def test_foreground_handoff_detaches_when_show_or_set_raises(self) -> None:
         user32 = RecordingUser32(
             foreground_hwnd=FOREIGN_HWND,
