@@ -41,7 +41,47 @@ class FidelityError(ValueError):
     """Raised for an unsafe or unsupported fidelity-layout request."""
 
 
-def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
+def _source_support_component_identity(
+    line: Any,
+    crop_gray: np.ndarray,
+    component_labels: np.ndarray,
+) -> tuple[int, ...] | None:
+    """Return the source foreground component(s) supporting ``line``."""
+    dx = line.p2_px[0] - line.p1_px[0]
+    dy = line.p2_px[1] - line.p1_px[1]
+    length = math.hypot(dx, dy)
+    if length == 0.0:
+        return None
+    normal = (-dy / length, dx / length)
+    best: tuple[float, np.ndarray] | None = None
+    for offset in (0.0, -1.0, 1.0, -2.0, 2.0):
+        start = (line.p1_px[0] + normal[0] * offset, line.p1_px[1] + normal[1] * offset)
+        end = (line.p2_px[0] + normal[0] * offset, line.p2_px[1] + normal[1] * offset)
+        support = np.zeros(component_labels.shape, dtype=np.uint8)
+        cv2.line(
+            support,
+            tuple(round(value) for value in start),
+            tuple(round(value) for value in end),
+            1,
+            1,
+            lineType=cv2.LINE_8,
+        )
+        pixels = support > 0
+        darkness = float(np.clip(255.0 - crop_gray[pixels].astype(np.float32), 0.0, 255.0).mean())
+        if best is None or darkness > best[0]:
+            best = (darkness, pixels)
+    if best is None or best[0] <= 0.0:
+        return None
+    labels = component_labels[best[1]]
+    components = tuple(sorted(int(label) for label in np.unique(labels) if label > 0))
+    return components or None
+
+
+def _filter_fidelity_geometry(
+    raw: RawGeometry,
+    *,
+    source_support: dict[str, tuple[int, ...]] | None = None,
+) -> RawGeometry:
     """Remove only sub-12-pixel strokes from a review-only raw candidate."""
     retained: list[Any] = []
     for line in raw.lines:
@@ -52,6 +92,12 @@ def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
             index for index, existing in enumerate(retained)
             if max(abs(start[0] - existing[0][0]), abs(start[1] - existing[0][1]),
                    abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
+            and not (
+                source_support is not None
+                and line.id in source_support
+                and existing[2].id in source_support
+                and source_support[line.id] != source_support[existing[2].id]
+            )
         ), None)
         if duplicate_index is None:
             retained.append((start, end, line))
@@ -94,7 +140,15 @@ def _select_fidelity_geometry(raw: RawGeometry, crop: np.ndarray, scale: float) 
     source_edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
     mask = np.full(crop.shape[:2], 255, dtype=np.uint8)
     baseline_edges = _raw_geometry_edges(raw, crop.shape[:2])
-    filtered = _filter_fidelity_geometry(raw)
+    crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    _, source_foreground = cv2.threshold(crop_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, component_labels = cv2.connectedComponents(source_foreground, connectivity=8)
+    source_support = {
+        line.id: identity
+        for line in raw.lines
+        if (identity := _source_support_component_identity(line, crop_gray, component_labels)) is not None
+    }
+    filtered = _filter_fidelity_geometry(raw, source_support=source_support)
     filtered_edges = _raw_geometry_edges(filtered, crop.shape[:2])
     baseline = {"edge_metric": _edge_metrics(source_edges, baseline_edges, mask), "line_entities": len(raw.lines), "circle_entities": len(raw.circles)}
     filtered_report = {"edge_metric": _edge_metrics(source_edges, filtered_edges, mask), "line_entities": len(filtered.lines), "circle_entities": len(filtered.circles)}
