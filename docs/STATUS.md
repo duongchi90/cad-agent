@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — post-kernel32 live boundary (iteration 126)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-post-kernel32-live-boundary-iteration126.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration126-proof.json; document-ready=True; failure=MCPToolError: WINDOW_FOREGROUND_INVALID after corrected kernel32 binding; candidate_open_call_count=0; raw_lisp_ack_returned=False; health_call_count=0; cleanup warnings=none; PID/IPC/scripts cleaned; candidate and DWT hashes unchanged
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=WINDOW_FOREGROUND_INVALID_AFTER_KERNEL32_FOREGROUND_HANDOFF
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and one smallest bounded foreground diagnostic or repair preserving the exact-HWND fail-closed contract; do not retry candidate activation, invoke plugin bootstrap, call health, or mutate source/DXF/CAD until authorized
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 126)
+- The corrected `kernel32.GetCurrentThreadId` binding was reached, but the
+  repaired foreground owner still failed closed at exact foreground readback
+  with `WINDOW_FOREGROUND_INVALID`.
+- No plugin bootstrap, raw-LISP, FileIPC, candidate open, active-document
+  identity, or health call was made. Cleanup and candidate/DWT integrity stayed
+  clean.
+- The key-free page-1 `DRAFT_REFERENCE` policy remains `MODIFY NONE`; the
+  authoritative SourceCustody HMAC contract was not changed or bypassed.
+
 ## Canonical checkpoint — kernel32 binding correction (iteration 125)
 ```text
 STATE=VERIFIED
