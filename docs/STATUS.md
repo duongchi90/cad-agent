@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Canonical checkpoint — foreground reacquisition diagnostic (iteration 122)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-foreground-reacquisition-diagnostic-iteration122.md; proof C:\temp\cad-agent-task6-live-20260911\foreground-reacquisition-diagnostic-iteration122-proof.json; document-ready=True; owned AutoCAD HWND=1771118/PID=8740; initial foreground HWND=591914/PID=3208/class=Chrome_WidgetWin_1/title=ChatGPT; one ShowWindow returned true; one SetForegroundWindow returned false; ten post-attempt samples remained ChatGPT; classification=FOREGROUND_REACQUIRE_DENIED; plugin/raw-LISP/FileIPC/candidate/health not invoked; PID/scripts cleaned; candidate unchanged
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=FOREGROUND_REACQUIRE_DENIED_DURING_BOOTSTRAP
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review and one smallest bounded session-level foreground repair or diagnostic preserving the fail-closed exact-HWND guard; do not retry candidate activation, invoke plugin bootstrap, call health, or mutate source/DXF/CAD until authorized
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 122)
+- AutoCAD reached document-ready, but the existing one-shot foreground
+  reacquisition could not move focus from the ChatGPT window to the owned
+  AutoCAD top-level HWND: `SetForegroundWindow` returned `false` and all ten
+  bounded samples stayed on ChatGPT.
+- No plugin bootstrap, command delivery, raw-LISP, FileIPC, candidate open, or
+  health call was made. The candidate remained unchanged; owned cleanup left no
+  acad.exe.
+- Cleanup emitted `START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED`, recorded as a
+  secondary warning; the owned PID was absent after the bounded cleanup check.
+- The key-free page-1 `DRAFT_REFERENCE` policy remains `MODIFY NONE`; the
+  authoritative SourceCustody HMAC contract was not changed or bypassed.
+
 ## Canonical checkpoint — foreground identity diagnostic (iteration 121)
 ```text
 STATE=CLASSIFIED
