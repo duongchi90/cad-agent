@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — AutoCAD discovery/load owner audit (iteration 166)
+    STATE=OFFLINE_DISCOVERY_LOAD_OWNER_AUDITED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-discovery-load-owner-audit-iteration166.md; exact HEAD 6ce8271221e7a4a027d0edf991e818d58c783220; hosted checks terminal SUCCESS; manifest demand-load, packager staging, startup direct-NETLOAD owner, and tests inspected; no install/launch/registry/env/dispatcher/FileIPC/viewport/live/source/DXF/CAD/key mutation
+    VERDICT=MATERIAL_FINDING
+    MATERIAL_FINDING=AUTOCAD_DISCOVERY_LOAD_OWNER_GAP
+    FIRST_UNSATISFIED_BOUNDARY=STAGED_BUNDLE_ROOT_NOT_BOUND_TO_AUTOCAD_DISCOVERY_OR_DEMAND_LOAD
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact audit; if clear authorize one test-only causal RED for the missing bundle-root-to-startup/discovery binding, otherwise keep LIVE_ORACLE=NOT_RUN; no AutoCAD launch/install or downstream dispatcher/FileIPC/viewport/live mutation
+    HUMAN_GATE=NO
+
+## AutoCAD discovery/load owner audit (iteration 166)
+- The manifest is demand-loaded (`LoadOnAutoCADStartup=False`,
+  `LoadOnCommandInvocation=True`). The packager owns disposable filesystem
+  staging only; the startup owner accepts only a direct DLL path and sends
+  `_.NETLOAD` after document-ready.
+- Existing live tests use the Release DLL directly, and the bundle test does
+  not connect its staged bundle root to AutoCAD discovery or command-demand
+  loading. The prior bundle availability proof found zero exact installed
+  module matches after QNEW-only startup.
+- Classification: `AUTOCAD_DISCOVERY_LOAD_OWNER_GAP`; cheapest causal RED is a
+  single test-only bundle-root-to-startup/discovery binding contract. No RED or
+  live operation was added in this audit; `LIVE_ORACLE=NOT_RUN`.
+
 ## Canonical checkpoint — bundle packaging owner GREEN (iteration 165)
     STATE=OFFLINE_GREEN_VERIFIED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-bundle-packaging-owner-green-iteration165.md; parent RED 3dd6e1be3841be68cdbbd99e86a1af904048d981; new owner scripts/package_autocad_bundle.ps1; focused bundle owner + existing contract 2 PASS; ruff and diff-check PASS; no csproj/workflow/AutoCAD/live/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
