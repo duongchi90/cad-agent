@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Canonical checkpoint — bundle packaging owner audit (iteration 163)
+    STATE=BUNDLE_PACKAGING_OWNER_AUDITED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-bundle-packaging-owner-audit-iteration163.md; exact HEAD abcfe7dfb0c88e492496eee8b299579f68670b52; PR #424 head matches; base/main e8fc0092ee46750e50de0ea408fd91811cae10c2; hosted checks terminal SUCCESS; manifest present; Release DLL present; bundle Contents/Windows target absent; no packaging/build/bootstrap owner maps Release output into declared bundle target; worktree clean before evidence record; no AutoCAD/live/package/source/DXF/CAD/key mutation
+    LIVE_ORACLE=NOT_RUN
+    VERDICT=MATERIAL_FINDING
+    MATERIAL_FINDING=BUNDLE_PACKAGING_OWNER_GAP
+    FIRST_UNSATISFIED_BOUNDARY=DECLARED_BUNDLE_MODULE_NOT_PRODUCED_BY_AN_EXISTING_BUILD_OR_PACKAGING_OWNER
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact audit; authorize at most one minimal owner-local packaging-contract action only if the gap is accepted, otherwise keep LIVE_ORACLE=NOT_RUN and continue with the next approved offline boundary
+    HUMAN_GATE=NO
+
+## Bundle packaging owner audit (iteration 163)
+- The repository manifest declares `./Contents/Windows/CadAgent.AutoCAD2027.dll`,
+  while the Release build emits the DLL only under the project `bin` output.
+- No `.csproj`, verifier, hosted workflow, or bootstrap owner stages/copies
+  that build output into the declared bundle path. The existing bundle test
+  creates only a disposable test bundle and is not a production packaging
+  owner.
+- The finding is `BUNDLE_PACKAGING_OWNER_GAP`, not an inferred live load result.
+  `LIVE_ORACLE=NOT_RUN`; no package repair or AutoCAD operation was attempted.
+
 ## Canonical checkpoint — live prerequisite preflight (iteration 162)
     STATE=LIVE_PREREQUISITES_ABSENT
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-prerequisite-preflight-iteration162.md; preflight-code-head 139e53db2cf697baf3ba24fbd43b688aaf168c24; local/GitHub main e8fc0092ee46750e50de0ea408fd91811cae10c2; local bridge health 1.0.0 OK; AutoCAD executable exists; AutoCAD process/HWND/document-ready absent; IPC/LISP/disposable-DWG env all unset; bundle-declared plugin DLL absent; no launch/APPLOAD/LISP/FileIPC/viewport/CAD/source/DXF/candidate/key mutation
