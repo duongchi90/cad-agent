@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Canonical checkpoint — native outcome instrumentation verified (iteration 130)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-native-outcome-instrumentation-iteration130.md; pushed code commit bcbb88b; focused Windows-trigger 25 passed/1 deselected/3 subtests; DotNetIPC 82 passed/52 subtests; Ruff passed; scripts/verify.ps1 exit 0; .NET 238 passed; offline Python 3321 passed/21 deselected/80 subtests; offline JUnit tests=3401 failures=0 errors=0 skipped=0; causal-red 1 expected failure; real-data 2 skipped; AutoCAD 17 skipped; live marker/M2 NOT RUN; git diff --check clean; worktree clean; no live retry or source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_NATIVE_OUTCOME_INSTRUMENTATION_LIVE_REVIEW_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the verified native-outcome evidence; await authorization for any live rerun and do not retry the full epoch or mutate source/DXF/CAD/key policy until authorized
+HUMAN_GATE=NO
+```
+
+## Current native-outcome boundary (iteration 130)
+- The diagnostic now captures target HWND/PID, caller and foreground thread
+  IDs, raw attach/detach results, ShowWindow result, and
+  SetForegroundWindow result while preserving the existing stage taxonomy and
+  public `WINDOW_FOREGROUND_INVALID` failure contract.
+- The focused regression proves these fields on the exact-readback-mismatch
+  branch. Authoritative verification is green. No live rerun followed the
+  instrumentation, so the native outcome for the existing live mismatch is
+  still not directly observed with the new fields.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — post-foreground diagnostic live boundary (iteration 129)
 ```text
 STATE=CLASSIFIED
