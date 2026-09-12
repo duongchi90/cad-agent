@@ -1866,6 +1866,28 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
     )
 
 
+def test_text_reconstruction_sizes_from_visible_glyphs_but_keeps_ocr_anchor() -> None:
+    """OCR boxes may include line spacing that must not become DXF glyph height."""
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((80, 240, 3), 255, dtype=np.uint8)
+    cv2.line(image, (10, 6), (229, 6), (0, 0, 0), 1)
+    cv2.line(image, (10, 55), (229, 55), (0, 0, 0), 1)
+    cv2.putText(image, "VISIBLE", (28, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 1, cv2.LINE_AA)
+    ocr_bbox = [10, 6, 230, 56]
+
+    sizing = fidelity_module._derive_text_reconstruction_size(
+        image, "VISIBLE", ocr_bbox, 0.1,
+    )
+
+    glyph_bbox = sizing["glyph_bbox_px"]
+    assert glyph_bbox[1] > ocr_bbox[1]
+    assert glyph_bbox[3] < ocr_bbox[3]
+    assert sizing["height_mm"] < (ocr_bbox[3] - ocr_bbox[1]) * 0.1
+    assert 0.0 < sizing["width_factor"] <= 2.0
+    assert sizing["insertion_px"] == [ocr_bbox[0], ocr_bbox[3]]
+
+
 def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:
     from cad_agent.fidelity import _select_fidelity_geometry
 
