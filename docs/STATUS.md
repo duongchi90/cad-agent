@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — self-attach repair verified (iteration 137)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-self-attach-repair-iteration137.md; pushed code commit 8cc9bcf; focused Windows-trigger 26 passed/1 deselected/3 subtests; DotNetIPC 82 passed/52 subtests; Ruff passed; scripts/verify.ps1 exit 0; .NET 238 passed; offline Python 3322 passed/21 deselected/80 subtests; offline JUnit tests=3402 failures=0 errors=0 skipped=0; causal-red 1 expected failure; real-data 2 skipped; AutoCAD 17 skipped; live marker/M2 NOT RUN; git diff --check clean; worktree clean; no live retry or source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_SELF_ATTACH_REPAIR_LIVE_FOREGROUND_HANDOFF_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable read-only live epoch against the same hash-bound page_01.dxf, requiring foreground handoff, existing plugin/bootstrap, same-expression raw-LISP ACK, exact active-document identity, one health call, and no-save cleanup; stop at the first causal failure
+HUMAN_GATE=NO
+```
+
+## Current self-attach boundary (iteration 137)
+- The production foreground helper now treats equal caller and foreground
+  thread IDs as `attach_not_required`: it skips the invalid self-attach and
+  detach calls, then preserves the existing ShowWindow, single
+  SetForegroundWindow, and exact-HWND readback sequence.
+- The new causal regression proves no AttachThreadInput calls occur for the
+  equal-thread case. Existing different-thread coverage and all authoritative
+  offline gates remain green.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — native AttachThreadInput failure (iteration 136)
 ```text
 STATE=CLASSIFIED
