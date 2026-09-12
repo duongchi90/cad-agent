@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — foreground handoff repair (iteration 123)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-foreground-handoff-repair-iteration123.md; pushed code commit f4b2b6012af289afc14f4d2dd55bbcd0b8ebbc19; focused Windows-trigger 23 passed/1 deselected/3 subtests; DotNetIPC 82 passed/52 subtests; Ruff passed; scripts/verify.ps1 exit 0; .NET 238 passed; offline Python 3319 passed/21 deselected/80 subtests; offline JUnit tests=3399 failures=0 errors=0 skipped=0; causal-red 1 expected failure; real-data 2 skipped; AutoCAD 17 skipped; live marker/M2 NOT RUN; clean tree; no live rerun or source/DXF/CAD mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_REPAIR_LIVE_FOREGROUND_HANDOFF_AND_RAW_LISP_ACK_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review, then if clear run exactly one disposable read-only live epoch with the repaired foreground owner against the same hash-bound page_01.dxf; stop at first causal failure and do not infer visual/dimension success
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 123)
+- The Windows foreground owner now performs one bounded
+  `AttachThreadInput` handoff around the existing `ShowWindow` plus
+  `SetForegroundWindow` sequence, always detaching and preserving exact-HWND
+  fail-closed readback.
+- Offline focused and authoritative verification passed. No live epoch has
+  run after the repair, so live foreground handoff, raw-LISP ACK, candidate
+  identity, health, visual fidelity, and dimensions remain unproven.
+- No plugin/raw-LISP/FileIPC/source/DXF/CAD/key-policy mutation occurred. The
+  key-free page-1 `DRAFT_REFERENCE` policy remains `MODIFY NONE`; SourceCustody
+  HMAC remains unchanged.
+
 ## Canonical checkpoint — foreground reacquisition diagnostic (iteration 122)
 ```text
 STATE=CLASSIFIED
