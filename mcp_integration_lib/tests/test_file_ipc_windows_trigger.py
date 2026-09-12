@@ -28,6 +28,8 @@ OWNED_PID = 0x2001
 FOREIGN_HWND = 0x1002
 FOREIGN_PID = 0x2002
 RECEIVER_HWND = 0x1101
+CURRENT_THREAD_ID = 0x3001
+FOREGROUND_THREAD_ID = 0x4001
 EXPRESSION = '(setq *r8d-test* "é")'
 EXPECTED_FRAMED_TEXT = "\x1b\x1b" + EXPRESSION + "\r"
 
@@ -69,6 +71,9 @@ class RecordingUser32:
         send_returns: list[int] | None = None,
         send_errors: list[int] | None = None,
         send_result: int = 1,
+        thread_ids: dict[int, int] | None = None,
+        attach_thread_result: int = 1,
+        set_foreground_exception: Exception | None = None,
     ) -> None:
         self.children = children if children is not None else [
             (RECEIVER_HWND, "MDIClient", OWNED_PID)
@@ -86,11 +91,18 @@ class RecordingUser32:
         self.send_returns = send_returns or [1]
         self.send_errors = send_errors or [0]
         self.send_result = send_result
+        self.thread_ids = thread_ids or {
+            OWNED_HWND: CURRENT_THREAD_ID,
+            FOREIGN_HWND: FOREGROUND_THREAD_ID,
+        }
+        self.attach_thread_result = attach_thread_result
+        self.set_foreground_exception = set_foreground_exception
         self.kernel32 = RecordingKernel32()
         self.enum_calls: list[tuple[int, int]] = []
         self.window_pid_calls: list[int] = []
         self._pid_call_counts: dict[int, int] = {}
         self.focus_calls: list[tuple[str, int]] = []
+        self.attach_calls: list[tuple[int, int, int]] = []
         self.post_calls: list[tuple[int, int, int, int]] = []
         self.post_results: list[int] = []
         self.send_calls: list[tuple[int, int, int, int, int, int]] = []
@@ -119,7 +131,14 @@ class RecordingUser32:
         call_index = self._pid_call_counts.get(hwnd, 0)
         self._pid_call_counts[hwnd] = call_index + 1
         pid_pointer._obj.value = sequence[min(call_index, len(sequence) - 1)]
-        return 1
+        return self.thread_ids.get(hwnd, 1)
+
+    def GetCurrentThreadId(self):
+        return CURRENT_THREAD_ID
+
+    def AttachThreadInput(self, source_thread, target_thread, attach):
+        self.attach_calls.append((source_thread, target_thread, attach))
+        return self.attach_thread_result
 
     def GetForegroundWindow(self):
         return self.foreground_hwnd
@@ -130,6 +149,8 @@ class RecordingUser32:
 
     def SetForegroundWindow(self, hwnd):
         self.focus_calls.append(("SetForegroundWindow", hwnd))
+        if self.set_foreground_exception is not None:
+            raise self.set_foreground_exception
         return self.set_foreground_result
 
     def PostMessageW(self, target, message, wparam, lparam):
@@ -319,6 +340,76 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             self._run_current_trigger(user32)
         self.assertEqual(user32.send_calls, [])
         self.assertEqual(user32.post_calls, [])
+
+    def test_foreground_handoff_attaches_and_detaches_before_exact_readback(self) -> None:
+        user32 = ReacquiringUser32(foreground_hwnd=FOREIGN_HWND)
+
+        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+            mcp_client._reacquire_windows_foreground(OWNED_HWND)
+
+        self.assertEqual(
+            user32.attach_calls,
+            [
+                (CURRENT_THREAD_ID, FOREGROUND_THREAD_ID, 1),
+                (CURRENT_THREAD_ID, FOREGROUND_THREAD_ID, 0),
+            ],
+        )
+        self.assertEqual(
+            user32.focus_calls,
+            [("ShowWindow", OWNED_HWND), ("SetForegroundWindow", OWNED_HWND)],
+        )
+
+    def test_foreground_handoff_attach_failure_fails_closed_before_show(self) -> None:
+        user32 = RecordingUser32(
+            foreground_hwnd=FOREIGN_HWND,
+            attach_thread_result=0,
+        )
+
+        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+            with self.assertRaises(MCPToolError):
+                mcp_client._reacquire_windows_foreground(OWNED_HWND)
+
+        self.assertEqual(
+            user32.attach_calls,
+            [(CURRENT_THREAD_ID, FOREGROUND_THREAD_ID, 1)],
+        )
+        self.assertEqual(user32.focus_calls, [])
+
+    def test_foreground_handoff_detaches_when_show_or_set_raises(self) -> None:
+        user32 = RecordingUser32(
+            foreground_hwnd=FOREIGN_HWND,
+            set_foreground_exception=RuntimeError("native denial"),
+        )
+
+        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+            with self.assertRaises(MCPToolError):
+                mcp_client._reacquire_windows_foreground(OWNED_HWND)
+
+        self.assertEqual(
+            user32.attach_calls,
+            [
+                (CURRENT_THREAD_ID, FOREGROUND_THREAD_ID, 1),
+                (CURRENT_THREAD_ID, FOREGROUND_THREAD_ID, 0),
+            ],
+        )
+
+    def test_foreground_handoff_exact_hwnd_mismatch_fails_closed_after_detach(self) -> None:
+        user32 = RecordingUser32(
+            foreground_hwnd=FOREIGN_HWND,
+            set_foreground_result=1,
+        )
+
+        with patch.object(mcp_client.ctypes.windll, "user32", user32):
+            with self.assertRaises(MCPToolError):
+                mcp_client._reacquire_windows_foreground(OWNED_HWND)
+
+        self.assertEqual(
+            user32.attach_calls,
+            [
+                (CURRENT_THREAD_ID, FOREGROUND_THREAD_ID, 1),
+                (CURRENT_THREAD_ID, FOREGROUND_THREAD_ID, 0),
+            ],
+        )
 
     def test_async_enqueue_does_not_depend_on_sync_timeout_completion(self) -> None:
         """A valid owner/foreground must survive a synchronous target timeout."""

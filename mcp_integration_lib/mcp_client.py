@@ -1639,9 +1639,7 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
 
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise MCPToolError("WINDOW_IDENTITY_CHANGED")
-        if get_foreground_window() != hwnd:
-            show_window(hwnd, 9)
-            set_foreground_window(hwnd)
+        _reacquire_windows_foreground(hwnd)
         if get_foreground_window() != hwnd:
             raise MCPToolError("WINDOW_FOREGROUND_INVALID")
 
@@ -1655,6 +1653,104 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
             if not post_message(target, 0x0102, code_unit, 0):
                 raise MCPToolError("WINDOW_DELIVERY_FAILED")
     return trigger
+
+
+def _reacquire_windows_foreground(hwnd: int) -> None:
+    """Reacquire one owned top-level window without weakening exact readback."""
+    user32 = ctypes.windll.user32
+
+    def set_native_signature(function: Any, argtypes: list[Any], restype: Any) -> None:
+        try:
+            function.argtypes = argtypes
+            function.restype = restype
+        except (AttributeError, TypeError):
+            # Test doubles expose the same callable surface without ctypes metadata.
+            pass
+
+    get_window_thread_process_id = user32.GetWindowThreadProcessId
+    get_current_thread_id = user32.GetCurrentThreadId
+    attach_thread_input = user32.AttachThreadInput
+    show_window = user32.ShowWindow
+    set_foreground_window = user32.SetForegroundWindow
+    get_foreground_window = user32.GetForegroundWindow
+    set_native_signature(
+        get_window_thread_process_id,
+        [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)],
+        wintypes.DWORD,
+    )
+    set_native_signature(get_current_thread_id, [], wintypes.DWORD)
+    set_native_signature(
+        attach_thread_input,
+        [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL],
+        wintypes.BOOL,
+    )
+    set_native_signature(show_window, [wintypes.HWND, ctypes.c_int], wintypes.BOOL)
+    set_native_signature(set_foreground_window, [wintypes.HWND], wintypes.BOOL)
+    set_native_signature(get_foreground_window, [], wintypes.HWND)
+
+    if int(get_foreground_window() or 0) == hwnd:
+        return
+
+    foreground_hwnd = int(get_foreground_window() or 0)
+    if foreground_hwnd <= 0:
+        raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+
+    def window_thread_id(window: int) -> int:
+        process_id = wintypes.DWORD()
+        thread_id = int(
+            get_window_thread_process_id(window, ctypes.byref(process_id)) or 0
+        )
+        if thread_id <= 0:
+            raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+        return thread_id
+
+    try:
+        caller_thread_id = int(get_current_thread_id() or 0)
+        foreground_thread_id = window_thread_id(foreground_hwnd)
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError("WINDOW_FOREGROUND_INVALID") from exc
+    if caller_thread_id <= 0:
+        raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+
+    attached = False
+    failure: Optional[MCPToolError] = None
+    try:
+        try:
+            attached = bool(
+                attach_thread_input(caller_thread_id, foreground_thread_id, True)
+            )
+        except Exception as exc:
+            failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+            failure.__cause__ = exc
+        if not attached and failure is None:
+            failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+        if attached:
+            try:
+                show_window(hwnd, 9)
+                set_foreground_window(hwnd)
+                if int(get_foreground_window() or 0) != hwnd:
+                    failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+            except MCPToolError as exc:
+                failure = exc
+            except Exception as exc:
+                failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+                failure.__cause__ = exc
+    finally:
+        if attached:
+            try:
+                detached = bool(
+                    attach_thread_input(caller_thread_id, foreground_thread_id, False)
+                )
+                if not detached and failure is None:
+                    failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+            except Exception as exc:
+                if failure is None:
+                    failure = MCPToolError("WINDOW_FOREGROUND_INVALID")
+                    failure.__cause__ = exc
+    if failure is not None:
+        raise failure
 
 
 def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
