@@ -155,6 +155,38 @@ def test_dimension_reconstruction_emits_approved_native_dimension(tmp_path: Path
     assert list(document.modelspace().query("DIMENSION"))[0].dxf.layer == "FIDELITY_DIMENSIONS"
 
 
+def test_dimension_reconstruction_preserves_approved_display_text_and_endpoints(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct
+
+    source, output, manifest, _, approval_path, base_dxf = _dimension_reconstruction_fixture(tmp_path)
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    observation_path = output / approval["observation"]["path"]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    mapping = approval["mappings"][0]
+    candidate = next(item for item in observation["candidates"] if item["text"]["id"] == mapping["candidate_id"])
+    candidate["text"]["parsed_value"] = 1525
+    observation_path.write_text(json.dumps(observation), encoding="utf-8")
+    approval["observation"]["sha256"] = __import__("hashlib").sha256(observation_path.read_bytes()).hexdigest()
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+    evidence = next(item for item in candidate["nearby_lines"] if item["id"] == mapping["line_evidence_id"])
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    height_px = int(audit["source_page"]["render_height_px"])
+    expected_p1 = (float(evidence["p1_px"][0]) * scale, (height_px - float(evidence["p1_px"][1])) * scale)
+    expected_p2 = (float(evidence["p2_px"][0]) * scale, (height_px - float(evidence["p2_px"][1])) * scale)
+
+    result = run_fidelity_dimension_reconstruct(
+        source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+    )
+
+    dimension = next(iter(ezdxf.readfile(result).modelspace().query("DIMENSION")))
+    assert dimension.dxf.text == "1525"
+    assert (dimension.dxf.defpoint2.x, dimension.dxf.defpoint2.y) == pytest.approx(expected_p1)
+    assert (dimension.dxf.defpoint3.x, dimension.dxf.defpoint3.y) == pytest.approx(expected_p2)
+
+
 def test_dimension_reconstruction_cli_writes_private_candidate(tmp_path: Path) -> None:
     source, output, _, manifest_path, approval_path, base_dxf = _dimension_reconstruction_fixture(tmp_path)
 
