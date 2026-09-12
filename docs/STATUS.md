@@ -1,11 +1,11 @@
 # CAD Agent Status
-## Canonical checkpoint — R1C executor binding offline GREEN (iteration 171)
-    STATE=OFFLINE_GREEN_VERIFIED
-    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-r1c-executor-binding-green-iteration171.md; implementation commit f2e6c54; existing PDF executor now binds caller-supplied R1C configuration to inspect_source_bundle; no live/source/CAD mutation
-    VERDICT=REVIEW_PENDING_AFTER_HEAD_MOVE
-    MATERIAL_FINDING=R1C_EXECUTOR_BINDING_GAP_RESOLVED_OFFLINE
-    FIRST_UNSATISFIED_BOUNDARY=AUTHENTIC_SOURCE_BUNDLE_CUSTODY_AND_SOURCE_FUSION_INPUTS_FOR_EXACT_PDF
-    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the exact pushed GREEN HEAD; if clear, materialize authentic exact-PDF inputs only through existing SourceBundle/SourceIntegrity/SourceFusion owners; no raw-key bridge API, provider/store, bypass, source/CAD/live/provider/M2 mutation
+## Canonical checkpoint — exact-PDF R1C materialization fail-closed (iteration 172)
+    STATE=STOPPED_AT_TRUTHFUL_AVAILABILITY_BOUNDARY
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-r1c-authentic-materialization-fail-closed-iteration172.md; exact source SHA recheck passed; no approved-root/config/identity/custody material was available; no source/CAD/live mutation
+    VERDICT=MATERIAL_FINDING
+    MATERIAL_FINDING=AUTHENTIC_R1C_LOCAL_CONFIGURATION_NOT_AVAILABLE_TO_CURRENT_EXECUTOR
+    FIRST_UNSATISFIED_BOUNDARY=AUTHENTIC_R1C_LOCAL_CONFIGURATION_NOT_AVAILABLE_TO_CURRENT_EXECUTOR
+    NEXT_SINGLE_BOUNDED_ACTION=STOP_AT_THIS_BOUNDARY; keep executor/source unchanged and resume only when truthful authorized local R1C configuration becomes available through an existing supported owner surface; no loader/provider/store/bridge/raw-key API, synthetic values, bypass, source/CAD/live/provider/M2 mutation
     HUMAN_GATE=NO
 
 ## R1C executor binding causal RED (iteration 170)
