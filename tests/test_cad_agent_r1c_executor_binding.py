@@ -4,7 +4,10 @@ import hashlib
 import inspect
 from pathlib import Path
 
+import pytest
+
 from cad_agent import pdf
+from cad_agent.manifest import ManifestError
 from cad_agent.source_bundle import build_source_bundle, source_bundle_sha256
 
 
@@ -56,6 +59,7 @@ def _r1c_configuration(tmp_path: Path) -> tuple[dict[str, object], Path]:
 
 def test_pdf_executor_binds_complete_r1c_configuration_to_existing_owner(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configuration, source = _r1c_configuration(tmp_path)
     bundle = configuration["source_bundle"]
@@ -64,8 +68,48 @@ def test_pdf_executor_binds_complete_r1c_configuration_to_existing_owner(
     assert len(source_bundle_sha256(bundle)) == 64
 
     signature = inspect.signature(pdf.run_pdf_stages)
-    assert "r1c_configuration" in signature.parameters, (
-        "Issue #409 RED: current PDF executor lacks the binding to the "
-        "existing R1C inspect_source_bundle/source-fusion owners"
+    assert "r1c_configuration" in signature.parameters
+
+    manifest = pdf.new_pdf_manifest(source, 1.0, "test-only", 144)
+    monkeypatch.setattr(pdf, "_ensure_rendered", lambda *_args: None)
+    evidence = pdf.run_pdf_stages(
+        source,
+        tmp_path / "output",
+        tmp_path / "manifest.json",
+        manifest,
+        r1c_configuration=configuration,
     )
 
+    assert evidence is not None
+    assert evidence["source_bundle_sha256"] == source_bundle_sha256(bundle)
+    assert evidence["items"][0]["observed_sha256"] == bundle["items"][0]["sha256"]
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "invalid"])
+def test_pdf_executor_rejects_incomplete_or_invalid_r1c_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    configuration, source = _r1c_configuration(tmp_path)
+    if mutation == "missing":
+        configuration.pop("source_bundle")
+    elif mutation == "extra":
+        configuration["unexpected"] = True
+    else:
+        configuration["identity_key"] = b""
+
+    manifest = pdf.new_pdf_manifest(source, 1.0, "test-only", 144)
+
+    def fail_render(*_args: object) -> None:
+        raise AssertionError("invalid R1C configuration reached PDF staging")
+
+    monkeypatch.setattr(pdf, "_ensure_rendered", fail_render)
+    with pytest.raises(ManifestError, match="R1C_CONFIGURATION_INVALID"):
+        pdf.run_pdf_stages(
+            source,
+            tmp_path / "output",
+            tmp_path / "manifest.json",
+            manifest,
+            r1c_configuration=configuration,
+        )
