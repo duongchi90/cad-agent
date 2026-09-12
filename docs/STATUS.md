@@ -1,4 +1,21 @@
 # CAD Agent Status
+## Canonical checkpoint — WAIT_SAFE live-oracle preflight (iteration 113)
+```text
+STATE=WAIT_SAFE
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-wait-safe-live-oracle-preflight-iteration113.md; iteration-112 authoritative offline verification at 2d78ca1; read-only live preflight found no AutoCAD process and all six live-oracle prerequisites absent; LiveOracleExecuted=False
+VERDICT=WAITING_FOR_SOL_REVIEW_WITH_LIVE_PREREQUISITES_UNAVAILABLE
+FIRST_UNSATISFIED_BOUNDARY=FRESH_SOL_REVIEW_AFTER_AUTHORITATIVE_OFFLINE_VERIFY
+NEXT_SINGLE_BOUNDED_ACTION=Consume the fresh SOL verdict; if clear, recheck prerequisites and run the one read-only live oracle only if its prerequisites become available, otherwise record SKIP/NOT_RUN
+HUMAN_GATE=NO
+```
+
+## WAIT_SAFE preparation (iteration 113)
+- No AutoCAD process or live-oracle prerequisites are present in this session;
+  the live gate remains `SKIP`/`NOT RUN`.
+- No FileIPC request, candidate activation, health call, AutoCAD interaction,
+  source/DXF/CAD mutation, or production mutation occurred while waiting for
+  SOL.
+
 ## Canonical checkpoint — authoritative raw-LISP ACK verification (iteration 112)
 ```text
 STATE=VERIFIED
