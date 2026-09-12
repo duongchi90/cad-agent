@@ -1814,12 +1814,17 @@ def run_fidelity_dimension_reconstruct(
         direction = 1.0 if side >= 0 else -1.0
         offset = max(6.0, (float(bbox[3]) - float(bbox[1])) * scale * 1.5)
         location = (midpoint[0] + normal[0] * direction * offset, midpoint[1] + normal[1] * direction * offset)
+        text_value = candidate["text"].get("parsed_value")
+        dimension_text = "<>"
+        if text_value is not None:
+            dimension_text = format(text_value, "g") if isinstance(text_value, (int, float)) else str(text_value)
         dimension = model.add_linear_dim(
             base=location,
             p1=p1,
             p2=p2,
             location=location,
             angle=math.degrees(math.atan2(dy, dx)),
+            text=dimension_text,
             dxfattribs={"layer": "FIDELITY_DIMENSIONS"},
         )
         dimension.render()
