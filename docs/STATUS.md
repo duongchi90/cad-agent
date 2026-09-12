@@ -1,4 +1,22 @@
 # CAD Agent Status
+## Current raw-LISP foreground oracle (iteration 98)
+- Fresh SOL review authorized exactly one disposable live read-only oracle
+  around one existing raw-LISP trigger. The existing bounded document-ready
+  wait passed on owned HWND `1312424` / PID `4356`.
+- Three read-only foreground samples immediately before/during/after the
+  trigger all showed the same foreground HWND/PID as the owner; process
+  identity was `acad.exe` at the approved AutoCAD 2027 path. The trigger ran
+  exactly once and returned without an exception, but its return is not an
+  execution/receiver ACK.
+- Per SOL's restricted classification, this epoch is
+  `FOREGROUND_BOUNDARY_UNRESOLVED`: it did not reproduce
+  `WINDOW_FOREGROUND_INVALID`, but it also does not prove command consumption
+  or resolve the prior epoch's failure permanently. Candidate, health, FileIPC,
+  setup, persistence, and CAD/source/DXF mutation were `NOT_RUN`/untouched.
+- Cleanup completed without warnings; owned PID, temporary bundle, and script
+  were absent and the DWT SHA was unchanged. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-foreground-oracle-iteration98.md`.
+
 ## Current raw-LISP foreground guard characterization (iteration 96)
 - Fresh SOL review required one offline characterization of the existing
   `make_windows_lisp_trigger` owner. Its exact foreground predicate is
