@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — full raw-LISP expression framing verified (iteration 140)
+```text
+STATE=VERIFIED_CAUSAL_ORACLE
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-full-expression-framing-iteration140.md; proof C:\temp\cad-agent-task6-live-20260911\raw-lisp-full-expression-framing-iteration140-proof.json; actual drawing_open ACK-wrapped expression length 949; 952 UTF-16LE WM_CHAR code units reconstructed byte-for-byte as ESC ESC + expression + CR; marker/token/path/order verified; all positive PostMessageW results=1; injected [1,0] branch returned WINDOW_DELIVERY_FAILED; no dispatch after failure; cleanup clean; production_files_modified=False; live_epoch_started=False; no production/live/plugin/candidate/health/source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=LIVE_RAW_LISP_RECEIVER_CONSUMPTION_OR_EVALUATION_NOT_PROVEN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable read-only live epoch against the same hash-bound page_01.dxf, requiring the existing live raw-LISP receiver ACK and then exact candidate identity plus one health call, with no retry and no visual/dimension/persistence/source/DXF/CAD/key-policy mutation
+HUMAN_GATE=NO
+```
+
+## Current full-expression framing boundary (iteration 140)
+- The actual generated `drawing_open` ACK-wrapped expression survived the
+  existing `WM_CHAR`/UTF-16LE text-trigger path byte-for-byte in the offline
+  native owner double. The marker/token/path and marker-before-activation
+  ordering were preserved.
+- A single injected `PostMessageW` failure returned the existing
+  `WINDOW_DELIVERY_FAILED` oracle, stopped later delivery, and cleaned up.
+- Live receiver consumption/evaluation is the only next live boundary in this
+  sequence; the offline oracle does not claim to prove it. The page-1 PDF
+  remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`, and the authoritative
+  SourceCustody HMAC/identity-key contract was not changed.
+
 ## Canonical checkpoint — raw-LISP ACK characterized (iteration 139)
 ```text
 STATE=VERIFIED_CHARACTERIZATION
