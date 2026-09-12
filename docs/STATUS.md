@@ -1,4 +1,24 @@
 # CAD Agent Status
+## Current-main exact page-1 candidate-activation discriminator (iteration 95)
+- Fresh SOL review authorized exactly one live, read-only candidate-activation
+  discriminator epoch using the executor-branch owner, verified DWT, and
+  `CADAGENT_DISPATCH` startup. The existing bounded document-ready wait
+  reached `DOCUMENT_READY=PROVEN`.
+- The existing raw-LISP open/activate trigger then failed closed with
+  `MCPToolError: WINDOW_FOREGROUND_INVALID`. The request was not delivered,
+  so the single `DotNetIPCClient.health(drawing_full_path=None)` call was not
+  reached (`health_call_count=0`). Candidate activation remains
+  `NOT_PROVEN`; no candidate-content conclusion is justified.
+- FileIPC bootstrap load/ping, setup audit, persistence, retry, timeout/code
+  change, and CAD/source/DXF mutation were all `NOT_RUN`. Cleanup removed the
+  owned PID, temporary bundle, startup script, and health request/result pair;
+  candidate/DWT hashes were unchanged. Normal close confirmation timed out,
+  but exact-PID fallback cleanup succeeded.
+- Classification is `LIVE_EPOCH=FAIL_CLOSED`,
+  `DOCUMENT_READY=PROVEN`, `CANDIDATE_ACTIVATION=NOT_PROVEN`, and
+  `DISCRIMINATOR_HEALTH=NOT_RUN`. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-real-pdf-candidate-activation-discriminator-iteration95.md`.
+
 ## Current-main exact page-1 startup discriminator with bounded wait (iteration 94)
 - Fresh SOL review authorized one live read-only startup discriminator using
   the executor-branch owner, verified DWT, and `CADAGENT_DISPATCH` startup
