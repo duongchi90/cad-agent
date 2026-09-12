@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — post-self-attach raw-LISP boundary (iteration 138)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-post-self-attach-live-boundary-iteration138.md; proof C:\temp\cad-agent-task6-live-20260911\candidate-activation-iteration138-proof.json; exactly one disposable full live epoch; document_ready=True; raw_lisp_ack_returned=False; failure=MCPTimeoutError: RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED; candidate/health downstream NOT RUN; health_call_count=0; cleanup warnings=0; AutoCAD PID 26444 absent; candidate SHA-256 unchanged at 167a3955a84e24c40c81112ad696eb08f943f4b2721d56891bef8620a731a714; default DWT SHA-256 unchanged at b4f8b4ea726bab4b50049f4aa54ba6540f52bd14961f851f49da705cdc292d42; no retry or source/DXF/CAD/key-policy mutation
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED_AFTER_SELF_ATTACH_REPAIR
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one offline characterization of the existing raw-LISP receiver ACK path and its disposable harness, with no production mutation, live retry, plugin/candidate/health, visual/dimension, source/DXF/CAD, or key-policy mutation until the characterization is reviewed
+HUMAN_GATE=NO
+```
+
+## Current post-self-attach live boundary (iteration 138)
+- The repaired foreground path was not the blocking boundary in this epoch:
+  AutoCAD reached `document_ready=True`, then the existing raw-LISP receiver
+  did not confirm its required same-expression ACK.
+- The run stopped before downstream candidate identity and health assertions;
+  there was no retry, no production/source/DXF/CAD mutation, and cleanup was
+  clean. Candidate and default DWT hashes were unchanged.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — self-attach repair verified (iteration 137)
 ```text
 STATE=VERIFIED
