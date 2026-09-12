@@ -1701,8 +1701,16 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
             if not get_window_thread_process_id(window, ctypes.byref(process_id)):
                 return {"hwnd": window, "pid": None}
         except Exception:
-            return {"hwnd": window, "pid": None}
+                return {"hwnd": window, "pid": None}
         return {"hwnd": window, "pid": int(process_id.value)}
+
+    target_snapshot = foreground_snapshot(hwnd)
+    caller_thread_id: Optional[int] = None
+    foreground_thread_id: Optional[int] = None
+    attach_result: object = None
+    show_window_result: object = None
+    set_foreground_result: object = None
+    detach_result: object = None
 
     def foreground_failure(
         stage: str,
@@ -1714,6 +1722,13 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
     ) -> MCPToolError:
         diagnostic: dict[str, object] = {
             "stage": stage,
+            "target": target_snapshot,
+            "caller_thread_id": caller_thread_id,
+            "foreground_thread_id": foreground_thread_id,
+            "attach_result": attach_result,
+            "show_window_result": show_window_result,
+            "set_foreground_result": set_foreground_result,
+            "detach_result": detach_result,
             "foreground_before": before,
             "foreground_after_set": after_set,
             "foreground_after_detach": after_detach,
@@ -1758,9 +1773,10 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
     foreground_after_detach: Optional[dict[str, object]] = None
     try:
         try:
-            attached = bool(
-                attach_thread_input(caller_thread_id, foreground_thread_id, True)
+            attach_result = attach_thread_input(
+                caller_thread_id, foreground_thread_id, True
             )
+            attached = bool(attach_result)
         except Exception as exc:
             failure = foreground_failure(
                 "ATTACH_FAILED", before=foreground_before, cause=exc
@@ -1769,8 +1785,8 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
             failure = foreground_failure("ATTACH_FAILED", before=foreground_before)
         if attached:
             try:
-                show_window(hwnd, 9)
-                set_foreground_window(hwnd)
+                show_window_result = show_window(hwnd, 9)
+                set_foreground_result = set_foreground_window(hwnd)
                 foreground_after_set = foreground_snapshot(
                     int(get_foreground_window() or 0)
                 )
@@ -1793,11 +1809,10 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
         if attached:
             detach_failure: Optional[MCPToolError] = None
             try:
-                detached = bool(
-                    attach_thread_input(
-                        caller_thread_id, foreground_thread_id, False
-                    )
+                detach_result = attach_thread_input(
+                    caller_thread_id, foreground_thread_id, False
                 )
+                detached = bool(detach_result)
                 foreground_after_detach = foreground_snapshot(
                     int(get_foreground_window() or 0)
                 )
@@ -1819,6 +1834,7 @@ def _reacquire_windows_foreground(hwnd: int) -> None:
             if failure is not None:
                 diagnostic = failure._foreground_handoff_diagnostic
                 diagnostic["foreground_after_detach"] = foreground_after_detach
+                diagnostic["detach_result"] = detach_result
             if detach_failure is not None:
                 if failure is None:
                     failure = detach_failure

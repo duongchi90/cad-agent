@@ -453,6 +453,31 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         self.assertEqual(diagnostic["foreground_after_set"], {"hwnd": FOREIGN_HWND, "pid": OWNED_PID})
         self.assertEqual(diagnostic["foreground_after_detach"], {"hwnd": FOREIGN_HWND, "pid": OWNED_PID})
 
+    def test_foreground_handoff_mismatch_captures_native_outcomes_and_target_identity(self) -> None:
+        user32 = RecordingUser32(
+            foreground_hwnd=FOREIGN_HWND,
+            set_foreground_result=0,
+        )
+
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
+            with self.assertRaises(MCPToolError) as raised:
+                mcp_client._reacquire_windows_foreground(OWNED_HWND)
+
+        self.assertEqual(str(raised.exception), "WINDOW_FOREGROUND_INVALID")
+        diagnostic = raised.exception._foreground_handoff_diagnostic
+        self.assertEqual(
+            diagnostic["target"], {"hwnd": OWNED_HWND, "pid": OWNED_PID}
+        )
+        self.assertEqual(diagnostic["caller_thread_id"], CURRENT_THREAD_ID)
+        self.assertEqual(diagnostic["foreground_thread_id"], FOREGROUND_THREAD_ID)
+        self.assertEqual(diagnostic["attach_result"], 1)
+        self.assertEqual(diagnostic["show_window_result"], 1)
+        self.assertEqual(diagnostic["set_foreground_result"], 0)
+        self.assertEqual(diagnostic["detach_result"], 1)
+
     def test_foreground_handoff_detach_failure_is_exposed_after_exact_readback(self) -> None:
         user32 = ReacquiringUser32(
             foreground_hwnd=FOREIGN_HWND,
