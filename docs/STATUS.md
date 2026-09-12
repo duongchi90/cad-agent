@@ -1,4 +1,22 @@
 # CAD Agent Status
+## Canonical checkpoint — live acceptance prerequisite classification (iteration 114)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-acceptance-prerequisite-classification-iteration114.md; exact candidate C:\temp\cad-agent-real-pdf-current-main-iter80-run\staged\dxf\page_01.dxf with SHA256 167a3955a84e24c40c81112ad696eb08f943f4b2721d56891bef8620a731a714; read-only preflight found no acad.exe and all six live prerequisites absent; LiveEpochStarted=False
+VERDICT=SKIP_LIVE_PREREQUISITES_UNAVAILABLE
+FIRST_UNSATISFIED_BOUNDARY=LIVE_ACCEPTANCE_PREREQUISITES_ABSENT
+NEXT_SINGLE_BOUNDED_ACTION=Remain WAIT_SAFE and consume fresh SOL review; if all prerequisites become available, rerun one exact disposable read-only epoch, otherwise retain SKIP/NOT_RUN and do not infer candidate or visual success
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 114)
+- The exact frozen page-1 candidate is identified and hash-bound, but the
+  disposable live acceptance epoch was not started because no AutoCAD process
+  or required live prerequisites were present.
+- Live raw-LISP receiver ACK, candidate active-document identity, and
+  `DotNetIPCClient.health` remain `NOT_PROVEN`; no PASS or failure is inferred.
+- No FileIPC, AutoCAD, source/DXF/CAD, retry, or cleanup mutation occurred.
+
 ## Canonical checkpoint — WAIT_SAFE live-oracle preflight (iteration 113)
 ```text
 STATE=WAIT_SAFE
