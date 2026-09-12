@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — foreground identity diagnostic (iteration 121)
+```text
+STATE=CLASSIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-foreground-identity-diagnostic-iteration121.md; proof C:\temp\cad-agent-task6-live-20260911\foreground-identity-diagnostic-iteration121-proof.json; document-ready=True; owned AutoCAD HWND=5048306/PID=13480; foreground HWND=2819782/PID=1428; class/title=#32770 / RYME Worldwide; classification=FOREIGN_PROCESS_STOLE_FOREGROUND; plugin/raw-LISP/FileIPC/candidate/health not invoked; PID/scripts cleaned; candidate unchanged
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=FOREIGN_PROCESS_STOLE_FOREGROUND_DURING_BOOTSTRAP
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of iteration 121 and one bounded foreground/bootstrap corrective or diagnostic action; do not retry candidate activation, call health, invoke SetForegroundWindow, or mutate source/DXF/CAD until authorized
+HUMAN_GATE=NO
+```
+
+## Current live boundary (iteration 121)
+- The read-only diagnostic reached document-ready, then found a different
+  process owning the foreground window while AutoCAD's owned top-level window
+  was not foreground.
+- No plugin bootstrap, raw-LISP, FileIPC, candidate open, or health call was
+  made. The candidate remained unchanged; owned cleanup left no acad.exe.
+- Cleanup emitted `START_TAB_BOOTSTRAP_CLOSE_NOT_CONFIRMED`, recorded as a
+  warning; the owned PID was absent after the bounded cleanup check.
+- The key-free page-1 `DRAFT_REFERENCE` policy remains `MODIFY NONE`; the
+  authoritative SourceCustody HMAC contract was not changed or bypassed.
+
 ## Canonical checkpoint — post-harness live foreground boundary (iteration 120)
 ```text
 STATE=CLASSIFIED
