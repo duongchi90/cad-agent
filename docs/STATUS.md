@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — disposable harness repair verified (iteration 133)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-disposable-harness-repair-iteration133.md; disposable harness tests 3 passed; DefWindowProcW pointer-width signature verified; bounded foreign precondition gate verified for exact and non-exact readback; production foreground helper unchanged; no live rerun, plugin/raw-LISP/candidate/health, or source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_DISPOSABLE_HARNESS_REPAIR_LIVE_NATIVE_OUTCOME_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable read-only native-outcome diagnostic with the repaired harness, verified benign foreign HWND/PID foreground first, then invoke unchanged production helper exactly once and capture all native outcomes; stop immediately afterward
+HUMAN_GATE=NO
+```
+
+## Current disposable harness boundary (iteration 133)
+- The iteration-132 harness-only defect is repaired: `DefWindowProcW` now has
+  pointer-width-safe argument and return signatures, and the foreign-window
+  setup is a bounded routine that proves exact foreground readback before the
+  production helper may run.
+- Focused offline harness tests: `3 passed`. No production foreground behavior
+  changed and no live retry was run after the repair.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — benign foreign-window precondition boundary (iteration 132)
 ```text
 STATE=CLASSIFIED
