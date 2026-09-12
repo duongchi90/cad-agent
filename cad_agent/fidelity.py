@@ -23,7 +23,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from primitive_ir_lib.assemble import build_document
 from primitive_ir_lib.calibration import Calibration
-from primitive_ir_lib.geometry_extraction import RawGeometry, extract_raw_geometry
+from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine, extract_raw_geometry
 from primitive_ir_lib.io_utils import save_document
 from primitive_ir_lib.run_image import _configure_tesseract
 from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
@@ -43,6 +43,51 @@ class FidelityError(ValueError):
 
 def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
     """Remove only sub-12-pixel strokes from a review-only raw candidate."""
+    collinear_angle_tolerance = math.radians(2.0)
+    collinear_offset_tolerance = 2.0
+    collinear_fragment_gap = 5.0
+
+    def _collinear_merge(left: RawLine, right: RawLine) -> RawLine | None:
+        left_start = np.asarray(left.p1_px, dtype=float)
+        left_end = np.asarray(left.p2_px, dtype=float)
+        right_start = np.asarray(right.p1_px, dtype=float)
+        right_end = np.asarray(right.p2_px, dtype=float)
+        left_vector = left_end - left_start
+        right_vector = right_end - right_start
+        left_length = float(np.linalg.norm(left_vector))
+        right_length = float(np.linalg.norm(right_vector))
+        if left_length == 0.0 or right_length == 0.0:
+            return None
+        left_direction = left_vector / left_length
+        right_direction = right_vector / right_length
+        orientation = abs(float(np.dot(left_direction, right_direction)))
+        if orientation < math.cos(collinear_angle_tolerance):
+            return None
+        normal = np.asarray([-left_direction[1], left_direction[0]])
+        if any(abs(float(np.dot(point - left_start, normal))) > collinear_offset_tolerance for point in (right_start, right_end)):
+            return None
+        right_projections = [float(np.dot(point - left_start, left_direction)) for point in (right_start, right_end)]
+        left_interval = (0.0, left_length)
+        right_interval = (min(right_projections), max(right_projections))
+        gap = max(left_interval[0] - right_interval[1], right_interval[0] - left_interval[1], 0.0)
+        if gap > collinear_fragment_gap:
+            return None
+        minimum, maximum = min(left_interval[0], right_interval[0]), max(left_interval[1], right_interval[1])
+        merged_start = left_start + left_direction * minimum
+        merged_end = left_start + left_direction * maximum
+        return RawLine(
+            id=left.id,
+            p1_px=(float(merged_start[0]), float(merged_start[1])),
+            p2_px=(float(merged_end[0]), float(merged_end[1])),
+            confidence=max(left.confidence, right.confidence),
+            bbox_px=(
+                float(min(merged_start[0], merged_end[0])),
+                float(min(merged_start[1], merged_end[1])),
+                float(max(merged_start[0], merged_end[0])),
+                float(max(merged_start[1], merged_end[1])),
+            ),
+        )
+
     retained: list[Any] = []
     for line in raw.lines:
         if line.length_px() < 12.0:
@@ -54,7 +99,28 @@ def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
                    abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
         ), None)
         if duplicate_index is None:
-            retained.append((start, end, line))
+            merge_index = next((
+                index for index, existing in enumerate(retained)
+                if _collinear_merge(existing[2], line) is not None
+            ), None)
+            if merge_index is None:
+                retained.append((start, end, line))
+                continue
+            merged = _collinear_merge(retained[merge_index][2], line)
+            assert merged is not None
+            retained.pop(merge_index)
+            merged_again = True
+            while merged_again:
+                merged_again = False
+                for index, existing in enumerate(retained):
+                    candidate = _collinear_merge(merged, existing[2])
+                    if candidate is not None:
+                        merged = candidate
+                        retained.pop(index)
+                        merged_again = True
+                        break
+            merged_start, merged_end = sorted((merged.p1_px, merged.p2_px))
+            retained.append((merged_start, merged_end, merged))
         else:
             current = retained[duplicate_index][2]
             if (line.confidence, line.length_px()) > (current.confidence, current.length_px()):
