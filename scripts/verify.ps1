@@ -195,7 +195,7 @@ function Invoke-PytestGate {
     Write-Host "$Name JUnit: tests=$($totals.Tests) failures=$($totals.Failures) errors=$($totals.Errors) skipped=$($totals.Skipped)"
 }
 
-function Invoke-CausalRedGate {
+function Invoke-ReceiptContractGate {
     param(
         [string]$Name,
         [string[]]$Targets,
@@ -203,13 +203,13 @@ function Invoke-CausalRedGate {
     )
     & $PythonExe -m pytest @Targets -q -m "causal_red" -p no:cacheprovider `
         "--junitxml=$JUnitPath"
-    $causalRedExitCode = $LASTEXITCODE
-    if ($causalRedExitCode -ne 1) {
-        throw "$Name must fail with pytest exit code 1; found $causalRedExitCode."
+    $receiptContractExitCode = $LASTEXITCODE
+    if ($receiptContractExitCode -ne 0) {
+        throw "$Name must pass with pytest exit code 0; found $receiptContractExitCode."
     }
     $totals = Get-JUnitTotals -Path $JUnitPath
-    if ($totals.Tests -ne 1 -or $totals.Failures -ne 1 -or $totals.Errors -ne 0 -or $totals.Skipped -ne 0) {
-        throw "$Name produced invalid expected-RED JUnit totals: $($totals | Out-String)"
+    if ($totals.Tests -ne 1 -or $totals.Failures -ne 0 -or $totals.Errors -ne 0 -or $totals.Skipped -ne 0) {
+        throw "$Name produced invalid receipt-contract JUnit totals: $($totals | Out-String)"
     }
     Write-Host "$Name JUnit: tests=$($totals.Tests) failures=$($totals.Failures) errors=$($totals.Errors) skipped=$($totals.Skipped)"
 }
@@ -221,7 +221,8 @@ $dotnetIpcJunitPath = Join-Path $artifactDir "dotnet-ipc.xml"
 $realDataJunitPath = Join-Path $artifactDir "real-data-unavailable.xml"
 $autocadJunitPath = Join-Path $artifactDir "autocad-mechanical-unavailable.xml"
 $autocadLiveJunitPath = Join-Path $artifactDir "autocad-mechanical-live.xml"
-$causalRedJunitPath = Join-Path $artifactDir "causal-red.xml"
+$autocadBundleJunitPath = Join-Path $artifactDir "autocad-bundle.xml"
+$receiptContractJunitPath = Join-Path $artifactDir "receipt-contract.xml"
 New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
 $tesseractDir = Split-Path -Parent $tesseractPath
@@ -235,9 +236,34 @@ $testTargets = @(
     "mcp_integration_lib/tests",
     "agent_lib/tests"
 )
+$autocadBundleTestTargets = @(
+    "mcp_integration_lib/tests/test_autocad_application_bundle.py"
+)
 
 Push-Location $repoRoot
 try {
+    if ($SkipAutoCADDotNet) {
+        $previousBundleBuildSkipped = $env:CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED
+        $env:CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED = "1"
+        try {
+            Invoke-PytestGate `
+                -Name "autocad bundle unavailable-state probe" `
+                -Targets $autocadBundleTestTargets `
+                -MarkerExpression "autocad_bundle" `
+                -JUnitPath $autocadBundleJunitPath `
+                -ExpectedState "all-skipped"
+        } finally {
+            $env:CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED = $previousBundleBuildSkipped
+        }
+    } else {
+        Invoke-PytestGate `
+            -Name "autocad bundle artifact" `
+            -Targets $autocadBundleTestTargets `
+            -MarkerExpression "autocad_bundle" `
+            -JUnitPath $autocadBundleJunitPath `
+            -ExpectedState "offline"
+    }
+
     $dotnetIpcTestTargets = @(
         "mcp_integration_lib/tests/test_dotnet_ipc.py"
     )
@@ -251,14 +277,14 @@ try {
     Invoke-PytestGate `
         -Name "offline" `
         -Targets $testTargets `
-        -MarkerExpression "not real_data and not autocad_mechanical and not causal_red" `
+        -MarkerExpression "not real_data and not autocad_mechanical and not autocad_bundle and not causal_red" `
         -JUnitPath $junitPath `
         -ExpectedState "offline"
 
-    Invoke-CausalRedGate `
-        -Name "causal RED negative oracle" `
-        -Targets @("mcp_integration_lib/tests/test_file_ipc_windows_trigger.py") `
-        -JUnitPath $causalRedJunitPath
+    Invoke-ReceiptContractGate `
+        -Name "receipt contract owner" `
+        -Targets @("mcp_integration_lib/tests/test_mcp_client_drawing_open.py") `
+        -JUnitPath $receiptContractJunitPath
 
     $specializedVariables = @(
         "CAD_AGENT_REAL_IMAGE",

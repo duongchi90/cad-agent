@@ -779,13 +779,27 @@
   (mcp-object (list (cons "entities" (mcp-array (reverse entities)))))
 )
 
-(defun mcp-op-drawing-open (params / path docs doc)
-  (setq path (mcp-param params "path"))
-  (if (not (= (type path) 'STR))
+(defun mcp-op-drawing-open (params / path docs doc keys read-only read-only-valid)
+  (setq path (mcp-param params "path")
+        keys (mcp-json-object-keys params)
+        read-only (mcp-param params "read_only")
+        read-only-valid
+          (or
+            (not (member "read_only" keys))
+            (eq read-only 'MCP_JSON_TRUE)
+            (eq read-only 'MCP_JSON_FALSE)
+          )
+  )
+  (if (not (and (= (type path) 'STR) read-only-valid))
     (mcp-object nil)
     (progn
       (setq docs (vla-get-Documents (vlax-get-acad-object))
-            doc (vla-Open docs path))
+            doc
+              (if (eq read-only 'MCP_JSON_TRUE)
+                (vla-Open docs path :vlax-true)
+                (vla-Open docs path)
+              )
+      )
       (vla-Activate doc)
       (mcp-object (list (cons "path" path)))
     )

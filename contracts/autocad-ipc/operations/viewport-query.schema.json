@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/viewport-query.schema.json",
+  "title": "CadAgent VIEWPORT-by-handle query parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "handle"
+  ],
+  "properties": {
+    "handle": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9A-Fa-f]+$"
+    }
+  }
+}

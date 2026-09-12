@@ -42,6 +42,9 @@ public static class ContractValidator
     private static readonly Regex LowercaseSha256Pattern =
         new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    private static readonly Regex ViewportHandlePattern =
+        new("^[0-9A-Fa-f]+$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static readonly Regex VisualEvidenceCapturedAtPattern =
         new("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -125,14 +128,444 @@ public static class ContractValidator
         {
             ValidateNativeRenderEvidenceRequest(request, errors);
         }
+        else if (string.Equals(request.Operation, ViewportQueryOperationNames.Operation, StringComparison.Ordinal))
+        {
+            ValidateViewportQueryRequest(request, errors);
+        }
 
         if (request.Operation is ExactBaseXrefOperationNames.Inspection
             or ExactBaseXrefOperationNames.Extraction)
         {
             ExactBaseXrefPolicy.ValidateRequestShape(request, errors);
         }
+        else if (request.Operation is StandaloneDwgComponentOperationNames.Inspection
+            or StandaloneDwgComponentOperationNames.Extraction)
+        {
+            ValidateStandaloneRequest(request, errors);
+        }
 
         return new ContractValidationResult(errors);
+    }
+
+    private static void ValidateStandaloneRequest(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        if (request.DrawingFullPath is null
+            || request.DrawingSha256 is null
+            || !LowercaseSha256Pattern.IsMatch(request.DrawingSha256))
+        {
+            errors.Add("standalone operations require a lowercase drawing_sha256");
+        }
+
+        var parameters = request.Parameters!;
+        if (request.Operation == StandaloneDwgComponentOperationNames.Inspection)
+        {
+            var required = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "schema_version", "request_id", "run_id", "source_drawing_path",
+                "source_drawing_sha256", "source_setup_audit_sha256", "selection_groups",
+                "expected_dbmod", "approval"
+            };
+            ValidateClosedDictionary(parameters, required, "standalone inspection parameters", errors);
+            if (!TryGetString(parameters, "schema_version", out var schemaVersion)
+                || schemaVersion != "standalone-dwg-component-inspection-1.0")
+            {
+                errors.Add("standalone inspection schema_version is unsupported");
+            }
+            ValidateStandaloneIdentifier(parameters, "request_id", "standalone inspection", errors);
+            ValidateStandaloneIdentifier(parameters, "run_id", "standalone inspection", errors);
+            ValidateStandaloneHash(parameters, "source_drawing_sha256", "standalone inspection", errors);
+            ValidateStandaloneEnvelopeHashBinding(request, parameters, "standalone inspection", errors);
+            ValidateStandaloneHash(parameters, "source_setup_audit_sha256", "standalone inspection", errors);
+            if (!TryGetString(parameters, "source_drawing_path", out var sourcePath)
+                || !TryNormalizeWindowsAbsolutePath(sourcePath, out var normalizedSource)
+                || request.DrawingFullPath is null
+                || !TryNormalizeWindowsAbsolutePath(request.DrawingFullPath, out var normalizedDrawing)
+                || !string.Equals(normalizedSource, normalizedDrawing, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add("standalone inspection source_drawing_path must match drawing_full_path");
+            }
+            if (!TryGetInt64(parameters, "expected_dbmod", out _))
+            {
+                errors.Add("standalone inspection expected_dbmod must be a non-negative integer");
+            }
+            if (!TryGetProperty(parameters, "approval", out var inspectionApproval)
+                || inspectionApproval.ValueKind != JsonValueKind.Null)
+            {
+                errors.Add("standalone inspection approval must be null");
+            }
+            ValidateStandaloneSelectionGroups(parameters, errors);
+        }
+        else
+        {
+            var required = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "plan_id", "request_id", "run_id", "inspection_id", "inspection_sha256",
+                "source_drawing_sha256", "candidate_output_path", "candidate_base_model",
+                "components", "transform_policy", "approval"
+            };
+            ValidateClosedDictionary(parameters, required, "standalone extraction parameters", errors);
+            foreach (var name in new[] { "plan_id", "request_id", "run_id", "inspection_id" })
+            {
+                ValidateStandaloneIdentifier(parameters, name, "standalone extraction", errors);
+            }
+            foreach (var name in new[] { "inspection_sha256", "source_drawing_sha256" })
+            {
+                ValidateStandaloneHash(parameters, name, "standalone extraction", errors);
+            }
+            ValidateStandaloneEnvelopeHashBinding(request, parameters, "standalone extraction", errors);
+            if (!TryGetString(parameters, "candidate_base_model", out var baseModel)
+                || baseModel != "EMPTY_NEW_DATABASE")
+            {
+                errors.Add("standalone extraction candidate_base_model must be EMPTY_NEW_DATABASE");
+            }
+            if (!TryGetString(parameters, "transform_policy", out var transformPolicy)
+                || transformPolicy != "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY")
+            {
+                errors.Add("standalone extraction transform_policy is unsupported");
+            }
+            if (!TryGetString(parameters, "candidate_output_path", out var outputPath)
+                || !TryNormalizeWindowsAbsolutePath(outputPath, out var normalizedOutput))
+            {
+                errors.Add("standalone extraction candidate_output_path must be a full absolute Windows path");
+            }
+            else if (request.DrawingFullPath is not null
+                && TryNormalizeWindowsAbsolutePath(request.DrawingFullPath, out var normalizedDrawing)
+                && string.Equals(normalizedOutput, normalizedDrawing, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add("standalone extraction candidate_output_path must not alias the source");
+            }
+            ValidateStandaloneComponents(parameters, errors);
+            ValidateStandaloneApproval(parameters, request, errors);
+        }
+    }
+
+    private static void ValidateStandaloneSelectionGroups(
+        IReadOnlyDictionary<string, JsonElement> parameters,
+        ICollection<string> errors)
+    {
+        if (!TryGetArray(parameters, "selection_groups", out var groups) || groups.GetArrayLength() == 0)
+        {
+            errors.Add("standalone inspection selection_groups must be a non-empty array");
+            return;
+        }
+
+        var groupIds = new HashSet<string>(StringComparer.Ordinal);
+        var handles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in groups.EnumerateArray())
+        {
+            var required = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "group_id", "logical_component_id", "source_handles",
+                "expected_entity_types", "source_layer_expectations"
+            };
+            ValidateClosedObject(group, required, "standalone inspection selection group", errors);
+            ValidateStandaloneIdentifier(group, "group_id", "standalone selection group", errors);
+            ValidateStandaloneIdentifier(group, "logical_component_id", "standalone selection group", errors);
+            if (TryGetString(group, "group_id", out var groupId) && !groupIds.Add(groupId))
+            {
+                errors.Add("standalone inspection group_id values must be unique");
+            }
+            ValidateStandaloneStringArray(group, "source_handles", "standalone selection group", errors, handles, hexadecimal: true);
+            ValidateStandaloneStringArray(group, "expected_entity_types", "standalone selection group", errors, null, hexadecimal: false, identifiers: true);
+            ValidateStandaloneStringArray(group, "source_layer_expectations", "standalone selection group", errors, null, hexadecimal: false, identifiers: false, safeText: true);
+        }
+    }
+
+    private static void ValidateStandaloneComponents(
+        IReadOnlyDictionary<string, JsonElement> parameters,
+        ICollection<string> errors)
+    {
+        if (!TryGetArray(parameters, "components", out var components) || components.GetArrayLength() == 0)
+        {
+            errors.Add("standalone extraction components must be a non-empty array");
+            return;
+        }
+
+        var groupIds = new HashSet<string>(StringComparer.Ordinal);
+        var handles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var component in components.EnumerateArray())
+        {
+            var required = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "group_id", "logical_component_id", "source_handles", "transform"
+            };
+            ValidateClosedObject(component, required, "standalone extraction component", errors);
+            ValidateStandaloneIdentifier(component, "group_id", "standalone component", errors);
+            ValidateStandaloneIdentifier(component, "logical_component_id", "standalone component", errors);
+            if (TryGetString(component, "group_id", out var groupId) && !groupIds.Add(groupId))
+            {
+                errors.Add("standalone extraction group_id values must be unique");
+            }
+            ValidateStandaloneStringArray(component, "source_handles", "standalone component", errors, handles, hexadecimal: true);
+            if (!TryGetProperty(component, "transform", out var transform))
+            {
+                continue;
+            }
+            var transformFields = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "rotation_degrees", "translation", "uniform_scale"
+            };
+            ValidateClosedObject(transform, transformFields, "standalone component transform", errors);
+            if (!TryGetDouble(transform, "rotation_degrees", out var rotation)
+                || !double.IsFinite(rotation)
+                || rotation is < -360 or > 360)
+            {
+                errors.Add("standalone component rotation_degrees must be finite and bounded");
+            }
+            if (!TryGetDouble(transform, "uniform_scale", out var scale)
+                || !double.IsFinite(scale)
+                || scale <= 0)
+            {
+                errors.Add("standalone component uniform_scale must be finite and positive");
+            }
+            if (TryGetProperty(transform, "translation", out var translation))
+            {
+                var pointFields = new HashSet<string>(StringComparer.Ordinal) { "x", "y", "z" };
+                ValidateClosedObject(translation, pointFields, "standalone component translation", errors);
+                foreach (var axis in new[] { "x", "y", "z" })
+                {
+                    if (!TryGetDouble(translation, axis, out var value) || !double.IsFinite(value))
+                    {
+                        errors.Add($"standalone component translation.{axis} must be finite");
+                    }
+                }
+            }
+        }
+    }
+
+    private static void ValidateStandaloneApproval(
+        IReadOnlyDictionary<string, JsonElement> parameters,
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        if (!TryGetProperty(parameters, "approval", out var approval)
+            || approval.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("standalone extraction approval is required");
+            return;
+        }
+        ValidateClosedObject(
+            approval,
+            new HashSet<string>(StringComparer.Ordinal) { "reference", "status" },
+            "standalone extraction approval",
+            errors);
+        var approvalHasReference = TryGetString(approval, "reference", out var reference);
+        var approvalHasStatus = TryGetString(approval, "status", out var status);
+        if (!approvalHasReference
+            || !VisualEvidenceIdentifierPattern.IsMatch(reference)
+            || !approvalHasStatus
+            || status != "APPROVED")
+        {
+            errors.Add("standalone extraction approval must be APPROVED with a reference");
+        }
+        if (!request.Approval.HasValue || request.Approval.Value.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("standalone extraction envelope approval is required");
+            return;
+        }
+        ValidateClosedObject(
+            request.Approval.Value,
+            new HashSet<string>(StringComparer.Ordinal) { "reference", "status" },
+            "standalone extraction envelope approval",
+            errors);
+        if (!TryGetString(request.Approval.Value, "reference", out var envelopeReference)
+            || !TryGetString(request.Approval.Value, "status", out var envelopeStatus)
+            || envelopeReference != reference
+            || envelopeStatus != status)
+        {
+            errors.Add("standalone extraction approval must exactly match the envelope approval");
+        }
+    }
+
+    private static void ValidateStandaloneInspectionResultPayload(
+        IReadOnlyDictionary<string, JsonElement>? payload,
+        ICollection<string> errors)
+    {
+        if (payload is null)
+        {
+            errors.Add("standalone inspection payload must be an object");
+            return;
+        }
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schema_version", "inspection_id", "request_id", "source_identity",
+            "source_sha256_before", "source_sha256_after", "dbmod_before", "dbmod_after",
+            "read_only", "groups", "warnings", "conflicts", "changed", "eligible", "inspection_sha256"
+        };
+        ValidateClosedDictionary(payload, required, "standalone inspection payload", errors);
+        if (!TryGetString(payload, "schema_version", out var schemaVersion)
+            || schemaVersion != "standalone-dwg-component-inspection-result-1.0")
+        {
+            errors.Add("standalone inspection result schema_version is unsupported");
+        }
+        foreach (var name in new[] { "inspection_id", "request_id" })
+        {
+            ValidateStandaloneIdentifier(payload, name, "standalone inspection result", errors);
+        }
+        foreach (var name in new[] { "source_sha256_before", "source_sha256_after", "inspection_sha256" })
+        {
+            ValidateStandaloneHash(payload, name, "standalone inspection result", errors);
+        }
+        if (!TryGetBoolean(payload, "read_only", out var readOnly) || !readOnly
+            || !TryGetBoolean(payload, "changed", out var changed) || changed
+            || !TryGetBoolean(payload, "eligible", out var eligible) || !eligible)
+        {
+            errors.Add("standalone inspection result must be read-only, unchanged, and eligible");
+        }
+        if (!TryGetInt64(payload, "dbmod_before", out _)
+            || !TryGetInt64(payload, "dbmod_after", out _))
+        {
+            errors.Add("standalone inspection result DBMOD values must be non-negative integers");
+        }
+        if (TryGetProperty(payload, "source_identity", out var sourceIdentity))
+        {
+            ValidateClosedObject(
+                sourceIdentity,
+                new HashSet<string>(StringComparer.Ordinal) { "path", "sha256", "dbmod" },
+                "standalone inspection source_identity",
+                errors,
+                "xref_count");
+            if (!TryGetString(sourceIdentity, "path", out var path)
+                || !TryNormalizeWindowsAbsolutePath(path, out _))
+            {
+                errors.Add("standalone inspection source_identity.path must be absolute");
+            }
+            ValidateStandaloneHash(sourceIdentity, "sha256", "standalone inspection source_identity", errors);
+            if (!TryGetInt64(sourceIdentity, "dbmod", out _))
+            {
+                errors.Add("standalone inspection source_identity.dbmod is invalid");
+            }
+        }
+        if (payload.TryGetValue("warnings", out var warningsPayload))
+        {
+            ValidateStandaloneStringArray(warningsPayload, "warnings", "standalone inspection result", errors, requireNonEmpty: false);
+        }
+        else
+        {
+            errors.Add("standalone inspection result.warnings must be present");
+        }
+        if (payload.TryGetValue("conflicts", out var conflictsPayload))
+        {
+            ValidateStandaloneStringArray(conflictsPayload, "conflicts", "standalone inspection result", errors, requireNonEmpty: false);
+        }
+        else
+        {
+            errors.Add("standalone inspection result.conflicts must be present");
+        }
+        if (TryGetArray(payload, "groups", out var groups))
+        {
+            foreach (var group in groups.EnumerateArray())
+            {
+                ValidateClosedObject(
+                    group,
+                    new HashSet<string>(StringComparer.Ordinal)
+                    {
+                        "group_id", "logical_component_id", "source_handles",
+                        "entity_types", "layers", "signature_sha256"
+                    },
+                    "standalone inspection result group",
+                    errors);
+                ValidateStandaloneIdentifier(group, "group_id", "standalone result group", errors);
+                ValidateStandaloneIdentifier(group, "logical_component_id", "standalone result group", errors);
+                ValidateStandaloneStringArray(group, "source_handles", "standalone result group", errors, null, hexadecimal: true);
+                ValidateStandaloneStringArray(group, "entity_types", "standalone result group", errors, null, hexadecimal: false, identifiers: true);
+                ValidateStandaloneStringArray(group, "layers", "standalone result group", errors, null, hexadecimal: false, identifiers: false, safeText: true);
+                ValidateStandaloneHash(group, "signature_sha256", "standalone result group", errors);
+            }
+        }
+    }
+
+    private static void ValidateStandaloneExtractionResultPayload(
+        IReadOnlyDictionary<string, JsonElement>? payload,
+        ICollection<string> errors)
+    {
+        if (payload is null)
+        {
+            errors.Add("standalone extraction payload must be an object");
+            return;
+        }
+        if (payload.ContainsKey("failure_code"))
+        {
+            var required = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "schema_version", "request_id", "run_id", "failure_code",
+                "candidate_output_path", "source_mutated", "save_performed"
+            };
+            ValidateClosedDictionary(payload, required, "standalone extraction failure payload", errors);
+            if (!TryGetString(payload, "schema_version", out var schemaVersion)
+                || schemaVersion != "standalone-dwg-component-extraction-result-1.0")
+            {
+                errors.Add("standalone extraction result schema_version is unsupported");
+            }
+            ValidateStandaloneIdentifier(payload, "request_id", "standalone extraction failure", errors);
+            ValidateStandaloneIdentifier(payload, "run_id", "standalone extraction failure", errors);
+            if (!TryGetString(payload, "failure_code", out var failureCode)
+                || failureCode is not ("CANDIDATE_OUTPUT_NOT_ABSENT" or "FORBIDDEN_WRITE_TARGET" or "SOURCE_MUTATED" or "OUTPUT_NOT_REOPENABLE" or "CLEANUP_FAILED"))
+            {
+                errors.Add("standalone extraction failure_code is unsupported");
+            }
+            if (!TryGetString(payload, "candidate_output_path", out var failurePath)
+                || !TryNormalizeWindowsAbsolutePath(failurePath, out _))
+            {
+                errors.Add("standalone extraction failure candidate_output_path must be absolute");
+            }
+            if (!TryGetBoolean(payload, "source_mutated", out var failureSourceMutated) || failureSourceMutated
+                || !TryGetBoolean(payload, "save_performed", out var failureSavePerformed) || failureSavePerformed)
+            {
+                errors.Add("standalone extraction failure must not mutate or save");
+            }
+            return;
+        }
+
+        var successRequired = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schema_version", "request_id", "run_id", "source_drawing_sha256",
+            "candidate_base_model", "candidate_output_sha256", "candidate_output_identity",
+            "source_mutated", "source_dbmod_before", "source_dbmod_after", "save_performed",
+            "components", "source_handle_to_candidate_handle", "result_sha256"
+        };
+        ValidateClosedDictionary(payload, successRequired, "standalone extraction success payload", errors);
+        if (!TryGetString(payload, "schema_version", out var successSchema)
+            || successSchema != "standalone-dwg-component-extraction-result-1.0")
+        {
+            errors.Add("standalone extraction result schema_version is unsupported");
+        }
+        ValidateStandaloneIdentifier(payload, "request_id", "standalone extraction result", errors);
+        ValidateStandaloneIdentifier(payload, "run_id", "standalone extraction result", errors);
+        ValidateStandaloneHash(payload, "source_drawing_sha256", "standalone extraction result", errors);
+        ValidateStandaloneHash(payload, "candidate_output_sha256", "standalone extraction result", errors);
+        ValidateStandaloneHash(payload, "result_sha256", "standalone extraction result", errors);
+        if (!TryGetString(payload, "candidate_base_model", out var baseModel)
+            || baseModel != "EMPTY_NEW_DATABASE")
+        {
+            errors.Add("standalone extraction result candidate_base_model is invalid");
+        }
+        if (!TryGetBoolean(payload, "source_mutated", out var sourceMutated) || sourceMutated
+            || !TryGetBoolean(payload, "save_performed", out var savePerformed) || !savePerformed
+            || !TryGetInt64(payload, "source_dbmod_before", out var before)
+            || !TryGetInt64(payload, "source_dbmod_after", out var after)
+            || before != after)
+        {
+            errors.Add("standalone extraction result must be source-safe and DBMOD-stable");
+        }
+        if (TryGetProperty(payload, "candidate_output_identity", out var identity))
+        {
+            ValidateClosedObject(
+                identity,
+                new HashSet<string>(StringComparer.Ordinal) { "path", "file_id" },
+                "standalone extraction candidate_output_identity",
+                errors);
+            if (!TryGetString(identity, "path", out var path)
+                || !TryNormalizeWindowsAbsolutePath(path, out _))
+            {
+                errors.Add("standalone extraction candidate_output_identity.path must be absolute");
+            }
+            ValidateStandaloneIdentifier(identity, "file_id", "standalone candidate identity", errors);
+        }
+        ValidateStandaloneResultComponents(payload, errors);
+        ValidateStandaloneMappings(payload, errors);
     }
 
     public static ContractValidationResult ValidateResult(IpcResult? result)
@@ -196,6 +629,10 @@ public static class ContractValidator
                 errors.Add("native_render_evidence failure results must contain an empty payload");
             }
         }
+        if (string.Equals(result.Operation, ViewportQueryOperationNames.Operation, StringComparison.Ordinal))
+        {
+            ValidateViewportQueryResult(result, errors);
+        }
         if (string.Equals(result.Operation, ExactBaseXrefOperationNames.Inspection, StringComparison.Ordinal))
         {
             if (result.Changed || (result.EntityHandles?.Count ?? 0) != 0)
@@ -212,6 +649,40 @@ public static class ContractValidator
             if (result.Success && !result.Changed)
             {
                 errors.Add("successful exact_base_xref_extraction results must report changed=true");
+            }
+        }
+        if (string.Equals(result.Operation, StandaloneDwgComponentOperationNames.Inspection, StringComparison.Ordinal))
+        {
+            if (result.Changed || (result.EntityHandles?.Count ?? 0) != 0)
+            {
+                errors.Add("standalone_dwg_component_inspection results must be read-only and contain no entity handles");
+            }
+            if (result.Success)
+            {
+                ValidateStandaloneInspectionResultPayload(result.Payload, errors);
+            }
+            else if (result.Payload is not null && result.Payload.Count != 0)
+            {
+                errors.Add("standalone_dwg_component_inspection failure results must contain an empty payload");
+            }
+        }
+        if (string.Equals(result.Operation, StandaloneDwgComponentOperationNames.Extraction, StringComparison.Ordinal))
+        {
+            if (!result.Success && (result.Changed || (result.EntityHandles?.Count ?? 0) != 0))
+            {
+                errors.Add("standalone_dwg_component_extraction failure results must be unchanged and contain no entity handles");
+            }
+            if (result.Success)
+            {
+                if (!result.Changed)
+                {
+                    errors.Add("successful standalone_dwg_component_extraction results must report changed=true");
+                }
+                ValidateStandaloneExtractionResultPayload(result.Payload, errors);
+            }
+            else
+            {
+                ValidateStandaloneExtractionResultPayload(result.Payload, errors);
             }
         }
         if (result.Payload is null)
@@ -379,6 +850,36 @@ public static class ContractValidator
         if (parameters.Keys.Any(key => !string.Equals(key, "handles", StringComparison.Ordinal)))
         {
             errors.Add("review parameters contain unsupported fields");
+        }
+    }
+
+    private static void ValidateViewportQueryRequest(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        if (request.DrawingSha256 is null || !LowercaseSha256Pattern.IsMatch(request.DrawingSha256))
+        {
+            errors.Add("viewport_query drawing_sha256 must be a lowercase SHA-256");
+        }
+        if (request.Approval.HasValue && request.Approval.Value.ValueKind != JsonValueKind.Null)
+        {
+            errors.Add("viewport_query approval is not allowed");
+        }
+
+        var parameters = request.Parameters!;
+        if (parameters.Count != 1 || !parameters.ContainsKey("handle"))
+        {
+            errors.Add("viewport_query parameters must contain only one handle");
+        }
+        foreach (var unsupported in parameters.Keys.Where(key => !string.Equals(key, "handle", StringComparison.Ordinal)))
+        {
+            errors.Add($"viewport_query parameters contain unsupported field '{unsupported}'");
+        }
+
+        if (!TryGetString(parameters, "handle", out var handle)
+            || !ViewportHandlePattern.IsMatch(handle))
+        {
+            errors.Add("viewport_query parameters.handle must be a non-empty hexadecimal handle");
         }
     }
 
@@ -997,6 +1498,251 @@ public static class ContractValidator
         if (!TryGetString(reference, "id", out var id) || !VisualEvidenceIdentifierPattern.IsMatch(id))
         {
             errors.Add("measurement reference id must be a stable identifier");
+        }
+    }
+
+    private static void ValidateViewportQueryResult(
+        IpcResult result,
+        ICollection<string> errors)
+    {
+        if (result.Changed)
+        {
+            errors.Add("viewport_query results must be read-only and report changed=false");
+        }
+
+        if (result.Success)
+        {
+            if (result.EntityHandles?.Count != 1)
+            {
+                errors.Add("successful viewport_query results must contain exactly one entity handle");
+            }
+            ValidateViewportQueryPayload(result.Payload, result.EntityHandles, errors);
+            return;
+        }
+
+        if ((result.EntityHandles?.Count ?? 0) != 0)
+        {
+            errors.Add("failed viewport_query results must contain no entity handles");
+        }
+        if (result.Payload is not null && result.Payload.Count != 0)
+        {
+            errors.Add("failed viewport_query results must contain an empty payload");
+        }
+    }
+
+    private static void ValidateViewportQueryPayload(
+        IReadOnlyDictionary<string, JsonElement>? payload,
+        IReadOnlyList<string>? entityHandles,
+        ICollection<string> errors)
+    {
+        if (payload is null)
+        {
+            errors.Add("viewport_query payload must be an object");
+            return;
+        }
+
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schema_version",
+            "handle",
+            "type",
+            "layer",
+            "fields",
+            "drawing_sha256_before",
+            "drawing_sha256_after",
+            "dbmod_before",
+            "dbmod_after"
+        };
+        foreach (var missing in required.Except(payload.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload is missing '{missing}'");
+        }
+        foreach (var unsupported in payload.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload contains unsupported field '{unsupported}'");
+        }
+
+        if (!TryGetString(payload, "schema_version", out var schemaVersion)
+            || !string.Equals(schemaVersion, ViewportQueryOperationNames.ResultSchemaVersion, StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload schema_version is unsupported");
+        }
+        if (!TryGetString(payload, "handle", out var handle)
+            || !ViewportHandlePattern.IsMatch(handle)
+            || !string.Equals(handle, handle.ToUpperInvariant(), StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload handle is invalid");
+        }
+        if (entityHandles?.Count == 1
+            && !string.Equals(entityHandles[0], handle, StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload handle does not match entity_handles");
+        }
+        if (!TryGetString(payload, "type", out var type)
+            || !string.Equals(type, ViewportQueryOperationNames.ViewportType, StringComparison.Ordinal))
+        {
+            errors.Add("viewport_query payload type must be VIEWPORT");
+        }
+        if (!TryGetString(payload, "layer", out _))
+        {
+            errors.Add("viewport_query payload layer must be a non-empty string");
+        }
+
+        if (!TryGetString(payload, "drawing_sha256_before", out var hashBefore)
+            || !LowercaseSha256Pattern.IsMatch(hashBefore))
+        {
+            errors.Add("viewport_query payload drawing_sha256_before must be a lowercase SHA-256");
+        }
+        if (!TryGetString(payload, "drawing_sha256_after", out var hashAfter)
+            || !LowercaseSha256Pattern.IsMatch(hashAfter))
+        {
+            errors.Add("viewport_query payload drawing_sha256_after must be a lowercase SHA-256");
+        }
+        if (!string.IsNullOrEmpty(hashBefore)
+            && !string.IsNullOrEmpty(hashAfter)
+            && string.Equals(hashBefore, hashAfter, StringComparison.Ordinal) == false)
+        {
+            errors.Add("viewport_query payload drawing hashes must be equal");
+        }
+        if (!TryGetInt64(payload, "dbmod_before", out var dbmodBefore)
+            || !TryGetInt64(payload, "dbmod_after", out var dbmodAfter))
+        {
+            errors.Add("viewport_query payload DBMOD values must be non-negative integers");
+        }
+        else if (dbmodBefore != dbmodAfter)
+        {
+            errors.Add("viewport_query payload DBMOD values must be equal");
+        }
+
+        if (!TryGetProperty(payload, "fields", out var fields)
+            || fields.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("viewport_query payload fields must be an object");
+            return;
+        }
+
+        var requiredFields = ViewportQueryOperationNames.FieldNames;
+        var presentFields = fields.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var missing in requiredFields.Except(presentFields, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload fields is missing '{missing}'");
+        }
+        foreach (var unsupported in presentFields.Except(requiredFields, StringComparer.Ordinal))
+        {
+            errors.Add($"viewport_query payload fields contains unsupported field '{unsupported}'");
+        }
+        foreach (var fieldName in requiredFields)
+        {
+            if (TryGetProperty(fields, fieldName, out var field))
+            {
+                ValidateViewportField(fieldName, field, errors);
+            }
+        }
+    }
+
+    private static void ValidateViewportField(
+        string fieldName,
+        JsonElement field,
+        ICollection<string> errors)
+    {
+        var displayName = $"viewport_query payload fields.{fieldName}";
+        ValidateClosedObject(
+            field,
+            new HashSet<string>(StringComparer.Ordinal) { "status" },
+            displayName,
+            errors,
+            "value",
+            "reason");
+
+        if (!TryGetString(field, "status", out var status))
+        {
+            errors.Add($"{displayName}.status is invalid");
+            return;
+        }
+
+        var hasValueProperty = TryGetProperty(field, "value", out var value);
+        var hasValue = hasValueProperty && value.ValueKind != JsonValueKind.Null;
+        var hasReasonProperty = TryGetProperty(field, "reason", out _);
+        var hasReason = TryGetString(field, "reason", out var reason);
+        if (status == ViewportFieldStatuses.Observed)
+        {
+            if (!hasValue || hasReasonProperty)
+            {
+                errors.Add($"{displayName} OBSERVED requires only a value");
+                return;
+            }
+            ValidateViewportObservedValue(fieldName, value, errors);
+            return;
+        }
+
+        if (status == ViewportFieldStatuses.Unsupported)
+        {
+            if (!hasReason || hasValueProperty)
+            {
+                errors.Add($"{displayName} UNSUPPORTED requires only a reason");
+                return;
+            }
+            if (reason != ViewportFieldReasons.PropertyUnavailable)
+            {
+                errors.Add($"{displayName}.reason must be PROPERTY_UNAVAILABLE for UNSUPPORTED");
+            }
+            return;
+        }
+
+        if (status == ViewportFieldStatuses.Error)
+        {
+            if (!hasReason || hasValueProperty)
+            {
+                errors.Add($"{displayName} ERROR requires only a reason");
+                return;
+            }
+            if (reason is not (ViewportFieldReasons.PropertyReadFailed
+                or ViewportFieldReasons.InvalidValue))
+            {
+                errors.Add($"{displayName}.reason must be PROPERTY_READ_FAILED or INVALID_VALUE for ERROR");
+            }
+            return;
+        }
+
+        errors.Add($"{displayName}.status is unsupported");
+    }
+
+    private static void ValidateViewportObservedValue(
+        string fieldName,
+        JsonElement value,
+        ICollection<string> errors)
+    {
+        var expectsVector = fieldName is "center_point" or "view_center" or "view_target";
+        if (!expectsVector)
+        {
+            if (value.ValueKind != JsonValueKind.Number
+                || !value.TryGetDouble(out var number)
+                || !double.IsFinite(number))
+            {
+                errors.Add($"viewport_query payload fields.{fieldName}.value must be a finite number");
+                return;
+            }
+            if (fieldName is "width" or "height" or "view_height" && number <= 0)
+            {
+                errors.Add($"viewport_query payload fields.{fieldName}.value must be positive");
+            }
+            return;
+        }
+
+        var expectedLength = fieldName == "view_center" ? 2 : 3;
+        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != expectedLength)
+        {
+            errors.Add($"viewport_query payload fields.{fieldName}.value must contain {expectedLength} finite numbers");
+            return;
+        }
+        if (value.EnumerateArray().Any(item =>
+                item.ValueKind != JsonValueKind.Number
+                || !item.TryGetDouble(out var number)
+                || !double.IsFinite(number)))
+        {
+            errors.Add($"viewport_query payload fields.{fieldName}.value must contain finite numbers");
         }
     }
 
@@ -1695,6 +2441,235 @@ public static class ContractValidator
             foreach (var artifact in artifacts.EnumerateArray())
             {
                 ValidateVisualEvidenceArtifact(artifact, kinds, errors);
+            }
+        }
+    }
+
+    private static void ValidateStandaloneResultComponents(
+        IReadOnlyDictionary<string, JsonElement> payload,
+        ICollection<string> errors)
+    {
+        if (!TryGetArray(payload, "components", out var components) || components.GetArrayLength() == 0)
+        {
+            errors.Add("standalone extraction components must be a non-empty array");
+            return;
+        }
+        var groups = new HashSet<string>(StringComparer.Ordinal);
+        var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+        var sources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var component in components.EnumerateArray())
+        {
+            ValidateClosedObject(
+                component,
+                new HashSet<string>(StringComparer.Ordinal)
+                {
+                    "group_id", "logical_component_id", "source_handles", "candidate_handles"
+                },
+                "standalone extraction component evidence",
+                errors);
+            ValidateStandaloneIdentifier(component, "group_id", "standalone component evidence", errors);
+            ValidateStandaloneIdentifier(component, "logical_component_id", "standalone component evidence", errors);
+            if (TryGetString(component, "group_id", out var groupId) && !groups.Add(groupId))
+            {
+                errors.Add("standalone extraction component groups must be unique");
+            }
+            if (TryGetString(component, "logical_component_id", out var logicalId) && !logicalIds.Add(logicalId))
+            {
+                errors.Add("standalone extraction component logical ids must be unique");
+            }
+            ValidateStandaloneStringArray(component, "source_handles", "standalone component evidence", errors, sources, hexadecimal: true);
+            ValidateStandaloneStringArray(component, "candidate_handles", "standalone component evidence", errors, candidates, hexadecimal: true);
+        }
+    }
+
+    private static void ValidateStandaloneMappings(
+        IReadOnlyDictionary<string, JsonElement> payload,
+        ICollection<string> errors)
+    {
+        if (!TryGetArray(payload, "source_handle_to_candidate_handle", out var mappings)
+            || mappings.GetArrayLength() == 0)
+        {
+            errors.Add("standalone extraction source_handle_to_candidate_handle must be a non-empty array");
+            return;
+        }
+        var sources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mapping in mappings.EnumerateArray())
+        {
+            ValidateClosedObject(
+                mapping,
+                new HashSet<string>(StringComparer.Ordinal) { "source_handle", "candidate_handle" },
+                "standalone extraction handle mapping",
+                errors);
+            ValidateStandaloneHandle(mapping, "source_handle", "standalone mapping", errors, sources);
+            ValidateStandaloneHandle(mapping, "candidate_handle", "standalone mapping", errors, candidates);
+        }
+    }
+
+    private static void ValidateClosedDictionary(
+        IReadOnlyDictionary<string, JsonElement> values,
+        IReadOnlySet<string> required,
+        string displayName,
+        ICollection<string> errors)
+    {
+        foreach (var missing in required.Except(values.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"{displayName} is missing '{missing}'");
+        }
+        foreach (var unsupported in values.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"{displayName} contains unsupported field '{unsupported}'");
+        }
+    }
+
+    private static void ValidateStandaloneIdentifier(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name,
+        string displayName,
+        ICollection<string> errors)
+    {
+        if (!TryGetString(values, name, out var value)
+            || !VisualEvidenceIdentifierPattern.IsMatch(value))
+        {
+            errors.Add($"{displayName}.{name} is invalid");
+        }
+    }
+
+    private static void ValidateStandaloneIdentifier(
+        JsonElement value,
+        string name,
+        string displayName,
+        ICollection<string> errors)
+    {
+        if (!TryGetString(value, name, out var text)
+            || !VisualEvidenceIdentifierPattern.IsMatch(text))
+        {
+            errors.Add($"{displayName}.{name} is invalid");
+        }
+    }
+
+    private static void ValidateStandaloneHash(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name,
+        string displayName,
+        ICollection<string> errors)
+    {
+        if (!TryGetString(values, name, out var value)
+            || !LowercaseSha256Pattern.IsMatch(value))
+        {
+            errors.Add($"{displayName}.{name} must be a lowercase SHA-256");
+        }
+    }
+
+    private static void ValidateStandaloneEnvelopeHashBinding(
+        IpcRequest request,
+        IReadOnlyDictionary<string, JsonElement> parameters,
+        string displayName,
+        ICollection<string> errors)
+    {
+        if (request.DrawingSha256 is not null
+            && TryGetString(parameters, "source_drawing_sha256", out var sourceHash)
+            && !string.Equals(request.DrawingSha256, sourceHash, StringComparison.Ordinal))
+        {
+            errors.Add($"{displayName} source_drawing_sha256 must match envelope drawing_sha256");
+        }
+    }
+
+    private static void ValidateStandaloneHash(
+        JsonElement value,
+        string name,
+        string displayName,
+        ICollection<string> errors)
+    {
+        if (!TryGetString(value, name, out var text)
+            || !LowercaseSha256Pattern.IsMatch(text))
+        {
+            errors.Add($"{displayName}.{name} must be a lowercase SHA-256");
+        }
+    }
+
+    private static void ValidateStandaloneHandle(
+        JsonElement value,
+        string name,
+        string displayName,
+        ICollection<string> errors,
+        ISet<string> seen)
+    {
+        if (!TryGetString(value, name, out var handle)
+            || !ViewportHandlePattern.IsMatch(handle)
+            || !seen.Add(handle))
+        {
+            errors.Add($"{displayName}.{name} must be a unique hexadecimal handle");
+        }
+    }
+
+    private static void ValidateStandaloneStringArray(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name,
+        string displayName,
+        ICollection<string> errors,
+        ISet<string>? seen = null,
+        bool hexadecimal = false,
+        bool identifiers = false,
+        bool safeText = false,
+        bool requireNonEmpty = true)
+    {
+        if (values.TryGetValue(name, out var value))
+        {
+            ValidateStandaloneStringArray(value, name, displayName, errors, seen, hexadecimal, identifiers, safeText, requireNonEmpty);
+        }
+        else
+        {
+            errors.Add($"{displayName}.{name} must be a non-empty string array");
+        }
+    }
+
+    private static void ValidateStandaloneStringArray(
+        JsonElement parent,
+        string name,
+        string displayName,
+        ICollection<string> errors,
+        ISet<string>? seen = null,
+        bool hexadecimal = false,
+        bool identifiers = false,
+        bool safeText = false,
+        bool requireNonEmpty = true)
+    {
+        var isArray = parent.ValueKind == JsonValueKind.Array;
+        var values = isArray
+            ? parent
+            : (TryGetArray(parent, name, out var nestedValues) ? nestedValues : default);
+        if ((!isArray && values.ValueKind != JsonValueKind.Array)
+            || (requireNonEmpty && values.GetArrayLength() == 0))
+        {
+            errors.Add($"{displayName}.{name} must be a non-empty string array");
+            return;
+        }
+        foreach (var item in values.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(item.GetString()))
+            {
+                errors.Add($"{displayName}.{name} must contain non-empty strings");
+                continue;
+            }
+            var text = item.GetString()!;
+            if (hexadecimal && !ViewportHandlePattern.IsMatch(text))
+            {
+                errors.Add($"{displayName}.{name} must contain hexadecimal handles");
+            }
+            if (identifiers && !VisualEvidenceIdentifierPattern.IsMatch(text))
+            {
+                errors.Add($"{displayName}.{name} must contain stable identifiers");
+            }
+            if (safeText && !IsNativeRenderString(text))
+            {
+                errors.Add($"{displayName}.{name} must contain safe text");
+            }
+            if (seen is not null && !seen.Add(text))
+            {
+                errors.Add($"{displayName}.{name} must not contain duplicates");
             }
         }
     }

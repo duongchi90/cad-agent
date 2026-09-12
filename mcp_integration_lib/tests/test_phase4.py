@@ -6,7 +6,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.mcp_client import FakeMCPClient, FileIPCLiveMCPClient, MCPToolError, MCPTimeoutError
+from mcp_integration_lib.mcp_client import (
+    FakeMCPClient,
+    FileIPCLiveMCPClient,
+    MCPToolError,
+    MCPTimeoutError,
+    WindowsStartTabBootstrapBindings,
+    WindowsAutoCADStartTabSession,
+)
 from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import review_dxf_live
 from mcp_integration_lib.reviewer2 import _same
@@ -88,6 +95,169 @@ class FileIPCClientTests(unittest.TestCase):
                 self.assertEqual((command["command"], command["params"]), ("drawing-open", {"path": "a.dxf"}))
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {"path": "a.dxf"}}))
             self.assertEqual(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_open("a.dxf"), {"path": "a.dxf"})
+
+    def test_ready_claim_bound_dispatcher_routes_read_only_open_through_file_ipc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            raw_commands = []
+            requests = []
+
+            def dispatch_trigger():
+                request_path = next(ipc_dir.glob("autocad_mcp_cmd_*.json"))
+                request = json.loads(request_path.read_text())
+                requests.append(request)
+                (ipc_dir / f"autocad_mcp_result_{request['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": request["request_id"],
+                            "claim": request["claim"],
+                            "ok": True,
+                            "payload": {"path": "C:/work/a.dxf"},
+                        }
+                    )
+                )
+
+            setattr(dispatch_trigger, "_mcp_claim_bound", True)
+            client = FileIPCLiveMCPClient(
+                tmp,
+                trigger=dispatch_trigger,
+                timeout_s=0.05,
+                poll_interval_s=0.001,
+                raw_lisp_trigger=raw_commands.append,
+                bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+                legacy_fixture_mode=False,
+                document_settle_s=0,
+            )
+            client._bootstrap_dispatcher_preloaded = True
+
+            self.assertEqual(
+                {"path": "C:/work/a.dxf"},
+                client.drawing_open("C:/work/a.dxf", read_only=True),
+            )
+            self.assertEqual(
+                {
+                    "command": "drawing-open",
+                    "params": {"path": "C:/work/a.dxf", "read_only": True},
+                },
+                {
+                    "command": requests[0]["command"],
+                    "params": requests[0]["params"],
+                },
+            )
+            self.assertEqual([], raw_commands)
+
+    def test_dispatcher_drawing_open_honors_read_only_boolean(self):
+        source = Path("mcp_integration_lib/mcp_dispatch.lsp").read_text()
+        self.assertIn('(mcp-json-object-keys params)', source)
+        self.assertIn("(eq read-only 'MCP_JSON_TRUE)", source)
+        self.assertIn('(vla-Open docs path :vlax-true)', source)
+
+    def test_apply_bindings_propagates_ready_state_and_routes_one_semantic_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            raw_commands = []
+            dispatch_requests = []
+
+            def dispatch_trigger():
+                request_path = next(ipc_dir.glob("autocad_mcp_cmd_*.json"))
+                request = json.loads(request_path.read_text())
+                dispatch_requests.append(request)
+                (ipc_dir / f"autocad_mcp_result_{request['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": request["request_id"],
+                            "claim": request["claim"],
+                            "ok": True,
+                            "payload": {"path": "C:/work/a.dxf"},
+                        }
+                    )
+                )
+
+            setattr(dispatch_trigger, "_mcp_claim_bound", True)
+            bindings = WindowsStartTabBootstrapBindings(
+                hwnd=8801,
+                command_trigger=lambda command: None,
+                raw_lisp_trigger=raw_commands.append,
+                dispatch_trigger=dispatch_trigger,
+                start_tab_no_document_probe=lambda: False,
+                document_ready_probe=lambda: True,
+                dispatcher_preloaded=True,
+                bootstrap_completion_confirmed=True,
+            )
+            client = FileIPCLiveMCPClient(
+                ipc_dir=tmp,
+                trigger=bindings.dispatch_trigger,
+                raw_lisp_trigger=bindings.raw_lisp_trigger,
+                bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+                legacy_fixture_mode=False,
+                timeout_s=0.05,
+                poll_interval_s=0.001,
+                document_settle_s=0,
+            )
+
+            client._apply_start_tab_bootstrap_bindings(bindings)
+
+            self.assertTrue(client._bootstrap_dispatcher_preloaded)
+            self.assertEqual(
+                {"path": "C:/work/a.dxf"},
+                client.drawing_open("C:/work/a.dxf", read_only=True),
+            )
+            self.assertEqual(1, len(dispatch_requests))
+            self.assertEqual(
+                {
+                    "command": "drawing-open",
+                    "params": {"path": "C:/work/a.dxf", "read_only": True},
+                },
+                {
+                    "command": dispatch_requests[0]["command"],
+                    "params": dispatch_requests[0]["params"],
+                },
+            )
+            self.assertEqual([], raw_commands)
+
+    def test_start_tab_preload_certificate_requires_dispatcher_lisp_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plugin_path = root / "CadAgent.AutoCAD2027.dll"
+            lisp_path = root / "mcp_dispatch.lsp"
+            plugin_path.write_bytes(b"test plugin")
+            lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+
+            def claim_bound_dispatch():
+                return None
+
+            setattr(claim_bound_dispatch, "_mcp_claim_bound", True)
+            bindings = WindowsStartTabBootstrapBindings(
+                hwnd=8801,
+                command_trigger=lambda command: None,
+                raw_lisp_trigger=lambda expression: None,
+                dispatch_trigger=claim_bound_dispatch,
+                start_tab_no_document_probe=lambda: False,
+                document_ready_probe=lambda: True,
+            )
+
+            plugin_only = WindowsAutoCADStartTabSession(
+                "C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+                str(root),
+                bootstrap_plugin_path=str(plugin_path),
+            )
+            plugin_only_bindings = plugin_only._confirm_bootstrap_bindings(bindings)
+            self.assertFalse(plugin_only_bindings.dispatcher_preloaded)
+            self.assertTrue(plugin_only_bindings.bootstrap_completion_confirmed)
+
+            fully_configured = WindowsAutoCADStartTabSession(
+                "C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+                str(root),
+                bootstrap_plugin_path=str(plugin_path),
+                bootstrap_lisp_path=str(lisp_path),
+                ipc_root=str(root),
+            )
+            ready_bindings = fully_configured._confirm_bootstrap_bindings(bindings)
+            self.assertTrue(ready_bindings.dispatcher_preloaded)
+            self.assertTrue(ready_bindings.bootstrap_completion_confirmed)
+            self.assertTrue(
+                getattr(ready_bindings.dispatch_trigger, "_mcp_claim_bound")
+            )
 
     def test_entity_get_reads_dimension_measurement_through_raw_lisp(self):
         with tempfile.TemporaryDirectory() as tmp:

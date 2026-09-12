@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import math
 import ntpath
 import os
 import re
@@ -26,6 +27,13 @@ from mcp_integration_lib.exact_base_xref import (
     ExactBaseXrefError,
     validate_extraction_plan,
     validate_xref_inspection,
+)
+from cad_agent.standalone_dwg_extraction import (
+    StandaloneDwgExtractionError,
+    build_standalone_extraction_plan,
+    validate_standalone_extraction_result,
+    validate_standalone_inspection_request,
+    validate_standalone_inspection_result,
 )
 from cad_agent.visual_evidence import (
     VisualEvidenceError,
@@ -64,8 +72,11 @@ SUPPORTED_OPERATIONS = frozenset(
         "drawing_setup_audit",
         "visual_evidence_export",
         "native_render_evidence",
+        "viewport_query",
         "exact_base_xref_inspection",
         "exact_base_xref_extraction",
+        "standalone_dwg_component_inspection",
+        "standalone_dwg_component_extraction",
     }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -75,8 +86,38 @@ _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _EXACT_BASE_XREF_INSPECTION = "exact_base_xref_inspection"
 _EXACT_BASE_XREF_EXTRACTION = "exact_base_xref_extraction"
+_STANDALONE_DWG_COMPONENT_INSPECTION = "standalone_dwg_component_inspection"
+_STANDALONE_DWG_COMPONENT_EXTRACTION = "standalone_dwg_component_extraction"
 _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE = "INSPECTION_HOST"
 _EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE = "DISPOSABLE_CANDIDATE"
+_VIEWPORT_QUERY_FIELDS = (
+    "center_point",
+    "width",
+    "height",
+    "view_center",
+    "view_height",
+    "view_target",
+    "twist_angle",
+)
+_VIEWPORT_QUERY_PAYLOAD_FIELDS = frozenset(
+    {
+        "schema_version",
+        "handle",
+        "type",
+        "layer",
+        "fields",
+        "drawing_sha256_before",
+        "drawing_sha256_after",
+        "dbmod_before",
+        "dbmod_after",
+    }
+)
+_VIEWPORT_QUERY_OBSERVED_VECTOR_FIELDS = frozenset(
+    {"center_point", "view_center", "view_target"}
+)
+_VIEWPORT_QUERY_ERROR_REASONS = frozenset(
+    {"PROPERTY_READ_FAILED", "INVALID_VALUE"}
+)
 _EXACT_BASE_XREF_LIVE_OWNED_FIELDS = frozenset(
     {
         "observed",
@@ -724,6 +765,11 @@ class DotNetIPCClient:
             parameters if parameters is not None else {},
         )
         normalized_sha256 = self._validate_sha256(drawing_sha256)
+        if normalized_operation == "viewport_query" and (
+            normalized_sha256 is None
+            or not _LOWERCASE_SHA256_PATTERN.fullmatch(normalized_sha256)
+        ):
+            raise ValueError("viewport_query drawing_sha256 must be a lowercase SHA-256")
         if normalized_operation in {
             _EXACT_BASE_XREF_INSPECTION,
             _EXACT_BASE_XREF_EXTRACTION,
@@ -734,13 +780,43 @@ class DotNetIPCClient:
                 normalized_parameters["source_full_path"],
                 candidate_output_path=normalized_parameters.get("candidate_output_path"),
             )
+        if normalized_operation in {
+            _STANDALONE_DWG_COMPONENT_INSPECTION,
+            _STANDALONE_DWG_COMPONENT_EXTRACTION,
+        }:
+            self._validate_exact_base_xref_hash(normalized_sha256, "drawing_sha256")
+            if normalized_sha256 != normalized_parameters["source_drawing_sha256"]:
+                raise ValueError(
+                    "standalone envelope drawing_sha256 must match "
+                    "parameters.source_drawing_sha256"
+                )
+            source_path = (
+                normalized_parameters.get("source_drawing_path")
+                if normalized_operation == _STANDALONE_DWG_COMPONENT_INSPECTION
+                else normalized_path
+            )
+            if normalized_operation == _STANDALONE_DWG_COMPONENT_INSPECTION:
+                source_path = normalized_parameters["source_drawing_path"]
+            if source_path is None:
+                raise ValueError("standalone source path is required")
+            if normalize_windows_absolute_path(source_path).casefold() != normalized_path.casefold():
+                raise ValueError("standalone source path must match drawing_full_path")
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
+        if normalized_operation == "viewport_query" and approval is not None:
+            raise ValueError("viewport_query approval must be null")
         if normalized_operation == _EXACT_BASE_XREF_INSPECTION and approval is not None:
             raise ValueError("exact_base_xref_inspection approval must be null")
         if normalized_operation == _EXACT_BASE_XREF_EXTRACTION:
             self._validate_exact_base_xref_approval(
                 normalized_parameters["extraction_plan"]["approval"],
+                approval,
+            )
+        if normalized_operation == _STANDALONE_DWG_COMPONENT_INSPECTION and approval is not None:
+            raise ValueError("standalone inspection approval must be null")
+        if normalized_operation == _STANDALONE_DWG_COMPONENT_EXTRACTION:
+            self._validate_exact_base_xref_approval(
+                normalized_parameters["approval"],
                 approval,
             )
 
@@ -769,6 +845,13 @@ class DotNetIPCClient:
                 raise DotNetIPCError("File IPC requires an AutoCAD dispatcher trigger")
             self.trigger()
             result = self._poll_result(result_file, actual_request_id, normalized_operation)
+            if normalized_operation == "viewport_query":
+                self._validate_viewport_query_result(
+                    result,
+                    drawing_full_path=normalized_path,
+                    drawing_sha256=normalized_sha256,
+                    handle=normalized_parameters["handle"],
+                )
             if result["success"] is not True:
                 errors = result.get("errors", [])
                 message = "; ".join(str(error) for error in errors) if errors else "request failed"
@@ -1233,6 +1316,106 @@ class DotNetIPCClient:
             approval=None,
             request_id=request_id,
         )
+
+    def viewport_query(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        drawing_sha256: str,
+        handle: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "viewport_query",
+            drawing_full_path,
+            drawing_sha256=drawing_sha256,
+            parameters={"handle": handle},
+            approval=None,
+            request_id=request_id,
+        )
+
+    def standalone_dwg_component_inspection(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        inspection_request: Mapping[str, Any],
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the closed read-only standalone-DWG inspection operation."""
+
+        try:
+            validated_request = validate_standalone_inspection_request(inspection_request)
+        except StandaloneDwgExtractionError as exc:
+            raise ValueError(str(exc)) from exc
+        normalized_drawing = normalize_windows_absolute_path(drawing_full_path)
+        if normalized_drawing.casefold() != str(validated_request["source_drawing_path"]).casefold():
+            raise ValueError("standalone inspection source path must match drawing_full_path")
+        result = self.request(
+            _STANDALONE_DWG_COMPONENT_INSPECTION,
+            normalized_drawing,
+            drawing_sha256=str(validated_request["source_drawing_sha256"]),
+            parameters=validated_request,
+            approval=None,
+            request_id=(
+                str(validated_request["request_id"])
+                if request_id is None
+                else request_id
+            ),
+        )
+        try:
+            result["payload"] = validate_standalone_inspection_result(
+                result.get("payload", {}),
+                validated_request,
+            )
+        except StandaloneDwgExtractionError as exc:
+            raise DotNetIPCProtocolError(str(exc)) from exc
+        return result
+
+    def standalone_dwg_component_extraction(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        extraction_plan: Mapping[str, Any],
+        inspection_result: Mapping[str, Any] | None = None,
+        inspection_request: Mapping[str, Any] | None = None,
+        approval: Mapping[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the closed EMPTY_NEW_DATABASE standalone extraction operation."""
+
+        try:
+            validated_plan = build_standalone_extraction_plan(
+                extraction_plan,
+                inspection_result=inspection_result,
+                inspection_request=inspection_request,
+            )
+        except StandaloneDwgExtractionError as exc:
+            raise ValueError(str(exc)) from exc
+        normalized_drawing = normalize_windows_absolute_path(drawing_full_path)
+        plan_source_hash = str(validated_plan["source_drawing_sha256"])
+        envelope_approval = validated_plan["approval"] if approval is None else approval
+        result = self.request(
+            _STANDALONE_DWG_COMPONENT_EXTRACTION,
+            normalized_drawing,
+            drawing_sha256=plan_source_hash,
+            parameters=validated_plan,
+            approval=envelope_approval,
+            request_id=(
+                str(validated_plan["request_id"])
+                if request_id is None
+                else request_id
+            ),
+        )
+        try:
+            result["payload"] = validate_standalone_extraction_result(
+                result.get("payload", {}),
+                source_path=normalized_drawing,
+                plan=validated_plan,
+                inspection_result=inspection_result,
+            )
+        except StandaloneDwgExtractionError as exc:
+            raise DotNetIPCProtocolError(str(exc)) from exc
+        return result
 
     def native_render_evidence(
         self,
@@ -1729,6 +1912,14 @@ class DotNetIPCClient:
         elif operation == "drawing_setup_audit":
             if values:
                 raise ValueError("drawing_setup_audit parameters must be an empty object")
+        elif operation == "viewport_query":
+            if set(values) != {"handle"}:
+                raise ValueError("viewport_query parameters contain unsupported fields")
+            handle = values["handle"]
+            if not isinstance(handle, str) or not re.fullmatch(r"[0-9A-Fa-f]+", handle):
+                raise ValueError(
+                    "viewport_query parameters.handle must be a non-empty hexadecimal handle"
+                )
         elif operation == "review":
             handles = values.get("handles")
             if not isinstance(handles, list) or not handles:
@@ -1752,6 +1943,18 @@ class DotNetIPCClient:
             DotNetIPCClient._validate_exact_base_xref_inspection_parameters(values)
         elif operation == _EXACT_BASE_XREF_EXTRACTION:
             DotNetIPCClient._validate_exact_base_xref_extraction_parameters(values)
+        elif operation == _STANDALONE_DWG_COMPONENT_INSPECTION:
+            try:
+                validated = validate_standalone_inspection_request(values)
+            except StandaloneDwgExtractionError as exc:
+                raise ValueError(str(exc)) from exc
+            values = validated
+        elif operation == _STANDALONE_DWG_COMPONENT_EXTRACTION:
+            try:
+                validated = build_standalone_extraction_plan(values)
+            except StandaloneDwgExtractionError as exc:
+                raise ValueError(str(exc)) from exc
+            values = validated
         return values
 
     @staticmethod
@@ -2324,6 +2527,164 @@ class DotNetIPCClient:
                 raise DotNetIPCProtocolError(f"result {name} must be a non-empty string")
         if "payload" in result and not isinstance(result["payload"], dict):
             raise DotNetIPCProtocolError("result payload must be an object")
+
+    @staticmethod
+    def _validate_viewport_query_result(
+        result: Mapping[str, Any],
+        *,
+        drawing_full_path: str | None,
+        drawing_sha256: str | None,
+        handle: Any,
+    ) -> None:
+        if not isinstance(drawing_full_path, str) or not isinstance(drawing_sha256, str):
+            raise DotNetIPCProtocolError("viewport_query request identity is incomplete")
+        try:
+            result_path = normalize_windows_absolute_path(result["drawing_full_path"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DotNetIPCProtocolError(
+                "viewport_query result drawing_full_path is invalid"
+            ) from exc
+        if result_path != drawing_full_path:
+            raise DotNetIPCProtocolError(
+                "viewport_query result drawing_full_path does not match the request"
+            )
+
+        if not isinstance(handle, str):
+            raise DotNetIPCProtocolError("viewport_query request handle is invalid")
+        expected_handle = handle.upper()
+        if result["success"] is False:
+            if (
+                result["changed"] is not False
+                or result["entity_handles"]
+                or result.get("payload") not in (None, {})
+            ):
+                raise DotNetIPCProtocolError(
+                    "failed viewport_query results must be unchanged and empty"
+                )
+            return
+
+        if result["changed"] is not False:
+            raise DotNetIPCProtocolError(
+                "successful viewport_query results must report changed=false"
+            )
+        if result["entity_handles"] != [expected_handle]:
+            raise DotNetIPCProtocolError(
+                "successful viewport_query results must contain the requested handle only"
+            )
+
+        payload = result.get("payload")
+        if not isinstance(payload, dict):
+            raise DotNetIPCProtocolError("viewport_query payload must be an object")
+        missing = sorted(_VIEWPORT_QUERY_PAYLOAD_FIELDS.difference(payload))
+        if missing:
+            raise DotNetIPCProtocolError(
+                "viewport_query payload is missing: " + ", ".join(missing)
+            )
+        unsupported = sorted(set(payload).difference(_VIEWPORT_QUERY_PAYLOAD_FIELDS))
+        if unsupported:
+            raise DotNetIPCProtocolError(
+                "viewport_query payload contains unsupported fields: "
+                + ", ".join(unsupported)
+            )
+        if payload["schema_version"] != "viewport-query-result-1.0":
+            raise DotNetIPCProtocolError("viewport_query payload schema_version is unsupported")
+        if (
+            not isinstance(payload["handle"], str)
+            or not re.fullmatch(r"[0-9A-F]+", payload["handle"])
+            or payload["handle"] != expected_handle
+        ):
+            raise DotNetIPCProtocolError("viewport_query payload handle is invalid or unbound")
+        if payload["type"] != "VIEWPORT":
+            raise DotNetIPCProtocolError("viewport_query payload type must be VIEWPORT")
+        if not isinstance(payload["layer"], str) or not payload["layer"]:
+            raise DotNetIPCProtocolError("viewport_query payload layer must be non-empty")
+        for name in ("drawing_sha256_before", "drawing_sha256_after"):
+            value = payload[name]
+            if not isinstance(value, str) or not _LOWERCASE_SHA256_PATTERN.fullmatch(value):
+                raise DotNetIPCProtocolError(
+                    f"viewport_query payload {name} must be a lowercase SHA-256"
+                )
+            if value != drawing_sha256:
+                raise DotNetIPCProtocolError(
+                    f"viewport_query payload {name} does not match the request hash"
+                )
+        dbmod_values = (payload["dbmod_before"], payload["dbmod_after"])
+        if any(type(value) is not int or value < 0 for value in dbmod_values):
+            raise DotNetIPCProtocolError(
+                "viewport_query payload DBMOD values must be non-negative integers"
+            )
+        if dbmod_values[0] != dbmod_values[1]:
+            raise DotNetIPCProtocolError(
+                "viewport_query payload DBMOD values must be equal"
+            )
+
+        fields = payload["fields"]
+        if not isinstance(fields, dict):
+            raise DotNetIPCProtocolError("viewport_query payload fields must be an object")
+        missing_fields = sorted(set(_VIEWPORT_QUERY_FIELDS).difference(fields))
+        if missing_fields:
+            raise DotNetIPCProtocolError(
+                "viewport_query payload fields is missing: " + ", ".join(missing_fields)
+            )
+        unsupported_fields = sorted(set(fields).difference(_VIEWPORT_QUERY_FIELDS))
+        if unsupported_fields:
+            raise DotNetIPCProtocolError(
+                "viewport_query payload fields contains unsupported fields: "
+                + ", ".join(unsupported_fields)
+            )
+        for field_name in _VIEWPORT_QUERY_FIELDS:
+            DotNetIPCClient._validate_viewport_query_field(field_name, fields[field_name])
+
+    @staticmethod
+    def _validate_viewport_query_field(field_name: str, field: Any) -> None:
+        prefix = f"viewport_query payload fields.{field_name}"
+        if not isinstance(field, dict):
+            raise DotNetIPCProtocolError(f"{prefix} must be an object")
+        status = field.get("status")
+        if status == "OBSERVED":
+            if set(field) != {"status", "value"}:
+                raise DotNetIPCProtocolError(f"{prefix} OBSERVED must contain only value")
+            value = field["value"]
+            if field_name in _VIEWPORT_QUERY_OBSERVED_VECTOR_FIELDS:
+                expected_length = 2 if field_name == "view_center" else 3
+                if not isinstance(value, list) or len(value) != expected_length:
+                    raise DotNetIPCProtocolError(
+                        f"{prefix}.value must contain {expected_length} finite numbers"
+                    )
+                for component in value:
+                    DotNetIPCClient._validate_viewport_query_number(component, prefix)
+            else:
+                DotNetIPCClient._validate_viewport_query_number(value, prefix)
+                if field_name in {"width", "height", "view_height"} and value <= 0:
+                    raise DotNetIPCProtocolError(f"{prefix}.value must be positive")
+            return
+        if status == "UNSUPPORTED":
+            if field != {"status": "UNSUPPORTED", "reason": "PROPERTY_UNAVAILABLE"}:
+                raise DotNetIPCProtocolError(
+                    f"{prefix} UNSUPPORTED requires reason PROPERTY_UNAVAILABLE"
+                )
+            return
+        if status == "ERROR":
+            if (
+                set(field) != {"status", "reason"}
+                or field.get("reason") not in _VIEWPORT_QUERY_ERROR_REASONS
+            ):
+                raise DotNetIPCProtocolError(
+                    f"{prefix} ERROR requires a read-failed or invalid-value reason"
+                )
+            return
+        raise DotNetIPCProtocolError(f"{prefix}.status is unsupported")
+
+    @staticmethod
+    def _validate_viewport_query_number(value: Any, prefix: str) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise DotNetIPCProtocolError(f"{prefix}.value must be a finite number")
+        try:
+            finite = math.isfinite(float(value))
+        except (OverflowError, ValueError):
+            finite = False
+        if not finite:
+            raise DotNetIPCProtocolError(f"{prefix}.value must be a finite number")
 
     @staticmethod
     def _validate_exact_base_xref_inspection_result(

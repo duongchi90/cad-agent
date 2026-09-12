@@ -1,0 +1,721 @@
+# Standalone DWG Component Extraction — Task 6 Implementation Record
+
+Date: 2026-09-11
+Branch: `codex/audit-text-style-compat-20260910`
+Implementation/evidence commits: `1e17f159a2bd089f9797876beb769a872dee45b0`,
+`a1fece80b1efae831d442626c6454a0ae23533d0`,
+`94719ca3e854dd3bb6b668217924c85e3d07c214`, and
+`a17032275a628328dcad0fd15166e413faee3663`
+
+## Scope and boundary
+
+Task 6 adds an opt-in `autocad_mechanical` gate for the approved standalone
+`BVTL.dwg` source. The gate consumes an operator-prepared private fixture and
+never stores the source DWG, customer annotations, candidate DWG, or private
+evidence in Git.
+
+The live path is candidate-only and read-only with respect to the source:
+
+1. Open the approved source through the existing File IPC client.
+2. Verify the loaded `AutoCAD Mechanical 2027` host and exact plugin binary
+   identity through `health`.
+3. Run `drawing_setup_audit` and require stable DBMOD/read-only setup evidence.
+4. Run `standalone_dwg_component_inspection` and require `XREF=0`, exact
+   inspection groups/handles, unchanged source hash/DBMOD, and eligibility.
+5. Require an absent disposable output, then run
+   `standalone_dwg_component_extraction` with `EMPTY_NEW_DATABASE`.
+6. Reopen and hash the candidate before accepting `save_performed=true`.
+7. Compose the detached source BASELINE, `R3_CANDIDATE`, registry, and root
+   `R4` candidate revision. Query only the candidate-bound handles through
+   `drawing_query`.
+8. Close the candidate without saving and remove it only after the returned
+   candidate hash and identity match. Reopen/check/close the source without
+   saving.
+
+The page-1 delta regression uses the existing inspection-backed allowlist:
+`cargo-side-frame` is rejected by `build_standalone_extraction_plan` when it
+has not been inspected. No native full-drawing or exact-base-Xref restriction
+was changed.
+
+The candidate identity boundary was then remediated after independent review
+found that the real .NET cleanup identity (`path|length|creation ticks|write
+ticks`) was being exposed as the schema `file_id`. The raw filesystem identity
+is now retained only as the internal cleanup recheck, while the public result
+exposes `candidate-file-<sha256(raw identity)>`, which satisfies the frozen
+schema grammar. C# reader/dispatcher coverage and the Python result validator
+now exercise this real-like raw identity end to end.
+
+The layer-name boundary was then remediated after the live read-only setup
+probe established that the approved source legitimately uses the AutoCAD layer
+name `Duong manh`. The previous identifier-only validator rejected that name
+before File IPC, so a truthful fixture could not reach the inspection gate.
+Commit `a17032275a628328dcad0fd15166e413faee3663` changes only
+`source_layer_expectations` and observed `layers` to a closed safe-text
+contract: 1-512 printable characters, with empty, control-character,
+malformed-array, and unknown-field inputs rejected. Group IDs, component IDs,
+handles, and entity-type tokens remain identifier-strict. Python, JSON schema,
+and C# validators now share the boundary, with `Duong manh` regression tests.
+
+## Interfaces and fixture contract
+
+The gate reuses the existing `DotNetIPCClient`, `FileIPCLiveMCPClient`, Windows
+trigger helpers, standalone adapter, DARA, component-view registry, candidate
+revision, and drawing-query owners. It adds no transport or truth store.
+
+The private fixture must contain exactly these logical fields:
+
+- `project_id`, `drawing_id`, `candidate_id`;
+- `inspection_request`, `extraction_plan`;
+- `source_upstream_evidence`, `observation_evidence_sha256`;
+- `candidate_upstream_evidence`, `candidate_observation_evidence_sha256`;
+- `query`.
+
+The opt-in environment additionally supplies the File IPC roots, AutoCAD HWND
+and LISP path, fixture path, approved source path/hash/setup-audit hash, and
+disposable candidate root. The gate reports each absent or invalid prerequisite
+as `SKIP`; it does not turn an unavailable live session into a PASS.
+
+## Evidence and verification
+
+Evidence captured on the layer-name remediation head
+`a17032275a628328dcad0fd15166e413faee3663`:
+
+- `scripts/verify.ps1`: exit `0`, all checks passed.
+- Full offline Python suite: `3278 passed`, `21 deselected`, `74 subtests`.
+- Offline IPC JUnit: `134` tests, `0` failures, `0` errors, `0` skipped.
+- Full C# solution: `238 passed`, `0` failed, `0` skipped.
+- Layer-name remediation focused set: Python/C# cross-language contract tests
+  passed (`97` Python tests in the focused owner set; `49` C# contract tests).
+- Read-only live preparation: approved `BVTL.dwg` opened with source hash
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`, .NET
+  `health` and `drawing_setup_audit` succeeded with `changed=false` and
+  `DBMOD=0`. The standalone live gate remained `NOT RUN` because the truthful
+  private fixture was absent; no inspection, extraction, candidate creation,
+  source save, or accepted-drawing mutation occurred. The detailed private
+  preparation record is outside Git at
+  `C:\temp\cad-agent-task6-live-20260911\task6-live-prep-20260911.txt`.
+- `autocad_mechanical` unavailable-state probe: `17 skipped`; live marker
+  `NOT RUN` because the AutoCAD/File IPC session was not prepared.
+- Real-data/private gates: `2 skipped` because their private inputs were not
+  supplied.
+- Causal trigger RED oracle: `1 expected failing negative test`, retained as
+  an intentional oracle and not counted as a product failure.
+- Python 3.11.9, .NET SDK 10.0.302, and repository Ruff checks passed.
+- `git diff --check`: pass; verification left the repository clean.
+
+The preceding hash-binding and candidate-identity remediations had SOL status
+`VERDICT=PASS`, with `MATERIAL_FINDING=NONE` and `HUMAN_GATE=NO`. SOL's fresh
+review then identified the real layer-name incompatibility and requested this
+single contract remediation; the remediation is now locally verified and
+awaits fresh SOL review. No live CAD verdict is inferred from these offline
+results.
+
+## Reuse dossier classification
+
+Classification: reuse-first, thin orchestration test gate. Existing owners
+remain responsible for request/result schemas, source freshness, candidate
+serialization/readback, cleanup policy, DARA custody/currentness, R3 registry
+binding, R4 candidate revision state, and bounded entity reads. The new file
+only coordinates those owners and records truthful live availability.
+
+## State and remaining risk
+
+Source and accepted drawings were not modified. No private artifact was added
+to Git. No production candidate was promoted.
+
+The remaining risk is explicitly live-gated: one bounded attempt had the
+approved `BVTL.dwg` source, AutoCAD Mechanical 2027 session, operator fixture,
+and File IPC prerequisites available, but it correctly failed closed at
+`S3C_SOURCE_READ_ONLY_REQUIRED` because the existing open path opened the
+source writable. Therefore this record remains implementation and
+offline-contract evidence, not live CAD acceptance or release evidence.
+
+## Read-only source-open remediation and iteration 27
+
+SOL's fresh review of the live finding identified the existing owner boundary:
+`FileIPCLiveMCPClient.drawing_open` called AutoCAD `vla-open` without its
+read-only argument. The bounded remediation in commit
+`1e17f159a2bd089f9797876beb769a872dee45b0` adds an explicit keyword
+`read_only=True` opt-in. Only the standalone Task-6 source-open call uses it;
+candidate opens remain on the default writable path. The `S3C` read-only policy
+was not weakened, and the source/fixture/accepted drawing were not changed.
+
+Regression evidence on the pushed code commit:
+
+- `test_mcp_client_drawing_open.py`: `12 passed`, including the exact
+  `:vlax-true` read-only call, active-document path verification, and the
+  unchanged writable default signature.
+- Focused FileIPC/Task-6 owner set: `32 passed`, one live prerequisite skip,
+  and one intentional causal-RED diagnostic.
+- `scripts/verify.ps1`: exit `0`; C# `238 passed`, offline Python `3354`
+  passed, offline IPC `134` passed, real-data `2 skipped`, AutoCAD Mechanical
+  `17 skipped`, and `git diff --check` passed.
+
+Iteration-27 live evidence is private at
+`C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration27-evidence.txt`.
+The gate reached health, setup audit, and standalone inspection dispatch, then
+failed closed with `S3C_SOURCE_READ_ONLY_REQUIRED`. No candidate was created;
+the disposable root was empty and the source hash remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+Live acceptance remains `NOT RUN` until SOL reviews this remediation and a new
+attempt actually passes inspection/extraction/query.
+
+## Read-only fallback fail-closed remediation and iteration 29
+
+SOL's fresh review of exact pushed HEAD
+`cf7b5f139adc63b07d4694a488dd449bf646258f` found one remaining escape path in
+the new owner-level contract: when VLA read-only open failed and the positive
+start-tab proof was available, `drawing_open(read_only=True)` could still call
+the generic writable `_.OPEN` fallback. The bounded remediation in commit
+`a21bf814545bbaa3148ce34a7940661be76e1b6d` propagates the VLA failure whenever
+`read_only=True`, so no writable command fallback is possible. The existing
+writable fallback remains available for `read_only=False`.
+
+Regression and verification evidence on the exact pushed code commit:
+
+- `test_mcp_client_drawing_open.py`: `13 passed`, including the new
+  fail-closed regression and the existing writable-fallback regression.
+- Focused FileIPC/Task-6 owner set: `33 passed`, one live prerequisite skip,
+  and one intentional causal-RED diagnostic.
+- `scripts/verify.ps1`: exit `0`; C# `238 passed`, offline Python `3355`
+  passed, offline IPC `134` passed, real-data `2 skipped`, AutoCAD Mechanical
+  unavailable probe `17 skipped`, Ruff passed, and `git diff --check` passed.
+
+The source DWG, private fixture, accepted drawing, candidate output, and live
+AutoCAD state were not changed. This is implementation and offline-contract
+evidence only. Live acceptance remains `NOT RUN` pending a fresh SOL review of
+`a21bf814545bbaa3148ce34a7940661be76e1b6d`; only after `VERDICT=PASS` may the
+standalone live inspection/extraction/query gate be attempted again.
+
+## Iteration 30 live session bootstrap result
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the fail-closed remediation. One fresh opt-in live gate was then attempted
+with AutoCAD Mechanical 2027 started without `BVTL.dwg` already open, the
+approved fixture and source hashes configured, and the existing plugin/dispatcher
+bootstrap route. The attempt stopped before `drawing_open(read_only=True)`:
+
+- `MCPTimeoutError`: AutoCAD dispatcher did not become ready;
+  `request_id=630d574a66d5`.
+- Pytest result: `1 failed, 1 deselected` in `14.54s`.
+- No health, setup audit, inspection, extraction, candidate creation, query,
+  or cleanup gate ran.
+- AutoCAD was on `[Start]` and closed without a drawing. The source hash stayed
+  `78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`, and the
+  disposable root remained empty.
+
+This is a session/bootstrap readiness finding, not a read-only-path result.
+Live acceptance therefore remains `NOT RUN`. The detailed private evidence is
+at `C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration30-evidence.txt`.
+No retry or production-code mutation was made after the bounded failure; the
+next action is held for a fresh SOL decision on the existing bootstrap path.
+
+## Iteration 31 bootstrap/readiness diagnostic
+
+SOL classified the iteration-30 timeout as a bootstrap/readiness boundary and
+authorized exactly one diagnostic on a fresh blank AutoCAD Mechanical 2027
+session, without running the Task-6 extraction gate. The existing native LISP
+trigger was called once with the configured load expression for
+`mcp_dispatch.lsp`, and it returned without a delivery exception:
+
+- `LISP_LOAD_TRIGGER_RETURNED=YES`.
+- Exactly one FileIPC `ping` was issued through the existing dispatch trigger,
+  with a five-second timeout.
+- The ping failed with `MCPTimeoutError: Timeout waiting for result`
+  (`request_id=d4f6cc647159`); no terminal result/evidence was produced.
+
+The session remained on `[Start]` and was closed without a drawing. The IPC
+root had no request/result residue, the disposable root remained empty, and
+the source hash remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`. No
+source, candidate, accepted drawing, production CAD, or reviewed HEAD was
+mutated. This diagnostic does not test the read-only source-open path; live
+acceptance remains `NOT RUN`. Detailed private evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-diagnostic-iteration31-evidence.txt`.
+
+## Iteration 32 explicit Start-tab bootstrap remediation
+
+SOL's fresh review identified that the iteration-31 native text-delivery
+return did not prove AutoLISP execution while AutoCAD was on the documentless
+`[Start]` tab. The bounded remediation at code HEAD
+`d79860b91ff34cef9e1898d353a98f6809dc445a` adds an explicit opt-in
+`bootstrap_start_tab` path to the existing File IPC client. When the positive
+Start-tab probe succeeds, the path creates one disposable blank document with
+`_.QNEW`, loads the existing dispatcher, and requires one successful FileIPC
+ping before source `drawing_open(..., read_only=True)` is allowed. Load or
+ping failure closes the blank document without saving. A real active document
+does not trigger `_.QNEW`, and the default writable path remains unchanged.
+
+Focused owner tests passed (`21` drawing-open tests; `41` combined FileIPC and
+Task-6 tests excluding the intentional causal-RED diagnostic, with one live
+prerequisite skip). Authoritative verification passed with C# `238`, offline
+Python `3369`, and offline IPC `134` tests, with zero product failures; the
+private real-data and AutoCAD Mechanical gates remain unavailable, and live
+Task-6 acceptance remains `NOT RUN`. The code/plan commit is pushed and the
+fresh SOL review is pending. Private evidence and recoverable resume state are
+at `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-context-iteration32-evidence.txt`
+and `C:\temp\cad-agent-task6-live-20260911\wait-safe-resume-state-iteration32.txt`.
+
+## Iteration 33 QNEW readiness hardening
+
+SOL's fresh review found a delivery/readiness race in iteration 32: the native
+command trigger can return after posting `_.QNEW` while the AutoCAD window is
+still on the documentless `[Start]` tab. The bounded remediation at code HEAD
+`8040adb54629a533dbfdb3efe1cb2ef0da92fa8e` adds an explicit bounded
+`bootstrap_document_ready_probe` and waits until the window no longer reports
+`[Start]` before marking bootstrap ownership, loading the existing dispatcher,
+or issuing a FileIPC ping. If readiness times out, no LISP or source-open
+expression is emitted and no cleanup is attempted for an unowned document.
+Task-6 supplies the matching Windows probe; the existing no-QNEW real-document
+path and default writable behavior remain unchanged.
+
+The RED tests covered delayed/non-executed QNEW and the GREEN run passed `24`
+drawing-open tests and `44` combined FileIPC/Task-6 tests with one live
+prerequisite skip. Authoritative `scripts/verify.ps1` on the exact code commit
+exited `0`: C# `238`, offline IPC `134`, and offline Python `3372`, with zero
+product failures; the causal-RED diagnostic remains intentionally failing and
+private real-data/AutoCAD Mechanical prerequisites remain skipped. No live
+Task-6 gate was rerun, no source/candidate/accepted drawing was touched, and
+fresh SOL review of `8040adb54629a533dbfdb3efe1cb2ef0da92fa8e` is required.
+
+## Iteration 34 fresh live readiness result
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the iteration-33 readiness hardening. Exactly one fresh opt-in Task-6 live
+attempt was run with AutoCAD Mechanical 2027 initially on `[Start]`, the
+approved fixture and source hashes configured, and `BVTL.dwg` not open. The
+native command trigger delivered `_.QNEW`, but the bounded readiness probe did
+not observe a non-`[Start]` document within `10.26s`; the gate failed closed
+with `START_TAB_BOOTSTRAP_DOCUMENT_NOT_READY` before LISP load, FileIPC ping,
+source `drawing_open(read_only=True)`, health, setup audit, inspection,
+extraction, candidate creation, or query.
+
+Postcondition inspection showed AutoCAD still on `[Start]`; it was closed
+without saving. The disposable root remained empty and source
+`BVTL.dwg` retained SHA-256
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`. No
+source, accepted drawing, candidate, production CAD, or reviewed HEAD was
+mutated. Live Task-6 acceptance remains `NOT RUN`, not `PASS`. Detailed
+private evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration34-evidence.txt`;
+fresh SOL review of this live boundary is required.
+
+## Iteration 35 Start-tab bootstrap-owner primitive diagnostic
+
+SOL classified iteration 34 as a bootstrap-owner defect and authorized exactly
+one bounded diagnostic focused only on creating the disposable blank document
+through an existing AutoCAD-native mechanism. Repository code was not changed,
+`BVTL.dwg` was not opened, and the Task-6 dispatcher was not loaded. A fresh
+AutoCAD Mechanical 2027 process was observed at `[Start]`; the existing native
+startup-script route (`acad.exe /nologo /b <script>`) with a disposable script
+containing only `_.QNEW` transitioned the same process to
+`[Drawing1.dwg]` in the observed session.
+
+The blank session was closed through the native process close path without
+saving. The source hash remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`, and the
+disposable extraction root remained empty. A separate LISP sentinel probe did
+not produce output, so it is not used as dispatcher evidence. This diagnostic
+proves only the candidate native Start-to-blank primitive; dispatcher load,
+FileIPC ping, source read-only open, extraction, and live acceptance remain
+`NOT RUN`. Fresh SOL review is required before any production-owner change.
+Private evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-owner-diagnostic-iteration35-evidence.txt`.
+
+## Iteration 36 startup-session owner remediation
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the iteration-35 diagnostic. The exact bounded owner change was implemented
+and pushed at code HEAD
+`8afc7c0494e14cf2711641e4c23b060df4920ef`.
+
+`WindowsAutoCADStartTabSession` launches a fresh disposable `acad.exe` with a
+temporary startup script whose exact bytes are `_.QNEW\r\n`. It discovers the
+main window by the launched process ID, requires the positive `[Start]`
+observation, and returns process-bound command/LISP/dispatch/readiness
+bindings. `FileIPCLiveMCPClient` waits for a non-`[Start]` document before
+loading the existing dispatcher. Task 6 then loads the approved plugin through
+the bound HWND and proceeds to the existing read-only source-open path. A
+failed readiness/ping path closes the owned session without opening the source;
+close timeout cleanup can terminate only the process created by this session.
+No source, accepted drawing, candidate, or production CAD state was mutated.
+
+Focused verification on the code head reported `48 passed`, `1 skipped`, `1
+deselected`, and `9 subtests` with the intentional causal-RED test excluded;
+Ruff and `git diff --check` passed. The authoritative
+`.\scripts\verify.ps1` ran on the clean pushed commit and exited `0`:
+C# `238 passed`; offline Python `3296 passed`, `21 deselected`, `80
+subtests`; offline IPC JUnit `tests=134`, `failures=0`, `errors=0`;
+real-data unavailable probe `2 skipped`; AutoCAD Mechanical unavailable probe
+`17 skipped`; live Task 6 `NOT RUN`. The verifier also ran the expected causal
+RED negative oracle and recorded one intentional failure without failing the
+verification contract.
+
+Private evidence and recoverable state are recorded at:
+
+- `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-owner-remediation-iteration36-evidence.txt`
+- `C:\temp\cad-agent-task6-live-20260911\wait-safe-resume-state-iteration36.txt`
+
+Fresh SOL review of the pushed owner change is required before another live
+Task-6 attempt.
+
+## Iteration 37 fresh live Task-6 result
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the iteration-36 owner remediation and authorized exactly one fresh live
+Task-6 gate. The startup-session owner successfully created a blank document
+from `[Start]` in the same owned AutoCAD process (`PID 28488`, `HWND 4983510`,
+title `Autodesk AutoCAD 2027 - [Drawing1.dwg]`).
+
+The first failure was the existing dispatcher readiness boundary: FileIPC
+`ping` request `03e4086d8d2f` timed out and the client raised
+`MCPTimeoutError: AutoCAD dispatcher did not become ready` after `73.71s`.
+The gate stopped before `BVTL.dwg` open, health, setup audit, inspection,
+extraction, candidate creation, candidate query, or source reopen. Cleanup
+left no AutoCAD process, removed the disposable startup script, and left the
+candidate directory empty. The approved source SHA remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`; no
+source, accepted drawing, candidate, or production CAD state was mutated.
+Live Task-6 acceptance remains `NOT RUN`, not `PASS`. The exact private
+evidence is at
+`C:\temp\cad-agent-task6-live-20260911\task6-live-gate-iteration37-evidence.txt`.
+
+The next action is a fresh bounded SOL diagnosis of this dispatcher boundary;
+do not retry live Task 6 or weaken readiness/custody policy before that
+review.
+
+## Iteration 38 dispatcher-owner remediation
+
+SOL classified iteration 37 as an initial dispatcher-load owner finding and
+authorized exactly one non-live remediation. The code change was pushed at
+`669472d2f8c900b58146e23921dab0fc90644d41`.
+
+The owned startup-session script now contains only bootstrap content:
+`_.QNEW`, optional approved release-plugin `_.NETLOAD`, and one AutoLISP
+expression that sets the exact FileIPC root and loads the exact
+`mcp_dispatch.lsp` path. It contains no source path, save, extraction,
+candidate, or publication command. The session still discovers the main
+window by its launched PID and returns the same-process HWND bindings. A
+`dispatcher_preloaded` binding tells `FileIPCLiveMCPClient` to skip the
+keyboard LISP load for initial bootstrap; it still requires a claim-bound
+FileIPC `ping` after readiness and before any runtime hook or source open.
+The existing runtime triggers and default writable behavior remain unchanged.
+
+Focused verification reported `49 passed`, `1 skipped`, `1 deselected`, and
+`9 subtests` with the causal-RED oracle excluded; Ruff and `git diff --check`
+passed. The authoritative `.\scripts\verify.ps1` ran on the clean code
+commit and exited `0`: C# `238 passed`; offline Python `3297 passed`, `21
+deselected`, `80 subtests`; offline IPC JUnit `134`, with zero failures or
+errors; real-data unavailable probe `2 skipped`; AutoCAD Mechanical
+unavailable probe `17 skipped`; live Task 6 `NOT RUN`. No live retry was made
+after this remediation and no CAD/source/candidate state was mutated.
+
+Private evidence and recoverable state are recorded at:
+
+- `C:\temp\cad-agent-task6-live-20260911\task6-bootstrap-dispatcher-owner-remediation-iteration38-evidence.txt`
+- `C:\temp\cad-agent-task6-live-20260911\wait-safe-resume-state-iteration38.txt`
+
+Fresh SOL review of this pushed remediation is required before another live
+Task-6 attempt.
+
+## Iteration 40 fresh live gate
+
+SOL returned PASS for iteration 39 and authorized exactly one fresh opt-in live Task-6 gate on code HEAD 386808924829062613d4658af937b98916a0db08. The gate started the owned startup-session route and stopped at the first claim-bound dispatcher readiness boundary: request 05c05ae0456e timed out after 41.81 seconds.
+
+The failure occurred before opening the approved BVTL.dwg source, health, setup audit, standalone inspection, extraction, candidate creation, candidate reopen/query, or source reopen. Cleanup was verified: no acad.exe process remained and the disposable candidate directory was empty. The approved source SHA remained 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8; Git remained clean at docs HEAD 0dfebd63d5ac31e175279acb751928c751115d90. No source, accepted drawing, candidate, or production CAD state was mutated.
+
+Live Task-6 acceptance remains NOT RUN, not PASS. This observation does not provide a visual, geometry, extraction, or query fidelity verdict. Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-live-gate-iteration40-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration40.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another live attempt.
+
+## Iteration 39 claim-binding remediation
+
+SOL's fresh review of exact synced code/docs state identified a claim-binding contract break: the startup-session client was constructed without an initial trigger, so it derived legacy fixture mode before the owned startup bindings were applied. The resulting readiness ping could therefore carry no claim.
+
+The bounded remediation was implemented and pushed at code HEAD 386808924829062613d4658af937b98916a0db08. The bootstrap-binding owner now fails closed unless the supplied trigger explicitly advertises claim capability, then switches the client to non-legacy mode before the first readiness ping. Explicit legacy fixture behavior outside the opt-in startup route remains unchanged.
+
+Focused owner checks report 50 passed, 1 skipped, 1 deselected, and 9 subtests; Ruff and git diff --check pass. The authoritative .\scripts\verify.ps1 exited 0 on the clean code head: C# 238 passed; offline Python JUnit 3378 tests with zero failures, errors, or skips (3298 passed, 21 deselected, 80 subtests); offline IPC JUnit 134 with zero failures/errors/skips; real-data unavailable probe 2 skipped; AutoCAD Mechanical unavailable probe 17 skipped; and the causal-RED oracle recorded its expected single negative failure.
+
+AutoCAD live and M2 Mechanical gates were NOT RUN because their prerequisites were absent. No live Task-6 retry was made after this remediation, and the approved source SHA remained 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8.
+
+Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-claim-binding-remediation-iteration39-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration39.txt
+
+Fresh SOL review of this pushed remediation is required before another live
+Task-6 attempt.
+Fresh SOL diagnosis of this first-failure boundary is required before another live attempt.
+
+## Iteration 41 startup-script completion-order remediation
+
+SOL's iteration-40 diagnosis identified that document readiness did not prove the owned startup script had finished NETLOAD and dispatcher load. The bounded remediation is pushed at code HEAD c415b90139f58d3f76de7e3f15f5dc4c3e68e40a.
+
+The startup script now writes one unique completion acknowledgement into the matching File/.NET IPC root only after QNEW, optional NETLOAD, and dispatcher load return. WindowsAutoCADStartTabSession waits for that exact token using the existing bounded timeout before returning bindings; dispatcher_preloaded is true only after confirmation. FileIPCLiveMCPClient rejects bootstrap bindings without bootstrap_completion_confirmed before any readiness ping, and cleanup removes the acknowledgement file. Explicit legacy fixture behavior remains unchanged.
+
+The RED tests reproduced both failures: document-ready alone was insufficient, and the client could otherwise ping before completion. The GREEN owner set reports 52 passed, 1 skipped, 1 deselected, and 9 subtests; Ruff and git diff --check pass. Authoritative .\scripts\verify.ps1 exits 0: C# 238 passed; offline Python JUnit 3380 tests with zero failures, errors, or skips (3300 passed, 21 deselected, 80 subtests); offline IPC JUnit 134 with zero failures/errors/skips; real-data unavailable probe 2 skipped; AutoCAD Mechanical unavailable probe 17 skipped; causal-RED handled as expected.
+
+No live Task-6 retry was made after this remediation. Approved BVTL.dwg SHA remains 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8; no source, accepted drawing, candidate, or production CAD state was mutated. Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-completion-remediation-iteration41-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration41.txt
+
+Fresh SOL review of this pushed remediation is required before another live attempt.
+Fresh SOL review of this pushed remediation is required before another live attempt.
+
+## Iteration 42 fresh live gate
+
+SOL returned PASS for iteration 41 and authorized exactly one fresh opt-in live Task-6 gate on code c415b90139f58d3f76de7e3f15f5dc4c3e68e40a. The owned startup session reached the startup window observation but did not observe the exact completion acknowledgement within the bounded timeout. It failed closed with START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED after 53.89 seconds.
+
+The claim-bound FileIPC readiness ping was not sent, and the approved BVTL.dwg source was not opened. Health, setup audit, standalone inspection, extraction, candidate creation, candidate reopen/query, and source reopen were not reached. Cleanup left no acad.exe process, no candidate, and no completion acknowledgement. The approved source SHA remained 78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8; no source, accepted drawing, candidate, or production CAD state was mutated.
+
+Live Task-6 acceptance remains NOT RUN, not PASS. This observation provides no dispatcher, visual, geometry, extraction, or query fidelity verdict. Private evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-live-gate-iteration42-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration42.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another live attempt.
+
+## Iteration 43 bootstrap-only staged completion diagnostic
+
+SOL classified the iteration-42 completion-ack timeout as a bootstrap-owner
+diagnostic boundary and authorized exactly one fresh bootstrap-only staged
+diagnostic. The diagnostic launched one owned AutoCAD Mechanical 2027 blank
+session with the approved release plugin and repository dispatcher. It did not
+open `BVTL.dwg`, send a claim-bound FileIPC ping, run Task 6, or alter any
+source, accepted drawing, candidate, or production CAD state.
+
+The same-root staged script positively emitted markers for:
+
+- `QNEW_COMPLETE`
+- `NETLOAD_RETURN`
+- `DISPATCHER_LOAD_RETURN`
+- `ACK_WRITE_RETURN`
+
+The session nevertheless failed closed with
+`START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 94.39 seconds. The final
+marker was placed after the acknowledgement conditional, so it proves that the
+script reached the final expression but does not independently prove that the
+`.ready` file was successfully opened and written. No `.ready` file remained
+after session cleanup. No acad.exe process remained, the disposable candidate
+root was empty, and the approved `BVTL.dwg` SHA-256 remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+
+Live Task-6 acceptance remains **NOT RUN**, not PASS. The diagnostic provides no
+dispatcher, visual, geometry, extraction, or query fidelity verdict. The
+diagnostic root is `C:/temp/cad-agent-task6-live-20260911/bootstrap-stage-iteration43`.
+Fresh SOL diagnosis is required before another bootstrap or live Task-6 run.
+
+## Iteration 44 completion-marker remediation
+
+SOL's iteration-43 review isolated the remaining bootstrap defect to the
+completion acknowledgement primitive. The staged diagnostic had reached the
+dispatcher-load return and the final conditional, while the production owner
+waited for a `.ready` file that was never observed. SOL authorized one bounded
+non-live owner remediation and no live retry.
+
+The remediation is pushed at code HEAD
+`4d05c46e3710bc7f5e23e0cd3f84438f19c74a09`. The owned startup session now uses
+the same live-proven same-root `open`/`write-line`/`close` marker primitive used
+by the staged diagnostic, with a unique per-session `.marker` path derived from
+the owned startup script and placed under the exact IPC root. It emits the
+exact `CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token only after dispatcher load
+returns, validates exact marker content, and removes the marker during cleanup.
+`dispatcher_preloaded` and `bootstrap_completion_confirmed` remain false until
+the marker is positively observed. Existing fail-closed ping and source-open
+ordering is unchanged.
+
+TDD RED changed the owner test to require the marker path and added wrong-token
+rejection with cleanup; both failed against the previous `.ready` owner. GREEN
+focused checks report 53 passed, 1 skipped, 1 deselected, and 9 subtests, with
+Ruff and `git diff --check` passing. The authoritative `scripts/verify.ps1`
+exited 0: C# 238 passed; offline Python JUnit 3381 with zero failures/errors/
+skips (3301 passed, 21 deselected, 80 subtests); offline IPC JUnit 134 clean;
+the causal-red oracle recorded its expected one negative failure; real-data 2
+skipped; AutoCAD Mechanical 17 skipped. AutoCAD live and M2 Mechanical were
+NOT RUN.
+
+No live bootstrap or Task-6 retry was made after this remediation. The
+approved `BVTL.dwg` SHA-256 remains
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`; no
+source, accepted drawing, candidate, or production CAD state was mutated.
+Evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-completion-marker-remediation-iteration44-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration44.txt
+
+Fresh SOL review of this pushed remediation is required before another live
+Task-6 attempt.
+
+## Iteration 45 bootstrap-only live proof
+
+SOL returned PASS for iteration 44 and authorized exactly one fresh
+bootstrap-only live proof on the marker remediation. The proof launched one
+owned AutoCAD Mechanical 2027 blank session and required positive observation
+of the unique same-root `.marker` containing the exact
+`CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token before exactly one claim-bound
+FileIPC readiness ping. It did not open `BVTL.dwg` or run Task 6 extraction or
+query.
+
+The proof failed closed at the first boundary with
+`START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 68.11 seconds. The marker
+was not observed by the production session, so the claim-bound readiness ping
+was not reached. The repository was at docs HEAD `d75aa27`; the production
+code/test files were byte-identical to code commit `4d05c46` used by SOL's
+authorization.
+
+Cleanup was verified: no acad.exe process remained, the proof root was empty,
+and the approved `BVTL.dwg` SHA-256 remained
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`. No
+source, accepted drawing, candidate, or production CAD state was mutated.
+Live Task-6 acceptance remains **NOT RUN**, not PASS; no dispatcher, visual,
+geometry, extraction, or query fidelity verdict is inferred.
+
+Evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-only-live-proof-iteration45-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration45.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another
+bootstrap or live Task-6 attempt.
+
+## Iteration 46 canonical completion-marker differential remediation
+
+SOL's iteration-45 review confirmed that the marker remediation was not live-
+valid and required exactly one non-live production-versus-diagnostic
+completion-marker differential. No bootstrap or Task-6 live retry was made.
+
+The differential captured the exact production startup-script bytes from code
+HEAD `4d05c46e3710bc7f5e23e0cd3f84438f19c74a09` and compared them with the
+iteration-43 live-proven staged marker writer. The resolved per-session marker
+path and exact `CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token matched, but the
+production expression lacked the diagnostic's canonical nested `progn` form.
+The pre-fix assertion recorded
+`PRODUCTION_CONTAINS_DIAGNOSTIC_EXPRESSION=False`.
+
+The bounded fix is pushed at code HEAD
+`636a81e186133a24c36d3e0c6b0b67a918fceb3e`. Production now uses
+`_start_tab_completion_marker_path` and
+`_start_tab_completion_marker_expression` so the startup owner emits the exact
+same-root `open`/`write-line`/`close` expression, exact token, and per-session
+`.marker` path. Existing exact-content validation and stale/wrong-token
+cleanup remain in force.
+
+TDD RED changed the owner test to require the exact canonical writer syntax;
+the test failed against the pre-fix production script. GREEN focused owner
+checks report 33 passed and 6 subtests, with Ruff and `git diff --check`
+passing. The authoritative `scripts/verify.ps1` exited 0: C# 238 passed;
+offline Python JUnit 3381 with zero failures/errors/skips (3301 passed, 21
+deselected, 80 subtests); offline IPC JUnit 134 clean; causal-red expected
+one negative failure handled; real-data 2 skipped; AutoCAD Mechanical 17
+skipped. Live AutoCAD and M2 Mechanical remain NOT RUN.
+
+The code commit is pushed separately from this documentation checkpoint. No
+source, accepted drawing, candidate, or production CAD state was mutated. The
+approved `BVTL.dwg` SHA-256 remains
+`78490aa0c57d24ffd58c4555f0945df527429658180e414735da68f4e24cc9b8`.
+Evidence and resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-completion-marker-differential-remediation-iteration46-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration46.txt
+
+Fresh SOL review of this pushed remediation is required before any live retry.
+
+## Iteration 47 bootstrap-only live proof
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+the iteration-46 canonical completion-marker remediation and authorized exactly
+one fresh bootstrap-only live proof on code HEAD
+`636a81e186133a24c36d3e0c6b0b67a918fceb3e`. The proof was limited to one
+owned AutoCAD Mechanical 2027 blank session, positive observation and
+consumption of the exact unique same-root `.marker`, then exactly one
+claim-bound FileIPC readiness ping. It passed no BVTL.dwg path and did not run
+Task 6 extraction, query, candidate creation, save, or source mutation.
+
+The proof failed closed at the first boundary with
+`START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED`. The production owner did not
+observe its unique `.marker`; therefore claim-bound FileIPC ping attempts were
+zero and the ping boundary was not reached. No marker or FileIPC validity
+verdict is inferred from this failure.
+
+Cleanup was verified: the owned blank session used close-without-save cleanup,
+the dedicated proof root was empty, and no acad.exe process remained. No source,
+accepted drawing, candidate, production CAD, or Task-6 state was mutated. Live
+Task-6 acceptance remains **NOT RUN**, not PASS.
+
+Private evidence and recoverable resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-only-live-proof-iteration47-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration47.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another
+bootstrap or live Task-6 attempt.
+
+## Iteration 48 full-script framing remediation
+
+SOL's iteration-47 review isolated the remaining material difference to
+execution framing. The iteration-43 live diagnostic proved a marker write after
+`DISPATCHER_LOAD_RETURN`, but the production owner still evaluated dispatcher
+root assignment, `(load mcp_dispatch.lsp)`, and the marker writer inside one
+enclosing AutoLISP `progn`. SOL authorized exactly one non-live remediation and
+no bootstrap or Task-6 live retry.
+
+The bounded fix is pushed at code HEAD
+`a9c8fa9f7f67d8562e17d55cce383bf975eb3761`. The startup script now emits one
+complete top-level expression for the IPC-root assignment and dispatcher load,
+then a separate following top-level expression for the canonical marker writer.
+The unique same-root `.marker`, exact
+`CAD_AGENT_START_TAB_BOOTSTRAP_COMPLETE` token, exact-content validation, and
+stale/wrong-token cleanup remain unchanged.
+
+TDD RED changed the owner test to assert the complete startup-script bytes,
+including CRLF command boundaries, order, and the absence of the previous
+combined framing; it failed against the old script. GREEN focused owner checks
+report 33 passed and 6 subtests, with Ruff and `git diff --check` passing. The
+authoritative `scripts/verify.ps1` exited 0: C# 238 passed; offline Python
+JUnit 3381 with zero failures/errors/skips (3301 passed, 21 deselected, 80
+subtests); offline IPC JUnit 134 clean; causal-red expected one negative
+failure handled; real-data 2 skipped; AutoCAD Mechanical 17 skipped. Live
+AutoCAD and M2 Mechanical remain NOT RUN.
+
+No live retry was made after this remediation. No source, accepted drawing,
+candidate, or production CAD state was mutated. Evidence and resume state are
+recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-framing-remediation-iteration48-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration48.txt
+
+Fresh SOL review of this pushed remediation is required before any live retry.
+
+## Iteration 49 bootstrap-only live proof
+
+SOL returned `VERDICT=PASS`, `MATERIAL_FINDING=NONE`, and `HUMAN_GATE=NO` for
+iteration 48 and authorized exactly one fresh bootstrap-only live proof on code
+HEAD `a9c8fa9f7f67d8562e17d55cce383bf975eb3761`. The proof required one owned
+AutoCAD Mechanical 2027 blank session, exact observation and validation of the
+unique completion marker, then exactly one claim-bound FileIPC readiness ping.
+It passed no BVTL.dwg path and did not run source open, Task 6 extraction,
+query, candidate, save, or accepted-drawing operations.
+
+The proof failed closed at the first boundary with
+`START_TAB_BOOTSTRAP_COMPLETION_NOT_CONFIRMED` after 57.547 seconds for the
+bounded process including cleanup. The production owner did not observe the
+unique same-root `.marker`; claim-bound FileIPC ping attempts were zero and
+the ping boundary was not reached. No marker or FileIPC validity verdict is
+inferred.
+
+Cleanup was verified: the owned blank session used close-without-save cleanup,
+the dedicated proof root was empty, and no acad.exe process remained. No source,
+accepted drawing, candidate, production CAD, or Task-6 state was mutated. Live
+Task-6 acceptance remains **NOT RUN**, not PASS.
+
+Private evidence and recoverable resume state are recorded at:
+
+- C:/temp/cad-agent-task6-live-20260911/task6-bootstrap-only-live-proof-iteration49-evidence.txt
+- C:/temp/cad-agent-task6-live-20260911/wait-safe-resume-state-iteration49.txt
+
+Fresh SOL diagnosis of this first-failure boundary is required before another
+bootstrap or live Task-6 attempt.

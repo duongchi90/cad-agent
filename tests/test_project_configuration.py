@@ -26,7 +26,13 @@ class ProjectConfigurationTests(unittest.TestCase):
         pytest_config = self.config["tool"]["pytest"]["ini_options"]
         marker_names = {entry.split(":", 1)[0] for entry in pytest_config["markers"]}
         self.assertEqual(
-            {"real_data", "autocad_mechanical", "m2_mechanical", "causal_red"},
+            {
+                "real_data",
+                "autocad_mechanical",
+                "autocad_bundle",
+                "m2_mechanical",
+                "causal_red",
+            },
             marker_names,
         )
         self.assertIn("--strict-markers", pytest_config["addopts"])

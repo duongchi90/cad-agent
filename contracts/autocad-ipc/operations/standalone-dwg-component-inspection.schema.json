@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/standalone-dwg-component-inspection.schema.json",
+  "title": "CadAgent standalone DWG component inspection request parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "run_id",
+    "source_drawing_path",
+    "source_drawing_sha256",
+    "source_setup_audit_sha256",
+    "selection_groups",
+    "expected_dbmod",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": { "const": "standalone-dwg-component-inspection-1.0" },
+    "request_id": { "$ref": "#/$defs/identifier" },
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "source_drawing_path": { "$ref": "#/$defs/absoluteWindowsPath" },
+    "source_drawing_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+    "source_setup_audit_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+    "selection_groups": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/selectionGroup" }
+    },
+    "expected_dbmod": { "type": "integer", "minimum": 0 },
+    "approval": { "const": null }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "absoluteWindowsPath": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32767,
+      "pattern": "^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)"
+    },
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "hexHandle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Fa-f]+$"
+    },
+    "layerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "selectionGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_id",
+        "logical_component_id",
+        "source_handles",
+        "expected_entity_types",
+        "source_layer_expectations"
+      ],
+      "properties": {
+        "group_id": { "$ref": "#/$defs/identifier" },
+        "logical_component_id": { "$ref": "#/$defs/identifier" },
+        "source_handles": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/hexHandle" }
+        },
+        "expected_entity_types": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "source_layer_expectations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/layerName" }
+        }
+      }
+    }
+  }
+}

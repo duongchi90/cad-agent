@@ -65,23 +65,33 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("--junitxml", script)
         self.assertIn("importlib.metadata", script)
         self.assertIn("not real_data and not autocad_mechanical", script)
+        self.assertIn("not autocad_bundle", script)
+        self.assertIn("autocad-bundle.xml", script)
+        self.assertIn("autocad bundle unavailable-state probe", script)
+        self.assertIn("autocad bundle artifact", script)
+        self.assertIn("CAD_AGENT_AUTOCAD_BUNDLE_BUILD_SKIPPED", script)
         self.assertIn("real-data-unavailable.xml", script)
         self.assertIn("autocad-mechanical-unavailable.xml", script)
         self.assertIn("causal_red", script)
-        self.assertIn("causal-red.xml", script)
+        self.assertIn("receipt-contract.xml", script)
+        self.assertIn(
+            '"mcp_integration_lib/tests/test_mcp_client_drawing_open.py"',
+            script,
+        )
         self.assertIn("check_environment.py", script)
         self.assertIn("Get-FileHash", script)
         self.assertIn("ls-files", script)
         self.assertIn('Write-Host "Tesseract: $tesseractPath ($tesseractVersion)"', script)
 
-    def test_causal_red_is_an_independent_expected_failure_gate(self) -> None:
+    def test_receipt_contract_is_an_independent_passing_gate(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
-        self.assertIn("Invoke-CausalRedGate", script)
+        self.assertIn("Invoke-ReceiptContractGate", script)
         self.assertIn('-m "causal_red"', script)
-        self.assertIn('$causalRedExitCode -ne 1', script)
-        self.assertIn("Failures -ne 1", script)
+        self.assertIn('$receiptContractExitCode -ne 0', script)
+        self.assertIn("Failures -ne 0", script)
+        self.assertIn("Errors -ne 0", script)
         self.assertIn(
-            '"not real_data and not autocad_mechanical and not causal_red"',
+            '"not real_data and not autocad_mechanical and not autocad_bundle and not causal_red"',
             script,
         )
 

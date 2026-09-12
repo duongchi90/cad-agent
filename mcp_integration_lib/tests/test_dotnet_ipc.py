@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import importlib
 import json
 import os
@@ -32,6 +33,11 @@ from mcp_integration_lib.dotnet_ipc import (
     request_path,
     result_filename,
     result_path,
+)
+from cad_agent.standalone_dwg_extraction import (
+    standalone_extraction_result_sha256,
+    standalone_inspection_result_sha256,
+    validate_standalone_extraction_result,
 )
 
 
@@ -254,6 +260,32 @@ def _result(request: dict[str, object], payload: dict[str, object] | None = None
     }
 
 
+def _viewport_query_payload(
+    *,
+    drawing_sha256: str = "a" * 64,
+    handle: str = "126BABE",
+) -> dict[str, object]:
+    return {
+        "schema_version": "viewport-query-result-1.0",
+        "handle": handle,
+        "type": "VIEWPORT",
+        "layer": "VIEWPORTS",
+        "fields": {
+            "center_point": {"status": "OBSERVED", "value": [0.0, 0.0, 0.0]},
+            "width": {"status": "OBSERVED", "value": 20.0},
+            "height": {"status": "OBSERVED", "value": 15.0},
+            "view_center": {"status": "OBSERVED", "value": [0.0, 0.0]},
+            "view_height": {"status": "OBSERVED", "value": 100.0},
+            "view_target": {"status": "OBSERVED", "value": [0.0, 0.0, 0.0]},
+            "twist_angle": {"status": "OBSERVED", "value": 0.0},
+        },
+        "drawing_sha256_before": drawing_sha256,
+        "drawing_sha256_after": drawing_sha256,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+    }
+
+
 def _exact_base_fixture() -> dict[str, object]:
     fixture_path = Path(__file__).resolve().parent / "fixtures" / "exact-base-xref-inspection.json"
     return json.loads(fixture_path.read_text(encoding="utf-8"))
@@ -352,10 +384,138 @@ def _nested_mapping_keys(value: object) -> set[str]:
     return set()
 
 
+def _standalone_fixture() -> dict[str, object]:
+    inspection_request = {
+        "schema_version": "standalone-dwg-component-inspection-1.0",
+        "request_id": "standalone-inspection-request-001",
+        "run_id": "standalone-run-001",
+        "source_drawing_path": r"C:\synthetic\source\standalone-source.dwg",
+        "source_drawing_sha256": "a" * 64,
+        "source_setup_audit_sha256": "b" * 64,
+        "selection_groups": [
+            {
+                "group_id": "group-001",
+                "logical_component_id": "component-001",
+                "source_handles": ["A1B2"],
+                "expected_entity_types": ["INSERT"],
+                "source_layer_expectations": ["BODY"],
+            }
+        ],
+        "expected_dbmod": 0,
+        "approval": None,
+    }
+    inspection_payload = {
+        "schema_version": "standalone-dwg-component-inspection-result-1.0",
+        "inspection_id": "standalone-inspection-001",
+        "request_id": inspection_request["request_id"],
+        "source_identity": {
+            "path": inspection_request["source_drawing_path"],
+            "sha256": "a" * 64,
+            "dbmod": 0,
+            "xref_count": 0,
+        },
+        "source_sha256_before": "a" * 64,
+        "source_sha256_after": "a" * 64,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+        "read_only": True,
+        "groups": [
+            {
+                "group_id": "group-001",
+                "logical_component_id": "component-001",
+                "source_handles": ["A1B2"],
+                "entity_types": ["INSERT"],
+                "layers": ["BODY"],
+                "signature_sha256": "c" * 64,
+            }
+        ],
+        "warnings": [],
+        "conflicts": [],
+        "changed": False,
+        "eligible": True,
+        "inspection_sha256": "",
+    }
+    inspection_payload["inspection_sha256"] = standalone_inspection_result_sha256(
+        inspection_payload
+    )
+    approval = {"reference": "approval-standalone-001", "status": "APPROVED"}
+    plan = {
+        "plan_id": "standalone-plan-001",
+        "request_id": "standalone-extraction-request-001",
+        "run_id": "standalone-run-001",
+        "inspection_id": inspection_payload["inspection_id"],
+        "inspection_sha256": inspection_payload["inspection_sha256"],
+        "source_drawing_sha256": "a" * 64,
+        "candidate_output_path": r"C:\synthetic\candidate\standalone-candidate.dwg",
+        "candidate_base_model": "EMPTY_NEW_DATABASE",
+        "components": [
+            {
+                "group_id": "group-001",
+                "logical_component_id": "component-001",
+                "source_handles": ["A1B2"],
+                "transform": {
+                    "rotation_degrees": 0.0,
+                    "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "uniform_scale": 1.0,
+                },
+            }
+        ],
+        "transform_policy": "LOCAL_TRANSLATION_ROTATION_UNIFORM_SCALE_ONLY",
+        "approval": approval,
+    }
+    extraction_payload = {
+        "schema_version": "standalone-dwg-component-extraction-result-1.0",
+        "request_id": plan["request_id"],
+        "run_id": plan["run_id"],
+        "source_drawing_sha256": "a" * 64,
+        "candidate_base_model": "EMPTY_NEW_DATABASE",
+        "candidate_output_sha256": "d" * 64,
+        "candidate_output_identity": {
+            "path": plan["candidate_output_path"],
+            "file_id": "candidate-file-001",
+        },
+        "source_mutated": False,
+        "source_dbmod_before": 0,
+        "source_dbmod_after": 0,
+        "save_performed": True,
+        "components": [
+            {
+                "group_id": "group-001",
+                "logical_component_id": "component-001",
+                "source_handles": ["A1B2"],
+                "candidate_handles": ["E001"],
+            }
+        ],
+        "source_handle_to_candidate_handle": [
+            {"source_handle": "A1B2", "candidate_handle": "E001"}
+        ],
+        "result_sha256": "",
+    }
+    extraction_payload["result_sha256"] = standalone_extraction_result_sha256(
+        extraction_payload
+    )
+    return {
+        "inspection_request": inspection_request,
+        "inspection_payload": inspection_payload,
+        "plan": plan,
+        "extraction_payload": extraction_payload,
+        "approval": approval,
+    }
+
+
 class FakeDispatcher:
-    def __init__(self, ipc_dir: Path, payload: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        ipc_dir: Path,
+        payload: dict[str, object] | None = None,
+        *,
+        entity_handles: list[str] | None = None,
+        result_drawing_full_path: str | None = None,
+    ) -> None:
         self.ipc_dir = ipc_dir
         self.payload = payload or {}
+        self.entity_handles = entity_handles
+        self.result_drawing_full_path = result_drawing_full_path
         self.requests: list[dict[str, object]] = []
         self.request_bytes = b""
 
@@ -365,9 +525,14 @@ class FakeDispatcher:
         self.request_bytes = request_files[0].read_bytes()
         request = json.loads(self.request_bytes.decode("utf-8"))
         self.requests.append(request)
+        result = _result(request, self.payload)
+        if self.entity_handles is not None:
+            result["entity_handles"] = self.entity_handles
+        if self.result_drawing_full_path is not None:
+            result["drawing_full_path"] = self.result_drawing_full_path
         atomic_write_json(
             result_path(self.ipc_dir, str(request["request_id"])),
-            _result(request, self.payload),
+            result,
         )
 
     @staticmethod
@@ -648,6 +813,179 @@ class DotNetIPCClientTests(unittest.TestCase):
                     request_id="xref-request-001",
                 )
 
+    def test_standalone_inspection_sends_closed_parameters(self) -> None:
+        fixture = _standalone_fixture()
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            dispatcher = FakeDispatcher(ipc_dir, fixture["inspection_payload"])
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.standalone_dwg_component_inspection(
+                fixture["inspection_request"]["source_drawing_path"],
+                inspection_request=fixture["inspection_request"],
+            )
+
+        request = dispatcher.requests[0]
+        self.assertEqual("standalone_dwg_component_inspection", request["operation"])
+        self.assertEqual(fixture["inspection_request"], request["parameters"])
+        self.assertIsNone(request["approval"])
+        self.assertEqual(fixture["inspection_payload"], result["payload"])
+
+    def test_standalone_rejects_envelope_hash_mismatch_before_trigger(self) -> None:
+        fixture = _standalone_fixture()
+        cases = (
+            (
+                "standalone_dwg_component_inspection",
+                fixture["inspection_request"],
+                None,
+            ),
+            (
+                "standalone_dwg_component_extraction",
+                fixture["plan"],
+                fixture["approval"],
+            ),
+        )
+
+        for operation, parameters, approval in cases:
+            with self.subTest(operation=operation), TemporaryDirectory() as temporary:
+                trigger_calls = 0
+
+                def trigger() -> None:
+                    nonlocal trigger_calls
+                    trigger_calls += 1
+
+                client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+                with self.assertRaises(ValueError):
+                    client.request(
+                        operation,
+                        fixture["inspection_request"]["source_drawing_path"],
+                        drawing_sha256="b" * 64,
+                        parameters=parameters,
+                        approval=approval,
+                    )
+
+                self.assertEqual(0, trigger_calls)
+                self.assertEqual([], list(Path(temporary).glob("cadagent_dotnet_*.json")))
+
+    def test_standalone_extraction_binds_approval_and_empty_base(self) -> None:
+        fixture = _standalone_fixture()
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            dispatcher = FakeDispatcher(ipc_dir, fixture["extraction_payload"])
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.standalone_dwg_component_extraction(
+                fixture["inspection_request"]["source_drawing_path"],
+                extraction_plan=fixture["plan"],
+                inspection_result=fixture["inspection_payload"],
+                inspection_request=fixture["inspection_request"],
+            )
+
+        request = dispatcher.requests[0]
+        self.assertEqual("standalone_dwg_component_extraction", request["operation"])
+        self.assertEqual("EMPTY_NEW_DATABASE", request["parameters"]["candidate_base_model"])
+        self.assertNotIn("candidate_input_path", request["parameters"])
+        self.assertEqual(fixture["approval"], request["approval"])
+        self.assertEqual(fixture["extraction_payload"], result["payload"])
+
+    def test_standalone_result_accepts_opaque_id_for_raw_filesystem_identity(self) -> None:
+        fixture = _standalone_fixture()
+        raw_identity = (
+            r"C:\temp\standalone-candidate.dwg|42|638000000000000000|"
+            "638000000000000001"
+        )
+        payload = copy.deepcopy(fixture["extraction_payload"])
+        payload["candidate_output_identity"]["file_id"] = (
+            "candidate-file-" + hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()
+        )
+        payload["result_sha256"] = standalone_extraction_result_sha256(payload)
+
+        validated = validate_standalone_extraction_result(payload)
+        self.assertEqual(payload["result_sha256"], validated["result_sha256"])
+
+    def test_standalone_rejects_candidate_input_before_trigger(self) -> None:
+        fixture = _standalone_fixture()
+        plan = copy.deepcopy(fixture["plan"])
+        plan["candidate_input_path"] = r"C:\synthetic\candidate\input.dwg"
+        trigger_calls = 0
+
+        with TemporaryDirectory() as temporary:
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+            with self.assertRaises(ValueError):
+                client.standalone_dwg_component_extraction(
+                    fixture["inspection_request"]["source_drawing_path"],
+                    extraction_plan=plan,
+                )
+
+        self.assertEqual(0, trigger_calls)
+
+    def test_standalone_rejects_source_or_other_write_targets(self) -> None:
+        fixture = _standalone_fixture()
+        plan = copy.deepcopy(fixture["plan"])
+        plan["candidate_output_path"] = fixture["inspection_request"]["source_drawing_path"]
+        trigger_calls = 0
+
+        with TemporaryDirectory() as temporary:
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+            with self.assertRaises(ValueError):
+                client.standalone_dwg_component_extraction(
+                    fixture["inspection_request"]["source_drawing_path"],
+                    extraction_plan=plan,
+                    inspection_result=fixture["inspection_payload"],
+                    inspection_request=fixture["inspection_request"],
+                )
+
+        self.assertEqual(0, trigger_calls)
+
+    def test_standalone_rejects_mismatched_result_identity(self) -> None:
+        fixture = _standalone_fixture()
+        payload = copy.deepcopy(fixture["inspection_payload"])
+        payload["request_id"] = "different-request-001"
+        payload["inspection_sha256"] = standalone_inspection_result_sha256(payload)
+
+        with TemporaryDirectory() as temporary:
+            dispatcher = FakeDispatcher(Path(temporary), payload)
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=dispatcher)
+            with self.assertRaises(DotNetIPCProtocolError):
+                client.standalone_dwg_component_inspection(
+                    fixture["inspection_request"]["source_drawing_path"],
+                    inspection_request=fixture["inspection_request"],
+                )
+
+    def test_standalone_cleanup_failure_is_not_success(self) -> None:
+        fixture = _standalone_fixture()
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def failed_dispatcher() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                atomic_write_json(
+                    result_path(ipc_dir, str(request["request_id"])),
+                    {
+                        **_result(request),
+                        "success": False,
+                        "errors": ["S3C_CLEANUP_FAILED: candidate identity recheck refused cleanup"],
+                        "payload": {},
+                    },
+                )
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=failed_dispatcher)
+            with self.assertRaises(DotNetIPCResultError):
+                client.standalone_dwg_component_extraction(
+                    fixture["inspection_request"]["source_drawing_path"],
+                    extraction_plan=fixture["plan"],
+                )
+
     def test_health_allows_null_drawing_path(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
@@ -672,6 +1010,126 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertEqual("review", request["operation"])
             self.assertEqual(r"C:\drawings\sample.dwg", request["drawing_full_path"])
             self.assertEqual({"handles": ["10", "A0"]}, request["parameters"])
+
+    def test_viewport_query_sends_one_handle_and_required_hash(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            dispatcher = FakeDispatcher(
+                ipc_dir,
+                _viewport_query_payload(),
+                entity_handles=["126BABE"],
+            )
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            client.viewport_query(
+                r"C:/drawings/parts/../sample.dwg",
+                drawing_sha256="a" * 64,
+                handle="126BABE",
+                request_id="viewport-001",
+            )
+
+            request = dispatcher.requests[0]
+            self.assertEqual("viewport_query", request["operation"])
+            self.assertEqual(r"C:\drawings\sample.dwg", request["drawing_full_path"])
+            self.assertEqual("a" * 64, request["drawing_sha256"])
+            self.assertEqual({"handle": "126BABE"}, request["parameters"])
+            self.assertIsNone(request["approval"])
+
+    def test_viewport_query_rejects_malformed_success_result(self) -> None:
+        with TemporaryDirectory() as temporary:
+            payload = _viewport_query_payload()
+            del payload["fields"]["width"]
+            dispatcher = FakeDispatcher(
+                Path(temporary),
+                payload,
+                entity_handles=["126BABE"],
+            )
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "viewport_query payload"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    handle="126BABE",
+                )
+
+    def test_viewport_query_rejects_result_binding_mismatch(self) -> None:
+        with TemporaryDirectory() as temporary:
+            dispatcher = FakeDispatcher(
+                Path(temporary),
+                _viewport_query_payload(),
+                entity_handles=["126BABE"],
+                result_drawing_full_path=r"C:\\drawings\\other.dwg",
+            )
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "drawing_full_path"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    handle="126BABE",
+                )
+
+    def test_viewport_query_rejects_mismatched_field_reason(self) -> None:
+        with TemporaryDirectory() as temporary:
+            payload = _viewport_query_payload()
+            payload["fields"]["width"] = {
+                "status": "UNSUPPORTED",
+                "reason": "PROPERTY_READ_FAILED",
+            }
+            dispatcher = FakeDispatcher(
+                Path(temporary),
+                payload,
+                entity_handles=["126BABE"],
+            )
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "reason"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    handle="126BABE",
+                )
+
+    def test_viewport_query_rejects_missing_hash(self) -> None:
+        with TemporaryDirectory() as temporary:
+            trigger_calls = 0
+
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+
+            with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
+                client.viewport_query(
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256=None,
+                    handle="126BABE",
+                )
+
+            self.assertEqual(0, trigger_calls)
+
+    def test_viewport_query_rejects_extra_parameters(self) -> None:
+        with TemporaryDirectory() as temporary:
+            trigger_calls = 0
+
+            def trigger() -> None:
+                nonlocal trigger_calls
+                trigger_calls += 1
+
+            client = DotNetIPCClient(ipc_dir=temporary, trigger=trigger)
+
+            with self.assertRaisesRegex(ValueError, "unsupported fields"):
+                client.request(
+                    "viewport_query",
+                    r"C:\\drawings\\sample.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={"handle": "126BABE", "scope": "all"},
+                    approval=None,
+                )
+
+            self.assertEqual(0, trigger_calls)
 
     def test_mechanical_bom_sends_empty_parameters_and_preserves_payload(self) -> None:
         with TemporaryDirectory() as temporary:

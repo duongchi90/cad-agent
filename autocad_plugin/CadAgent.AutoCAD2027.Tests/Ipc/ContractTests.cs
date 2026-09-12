@@ -80,6 +80,158 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void ViewportQueryRequiresOneHexHandleAndSourceHash()
+    {
+        var parameters = new Dictionary<string, JsonElement>
+        {
+            ["handle"] = JsonSerializer.SerializeToElement("126BABE")
+        };
+        var missingHash = ValidRequest("viewport_query") with
+        {
+            DrawingSha256 = null,
+            Parameters = parameters
+        };
+
+        var missingHashValidation = ContractValidator.ValidateRequest(missingHash);
+
+        Assert.False(missingHashValidation.IsValid);
+        Assert.Contains(
+            missingHashValidation.Errors,
+            error => error.Contains("drawing_sha256", StringComparison.OrdinalIgnoreCase));
+
+        var valid = missingHash with { DrawingSha256 = new string('a', 64) };
+
+        Assert.True(ContractValidator.ValidateRequest(valid).IsValid);
+    }
+
+    [Fact]
+    public void ViewportQueryRejectsExtraParameters()
+    {
+        var parameters = new Dictionary<string, JsonElement>
+        {
+            ["handle"] = JsonSerializer.SerializeToElement("126BABE"),
+            ["unexpected"] = JsonSerializer.SerializeToElement("value")
+        };
+        var request = ValidRequest("viewport_query") with
+        {
+            DrawingSha256 = new string('a', 64),
+            Parameters = parameters
+        };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("unexpected", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ViewportQueryResultRequiresClosedFieldEntries()
+    {
+        var valid = ViewportResult();
+
+        Assert.True(ContractValidator.ValidateResult(valid).IsValid);
+
+        var missingFields = ValidViewportPayload();
+        missingFields.Remove("fields");
+        var missingFieldsValidation = ContractValidator.ValidateResult(
+            valid with { Payload = missingFields });
+
+        Assert.False(missingFieldsValidation.IsValid);
+        Assert.Contains(
+            missingFieldsValidation.Errors,
+            error => error.Contains("fields", StringComparison.OrdinalIgnoreCase));
+
+        var fieldsWithExtra = ValidViewportPayload();
+        var fieldProperties = fieldsWithExtra["fields"]
+            .EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+        fieldProperties["unexpected"] = JsonSerializer.SerializeToElement(
+            new { status = "OBSERVED", value = 1.0 });
+        fieldsWithExtra["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+        var extraFieldValidation = ContractValidator.ValidateResult(
+            valid with { Payload = fieldsWithExtra });
+
+        Assert.False(extraFieldValidation.IsValid);
+        Assert.Contains(
+            extraFieldValidation.Errors,
+            error => error.Contains("unsupported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ViewportQueryResultRejectsNonFiniteObservedValues()
+    {
+        var payload = ValidViewportPayload();
+        var fieldProperties = payload["fields"]
+            .EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+        fieldProperties["width"] = JsonSerializer.SerializeToElement(
+            new { status = "OBSERVED", value = "NaN" });
+        payload["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+
+        var validation = ContractValidator.ValidateResult(
+            ViewportResult(payload));
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(
+            validation.Errors,
+            error => error.Contains("finite", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("number", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ViewportQueryResultRejectsMismatchedFieldStateReasons()
+    {
+        foreach (var fieldState in new[]
+        {
+            new { status = "UNSUPPORTED", reason = "PROPERTY_READ_FAILED" },
+            new { status = "ERROR", reason = "PROPERTY_UNAVAILABLE" }
+        })
+        {
+            var payload = ValidViewportPayload();
+            var fieldProperties = payload["fields"]
+                .EnumerateObject()
+                .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+            fieldProperties["width"] = JsonSerializer.SerializeToElement(fieldState);
+            payload["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+
+            var validation = ContractValidator.ValidateResult(ViewportResult(payload));
+
+            Assert.False(validation.IsValid);
+            Assert.Contains(
+                validation.Errors,
+                error => error.Contains("reason", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
+    public void ViewportQueryResultRejectsNullOptionalFieldProperties()
+    {
+        foreach (var fieldState in new[]
+        {
+            JsonSerializer.SerializeToElement(new { status = "OBSERVED", value = 1.0, reason = (string?)null }),
+            JsonSerializer.SerializeToElement(new { status = "ERROR", reason = "PROPERTY_READ_FAILED", value = (double?)null })
+        })
+        {
+            var payload = ValidViewportPayload();
+            var fieldProperties = payload["fields"]
+                .EnumerateObject()
+                .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+            fieldProperties["width"] = fieldState;
+            payload["fields"] = JsonSerializer.SerializeToElement(fieldProperties);
+
+            var validation = ContractValidator.ValidateResult(ViewportResult(payload));
+
+            Assert.False(validation.IsValid);
+            Assert.Contains(
+                validation.Errors,
+                error => error.Contains("value", StringComparison.OrdinalIgnoreCase)
+                    || error.Contains("reason", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
     public void AcceptsMechanicalBomOnlyWithEmptyParameters()
     {
         var request = ValidRequest("mechanical_bom");
@@ -748,6 +900,301 @@ public sealed class ContractTests
                 .GetInt32());
     }
 
+    [Fact]
+    public void StandaloneDwgComponentOperationsAreAllowlistedWithClosedSchemaBranches()
+    {
+        using var requestSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/request.schema.json")));
+        using var resultSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/result.schema.json")));
+
+        foreach (var schema in new[] { requestSchema, resultSchema })
+        {
+            var operations = schema.RootElement
+                .GetProperty("properties")
+                .GetProperty("operation")
+                .GetProperty("enum")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .ToArray();
+
+            var existingOperations = new[]
+            {
+                "health",
+                "review",
+                "close_disposable",
+                "mechanical_bom",
+                "drawing_setup_audit",
+                "visual_evidence_export",
+                "native_render_evidence",
+                "viewport_query",
+                "exact_base_xref_inspection",
+                "exact_base_xref_extraction",
+            };
+
+            Assert.All(existingOperations, operation => Assert.Contains(operation, operations));
+            Assert.Contains("standalone_dwg_component_inspection", operations);
+            Assert.Contains("standalone_dwg_component_extraction", operations);
+        }
+
+        Assert.Equal(
+            "operations/standalone-dwg-component-inspection.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "standalone_dwg_component_inspection")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/standalone-dwg-component-extraction.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "standalone_dwg_component_extraction")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/standalone-dwg-component-inspection-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "standalone_dwg_component_inspection")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/standalone-dwg-component-extraction-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "standalone_dwg_component_extraction")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+
+        foreach (var schemaRelativePath in new[]
+        {
+            "contracts/autocad-ipc/operations/standalone-dwg-component-inspection.schema.json",
+            "contracts/autocad-ipc/operations/standalone-dwg-component-inspection-result.schema.json"
+        })
+        {
+            using var operationSchema = JsonDocument.Parse(File.ReadAllText(
+                RepositoryFile(schemaRelativePath)));
+            var layerName = operationSchema.RootElement
+                .GetProperty("$defs")
+                .GetProperty("layerName");
+            Assert.Equal(1, layerName.GetProperty("minLength").GetInt32());
+            Assert.Equal(512, layerName.GetProperty("maxLength").GetInt32());
+            Assert.Equal(
+                "^[^\\u0000-\\u001F\\u007F]+$",
+                layerName.GetProperty("pattern").GetString());
+        }
+
+        using var inspectionOperationSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/operations/standalone-dwg-component-inspection.schema.json")));
+        Assert.Equal(
+            "#/$defs/layerName",
+            inspectionOperationSchema.RootElement
+                .GetProperty("$defs")
+                .GetProperty("selectionGroup")
+                .GetProperty("properties")
+                .GetProperty("source_layer_expectations")
+                .GetProperty("items")
+                .GetProperty("$ref")
+                .GetString());
+
+        using var inspectionResultSchema = JsonDocument.Parse(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/operations/standalone-dwg-component-inspection-result.schema.json")));
+        Assert.Equal(
+            "#/$defs/layerName",
+            inspectionResultSchema.RootElement
+                .GetProperty("$defs")
+                .GetProperty("inspectionGroup")
+                .GetProperty("properties")
+                .GetProperty("layers")
+                .GetProperty("items")
+                .GetProperty("$ref")
+                .GetString());
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentExamplesRoundTrip()
+    {
+        var inspectionRequest = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json")));
+        var inspectionResult = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.result.json")));
+        var extractionRequest = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.request.json")));
+        var extractionResult = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.result.json")));
+
+        Assert.True(ContractValidator.ValidateRequest(inspectionRequest).IsValid);
+        Assert.True(ContractValidator.ValidateResult(inspectionResult).IsValid);
+        Assert.True(ContractValidator.ValidateRequest(extractionRequest).IsValid);
+        Assert.True(ContractValidator.ValidateResult(extractionResult).IsValid);
+        Assert.Equal("standalone_dwg_component_inspection", inspectionRequest.Operation);
+        Assert.Equal("standalone_dwg_component_extraction", extractionRequest.Operation);
+        Assert.Null(inspectionRequest.Approval);
+        Assert.Equal(
+            "standalone-dwg-component-inspection-result-1.0",
+            inspectionResult.Payload!["schema_version"].GetString());
+        Assert.Equal(
+            "EMPTY_NEW_DATABASE",
+            extractionRequest.Parameters!["candidate_base_model"].GetString());
+        Assert.Equal(
+            "standalone-dwg-component-extraction-result-1.0",
+            extractionResult.Payload!["schema_version"].GetString());
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentRequestsBindEnvelopeHashToSourceHash()
+    {
+        var requests = new[]
+        {
+            ContractJson.DeserializeRequest(File.ReadAllText(
+                RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json"))),
+            ContractJson.DeserializeRequest(File.ReadAllText(
+                RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.request.json")))
+        };
+
+        foreach (var request in requests)
+        {
+            var mismatched = request with { DrawingSha256 = new string('b', 64) };
+
+            var validation = ContractValidator.ValidateRequest(mismatched);
+
+            Assert.False(validation.IsValid);
+            Assert.Contains(validation.Errors, error =>
+                error.Contains("hash", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("drawing_sha256", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentRequestsRejectXrefOnlyFields()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json")));
+        var parameters = request.Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters["xref_name"] = JsonSerializer.SerializeToElement("BASE_XREF");
+        request = request with { Parameters = parameters };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error =>
+            error.Contains("xref", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentRequestsAllowRealAutocadLayerNamesButRejectControls()
+    {
+        var request = ContractJson.DeserializeRequest(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.request.json")));
+        var parameters = request.Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        var selectionGroups = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                expected_entity_types = new[] { "INSERT" },
+                source_layer_expectations = new[] { "Duong manh" }
+            }
+        });
+        parameters["selection_groups"] = selectionGroups;
+        var valid = request with { Parameters = parameters };
+
+        Assert.True(ContractValidator.ValidateRequest(valid).IsValid);
+
+        parameters["selection_groups"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                expected_entity_types = new[] { "INSERT" },
+                source_layer_expectations = new[] { "Duong\nmanh" }
+            }
+        });
+        var invalid = request with { Parameters = parameters };
+
+        var validation = ContractValidator.ValidateRequest(invalid);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error =>
+            error.Contains("layer", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("safe", StringComparison.OrdinalIgnoreCase));
+
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-inspection.result.json")));
+        var resultPayload = result.Payload!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        resultPayload["groups"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                entity_types = new[] { "INSERT" },
+                layers = new[] { "Duong manh" },
+                signature_sha256 = new string('c', 64)
+            }
+        });
+        var validResult = result with { Payload = resultPayload };
+
+        Assert.True(ContractValidator.ValidateResult(validResult).IsValid);
+
+        resultPayload["groups"] = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                group_id = "group-001",
+                logical_component_id = "component-001",
+                source_handles = new[] { "A1B2" },
+                entity_types = new[] { "INSERT" },
+                layers = new[] { "Duong\nmanh" },
+                signature_sha256 = new string('c', 64)
+            }
+        });
+        var invalidResult = result with { Payload = resultPayload };
+
+        var resultValidation = ContractValidator.ValidateResult(invalidResult);
+
+        Assert.False(resultValidation.IsValid);
+        Assert.Contains(resultValidation.Errors, error =>
+            error.Contains("layer", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("safe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void StandaloneDwgComponentResultsRequireCandidateOnlySerialization()
+    {
+        var result = ContractJson.DeserializeResult(File.ReadAllText(
+            RepositoryFile("contracts/autocad-ipc/examples/standalone-dwg-component-extraction.result.json")));
+        var payload = result.Payload!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        payload["source_save_performed"] = JsonSerializer.SerializeToElement(true);
+        result = result with { Payload = payload };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error =>
+            error.Contains("source", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("candidate", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("supported", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static JsonElement FindOperationBranch(JsonElement schema, string operation)
     {
         return schema.GetProperty("allOf")
@@ -786,6 +1233,50 @@ public sealed class ContractTests
         Parameters = new Dictionary<string, JsonElement>(),
         Approval = null
     };
+
+    private static IpcResult ViewportResult(
+        Dictionary<string, JsonElement>? payload = null) => new()
+    {
+        RequestId = "viewport-request-001",
+        Success = true,
+        Operation = "viewport_query",
+        DrawingFullPath = @"C:\drawings\sample.dwg",
+        Changed = false,
+        EntityHandles = new List<string> { "126BABE" },
+        Warnings = new List<string>(),
+        Errors = new List<string>(),
+        StartedAt = DateTimeOffset.Parse("2026-09-10T00:00:00Z"),
+        CompletedAt = DateTimeOffset.Parse("2026-09-10T00:00:01Z"),
+        Payload = payload ?? ValidViewportPayload()
+    };
+
+    private static Dictionary<string, JsonElement> ValidViewportPayload()
+    {
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            schema_version = "viewport-query-result-1.0",
+            handle = "126BABE",
+            type = "VIEWPORT",
+            layer = "0",
+            fields = new
+            {
+                center_point = new { status = "OBSERVED", value = new[] { 0.0, 0.0, 0.0 } },
+                width = new { status = "OBSERVED", value = 100.0 },
+                height = new { status = "OBSERVED", value = 50.0 },
+                view_center = new { status = "OBSERVED", value = new[] { 10.0, 20.0 } },
+                view_height = new { status = "OBSERVED", value = 200.0 },
+                view_target = new { status = "OBSERVED", value = new[] { 0.0, 0.0, 0.0 } },
+                twist_angle = new { status = "OBSERVED", value = 0.0 }
+            },
+            drawing_sha256_before = new string('a', 64),
+            drawing_sha256_after = new string('a', 64),
+            dbmod_before = 0,
+            dbmod_after = 0
+        });
+
+        return payload.EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal);
+    }
 
     private static IpcRequest NativeRenderRequest() => new()
     {

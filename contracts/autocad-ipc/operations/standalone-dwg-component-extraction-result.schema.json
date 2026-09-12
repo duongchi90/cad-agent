@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/standalone-dwg-component-extraction-result.schema.json",
+  "title": "CadAgent standalone DWG component extraction result payload",
+  "type": "object",
+  "additionalProperties": false,
+  "oneOf": [
+    { "$ref": "#/$defs/successResult" },
+    { "$ref": "#/$defs/failureResult" }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "absoluteWindowsPath": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32767,
+      "pattern": "^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)"
+    },
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "hexHandle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Fa-f]+$"
+    },
+    "candidateIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "file_id"],
+      "properties": {
+        "path": { "$ref": "#/$defs/absoluteWindowsPath" },
+        "file_id": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "componentEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_id",
+        "logical_component_id",
+        "source_handles",
+        "candidate_handles"
+      ],
+      "properties": {
+        "group_id": { "$ref": "#/$defs/identifier" },
+        "logical_component_id": { "$ref": "#/$defs/identifier" },
+        "source_handles": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/hexHandle" }
+        },
+        "candidate_handles": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/hexHandle" }
+        }
+      }
+    },
+    "handleMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_handle", "candidate_handle"],
+      "properties": {
+        "source_handle": { "$ref": "#/$defs/hexHandle" },
+        "candidate_handle": { "$ref": "#/$defs/hexHandle" }
+      }
+    },
+    "successResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "run_id",
+        "source_drawing_sha256",
+        "candidate_base_model",
+        "candidate_output_sha256",
+        "candidate_output_identity",
+        "source_mutated",
+        "source_dbmod_before",
+        "source_dbmod_after",
+        "save_performed",
+        "components",
+        "source_handle_to_candidate_handle",
+        "result_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "standalone-dwg-component-extraction-result-1.0" },
+        "request_id": { "$ref": "#/$defs/identifier" },
+        "run_id": { "$ref": "#/$defs/identifier" },
+        "source_drawing_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+        "candidate_base_model": { "const": "EMPTY_NEW_DATABASE" },
+        "candidate_output_sha256": { "$ref": "#/$defs/lowercaseSha256" },
+        "candidate_output_identity": { "$ref": "#/$defs/candidateIdentity" },
+        "source_mutated": { "const": false },
+        "source_dbmod_before": { "type": "integer", "minimum": 0 },
+        "source_dbmod_after": { "type": "integer", "minimum": 0 },
+        "save_performed": { "const": true },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/componentEvidence" }
+        },
+        "source_handle_to_candidate_handle": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/handleMapping" }
+        },
+        "result_sha256": { "$ref": "#/$defs/lowercaseSha256" }
+      }
+    },
+    "failureResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "run_id",
+        "failure_code",
+        "candidate_output_path",
+        "source_mutated",
+        "save_performed"
+      ],
+      "properties": {
+        "schema_version": { "const": "standalone-dwg-component-extraction-result-1.0" },
+        "request_id": { "$ref": "#/$defs/identifier" },
+        "run_id": { "$ref": "#/$defs/identifier" },
+        "failure_code": {
+          "enum": [
+            "CANDIDATE_OUTPUT_NOT_ABSENT",
+            "FORBIDDEN_WRITE_TARGET",
+            "SOURCE_MUTATED",
+            "OUTPUT_NOT_REOPENABLE",
+            "CLEANUP_FAILED"
+          ]
+        },
+        "candidate_output_path": { "$ref": "#/$defs/absoluteWindowsPath" },
+        "source_mutated": { "const": false },
+        "save_performed": { "const": false }
+      }
+    }
+  }
+}

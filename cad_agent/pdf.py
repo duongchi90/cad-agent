@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +19,23 @@ from .manifest import (
     verify_source,
     write_manifest,
 )
+from .source_integrity import SourceIntegrityError, inspect_source_bundle
 
 
 PDF_MANIFEST_SCHEMA_VERSION = "pdf-run-1.0"
 PDF_MANIFEST_NAME = "pdf-run-manifest.json"
 PAGE_STAGES = ("primitive_ir", "semantic_ir", "dxf", "build_evidence")
+_R1C_CONFIGURATION_FIELDS = frozenset(
+    {
+        "approved_root_id",
+        "approved_root_revision",
+        "approved_root",
+        "identity_key",
+        "identity_key_revision",
+        "policy_limits",
+        "source_bundle",
+    }
+)
 
 
 def _stage(state: str = "pending", artifact: str | None = None, digest: str | None = None) -> dict[str, Any]:
@@ -175,8 +188,32 @@ def _ensure_rendered(source: Path, output_dir: Path, manifest_path: Path, manife
     write_manifest(manifest_path, manifest)
 
 
-def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
+def _inspect_r1c_configuration(
+    configuration: Mapping[str, object],
+) -> dict[str, object]:
+    if (
+        not isinstance(configuration, Mapping)
+        or set(configuration) != _R1C_CONFIGURATION_FIELDS
+    ):
+        raise ManifestError("R1C_CONFIGURATION_INVALID")
+    try:
+        return inspect_source_bundle(**dict(configuration))
+    except (SourceIntegrityError, TypeError) as exc:
+        raise ManifestError("R1C_CONFIGURATION_INVALID") from exc
+
+
+def run_pdf_stages(
+    source: Path,
+    output_dir: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    *,
+    r1c_configuration: Mapping[str, object] | None = None,
+) -> dict[str, object] | None:
     verify_source(manifest, source)
+    r1c_evidence = None
+    if r1c_configuration is not None:
+        r1c_evidence = _inspect_r1c_configuration(r1c_configuration)
     approval = manifest.get("approvals", {}).get("calibration", {})
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
         raise ManifestError("PDF run manifest has no recorded calibration approval.")
@@ -221,3 +258,4 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
             _run_dxf(primitive, semantic, dxf, evidence)
             _write_page_stage(manifest_path, manifest, page, "dxf", dxf, "Staged DXF rebuilt with fresh evidence.")
             _write_page_stage(manifest_path, manifest, page, "build_evidence", evidence, "SHA-bound BuildResult evidence persisted.")
+    return r1c_evidence

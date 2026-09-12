@@ -11,10 +11,230 @@ from pathlib import Path
 import pytest
 
 from cad_agent.drawing_contracts import canonical_json_sha256
+from cad_agent import drawing_artifact_reference as dara
 
 
 MODULE_NAME = "cad_agent.component_view_registry"
 SCHEMA_VERSION = "component-view-registry-1.0"
+
+
+def _standalone_pre_r3_context() -> dict[str, object]:
+    source_bytes = b"synthetic-standalone-source-r3-red"
+    reference = dara.issue_drawing_artifact_reference(
+        run_id="standalone-r3-red-run",
+        project_id="standalone-r3-red-project",
+        drawing_id="standalone-r3-red-drawing",
+        artifact_role="BASELINE",
+        artifact_bytes=source_bytes,
+        upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "standalone-r3-red-evidence",
+            "evidence_sha256": "1" * 64,
+        },
+    )
+    observation = dara.observe_drawing_artifact_currentness(
+        reference=reference,
+        artifact_bytes=source_bytes,
+        observation_evidence_sha256="2" * 64,
+    )
+    provenance = {
+        "schema_version": "standalone-dwg-pre-r3-provenance-1.0",
+        "provenance_mode": "STANDALONE_DWG_COMPONENTS",
+        "source_reference": reference,
+        "source_current_observation": observation,
+        "source_path": r"C:\synthetic\standalone-r3-source.dwg",
+        "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "candidate_output_identity": {
+            "path": r"C:\synthetic\standalone-r3-candidate.dwg",
+            "file_id": "standalone-r3-candidate-file",
+        },
+        "candidate_output_sha256": "3" * 64,
+        "selected_groups": [
+            {
+                "group_id": "group-r3-001",
+                "logical_component_id": "component-r3-001",
+                "source_handles": ["A1B2"],
+            }
+        ],
+        "handle_bindings": [
+            {
+                "group_id": "group-r3-001",
+                "source_handle": "A1B2",
+                "candidate_handle": "F001",
+            }
+        ],
+        "inspection_sha256": "4" * 64,
+        "extraction_result_sha256": "5" * 64,
+        "provenance_sha256": "",
+    }
+    provenance["provenance_sha256"] = canonical_json_sha256(
+        {
+            key: value
+            for key, value in provenance.items()
+            if key != "provenance_sha256"
+        }
+    )
+    return {
+        "provenance_mode": "STANDALONE_DWG_COMPONENTS",
+        "candidate": {
+            "candidate_id": "standalone-candidate-r3",
+            "candidate_drawing_sha256": "3" * 64,
+        },
+        "standalone_dwg_provenance": provenance,
+    }
+
+
+def _standalone_component_inputs(module, context: dict[str, object]) -> list[dict[str, object]]:
+    group = context["standalone_dwg_provenance"]["selected_groups"][0]
+    source_handle = group["source_handles"][0]
+    primitive_ref, semantic_ref = module.standalone_dwg_projection_refs(
+        group_id=group["group_id"],
+        logical_component_id=group["logical_component_id"],
+        source_handle=source_handle,
+    )
+    return [
+        {
+            "component_type": "STRUCTURAL",
+            "origin_class": "RECONSTRUCTED_NEW",
+            "source_projection_refs": [primitive_ref],
+            "semantic_projection_refs": [semantic_ref],
+            "candidate_entity_bindings": [
+                {
+                    "target_namespace": "CANDIDATE",
+                    "candidate_id": context["candidate"]["candidate_id"],
+                    "entity_handle": "F001",
+                    "block_name": "STANDALONE:group-r3-001",
+                    "legacy_uuid": "component-r3-001",
+                    "relative_path": r"C:\synthetic\standalone-r3-candidate.dwg",
+                    "captured_at_utc": "STANDALONE_DWG_EXTRACTION",
+                }
+            ],
+        }
+    ]
+
+
+def test_standalone_r3_builds_versioned_registry_with_closed_lineage() -> None:
+    module = _registry_module()
+    context = _standalone_pre_r3_context()
+    registry = module.build_component_view_registry(
+        upstream_context=context,
+        components=_standalone_component_inputs(module, context),
+    )
+    assert registry["schema_version"] == (
+        "component-view-registry-standalone-dwg-1.0"
+    )
+    assert registry["upstream_bindings"]["source_path"].endswith(
+        "standalone-r3-source.dwg"
+    )
+    assert registry["upstream_bindings"]["handle_bindings"] == [
+        {
+            "group_id": "group-r3-001",
+            "source_handle": "A1B2",
+            "candidate_handle": "F001",
+        }
+    ]
+    assert module.validate_component_view_registry(
+        registry, upstream_context=context
+    ) == registry
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        ("full_drawing", "STANDALONE_FULL_DRAWING_FORBIDDEN"),
+        ("base_cad_reuse", "STANDALONE_BASE_CAD_REUSE_FORBIDDEN"),
+        ("duplicate_candidate", "STANDALONE_CANDIDATE_HANDLE_DUPLICATE"),
+        ("unbound_source", "STANDALONE_SOURCE_HANDLE_UNBOUND"),
+        ("stale_source", "STANDALONE_SOURCE_HASH_MISMATCH"),
+    ],
+)
+def test_standalone_r3_rejects_cross_lineage_attacks(attack: str, expected: str) -> None:
+    module = _registry_module()
+    context = _standalone_pre_r3_context()
+    provenance = context["standalone_dwg_provenance"]
+    if attack == "full_drawing":
+        provenance["scope"] = "FULL_DRAWING"
+    elif attack == "base_cad_reuse":
+        provenance["selected_groups"][0]["origin_class"] = "REUSED_FROM_BASE_CAD"
+    elif attack == "duplicate_candidate":
+        provenance["selected_groups"].append(
+            {
+                "group_id": "group-r3-002",
+                "logical_component_id": "component-r3-002",
+                "source_handles": ["C3D4"],
+            }
+        )
+        provenance["handle_bindings"].append(
+            {
+                "group_id": "group-r3-002",
+                "source_handle": "C3D4",
+                "candidate_handle": "F001",
+            }
+        )
+    elif attack == "unbound_source":
+        provenance["selected_groups"][0]["source_handles"].append("C3D4")
+    elif attack == "stale_source":
+        provenance["source_sha256"] = "7" * 64
+    if attack not in {"full_drawing", "stale_source"}:
+        provenance["provenance_sha256"] = canonical_json_sha256(
+            {
+                key: value
+                for key, value in provenance.items()
+                if key != "provenance_sha256"
+            }
+        )
+    with pytest.raises(module.ComponentViewRegistryError, match=expected):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_standalone_component_inputs(module, context),
+        )
+
+
+def test_standalone_r3_rejects_unknown_mode_and_candidate_revision_link() -> None:
+    module = _registry_module()
+    context = _standalone_pre_r3_context()
+    unknown = deepcopy(context)
+    unknown["provenance_mode"] = "UNKNOWN_MODE"
+    with pytest.raises(module.ComponentViewRegistryError, match="UPSTREAM_CONTEXT_INVALID"):
+        module.build_component_view_registry(
+            upstream_context=unknown,
+            components=_standalone_component_inputs(module, context),
+        )
+
+    registry = module.build_component_view_registry(
+        upstream_context=context,
+        components=_standalone_component_inputs(module, context),
+    )
+    component_id = registry["components"][0]["component_id"]
+    primitive_ref = registry["components"][0]["source_projection_refs"][0]
+    semantic_ref = registry["components"][0]["semantic_projection_refs"][0]
+    foreign_view = {
+        "view_role": "PRIMARY",
+        "component_ids": [component_id],
+        "source_projection_refs": [primitive_ref],
+        "semantic_projection_refs": [semantic_ref],
+        "candidate_entity_bindings": [
+            {
+                **registry["components"][0]["candidate_entity_bindings"][0],
+                "candidate_id": "foreign-candidate-r3",
+            }
+        ],
+        "layout_bindings": [
+            {
+                "layout_id": "layout-r3",
+                "display_name": "Standalone",
+                "legacy_uuid": "layout-r3",
+                "relative_path": "layouts/standalone.dwg",
+                "captured_at_utc": "2026-09-11T00:00:00Z",
+            }
+        ],
+    }
+    with pytest.raises(module.ComponentViewRegistryError, match="VIEW_CANDIDATE_BINDING_INVALID"):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=_standalone_component_inputs(module, context),
+            views=[foreign_view],
+        )
 
 
 def _registry_module():

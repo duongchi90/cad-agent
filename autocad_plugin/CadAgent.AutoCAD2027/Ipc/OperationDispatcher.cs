@@ -1,9 +1,13 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
+using Autodesk.AutoCAD.ApplicationServices;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.DrawingSetup;
 using CadAgent.AutoCAD2027.Mechanical;
 using CadAgent.AutoCAD2027.Review;
+using AcadApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 namespace CadAgent.AutoCAD2027.Ipc;
 
@@ -13,11 +17,15 @@ public sealed class OperationDispatcher
 
     private readonly CommandContext _context;
     private readonly ReviewEngine _reviewEngine;
+    private readonly Func<AutoCadStandaloneDwgComponentReader> _standaloneReaderFactory;
 
-    public OperationDispatcher(CommandContext context)
+    public OperationDispatcher(
+        CommandContext context,
+        Func<AutoCadStandaloneDwgComponentReader>? standaloneReaderFactory = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _reviewEngine = new ReviewEngine(context.DrawingGateway);
+        _standaloneReaderFactory = standaloneReaderFactory ?? CreateLiveStandaloneReader;
     }
 
     public IpcResult Dispatch(IpcRequest? request)
@@ -46,8 +54,11 @@ public sealed class OperationDispatcher
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
+                ViewportQueryOperationNames.Operation => DispatchViewportQuery(request, startedAt),
                 ExactBaseXrefOperationNames.Inspection => DispatchExactBaseXrefInspection(request, startedAt),
                 ExactBaseXrefOperationNames.Extraction => DispatchExactBaseXrefExtraction(request, startedAt),
+                StandaloneDwgComponentOperationNames.Inspection => DispatchStandaloneInspection(request, startedAt),
+                StandaloneDwgComponentOperationNames.Extraction => DispatchStandaloneExtraction(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
             };
         }
@@ -288,6 +299,47 @@ public sealed class OperationDispatcher
             startedAt);
     }
 
+    private IpcResult DispatchViewportQuery(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var viewportRequest = ViewportQueryRequest.FromIpc(request);
+        var snapshot = _context.DrawingGateway.ReadViewportQuery(viewportRequest);
+        if (!string.Equals(
+                snapshot.Handle,
+                viewportRequest.Handle,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                snapshot.DrawingSha256Before,
+                viewportRequest.DrawingSha256,
+                StringComparison.Ordinal))
+        {
+            return Failure(
+                request,
+                new[] { "viewport_query result did not match the requested handle or source hash" },
+                startedAt);
+        }
+
+        var result = CreateResult(
+            request.RequestId!,
+            ViewportQueryOperationNames.Operation,
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: new[] { snapshot.Handle },
+            warnings: Array.Empty<string>(),
+            errors: Array.Empty<string>(),
+            payload: snapshot.ToPayload(),
+            startedAt);
+        var validation = ContractValidator.ValidateResult(result);
+        return validation.IsValid
+            ? result
+            : Failure(request, validation.Errors, startedAt);
+    }
+
     private IpcResult DispatchExactBaseXrefInspection(IpcRequest request, DateTimeOffset startedAt)
     {
         if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
@@ -359,6 +411,314 @@ public sealed class OperationDispatcher
             SerializeExtractionEvidence(snapshot.Evidence),
             startedAt);
     }
+
+    private IpcResult DispatchStandaloneInspection(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { $"{StandaloneDwgComponentPolicy.SourceIdentityMismatchCode}: {error}" }, startedAt);
+        }
+
+        var inspectionRequest = ParseStandaloneInspectionRequest(request);
+        var snapshot = _standaloneReaderFactory().Inspect(inspectionRequest);
+        if (!snapshot.Success)
+        {
+            return Failure(request, snapshot.Errors, startedAt);
+        }
+
+        var payload = SerializeStandaloneInspectionPayload(request, inspectionRequest, snapshot);
+        return CreateResult(
+            request.RequestId!,
+            StandaloneDwgComponentOperationNames.Inspection,
+            activePath,
+            success: true,
+            changed: false,
+            entityHandles: Array.Empty<string>(),
+            warnings: snapshot.Warnings,
+            errors: Array.Empty<string>(),
+            payload,
+            startedAt);
+    }
+
+    private IpcResult DispatchStandaloneExtraction(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { $"{StandaloneDwgComponentPolicy.SourceIdentityMismatchCode}: {error}" }, startedAt);
+        }
+
+        var plan = ParseStandaloneExtractionPlan(request);
+        var snapshot = _standaloneReaderFactory().Extract(plan);
+        if (!snapshot.Success || snapshot.Evidence is null)
+        {
+            var failurePayload = SerializeStandaloneExtractionFailurePayload(request, plan, snapshot);
+            return CreateResult(
+                request.RequestId!,
+                StandaloneDwgComponentOperationNames.Extraction,
+                activePath,
+                success: false,
+                changed: false,
+                entityHandles: Array.Empty<string>(),
+                warnings: snapshot.Warnings,
+                errors: snapshot.Errors,
+                failurePayload,
+                startedAt);
+        }
+
+        var payload = SerializeStandaloneExtractionPayload(plan, snapshot.Evidence);
+        return CreateResult(
+            request.RequestId!,
+            StandaloneDwgComponentOperationNames.Extraction,
+            activePath,
+            success: true,
+            changed: true,
+            snapshot.EntityHandles,
+            snapshot.Warnings,
+            snapshot.Errors,
+            payload,
+            startedAt);
+    }
+
+    private AutoCadStandaloneDwgComponentReader CreateLiveStandaloneReader()
+    {
+        var document = AcadApplication.DocumentManager.MdiActiveDocument
+            ?? throw new InvalidOperationException("No active AutoCAD document is available.");
+        var disposableRoot = _context.ExactBaseXrefPolicy.Configuration.DisposableRoot
+            ?? throw new InvalidOperationException(
+                "CAD_AGENT_S3B_DISPOSABLE_ROOT is required for standalone extraction.");
+        return new AutoCadStandaloneDwgComponentReader(
+            new AutoCadStandaloneDwgComponentDatabase(document),
+            new StandaloneDwgComponentPolicy(disposableRoot));
+    }
+
+    private static StandaloneDwgComponentInspectionRequest ParseStandaloneInspectionRequest(IpcRequest request)
+    {
+        var parameters = request.Parameters!;
+        return new StandaloneDwgComponentInspectionRequest
+        {
+            SchemaVersion = RequiredString(parameters, "schema_version"),
+            RequestId = RequiredString(parameters, "request_id"),
+            RunId = RequiredString(parameters, "run_id"),
+            SourceDrawingPath = RequiredString(parameters, "source_drawing_path"),
+            SourceDrawingSha256 = RequiredString(parameters, "source_drawing_sha256"),
+            SourceSetupAuditSha256 = RequiredString(parameters, "source_setup_audit_sha256"),
+            ExpectedDbmod = checked((int)parameters["expected_dbmod"].GetInt64()),
+            SelectionGroups = parameters["selection_groups"].EnumerateArray()
+                .Select(group => new StandaloneDwgComponentSelectionGroup
+                {
+                    GroupId = RequiredString(group, "group_id"),
+                    LogicalComponentId = RequiredString(group, "logical_component_id"),
+                    SourceHandles = StringArray(group, "source_handles"),
+                    ExpectedEntityTypes = StringArray(group, "expected_entity_types"),
+                    SourceLayerExpectations = StringArray(group, "source_layer_expectations")
+                })
+                .ToArray()
+        };
+    }
+
+    private static StandaloneDwgComponentExtractionPlan ParseStandaloneExtractionPlan(IpcRequest request)
+    {
+        var parameters = request.Parameters!;
+        var approval = parameters["approval"];
+        return new StandaloneDwgComponentExtractionPlan
+        {
+            PlanId = RequiredString(parameters, "plan_id"),
+            RequestId = RequiredString(parameters, "request_id"),
+            RunId = RequiredString(parameters, "run_id"),
+            InspectionId = RequiredString(parameters, "inspection_id"),
+            InspectionSha256 = RequiredString(parameters, "inspection_sha256"),
+            SourceDrawingSha256 = RequiredString(parameters, "source_drawing_sha256"),
+            CandidateOutputPath = RequiredString(parameters, "candidate_output_path"),
+            CandidateBaseModel = RequiredString(parameters, "candidate_base_model"),
+            TransformPolicy = RequiredString(parameters, "transform_policy"),
+            Approval = new StandaloneDwgComponentApproval
+            {
+                Reference = RequiredString(approval, "reference"),
+                Status = RequiredString(approval, "status")
+            },
+            Components = parameters["components"].EnumerateArray()
+                .Select(component =>
+                {
+                    var transform = component.GetProperty("transform");
+                    var translation = transform.GetProperty("translation");
+                    return new StandaloneDwgComponentPlanComponent
+                    {
+                        GroupId = RequiredString(component, "group_id"),
+                        LogicalComponentId = RequiredString(component, "logical_component_id"),
+                        SourceHandles = StringArray(component, "source_handles"),
+                        Transform = new StandaloneDwgComponentTransform
+                        {
+                            RotationDegrees = transform.GetProperty("rotation_degrees").GetDouble(),
+                            UniformScale = transform.GetProperty("uniform_scale").GetDouble(),
+                            Translation = new StandaloneDwgComponentPoint
+                            {
+                                X = translation.GetProperty("x").GetDouble(),
+                                Y = translation.GetProperty("y").GetDouble(),
+                                Z = translation.GetProperty("z").GetDouble()
+                            }
+                        }
+                    };
+                })
+                .ToArray()
+        };
+    }
+
+    private static Dictionary<string, JsonElement> SerializeStandaloneInspectionPayload(
+        IpcRequest request,
+        StandaloneDwgComponentInspectionRequest inspectionRequest,
+        StandaloneDwgComponentInspectionSnapshot snapshot)
+    {
+        var groups = inspectionRequest.SelectionGroups
+            .Select(group =>
+            {
+                var selected = snapshot.Entities
+                    .Where(entity => group.SourceHandles.Contains(entity.SourceHandle, StringComparer.OrdinalIgnoreCase))
+                    .ToArray();
+                var groupPayload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                {
+                    ["group_id"] = JsonSerializer.SerializeToElement(group.GroupId),
+                    ["logical_component_id"] = JsonSerializer.SerializeToElement(group.LogicalComponentId),
+                    ["source_handles"] = JsonSerializer.SerializeToElement(group.SourceHandles),
+                    ["entity_types"] = JsonSerializer.SerializeToElement(selected.Select(entity => entity.EntityType).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray()),
+                    ["layers"] = JsonSerializer.SerializeToElement(selected.Select(entity => entity.Layer).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray())
+                };
+                groupPayload["signature_sha256"] = JsonSerializer.SerializeToElement(CanonicalSha256(groupPayload));
+                return groupPayload;
+            })
+            .ToArray();
+        var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["schema_version"] = JsonSerializer.SerializeToElement("standalone-dwg-component-inspection-result-1.0"),
+            ["inspection_id"] = JsonSerializer.SerializeToElement(inspectionRequest.RequestId),
+            ["request_id"] = JsonSerializer.SerializeToElement(inspectionRequest.RequestId),
+            ["source_identity"] = JsonSerializer.SerializeToElement(new
+            {
+                path = snapshot.DrawingFullPath,
+                sha256 = snapshot.SourceSha256Before,
+                dbmod = snapshot.DbmodBefore,
+                xref_count = 0
+            }),
+            ["source_sha256_before"] = JsonSerializer.SerializeToElement(snapshot.SourceSha256Before),
+            ["source_sha256_after"] = JsonSerializer.SerializeToElement(snapshot.SourceSha256After),
+            ["dbmod_before"] = JsonSerializer.SerializeToElement(snapshot.DbmodBefore),
+            ["dbmod_after"] = JsonSerializer.SerializeToElement(snapshot.DbmodAfter),
+            ["read_only"] = JsonSerializer.SerializeToElement(snapshot.ReadOnly),
+            ["groups"] = JsonSerializer.SerializeToElement(groups),
+            ["warnings"] = JsonSerializer.SerializeToElement(snapshot.Warnings),
+            ["conflicts"] = JsonSerializer.SerializeToElement(Array.Empty<string>()),
+            ["changed"] = JsonSerializer.SerializeToElement(snapshot.Changed),
+            ["eligible"] = JsonSerializer.SerializeToElement(snapshot.Eligible),
+        };
+        payload["inspection_sha256"] = JsonSerializer.SerializeToElement(CanonicalSha256(payload));
+        return payload;
+    }
+
+    private static Dictionary<string, JsonElement> SerializeStandaloneExtractionPayload(
+        StandaloneDwgComponentExtractionPlan plan,
+        StandaloneDwgComponentCandidateSnapshot evidence)
+    {
+        var mappingBySource = evidence.Mappings.ToDictionary(
+            mapping => StandaloneDwgComponentPolicy.NormalizeHandle(mapping.SourceHandle),
+            mapping => StandaloneDwgComponentPolicy.NormalizeHandle(mapping.CandidateHandle),
+            StringComparer.OrdinalIgnoreCase);
+        var components = plan.Components.Select(component => new
+        {
+            group_id = component.GroupId,
+            logical_component_id = component.LogicalComponentId,
+            source_handles = component.SourceHandles.Select(StandaloneDwgComponentPolicy.NormalizeHandle).ToArray(),
+            candidate_handles = component.SourceHandles
+                .Select(StandaloneDwgComponentPolicy.NormalizeHandle)
+                .Select(handle => mappingBySource[handle])
+                .ToArray()
+        }).ToArray();
+        var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["schema_version"] = JsonSerializer.SerializeToElement("standalone-dwg-component-extraction-result-1.0"),
+            ["request_id"] = JsonSerializer.SerializeToElement(plan.RequestId),
+            ["run_id"] = JsonSerializer.SerializeToElement(plan.RunId),
+            ["source_drawing_sha256"] = JsonSerializer.SerializeToElement(plan.SourceDrawingSha256),
+            ["candidate_base_model"] = JsonSerializer.SerializeToElement("EMPTY_NEW_DATABASE"),
+            ["candidate_output_sha256"] = JsonSerializer.SerializeToElement(evidence.CandidateOutputSha256),
+            ["candidate_output_identity"] = JsonSerializer.SerializeToElement(new
+            {
+                path = evidence.CandidateOutputPath,
+                file_id = evidence.CandidateOutputIdentity
+            }),
+            ["source_mutated"] = JsonSerializer.SerializeToElement(evidence.SourceMutated),
+            ["source_dbmod_before"] = JsonSerializer.SerializeToElement(evidence.SourceDbmodBefore),
+            ["source_dbmod_after"] = JsonSerializer.SerializeToElement(evidence.SourceDbmodAfter),
+            ["save_performed"] = JsonSerializer.SerializeToElement(evidence.SavePerformed),
+            ["components"] = JsonSerializer.SerializeToElement(components),
+            ["source_handle_to_candidate_handle"] = JsonSerializer.SerializeToElement(
+                evidence.Mappings.Select(mapping => new
+                {
+                    source_handle = StandaloneDwgComponentPolicy.NormalizeHandle(mapping.SourceHandle),
+                    candidate_handle = StandaloneDwgComponentPolicy.NormalizeHandle(mapping.CandidateHandle)
+                }).ToArray())
+        };
+        payload["result_sha256"] = JsonSerializer.SerializeToElement(CanonicalSha256(payload));
+        return payload;
+    }
+
+    private static Dictionary<string, JsonElement> SerializeStandaloneExtractionFailurePayload(
+        IpcRequest request,
+        StandaloneDwgComponentExtractionPlan plan,
+        StandaloneDwgComponentExtractionSnapshot snapshot)
+    {
+        var code = snapshot.Errors.Any(error => error.Contains(StandaloneDwgComponentPolicy.CleanupFailedCode, StringComparison.Ordinal))
+            ? "CLEANUP_FAILED"
+            : snapshot.Errors.Any(error => error.Contains(StandaloneDwgComponentPolicy.CandidateOutputNotReopenableCode, StringComparison.Ordinal))
+                ? "OUTPUT_NOT_REOPENABLE"
+                : snapshot.Errors.Any(error => error.Contains(StandaloneDwgComponentPolicy.SourceFreshnessMismatchCode, StringComparison.Ordinal))
+                    ? "SOURCE_MUTATED"
+                    : snapshot.Errors.Any(error => error.Contains(StandaloneDwgComponentPolicy.ForbiddenWriteTargetCode, StringComparison.Ordinal))
+                        ? "FORBIDDEN_WRITE_TARGET"
+                        : "CANDIDATE_OUTPUT_NOT_ABSENT";
+        return new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["schema_version"] = JsonSerializer.SerializeToElement("standalone-dwg-component-extraction-result-1.0"),
+            ["request_id"] = JsonSerializer.SerializeToElement(plan.RequestId ?? request.RequestId),
+            ["run_id"] = JsonSerializer.SerializeToElement(plan.RunId),
+            ["failure_code"] = JsonSerializer.SerializeToElement(code),
+            ["candidate_output_path"] = JsonSerializer.SerializeToElement(plan.CandidateOutputPath),
+            ["source_mutated"] = JsonSerializer.SerializeToElement(false),
+            ["save_performed"] = JsonSerializer.SerializeToElement(false)
+        };
+    }
+
+    private static string RequiredString(
+        IReadOnlyDictionary<string, JsonElement> values,
+        string name) => values[name].GetString() ?? throw new InvalidDataException($"{name} must be a string");
+
+    private static string RequiredString(JsonElement value, string name) =>
+        value.GetProperty(name).GetString() ?? throw new InvalidDataException($"{name} must be a string");
+
+    private static string[] StringArray(IReadOnlyDictionary<string, JsonElement> values, string name) =>
+        values[name].EnumerateArray().Select(item => item.GetString()!).ToArray();
+
+    private static string[] StringArray(JsonElement value, string name) =>
+        value.GetProperty(name).EnumerateArray().Select(item => item.GetString()!).ToArray();
+
+    private static string CanonicalSha256(IReadOnlyDictionary<string, JsonElement> values)
+    {
+        var json = "{" + string.Join(",", values.Keys.OrderBy(key => key, StringComparer.Ordinal)
+            .Select(key => JsonSerializer.Serialize(key) + ":" + CanonicalJson(values[key]))) + "}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
+    }
+
+    private static string CanonicalJson(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Object => "{" + string.Join(",", value.EnumerateObject()
+            .OrderBy(property => property.Name, StringComparer.Ordinal)
+            .Select(property => JsonSerializer.Serialize(property.Name) + ":" + CanonicalJson(property.Value))) + "}",
+        JsonValueKind.Array => "[" + string.Join(",", value.EnumerateArray().Select(CanonicalJson)) + "]",
+        JsonValueKind.String => JsonSerializer.Serialize(value.GetString()),
+        JsonValueKind.Number => value.GetRawText(),
+        JsonValueKind.True => "true",
+        JsonValueKind.False => "false",
+        JsonValueKind.Null => "null",
+        _ => throw new InvalidDataException("standalone payload contains an unsupported JSON value")
+    };
 
     private static Dictionary<string, JsonElement> SerializeExtractionEvidence(
         ExactBaseXrefExtractionEvidence evidence) =>

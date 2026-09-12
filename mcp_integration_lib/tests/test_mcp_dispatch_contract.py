@@ -13,6 +13,7 @@ from mcp_integration_lib.mcp_client import (
     MCPTimeoutError,
     MCPToolError,
 )
+from mcp_integration_lib.dotnet_ipc import SUPPORTED_OPERATIONS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -754,6 +755,58 @@ def test_live_harness_binds_file_ipc_and_dotnet_clients_to_explicit_root_envs() 
         value is not None and _is_environment_lookup(value, "CAD_AGENT_DOTNET_IPC_DIR")
         for value in dotnet_values
     )
+
+
+def test_viewport_query_is_allowlisted_and_schema_bound() -> None:
+    request_schema = json.loads(
+        (REPO_ROOT / "contracts" / "autocad-ipc" / "request.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    result_schema = json.loads(
+        (REPO_ROOT / "contracts" / "autocad-ipc" / "result.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    operation_schema = json.loads(
+        (
+            REPO_ROOT
+            / "contracts"
+            / "autocad-ipc"
+            / "operations"
+            / "viewport-query.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    result_operation_schema = json.loads(
+        (
+            REPO_ROOT
+            / "contracts"
+            / "autocad-ipc"
+            / "operations"
+            / "viewport-query-result.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert "viewport_query" in SUPPORTED_OPERATIONS
+    assert "viewport_query" in request_schema["properties"]["operation"]["enum"]
+    assert "viewport_query" in result_schema["properties"]["operation"]["enum"]
+    request_branch = next(
+        branch
+        for branch in request_schema["allOf"]
+        if branch["if"]["properties"]["operation"].get("const") == "viewport_query"
+    )
+    assert request_branch["then"]["properties"]["parameters"]["$ref"] == (
+        "operations/viewport-query.schema.json"
+    )
+    assert operation_schema["additionalProperties"] is False
+    assert operation_schema["required"] == ["handle"]
+    result_defs = result_operation_schema["$defs"]
+    for field_schema_ref in result_defs["fields"]["properties"].values():
+        field_schema_name = field_schema_ref["$ref"].rsplit("/", 1)[-1]
+        field_schema = result_defs[field_schema_name]
+        refs = {item["$ref"] for item in field_schema["oneOf"] if "$ref" in item}
+        assert "#/$defs/unsupportedField" in refs
+        assert "#/$defs/errorField" in refs
 
 
 def test_python_file_ipc_command_surface_is_exact_and_closed() -> None:
