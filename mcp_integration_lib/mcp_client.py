@@ -1357,7 +1357,7 @@ class FileIPCLiveMCPClient:
         token: str,
         *,
         ack_before: Optional[str] = None,
-    ) -> bool:
+    ) -> Dict[str, str]:
         """Send one owner-built expression and require its exact marker receipt."""
         if self._raw_lisp_trigger is None:
             raise MCPToolError("RAW_LISP_TRIGGER_REQUIRED")
@@ -1392,7 +1392,10 @@ class FileIPCLiveMCPClient:
                         marker_path.is_file()
                         and marker_path.read_text(encoding="ascii").strip() == token
                     ):
-                        return True
+                        return {
+                            "raw_lisp_evaluator_receipt": "CONFIRMED",
+                            "receiver_consumption": "NOT_SEPARATELY_OBSERVABLE",
+                        }
                 except (OSError, UnicodeError):
                     pass
                 remaining = deadline - time.monotonic()
