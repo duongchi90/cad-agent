@@ -1,4 +1,34 @@
 # CAD Agent Status
+## Canonical checkpoint — managed candidate-activation owner decision (iteration 107)
+```text
+STATE=EXECUTED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-candidate-activation-managed-owner-decision-iteration107.md; fresh raw opening-owner tests 5 passed, 35 deselected; fresh managed active-document identity tests passed 2, failed 0; current HEAD before record 73225159b72dfc92d50fb2a69605a892be34e508
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=MANAGED_CANDIDATE_OPEN_ACTIVATE_OPERATION_ABSENT
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of iteration 107; preserve key-free PDF DRAFT_REFERENCE and keep live candidate activation, health/FileIPC, raw-LISP retry, and production mutation stopped until a separate bounded action is authorized
+HUMAN_GATE=NO
+```
+
+## Current managed candidate-activation owner decision (iteration 107)
+- The current managed dispatcher has no `drawing_open` or
+  `candidate_activate` operation. Its `health(candidate_path)` operation only
+  confirms that the requested path is already the active document; it cannot
+  open or activate it. `IDrawingGateway` exposes no open/activate capability.
+- The existing opening owner remains
+  `FileIPCLiveMCPClient.drawing_open`: raw-LISP VLA lookup/open/activate,
+  guarded Start-tab `_.OPEN` fallback, dispatcher readiness, and exact active
+  path readback. This owner split is proven by focused tests: 5 Python opening
+  tests and 2 managed identity tests passed.
+- A managed replacement would be a behavior/contract change spanning the
+  dispatcher operation schema, `OperationDispatcher`, drawing gateway,
+  client wrapper, and lifecycle/identity tests. No such change was made;
+  `MODIFY NONE / CREATE NONE` remains the write set for this decision.
+- A future live discriminator may compose the existing read-only open owner
+  with `DotNetIPCClient.health(candidate_path)`, but it is not authorized here.
+  No candidate activation, health/FileIPC call, raw-LISP retry, production,
+  source, candidate, DXF, or CAD mutation occurred. Exact evidence is recorded
+  in `docs/superpowers/implementation-records/2026-09-12-candidate-activation-managed-owner-decision-iteration107.md`.
+
 ## Verification gate attempt — pre-existing untracked report (iteration 106)
 ```text
 STATE=EXECUTED
