@@ -1,10 +1,10 @@
 # CAD Agent Status
 ## Canonical checkpoint — hosted Integration portability repair (iteration 156)
-    STATE=FOCUSED_GREEN_PENDING_FULL_GATE
-    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-hosted-integration-portability-repair-iteration156.md; exact-head hosted run 34679437929 had 3 failures; focused 49 passed + 6 subtests; Ruff PASS; git diff --check PASS; no production/key/schema/transport/source/DXF/CAD/candidate mutation
+    STATE=OFFLINE_GREEN_HOSTED_REPLAY_PENDING
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-hosted-integration-portability-repair-iteration156.md; exact-head 04877bffc3ae84afc7580c88130c76000257d510; focused 49 passed + 6 subtests; full scripts/verify.ps1 PASS (offline JUnit 3412, C# 238, .NET IPC 134, causal RED 1 expected failure, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); git diff --check PASS; no production/key/schema/transport/source/DXF/CAD/candidate mutation
     VERDICT=MATERIAL_FINDING
     FIRST_UNSATISFIED_BOUNDARY=EXACT_HEAD_HOSTED_VERIFICATION_TERMINAL_PASS
-    NEXT_SINGLE_BOUNDED_ACTION=Run the authoritative full scripts/verify.ps1 on the clean committed state, push, and inspect the exact-head hosted check
+    NEXT_SINGLE_BOUNDED_ACTION=Push the clean bounded commit and inspect the exact-head hosted verification check; restart #392 on the resulting exact HEAD
     HUMAN_GATE=NO
 
 ## Hosted Integration portability repair (iteration 156)

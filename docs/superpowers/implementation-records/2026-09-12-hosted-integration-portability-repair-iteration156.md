@@ -31,13 +31,15 @@ runtime:
 ## Verification before hosted replay
 
 Focused gate: `49 passed, 6 subtests`; Ruff PASS; `git diff --check` PASS.
-The authoritative full gate is run only after this bounded commit because
-`scripts/verify.ps1` requires a clean tree before test gates.
+After the bounded commit, the authoritative full gate completed successfully:
+Release x64 build succeeded; C# `238 passed`; .NET IPC `134 passed`; offline
+JUnit `3412` with zero failures/errors; causal RED `1` expected failure;
+real-data `2 SKIP`; AutoCAD `17 SKIP`; live/M2 `NOT RUN`.
 
 ```text
-STATE=FOCUSED_GREEN_PENDING_FULL_GATE
+STATE=OFFLINE_GREEN_HOSTED_REPLAY_PENDING
 MATERIAL_FINDING=HOSTED_INTEGRATION_CONTRACT_REPAIRED_WITHOUT_PRODUCTION_CHANGE
 FIRST_UNSATISFIED_BOUNDARY=EXACT_HEAD_HOSTED_VERIFICATION_TERMINAL_PASS
-NEXT_SINGLE_BOUNDED_ACTION=Run the authoritative full scripts/verify.ps1 on the clean committed state, push, and inspect the exact-head hosted check
+NEXT_SINGLE_BOUNDED_ACTION=Push the clean bounded commit and inspect the exact-head hosted verification check; restart #392 on the resulting exact HEAD
 HUMAN_GATE=NO
 ```
