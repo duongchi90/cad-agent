@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — evaluator receipt causal RED (iteration 160)
+    STATE=CAUSAL_RED_CHARACTERIZED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-receipt-causal-red-iteration160.md; verified-code-head ee174db267fc23da6570968eea40865c510ea0de; focused normal 91 passed + 1 deselected + 9 subtests; full scripts/verify.ps1 exit 0 (offline JUnit 3414, C# 238, .NET IPC 134, causal RED 1 test/1 intentional failure, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); no production/live/transport/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_EVALUATOR_RECEIPT_CLASSIFICATION_NOT_EXPOSED_BY_CURRENT_PRIVATE_OWNER
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact-head RED; if clear, implement only the minimal private raw-LISP receipt classification in mcp_integration_lib/mcp_client.py and run the focused GREEN, with no transport/dispatcher/FileIPC/viewport/live change
+    HUMAN_GATE=NO
+
+## Evaluator receipt causal RED (iteration 160)
+- The exact owner-local RED proves the existing missing/wrong marker paths
+  remain fail-closed after one raw-LISP trigger with root-safe cleanup.
+- The exact marker path is currently RED only because the private owner returns
+  legacy bare `True` instead of the approved explicit combined receipt:
+  `raw_lisp_evaluator_receipt=CONFIRMED` and
+  `receiver_consumption=NOT_SEPARATELY_OBSERVABLE`.
+- The authoritative verifier now runs exactly one causal-red test. Full
+  verification passes its contract with the intentional RED; no production or
+  live mutation is authorized by this checkpoint.
+
 ## Canonical checkpoint — AutoCAD evaluator/receiver receipt adapter design (iteration 159)
     STATE=DESIGN_PROPOSED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-evaluator-receiver-receipt-adapter-design-iteration159.md; exact-head 9d81a09f5f4fe4753fbc444af52412cb2afdfa2c; existing same-expression AutoLISP marker writer/observer selected as supported semantic mechanism; receiver-only ACK absent; no implementation/live/transport/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
