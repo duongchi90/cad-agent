@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,133 @@ def _claim_bound_trigger(callback):
     return callback
 
 
+def _record_drawing_open_ack(expression):
+    if mcp_client_module._RAW_LISP_DRAWING_OPEN_ACK_TOKEN not in expression:
+        return
+    marker_match = re.search(r'\(open "([^"]+)" "w"\)', expression)
+    if marker_match is not None:
+        Path(marker_match.group(1)).write_text(
+            mcp_client_module._RAW_LISP_DRAWING_OPEN_ACK_TOKEN + "\n",
+            encoding="ascii",
+        )
+
+
+class RawLispConsumptionAckTests(unittest.TestCase):
+    def setUp(self):
+        self._ipc_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._ipc_tmp.cleanup)
+        self._ipc_dir = self._ipc_tmp.name
+
+    def _client(
+        self,
+        raw_lisp_trigger,
+        *,
+        command_trigger=None,
+        start_tab_no_document_probe=None,
+    ):
+        return FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_lisp_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_trigger,
+            start_tab_no_document_probe=start_tab_no_document_probe,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+        )
+
+    def _active_document_dispatch(self, command, params):
+        if command == "ping":
+            return {}
+        if command == "drawing-get-variables":
+            return {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
+        raise AssertionError(f"unexpected dispatch: {command}")
+
+    def test_drawing_open_does_not_claim_receiver_success_when_ack_is_absent(self):
+        raw_commands = []
+        client = self._client(raw_commands.append)
+        client._dispatch = self._active_document_dispatch
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED"
+        ):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertEqual(1, len(raw_commands))
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_drawing_open_does_not_claim_receiver_success_for_wrong_ack(self):
+        raw_commands = []
+
+        def raw_trigger(expression):
+            raw_commands.append(expression)
+            marker_match = re.search(r'\(open "([^"]+)" "w"\)', expression)
+            if marker_match is not None:
+                Path(marker_match.group(1)).write_text(
+                    "WRONG_RAW_LISP_ACK\n", encoding="ascii"
+                )
+
+        client = self._client(raw_trigger)
+        client._dispatch = self._active_document_dispatch
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED"
+        ):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertEqual(1, len(raw_commands))
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_drawing_open_does_not_retry_after_missing_ack(self):
+        raw_commands = []
+        command_sequences = []
+        client = self._client(
+            raw_commands.append,
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+        )
+        client._dispatch = self._active_document_dispatch
+
+        with self.assertRaisesRegex(
+            MCPTimeoutError, "RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED"
+        ):
+            client.drawing_open("C:/work/source.dxf")
+
+        self.assertEqual(1, len(raw_commands))
+        self.assertEqual([], command_sequences)
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_exact_ack_is_separate_from_active_document_verification(self):
+        raw_commands = []
+        dispatches = []
+
+        def raw_trigger(expression):
+            raw_commands.append(expression)
+            marker_match = re.search(r'\(open "([^"]+)" "w"\)', expression)
+            if marker_match is not None:
+                Path(marker_match.group(1)).write_text(
+                    "CAD_AGENT_DRAWING_OPEN_RECEIVER_EVALUATED\n",
+                    encoding="ascii",
+                )
+
+        client = self._client(raw_trigger)
+
+        def dispatch(command, params):
+            dispatches.append(command)
+            return self._active_document_dispatch(command, params)
+
+        client._dispatch = dispatch
+
+        self.assertEqual(
+            {"path": "C:/work/source.dxf"},
+            client.drawing_open("C:/work/source.dxf"),
+        )
+        self.assertEqual(2, len(raw_commands))
+        self.assertIn("CAD_AGENT_DRAWING_OPEN_RECEIVER_EVALUATED", raw_commands[0])
+        self.assertIn("drawing-get-variables", dispatches)
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+
 class DrawingOpenFallbackTests(unittest.TestCase):
     def setUp(self):
         self._ipc_tmp = tempfile.TemporaryDirectory()
@@ -27,9 +155,13 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self._ipc_dir = self._ipc_tmp.name
 
     def _client(self, raw_commands, command_sequences):
+        def raw_trigger(command):
+            raw_commands.append(command)
+            _record_drawing_open_ack(command)
+
         return FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
+            raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
             timeout_s=0.01,
@@ -74,9 +206,14 @@ class DrawingOpenFallbackTests(unittest.TestCase):
     def test_post_activation_start_tab_sentinel_with_probe_does_not_reenter_open(self):
         raw_commands = []
         command_sequences = []
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+            _record_drawing_open_ack(command)
+
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
+            raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
             start_tab_no_document_probe=lambda: True,
@@ -107,7 +244,8 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         def raw_trigger(command):
             raw_commands.append(command)
-            if command.startswith("(progn (vl-load-com)"):
+            _record_drawing_open_ack(command)
+            if "vla-open" in command:
                 com_activation_attempts.append(active_document["full_name"])
                 if active_document["full_name"].casefold() != target_path.casefold():
                     com_open_attempts.append(target_path)
@@ -149,6 +287,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         def raw_trigger(command):
             raw_commands.append(command)
+            _record_drawing_open_ack(command)
 
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
@@ -183,6 +322,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
     def _runtime_bindings_factory(self, session_ref, events):
         def raw_lisp(expression):
             events.append(("lisp", expression))
+            _record_drawing_open_ack(expression)
             session = session_ref["session"]
             for _event_name, stage_path, token in session._stage_marker_paths:
                 if token in expression:
@@ -293,6 +433,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         def raw_trigger(command):
             raw_commands.append(command)
+            _record_drawing_open_ack(command)
 
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
@@ -348,9 +489,14 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             events.append(("ready", value))
             return value
 
+        def raw_trigger(command):
+            raw_commands.append(command)
+            _record_drawing_open_ack(command)
+            events.append(("lisp", command))
+
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=lambda command: (raw_commands.append(command), events.append(("lisp", command))),
+            raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_trigger,
             start_tab_no_document_probe=lambda: True,
@@ -894,7 +1040,9 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                     hwnd=8801,
                     command_trigger=lambda command: events.append(("command", command)),
                     raw_lisp_trigger=lambda command: (
-                        raw_commands.append(command), events.append(("lisp", command))
+                        raw_commands.append(command),
+                        _record_drawing_open_ack(command),
+                        events.append(("lisp", command)),
                     ),
                     dispatch_trigger=_claim_bound_trigger(
                         lambda: events.append("dispatch")
@@ -1140,9 +1288,14 @@ class DrawingOpenFallbackTests(unittest.TestCase):
     def test_start_tab_bootstrap_does_not_run_when_real_document_is_active(self):
         raw_commands = []
         command_sequences = []
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+            _record_drawing_open_ack(command)
+
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
+            raw_lisp_trigger=raw_trigger,
             bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
             command_trigger=command_sequences.append,
             start_tab_no_document_probe=lambda: False,
@@ -1434,6 +1587,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
             def raw_trigger(command):
                 raw_commands.append(command)
+                _record_drawing_open_ack(command)
 
             def trigger():
                 command_file = next(ipc_dir.glob("autocad_mcp_cmd_*.json"))

@@ -1,4 +1,29 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP consumption ACK implementation (iteration 110)
+```text
+STATE=IMPLEMENTED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-consumption-ack-implementation-iteration110.md; focused ACK/opening tests 44 passed; Windows-trigger regression 19 passed excluding intentional causal-red; ruff passed; git diff --check passed
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=AUTHORITATIVE_FULL_VERIFY_AFTER_ACK_IMPLEMENTATION
+NEXT_SINGLE_BOUNDED_ACTION=Run clean-tree scripts/verify.ps1; stop after offline verification and do not run the live acceptance epoch yet
+HUMAN_GATE=NO
+```
+
+## Current raw-LISP consumption ACK implementation (iteration 110)
+- The existing raw-LISP/opening owner now requires an exact receiver/evaluation
+  marker before `drawing_open` proceeds to independent dispatcher and active
+  document verification.
+- The low-level Windows trigger remains enqueue-only; no second transport,
+  managed open/activate subsystem, C# schema/dispatcher change, or implicit
+  raw-LISP retry was added.
+- The marker is request-owned, fixed-token, same-expression, bounded, and
+  cleaned on terminal paths. Missing or wrong marker is fail-closed and never
+  claims receiver success.
+- The implementation write set is limited to `mcp_client.py`, focused opening
+  tests, and this evidence/status documentation. No live AutoCAD, candidate,
+  health/FileIPC, source/DXF/CAD, or authoritative custody-policy mutation
+  occurred.
+
 ## Canonical checkpoint — raw-LISP consumption ACK design (iteration 109)
 ```text
 STATE=DESIGNED

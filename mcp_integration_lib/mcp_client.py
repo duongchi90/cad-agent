@@ -389,6 +389,13 @@ def _start_tab_stage_marker_paths(
     )
 
 
+_RAW_LISP_DRAWING_OPEN_ACK_TOKEN = "CAD_AGENT_DRAWING_OPEN_RECEIVER_EVALUATED"
+_RAW_LISP_DRAWING_OPEN_ACK_PREFIX = "autocad_mcp_drawing_open_ack_"
+_RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED = (
+    "RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED"
+)
+
+
 @dataclass(frozen=True)
 class WindowsStartTabBootstrapBindings:
     """Window-bound triggers and probes for an owned AutoCAD session."""
@@ -1000,7 +1007,7 @@ class FileIPCLiveMCPClient:
             read_only_argument = " :vlax-true" if read_only else ""
             for attempt in range(2):
                 try:
-                    self._raw_lisp_trigger(
+                    self._send_raw_lisp_with_ack(
                         '(progn (vl-load-com) '
                         '(setq mcp-docs (vla-get-Documents (vlax-get-acad-object)) '
                         'mcp-target-path (findfile "' + normalized_path + '") '
@@ -1013,9 +1020,12 @@ class FileIPCLiveMCPClient:
                         '(setq mcp-open-doc mcp-candidate-doc))) '
                         '(if (not mcp-open-doc) '
                         '(setq mcp-open-doc (vla-open mcp-docs "' + normalized_path + '"' + read_only_argument + '))) '
-                        '(vla-activate mcp-open-doc))'
+                        '(vla-activate mcp-open-doc))',
+                        _RAW_LISP_DRAWING_OPEN_ACK_TOKEN,
                     )
                 except (MCPTimeoutError, MCPToolError) as exc:
+                    if str(exc) == _RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED:
+                        raise
                     if (
                         read_only
                         or self._command_trigger is None
@@ -1224,6 +1234,63 @@ class FileIPCLiveMCPClient:
                 last_error = exc
                 time.sleep(self._poll)
         raise MCPTimeoutError(f"AutoCAD dispatcher did not become ready: {last_error}")
+
+    def _send_raw_lisp_with_ack(self, expression: str, token: str) -> bool:
+        """Send one owner-built expression and require its exact marker receipt."""
+        if self._raw_lisp_trigger is None:
+            raise MCPToolError("RAW_LISP_TRIGGER_REQUIRED")
+        self._assert_root_unchanged()
+        marker_id = uuid.uuid4().hex[:12]
+        marker_path = self._dir / f"{_RAW_LISP_DRAWING_OPEN_ACK_PREFIX}{marker_id}.txt"
+        if marker_path.exists():
+            raise MCPToolError("RAW_LISP_ACK_PATH_CONFLICT")
+        wrapped_expression = (
+            "(progn "
+            + expression
+            + " "
+            + _start_tab_stage_marker_expression(marker_path, token)
+            + ")"
+        )
+        root_safe_for_cleanup = True
+        try:
+            self._raw_lisp_trigger(wrapped_expression)
+            self._assert_root_unchanged()
+            deadline = time.monotonic() + max(0.0, self._timeout)
+            while True:
+                try:
+                    if (
+                        marker_path.is_file()
+                        and marker_path.read_text(encoding="ascii").strip() == token
+                    ):
+                        return True
+                except (OSError, UnicodeError):
+                    pass
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MCPTimeoutError(
+                        _RAW_LISP_RECEIVER_EVALUATION_ACK_NOT_CONFIRMED
+                    )
+                time.sleep(min(max(0.0, self._poll), remaining))
+        finally:
+            try:
+                self._assert_root_unchanged()
+            except MCPToolError:
+                root_safe_for_cleanup = False
+            if root_safe_for_cleanup:
+                for attempt in range(10):
+                    try:
+                        marker_path.unlink(missing_ok=True)
+                        break
+                    except PermissionError as exc:
+                        if attempt == 9:
+                            raise MCPToolError(
+                                "RAW_LISP_ACK_CLEANUP_FAILED"
+                            ) from exc
+                        time.sleep(self._poll)
+                    except OSError as exc:
+                        raise MCPToolError(
+                            "RAW_LISP_ACK_CLEANUP_FAILED"
+                        ) from exc
 
     def drawing_save(self, path: Optional[str] = None) -> None:
         self._dispatch("drawing-save", {"path": path} if path else {})
