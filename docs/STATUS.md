@@ -1,4 +1,23 @@
 # CAD Agent Status
+## Canonical checkpoint — bundle packaging owner GREEN (iteration 165)
+    STATE=OFFLINE_GREEN_VERIFIED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-bundle-packaging-owner-green-iteration165.md; parent RED 3dd6e1be3841be68cdbbd99e86a1af904048d981; new owner scripts/package_autocad_bundle.ps1; focused bundle owner + existing contract 2 PASS; ruff and diff-check PASS; no csproj/workflow/AutoCAD/live/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
+    VERDICT=CLEAR_CONTINUE
+    MATERIAL_FINDING=NONE_FOR_BUNDLE_PACKAGING_CONTRACT
+    FIRST_UNSATISFIED_BOUNDARY=AUTOCAD_DISCOVERY_PLUGIN_LOAD_AND_STARTUP_RECEIPT_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact GREEN; if clear and truthful live prerequisites are present, rerun read-only preflight then authorize at most one disposable live module/startup oracle; otherwise keep LIVE_ORACLE=NOT_RUN and continue only with the next approved offline boundary
+    HUMAN_GATE=NO
+
+## Bundle packaging owner GREEN (iteration 165)
+- The minimal disposable owner `scripts/package_autocad_bundle.ps1` now stages
+  the repository manifest and existing Release DLL into the manifest-declared
+  `Contents/Windows` path, validates conflicting/missing inputs, and checks
+  exact SHA-256 identity.
+- Focused GREEN passed for both the new owner contract and the nearest existing
+  bundle contract: `2 passed in 0.50s`; Ruff and `git diff --check` passed.
+- This proves offline staging only. AutoCAD discovery/plugin load/startup and
+  all downstream live CAD/FileIPC/viewport work remain `NOT_RUN`.
+
 ## Canonical checkpoint — bundle packaging owner causal RED (iteration 164)
     STATE=CAUSAL_RED_CHARACTERIZED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-bundle-packaging-owner-causal-red-iteration164.md; exact HEAD f5d9a296884a7634e10565bfcdc69bc839ee4a74; test-only contract; existing bundle test 1 PASS and new owner test 1 intentional RED; no production/package/live/CAD/source/DXF/key mutation
