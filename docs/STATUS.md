@@ -1,7 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — evaluator-entry ACK reuse decision (iteration 154)
+    STATE=DESIGNED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-evaluator-entry-ack-reuse-decision-iteration154.md; mcp_integration_lib/mcp_client.py; mcp_integration_lib/mcp_dispatch.lsp; autocad_plugin/CadAgent.AutoCAD2027/Commands/CadAgentCommands.cs; autocad_plugin/CadAgent.bundle/PackageContents.xml; causal RED 1 failed, 26 deselected; HEAD 79ccb910fcf251254669f8d5cab801f878796069; no production/live/CAD/DXF/candidate/SourceCustody mutation
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_EVALUATOR_ENTRY_NOT_PROVEN
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the existing-marker same-expression seam; authorize implementation only if the exact owner, write-set, fail-closed contract, and live oracle are accepted
+    HUMAN_GATE=NO
+
+## Evaluator-entry ACK reuse decision (iteration 154)
+- The existing owner scan found no managed AutoCAD evaluator callback,
+  receiver hook, or queue-drain ACK. `PostMessageW=True` remains enqueue-only.
+- The smallest honest reuse seam is one exact evaluator-entry marker in the
+  existing raw-LISP startup expression, observed under the existing IPC root,
+  followed by the existing dispatcher completion marker. This is a design
+  decision only; no implementation or live retry is authorized yet.
+- The SourceCustody HMAC/identity-key contract is unchanged and remains
+  fail-closed. The page-1 PDF remains key-free `DRAFT_REFERENCE` / `MODIFY NONE`.
+
 ## Canonical checkpoint — startup completion live diagnostic (iteration 153)
     STATE=CLASSIFIED
-    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-completion-live-diagnostic-iteration153.md; proof C:\temp\cad-agent-task6-live-20260911\startup-completion-live-diagnostic-iteration153-proof.json; HEAD df6a1e38b94759566eabd33e87e93d91359d8935; exactly one diagnostic epoch; evaluator-entry ACK not proven; no marker/client/File IPC; candidate/DWT unchanged; cleanup clean
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-startup-completion-live-diagnostic-iteration153.md; proof C:\temp\cad-agent-task6-live-20260911\startup-completion-live-diagnostic-iteration153-proof.json; code HEAD before record df6a1e38b94759566eabd33e87e93d91359d8935; current canonical HEAD 79ccb910fcf251254669f8d5cab801f878796069; exactly one diagnostic epoch; evaluator-entry ACK not proven; no marker/client/File IPC; candidate/DWT unchanged; cleanup clean
     VERDICT=MATERIAL_FINDING
     FIRST_UNSATISFIED_BOUNDARY=REAL_AUTOCAD_EVALUATOR_ENTRY_NOT_PROVEN
     NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize one bounded next action for the unowned evaluator-entry acknowledgement seam, with no retry and no downstream client/File IPC work
