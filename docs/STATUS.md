@@ -1,4 +1,19 @@
 # CAD Agent Status
+## Verification gate attempt — pre-existing untracked report (iteration 106)
+```text
+STATE=EXECUTED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-verification-gate-preexisting-report-iteration106.md; scripts/verify.ps1 stopped before test gates on pre-existing ?? docs/reports/2026-09-11-cadmind-page1-experiment-report.md; focused checks remain 3 passed and 5 passed
+VERDICT=NOT_RUN
+FIRST_UNSATISFIED_BOUNDARY=VERIFY_REQUIRES_CLEAN_TREE_DUE_TO_PREEXISTING_UNTRACKED_REPORT
+NEXT_SINGLE_BOUNDED_ACTION=Preserve the untracked report and rerun scripts/verify.ps1 after its Git disposition is resolved; continue only the SOL-authorized read-only page-1 work in parallel
+HUMAN_GATE=NO
+```
+
+The authoritative verification gate did not begin because the workspace had a
+pre-existing untracked report. The report was preserved and not staged,
+deleted, or modified. No pass is claimed; exact evidence is recorded in
+`docs/superpowers/implementation-records/2026-09-12-verification-gate-preexisting-report-iteration106.md`.
+
 ## Canonical checkpoint — key-free PDF DRAFT_REFERENCE decision (iteration 105)
 ```text
 STATE=DECISION_COMPLETE
