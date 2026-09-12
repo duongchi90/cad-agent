@@ -12,6 +12,7 @@ from mcp_integration_lib.mcp_client import (
     MCPToolError,
     MCPTimeoutError,
     WindowsStartTabBootstrapBindings,
+    WindowsAutoCADStartTabSession,
 )
 from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import review_dxf_live
@@ -213,6 +214,50 @@ class FileIPCClientTests(unittest.TestCase):
                 },
             )
             self.assertEqual([], raw_commands)
+
+    def test_start_tab_preload_certificate_requires_dispatcher_lisp_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plugin_path = root / "CadAgent.AutoCAD2027.dll"
+            lisp_path = root / "mcp_dispatch.lsp"
+            plugin_path.write_bytes(b"test plugin")
+            lisp_path.write_text("; test dispatcher\n", encoding="utf-8")
+
+            def claim_bound_dispatch():
+                return None
+
+            setattr(claim_bound_dispatch, "_mcp_claim_bound", True)
+            bindings = WindowsStartTabBootstrapBindings(
+                hwnd=8801,
+                command_trigger=lambda command: None,
+                raw_lisp_trigger=lambda expression: None,
+                dispatch_trigger=claim_bound_dispatch,
+                start_tab_no_document_probe=lambda: False,
+                document_ready_probe=lambda: True,
+            )
+
+            plugin_only = WindowsAutoCADStartTabSession(
+                "C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+                str(root),
+                bootstrap_plugin_path=str(plugin_path),
+            )
+            plugin_only_bindings = plugin_only._confirm_bootstrap_bindings(bindings)
+            self.assertFalse(plugin_only_bindings.dispatcher_preloaded)
+            self.assertTrue(plugin_only_bindings.bootstrap_completion_confirmed)
+
+            fully_configured = WindowsAutoCADStartTabSession(
+                "C:/Program Files/Autodesk/AutoCAD 2027/acad.exe",
+                str(root),
+                bootstrap_plugin_path=str(plugin_path),
+                bootstrap_lisp_path=str(lisp_path),
+                ipc_root=str(root),
+            )
+            ready_bindings = fully_configured._confirm_bootstrap_bindings(bindings)
+            self.assertTrue(ready_bindings.dispatcher_preloaded)
+            self.assertTrue(ready_bindings.bootstrap_completion_confirmed)
+            self.assertTrue(
+                getattr(ready_bindings.dispatch_trigger, "_mcp_claim_bound")
+            )
 
     def test_entity_get_reads_dimension_measurement_through_raw_lisp(self):
         with tempfile.TemporaryDirectory() as tmp:
