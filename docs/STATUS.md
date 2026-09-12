@@ -1,4 +1,19 @@
 # CAD Agent Status
+## Current-main exact page-1 startup discriminator with bounded wait (iteration 94)
+- Fresh SOL review authorized one live read-only startup discriminator using
+  the executor-branch owner, verified DWT, and `CADAGENT_DISPATCH` startup
+  pattern. The existing bounded `_wait_for_document_ready` observed the owned
+  window at `14.391s` and a `document_ready_transition` at `27.031s`.
+- `DOCUMENT_READY=PROVEN` within the existing 60-second bound. The timeout
+  raw-title branch was not entered, so no candidate activation, health,
+  FileIPC, or setup operation ran.
+- The runner exited `1` only for normal close confirmation timeout; exact PID
+  fallback cleanup succeeded. Bundle/script were removed and candidate/DWT
+  hashes were unchanged. Classification is
+  `STARTUP_DISCRIMINATOR=PASS`, `CLEANUP=SAFE_WITH_CLOSE_WARNING`, and
+  `SETUP_READBACK=NOT_RUN`. Exact evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-real-pdf-startup-discriminator-iteration94.md`.
+
 ## Current-main document-ready probe characterization (iteration 93)
 - Fresh SOL review of iteration 92 required one offline characterization of
   the startup readiness predicate. Canonical `origin/main` at
@@ -29,9 +44,11 @@
 - Fresh SOL review authorized one read-only discriminator epoch using the
   verified DWT plus the demand-load `CADAGENT_DISPATCH` bootstrap pattern.
 - The owned AutoCAD session reached a window handle, but the existing
-  document-ready probe did not become true within the bounded startup window.
-  The epoch therefore stopped before bootstrap-health consumption, raw-LISP
-  candidate activation, and the one planned `.NET health(None)` discriminator.
+  runner made one immediate document-ready probe call after window discovery;
+  that one sample returned false, but the runner did not invoke the existing
+  bounded `_wait_for_document_ready` owner. Therefore iteration 92 did not
+  prove a bounded timeout and its candidate/open conclusion remains
+  `NOT_PROVEN`.
 - No FileIPC dispatcher load/ping or `drawing_setup_audit` was invoked. The
   candidate remains `CANDIDATE_OPEN_NOT_PROVEN`; no candidate-content defect is
   inferred.
@@ -39,7 +56,8 @@
   health request/result pairs were absent. Candidate and DWT SHA values were
   unchanged. Normal close confirmation timed out, but exact-PID fallback
   cleanup succeeded; this is a cleanup warning, not a semantic pass.
-- Classification is `LIVE_EPOCH=FAIL`, `DOCUMENT_READY=NOT_PROVEN`,
+- Classification is `LIVE_EPOCH=FAIL_CLOSED`,
+  `DOCUMENT_READY=NOT_PROVEN_BY_THIS_EPOCH`,
   `DISCRIMINATOR_HEALTH=NOT_RUN`, `FILEIPC_LOAD_PING=NOT_RUN`, and
   `SETUP_READBACK=NOT_RUN`. Exact evidence is recorded in
   `docs/superpowers/implementation-records/2026-09-11-real-pdf-drawing-open-discriminator-live-epoch-iteration92.md`.

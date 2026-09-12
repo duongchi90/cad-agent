@@ -16,12 +16,14 @@ allowed.
 
 The owned AutoCAD process and startup script were launched with the verified
 DWT and the temporary ApplicationPlugins bundle. The session found an owned
-window, but the existing document-ready probe did not become true within the
-bounded startup window:
+window, but the runner made only one immediate call to the document-ready
+probe after `launch_blank_document()` returned. It did not invoke the existing
+`_wait_for_document_ready` bounded polling owner. That one sample returned
+false:
 
 `RuntimeError: document-ready was not observed on the owned HWND`
 
-Therefore the epoch stopped before the pre-created bootstrap health result
+Therefore this epoch stopped before the pre-created bootstrap health result
 was consumed, before raw-LISP candidate activation, and before the one
 discriminator `DotNetIPCClient.health(drawing_full_path=None)` call.
 
@@ -53,9 +55,9 @@ The only valid candidate classification remains
 
 ## Classification
 
-`LIVE_EPOCH=FAIL`
+`LIVE_EPOCH=FAIL_CLOSED`
 
-`DOCUMENT_READY=NOT_PROVEN`
+`DOCUMENT_READY=NOT_PROVEN_BY_THIS_EPOCH`
 
 `BOOTSTRAP_HEALTH=NOT_READ`
 
@@ -69,3 +71,10 @@ The only valid candidate classification remains
 
 Exact private proof is retained outside Git at
 `C:\temp\cad-agent-task6-live-20260911\discriminator-iteration92\discriminator-proof.json`.
+
+## Subsequent qualification
+
+Iteration 94 invoked the existing bounded `_wait_for_document_ready` owner
+and observed a `document_ready_transition` at 27.031 seconds after process
+launch. Therefore iteration 92's single false sample must not be read as
+proof that the bounded readiness wait timed out.
