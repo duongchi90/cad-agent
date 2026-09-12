@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Canonical checkpoint — key-free PDF DRAFT_REFERENCE decision (iteration 105)
+```text
+STATE=DECISION_COMPLETE
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-key-free-draft-policy-decision-iteration105.md; SOL fresh review of canonical main=e8fc0092ee46750e50de0ea408fd91811cae10c2; executor HEAD=e08a589ddb0ddd7ad21e08a572c8859d512911c3; focused PDF policy/custody tests 5 passed, 232 deselected
+VERDICT=REQUEST_SATISFIED_WITH_MODIFY_NONE
+FIRST_UNSATISFIED_BOUNDARY=NONE_FOR_DRAFT_REFERENCE_KEY_POLICY
+NEXT_SINGLE_BOUNDED_ACTION=Preserve the key-free PDF DRAFT_REFERENCE path and continue page-1 acceptance from the raw-LISP receiver-consumption boundary; do not route through authoritative SourceCustody/SourceFusion and do not perform live retry, code, source, DXF, or CAD mutation until the next bounded action is authorized
+HUMAN_GATE=NO
+```
+
+## Current key-free PDF DRAFT_REFERENCE decision (iteration 105)
+- SOL confirmed from fresh canonical `main` that PDF `DRAFT_REFERENCE`
+  creation/resume already has no approved-root or identity-key prerequisite.
+  No key bytes were read, changed, or removed.
+- The authoritative SourceCustody contract intentionally remains fail-closed
+  with its HMAC identity scheme and key revision. Removing that requirement
+  would be a separate governance/contract change, not part of the requested
+  page-1 draft workflow.
+- The request is therefore satisfied with `MODIFY NONE`. The active project
+  frontier remains the measured raw-LISP receiver-consumption boundary. Exact
+  SOL decision evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-key-free-draft-policy-decision-iteration105.md`.
+
 ## Canonical checkpoint — semantic result owner and key-free draft disposition (iteration 104)
 ```text
 STATE=EXECUTED
