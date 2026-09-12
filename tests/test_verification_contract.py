@@ -74,6 +74,10 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("autocad-mechanical-unavailable.xml", script)
         self.assertIn("causal_red", script)
         self.assertIn("causal-red.xml", script)
+        self.assertIn(
+            '"mcp_integration_lib/tests/test_mcp_client_drawing_open.py"',
+            script,
+        )
         self.assertIn("check_environment.py", script)
         self.assertIn("Get-FileHash", script)
         self.assertIn("ls-files", script)

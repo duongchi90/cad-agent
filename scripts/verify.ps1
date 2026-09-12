@@ -283,7 +283,7 @@ try {
 
     Invoke-CausalRedGate `
         -Name "causal RED negative oracle" `
-        -Targets @("mcp_integration_lib/tests/test_file_ipc_windows_trigger.py") `
+        -Targets @("mcp_integration_lib/tests/test_mcp_client_drawing_open.py") `
         -JUnitPath $causalRedJunitPath
 
     $specializedVariables = @(
