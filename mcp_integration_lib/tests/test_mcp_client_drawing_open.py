@@ -1126,6 +1126,8 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 events.append("ping")
             if command == "drawing-get-variables":
                 return {"DWGPREFIX": "C:/work/", "DWGNAME": "source.dxf"}
+            if command == "drawing-open":
+                return {"path": "C:/work/source.dxf"}
             return {"ready": True}
 
         client._dispatch = dispatch

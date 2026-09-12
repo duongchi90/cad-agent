@@ -1000,6 +1000,17 @@ class FileIPCLiveMCPClient:
             raise ValueError("read_only must be a bool")
         if self._bootstrap_start_tab:
             self.ensure_start_tab_bootstrap()
+        if (
+            self._bootstrap_dispatcher_preloaded
+            and self._trigger is not None
+            and getattr(self._trigger, "_mcp_claim_bound", False) is True
+        ):
+            params: Dict[str, Any] = {"path": path}
+            if read_only:
+                params["read_only"] = True
+            result = self._dispatch("drawing-open", params)
+            self._active_drawing_path = _normalized_autocad_path(path)
+            return result
         if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
             normalized_path = path.replace("\\", "/").replace('"', '\\"')
             expected_path = _normalized_autocad_path(path)

@@ -89,6 +89,62 @@ class FileIPCClientTests(unittest.TestCase):
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {"path": "a.dxf"}}))
             self.assertEqual(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_open("a.dxf"), {"path": "a.dxf"})
 
+    def test_ready_claim_bound_dispatcher_routes_read_only_open_through_file_ipc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            raw_commands = []
+            requests = []
+
+            def dispatch_trigger():
+                request_path = next(ipc_dir.glob("autocad_mcp_cmd_*.json"))
+                request = json.loads(request_path.read_text())
+                requests.append(request)
+                (ipc_dir / f"autocad_mcp_result_{request['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": request["request_id"],
+                            "claim": request["claim"],
+                            "ok": True,
+                            "payload": {"path": "C:/work/a.dxf"},
+                        }
+                    )
+                )
+
+            setattr(dispatch_trigger, "_mcp_claim_bound", True)
+            client = FileIPCLiveMCPClient(
+                tmp,
+                trigger=dispatch_trigger,
+                timeout_s=0.05,
+                poll_interval_s=0.001,
+                raw_lisp_trigger=raw_commands.append,
+                bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+                legacy_fixture_mode=False,
+                document_settle_s=0,
+            )
+            client._bootstrap_dispatcher_preloaded = True
+
+            self.assertEqual(
+                {"path": "C:/work/a.dxf"},
+                client.drawing_open("C:/work/a.dxf", read_only=True),
+            )
+            self.assertEqual(
+                {
+                    "command": "drawing-open",
+                    "params": {"path": "C:/work/a.dxf", "read_only": True},
+                },
+                {
+                    "command": requests[0]["command"],
+                    "params": requests[0]["params"],
+                },
+            )
+            self.assertEqual([], raw_commands)
+
+    def test_dispatcher_drawing_open_honors_read_only_boolean(self):
+        source = Path("mcp_integration_lib/mcp_dispatch.lsp").read_text()
+        self.assertIn('(mcp-json-object-keys params)', source)
+        self.assertIn("(eq read-only 'MCP_JSON_TRUE)", source)
+        self.assertIn('(vla-Open docs path :vlax-true)', source)
+
     def test_entity_get_reads_dimension_measurement_through_raw_lisp(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
