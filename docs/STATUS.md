@@ -1,4 +1,25 @@
 # CAD Agent Status
+## Canonical checkpoint — receiver-consumption ACK reuse decision (iteration 158)
+    STATE=CHARACTERIZED
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-receiver-consumption-ack-reuse-decision-iteration158.md; exact-head e66a7d74a78e93dce425049427a6e4b3784cd21f; focused 31 passed + 1 deselected + 3 subtests; scripts/verify.ps1 exit 0 (offline JUnit 3413, C# 238, .NET IPC 134, intentional causal RED 1, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); owner/history scan found no production receiver callback/queue-drain/evaluator hook; no production/live/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
+    VERDICT=MATERIAL_FINDING
+    FIRST_UNSATISFIED_BOUNDARY=RECEIVER_CONSUMPTION_ACK_GENUINELY_MISSING_IN_CURRENT_PRODUCTION_OWNER
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact-head reuse decision; if accepted, choose one approved semantic boundary and its owner before any production patch or live epoch
+    HUMAN_GATE=NO
+
+## Receiver-consumption ACK reuse decision (iteration 158)
+- The exact production owners were reread at `e66a7d7`. Raw-LISP and managed
+  dispatch both use the existing asynchronous `PostMessageW` enqueue path; no
+  production receiver callback, queue-drain result, window-procedure hook, or
+  AutoCAD evaluator callback exists at that seam.
+- The existing same-expression marker is the smallest supported semantic
+  oracle when observed, but it proves combined evaluator receipt rather than a
+  receiver-only queue acknowledgement. The claim-bound File IPC result remains
+  a downstream operation oracle after dispatcher readiness.
+- The causal RED remains intentional and explicit:
+  `POSTMESSAGE_ENQUEUED_BUT_RECEIVER_CONSUMPTION_UNOBSERVED`. No production
+  patch, transport substitution, or live retry is justified by the inspection.
+
 ## Canonical checkpoint — hosted Integration portability repair (iteration 156)
     STATE=OFFLINE_GREEN_HOSTED_REPLAY_PENDING
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-hosted-integration-portability-repair-iteration156.md; exact-head 04877bffc3ae84afc7580c88130c76000257d510; focused 49 passed + 6 subtests; full scripts/verify.ps1 PASS (offline JUnit 3412, C# 238, .NET IPC 134, causal RED 1 expected failure, real-data 2 SKIP, AutoCAD 17 SKIP, live/M2 NOT RUN); git diff --check PASS; no production/key/schema/transport/source/DXF/CAD/candidate mutation
