@@ -52,6 +52,13 @@ def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
             index for index, existing in enumerate(retained)
             if max(abs(start[0] - existing[0][0]), abs(start[1] - existing[0][1]),
                    abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
+            and max(
+                abs(
+                    (existing[1][0] - existing[0][0]) * (point[1] - existing[0][1])
+                    - (existing[1][1] - existing[0][1]) * (point[0] - existing[0][0])
+                ) / existing[2].length_px()
+                for point in (start, end)
+            ) <= 1.0
         ), None)
         if duplicate_index is None:
             retained.append((start, end, line))
