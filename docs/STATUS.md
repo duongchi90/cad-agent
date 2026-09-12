@@ -1,4 +1,26 @@
 # CAD Agent Status
+## Canonical checkpoint — foreground-stage instrumentation (iteration 127)
+```text
+STATE=VERIFIED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-foreground-stage-instrumentation-iteration127.md; pushed code commit 0e18218; focused Windows-trigger 24 passed/1 deselected/3 subtests; DotNetIPC 82 passed/52 subtests; Ruff passed; scripts/verify.ps1 completed; offline JUnit tests=3400 failures=0 errors=0 skipped=0; causal-red tests=1 failures=1 expected; real-data tests=2 skipped; AutoCAD tests=17 skipped; live marker/M2 NOT RUN; git diff --check clean; worktree clean; no live rerun or source/DXF/CAD/key-policy mutation
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=POST_FOREGROUND_STAGE_INSTRUMENTATION_LIVE_DIAGNOSTIC_NOT_RUN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review, then if clear run exactly one disposable read-only live diagnostic or live epoch with the internal foreground stage exposed in proof; do not infer raw-LISP ACK, candidate identity, health, visual fidelity, or dimensions and do not mutate source/DXF/CAD
+HUMAN_GATE=NO
+```
+
+## Current foreground-stage boundary (iteration 127)
+- The foreground helper now preserves the public `WINDOW_FOREGROUND_INVALID`
+  error while exposing a bounded internal stage and before/after foreground
+  HWND/PID snapshots for `ATTACH_FAILED`, `SHOW_OR_SET_NATIVE_ERROR`,
+  `EXACT_HWND_READBACK_MISMATCH`, and `DETACH_FAILED`.
+- Focused Windows-trigger tests cover each diagnostic branch and prove that the
+  public failure contract remains unchanged. The authoritative verification
+  completed cleanly; no live retry was made after iteration 126.
+- The page-1 PDF remains key-free `DRAFT_REFERENCE` with `MODIFY NONE`. The
+  authoritative SourceCustody HMAC/identity-key contract was not removed,
+  bypassed, or otherwise changed.
+
 ## Canonical checkpoint — post-kernel32 live boundary (iteration 126)
 ```text
 STATE=CLASSIFIED
