@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Canonical checkpoint — ready-dispatcher readiness propagation (iteration 148)
+```text
+STATE=OFFLINE_GREEN
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-ready-dispatcher-readiness-propagation-iteration148.md; temp RED/GREEN readiness oracle; commit b02586b; focused tests; scripts/verify.ps1 offline JUnit 3405 pass, dotnet IPC 134 pass, expected causal RED 1 failure, real-data 2 skip, AutoCAD 17 skip, live/M2 NOT RUN
+VERDICT=CLEAR_CONTINUE
+FIRST_UNSATISFIED_BOUNDARY=LIVE_DISPATCHER_FILE_IPC_DRAWING_OPEN_RESULT_NOT_PROVEN
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review; if clear authorize exactly one disposable live epoch through the repaired bootstrap-binding path, requiring exact request/result/active-path evidence and no retry/raw fallback
+HUMAN_GATE=NO
+```
+
+## Ready-dispatcher readiness propagation (iteration 148)
+- The bounded causal RED proved that startup bindings carried
+  `dispatcher_preloaded=True` but a newly constructed live client did not.
+  Applying the existing `_apply_start_tab_bootstrap_bindings(bindings)` owner
+  repaired only that readiness handoff.
+- The repaired offline oracle passed and proved one exact read-only semantic
+  File IPC `drawing-open` request/result with zero raw-LISP calls. The full
+  authoritative verification completed with 3,405 offline tests passing;
+  unavailable private/live gates remain explicitly skipped or not run.
+- No live retry followed iteration 147. No drawing/source/DXF/CAD/provider/M2
+  or key-policy mutation occurred. The SourceCustody HMAC/identity-key
+  contract remains fail-closed and unchanged.
+
 ## Canonical checkpoint — ready-dispatcher live boundary (iteration 147)
 ```text
 STATE=CLASSIFIED
