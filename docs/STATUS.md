@@ -1,4 +1,27 @@
 # CAD Agent Status
+## Canonical checkpoint — live prerequisite preflight (iteration 169)
+    STATE=LIVE_PREREQUISITES_ABSENT
+    EVIDENCE=docs/superpowers/implementation-records/2026-09-12-live-prerequisite-preflight-iteration169.md; exact HEAD fd992106f0e4fa8aeaba5c83b89a87ea01aa55b2; GitHub main e8fc0092ee46750e50de0ea408fd91811cae10c2; hosted checks terminal SUCCESS; read-only preflight confirms executable present but AutoCAD process/HWND/document-ready/IPC/LISP/disposable-DWG/plugin identity absent; no live operation or mutation
+    VERDICT=MATERIAL_FINDING
+    MATERIAL_FINDING=LIVE_AUTOCAD_PREREQUISITES_ABSENT
+    FIRST_UNSATISFIED_BOUNDARY=TRUTHFUL_AUTOCAD_PROCESS_HWND_DOCUMENT_AND_PLUGIN_SESSION_NOT_AVAILABLE
+    NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of this exact preflight; keep LIVE_ORACLE=NOT_RUN and do not launch/install/repair; only if all prerequisites later become truthfully present rerun this read-only preflight before any disposable module/startup receipt oracle
+    HUMAN_GATE=NO
+
+## Live prerequisite preflight (iteration 169)
+- Fresh local/GitHub currentness and hosted checks were read at exact HEAD
+  `fd992106f0e4fa8aeaba5c83b89a87ea01aa55b2`; PR #424 checks are terminal
+  `SUCCESS`.
+- The AutoCAD 2027 executable, repository bundle manifest, Release DLL, and
+  packaging owner are present, but no `acad.exe` process exists. Therefore no
+  process-bound HWND or truthful document-ready observation exists.
+- All process environment prerequisites (`CAD_AGENT_AUTOCAD_HWND`, LISP,
+  File IPC, .NET IPC, disposable DWG, and AutoCAD executable overrides) are
+  absent; deployed/staged bundle module identity is absent as well.
+- Classification remains `LIVE_ORACLE=NOT_RUN`; no launch, install, repair,
+  registry/environment mutation, dispatcher/FileIPC, viewport, source,
+  customer/accepted CAD, candidate, DXF, or key mutation was performed.
+
 ## Canonical checkpoint — AutoCAD discovery/load binding GREEN (iteration 168)
     STATE=OFFLINE_GREEN_VERIFIED
     EVIDENCE=docs/superpowers/implementation-records/2026-09-12-autocad-discovery-load-binding-green-iteration168.md; parent RED f62e71a3e5c1bab402448a5a6dae5af32ac93f92; existing startup owner now resolves exactly one in-root manifest DLL; focused bundle/startup contracts 7 PASS; ruff/diff-check PASS; no AutoCAD/live/install/registry/env/dispatcher/FileIPC/viewport/source/DXF/CAD/key mutation
