@@ -138,6 +138,120 @@ def test_dimension_observation_persists_stable_line_endpoint_evidence(tmp_path: 
     assert set(candidate["nearby_lines"][0]) >= {"id", "p1_px", "p2_px", "bbox_px", "length_px"}
 
 
+@pytest.mark.causal_red
+def test_dimension_reconstruction_red_preserves_source_observed_normal_distance_for_1355_and_1525(
+    tmp_path: Path,
+) -> None:
+    """RED: source-observed dimension placement must beat synthetic bbox offset."""
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct, sha256_file
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    rendered = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+
+    fixtures = [
+        {
+            "candidate_id": "rawtext-bd621064",
+            "value": 1355.0,
+            "bbox_px": [1732, 1168, 1785, 1186],
+            "line_id": "rawline-5c0fc7e1",
+            "p1_px": [1645.0, 1189.0],
+            "p2_px": [1871.0, 1189.0],
+        },
+        {
+            "candidate_id": "rawtext-6044e704",
+            "value": 1525.0,
+            "bbox_px": [1732, 1198, 1785, 1216],
+            "line_id": "rawline-2e7a2d81",
+            "p1_px": [1630.0, 1219.0],
+            "p2_px": [1886.0, 1219.0],
+        },
+    ]
+    observation_path = output / "dimension-observation.json"
+    observation_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_human_approval",
+        "source": manifest["source"],
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "candidates": [
+            {
+                "text": {
+                    "id": item["candidate_id"],
+                    "content": str(int(item["value"])),
+                    "bbox_px": item["bbox_px"],
+                    "rotation_deg": 0.0,
+                    "confidence": 1.0,
+                    "source": "test_fixture",
+                    "semantic_role": "dimension_value",
+                    "parsed_value": item["value"],
+                },
+                "nearby_line_ids": [item["line_id"]],
+                "nearby_lines": [{
+                    "id": item["line_id"],
+                    "p1_px": item["p1_px"],
+                    "p2_px": item["p2_px"],
+                    "bbox_px": [*item["p1_px"], *item["p2_px"]],
+                    "length_px": item["p2_px"][0] - item["p1_px"][0],
+                }],
+                "state": "needs_human_approval",
+            }
+            for item in fixtures
+        ],
+        "unresolved": [],
+    }), encoding="utf-8")
+
+    base_dxf = output / "base.dxf"
+    ezdxf.new("R2010").saveas(base_dxf)
+    approval_path = output / "dimension-approval.json"
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-dimension-mappings",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": {"path": observation_path.name, "sha256": sha256_file(observation_path)},
+        "base_dxf": {"path": base_dxf.name, "sha256": sha256_file(base_dxf)},
+        "approval_reference": "approved-test",
+        "mappings": [
+            {"candidate_id": item["candidate_id"], "line_evidence_id": item["line_id"]}
+            for item in fixtures
+        ],
+    }), encoding="utf-8")
+
+    result = run_fidelity_dimension_reconstruct(
+        source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+    )
+    dimensions = {str(entity.dxf.text): entity for entity in ezdxf.readfile(result).modelspace().query("DIMENSION")}
+    scale = float(manifest["pages"][0]["pixel_to_paper_mm"]["used"])
+    height_px = int(json.loads((output / manifest["pages"][0]["artifacts"]["layout_audit"]["artifact"]).read_text())["source_page"]["render_height_px"])
+
+    actual_distances = {}
+    expected_distances = {}
+    for item in fixtures:
+        bbox = item["bbox_px"]
+        line_y = (item["p1_px"][1] + item["p2_px"][1]) / 2.0
+        text_y = (bbox[1] + bbox[3]) / 2.0
+        expected_source_distance_mm = abs(line_y - text_y) * scale
+        p1 = (item["p1_px"][0] * scale, (height_px - item["p1_px"][1]) * scale)
+        p2 = (item["p2_px"][0] * scale, (height_px - item["p2_px"][1]) * scale)
+        line_midpoint = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        dimension = dimensions[str(int(item["value"]))]
+        assert (dimension.dxf.defpoint2.x, dimension.dxf.defpoint2.y) == pytest.approx(p1)
+        assert (dimension.dxf.defpoint3.x, dimension.dxf.defpoint3.y) == pytest.approx(p2)
+        actual_distances[str(int(item["value"]))] = abs(dimension.dxf.text_midpoint.y - line_midpoint[1])
+        expected_distances[str(int(item["value"]))] = expected_source_distance_mm
+
+    assert actual_distances == pytest.approx(expected_distances, abs=1e-9), (
+        "synthetic current offsets do not preserve the independent source-observed distances: "
+        f"actual={actual_distances}, expected={expected_distances}"
+    )
+
+
 def test_dimension_reconstruction_emits_approved_native_dimension(tmp_path: Path) -> None:
     from cad_agent.fidelity import run_fidelity_dimension_reconstruct
 
