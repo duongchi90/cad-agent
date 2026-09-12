@@ -2091,6 +2091,98 @@ def write_fidelity_text_approvals_from_selection(
     return results
 
 
+def _measure_visible_glyph_bbox(image: np.ndarray, bbox: list[int]) -> list[int] | None:
+    """Find a conservative visible-glyph band inside one OCR box.
+
+    OCR boxes can include line spacing and nearby ruled-cell pixels.  A text
+    band is accepted only when its strongest contiguous row run is separated
+    from an OCR-box edge by a substantial margin; otherwise the original box
+    remains the safer measurement.
+    """
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (int(round(value)) for value in bbox)
+    except (TypeError, ValueError):
+        return None
+    if x1 <= x0 or y1 <= y0 or image is None or image.size == 0:
+        return None
+    page_height, page_width = image.shape[:2]
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(page_width, x1), min(page_height, y1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    crop = gray[y0:y1, x0:x1]
+    ink = crop < 180
+    crop_height, crop_width = ink.shape
+    row_counts = ink.sum(axis=1)
+    row_threshold = max(3, int(round(crop_width * 0.03)))
+    # A ruled border spanning most of the OCR box is not a glyph band.
+    row_active = (row_counts >= row_threshold) & (row_counts < crop_width * 0.8)
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, active in enumerate(row_active):
+        if active and start is None:
+            start = index
+        elif not active and start is not None:
+            runs.append((start, index))
+            start = None
+    if start is not None:
+        runs.append((start, crop_height))
+    if not runs:
+        return None
+    band_start, band_end = max(runs, key=lambda item: (item[1] - item[0], int(row_counts[item[0]:item[1]].sum())))
+    top_margin = band_start
+    bottom_margin = crop_height - band_end
+    if max(top_margin, bottom_margin) < max(2, math.ceil(crop_height * 0.25)):
+        return [x0, y0, x1, y1]
+    band = ink[band_start:band_end]
+    columns = np.where(band.any(axis=0))[0]
+    if columns.size == 0:
+        return None
+    return [x0 + int(columns[0]), y0 + band_start, x0 + int(columns[-1]) + 1, y0 + band_end]
+
+
+def _derive_text_reconstruction_size(
+    image: np.ndarray,
+    content: str,
+    bbox: list[int],
+    scale: float,
+) -> dict[str, Any]:
+    """Map visible source glyph extents to DXF TEXT size without moving its anchor."""
+    original = [int(round(value)) for value in bbox]
+    original_height = max(1.5, min(10.0, (original[3] - original[1]) * scale))
+    visible = _measure_visible_glyph_bbox(image, original)
+    if visible is None or visible == original:
+        return {
+            "glyph_bbox_px": original,
+            "height_mm": original_height,
+            "width_factor": 1.0,
+            "insertion_px": [original[0], original[3]],
+        }
+    font_path = Path(os.environ.get("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\arial.ttf"))
+    try:
+        font = ImageFont.truetype(str(font_path), size=32)
+        mask = font.getmask(content)
+        mask_bbox = mask.getbbox()
+    except (OSError, ValueError):
+        mask_bbox = None
+    visible_width = max(1, visible[2] - visible[0])
+    visible_height = max(1, visible[3] - visible[1])
+    if mask_bbox is None or mask_bbox[2] <= mask_bbox[0] or mask_bbox[3] <= mask_bbox[1]:
+        width_factor = 1.0
+    else:
+        natural_width = visible_height * font.getlength(content) / max(1, mask_bbox[3] - mask_bbox[1])
+        width_factor = max(0.5, min(2.0, visible_width / max(1.0, natural_width)))
+    return {
+        "glyph_bbox_px": visible,
+        "height_mm": max(1.5, min(10.0, visible_height * scale)),
+        "width_factor": width_factor,
+        "insertion_px": [original[0], original[3]],
+    }
+
+
 def run_fidelity_text_reconstruct(
     source: Path,
     output_root: Path,
@@ -2122,7 +2214,12 @@ def run_fidelity_text_reconstruct(
     scale = float(page["pixel_to_paper_mm"]["used"])
     audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
     height_px = int(json.loads(audit_path.read_text(encoding="utf-8"))["source_page"]["render_height_px"])
+    rendered_path = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    source_image = cv2.imread(str(rendered_path))
+    if source_image is None:
+        raise FidelityError("Cannot read rendered page for text reconstruction sizing.")
     emitted = 0
+    sizing_records: list[dict[str, Any]] = []
     for approved in approval.get("approved_candidates", []):
         candidate = approved.get("candidate", {})
         content = candidate.get("content")
@@ -2130,9 +2227,11 @@ def run_fidelity_text_reconstruct(
         if not isinstance(content, str) or not content.strip() or not isinstance(bbox, list) or len(bbox) != 4:
             raise FidelityError("Text approval contains an invalid candidate.")
         x0, _, _, y1 = (float(value) for value in bbox)
-        text_height = max(1.5, min(10.0, (float(bbox[3]) - float(bbox[1])) * scale))
-        entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height, "style": _ensure_unicode_text_style(document)})
+        sizing = _derive_text_reconstruction_size(source_image, content, bbox, scale)
+        text_height = sizing["height_mm"]
+        entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height, "width": sizing["width_factor"], "style": _ensure_unicode_text_style(document)})
         entity.set_placement((x0 * scale, (height_px - y1) * scale))
+        sizing_records.append({"id": candidate.get("id"), **sizing})
         emitted += 1
     root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
     if root.exists():
@@ -2140,7 +2239,7 @@ def run_fidelity_text_reconstruct(
     root.mkdir(parents=True)
     output = root / "layout.dxf"
     document.saveas(output)
-    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "output_dxf_sha256": sha256_file(output), "emitted_text_entities": emitted, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "output_dxf_sha256": sha256_file(output), "emitted_text_entities": emitted, "text_sizing": sizing_records, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
     return output
 
 
