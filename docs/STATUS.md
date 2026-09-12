@@ -1,4 +1,36 @@
 # CAD Agent Status
+## Canonical checkpoint — raw-LISP consumption ACK design (iteration 109)
+```text
+STATE=DESIGNED
+EVIDENCE=docs/superpowers/implementation-records/2026-09-12-raw-lisp-consumption-ack-design-iteration109.md; current low-level owner _make_windows_text_trigger/make_windows_lisp_trigger; existing causal-red enqueue-TRUE/ACK-absent oracle; existing marker writer/observer reuse; full verify at 78c09fb exit 0 with intentional causal-red recorded
+VERDICT=MATERIAL_FINDING
+FIRST_UNSATISFIED_BOUNDARY=RAW_LISP_RECEIVER_EVALUATION_ACK_ABSENT_IN_CURRENT_OWNER
+NEXT_SINGLE_BOUNDED_ACTION=Fresh SOL review of the same-expression marker ACK design and exact write set; no implementation, live retry, candidate activation, health/FileIPC, production/source/DXF/CAD mutation until explicitly authorized
+HUMAN_GATE=NO
+```
+
+## Current raw-LISP consumption ACK design (iteration 109)
+- The low-level Windows trigger remains enqueue-only. The smallest proposed
+  seam is a private wrapper at the existing known-expression opening owner:
+  append the existing fixed-token marker writer as the final form of the same
+  `progn`, send once through the existing raw-LISP trigger, and accept terminal
+  consumed/evaluated evidence only after exact marker/path readback within the
+  existing bound.
+- The design deliberately does not change the trigger return type, add a
+  second transport, add managed `drawing_open`/`candidate_activate`, or claim
+  that marker readback alone proves the business operation. Existing exact
+  active-document readback and managed health remain separate identity/result
+  checks.
+- TDD outputs are defined as `EXACT_WRITE_SET`, `RED_TEST`,
+  `GREEN_CONTRACT`, `REGRESSION_GATE`, and `LIVE_ACCEPTANCE_ORACLE` in the
+  iteration-109 record. The future write set is limited to the Python opening
+  owner, its focused tests, and documentation; actual decision write set is
+  `MODIFY NONE / CREATE NONE`.
+- No implementation, live retry, candidate activation, health/FileIPC call,
+  production code, source, candidate, DXF, or CAD mutation occurred. Exact
+  evidence is recorded in
+  `docs/superpowers/implementation-records/2026-09-12-raw-lisp-consumption-ack-design-iteration109.md`.
+
 ## Canonical checkpoint — authoritative verification from clean tree (iteration 108)
 ```text
 STATE=VERIFIED
