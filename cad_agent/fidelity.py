@@ -223,6 +223,49 @@ def _validated_ocr_roi(
     return ocr_roi
 
 
+def _validated_geometry_occurrences(
+    occurrences: object,
+    bbox: list[int],
+    category: str,
+) -> list[dict[str, Any]] | None:
+    if occurrences is None:
+        return None
+    if category != "region":
+        raise FidelityError(f"{category} geometry_occurrences are not supported.")
+    if not isinstance(occurrences, list) or not occurrences:
+        raise FidelityError("region geometry_occurrences must contain at least one record.")
+
+    x0, y0, x1, y1 = bbox
+    result: list[dict[str, Any]] = []
+    ids: set[str] = set()
+    for occurrence in occurrences:
+        if not isinstance(occurrence, dict) or not isinstance(occurrence.get("id"), str) or not occurrence["id"].strip():
+            raise FidelityError("Every geometry occurrence requires a non-empty id.")
+        if occurrence["id"] in ids:
+            raise FidelityError(f"Duplicate geometry occurrence id: {occurrence['id']}")
+
+        points: list[list[float]] = []
+        for point_name in ("p1_px", "p2_px"):
+            point = occurrence.get(point_name)
+            if (
+                not isinstance(point, list)
+                or len(point) != 2
+                or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in point)
+                or not all(math.isfinite(float(value)) for value in point)
+            ):
+                raise FidelityError(f"geometry occurrence {point_name} must contain two finite numeric coordinates.")
+            px, py = (float(value) for value in point)
+            if not (x0 <= px <= x1 and y0 <= py <= y1):
+                raise FidelityError("geometry occurrence points must fit inside the containing region.")
+            points.append([px, py])
+
+        if math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1]) < 12.0:
+            raise FidelityError("geometry occurrence segments must be at least 12 px long.")
+        ids.add(occurrence["id"])
+        result.append({"id": occurrence["id"], "p1_px": points[0], "p2_px": points[1]})
+    return result
+
+
 def _normalized_regions(regions: dict[str, Any], width: int, height: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     def normalize(items: object, category: str) -> list[dict[str, Any]]:
         if not isinstance(items, list) or not items:
@@ -248,6 +291,11 @@ def _normalized_regions(regions: dict[str, Any], width: int, height: int) -> tup
             ocr_roi = _validated_ocr_roi(ocr_roi=item.get("ocr_roi_px"), region_width=x1 - x0, region_height=y1 - y0, category=category)
             if ocr_roi is not None:
                 normalized["ocr_roi_px"] = ocr_roi
+            geometry_occurrences = _validated_geometry_occurrences(
+                item.get("geometry_occurrences"), box, category,
+            )
+            if geometry_occurrences is not None:
+                normalized["geometry_occurrences"] = geometry_occurrences
             ids.add(item["id"])
             result.append(normalized)
         return result
