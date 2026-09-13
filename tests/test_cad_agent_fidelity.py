@@ -2168,7 +2168,7 @@ def test_text_reconstruction_sizes_from_visible_glyphs_but_keeps_ocr_anchor() ->
 
     tight_bbox = [28, 20, 145, 41]
     tight = fidelity_module._derive_text_reconstruction_size(
-        image, "VISIBLE", tight_bbox, 0.1,
+        image, "VISIBLE", tight_bbox, 0.1, allow_tight_box_font_metric=True,
     )
     assert tight["glyph_bbox_px"] == tight_bbox
     assert tight["height_mm"] == pytest.approx((tight_bbox[3] - tight_bbox[1]) * 0.1)
@@ -2205,7 +2205,9 @@ def test_page1_text_sizing_uses_font_width_for_tight_approved_boxes(monkeypatch:
 
     font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", size=32)
     for content, bbox in cases:
-        sizing = fidelity_module._derive_text_reconstruction_size(image, content, bbox, 0.1)
+        sizing = fidelity_module._derive_text_reconstruction_size(
+            image, content, bbox, 0.1, allow_tight_box_font_metric=True,
+        )
         visible_width = bbox[2] - bbox[0]
         visible_height = bbox[3] - bbox[1] if content != cases[1][0] else 20
         mask_bbox = font.getmask(content).getbbox()
@@ -2232,6 +2234,26 @@ def test_text_sizing_preserves_unmeasurable_fallback_for_other_text() -> None:
         "width_factor": 1.0,
         "insertion_px": [12, 42],
     }
+
+
+def test_text_sizing_keeps_tight_box_fallback_without_page1_opt_in() -> None:
+    """Other callers keep the legacy tight-box fallback unless opted in."""
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((80, 120, 3), 255, dtype=np.uint8)
+    bbox = [12, 18, 92, 42]
+    x0, y0, x1, y1 = bbox
+    image[y0:y1, x0:x1:5] = 0
+    image[y0:y1, x1 - 1] = 0
+
+    sizing = fidelity_module._derive_text_reconstruction_size(
+        image, "OTHER TEXT", bbox, 0.1,
+    )
+
+    assert sizing["glyph_bbox_px"] == bbox
+    assert sizing["height_mm"] == pytest.approx(2.4)
+    assert sizing["width_factor"] == 1.0
+    assert sizing["insertion_px"] == [12, 42]
 
 
 def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:

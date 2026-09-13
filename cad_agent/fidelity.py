@@ -2158,12 +2158,14 @@ def _derive_text_reconstruction_size(
     content: str,
     bbox: list[int],
     scale: float,
+    *,
+    allow_tight_box_font_metric: bool = False,
 ) -> dict[str, Any]:
     """Map visible source glyph extents to DXF TEXT size without moving its anchor."""
     original = [int(round(value)) for value in bbox]
     original_height = max(1.5, min(10.0, (original[3] - original[1]) * scale))
     visible = _measure_visible_glyph_bbox(image, original)
-    if visible is None:
+    if visible is None or (visible == original and not allow_tight_box_font_metric):
         return {
             "glyph_bbox_px": original,
             "height_mm": original_height,
@@ -2236,7 +2238,13 @@ def run_fidelity_text_reconstruct(
         if not isinstance(content, str) or not content.strip() or not isinstance(bbox, list) or len(bbox) != 4:
             raise FidelityError("Text approval contains an invalid candidate.")
         x0, _, _, y1 = (float(value) for value in bbox)
-        sizing = _derive_text_reconstruction_size(source_image, content, bbox, scale)
+        sizing = _derive_text_reconstruction_size(
+            source_image,
+            content,
+            bbox,
+            scale,
+            allow_tight_box_font_metric=page["page"] == 1,
+        )
         text_height = sizing["height_mm"]
         entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height, "width": sizing["width_factor"], "style": _ensure_unicode_text_style(document)})
         entity.set_placement((x0 * scale, (height_px - y1) * scale))
