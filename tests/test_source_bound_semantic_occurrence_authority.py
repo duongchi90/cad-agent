@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from cad_agent import source_bound_semantic_occurrence_authority as authority_module
 from cad_agent.source_bound_semantic_occurrence_authority import (
     validate_source_bound_semantic_occurrence_authority,
 )
@@ -99,14 +100,23 @@ def test_currentness_consumes_existing_source_fusion_evidence() -> None:
     payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
     custody = _custody()
     page_locators = _page_payload(custody)
+    render_provenance = [_pdf_render_record(custody, page_locators)]
+    normalized_render = authority_module._source_fusion.validate_render_provenance(
+        render_provenance,
+        page_locators=page_locators,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )[0]
+    payload["source"]["render_transform"] = (
+        authority_module._render_transform_identity(normalized_render)
+    )
     result = validate_source_bound_semantic_occurrence_authority(
         payload,
         currentness_evidence={
-            "render_provenance": [_pdf_render_record(custody, page_locators)],
+            "render_provenance": render_provenance,
             "page_locators": page_locators,
             "custody": custody,
             "primitive_artifact_sha256": PRIMITIVE_ARTIFACT_SHA256,
-            "render_transform": "displayed-page-box-v1",
         },
     )
     assert result["currentness"] == "CURRENT"
@@ -125,14 +135,14 @@ def test_caller_supplied_transform_label_cannot_grant_currentness() -> None:
     payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
     custody = _custody()
     page_locators = _page_payload(custody)
+    render_provenance = [_pdf_render_record(custody, page_locators)]
     result = validate_source_bound_semantic_occurrence_authority(
         payload,
         currentness_evidence={
-            "render_provenance": [_pdf_render_record(custody, page_locators)],
+            "render_provenance": render_provenance,
             "page_locators": page_locators,
             "custody": custody,
             "primitive_artifact_sha256": PRIMITIVE_ARTIFACT_SHA256,
-            "render_transform": "caller-controlled-transform",
         },
     )
     assert result["currentness"] == "UNRESOLVED_NON_PASS"

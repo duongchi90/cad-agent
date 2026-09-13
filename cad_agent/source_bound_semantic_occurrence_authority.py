@@ -51,7 +51,6 @@ _CURRENTNESS_EVIDENCE_FIELDS = {
     "page_locators",
     "custody",
     "primitive_artifact_sha256",
-    "render_transform",
 }
 _ORACLE_EXPECTATIONS = {"DISTINCT", "SAME_OCCURRENCE", "UNRESOLVED_NON_PASS"}
 
@@ -288,15 +287,33 @@ def _oracle_case(
     return {"case_id": case_id, "status": status}
 
 
+def _render_transform_identity(render: Mapping[str, object]) -> str:
+    """Derive the authority transform identity from validated render facts."""
+    transform_material = {
+        "identity_kind": "r1c-render-transform-v1",
+        "provenance_kind": render["provenance_kind"],
+        "source_id": render["source_id"],
+        "observed_source_sha256": render["observed_source_sha256"],
+        "raster_sha256": render["raster_sha256"],
+        "page_locator_sha256": render["page_locator_sha256"],
+        "pdf_page_index": render["pdf_page_index"],
+        "box_kind": render["box_kind"],
+        "selected_box": render["selected_box"],
+        "rotation": render["rotation"],
+        "user_unit": render["user_unit"],
+        "render_dpi": render["render_dpi"],
+        "render_matrix": render["render_matrix"],
+        "render_provenance_sha256": render["render_provenance_sha256"],
+    }
+    return f"r1c-render-transform-v1:{canonical_json_sha256(transform_material)}"
+
+
 def _currentness_from_owner_evidence(
     source: dict[str, str],
     evidence: Mapping[str, object] | None,
 ) -> str:
     """Use the existing provenance owner before declaring a binding current."""
     if not isinstance(evidence, Mapping) or set(evidence) != _CURRENTNESS_EVIDENCE_FIELDS:
-        return "UNRESOLVED_NON_PASS"
-    render_transform = evidence["render_transform"]
-    if not isinstance(render_transform, str) or not render_transform:
         return "UNRESOLVED_NON_PASS"
     page_locators = evidence["page_locators"]
     try:
@@ -323,7 +340,7 @@ def _currentness_from_owner_evidence(
             and render.get("raster_sha256") == source["render_sha256"]
             and page_ids_by_locator.get(str(render.get("page_locator_sha256")))
             == source["page_id"]
-            and render_transform == source["render_transform"]
+            and _render_transform_identity(render) == source["render_transform"]
         ):
             return "CURRENT"
     return "UNRESOLVED_NON_PASS"
