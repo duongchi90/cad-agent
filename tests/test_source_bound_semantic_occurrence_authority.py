@@ -9,6 +9,14 @@ import pytest
 from cad_agent.source_bound_semantic_occurrence_authority import (
     validate_source_bound_semantic_occurrence_authority,
 )
+from tests.test_cad_agent_source_fusion import (
+    PDF_RASTER_SHA256,
+    PDF_SHA256,
+    PRIMITIVE_ARTIFACT_SHA256,
+    _custody,
+    _page_payload,
+    _pdf_render_record,
+)
 
 
 FIXTURE = (
@@ -77,3 +85,28 @@ def test_zero_match_is_fail_closed() -> None:
         case["case_id"]: case["status"]
         for case in result["oracle_results"]
     }["ZERO_MATCH"] == "UNRESOLVED_NON_PASS"
+
+
+def test_currentness_consumes_existing_source_fusion_evidence() -> None:
+    payload = _fixture()
+    payload["source"].update(
+        {
+            "source_pdf_sha256": PDF_SHA256,
+            "page_id": "PAGE-99",
+            "render_sha256": PDF_RASTER_SHA256,
+        }
+    )
+    payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
+    custody = _custody()
+    page_locators = _page_payload(custody)
+    result = validate_source_bound_semantic_occurrence_authority(
+        payload,
+        currentness_evidence={
+            "render_provenance": [_pdf_render_record(custody, page_locators)],
+            "page_locators": page_locators,
+            "custody": custody,
+            "primitive_artifact_sha256": PRIMITIVE_ARTIFACT_SHA256,
+            "render_transform": "displayed-page-box-v1",
+        },
+    )
+    assert result["currentness"] == "CURRENT"

@@ -13,6 +13,7 @@ import re as _re
 from collections.abc import Mapping
 from copy import deepcopy
 
+from cad_agent import source_fusion as _source_fusion
 from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.source_integrity import canonicalize_r1c_quantity
 
@@ -45,6 +46,13 @@ _SOURCE_FIELDS = {
 _APPROVAL_FIELDS = {"approval_identity", "approved_at", "contract_version"}
 _OCCURRENCE_FIELDS = {"occurrence_id", "kind", "source_segment_px"}
 _SEGMENT_FIELDS = {"p1", "p2"}
+_CURRENTNESS_EVIDENCE_FIELDS = {
+    "render_provenance",
+    "page_locators",
+    "custody",
+    "primitive_artifact_sha256",
+    "render_transform",
+}
 _ORACLE_EXPECTATIONS = {"DISTINCT", "SAME_OCCURRENCE", "UNRESOLVED_NON_PASS"}
 
 
@@ -224,6 +232,43 @@ def _oracle_case(
             else:
                 status = "UNIQUE_MATCH"
         status = locals().get("status", "UNRESOLVED_NON_PASS")
+    elif case_id == "ZERO_MATCH":
+        record = _closed(value, {"case_id", "observations", "expected"}, path)
+        observations = record["observations"]
+        if not isinstance(observations, list) or not observations:
+            raise _AuthorityError(f"{path}.observations: OBSERVATIONS_INVALID")
+        outcomes: list[str] = []
+        for item_index, item in enumerate(observations):
+            observation = _closed(
+                item,
+                {"candidate_id", "matched_occurrence_ids"},
+                f"{path}.observations[{item_index}]",
+            )
+            _identifier(
+                observation["candidate_id"],
+                f"{path}.observations[{item_index}].candidate_id",
+            )
+            matches = observation["matched_occurrence_ids"]
+            if not isinstance(matches, list):
+                raise _AuthorityError(f"{path}.observations[{item_index}]: MATCHES_INVALID")
+            normalized_matches = [
+                _identifier(
+                    match,
+                    f"{path}.observations[{item_index}].matched_occurrence_ids[{match_index}]",
+                )
+                for match_index, match in enumerate(matches)
+            ]
+            outcomes.append(
+                "UNIQUE_MATCH"
+                if len(normalized_matches) == 1
+                and normalized_matches[0] in occurrence_ids
+                else "UNRESOLVED_NON_PASS"
+            )
+        status = (
+            "UNIQUE_MATCH"
+            if all(outcome == "UNIQUE_MATCH" for outcome in outcomes)
+            else "UNRESOLVED_NON_PASS"
+        )
     elif case_id == "STALE_RENDER_BINDING":
         record = _closed(value, {"case_id", "source_render_sha256", "expected"}, path)
         observed_render_sha256 = _sha256(
@@ -243,15 +288,58 @@ def _oracle_case(
     return {"case_id": case_id, "status": status}
 
 
+def _currentness_from_owner_evidence(
+    source: dict[str, str],
+    evidence: Mapping[str, object] | None,
+) -> str:
+    """Use the existing provenance owner before declaring a binding current."""
+    if not isinstance(evidence, Mapping) or set(evidence) != _CURRENTNESS_EVIDENCE_FIELDS:
+        return "UNRESOLVED_NON_PASS"
+    render_transform = evidence["render_transform"]
+    if not isinstance(render_transform, str) or not render_transform:
+        return "UNRESOLVED_NON_PASS"
+    page_locators = evidence["page_locators"]
+    try:
+        normalized_renders = _source_fusion.validate_render_provenance(
+            evidence["render_provenance"],
+            page_locators=page_locators,
+            custody=evidence["custody"],
+            primitive_artifact_sha256=evidence["primitive_artifact_sha256"],
+        )
+    except Exception:
+        return "UNRESOLVED_NON_PASS"
+
+    page_ids_by_locator = {
+        str(page["page_locator_sha256"]): str(page["page_id"])
+        for page in page_locators
+        if isinstance(page, Mapping)
+        and "page_locator_sha256" in page
+        and "page_id" in page
+    }
+    for render in normalized_renders:
+        if (
+            render.get("provenance_kind") == "PDF_RENDER"
+            and render.get("observed_source_sha256") == source["source_pdf_sha256"]
+            and render.get("raster_sha256") == source["render_sha256"]
+            and page_ids_by_locator.get(str(render.get("page_locator_sha256")))
+            == source["page_id"]
+            and render_transform == source["render_transform"]
+        ):
+            return "CURRENT"
+    return "UNRESOLVED_NON_PASS"
+
+
 def validate_source_bound_semantic_occurrence_authority(
     payload: object,
     *,
+    currentness_evidence: Mapping[str, object] | None = None,
     current_source_binding: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Return a normalized authority record or a fail-closed result.
 
-    ``current_source_binding`` is an observed, exact source/render tuple. A
-    missing or drifted tuple never grants current authority.
+    ``currentness_evidence`` is the existing source-fusion owner's validated
+    custody/provenance evidence. A raw caller-supplied source/render tuple is
+    intentionally ignored and never grants current authority.
     """
     root = _closed(payload, _ROOT_FIELDS, "authority")
     if root["schema_version"] != SCHEMA_VERSION:
@@ -275,8 +363,8 @@ def validate_source_bound_semantic_occurrence_authority(
         for index, item in enumerate(oracle_results_value)
     ]
 
-    normalized_current = _source(current_source_binding) if current_source_binding is not None else None
-    currentness = "CURRENT" if normalized_current == source else "UNRESOLVED_NON_PASS"
+    del current_source_binding
+    currentness = _currentness_from_owner_evidence(source, currentness_evidence)
     authority_material = {
         "schema_version": SCHEMA_VERSION,
         "contract_version": CONTRACT_VERSION,
