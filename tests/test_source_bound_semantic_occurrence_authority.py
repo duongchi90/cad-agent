@@ -416,3 +416,179 @@ def test_untrusted_approval_cannot_self_authorize_current_packet() -> None:
     wrong_authority_class = deepcopy(packet)
     wrong_authority_class["approval"]["approved_by"] = "HUMAN"
     assert_rejected(wrong_authority_class)
+
+
+class _OpaqueVerifiedApprovalDecision:
+    """Test stand-in for a result issued by an external trusted boundary."""
+
+    __slots__ = ("approval_identity", "approved_by", "approval_ref", "scope")
+
+    def __init__(
+        self,
+        *,
+        approval_identity: str,
+        approved_by: str,
+        approval_ref: str,
+        scope: object,
+    ) -> None:
+        self.approval_identity = approval_identity
+        self.approved_by = approved_by
+        self.approval_ref = approval_ref
+        self.scope = scope
+
+
+@pytest.mark.causal_red
+def test_approval_requires_opaque_authenticated_decision_scope() -> None:
+    """Causal RED: packet fields cannot manufacture an approval decision."""
+    custody = _custody()
+    page_locators = _page_payload(custody)
+    render_provenance = [_pdf_render_record(custody, page_locators)]
+    normalized_render = authority_module._source_fusion.validate_render_provenance(
+        render_provenance,
+        page_locators=page_locators,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )[0]
+    page_99 = next(page for page in page_locators if page["page_id"] == "PAGE-99")
+    currentness_evidence = {
+        "render_provenance": render_provenance,
+        "page_locators": page_locators,
+        "custody": custody,
+        "primitive_artifact_sha256": PRIMITIVE_ARTIFACT_SHA256,
+    }
+    occurrences = deepcopy(_fixture()["occurrences"])
+
+    def make_packet(
+        *, approval_identity: str, approved_by: str, approval_ref: str
+    ) -> dict[str, object]:
+        packet = {
+            "schema_version": "source-bound-semantic-occurrence-approval-1.0",
+            "contract_version": "SOURCE_BOUND_SEMANTIC_OCCURRENCE_APPROVAL_V1",
+            "source": {
+                "source_pdf_sha256": PDF_SHA256,
+                "page_id": "PAGE-99",
+                "render_sha256": PDF_RASTER_SHA256,
+                "render_transform": authority_module._render_transform_identity(
+                    normalized_render
+                ),
+                "source_custody_sha256": source_custody_sha256(custody),
+                "page_locator_sha256": page_99["page_locator_sha256"],
+                "render_provenance_sha256": normalized_render[
+                    "render_provenance_sha256"
+                ],
+            },
+            "approval": {
+                "approval_identity": approval_identity,
+                "approved_by": approved_by,
+                "approval_ref": approval_ref,
+                "approved_at": "2026-09-13T12:00:00Z",
+            },
+            "occurrences": deepcopy(occurrences),
+            "packet_hash": "",
+        }
+        packet["packet_hash"] = authority_module.canonical_json_sha256(
+            {key: item for key, item in packet.items() if key != "packet_hash"}
+        )
+        return packet
+
+    occurrence_ids = [item["occurrence_id"] for item in occurrences]
+    occurrence_scope = {
+        "scope_kind": "SOURCE_BOUND_SEMANTIC_OCCURRENCE",
+        "source_pdf_sha256": PDF_SHA256,
+        "page_id": "PAGE-99",
+        "render_sha256": PDF_RASTER_SHA256,
+        "occurrence_ids": occurrence_ids,
+    }
+    occurrence_witness = _OpaqueVerifiedApprovalDecision(
+        approval_identity="TEST-OCCURRENCE-AUTHORITY-001",
+        approved_by="PO",
+        approval_ref="test-verified-occurrence-decision-001",
+        scope=occurrence_scope,
+    )
+    contract_witness = _OpaqueVerifiedApprovalDecision(
+        approval_identity="APPROVAL-OPTION-B-001",
+        approved_by="PO",
+        approval_ref="github-409-comment-5651227165",
+        scope={"scope_kind": "SEMANTIC_MULTIPLICITY_CONTRACT_ONLY"},
+    )
+    contract_packet = make_packet(
+        approval_identity=contract_witness.approval_identity,
+        approved_by=contract_witness.approved_by,
+        approval_ref=contract_witness.approval_ref,
+    )
+    occurrence_packet = make_packet(
+        approval_identity=occurrence_witness.approval_identity,
+        approved_by=occurrence_witness.approved_by,
+        approval_ref=occurrence_witness.approval_ref,
+    )
+    fake_witness_mapping = {
+        "approval_identity": occurrence_witness.approval_identity,
+        "approved_by": occurrence_witness.approved_by,
+        "approval_ref": occurrence_witness.approval_ref,
+        "scope": deepcopy(occurrence_scope),
+    }
+    mismatched_class_witness = _OpaqueVerifiedApprovalDecision(
+        approval_identity=occurrence_witness.approval_identity,
+        approved_by="HUMAN",
+        approval_ref=occurrence_witness.approval_ref,
+        scope=occurrence_scope,
+    )
+
+    def evaluate(
+        packet: dict[str, object], witness: object = None
+    ) -> tuple[str, str]:
+        kwargs: dict[str, object] = {"currentness_evidence": currentness_evidence}
+        if witness is not None:
+            kwargs["verified_approval_decision"] = witness
+        try:
+            validated = authority_module.validate_source_bound_semantic_occurrence_approval(
+                packet,
+                **kwargs,
+            )
+        except TypeError as exc:
+            return "API_MISSING", str(exc)
+        except ValueError as exc:
+            return "REJECTED", str(exc)
+        if validated["currentness"] != "CURRENT":
+            return "REJECTED", str(validated["currentness"])
+
+        authority_payload = _fixture()
+        authority_payload["source"].update(
+            {
+                "source_pdf_sha256": PDF_SHA256,
+                "page_id": "PAGE-99",
+                "render_sha256": PDF_RASTER_SHA256,
+                "render_transform": packet["source"]["render_transform"],
+            }
+        )
+        authority_payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
+        try:
+            downstream = validate_source_bound_semantic_occurrence_authority(
+                authority_payload,
+                currentness_evidence=currentness_evidence,
+                validated_approval_packet=validated,
+            )
+        except ValueError as exc:
+            return "REJECTED", str(exc)
+        return (
+            "CURRENT",
+            str(downstream["currentness"]),
+        )
+
+    outcomes = {
+        "contract_only_scope": evaluate(contract_packet, contract_witness),
+        "exact_occurrence_scope": evaluate(occurrence_packet, occurrence_witness),
+        "no_authenticated_decision": evaluate(occurrence_packet),
+        "fake_witness_mapping": evaluate(occurrence_packet, fake_witness_mapping),
+        "authority_class_mismatch": evaluate(
+            occurrence_packet,
+            mismatched_class_witness,
+        ),
+    }
+
+    assert outcomes["contract_only_scope"][0] == "REJECTED"
+    assert "SCOPE_MISMATCH" in outcomes["contract_only_scope"][1]
+    assert outcomes["exact_occurrence_scope"] == ("CURRENT", "CURRENT")
+    assert outcomes["no_authenticated_decision"][0] == "REJECTED"
+    assert outcomes["fake_witness_mapping"][0] == "REJECTED"
+    assert outcomes["authority_class_mismatch"][0] == "REJECTED"
