@@ -35,26 +35,26 @@ Required private/live gates: real_data NOT RUN until implementation is verified;
 
 Files:
 - Modify: cad_agent/fidelity.py, function _normalized_regions
-- Test: tests/test_cad_agent_fidelity.py
+- Test: tests/test_semantic_multiplicity_contract.py
 
 Interfaces:
 - Consumes existing region records with id, bbox_px, and purpose.
 - Produces optional normalized geometry_occurrences records with stable ids and page-pixel p1_px/p2_px segments, included in the existing proposal definition hash.
 
-- [ ] Step 1: Write the failing test.
+- [x] Step 1: Write the failing test.
 
   Add test_region_proposal_preserves_geometry_occurrences_and_hashes_them. Submit two valid occurrence records in one region, assert the proposal preserves them, then change one endpoint and assert the proposal definition digest changes.
 
-- [ ] Step 2: Run the focused test and verify it fails.
+- [x] Step 2: Run the focused test and verify it fails.
 
   Run pytest tests/test_cad_agent_fidelity.py -k geometry_occurrence_proposal -q.
   Expected: FAIL because _normalized_regions currently drops the occurrence field.
 
-- [ ] Step 3: Implement the smallest validation and normalization delta.
+- [x] Step 3: Implement the smallest validation and normalization delta.
 
   Validate a non-empty unique occurrence id, two finite numeric points, a segment length of at least 12 pixels, and points inside the containing region. Copy only normalized occurrence fields into the existing region record. The existing definition hash then binds them without a second schema or registry.
 
-- [ ] Step 4: Run the focused test and verify it passes.
+- [x] Step 4: Run the focused test and verify it passes.
 
   Run pytest tests/test_cad_agent_fidelity.py -k geometry_occurrence_proposal -q and confirm PASS.
 
@@ -65,28 +65,33 @@ Interfaces:
 ### Task 2: Add the causal RED for occurrence-aware filtering
 
 Files:
-- Modify: tests/test_cad_agent_fidelity.py near the existing region quality tests
+- Modify: tests/test_semantic_multiplicity_contract.py
 
 Interfaces:
 - Consumes RawGeometry, RawLine, and the existing private filter owner.
 - Produces regression cases for distinct, same, and ambiguous occurrence assignments.
 
-- [ ] Step 1: Write the failing distinct-occurrence test.
+- [x] Step 1: Write the failing distinct-occurrence test.
 
   Add test_filter_preserves_distinct_semantic_occurrences_within_endpoint_tolerance with two six-pixel-separated horizontal RawLine values and occurrence_ids mapping each id to a different occurrence. Assert both ids remain.
 
-- [ ] Step 2: Run the RED.
+- [x] Step 2: Run the RED.
 
   Run pytest tests/test_cad_agent_fidelity.py -k preserves_distinct_semantic_occurrences -q.
   Expected: FAIL because _filter_fidelity_geometry has no occurrence-aware input.
 
-- [ ] Step 3: Add the same-occurrence and ambiguous RED cases.
+- [x] Step 3: Add the same-occurrence and ambiguous RED cases.
 
   Add test_filter_deduplicates_raw_fragments_within_one_semantic_occurrence with two endpoint-near raw lines sharing one occurrence and assert only the higher confidence/length line remains. Add test_filter_keeps_ambiguous_occurrence_candidates_fail_closed with None assignments and assert both candidates remain.
 
-- [ ] Step 4: Run all three RED tests.
+- [x] Step 4: Run all three RED tests.
 
   Run pytest tests/test_cad_agent_fidelity.py -k semantic_occurrence -q and confirm the failures are caused by the missing occurrence-aware interface, not malformed fixtures.
+
+  In this workstation run, the equivalent custom unittest harness was used with
+  native-library thread limits because pytest collection was blocked by the
+  Windows commit/paging-file limit. It produced three TypeError failures for
+  the missing occurrence_ids argument and one passing region-contract test.
 
 ### Task 3: Implement and wire the smallest existing-owner repair
 
