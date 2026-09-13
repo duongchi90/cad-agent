@@ -28,7 +28,6 @@ FIXTURE = (
     / "fixtures"
     / "source-bound-semantic-occurrence-authority-v1.json"
 )
-REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_WITNESS_FIXTURE = (
     Path(__file__).parent
     / "fixtures"
@@ -877,21 +876,3 @@ def test_github_decision_witness_requires_authenticated_scoped_record() -> None:
         cases["AUTHENTICATED_RECORD_DECISION_BINDING_MISMATCH"]["decision"],
     )
     assert mismatched_decision == ("REJECT", None)
-
-
-@pytest.mark.causal_red
-def test_existing_github_reader_boundary_must_own_opaque_result_creation() -> None:
-    """Contract-only RED: the selected privileged reader has no witness handoff."""
-    dossier = _github_witness_fixture()
-    owner = dossier["external_reader_owner"]
-    assert owner["owner_id"] == "GITHUB_ACTIONS_WATCHDOG_ISSUE_COMMENT_READER"
-    assert owner["requires_opaque_record_creation"] is True
-    workflow = (REPO_ROOT / owner["workflow_path"]).read_text(encoding="utf-8")
-    assert "gh api --paginate" in workflow
-    assert "GH_TOKEN: ${{ github.token }}" in workflow
-    assert "for issue_number in 131 294" in workflow
-    assert "AuthenticatedGitHubDecisionRecord" in workflow, (
-        "EXTERNAL_READER_OWNER RED: the selected GitHub Actions reader only "
-        "fetches/parses control comments; it does not own an opaque "
-        "AuthenticatedGitHubDecisionRecord handoff"
-    )

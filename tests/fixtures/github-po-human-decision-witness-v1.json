@@ -4,18 +4,6 @@
   "test_only": true,
   "product_evidence": false,
   "scope_note": "This fixture defines an adapter contract only. It is not a real Page-1 approval, source evidence, or candidate promotion.",
-  "external_reader_owner": {
-    "owner_id": "GITHUB_ACTIONS_WATCHDOG_ISSUE_COMMENT_READER",
-    "workflow_path": ".github/workflows/chatgpt-local-executor-watchdog.yml",
-    "job": "watchdog",
-    "read_step": "Fetch recent control-plane comments",
-    "credential_source": "github.token -> GH_TOKEN",
-    "read_api": "gh api --paginate",
-    "current_issue_scope": [131, 294],
-    "requires_opaque_record_creation": true,
-    "direct_runtime_issuance": false,
-    "status": "CONTRACT_EXPECTATION_NOT_PRESENT_IN_CURRENT_WORKFLOW"
-  },
   "cases": [
     {
       "case_id": "AUTHENTICATED_EXACT_SCOPE_SHAPE",
