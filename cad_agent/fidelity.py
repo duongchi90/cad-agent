@@ -23,7 +23,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from primitive_ir_lib.assemble import build_document
 from primitive_ir_lib.calibration import Calibration
-from primitive_ir_lib.geometry_extraction import RawGeometry, extract_raw_geometry
+from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine, extract_raw_geometry
 from primitive_ir_lib.io_utils import save_document
 from primitive_ir_lib.run_image import _configure_tesseract
 from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
@@ -39,6 +39,60 @@ FIDELITY_SCHEMA_VERSION = "fidelity-run-1.0"
 
 class FidelityError(ValueError):
     """Raised for an unsafe or unsupported fidelity-layout request."""
+
+
+def _map_raw_line_to_occurrence_id(
+    line: RawLine,
+    occurrences: list[dict[str, Any]],
+) -> str | None:
+    matches: list[str] = []
+    raw_p1, raw_p2 = line.p1_px, line.p2_px
+    for occurrence in occurrences:
+        occurrence_id = occurrence.get("id")
+        p1 = occurrence.get("p1_px")
+        p2 = occurrence.get("p2_px")
+        if (
+            not isinstance(occurrence_id, str)
+            or not occurrence_id.strip()
+            or not isinstance(p1, list)
+            or not isinstance(p2, list)
+            or len(p1) != 2
+            or len(p2) != 2
+        ):
+            continue
+        try:
+            ax, ay = (float(value) for value in p1)
+            bx, by = (float(value) for value in p2)
+        except (TypeError, ValueError):
+            continue
+
+        dx, dy = bx - ax, by - ay
+        occurrence_length = math.hypot(dx, dy)
+        if occurrence_length == 0.0:
+            continue
+        raw_length = math.hypot(raw_p2[0] - raw_p1[0], raw_p2[1] - raw_p1[1])
+        if raw_length == 0.0:
+            continue
+
+        def distance_from_occurrence_line(point: tuple[float, float]) -> float:
+            return abs(dx * (point[1] - ay) - dy * (point[0] - ax)) / occurrence_length
+
+        if (
+            distance_from_occurrence_line(raw_p1) > 1.0
+            or distance_from_occurrence_line(raw_p2) > 1.0
+        ):
+            continue
+
+        ux, uy = dx / occurrence_length, dy / occurrence_length
+        projections = (
+            (raw_p1[0] - ax) * ux + (raw_p1[1] - ay) * uy,
+            (raw_p2[0] - ax) * ux + (raw_p2[1] - ay) * uy,
+        )
+        overlap = min(occurrence_length, max(projections)) - max(0.0, min(projections))
+        if overlap >= 12.0:
+            matches.append(occurrence_id)
+
+    return matches[0] if len(matches) == 1 else None
 
 
 def _filter_fidelity_geometry(
