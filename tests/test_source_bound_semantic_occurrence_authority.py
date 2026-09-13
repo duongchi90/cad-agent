@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
+import pytest
+
 from cad_agent.source_bound_semantic_occurrence_authority import (
     validate_source_bound_semantic_occurrence_authority,
 )
@@ -25,10 +27,9 @@ def test_approved_authority_v1_contract_is_validated_fail_closed() -> None:
     payload = _fixture()
     result = validate_source_bound_semantic_occurrence_authority(
         payload,
-        current_source_binding=payload["source"],
     )
     assert result["contract_version"] == "SOURCE_BOUND_SEMANTIC_OCCURRENCE_AUTHORITY_V1"
-    assert result["currentness"] == "CURRENT"
+    assert result["currentness"] == "UNRESOLVED_NON_PASS"
     assert {
         case["case_id"]: case["status"]
         for case in result["oracle_results"]
@@ -46,3 +47,33 @@ def test_approved_authority_v1_contract_is_validated_fail_closed() -> None:
         current_source_binding=stale_binding,
     )
     assert stale_result["currentness"] == "UNRESOLVED_NON_PASS"
+
+
+def test_self_echoed_binding_without_owner_evidence_cannot_grant_currentness() -> None:
+    payload = _fixture()
+    result = validate_source_bound_semantic_occurrence_authority(
+        payload,
+        current_source_binding=payload["source"],
+    )
+    assert result["currentness"] == "UNRESOLVED_NON_PASS"
+
+
+def test_zero_match_is_fail_closed() -> None:
+    payload = _fixture()
+    payload["oracle_cases"].append(
+        {
+            "case_id": "ZERO_MATCH",
+            "observations": [
+                {"candidate_id": "RAW-NONE", "matched_occurrence_ids": []}
+            ],
+            "expected": "UNRESOLVED_NON_PASS",
+        }
+    )
+    try:
+        result = validate_source_bound_semantic_occurrence_authority(payload)
+    except Exception as exc:  # pragma: no cover - causal RED until ZERO_MATCH exists
+        pytest.fail(f"ZERO_MATCH must return a fail-closed result: {exc}")
+    assert {
+        case["case_id"]: case["status"]
+        for case in result["oracle_results"]
+    }["ZERO_MATCH"] == "UNRESOLVED_NON_PASS"
