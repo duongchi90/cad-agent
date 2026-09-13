@@ -2215,6 +2215,25 @@ def test_page1_text_sizing_uses_font_width_for_tight_approved_boxes(monkeypatch:
         assert sizing["insertion_px"] == [bbox[0], bbox[3]]
 
 
+def test_text_sizing_preserves_unmeasurable_fallback_for_other_text() -> None:
+    """Text with no detectable glyphs keeps the existing safe fallback."""
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((80, 120, 3), 255, dtype=np.uint8)
+    bbox = [12, 18, 92, 42]
+
+    sizing = fidelity_module._derive_text_reconstruction_size(
+        image, "OTHER TEXT", bbox, 0.1,
+    )
+
+    assert sizing == {
+        "glyph_bbox_px": bbox,
+        "height_mm": pytest.approx(2.4),
+        "width_factor": 1.0,
+        "insertion_px": [12, 42],
+    }
+
+
 def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:
     from cad_agent.fidelity import _select_fidelity_geometry
 
