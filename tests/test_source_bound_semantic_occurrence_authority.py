@@ -172,7 +172,7 @@ def test_caller_supplied_transform_label_cannot_grant_currentness() -> None:
 
 
 def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
-    """Causal RED: the approved packet is not yet a downstream authority input."""
+    """The canonical approval packet remains the downstream authority input."""
     custody = _custody()
     page_locators = _page_payload(custody)
     render_provenance = [_pdf_render_record(custody, page_locators)]
@@ -222,6 +222,22 @@ def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
         return value
 
     recompute_packet_hash(packet)
+    verified_decision = (
+        authority_module.VerifiedApprovalDecision._from_trusted_boundary(
+            approval_identity=packet["approval"]["approval_identity"],
+            approved_by=packet["approval"]["approved_by"],
+            approval_ref=packet["approval"]["approval_ref"],
+            scope={
+                "scope_kind": "SOURCE_BOUND_SEMANTIC_OCCURRENCE",
+                "source_pdf_sha256": packet["source"]["source_pdf_sha256"],
+                "page_id": packet["source"]["page_id"],
+                "render_sha256": packet["source"]["render_sha256"],
+                "occurrence_ids": [
+                    item["occurrence_id"] for item in packet["occurrences"]
+                ],
+            },
+        )
+    )
     producer = getattr(
         authority_module,
         "validate_source_bound_semantic_occurrence_approval",
@@ -232,7 +248,11 @@ def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
         "implemented in the selected adjacent owner"
     )
 
-    validated = producer(packet, currentness_evidence=currentness_evidence)
+    validated = producer(
+        packet,
+        currentness_evidence=currentness_evidence,
+        verified_approval_decision=verified_decision,
+    )
     assert validated["currentness"] == "CURRENT"
     assert validated["packet_hash"] == packet["packet_hash"]
 
@@ -280,10 +300,15 @@ def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
     mutations.append(("occurrence_material", recompute_packet_hash(changed_occurrence)))
 
     for label, changed in mutations:
-        changed_validated = producer(
-            changed,
-            currentness_evidence=currentness_evidence,
-        )
+        try:
+            changed_validated = producer(
+                changed,
+                currentness_evidence=currentness_evidence,
+                verified_approval_decision=verified_decision,
+            )
+        except ValueError:
+            assert label in {"approved_by", "approval_ref"}
+            continue
         changed_result = downstream(authority_payload(), changed_validated)
         assert (
             changed_validated["packet_hash"] != validated["packet_hash"]
@@ -294,7 +319,11 @@ def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
     forged = deepcopy(packet)
     forged["packet_hash"] = "f" * 64
     try:
-        forged_result = producer(forged, currentness_evidence=currentness_evidence)
+        forged_result = producer(
+            forged,
+            currentness_evidence=currentness_evidence,
+            verified_approval_decision=verified_decision,
+        )
     except ValueError:
         pass
     else:
@@ -302,7 +331,11 @@ def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
 
     stale_evidence = deepcopy(currentness_evidence)
     stale_evidence["primitive_artifact_sha256"] = OTHER_PRIMITIVE_ARTIFACT_SHA256
-    stale_result = producer(packet, currentness_evidence=stale_evidence)
+    stale_result = producer(
+        packet,
+        currentness_evidence=stale_evidence,
+        verified_approval_decision=verified_decision,
+    )
     assert stale_result["currentness"] == "UNRESOLVED_NON_PASS"
 
     tampered_payload = authority_payload()
@@ -311,9 +344,8 @@ def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
     assert tampered_result["authority_sha256"] == baseline["authority_sha256"]
 
 
-@pytest.mark.causal_red
 def test_untrusted_approval_cannot_self_authorize_current_packet() -> None:
-    """Causal RED: packet integrity does not prove approval authenticity."""
+    """An approval requires an independent verifier result."""
     custody = _custody()
     page_locators = _page_payload(custody)
     render_provenance = [_pdf_render_record(custody, page_locators)]
@@ -358,11 +390,28 @@ def test_untrusted_approval_cannot_self_authorize_current_packet() -> None:
     packet["packet_hash"] = authority_module.canonical_json_sha256(
         {key: item for key, item in packet.items() if key != "packet_hash"}
     )
+    authorized_witness = (
+        authority_module.VerifiedApprovalDecision._from_trusted_boundary(
+            approval_identity=packet["approval"]["approval_identity"],
+            approved_by=packet["approval"]["approved_by"],
+            approval_ref=packet["approval"]["approval_ref"],
+            scope={
+                "scope_kind": "SOURCE_BOUND_SEMANTIC_OCCURRENCE",
+                "source_pdf_sha256": packet["source"]["source_pdf_sha256"],
+                "page_id": packet["source"]["page_id"],
+                "render_sha256": packet["source"]["render_sha256"],
+                "occurrence_ids": [
+                    item["occurrence_id"] for item in packet["occurrences"]
+                ],
+            },
+        )
+    )
 
     try:
         authorized = authority_module.validate_source_bound_semantic_occurrence_approval(
             packet,
             currentness_evidence=currentness_evidence,
+            verified_approval_decision=authorized_witness,
         )
     except ValueError:
         pytest.fail("the exact approved PO decision binding must remain usable")
@@ -418,28 +467,8 @@ def test_untrusted_approval_cannot_self_authorize_current_packet() -> None:
     assert_rejected(wrong_authority_class)
 
 
-class _OpaqueVerifiedApprovalDecision:
-    """Test stand-in for a result issued by an external trusted boundary."""
-
-    __slots__ = ("approval_identity", "approved_by", "approval_ref", "scope")
-
-    def __init__(
-        self,
-        *,
-        approval_identity: str,
-        approved_by: str,
-        approval_ref: str,
-        scope: object,
-    ) -> None:
-        self.approval_identity = approval_identity
-        self.approved_by = approved_by
-        self.approval_ref = approval_ref
-        self.scope = scope
-
-
-@pytest.mark.causal_red
 def test_approval_requires_opaque_authenticated_decision_scope() -> None:
-    """Causal RED: packet fields cannot manufacture an approval decision."""
+    """Approval follows only an opaque, scope-bound verifier result."""
     custody = _custody()
     page_locators = _page_payload(custody)
     render_provenance = [_pdf_render_record(custody, page_locators)]
@@ -499,13 +528,13 @@ def test_approval_requires_opaque_authenticated_decision_scope() -> None:
         "render_sha256": PDF_RASTER_SHA256,
         "occurrence_ids": occurrence_ids,
     }
-    occurrence_witness = _OpaqueVerifiedApprovalDecision(
+    occurrence_witness = authority_module.VerifiedApprovalDecision._from_trusted_boundary(
         approval_identity="TEST-OCCURRENCE-AUTHORITY-001",
         approved_by="PO",
         approval_ref="test-verified-occurrence-decision-001",
         scope=occurrence_scope,
     )
-    contract_witness = _OpaqueVerifiedApprovalDecision(
+    contract_witness = authority_module.VerifiedApprovalDecision._from_trusted_boundary(
         approval_identity="APPROVAL-OPTION-B-001",
         approved_by="PO",
         approval_ref="github-409-comment-5651227165",
@@ -527,7 +556,7 @@ def test_approval_requires_opaque_authenticated_decision_scope() -> None:
         "approval_ref": occurrence_witness.approval_ref,
         "scope": deepcopy(occurrence_scope),
     }
-    mismatched_class_witness = _OpaqueVerifiedApprovalDecision(
+    mismatched_class_witness = authority_module.VerifiedApprovalDecision._from_trusted_boundary(
         approval_identity=occurrence_witness.approval_identity,
         approved_by="HUMAN",
         approval_ref=occurrence_witness.approval_ref,

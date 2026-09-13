@@ -24,6 +24,7 @@ APPROVAL_CONTRACT_VERSION = "SOURCE_BOUND_SEMANTIC_OCCURRENCE_APPROVAL_V1"
 APPROVAL_SCHEMA_VERSION = "source-bound-semantic-occurrence-approval-1.0"
 
 __all__ = [
+    "VerifiedApprovalDecision",
     "validate_source_bound_semantic_occurrence_approval",
     "validate_source_bound_semantic_occurrence_authority",
 ]
@@ -82,10 +83,71 @@ _APPROVAL_PACKET_APPROVAL_FIELDS = {
     "approved_at",
 }
 _APPROVAL_AUTHORITY_CLASSES = {"PO", "HUMAN"}
+_VERIFIED_APPROVAL_DECISION_MARKER = object()
 
 
 class _AuthorityError(ValueError):
     """Raised when an authority record cannot be safely normalized."""
+
+
+class VerifiedApprovalDecision:
+    """Opaque result issued by an external approval-verifier boundary."""
+
+    __slots__ = (
+        "_approval_identity",
+        "_approved_by",
+        "_approval_ref",
+        "_scope",
+        "_issuer_marker",
+    )
+
+    def __new__(cls, *args: object, **kwargs: object) -> VerifiedApprovalDecision:
+        del args, kwargs
+        raise TypeError("VerifiedApprovalDecision is verifier-issued")
+
+    @classmethod
+    def _from_trusted_boundary(
+        cls,
+        *,
+        approval_identity: str,
+        approved_by: str,
+        approval_ref: str,
+        scope: object,
+    ) -> VerifiedApprovalDecision:
+        """Construct the opaque test/adapter result at a trusted boundary."""
+        result = object.__new__(cls)
+        object.__setattr__(result, "_approval_identity", approval_identity)
+        object.__setattr__(result, "_approved_by", approved_by)
+        object.__setattr__(result, "_approval_ref", approval_ref)
+        object.__setattr__(result, "_scope", deepcopy(scope))
+        object.__setattr__(result, "_issuer_marker", _VERIFIED_APPROVAL_DECISION_MARKER)
+        return result
+
+    def __setattr__(self, name: str, value: object) -> None:
+        del name, value
+        raise TypeError("VerifiedApprovalDecision is immutable")
+
+    @property
+    def approval_identity(self) -> str:
+        return self._approval_identity
+
+    @property
+    def approved_by(self) -> str:
+        return self._approved_by
+
+    @property
+    def approval_ref(self) -> str:
+        return self._approval_ref
+
+    @property
+    def scope(self) -> object:
+        return deepcopy(self._scope)
+
+    def __repr__(self) -> str:
+        return "<VerifiedApprovalDecision verifier-issued>"
+
+    def __reduce__(self) -> object:
+        raise TypeError("VerifiedApprovalDecision cannot be serialized")
 
 
 def _closed(value: object, fields: set[str], path: str) -> Mapping[str, object]:
@@ -221,6 +283,134 @@ def _approval_packet_approval(value: object) -> dict[str, str]:
             "approval_packet.approval.approved_at",
         ),
     }
+
+
+def _verified_approval_scope(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise _AuthorityError(
+            "verified_approval_decision.scope: SCOPE_INVALID"
+        )
+    scope_kind = value.get("scope_kind")
+    if scope_kind == "SEMANTIC_MULTIPLICITY_CONTRACT_ONLY":
+        _closed(
+            value,
+            {"scope_kind"},
+            "verified_approval_decision.scope",
+        )
+        return {"scope_kind": scope_kind}
+    scope = _closed(
+        value,
+        {
+            "scope_kind",
+            "source_pdf_sha256",
+            "page_id",
+            "render_sha256",
+            "occurrence_ids",
+        },
+        "verified_approval_decision.scope",
+    )
+    if scope_kind != "SOURCE_BOUND_SEMANTIC_OCCURRENCE":
+        raise _AuthorityError(
+            "verified_approval_decision.scope.scope_kind: SCOPE_INVALID"
+        )
+    occurrence_ids = scope["occurrence_ids"]
+    if not isinstance(occurrence_ids, list) or not occurrence_ids:
+        raise _AuthorityError(
+            "verified_approval_decision.scope.occurrence_ids: OCCURRENCES_INVALID"
+        )
+    normalized_occurrence_ids = [
+        _identifier(
+            occurrence_id,
+            f"verified_approval_decision.scope.occurrence_ids[{index}]",
+        )
+        for index, occurrence_id in enumerate(occurrence_ids)
+    ]
+    if len(set(normalized_occurrence_ids)) != len(normalized_occurrence_ids):
+        raise _AuthorityError(
+            "verified_approval_decision.scope.occurrence_ids: OCCURRENCE_ID_DUPLICATE"
+        )
+    return {
+        "scope_kind": scope_kind,
+        "source_pdf_sha256": _sha256(
+            scope["source_pdf_sha256"],
+            "verified_approval_decision.scope.source_pdf_sha256",
+        ),
+        "page_id": _identifier(
+            scope["page_id"],
+            "verified_approval_decision.scope.page_id",
+        ),
+        "render_sha256": _sha256(
+            scope["render_sha256"],
+            "verified_approval_decision.scope.render_sha256",
+        ),
+        "occurrence_ids": sorted(normalized_occurrence_ids),
+    }
+
+
+def _verified_approval_decision(value: object) -> dict[str, object]:
+    if (
+        type(value) is not VerifiedApprovalDecision
+        or value._issuer_marker is not _VERIFIED_APPROVAL_DECISION_MARKER
+    ):
+        raise _AuthorityError(
+            "verified_approval_decision: TRUST_RESULT_INVALID"
+        )
+    approved_by = value.approved_by
+    if not isinstance(approved_by, str) or approved_by not in _APPROVAL_AUTHORITY_CLASSES:
+        raise _AuthorityError(
+            "verified_approval_decision.approved_by: AUTHORITY_CLASS_INVALID"
+        )
+    return {
+        "approval_identity": _identifier(
+            value.approval_identity,
+            "verified_approval_decision.approval_identity",
+        ),
+        "approved_by": approved_by,
+        "approval_ref": _reference(
+            value.approval_ref,
+            "verified_approval_decision.approval_ref",
+        ),
+        "scope": _verified_approval_scope(value.scope),
+    }
+
+
+def _require_verified_approval_binding(
+    packet: Mapping[str, object],
+    decision: Mapping[str, object],
+) -> None:
+    packet_source = packet["source"]
+    packet_approval = packet["approval"]
+    if not isinstance(packet_source, Mapping) or not isinstance(packet_approval, Mapping):
+        raise _AuthorityError("verified_approval_decision: BINDING_INVALID")
+    for field in ("approval_identity", "approved_by", "approval_ref"):
+        if decision[field] != packet_approval[field]:
+            raise _AuthorityError(
+                f"verified_approval_decision.{field}: APPROVAL_BINDING_MISMATCH"
+            )
+    scope = decision["scope"]
+    if not isinstance(scope, Mapping):
+        raise _AuthorityError("verified_approval_decision.scope: SCOPE_INVALID")
+    if scope["scope_kind"] != "SOURCE_BOUND_SEMANTIC_OCCURRENCE":
+        raise _AuthorityError(
+            "verified_approval_decision.scope: SCOPE_MISMATCH"
+        )
+    expected_source = {
+        field: packet_source[field]
+        for field in ("source_pdf_sha256", "page_id", "render_sha256")
+    }
+    observed_source = {
+        field: scope[field]
+        for field in ("source_pdf_sha256", "page_id", "render_sha256")
+    }
+    expected_occurrence_ids = sorted(
+        item["occurrence_id"]
+        for item in packet["occurrences"]
+        if isinstance(item, Mapping)
+    )
+    if observed_source != expected_source or scope["occurrence_ids"] != expected_occurrence_ids:
+        raise _AuthorityError(
+            "verified_approval_decision.scope: SCOPE_MISMATCH"
+        )
 
 
 def _point(value: object, path: str) -> list[int]:
@@ -575,9 +765,16 @@ def validate_source_bound_semantic_occurrence_approval(
     payload: object,
     *,
     currentness_evidence: Mapping[str, object] | None = None,
+    verified_approval_decision: object | None = None,
 ) -> dict[str, object]:
     """Validate a canonical, explicitly approved source-occurrence packet."""
+    if verified_approval_decision is None:
+        raise _AuthorityError(
+            "verified_approval_decision: PROVENANCE_MISSING"
+        )
     packet, packet_hash = _normalize_approval_packet(payload)
+    decision = _verified_approval_decision(verified_approval_decision)
+    _require_verified_approval_binding(packet, decision)
     currentness = _currentness_from_approval_packet_evidence(
         packet["source"],
         currentness_evidence,
