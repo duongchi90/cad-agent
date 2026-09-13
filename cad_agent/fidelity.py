@@ -160,13 +160,19 @@ def _raw_geometry_edges(raw: RawGeometry, shape: tuple[int, int]) -> np.ndarray:
     return cv2.Canny(canvas, 50, 150)
 
 
-def _select_fidelity_geometry(raw: RawGeometry, crop: np.ndarray, scale: float) -> tuple[RawGeometry, dict[str, Any]]:
+def _select_fidelity_geometry(
+    raw: RawGeometry,
+    crop: np.ndarray,
+    scale: float,
+    *,
+    occurrence_ids: dict[str, str | None] | None = None,
+) -> tuple[RawGeometry, dict[str, Any]]:
     """Choose a filtered candidate only if it improves local tolerant edge F1."""
     del scale  # Raw geometry and the cropped PDF share pixel coordinates here.
     source_edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
     mask = np.full(crop.shape[:2], 255, dtype=np.uint8)
     baseline_edges = _raw_geometry_edges(raw, crop.shape[:2])
-    filtered = _filter_fidelity_geometry(raw)
+    filtered = _filter_fidelity_geometry(raw, occurrence_ids=occurrence_ids)
     filtered_edges = _raw_geometry_edges(filtered, crop.shape[:2])
     baseline = {"edge_metric": _edge_metrics(source_edges, baseline_edges, mask), "line_entities": len(raw.lines), "circle_entities": len(raw.circles)}
     filtered_report = {"edge_metric": _edge_metrics(source_edges, filtered_edges, mask), "line_entities": len(filtered.lines), "circle_entities": len(filtered.circles)}
@@ -531,7 +537,25 @@ def run_fidelity_reconstruct(
         x0, y0, x1, y1 = region["bbox_px"]
         crop = image[y0:y1, x0:x1]
         raw = extract_raw_geometry(crop, preset="real_scan_tuned_v1")
-        selected_raw, quality = _select_fidelity_geometry(raw, crop, scale)
+        occurrence_ids = None
+        if "geometry_occurrences" in region:
+            crop_occurrences = [
+                {
+                    "id": occurrence["id"],
+                    "p1_px": [occurrence["p1_px"][0] - x0, occurrence["p1_px"][1] - y0],
+                    "p2_px": [occurrence["p2_px"][0] - x0, occurrence["p2_px"][1] - y0],
+                }
+                for occurrence in region["geometry_occurrences"]
+            ]
+            occurrence_ids = _map_raw_geometry_to_occurrence_ids(raw, crop_occurrences)
+        selected_raw, quality = _select_fidelity_geometry(
+            raw, crop, scale, occurrence_ids=occurrence_ids,
+        )
+        if occurrence_ids is not None:
+            quality["occurrence_mapping"] = {
+                "mapped": sum(value is not None for value in occurrence_ids.values()),
+                "unresolved": sum(value is None for value in occurrence_ids.values()),
+            }
         candidate_root = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"]
         if candidate_root.exists():
             raise FidelityError(f"Reconstruction candidate already exists: {candidate_root}")

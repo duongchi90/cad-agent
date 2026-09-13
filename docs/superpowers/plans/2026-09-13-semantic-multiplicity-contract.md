@@ -128,13 +128,21 @@ Interfaces:
   occurrence_ids, and the reconstruction test observes None plus a missing
   occurrence_mapping report. No runtime wiring was changed by this RED.
 
-- [ ] Step 5: Pass region descriptors through reconstruction.
+- [x] Step 5: Pass region descriptors through reconstruction.
 
   Convert approved page-pixel occurrence points to crop-local points using the existing region origin, build the map after Hough extraction, and pass it into _select_fidelity_geometry. Add mapped and ambiguous counts to the existing quality report without changing its schema version.
 
-- [ ] Step 6: Run the occurrence-aware tests GREEN.
+  Implemented in the current bounded GREEN; the runtime test verifies page to
+  crop translation, per-line ids/None values, and mapped/unresolved reporting.
+
+- [x] Step 6: Run the occurrence-aware tests GREEN.
 
   Run pytest tests/test_cad_agent_fidelity.py -k semantic_occurrence -q and confirm all three cases pass.
+
+  The focused custom unittest module passed all 10 semantic, mapper, filter,
+  and reconstruction-wiring tests with native-library thread limits. The
+  authoritative pytest invocation remains unavailable because of the Windows
+  commit/paging-file allocation failure.
 
 - [ ] Step 7: Run the owner regression suite.
 
