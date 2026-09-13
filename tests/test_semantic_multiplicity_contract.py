@@ -106,6 +106,24 @@ class SemanticMultiplicityContractTests(unittest.TestCase):
 
         self.assertIsNone(fidelity._map_raw_line_to_occurrence_id(line, occurrences))
 
+    def test_raw_geometry_wiring_preserves_unresolved_mapping_for_counts(self) -> None:
+        fidelity = importlib.import_module("cad_agent.fidelity")
+        raw = RawGeometry(lines=[
+            RawLine("mapped", (30.0, 40.0), (120.0, 40.0), 0.9, (30.0, 40.0, 120.0, 40.0)),
+            RawLine("ambiguous", (30.0, 60.0), (120.0, 60.0), 0.9, (30.0, 60.0, 120.0, 60.0)),
+            RawLine("unmapped", (30.0, 90.0), (120.0, 90.0), 0.9, (30.0, 90.0, 120.0, 90.0)),
+        ])
+        occurrences = [
+            {"id": "occ-a", "p1_px": [20.0, 40.0], "p2_px": [180.0, 40.0]},
+            {"id": "occ-b", "p1_px": [20.0, 60.0], "p2_px": [180.0, 60.0]},
+            {"id": "occ-c", "p1_px": [20.0, 60.5], "p2_px": [180.0, 60.5]},
+        ]
+
+        occurrence_ids = fidelity._map_raw_geometry_to_occurrence_ids(raw, occurrences)
+        self.assertEqual(occurrence_ids, {"mapped": "occ-a", "ambiguous": None, "unmapped": None})
+        self.assertEqual(sum(value is not None for value in occurrence_ids.values()), 1)
+        self.assertEqual(sum(value is None for value in occurrence_ids.values()), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

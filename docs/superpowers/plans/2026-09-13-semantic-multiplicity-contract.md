@@ -109,13 +109,18 @@ Interfaces:
   ambiguous segment, and an unmapped segment. The custom unittest harness
   fails all three with AttributeError because the mapper is not present.
 
-- [ ] Step 2: Add the fixed source-segment mapper.
+- [x] Step 2: Add the fixed source-segment mapper.
 
   Map a raw segment to an occurrence when both endpoints are collinear with the occurrence segment within a fixed one-pixel source-render tolerance and projected intervals overlap by at least 12 pixels. Return one id only for exactly one match; return None for zero or multiple matches.
 
-- [ ] Step 3: Make the filter accept an optional occurrence-id map.
+  Implemented in c4180463; the focused mapping tests and legacy no-map smoke
+  passed.
+
+- [x] Step 3: Make the filter accept an optional occurrence-id map.
 
   Keep the current endpoint/confidence/length algorithm when the map is absent. When the map is present, compare a candidate only with retained lines carrying the same non-None occurrence id; never collapse or replace across different, missing, or ambiguous ids.
+
+  Implemented in e95edb3; the focused A/B/C tests passed.
 
 - [ ] Step 4: Pass region descriptors through reconstruction.
 
