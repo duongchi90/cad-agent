@@ -309,3 +309,80 @@ def test_option_b_packet_hash_binding_is_lossless_and_fail_closed() -> None:
     tampered_payload["occurrences"][0]["source_segment_px"]["p2"][0] += 10
     tampered_result = downstream(tampered_payload, validated)
     assert tampered_result["authority_sha256"] == baseline["authority_sha256"]
+
+
+@pytest.mark.causal_red
+def test_untrusted_approval_cannot_self_authorize_current_packet() -> None:
+    """Causal RED: packet integrity does not prove approval authenticity."""
+    custody = _custody()
+    page_locators = _page_payload(custody)
+    render_provenance = [_pdf_render_record(custody, page_locators)]
+    normalized_render = authority_module._source_fusion.validate_render_provenance(
+        render_provenance,
+        page_locators=page_locators,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )[0]
+    page_99 = next(page for page in page_locators if page["page_id"] == "PAGE-99")
+    currentness_evidence = {
+        "render_provenance": render_provenance,
+        "page_locators": page_locators,
+        "custody": custody,
+        "primitive_artifact_sha256": PRIMITIVE_ARTIFACT_SHA256,
+    }
+    packet = {
+        "schema_version": "source-bound-semantic-occurrence-approval-1.0",
+        "contract_version": "SOURCE_BOUND_SEMANTIC_OCCURRENCE_APPROVAL_V1",
+        "source": {
+            "source_pdf_sha256": PDF_SHA256,
+            "page_id": "PAGE-99",
+            "render_sha256": PDF_RASTER_SHA256,
+            "render_transform": authority_module._render_transform_identity(
+                normalized_render
+            ),
+            "source_custody_sha256": source_custody_sha256(custody),
+            "page_locator_sha256": page_99["page_locator_sha256"],
+            "render_provenance_sha256": normalized_render[
+                "render_provenance_sha256"
+            ],
+        },
+        "approval": {
+            "approval_identity": "INVENTED-UNTRUSTED-001",
+            "approved_by": "PO",
+            "approval_ref": "synthetic-approval-ref",
+            "approved_at": "2026-09-13T12:00:00Z",
+        },
+        "occurrences": deepcopy(_fixture()["occurrences"]),
+        "packet_hash": "",
+    }
+    packet["packet_hash"] = authority_module.canonical_json_sha256(
+        {key: item for key, item in packet.items() if key != "packet_hash"}
+    )
+
+    try:
+        validated = authority_module.validate_source_bound_semantic_occurrence_approval(
+            packet,
+            currentness_evidence=currentness_evidence,
+        )
+    except ValueError:
+        return
+
+    authority_payload = _fixture()
+    authority_payload["source"].update(
+        {
+            "source_pdf_sha256": PDF_SHA256,
+            "page_id": "PAGE-99",
+            "render_sha256": PDF_RASTER_SHA256,
+            "render_transform": packet["source"]["render_transform"],
+        }
+    )
+    authority_payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
+    downstream = validate_source_bound_semantic_occurrence_authority(
+        authority_payload,
+        currentness_evidence=currentness_evidence,
+        validated_approval_packet=validated,
+    )
+    assert downstream["currentness"] == "UNRESOLVED_NON_PASS", (
+        "APPROVAL_AUTHENTICITY RED: a correctly hashed invented approval must "
+        "not reach CURRENT through the existing authority owner"
+    )
