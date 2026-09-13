@@ -2146,6 +2146,7 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
 
 def test_text_reconstruction_sizes_from_visible_glyphs_but_keeps_ocr_anchor() -> None:
     """OCR boxes may include line spacing that must not become DXF glyph height."""
+    from PIL import ImageFont
     from cad_agent import fidelity as fidelity_module
 
     image = np.full((80, 240, 3), 255, dtype=np.uint8)
@@ -2171,8 +2172,47 @@ def test_text_reconstruction_sizes_from_visible_glyphs_but_keeps_ocr_anchor() ->
     )
     assert tight["glyph_bbox_px"] == tight_bbox
     assert tight["height_mm"] == pytest.approx((tight_bbox[3] - tight_bbox[1]) * 0.1)
-    assert tight["width_factor"] == 1.0
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", size=32)
+    mask_bbox = font.getmask("VISIBLE").getbbox()
+    expected_width_factor = (tight_bbox[2] - tight_bbox[0]) * (mask_bbox[3] - mask_bbox[1]) / ((tight_bbox[3] - tight_bbox[1]) * font.getlength("VISIBLE"))
+    assert tight["width_factor"] == pytest.approx(expected_width_factor)
     assert tight["insertion_px"] == [tight_bbox[0], tight_bbox[3]]
+
+
+def test_page1_text_sizing_uses_font_width_for_tight_approved_boxes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tight OCR boxes still need the existing font-width correction."""
+    from PIL import ImageFont
+    from cad_agent import fidelity as fidelity_module
+
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\arial.ttf")
+    image = np.full((150, 500, 3), 255, dtype=np.uint8)
+    cases = [
+        ("TAO O TO THUNG KIN THACO K190", [10, 10, 463, 27]),
+        ("THANH 0 TO TAl TAP LAI", [10, 40, 303, 80]),
+        ("O TO SAU CAI TAGs", [10, 95, 401, 133]),
+    ]
+    # The first and third boxes model a tight source glyph band: every row is
+    # active, so the conservative helper intentionally returns the original box.
+    for _, bbox in (cases[0], cases[2]):
+        x0, y0, x1, y1 = bbox
+        image[y0:y1, x0:x1:5] = 0
+        image[y0:y1, x1 - 1] = 0
+    # The middle case models a separated glyph band and exercises the existing
+    # visible-band path without changing the expected OCR anchor.
+    x0, y0, x1, y1 = cases[1][1]
+    image[y0 + 10:y1 - 10, x0:x1:5] = 0
+    image[y0 + 10:y1 - 10, x1 - 1] = 0
+
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", size=32)
+    for content, bbox in cases:
+        sizing = fidelity_module._derive_text_reconstruction_size(image, content, bbox, 0.1)
+        visible_width = bbox[2] - bbox[0]
+        visible_height = bbox[3] - bbox[1] if content != cases[1][0] else 20
+        mask_bbox = font.getmask(content).getbbox()
+        expected_width_factor = visible_width * (mask_bbox[3] - mask_bbox[1]) / (visible_height * font.getlength(content))
+        assert sizing["width_factor"] == pytest.approx(expected_width_factor, abs=1e-6)
+        assert sizing["height_mm"] == pytest.approx(visible_height * 0.1)
+        assert sizing["insertion_px"] == [bbox[0], bbox[3]]
 
 
 def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:

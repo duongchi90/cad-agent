@@ -2163,7 +2163,7 @@ def _derive_text_reconstruction_size(
     original = [int(round(value)) for value in bbox]
     original_height = max(1.5, min(10.0, (original[3] - original[1]) * scale))
     visible = _measure_visible_glyph_bbox(image, original)
-    if visible is None or visible == original:
+    if visible is None:
         return {
             "glyph_bbox_px": original,
             "height_mm": original_height,
