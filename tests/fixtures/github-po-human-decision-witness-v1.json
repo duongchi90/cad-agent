@@ -37,26 +37,57 @@
       }
     },
     {
-      "case_id": "CALLER_AUTHORED_CLONE_WITHOUT_GITHUB_PROVENANCE",
-      "expected": "REJECT",
+      "case_id": "BYTE_IDENTICAL_PLAIN_MAPPING",
+      "expected": "REJECT_PROVENANCE",
       "github_record": {
         "repository": "duongchi90/cad-agent",
         "issue_number": 409,
-        "comment_id": null,
-        "node_id": null,
+        "comment_id": 999000001,
+        "node_id": "IC_fixture_occurrence_decision_001",
         "author_login": "duongchi90",
         "author_id": 285374230,
         "author_association": "OWNER",
         "authority_class": "PO",
-        "body_sha256": null,
+        "body_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
         "immutable_comment_ref": "github-409-comment-fixture-occurrence-001",
-        "record_status": "CALLER_AUTHORED_FIELDS_ONLY"
+        "record_status": "EXTERNALLY_AUTHENTICATED_SHAPE_ONLY"
       },
       "decision": {
         "decision": "APPROVED",
         "approval_identity": "FIXTURE-PO-OCCURRENCE-001",
         "approved_by": "PO",
         "approval_ref": "github-409-comment-fixture-occurrence-001",
+        "approved_at": "2026-09-14T00:00:00Z",
+        "scope": {
+          "scope_kind": "SOURCE_BOUND_SEMANTIC_OCCURRENCE",
+          "source_pdf_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "page_id": "PAGE-001",
+          "render_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "occurrence_ids": ["OCC-LINE-A", "OCC-LINE-B"]
+        }
+      }
+    },
+    {
+      "case_id": "AUTHENTICATED_RECORD_DECISION_BINDING_MISMATCH",
+      "expected": "REJECT_BINDING",
+      "github_record": {
+        "repository": "duongchi90/cad-agent",
+        "issue_number": 409,
+        "comment_id": 999000001,
+        "node_id": "IC_fixture_occurrence_decision_001",
+        "author_login": "duongchi90",
+        "author_id": 285374230,
+        "author_association": "OWNER",
+        "authority_class": "PO",
+        "body_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "immutable_comment_ref": "github-409-comment-fixture-occurrence-001",
+        "record_status": "EXTERNALLY_AUTHENTICATED_SHAPE_ONLY"
+      },
+      "decision": {
+        "decision": "APPROVED",
+        "approval_identity": "FIXTURE-PO-OCCURRENCE-001",
+        "approved_by": "PO",
+        "approval_ref": "github-409-comment-other-immutable-ref",
         "approved_at": "2026-09-14T00:00:00Z",
         "scope": {
           "scope_kind": "SOURCE_BOUND_SEMANTIC_OCCURRENCE",

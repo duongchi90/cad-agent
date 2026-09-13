@@ -43,6 +43,28 @@ def _github_witness_fixture() -> dict[str, object]:
     return json.loads(GITHUB_WITNESS_FIXTURE.read_text(encoding="utf-8"))
 
 
+class _AuthenticatedGitHubDecisionRecord:
+    """Test-only opaque stand-in for an external GitHub reader result."""
+
+    __slots__ = ("_record",)
+
+    def __new__(cls, *args: object, **kwargs: object) -> _AuthenticatedGitHubDecisionRecord:
+        del args, kwargs
+        raise TypeError("authenticated GitHub records are external-boundary results")
+
+    @classmethod
+    def _from_test_boundary(
+        cls, record: dict[str, object]
+    ) -> _AuthenticatedGitHubDecisionRecord:
+        result = object.__new__(cls)
+        object.__setattr__(result, "_record", deepcopy(record))
+        return result
+
+    @property
+    def canonical_record(self) -> dict[str, object]:
+        return deepcopy(self._record)
+
+
 def test_approved_authority_v1_contract_is_validated_fail_closed() -> None:
     """The selected adjacent owner validates the approved contract and oracle."""
     payload = _fixture()
@@ -776,28 +798,38 @@ def test_approval_requires_an_external_issuer_owner_before_green() -> None:
 
 @pytest.mark.causal_red
 def test_github_decision_witness_requires_authenticated_scoped_record() -> None:
-    """Contract-only RED: caller-copied GitHub fields cannot issue authority."""
+    """Contract-only RED: only an external-boundary result may issue authority."""
     dossier = _github_witness_fixture()
     assert dossier["test_only"] is True
     assert dossier["product_evidence"] is False
     cases = {case["case_id"]: case for case in dossier["cases"]}
     assert set(cases) == {
         "AUTHENTICATED_EXACT_SCOPE_SHAPE",
-        "CALLER_AUTHORED_CLONE_WITHOUT_GITHUB_PROVENANCE",
+        "BYTE_IDENTICAL_PLAIN_MAPPING",
         "REAL_CONTRACT_ONLY_COMMENT_5651227165",
+        "AUTHENTICATED_RECORD_DECISION_BINDING_MISMATCH",
     }
     assert (
         cases["AUTHENTICATED_EXACT_SCOPE_SHAPE"]["expected"]
         == "EMIT_VERIFIED_DECISION"
     )
     assert (
-        cases["CALLER_AUTHORED_CLONE_WITHOUT_GITHUB_PROVENANCE"]["expected"]
-        == "REJECT"
+        cases["BYTE_IDENTICAL_PLAIN_MAPPING"]["expected"] == "REJECT_PROVENANCE"
     )
     assert (
         cases["REAL_CONTRACT_ONLY_COMMENT_5651227165"]["expected"]
         == "REJECT_SCOPE"
     )
+    assert (
+        cases["AUTHENTICATED_RECORD_DECISION_BINDING_MISMATCH"]["expected"]
+        == "REJECT_BINDING"
+    )
+    authenticated_record = _AuthenticatedGitHubDecisionRecord._from_test_boundary(
+        cases["AUTHENTICATED_EXACT_SCOPE_SHAPE"]["github_record"]
+    )
+    assert authenticated_record.canonical_record == cases[
+        "BYTE_IDENTICAL_PLAIN_MAPPING"
+    ]["github_record"]
 
     try:
         adapter_module = importlib.import_module("cad_agent.github_decision_witness")
@@ -812,18 +844,35 @@ def test_github_decision_witness_requires_authenticated_scoped_record() -> None:
         "issuer boundary without making APPROVAL_V1 a factory"
     )
 
-    for case in cases.values():
+    def evaluate(record: object, decision: object) -> tuple[str, object]:
         try:
-            result = issuer(case["github_record"], case["decision"])
+            return "EMIT", issuer(record, decision)
         except ValueError:
-            if case["expected"] == "EMIT_VERIFIED_DECISION":
-                pytest.fail(
-                    f"GITHUB_WITNESS RED: {case['case_id']} was rejected"
-                )
-            continue
-        if case["expected"] != "EMIT_VERIFIED_DECISION":
-            pytest.fail(
-                f"GITHUB_WITNESS RED: {case['case_id']} unexpectedly emitted "
-                "a verified decision"
-            )
-        assert type(result) is authority_module.VerifiedApprovalDecision
+            return "REJECT", None
+
+    positive = evaluate(
+        authenticated_record,
+        cases["AUTHENTICATED_EXACT_SCOPE_SHAPE"]["decision"],
+    )
+    assert positive[0] == "EMIT"
+    assert type(positive[1]) is authority_module.VerifiedApprovalDecision
+
+    plain_mapping = evaluate(
+        deepcopy(cases["BYTE_IDENTICAL_PLAIN_MAPPING"]["github_record"]),
+        cases["BYTE_IDENTICAL_PLAIN_MAPPING"]["decision"],
+    )
+    assert plain_mapping == ("REJECT", None)
+
+    real_contract_only = evaluate(
+        _AuthenticatedGitHubDecisionRecord._from_test_boundary(
+            cases["REAL_CONTRACT_ONLY_COMMENT_5651227165"]["github_record"]
+        ),
+        cases["REAL_CONTRACT_ONLY_COMMENT_5651227165"]["decision"],
+    )
+    assert real_contract_only == ("REJECT", None)
+
+    mismatched_decision = evaluate(
+        authenticated_record,
+        cases["AUTHENTICATED_RECORD_DECISION_BINDING_MISMATCH"]["decision"],
+    )
+    assert mismatched_decision == ("REJECT", None)
