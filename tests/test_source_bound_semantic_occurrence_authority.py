@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 
@@ -19,21 +18,16 @@ def _fixture() -> dict[str, object]:
 
 
 @pytest.mark.causal_red
-def test_source_fusion_has_a_seam_for_the_approved_authority_v1_fixture() -> None:
-    """The approved contract currently has no existing owner entry point."""
+def test_approved_authority_v1_contract_has_no_selected_validator_yet() -> None:
+    """The approved contract is red until an owner is selected and supplied."""
     payload = _fixture()
     assert payload["contract_version"] == "SOURCE_BOUND_SEMANTIC_OCCURRENCE_AUTHORITY_V1"
     assert {
         case["expected"] for case in payload["oracle_cases"]
     } == {"DISTINCT", "SAME_OCCURRENCE", "UNRESOLVED_NON_PASS"}
 
-    source_fusion = importlib.import_module("cad_agent.source_fusion")
-    validator = getattr(
-        source_fusion,
-        "validate_source_bound_semantic_occurrence_authority",
-        None,
-    )
-    assert callable(validator), (
-        "Causal RED: the existing Source Fusion owner has no public seam for "
-        "SOURCE_BOUND_SEMANTIC_OCCURRENCE_AUTHORITY_V1."
+    selected_validator = None
+    assert callable(selected_validator), (
+        "Causal RED: no production validator has been selected or authorized "
+        "for SOURCE_BOUND_SEMANTIC_OCCURRENCE_AUTHORITY_V1."
     )
