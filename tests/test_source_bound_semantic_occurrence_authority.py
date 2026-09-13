@@ -110,3 +110,29 @@ def test_currentness_consumes_existing_source_fusion_evidence() -> None:
         },
     )
     assert result["currentness"] == "CURRENT"
+
+
+def test_caller_supplied_transform_label_cannot_grant_currentness() -> None:
+    payload = _fixture()
+    payload["source"].update(
+        {
+            "source_pdf_sha256": PDF_SHA256,
+            "page_id": "PAGE-99",
+            "render_sha256": PDF_RASTER_SHA256,
+            "render_transform": "caller-controlled-transform",
+        }
+    )
+    payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
+    custody = _custody()
+    page_locators = _page_payload(custody)
+    result = validate_source_bound_semantic_occurrence_authority(
+        payload,
+        currentness_evidence={
+            "render_provenance": [_pdf_render_record(custody, page_locators)],
+            "page_locators": page_locators,
+            "custody": custody,
+            "primitive_artifact_sha256": PRIMITIVE_ARTIFACT_SHA256,
+            "render_transform": "caller-controlled-transform",
+        },
+    )
+    assert result["currentness"] == "UNRESOLVED_NON_PASS"
