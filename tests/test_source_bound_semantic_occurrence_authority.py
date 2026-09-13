@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib
 import json
 from pathlib import Path
 
@@ -27,10 +28,19 @@ FIXTURE = (
     / "fixtures"
     / "source-bound-semantic-occurrence-authority-v1.json"
 )
+GITHUB_WITNESS_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures"
+    / "github-po-human-decision-witness-v1.json"
+)
 
 
 def _fixture() -> dict[str, object]:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def _github_witness_fixture() -> dict[str, object]:
+    return json.loads(GITHUB_WITNESS_FIXTURE.read_text(encoding="utf-8"))
 
 
 def test_approved_authority_v1_contract_is_validated_fail_closed() -> None:
@@ -762,3 +772,58 @@ def test_approval_requires_an_external_issuer_owner_before_green() -> None:
         "verifier before implementing another APPROVAL_V1 issuer; current "
         f"inventory has no eligible owner: {owner_inventory}"
     )
+
+
+@pytest.mark.causal_red
+def test_github_decision_witness_requires_authenticated_scoped_record() -> None:
+    """Contract-only RED: caller-copied GitHub fields cannot issue authority."""
+    dossier = _github_witness_fixture()
+    assert dossier["test_only"] is True
+    assert dossier["product_evidence"] is False
+    cases = {case["case_id"]: case for case in dossier["cases"]}
+    assert set(cases) == {
+        "AUTHENTICATED_EXACT_SCOPE_SHAPE",
+        "CALLER_AUTHORED_CLONE_WITHOUT_GITHUB_PROVENANCE",
+        "REAL_CONTRACT_ONLY_COMMENT_5651227165",
+    }
+    assert (
+        cases["AUTHENTICATED_EXACT_SCOPE_SHAPE"]["expected"]
+        == "EMIT_VERIFIED_DECISION"
+    )
+    assert (
+        cases["CALLER_AUTHORED_CLONE_WITHOUT_GITHUB_PROVENANCE"]["expected"]
+        == "REJECT"
+    )
+    assert (
+        cases["REAL_CONTRACT_ONLY_COMMENT_5651227165"]["expected"]
+        == "REJECT_SCOPE"
+    )
+
+    try:
+        adapter_module = importlib.import_module("cad_agent.github_decision_witness")
+    except ModuleNotFoundError:
+        pytest.fail(
+            "GITHUB_WITNESS RED: API_MISSING; add only the contract-only "
+            "GITHUB_PO_HUMAN_DECISION_WITNESS_V1 adapter outside APPROVAL_V1"
+        )
+    issuer = getattr(adapter_module, "issue_verified_approval_decision_from_github_record", None)
+    assert callable(issuer), (
+        "GITHUB_WITNESS RED: the external-record adapter must expose one "
+        "issuer boundary without making APPROVAL_V1 a factory"
+    )
+
+    for case in cases.values():
+        try:
+            result = issuer(case["github_record"], case["decision"])
+        except ValueError:
+            if case["expected"] == "EMIT_VERIFIED_DECISION":
+                pytest.fail(
+                    f"GITHUB_WITNESS RED: {case['case_id']} was rejected"
+                )
+            continue
+        if case["expected"] != "EMIT_VERIFIED_DECISION":
+            pytest.fail(
+                f"GITHUB_WITNESS RED: {case['case_id']} unexpectedly emitted "
+                "a verified decision"
+            )
+        assert type(result) is authority_module.VerifiedApprovalDecision
