@@ -52,13 +52,24 @@ minimum:
 - repository identity: `duongchi90/cad-agent`;
 - issue identity: `409`;
 - immutable comment identity: comment ID, node ID, and immutable reference;
-- authenticated author identity and authority class (`PO` or `HUMAN`);
+- `AUTHENTICATED_GITHUB_AUTHOR_IDENTITY`: canonical author login, numeric
+  GitHub user ID, and repository relationship obtained from GitHub;
+- `AUTHORIZED_DECISION_CLASS`: `PO` or `HUMAN`, resolved by the existing
+  governance authority rule for that authenticated identity;
 - exact comment body bytes and their SHA-256;
 - explicit decision: `APPROVED`;
 - approval identity and approval reference;
 - occurrence-approval scope;
 - exact source PDF SHA-256, Page-1 identifier, render SHA-256, and sorted
   semantic occurrence IDs.
+
+These are two non-substitutable bindings. GitHub authenticates the
+`AUTHENTICATED_GITHUB_AUTHOR_IDENTITY`; the existing governance authority rule
+resolves whether that identity is eligible for `AUTHORIZED_DECISION_CLASS`.
+The latter is not inferred from the comment body or from GitHub's
+`author_association`. If the governance rule cannot recognize the
+authenticated identity, the boundary rejects the decision. This specification
+does not create an identity registry or invent a PO/HUMAN mapping.
 
 Authentication is a property of the external reader boundary and its
 canonical GitHub response, not a claim carried by caller-supplied mapping
@@ -118,11 +129,14 @@ cases before `VerifiedApprovalDecision` or `APPROVAL_V1` can become current:
    reference;
 3. repository or issue other than the canonical `duongchi90/cad-agent` / 409
    decision record;
-4. missing, wrong, or unverified author/authority class;
-5. a decision other than explicit `APPROVED`;
-6. missing or non-occurrence scope;
-7. source PDF, Page-1, render, or occurrence-ID binding mismatch;
-8. caller-created mapping, nominal lookalike, or result replayed outside the
+4. an authenticated GitHub identity with no recognized governance-authority
+   binding, even when the body claims `PO`/`HUMAN` or GitHub reports `OWNER`
+   (`REJECT_AUTHORITY`);
+5. missing, wrong, or unverified GitHub author identity;
+6. a decision other than explicit `APPROVED`;
+7. missing or non-occurrence scope;
+8. source PDF, Page-1, render, or occurrence-ID binding mismatch;
+9. caller-created mapping, nominal lookalike, or result replayed outside the
    external reader boundary.
 
 The positive contract case is a fresh external result whose `APPROVED`
