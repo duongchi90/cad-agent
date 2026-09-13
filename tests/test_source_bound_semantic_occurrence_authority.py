@@ -621,3 +621,80 @@ def test_approval_requires_opaque_authenticated_decision_scope() -> None:
     assert outcomes["no_authenticated_decision"][0] == "REJECTED"
     assert outcomes["fake_witness_mapping"][0] == "REJECTED"
     assert outcomes["authority_class_mismatch"][0] == "REJECTED"
+
+
+@pytest.mark.causal_red
+def test_caller_can_mint_verified_decision_before_issuer_boundary() -> None:
+    """Causal RED: the nominal verifier factory remains caller-reachable."""
+    custody = _custody()
+    page_locators = _page_payload(custody)
+    render_provenance = [_pdf_render_record(custody, page_locators)]
+    normalized_render = authority_module._source_fusion.validate_render_provenance(
+        render_provenance,
+        page_locators=page_locators,
+        custody=custody,
+        primitive_artifact_sha256=PRIMITIVE_ARTIFACT_SHA256,
+    )[0]
+    page_99 = next(page for page in page_locators if page["page_id"] == "PAGE-99")
+    currentness_evidence = {
+        "render_provenance": render_provenance,
+        "page_locators": page_locators,
+        "custody": custody,
+        "primitive_artifact_sha256": PRIMITIVE_ARTIFACT_SHA256,
+    }
+    occurrences = deepcopy(_fixture()["occurrences"])
+    source = {
+        "source_pdf_sha256": PDF_SHA256,
+        "page_id": "PAGE-99",
+        "render_sha256": PDF_RASTER_SHA256,
+        "render_transform": authority_module._render_transform_identity(
+            normalized_render
+        ),
+        "source_custody_sha256": source_custody_sha256(custody),
+        "page_locator_sha256": page_99["page_locator_sha256"],
+        "render_provenance_sha256": normalized_render[
+            "render_provenance_sha256"
+        ],
+    }
+    caller_witness = (
+        authority_module.VerifiedApprovalDecision._from_trusted_boundary(
+            approval_identity="CALLER-MINTED-PO-001",
+            approved_by="PO",
+            approval_ref="caller-minted-approval-ref",
+            scope={
+                "scope_kind": "SOURCE_BOUND_SEMANTIC_OCCURRENCE",
+                "source_pdf_sha256": source["source_pdf_sha256"],
+                "page_id": source["page_id"],
+                "render_sha256": source["render_sha256"],
+                "occurrence_ids": [
+                    item["occurrence_id"] for item in occurrences
+                ],
+            },
+        )
+    )
+    packet = {
+        "schema_version": "source-bound-semantic-occurrence-approval-1.0",
+        "contract_version": "SOURCE_BOUND_SEMANTIC_OCCURRENCE_APPROVAL_V1",
+        "source": source,
+        "approval": {
+            "approval_identity": caller_witness.approval_identity,
+            "approved_by": caller_witness.approved_by,
+            "approval_ref": caller_witness.approval_ref,
+            "approved_at": "2026-09-13T12:00:00Z",
+        },
+        "occurrences": occurrences,
+        "packet_hash": "",
+    }
+    packet["packet_hash"] = authority_module.canonical_json_sha256(
+        {key: item for key, item in packet.items() if key != "packet_hash"}
+    )
+
+    result = authority_module.validate_source_bound_semantic_occurrence_approval(
+        packet,
+        currentness_evidence=currentness_evidence,
+        verified_approval_decision=caller_witness,
+    )
+    assert result["currentness"] == "UNRESOLVED_NON_PASS", (
+        "APPROVAL_ISSUER RED: ordinary callers must not mint a trusted "
+        "approval decision that reaches CURRENT"
+    )
