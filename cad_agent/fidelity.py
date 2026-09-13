@@ -41,24 +41,32 @@ class FidelityError(ValueError):
     """Raised for an unsafe or unsupported fidelity-layout request."""
 
 
-def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
-    """Remove only sub-12-pixel strokes from a review-only raw candidate."""
+def _filter_fidelity_geometry(
+    raw: RawGeometry,
+    *,
+    occurrence_ids: dict[str, str | None] | None = None,
+) -> RawGeometry:
+    """Filter review-only geometry, optionally limiting deduplication by occurrence."""
     retained: list[Any] = []
     for line in raw.lines:
         if line.length_px() < 12.0:
             continue
         start, end = sorted((line.p1_px, line.p2_px))
+        occurrence_id = occurrence_ids.get(line.id) if occurrence_ids is not None else None
         duplicate_index = next((
             index for index, existing in enumerate(retained)
-            if max(abs(start[0] - existing[0][0]), abs(start[1] - existing[0][1]),
-                   abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
+            if (
+                (occurrence_ids is None or (occurrence_id is not None and occurrence_id == existing[3]))
+                and max(abs(start[0] - existing[0][0]), abs(start[1] - existing[0][1]),
+                        abs(end[0] - existing[1][0]), abs(end[1] - existing[1][1])) <= 8.0
+            )
         ), None)
         if duplicate_index is None:
-            retained.append((start, end, line))
+            retained.append((start, end, line, occurrence_id))
         else:
             current = retained[duplicate_index][2]
             if (line.confidence, line.length_px()) > (current.confidence, current.length_px()):
-                retained[duplicate_index] = (start, end, line)
+                retained[duplicate_index] = (start, end, line, occurrence_id)
     return RawGeometry(
         lines=[item[2] for item in retained],
         circles=list(raw.circles),
