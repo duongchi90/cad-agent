@@ -97,33 +97,39 @@ Interfaces:
 
 Files:
 - Modify: cad_agent/fidelity.py, _filter_fidelity_geometry, _select_fidelity_geometry, and run_fidelity_reconstruct
-- Test: tests/test_cad_agent_fidelity.py
+- Test: tests/test_semantic_multiplicity_contract.py
 
 Interfaces:
 - Consumes normalized region geometry_occurrences and extracted RawGeometry in crop coordinates.
 - Produces an occurrence-id map for each raw candidate and the existing RawGeometry selection result; same-occurrence dedup only when the map is explicit and unique.
 
-- [ ] Step 1: Add the fixed source-segment mapper.
+- [x] Step 1: Write and run the mapping RED.
+
+  The test-only RED covers one compatible source segment, a multiple-match
+  ambiguous segment, and an unmapped segment. The custom unittest harness
+  fails all three with AttributeError because the mapper is not present.
+
+- [ ] Step 2: Add the fixed source-segment mapper.
 
   Map a raw segment to an occurrence when both endpoints are collinear with the occurrence segment within a fixed one-pixel source-render tolerance and projected intervals overlap by at least 12 pixels. Return one id only for exactly one match; return None for zero or multiple matches.
 
-- [ ] Step 2: Make the filter accept an optional occurrence-id map.
+- [ ] Step 3: Make the filter accept an optional occurrence-id map.
 
   Keep the current endpoint/confidence/length algorithm when the map is absent. When the map is present, compare a candidate only with retained lines carrying the same non-None occurrence id; never collapse or replace across different, missing, or ambiguous ids.
 
-- [ ] Step 3: Pass region descriptors through reconstruction.
+- [ ] Step 4: Pass region descriptors through reconstruction.
 
   Convert approved page-pixel occurrence points to crop-local points using the existing region origin, build the map after Hough extraction, and pass it into _select_fidelity_geometry. Add mapped and ambiguous counts to the existing quality report without changing its schema version.
 
-- [ ] Step 4: Run the occurrence-aware tests GREEN.
+- [ ] Step 5: Run the occurrence-aware tests GREEN.
 
   Run pytest tests/test_cad_agent_fidelity.py -k semantic_occurrence -q and confirm all three cases pass.
 
-- [ ] Step 5: Run the owner regression suite.
+- [ ] Step 6: Run the owner regression suite.
 
   Run pytest tests/test_cad_agent_fidelity.py -q and confirm the existing no-mapping behavior and all fidelity tests remain green.
 
-- [ ] Step 6: Commit the causal repair.
+- [ ] Step 7: Commit the causal repair.
 
   Run git add cad_agent/fidelity.py tests/test_cad_agent_fidelity.py and git commit -m "fix: deduplicate fidelity lines by semantic occurrence".
 

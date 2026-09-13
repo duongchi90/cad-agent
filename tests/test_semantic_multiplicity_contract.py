@@ -82,6 +82,30 @@ class SemanticMultiplicityContractTests(unittest.TestCase):
         )
         self.assertEqual({line.id for line in filtered.lines}, {"ambiguous-a", "ambiguous-b"})
 
+    def test_raw_line_maps_to_one_approved_occurrence_by_source_segment(self) -> None:
+        fidelity = importlib.import_module("cad_agent.fidelity")
+        line = RawLine("fragment", (30.0, 40.5), (120.0, 40.5), 0.9, (30.0, 40.5, 120.0, 40.5))
+        occurrences = [{"id": "occ-a", "p1_px": [20.0, 40.0], "p2_px": [180.0, 40.0]}]
+
+        self.assertEqual(fidelity._map_raw_line_to_occurrence_id(line, occurrences), "occ-a")
+
+    def test_raw_line_with_multiple_occurrence_matches_is_unresolved(self) -> None:
+        fidelity = importlib.import_module("cad_agent.fidelity")
+        line = RawLine("fragment", (30.0, 40.0), (120.0, 40.0), 0.9, (30.0, 40.0, 120.0, 40.0))
+        occurrences = [
+            {"id": "occ-a", "p1_px": [20.0, 40.0], "p2_px": [180.0, 40.0]},
+            {"id": "occ-b", "p1_px": [20.0, 40.0], "p2_px": [180.0, 40.0]},
+        ]
+
+        self.assertIsNone(fidelity._map_raw_line_to_occurrence_id(line, occurrences))
+
+    def test_raw_line_without_occurrence_match_is_unresolved(self) -> None:
+        fidelity = importlib.import_module("cad_agent.fidelity")
+        line = RawLine("unmapped", (30.0, 60.0), (120.0, 60.0), 0.9, (30.0, 60.0, 120.0, 60.0))
+        occurrences = [{"id": "occ-a", "p1_px": [20.0, 40.0], "p2_px": [180.0, 40.0]}]
+
+        self.assertIsNone(fidelity._map_raw_line_to_occurrence_id(line, occurrences))
+
 
 if __name__ == "__main__":
     unittest.main()
