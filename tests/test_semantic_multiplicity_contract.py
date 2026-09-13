@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import copy
 import importlib
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import fitz
+import numpy as np
 
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 
@@ -123,6 +130,100 @@ class SemanticMultiplicityContractTests(unittest.TestCase):
         self.assertEqual(occurrence_ids, {"mapped": "occ-a", "ambiguous": None, "unmapped": None})
         self.assertEqual(sum(value is not None for value in occurrence_ids.values()), 1)
         self.assertEqual(sum(value is None for value in occurrence_ids.values()), 2)
+
+    def test_selection_wiring_forwards_occurrence_ids_to_existing_filter(self) -> None:
+        fidelity = importlib.import_module("cad_agent.fidelity")
+        crop = np.full((100, 180, 3), 255, dtype=np.uint8)
+        raw = RawGeometry(lines=[
+            RawLine("line", (10.0, 40.0), (170.0, 40.0), 0.9, (10.0, 40.0, 170.0, 40.0)),
+        ])
+        seen: dict[str, object] = {}
+
+        def fake_filter(candidate: RawGeometry, *, occurrence_ids: dict[str, str | None] | None = None) -> RawGeometry:
+            seen["occurrence_ids"] = occurrence_ids
+            return candidate
+
+        with patch.object(fidelity, "_filter_fidelity_geometry", side_effect=fake_filter):
+            fidelity._select_fidelity_geometry(
+                raw, crop, 1.0, occurrence_ids={"line": "occ-a"},
+            )
+        self.assertEqual(seen["occurrence_ids"], {"line": "occ-a"})
+
+    def test_reconstruction_wiring_passes_occurrence_ids_and_records_unresolved_count(self) -> None:
+        fidelity = importlib.import_module("cad_agent.fidelity")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "drawing.pdf"
+            document = fitz.open()
+            page = document.new_page(width=400, height=300)
+            page.draw_line((20, 40), (380, 40))
+            document.save(source)
+            document.close()
+
+            output = root / "private-staging"
+            manifest = fidelity.new_fidelity_manifest(
+                source, output, 144, "approved-test", workspace_root=Path.cwd(),
+            )
+            manifest_path = output / "fidelity-run-manifest.json"
+            fidelity.run_fidelity_pdf(source, output, manifest_path, manifest)
+            page_record = manifest["pages"][0]
+            audit = json.loads((output / page_record["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+            width = audit["source_page"]["render_width_px"]
+            height = audit["source_page"]["render_height_px"]
+            x0, y0, x1, y1 = 10, 10, width - 50, height - 10
+            regions = {
+                "regions": [{
+                    "id": "main",
+                    "bbox_px": [x0, y0, x1, y1],
+                    "purpose": "layout-reconstruction",
+                    "geometry_occurrences": [
+                        {"id": "occ-a", "p1_px": [x0 + 10.0, y0 + 30.0], "p2_px": [x1 - 10.0, y0 + 30.0]},
+                        {"id": "occ-b", "p1_px": [x0 + 10.0, y0 + 50.0], "p2_px": [x1 - 10.0, y0 + 50.0]},
+                        {"id": "occ-c", "p1_px": [x0 + 10.0, y0 + 50.5], "p2_px": [x1 - 10.0, y0 + 50.5]},
+                    ],
+                }],
+                "excluded_regions": [{
+                    "id": "outside",
+                    "bbox_px": [x1 + 3, y0, x1 + 33, y0 + 30],
+                    "purpose": "exclude",
+                }],
+            }
+            fidelity.write_region_proposal(
+                source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd(),
+            )
+            approval_path = output / "region_approvals" / "page_01.json"
+            fidelity.write_region_approval(
+                source, output, manifest, 1, 1, ["main"], "approved-test", workspace_root=Path.cwd(),
+            )
+            crop_width, crop_height = x1 - x0, y1 - y0
+            raw = RawGeometry(lines=[
+                RawLine("mapped", (10.0, 30.0), (crop_width - 10.0, 30.0), 0.9, (10.0, 30.0, crop_width - 10.0, 30.0)),
+                RawLine("ambiguous", (10.0, 50.0), (crop_width - 10.0, 50.0), 0.9, (10.0, 50.0, crop_width - 10.0, 50.0)),
+                RawLine("unmapped", (10.0, 80.0), (crop_width - 10.0, 80.0), 0.9, (10.0, 80.0, crop_width - 10.0, 80.0)),
+            ])
+            seen: dict[str, object] = {}
+
+            def fake_select(
+                candidate: RawGeometry,
+                crop: np.ndarray,
+                scale: float,
+                *,
+                occurrence_ids: dict[str, str | None] | None = None,
+            ) -> tuple[RawGeometry, dict[str, object]]:
+                del crop, scale
+                seen["occurrence_ids"] = occurrence_ids
+                return candidate, {"selected_profile": "baseline"}
+
+            with patch.object(fidelity, "extract_raw_geometry", return_value=raw), patch.object(
+                fidelity, "_select_fidelity_geometry", side_effect=fake_select,
+            ):
+                results = fidelity.run_fidelity_reconstruct(
+                    source, output, manifest, approval_path, workspace_root=Path.cwd(),
+                )
+
+            self.assertEqual(seen["occurrence_ids"], {"mapped": "occ-a", "ambiguous": None, "unmapped": None})
+            report = json.loads((results[0] / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["quality"]["occurrence_mapping"], {"mapped": 1, "unresolved": 2})
 
 
 if __name__ == "__main__":

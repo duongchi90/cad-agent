@@ -122,19 +122,25 @@ Interfaces:
 
   Implemented in e95edb3; the focused A/B/C tests passed.
 
-- [ ] Step 4: Pass region descriptors through reconstruction.
+- [x] Step 4: Write and run the runtime-wiring RED.
+
+  The selection test fails because _select_fidelity_geometry rejects
+  occurrence_ids, and the reconstruction test observes None plus a missing
+  occurrence_mapping report. No runtime wiring was changed by this RED.
+
+- [ ] Step 5: Pass region descriptors through reconstruction.
 
   Convert approved page-pixel occurrence points to crop-local points using the existing region origin, build the map after Hough extraction, and pass it into _select_fidelity_geometry. Add mapped and ambiguous counts to the existing quality report without changing its schema version.
 
-- [ ] Step 5: Run the occurrence-aware tests GREEN.
+- [ ] Step 6: Run the occurrence-aware tests GREEN.
 
   Run pytest tests/test_cad_agent_fidelity.py -k semantic_occurrence -q and confirm all three cases pass.
 
-- [ ] Step 6: Run the owner regression suite.
+- [ ] Step 7: Run the owner regression suite.
 
   Run pytest tests/test_cad_agent_fidelity.py -q and confirm the existing no-mapping behavior and all fidelity tests remain green.
 
-- [ ] Step 7: Commit the causal repair.
+- [ ] Step 8: Commit the causal repair.
 
   Run git add cad_agent/fidelity.py tests/test_cad_agent_fidelity.py and git commit -m "fix: deduplicate fidelity lines by semantic occurrence".
 
