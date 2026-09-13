@@ -1,0 +1,66 @@
+{
+  "schema_version": "source-bound-semantic-occurrence-authority-1.0",
+  "contract_version": "SOURCE_BOUND_SEMANTIC_OCCURRENCE_AUTHORITY_V1",
+  "source": {
+    "source_pdf_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "page_id": "PAGE-001",
+    "render_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "render_transform": "displayed-page-box-v1"
+  },
+  "approval": {
+    "approval_identity": "APPROVAL-PAGE-001-OCCURRENCES",
+    "approved_at": "2026-09-13T12:00:00Z",
+    "contract_version": "SOURCE_BOUND_SEMANTIC_OCCURRENCE_AUTHORITY_V1"
+  },
+  "occurrences": [
+    {
+      "occurrence_id": "OCC-LINE-A",
+      "kind": "LINE",
+      "source_segment_px": {
+        "p1": [100, 200],
+        "p2": [300, 200]
+      }
+    },
+    {
+      "occurrence_id": "OCC-LINE-B",
+      "kind": "LINE",
+      "source_segment_px": {
+        "p1": [100, 202],
+        "p2": [300, 202]
+      }
+    }
+  ],
+  "oracle_cases": [
+    {
+      "case_id": "DISTINCT_PARALLEL_OCCURRENCES",
+      "observations": [
+        {"candidate_id": "RAW-A", "occurrence_id": "OCC-LINE-A"},
+        {"candidate_id": "RAW-B", "occurrence_id": "OCC-LINE-B"}
+      ],
+      "expected": "DISTINCT"
+    },
+    {
+      "case_id": "SAME_OCCURRENCE_DUPLICATE_OBSERVATIONS",
+      "observations": [
+        {"candidate_id": "RAW-A1", "occurrence_id": "OCC-LINE-A"},
+        {"candidate_id": "RAW-A2", "occurrence_id": "OCC-LINE-A"}
+      ],
+      "expected": "SAME_OCCURRENCE"
+    },
+    {
+      "case_id": "MULTI_MATCH",
+      "observations": [
+        {
+          "candidate_id": "RAW-AMBIGUOUS",
+          "matched_occurrence_ids": ["OCC-LINE-A", "OCC-LINE-B"]
+        }
+      ],
+      "expected": "UNRESOLVED_NON_PASS"
+    },
+    {
+      "case_id": "STALE_RENDER_BINDING",
+      "source_render_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "expected": "UNRESOLVED_NON_PASS"
+    }
+  ]
+}
