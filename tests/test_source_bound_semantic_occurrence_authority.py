@@ -88,6 +88,27 @@ def test_zero_match_is_fail_closed() -> None:
     }["ZERO_MATCH"] == "UNRESOLVED_NON_PASS"
 
 
+def test_multi_match_aggregates_all_observations_fail_closed() -> None:
+    payload = _fixture()
+    payload["oracle_cases"][2]["observations"] = [
+        {
+            "candidate_id": "RAW-AMBIGUOUS",
+            "matched_occurrence_ids": ["OCC-LINE-A", "OCC-LINE-B"],
+        },
+        {
+            "candidate_id": "RAW-UNIQUE-LATER",
+            "matched_occurrence_ids": ["OCC-LINE-A"],
+        },
+    ]
+
+    result = validate_source_bound_semantic_occurrence_authority(payload)
+
+    assert {
+        case["case_id"]: case["status"]
+        for case in result["oracle_results"]
+    }["MULTI_MATCH"] == "UNRESOLVED_NON_PASS"
+
+
 def test_currentness_consumes_existing_source_fusion_evidence() -> None:
     payload = _fixture()
     payload["source"].update(

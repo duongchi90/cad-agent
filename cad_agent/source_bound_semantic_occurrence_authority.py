@@ -206,6 +206,7 @@ def _oracle_case(
         observations = record["observations"]
         if not isinstance(observations, list) or not observations:
             raise _AuthorityError(f"{path}.observations: OBSERVATIONS_INVALID")
+        outcomes: list[str] = []
         for item_index, item in enumerate(observations):
             observation = _closed(
                 item,
@@ -227,10 +228,14 @@ def _oracle_case(
                 for match_index, match in enumerate(matches)
             ]
             if len(normalized_matches) != 1 or normalized_matches[0] not in occurrence_ids:
-                status = "UNRESOLVED_NON_PASS"
+                outcomes.append("UNRESOLVED_NON_PASS")
             else:
-                status = "UNIQUE_MATCH"
-        status = locals().get("status", "UNRESOLVED_NON_PASS")
+                outcomes.append("UNIQUE_MATCH")
+        status = (
+            "UNIQUE_MATCH"
+            if all(outcome == "UNIQUE_MATCH" for outcome in outcomes)
+            else "UNRESOLVED_NON_PASS"
+        )
     elif case_id == "ZERO_MATCH":
         record = _closed(value, {"case_id", "observations", "expected"}, path)
         observations = record["observations"]
