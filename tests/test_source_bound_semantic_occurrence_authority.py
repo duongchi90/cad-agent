@@ -347,9 +347,9 @@ def test_untrusted_approval_cannot_self_authorize_current_packet() -> None:
             ],
         },
         "approval": {
-            "approval_identity": "INVENTED-UNTRUSTED-001",
+            "approval_identity": "APPROVAL-OPTION-B-001",
             "approved_by": "PO",
-            "approval_ref": "synthetic-approval-ref",
+            "approval_ref": "github-409-comment-5651227165",
             "approved_at": "2026-09-13T12:00:00Z",
         },
         "occurrences": deepcopy(_fixture()["occurrences"]),
@@ -360,29 +360,59 @@ def test_untrusted_approval_cannot_self_authorize_current_packet() -> None:
     )
 
     try:
-        validated = authority_module.validate_source_bound_semantic_occurrence_approval(
+        authorized = authority_module.validate_source_bound_semantic_occurrence_approval(
             packet,
             currentness_evidence=currentness_evidence,
         )
     except ValueError:
-        return
+        pytest.fail("the exact approved PO decision binding must remain usable")
+    assert authorized["currentness"] == "CURRENT"
 
-    authority_payload = _fixture()
-    authority_payload["source"].update(
+    def assert_rejected(untrusted_packet: dict[str, object]) -> None:
+        untrusted_packet["packet_hash"] = authority_module.canonical_json_sha256(
+            {
+                key: item
+                for key, item in untrusted_packet.items()
+                if key != "packet_hash"
+            }
+        )
+        try:
+            validated = authority_module.validate_source_bound_semantic_occurrence_approval(
+                untrusted_packet,
+                currentness_evidence=currentness_evidence,
+            )
+        except ValueError:
+            return
+
+        authority_payload = _fixture()
+        authority_payload["source"].update(
+            {
+                "source_pdf_sha256": PDF_SHA256,
+                "page_id": "PAGE-99",
+                "render_sha256": PDF_RASTER_SHA256,
+                "render_transform": untrusted_packet["source"]["render_transform"],
+            }
+        )
+        authority_payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
+        downstream = validate_source_bound_semantic_occurrence_authority(
+            authority_payload,
+            currentness_evidence=currentness_evidence,
+            validated_approval_packet=validated,
+        )
+        assert downstream["currentness"] == "UNRESOLVED_NON_PASS", (
+            "APPROVAL_AUTHENTICITY RED: a correctly hashed untrusted approval "
+            "must not reach CURRENT through the existing authority owner"
+        )
+
+    synthetic = deepcopy(packet)
+    synthetic["approval"].update(
         {
-            "source_pdf_sha256": PDF_SHA256,
-            "page_id": "PAGE-99",
-            "render_sha256": PDF_RASTER_SHA256,
-            "render_transform": packet["source"]["render_transform"],
+            "approval_identity": "INVENTED-UNTRUSTED-001",
+            "approval_ref": "synthetic-approval-ref",
         }
     )
-    authority_payload["oracle_cases"][3]["source_render_sha256"] = "4" * 64
-    downstream = validate_source_bound_semantic_occurrence_authority(
-        authority_payload,
-        currentness_evidence=currentness_evidence,
-        validated_approval_packet=validated,
-    )
-    assert downstream["currentness"] == "UNRESOLVED_NON_PASS", (
-        "APPROVAL_AUTHENTICITY RED: a correctly hashed invented approval must "
-        "not reach CURRENT through the existing authority owner"
-    )
+    assert_rejected(synthetic)
+
+    wrong_authority_class = deepcopy(packet)
+    wrong_authority_class["approval"]["approved_by"] = "HUMAN"
+    assert_rejected(wrong_authority_class)
