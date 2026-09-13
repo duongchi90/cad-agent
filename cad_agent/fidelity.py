@@ -95,6 +95,16 @@ def _map_raw_line_to_occurrence_id(
     return matches[0] if len(matches) == 1 else None
 
 
+def _map_raw_geometry_to_occurrence_ids(
+    raw: RawGeometry,
+    occurrences: list[dict[str, Any]],
+) -> dict[str, str | None]:
+    return {
+        line.id: _map_raw_line_to_occurrence_id(line, occurrences)
+        for line in raw.lines
+    }
+
+
 def _filter_fidelity_geometry(
     raw: RawGeometry,
     *,
