@@ -698,3 +698,67 @@ def test_caller_can_mint_verified_decision_before_issuer_boundary() -> None:
         "APPROVAL_ISSUER RED: ordinary callers must not mint a trusted "
         "approval decision that reaches CURRENT"
     )
+
+
+@pytest.mark.causal_red
+def test_approval_requires_an_external_issuer_owner_before_green() -> None:
+    """Contract-only RED: no current in-process owner can issue this authority."""
+    required_contract = {
+        "issuer_kind": "PRIVILEGED_EXTERNAL_DECISION_VERIFIER",
+        "ordinary_runtime_callable_path": False,
+        "consumer": "SOURCE_BOUND_SEMANTIC_OCCURRENCE_APPROVAL_V1",
+        "required_bindings": (
+            "approval_identity",
+            "approved_by",
+            "approval_ref",
+            "source_pdf_sha256",
+            "page_id",
+            "render_sha256",
+            "occurrence_ids",
+        ),
+        "contract_only_reference_is_occurrence_ineligible": True,
+    }
+    owner_inventory = {
+        "source_integrity": {
+            "path": "cad_agent.source_integrity",
+            "authority": "source custody/provenance/currentness",
+            "can_issue": False,
+        },
+        "source_fusion": {
+            "path": "cad_agent.source_fusion",
+            "authority": "source fusion/currentness",
+            "can_issue": False,
+        },
+        "authority_v1": {
+            "path": "cad_agent.source_bound_semantic_occurrence_authority",
+            "authority": "approval binding/consumer normalization",
+            "can_issue": False,
+        },
+        "agent_action_approval": {
+            "path": "agent_lib.run._validate_agent_action_approval",
+            "authority": "operator-supplied AgentReport application audit text",
+            "can_issue": False,
+        },
+        "repair_authorization": {
+            "path": "cad_agent.repair_authorization.issue_repair_authorization",
+            "authority": "single-use repair operation authorization",
+            "can_issue": False,
+        },
+        "codex_worker": {
+            "path": "agent_lib.codex_worker",
+            "authority": "provider handoff/output validation only",
+            "can_issue": False,
+        },
+    }
+    eligible_owners = [
+        name
+        for name, record in owner_inventory.items()
+        if record["can_issue"]
+        and record["authority"] == required_contract["issuer_kind"]
+        and required_contract["ordinary_runtime_callable_path"] is False
+    ]
+    assert eligible_owners, (
+        "ISSUER_OWNER RED: select an existing privileged external decision "
+        "verifier before implementing another APPROVAL_V1 issuer; current "
+        f"inventory has no eligible owner: {owner_inventory}"
+    )
