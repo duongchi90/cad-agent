@@ -1,0 +1,88 @@
+{
+  "schema_version": "page1-residual-frontier-geometry-owner-1.0",
+  "state": "FRONTIER_TRIAGE_STOPPED_AT_FIRST_UNIQUE_EXISTING_OWNER",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "9de8f1dec14e9095d8bf73c344ed225d89a516da",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only residual-frontier triage iteration using the same approved Page-1 source/vector identities, BGR-to-gray Canny-50-150, 7x7 vector dilation tolerance, existing content mask, layout_ir traces, and layout_audit OCR sidecar. Component 89 remains unresolved and component 1839 is expected sidecar-only; neither was advanced.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235",
+    "render_size_px": [2382, 1685],
+    "source_edge_pixels_in_content": 144961,
+    "vector_edge_pixels_in_content": 100158,
+    "source_only_residual_pixels_in_content": 44272,
+    "material_component_count": 8
+  },
+  "exclusions_and_intermediate": {
+    "excluded_component_89": {
+      "bbox_px": [1898, 216, 1942, 519],
+      "reason": "SOURCE_SHAPE_OWNERSHIP_UNRESOLVED; prior RawLine/RawCircle RED retired"
+    },
+    "excluded_component_1839": {
+      "bbox_px": [1847, 1131, 1875, 1162],
+      "reason": "EXPECTED_SIDECAR_ONLY; selected OCR candidate is not per-text approved"
+    },
+    "first_remaining_component_92": {
+      "area": 385,
+      "bbox_px": [1625, 245, 1886, 314],
+      "classification": "MIXED_GEOMETRY_OCR; NOT_DECISION_GRADE_AS_SINGLE_OWNER",
+      "geometry_hits": [
+        {"id": "rawline-088c9063", "type": "line", "bbox_px": [1673.0, 288.0, 1844.0, 288.0]},
+        {"id": "rawline-9bc708bd", "type": "line", "bbox_px": [1684.0, 283.0, 1833.0, 283.0]}
+      ],
+      "ocr_hits": [
+        {"id": "rawtext-9aacae7f", "content": "N", "bbox_px": [1711, 293, 1724, 308], "confidence": 0.77},
+        {"id": "rawtext-bf55b227", "content": "VX", "bbox_px": [1758, 293, 1786, 308], "confidence": 0.22},
+        {"id": "rawtext-08587255", "content": "NN", "bbox_px": [1740, 313, 1753, 328], "confidence": 0.44}
+      ],
+      "ocr_roi_hits": 1,
+      "decision": "Skip this component in the current iteration because existing geometry and OCR owners overlap the same residual region; no single-owner causal RED is justified."
+    }
+  },
+  "selected_component": {
+    "residual_frontier_rank": 4,
+    "rank_after_exclusions_and_mixed_skip": 2,
+    "label": 478,
+    "area": 365,
+    "bbox_px": [425, 445, 576, 507],
+    "centroid_px": [480.403, 466.025],
+    "owner": "GEOMETRY_OPENCV_EXISTING_LAYOUT_IR_OWNER",
+    "decision_grade": true,
+    "decision_basis": "The selected residual bbox intersects existing layout_ir geometry traces and has no OCR text-bbox or OCR ROI intersection. Existing geometry ownership is therefore decision-grade for the next contract-correct RED candidate; this does not yet prove a semantic primitive identity or authorize repair.",
+    "layout_ir_geometry_trace_hits": [
+      {"id": "rawline-3e846dc7", "type": "line", "source": "geometry_opencv", "bbox_px": [556.0, 475.0, 704.0, 475.0], "validation": "unreviewed"},
+      {"id": "rawline-3ced4ef5", "type": "line", "source": "geometry_opencv", "bbox_px": [501.0, 469.0, 567.0, 469.0], "validation": "unreviewed"},
+      {"id": "rawline-8a2e76ee", "type": "line", "source": "geometry_opencv", "bbox_px": [309.0, 445.0, 520.0, 445.0], "validation": "unreviewed"},
+      {"id": "rawline-0538975b", "type": "line", "source": "geometry_opencv", "bbox_px": [459.0, 497.0, 518.0, 500.0], "validation": "unreviewed"},
+      {"id": "rawline-8f4df7f9", "type": "line", "source": "geometry_opencv", "bbox_px": [460.0, 495.0, 588.0, 497.0], "validation": "unreviewed"},
+      {"id": "rawline-84bb66f5", "type": "line", "source": "geometry_opencv", "bbox_px": [531.0, 497.0, 587.0, 498.0], "validation": "unreviewed"},
+      {"id": "rawline-cf216e80", "type": "line", "source": "geometry_opencv", "bbox_px": [458.0, 498.0, 518.0, 501.0], "validation": "unreviewed"},
+      {"id": "rawline-8d25bdb0", "type": "line", "source": "geometry_opencv", "bbox_px": [458.0, 499.0, 519.0, 502.0], "validation": "unreviewed"},
+      {"id": "rawline-0d83a7ef", "type": "line", "source": "geometry_opencv", "bbox_px": [492.0, 493.0, 560.0, 494.0], "validation": "unreviewed"},
+      {"id": "rawline-b92cb9ed", "type": "line", "source": "geometry_opencv", "bbox_px": [504.0, 464.0, 567.0, 467.0], "validation": "unreviewed"},
+      {"id": "rawcirc-e9ce88aa", "type": "circle", "source": "geometry_opencv", "bbox_px": [452.8999938964844, 482.8999938964844, 522.0999755859375, 552.0999755859375], "validation": "unreviewed"}
+    ],
+    "ocr_bbox_intersection_count": 0,
+    "ocr_roi_intersection_count": 0,
+    "dimension_value_intersection_count": 0,
+    "table_audit_status": "not_evaluated"
+  },
+  "cheapest_causal_red_candidate": {
+    "status": "CANDIDATE_NOT_RUN",
+    "name": "GEOMETRY_OWNER_COVERAGE_MISMATCH_RED",
+    "assertion": "For the source-supported residual component at bbox [425,445,576,507], the existing geometry owner must either cover the source edge under the unchanged 7x7 vector tolerance or be absent; the current evidence shows 365 source-only residual pixels while 10 RawLine and 1 RawCircle layout_ir traces intersect the same bbox.",
+    "expected_observation_if_defect": "A geometry-owned residual region remains uncovered by the current vector render despite direct existing geometry trace intersections.",
+    "scope": "Test/evidence-only against unchanged existing render, layout_ir, and comparison owners; no threshold tuning, selector change, extraction change, new classifier, production GREEN, source/candidate/CAD mutation, PR, promotion, or merge."
+  },
+  "causal_path": "Approved Page-1 render -> source-only residual label 478 -> existing geometry_opencv layout_ir traces -> current vector coverage mismatch; semantic primitive ownership beyond the existing geometry owner is not asserted.",
+  "red": "NOT_RUN; pending PO22 review.",
+  "green": "NOT_RUN; no production delta.",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this single selected geometry-owner triage result to SOL PO 22. Await verdict before running the proposed RED or inspecting a later component."
+}
