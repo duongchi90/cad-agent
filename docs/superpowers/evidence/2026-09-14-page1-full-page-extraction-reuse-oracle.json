@@ -1,0 +1,87 @@
+{
+  "schema_version": "page1-full-page-extraction-reuse-oracle-v1",
+  "state": "read_only_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "ef4d9cd5ab46c642335224769def3e107b091856",
+  "branch": "codex/page1-dimension-acceptance-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "oracle": "FULL_PAGE_EXTRACTION_REUSE_ORACLE",
+  "scope": {
+    "page": 1,
+    "approved_bbox_px": [59, 38, 2320, 1646],
+    "crop_shape_px": [2261, 1608],
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "production_code_mutation": false,
+    "cad_live_state_mutation": false,
+    "threshold_or_preset_tuning": false,
+    "dimensions": false,
+    "new_control_plane": false
+  },
+  "provenance": {
+    "source_pdf": {
+      "path_label": "BVTL_raster_A3_sheets.pdf",
+      "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+    },
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "page1_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "current_layout_dxf_sha256": "cee47d88f5801a2b0c3e47c8b15528011086653221111d145654f208560fa1ff",
+    "crop_identity": "PASS; freshly encoded approved crop matches candidate source.png SHA256"
+  },
+  "existing_owner": {
+    "extraction": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "selection": "cad_agent.fidelity._select_fidelity_geometry",
+    "reconstruction_consumer": "cad_agent.fidelity.run_fidelity_reconstruct",
+    "reuse_action": "execute existing full-page extraction, clip/translate RawLine/RawCircle results into the approved region, then run the existing bounded selection/raster comparator"
+  },
+  "identity_checks": {
+    "full_page_render_input": "PASS",
+    "approved_crop_render_input": "PASS",
+    "candidate_identity": "PASS",
+    "calibration_identity": "PASS",
+    "source_render_candidate_binding": "PASS"
+  },
+  "populations": {
+    "full_page_raw": {"LINE": 517, "CIRCLE": 19},
+    "approved_crop_raw": {"LINE": 520, "CIRCLE": 19},
+    "approved_crop_selected": {"LINE": 520, "CIRCLE": 19, "profile": "baseline"},
+    "full_page_clipped_translated": {"LINE": 515, "CIRCLE": 19},
+    "full_page_reuse_selected": {"LINE": 515, "CIRCLE": 19, "profile": "baseline"}
+  },
+  "metrics": {
+    "current_candidate_report": {"precision": 0.985836, "recall": 0.679721, "f1": 0.804648},
+    "current_candidate_recomputed": {"precision": 0.985836, "recall": 0.679721, "f1": 0.804648},
+    "crop_recomputed": {"precision": 0.985836, "recall": 0.679721, "f1": 0.804648},
+    "full_page_owner": {"precision": 0.98702, "recall": 0.700284, "f1": 0.819289},
+    "full_page_reuse_bounded": {"precision": 0.986259, "recall": 0.692911, "f1": 0.813961},
+    "delta_reuse_vs_crop_recomputed": {"precision": 0.000423, "recall": 0.01319, "f1": 0.009313},
+    "interpretation": "Diagnostic geometry metrics only; no product acceptance PASS inferred and no material-regression claim made from metrics alone."
+  },
+  "component_858": {
+    "label": 858,
+    "area_px": 288,
+    "bbox_xyxy_px": [318, 511, 400, 544],
+    "connected_component_stats_xywh_px": [318, 511, 83, 34],
+    "target_segment_px": [[330.0, 535.0], [500.0, 535.0]],
+    "crop_candidate_coverage_within_3px": 0.0,
+    "full_page_reuse_coverage_within_3px": 0.572917,
+    "required_coverage_within_3px": 0.5,
+    "result": "RECOVERED_BY_REUSE_ORACLE"
+  },
+  "causal_interpretation": {
+    "causal_path": "existing full-page extract_raw_geometry -> approved-region clip/translate -> existing _select_fidelity_geometry -> existing raster comparator",
+    "first_loss_hypothesis": "approved-crop extraction context loses source-supported geometry identity before selection",
+    "repair_hypothesis": "reuse the existing full-page extraction context rather than independently re-extracting the approved crop",
+    "causal_status": "REUSE_ORACLE_SUPPORTS_HYPOTHESIS",
+    "production_repair_authorized": false,
+    "green_authorized": false
+  },
+  "next_single_bounded_action": "ROUTE_THIS_ORACLE_TO_SOL_PO22_AND_WAIT_FOR_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Fresh-read exact GitHub/source/evidence. Independently verify full-page versus crop extraction identity, clipping/translation scope, component-858 recovery, and bounded geometry deltas. Decide whether the reuse hypothesis is causal and authorize at most one smallest existing-owner next action. Do not authorize GREEN, dimensions, tuning, source/CAD mutation, or a new control plane."
+}
