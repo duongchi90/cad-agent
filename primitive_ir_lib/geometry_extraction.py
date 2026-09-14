@@ -181,6 +181,117 @@ PRESETS = {
 }
 
 
+def _fit_circle(points: np.ndarray) -> tuple[float, float, float, np.ndarray] | None:
+    """Fit one circle to residual edge pixels with a linear least-squares fit."""
+    if len(points) < 3:
+        return None
+    coordinates = points.astype(np.float64, copy=False)
+    x = coordinates[:, 0]
+    y = coordinates[:, 1]
+    matrix = np.column_stack((2.0 * x, 2.0 * y, np.ones_like(x)))
+    if np.linalg.matrix_rank(matrix) < 3:
+        return None
+    center_x, center_y, constant = np.linalg.lstsq(
+        matrix, x * x + y * y, rcond=None
+    )[0]
+    radius_squared = constant + center_x * center_x + center_y * center_y
+    if radius_squared <= 0.0:
+        return None
+    radius = float(np.sqrt(radius_squared))
+    residuals = np.abs(np.hypot(x - center_x, y - center_y) - radius)
+    return float(center_x), float(center_y), radius, residuals
+
+
+def _arc_angle_interval(
+    points: np.ndarray, center_x: float, center_y: float
+) -> tuple[float, float, float]:
+    """Return the occupied circular interval in image (y-down) coordinates."""
+    angles = np.degrees(
+        np.arctan2(-(points[:, 1] - center_y), points[:, 0] - center_x)
+    ) % 360.0
+    ordered = np.sort(angles)
+    gaps = np.diff(np.concatenate((ordered, ordered[:1] + 360.0)))
+    largest_gap_index = int(np.argmax(gaps))
+    start = float(ordered[(largest_gap_index + 1) % len(ordered)])
+    end = float(ordered[largest_gap_index])
+    if end < start:
+        end += 360.0
+    return start, end, end - start
+
+
+def _extract_arcs(
+    image_bgr: np.ndarray,
+    lines: List[RawLine],
+    circles: List[RawCircle],
+) -> List[RawArc]:
+    """Recover partial-circle witnesses left after existing line/circle owners.
+
+    This is intentionally a narrow handoff detector for source-supported
+    residual arcs.  It removes the already-owned LINE/CIRCLE geometry from the
+    existing Canny edge map, fits only connected residual components, and
+    returns the components that satisfy the established support/span contract.
+    It does not alter the LINE/CIRCLE detectors or their presets.
+    """
+    edges = cv2.Canny(_preprocess(image_bgr), 50, 150)
+    residual = (edges > 0).astype(np.uint8)
+    owned = np.zeros_like(residual)
+    for line in lines:
+        cv2.line(
+            owned,
+            (round(line.p1_px[0]), round(line.p1_px[1])),
+            (round(line.p2_px[0]), round(line.p2_px[1])),
+            255,
+            3,
+        )
+    for circle in circles:
+        cv2.circle(
+            owned,
+            (round(circle.center_px[0]), round(circle.center_px[1])),
+            round(circle.radius_px),
+            255,
+            3,
+        )
+    residual[owned > 0] = 0
+
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        residual, connectivity=8
+    )
+    arcs: List[RawArc] = []
+    for label in range(1, component_count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < 100:
+            continue
+        points = np.column_stack(np.where(labels == label))[:, ::-1]
+        fit = _fit_circle(points)
+        if fit is None:
+            continue
+        center_x, center_y, radius, residuals = fit
+        if not 20.0 <= radius <= 130.0:
+            continue
+        support = float(np.mean(residuals <= 3.0))
+        if support < 0.5 or float(np.median(residuals)) > 3.0:
+            continue
+        start, end, span = _arc_angle_interval(points, center_x, center_y)
+        if span < 60.0:
+            continue
+        x0 = float(stats[label, cv2.CC_STAT_LEFT])
+        y0 = float(stats[label, cv2.CC_STAT_TOP])
+        x1 = x0 + float(stats[label, cv2.CC_STAT_WIDTH])
+        y1 = y0 + float(stats[label, cv2.CC_STAT_HEIGHT])
+        arcs.append(
+            RawArc(
+                id=new_id("rawarc"),
+                center_px=(center_x, center_y),
+                radius_px=radius,
+                start_angle_deg=start,
+                end_angle_deg=end,
+                confidence=min(1.0, support),
+                bbox_px=(x0, y0, x1, y1),
+            )
+        )
+    return arcs
+
+
 def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwargs) -> RawGeometry:
     """Entry point chính của module.
 
@@ -204,7 +315,10 @@ def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwarg
         "canny_low", "canny_high", "hough_threshold", "min_line_length", "max_line_gap")}
     circle_kwargs = {k: v for k, v in merged.items() if k in (
         "min_radius", "max_radius", "param1", "param2", "min_dist")}
+    lines = extract_lines(image_bgr, **line_kwargs)
+    circles = extract_circles(image_bgr, **circle_kwargs)
     return RawGeometry(
-        lines=extract_lines(image_bgr, **line_kwargs),
-        circles=extract_circles(image_bgr, **circle_kwargs),
+        lines=lines,
+        circles=circles,
+        arcs=_extract_arcs(image_bgr, lines, circles),
     )
