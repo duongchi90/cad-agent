@@ -1,0 +1,62 @@
+{
+  "schema_version": "page1-label1517-local-branch-1.0",
+  "state": "JUNCTION_FREE_CIRCLE_SUPPORTED_LOCAL_CONTINUATION",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "ce7e833527a4e3dfa8cd1c83e81c4ccd87d466fc",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only local-branch correspondence oracle inside source-edge component 1082. Starting from source-edge pixels within the existing 3 px neighborhood of rawcirc-2d8338b2, trace the shortest 8-connected source-edge path to residual label 1517, count junction/branch pixels, and test whether the path enters another existing primitive 3 px neighborhood before reaching the residual. No production or artifact mutation.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "source_edge_method": "BGR-to-gray Canny-50-150",
+    "vector_tolerance": "7x7 dilation (3 px each side)",
+    "calibration": {
+      "unit": "mm",
+      "pixel_to_unit_scale": 0.17634073294549343,
+      "origin_px": [0.0, 1685.0],
+      "method": "manual_override",
+      "status": "verified"
+    }
+  },
+  "selected_residual": {
+    "label": 1517,
+    "area": 286,
+    "bbox_px": [413, 989, 594, 1075],
+    "source_edge_component_label": 1082,
+    "source_edge_component_area": 5897,
+    "source_edge_component_bbox_px": [273, 737, 1228, 1126]
+  },
+  "circle_owner": {
+    "primitive_id": "rawcirc-2d8338b2",
+    "type": "circle",
+    "raster_bbox_px": [312, 938, 448, 1074],
+    "seed_rule": "source-edge pixels in the 7x7 dilation of the calibrated primitive rasterization",
+    "seed_count": 86
+  },
+  "shortest_path": {
+    "connectivity": "8-neighbor",
+    "pixel_count": 4,
+    "step_count": 3,
+    "start_px": [410, 1071],
+    "end_px": [413, 1072],
+    "path_points_px": [[410, 1071], [411, 1072], [412, 1072], [413, 1072]],
+    "path_bbox_px": [410, 1071, 413, 1072],
+    "junction_or_branch_pixel_count": 0,
+    "path_degree_histogram": {"2": 4},
+    "other_existing_primitive_neighborhood_hits_before_target": [],
+    "all_existing_primitive_neighborhood_hits_before_target": [
+      {"id": "rawcirc-2d8338b2", "type": "circle", "first_path_index": 0}
+    ],
+    "junction_free_circle_supported_branch": true
+  },
+  "result": "JUNCTION_FREE_CIRCLE_SUPPORTED_LOCAL_CONTINUATION",
+  "causal_conclusion": "A junction-free 3-step source-edge path runs from the existing circle-supported neighborhood to residual label 1517 without entering any other existing primitive's 3 px neighborhood. This closes the local continuation uncertainty sufficiently to reconsider a test-only geometry-owner coverage RED; it does not authorize production repair or semantic promotion.",
+  "red": "NOT_RUN; test-only GEOMETRY_OWNER_COVERAGE_MISMATCH_RED is pending PO22 review.",
+  "green": "NOT_RUN; no production delta.",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this bounded local-branch result to SOL PO 22. Await verdict before running the test-only coverage RED."
+}
