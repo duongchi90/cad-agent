@@ -1,0 +1,113 @@
+{
+  "schema_version": "page1-next-eligible-residual-shape-obligation-v1",
+  "state": "read_only_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "df7ed5fc6c79dc3e5e6e7349be781f3cc78df6c6",
+  "branch": "codex/page1-geometry-residual-owner-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "oracle": "NEXT_ELIGIBLE_RESIDUAL_SHAPE_OBLIGATION_ORACLE",
+  "scope": {
+    "page": 1,
+    "approved_region_bbox_px": [59, 38, 2320, 1646],
+    "selection_rule": "highest-area current-candidate source-only residual excluding components 720/858/198 and established OCR/dimension sidecars",
+    "component_source": "source-only residual connected components under existing 7x7 dilation / 3px tolerance",
+    "analytical_discriminator": "existing LINE-versus-CIRCLE/ARC shape-fit method",
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "threshold_or_preset_tuning": false,
+    "dimensions": false,
+    "new_control_plane": false
+  },
+  "provenance": {
+    "source_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "page1_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "text_observation_sha256": "b3b1429c1331d19321012c2d828ec92081b76354d8a8f3e8b001f770626548d1",
+    "dimension_observation_sha256": "483da8fe56aed158a2fe6fc29bae6b61973e575c079d07febeea772baf6476c9",
+    "oracle_report_sha256": "40950f3c33421e5be4b56ba53d3e5ff0c9c3933a7352dae3ac6190ee63ec7a4d",
+    "oracle_report_path_private": "C:/temp/cad-agent-bvtl-sheets-fidelity-20260914-current-main-next-shape-v1/oracle-report.json"
+  },
+  "residual_population": {
+    "source_only_residual_components": 2221,
+    "excluded_component_labels": [198, 720, 858],
+    "established_ocr_box_count": 80,
+    "eligible_component_count_under_bbox_sidecar_filter": 1806,
+    "selected_is_largest_eligible": true
+  },
+  "selected_component": {
+    "label": 501,
+    "area_px": 412,
+    "bbox_xyxy_px_crop": [366, 408, 519, 471],
+    "bbox_xyxy_px_global": [425, 446, 578, 509],
+    "sidecar_bbox_overlap": false,
+    "sidecar_overlap_px": 0,
+    "outside_existing_table_roi": true,
+    "current_candidate_coverage_within_3px": 0.0
+  },
+  "sidecar_admissibility": {
+    "ocr_box_count": 80,
+    "approved_dimension_line_ids": ["rawline-2e7a2d81", "rawline-5c0fc7e1"],
+    "table_roi_global_y_start": 1095,
+    "table_owner_records": "NONE; current table audit is NOT_EVALUATED",
+    "linetype_hatch_owner_records": "NONE"
+  },
+  "existing_owner_observation": {
+    "crop_raw": {"LINE": 520, "CIRCLE": 19, "ARC": 0},
+    "best_raw_line_support_within_3px": 0.0,
+    "best_raw_circle_support_within_3px": 0.0,
+    "interpretation": "Current production RawLine/RawCircle extraction provides no witness for the selected residual at the established 3px support test; it emits zero RawArc by default."
+  },
+  "shape_fits": {
+    "straight_line": {
+      "pca_support_within_3px": 0.15776699029126215,
+      "fit_segment_px": [
+        [511.1377229240153, 402.359275987536],
+        [359.77138142167587, 450.35756730019887]
+      ],
+      "interpretation": "A single straight line explains only a small minority of the selected obligation."
+    },
+    "circle_arc": {
+      "fit": "least_squares_circle_with_minimal_contiguous_arc_span",
+      "center_px": [454.7356135292059, 503.4106249538523],
+      "radius_px": 92.79883360399872,
+      "arc_span_deg": 107.91112537154225,
+      "source_support_within_3px": 0.5995145631067961,
+      "fit_residual_px": {
+        "median": 2.3694469471398847,
+        "p90": 6.829371650416285,
+        "p95": 8.402073683568316,
+        "max": 15.988819405215438
+      }
+    }
+  },
+  "classification": {
+    "status": "ARC_SHAPE_OBLIGATION_RECURS",
+    "shape_class": "PARTIAL_CIRCLE_ARC_LOCUS",
+    "minimum_source_supported_primitive_set_for_0_5_threshold": ["ARC"],
+    "missing_production_witness": "ARC",
+    "first_loss_stage": "UPSTREAM_ARC_DETECTION_OR_WITNESS_UNPROVEN",
+    "causal_interpretation": "The next largest eligible source-only residual is independently explained by a partial circular locus above the established 0.5 support threshold, while the unchanged production RawLine/RawCircle extraction supplies no witness. The existing RawArc carrier is representable, but no detector or extraction change is authorized by this read-only oracle.",
+    "production_repair_authorized": false,
+    "green_authorized": false
+  },
+  "safety": {
+    "read_only_oracle": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions_acceptance": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "next_single_bounded_action": "ROUTE_THIS_ORACLE_TO_SOL_PO22_AND_WAIT_FOR_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Fresh-read exact GitHub/source/evidence. Independently verify component 501 selection, sidecar exclusions, line-versus-circle/arc fits, source support, and current RawLine/RawCircle owner support. Decide whether ARC recurrence is causal and what one smallest next action is. Do not authorize ARC detection/tuning, product GREEN, dimensions, source/CAD mutation, merge, or a new control plane."
+}
