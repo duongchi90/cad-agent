@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+from primitive_ir_lib.geometry_extraction import RawArc, RawCircle, RawGeometry, RawLine
 from primitive_ir_lib.text_extraction import RawText
 from cad_agent.fidelity import (
     FidelityError,
@@ -2052,17 +2052,42 @@ def test_region_quality_selects_filtered_geometry_only_when_f1_improves() -> Non
 
     crop = np.full((160, 200, 3), 255, dtype=np.uint8)
     cv2.line(crop, (20, 80), (180, 80), (0, 0, 0), 1)
-    raw = RawGeometry(lines=[
-        RawLine("main", (20.0, 80.0), (180.0, 80.0), 1.0, (20.0, 80.0, 180.0, 80.0)),
-        RawLine("noise-1", (20.0, 25.0), (27.0, 25.0), 0.2, (20.0, 25.0, 27.0, 25.0)),
-        RawLine("noise-2", (35.0, 35.0), (42.0, 35.0), 0.2, (35.0, 35.0, 42.0, 35.0)),
-    ])
+    raw = RawGeometry(
+        lines=[
+            RawLine("main", (20.0, 80.0), (180.0, 80.0), 1.0, (20.0, 80.0, 180.0, 80.0)),
+            RawLine("noise-1", (20.0, 25.0), (27.0, 25.0), 0.2, (20.0, 25.0, 27.0, 25.0)),
+            RawLine("noise-2", (35.0, 35.0), (42.0, 35.0), 0.2, (35.0, 35.0, 42.0, 35.0)),
+        ],
+        arcs=[RawArc("arc", (100.0, 80.0), 25.0, 0.0, 90.0, 1.0, (75.0, 55.0, 125.0, 105.0))],
+    )
 
     selected, quality = _select_fidelity_geometry(raw, crop, 1.0)
 
     assert quality["selected_profile"] == "filtered"
     assert quality["filtered"]["edge_metric"]["f1"] > quality["baseline"]["edge_metric"]["f1"]
     assert [line.id for line in selected.lines] == ["main"]
+    assert [arc.id for arc in selected.arcs] == ["arc"]
+
+
+def test_region_quality_preserves_arcs_in_baseline_profile() -> None:
+    from cad_agent.fidelity import _select_fidelity_geometry
+
+    crop = np.full((160, 200, 3), 255, dtype=np.uint8)
+    cv2.line(crop, (20, 80), (180, 80), (0, 0, 0), 1)
+    cv2.circle(crop, (60, 40), 15, (0, 0, 0), 1)
+    arc = RawArc("arc", (100.0, 80.0), 25.0, 0.0, 90.0, 1.0, (75.0, 55.0, 125.0, 105.0))
+    raw = RawGeometry(
+        lines=[RawLine("main", (20.0, 80.0), (180.0, 80.0), 1.0, (20.0, 80.0, 180.0, 80.0))],
+        circles=[RawCircle("circle", (60.0, 40.0), 15.0, 1.0, (45.0, 25.0, 75.0, 55.0))],
+        arcs=[arc],
+    )
+
+    selected, quality = _select_fidelity_geometry(raw, crop, 1.0)
+
+    assert quality["selected_profile"] == "baseline"
+    assert [line.id for line in selected.lines] == ["main"]
+    assert [circle.id for circle in selected.circles] == ["circle"]
+    assert [item.id for item in selected.arcs] == [arc.id]
 
 
 def test_table_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_path: Path) -> None:

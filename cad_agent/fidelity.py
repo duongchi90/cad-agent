@@ -62,6 +62,7 @@ def _filter_fidelity_geometry(raw: RawGeometry) -> RawGeometry:
     return RawGeometry(
         lines=[item[2] for item in retained],
         circles=list(raw.circles),
+        arcs=list(raw.arcs),
     )
 
 
@@ -421,6 +422,7 @@ def run_fidelity_reconstruct(
             image_width_px=crop.shape[1], image_height_px=crop.shape[0],
             calibration=Calibration(unit="mm", pixel_to_unit_scale=scale, origin_px=(0.0, float(crop.shape[0])), method="manual_override", reference_note="Approved fidelity-layout region in paper millimetres."),
             raw_lines=selected_raw.lines, raw_circles=selected_raw.circles, raw_texts=[], sha256=sha256_file(rendered),
+            raw_arcs=selected_raw.arcs,
         )
         dxf = candidate_root / "geometry.dxf"
         build_dxf(doc, str(dxf), build_components=False)
