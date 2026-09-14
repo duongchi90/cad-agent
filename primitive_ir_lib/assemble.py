@@ -1,5 +1,5 @@
 """
-assemble.py — Ghép RawLine/RawCircle/RawText (tọa độ pixel) + Calibration
+assemble.py — Ghép RawLine/RawCircle/RawArc/RawText (tọa độ pixel) + Calibration
 thành PrimitiveIRDocument hoàn chỉnh (tọa độ CAD, đúng primitive_ir.schema.json).
 
 Đây là bước "chốt hạ" nối 3 module geometry_extraction / text_extraction /
@@ -12,9 +12,9 @@ from __future__ import annotations
 from typing import List, Optional
 
 from .calibration import Calibration
-from .geometry_extraction import RawCircle, RawLine
+from .geometry_extraction import RawArc, RawCircle, RawLine
 from .models import (
-    CircleGeometry, LineGeometry, Primitive,
+    ArcGeometry, CircleGeometry, LineGeometry, Primitive,
     PrimitiveIRDocument, SourceDocument, Trace, now_iso,
 )
 from .text_extraction import RawText
@@ -42,6 +42,31 @@ def circle_to_primitive(raw: RawCircle, calibration: Calibration, tool: str = "o
         source="geometry_opencv",
         confidence=raw.confidence,
         geometry=CircleGeometry(center, radius),
+        trace=Trace(bbox_px=raw.bbox_px, extraction_tool=tool, extracted_at=now_iso()),
+    )
+
+
+def arc_to_primitive(raw: RawArc, calibration: Calibration, tool: str = "opencv-canny-hough-v1") -> Primitive:
+    """Convert an observed pixel-space arc to the existing CAD ArcGeometry.
+
+    Pixel angles increase clockwise because image y points down.  CAD angles
+    increase counter-clockwise because CAD y points up, so the endpoints are
+    negated and swapped while normalizing to one turn.  An unwrapped pixel
+    end angle therefore preserves the observed sweep across the zero angle.
+    """
+    center = calibration.pixel_to_cad(*raw.center_px)
+    radius = raw.radius_px * calibration.pixel_to_unit_scale
+    return Primitive(
+        id=raw.id,
+        type="arc",
+        source="geometry_opencv",
+        confidence=raw.confidence,
+        geometry=ArcGeometry(
+            center=center,
+            radius=radius,
+            start_angle_deg=(-raw.end_angle_deg) % 360.0,
+            end_angle_deg=(-raw.start_angle_deg) % 360.0,
+        ),
         trace=Trace(bbox_px=raw.bbox_px, extraction_tool=tool, extracted_at=now_iso()),
     )
 
@@ -84,6 +109,7 @@ def build_document(
     raw_circles: List[RawCircle],
     raw_texts: List[RawText],
     sha256: Optional[str] = None,
+    raw_arcs: Optional[List[RawArc]] = None,
 ) -> PrimitiveIRDocument:
     """Entry point chính: sinh PrimitiveIRDocument đầy đủ (chưa có
     cross_validations — gọi cross_validation.cross_validate() rồi gán vào
@@ -92,6 +118,7 @@ def build_document(
     primitives: List[Primitive] = []
     primitives += [line_to_primitive(l, calibration) for l in raw_lines]
     primitives += [circle_to_primitive(c, calibration) for c in raw_circles]
+    primitives += [arc_to_primitive(a, calibration) for a in (raw_arcs or [])]
     primitives += [text_to_primitive(t, calibration) for t in raw_texts]
 
     return PrimitiveIRDocument(

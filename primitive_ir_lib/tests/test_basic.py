@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import math
 
+from primitive_ir_lib.assemble import arc_to_primitive, build_document
 from primitive_ir_lib.calibration import estimate_calibration_from_reference, find_nearest_line
 from primitive_ir_lib.cross_validation import cross_validate
-from primitive_ir_lib.geometry_extraction import RawLine
-from primitive_ir_lib.models import Point2D, Primitive, LineGeometry, Trace
+from primitive_ir_lib.geometry_extraction import RawArc, RawCircle, RawGeometry, RawLine
+from primitive_ir_lib.models import Calibration, Point2D, Primitive, LineGeometry, Trace
 from primitive_ir_lib.table_extraction import build_cells, detect_grid, extract_table_cells
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
 from primitive_ir_lib.validator import validate_document
@@ -65,6 +66,75 @@ def test_pixel_to_cad_flips_y():
     p_bottom = cal.pixel_to_cad(100, 550)  # đáy line trong ảnh (y pixel lớn) = origin
     assert math.isclose(p_bottom.y, 0.0, abs_tol=1e-6)
     assert p_top.y > p_bottom.y  # CAD y phải tăng lên khi pixel y giảm (flip đúng)
+
+
+def _arc(start=351.0938, end=534.8344, id_="a1"):
+    return RawArc(
+        id=id_,
+        center_px=(429.2697, 480.6363),
+        radius_px=47.1,
+        start_angle_deg=start,
+        end_angle_deg=end,
+        confidence=0.95,
+        bbox_px=(378.0, 465.0, 483.0, 536.0),
+    )
+
+
+def test_raw_geometry_arcs_are_empty_by_default():
+    geometry = RawGeometry()
+    assert geometry.lines == []
+    assert geometry.circles == []
+    assert geometry.arcs == []
+
+
+def test_arc_to_primitive_reflects_pixel_y_and_reverses_arc_orientation():
+    calibration = Calibration(
+        unit="mm",
+        pixel_to_unit_scale=0.17634073294549343,
+        origin_px=(0.0, 1608.0),
+        method="manual_override",
+        status="verified",
+    )
+
+    primitive = arc_to_primitive(_arc(), calibration)
+
+    assert primitive.type == "arc"
+    assert math.isclose(primitive.geometry.center.x, 75.697733529292, abs_tol=1e-9)
+    assert math.isclose(primitive.geometry.center.y, 198.800141154143, abs_tol=1e-9)
+    assert math.isclose(primitive.geometry.radius, 8.305648521733, abs_tol=1e-9)
+    assert math.isclose(primitive.geometry.start_angle_deg, 185.1656, abs_tol=1e-9)
+    assert math.isclose(primitive.geometry.end_angle_deg, 8.9062, abs_tol=1e-9)
+
+
+def test_build_document_accepts_optional_arcs_without_changing_line_circle_behavior():
+    calibration = Calibration(
+        unit="mm",
+        pixel_to_unit_scale=1.0,
+        origin_px=(0.0, 100.0),
+        method="manual_override",
+        status="verified",
+    )
+    circle = RawCircle(
+        id="c1", center_px=(20.0, 20.0), radius_px=5.0,
+        confidence=0.9, bbox_px=(15.0, 15.0, 25.0, 25.0),
+    )
+
+    without_arcs = build_document(
+        "drawing.png", 0, 100, 100, calibration,
+        raw_lines=[_line((1.0, 2.0), (3.0, 4.0))],
+        raw_circles=[circle],
+        raw_texts=[],
+    )
+    with_arcs = build_document(
+        "drawing.png", 0, 100, 100, calibration,
+        raw_lines=[_line((1.0, 2.0), (3.0, 4.0))],
+        raw_circles=[circle],
+        raw_texts=[],
+        raw_arcs=[_arc(id_="a2")],
+    )
+
+    assert [primitive.type for primitive in without_arcs.primitives] == ["line", "circle"]
+    assert [primitive.type for primitive in with_arcs.primitives] == ["line", "circle", "arc"]
 
 
 def test_find_nearest_line_respects_max_distance():

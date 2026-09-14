@@ -1,7 +1,7 @@
 """
 geometry_extraction.py — Trích xuất line/circle bằng OpenCV Canny+Hough.
 
-QUAN TRỌNG: hàm ở đây trả về tọa độ PIXEL (RawLine/RawCircle), KHÔNG phải tọa
+QUAN TRỌNG: hàm ở đây trả về tọa độ PIXEL (RawLine/RawCircle/RawArc), KHÔNG phải tọa
 độ CAD. Lý do: calibration (pixel -> mm) thường chỉ xác định được SAU khi biết
 ít nhất 1 kích thước tham chiếu (thường đọc từ text) — nên geometry extraction
 và calibration là 2 bước tách rời, đúng thứ tự trong sơ đồ kiến trúc mục 2.
@@ -56,9 +56,29 @@ class RawCircle:
 
 
 @dataclass
+class RawArc:
+    """Pixel-space arc carrier for an upstream owner that already observed an arc.
+
+    Angles use the image's top-left origin and y-down coordinate system.  The
+    end angle may be unwrapped past 360 degrees so the observed sweep is not
+    lost before ``assemble.arc_to_primitive`` converts it to CAD coordinates.
+    The detector intentionally does not populate this carrier yet.
+    """
+
+    id: str
+    center_px: Tuple[float, float]
+    radius_px: float
+    start_angle_deg: float
+    end_angle_deg: float
+    confidence: float
+    bbox_px: Tuple[float, float, float, float]
+
+
+@dataclass
 class RawGeometry:
     lines: List[RawLine] = field(default_factory=list)
     circles: List[RawCircle] = field(default_factory=list)
+    arcs: List[RawArc] = field(default_factory=list)
 
 
 def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
