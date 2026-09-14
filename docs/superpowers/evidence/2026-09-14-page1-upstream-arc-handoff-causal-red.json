@@ -1,0 +1,84 @@
+{
+  "schema_version": "page1-upstream-arc-handoff-causal-red-v1",
+  "state": "test_only_intended_red",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "330ed0a857c5cda2521be7f7c8d26dceb1d31232",
+  "branch": "codex/page1-geometry-residual-owner-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "oracle": "UPSTREAM_ARC_HANDOFF_CAUSAL_RED",
+  "scope": {
+    "page": 1,
+    "component_label": 720,
+    "approved_region_bbox_px": [59, 38, 2320, 1646],
+    "unchanged_extractor": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "preset": "real_scan_tuned_v1",
+    "unchanged_assembler": "primitive_ir_lib.assemble.build_document",
+    "no_synthetic_arc_injection": true,
+    "test_only": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "provenance": {
+    "source_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "page1_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "oracle_dxf_sha256": "5efaccf64f45785cdf110b2e556af56c8fc9009331c09b0231563a4d35f8d9a8",
+    "oracle_dxf_path_private": "C:/temp/cad-agent-bvtl-sheets-fidelity-20260914-current-main-upstream-arc-red-v1/upstream-rawline-rawcircle.dxf"
+  },
+  "approved_calibration": {
+    "unit": "mm",
+    "pixel_to_unit_scale": 0.17634073294549343,
+    "origin_px": [0.0, 1608.0],
+    "method": "manual_override",
+    "status": "verified",
+    "source_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0"
+  },
+  "existing_owner_execution": {
+    "raw_LINE_count": 520,
+    "raw_CIRCLE_count": 19,
+    "primitive_type_counts": {"line": 520, "circle": 19},
+    "arc_capable_witness_present": false,
+    "dxf_builder": "dxf_builder_lib.builder.build_dxf",
+    "entity_count": 539,
+    "skipped_primitive_ids": []
+  },
+  "causal_assertion": {
+    "component_720_area_px": 474,
+    "component_720_bbox_xyxy_px_crop": [378, 465, 483, 536],
+    "required_component_720_coverage_within_3px": 0.5,
+    "actual_component_720_coverage_within_3px": 0.0,
+    "component_720_covered_px": 0,
+    "geometry_threshold_assertion": "FAIL",
+    "arc_capable_witness_assertion": "FAIL",
+    "fixture_hash_calibration_renderer_identity": "PASS",
+    "intended_failure": "absence of upstream ARC representation and insufficient component-720 coverage",
+    "first_loss_stage": "UPSTREAM_ARC_REPRESENTATION_HANDOFF"
+  },
+  "classification": {
+    "status": "RED_CONFIRMED",
+    "causal_interpretation": "The unchanged approved-crop extraction and assemble owners produce only RawLine/RawCircle-backed Primitive IR; the already-verified downstream ARC handoff is not reached. The intended assertion fails on missing ARC representation and zero component-720 coverage, with fixture/hash/calibration/renderer identity passing.",
+    "green_authorized": false,
+    "production_repair_authorized": false
+  },
+  "safety": {
+    "read_only_oracle": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions_acceptance": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "next_single_bounded_action": "ROUTE_THIS_CAUSAL_RED_TO_SOL_PO22_AND_WAIT_FOR_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Fresh-read exact GitHub/source/evidence. Independently verify the unchanged extractor/assembler path, source/calibration identity, intended component-720 failure, and that no downstream or fixture failure is being mislabeled. Return one verdict and one smallest causal next action; do not authorize production code, RawArc/extraction changes, GREEN, dimensions, tuning, source/CAD mutation, or a new control plane."
+}
