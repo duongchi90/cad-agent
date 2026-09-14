@@ -1,0 +1,67 @@
+{
+  "schema_version": "page1-label478-trace-correspondence-1.0",
+  "state": "UNRESOLVED_EXISTING_GEOMETRY_CORRESPONDENCE",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "79366e779c0549720893ce71020f2a1d927f1fd6",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only trace-to-residual correspondence oracle. Rasterize the 10 RawLine and 1 RawCircle layout_ir primitives with the existing verified calibration, identify source-edge components touched within the unchanged 3 px tolerance, and test whether residual label 478 belongs to any of those same source components. No production or artifact mutation.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "source_edge_method": "BGR-to-gray Canny-50-150",
+    "vector_tolerance": "7x7 dilation (3 px each side)",
+    "calibration": {
+      "unit": "mm",
+      "pixel_to_unit_scale": 0.17634073294549343,
+      "origin_px": [0.0, 1685.0],
+      "method": "manual_override",
+      "status": "verified"
+    }
+  },
+  "selected_residual": {
+    "label": 478,
+    "area": 365,
+    "bbox_px": [425, 445, 576, 507],
+    "centroid_px": [480.403, 466.025],
+    "source_edge_component_labels": [196],
+    "source_edge_component": {
+      "label": 196,
+      "area": 1135,
+      "bbox_px": [322, 288, 582, 562],
+      "centroid_px": [489.162, 454.745],
+      "selected_residual_is_in_parent": true
+    }
+  },
+  "correspondence_result": {
+    "rasterized_primitive_count": 11,
+    "rawline_count": 10,
+    "rawcircle_count": 1,
+    "primitive_rasterization_contract": "x_px=origin_x+x_mm/scale; y_px=origin_y-y_mm/scale; LINE/CIRCLE rasterized with existing integer pixel coordinate contract",
+    "primitive_source_component_shared_with_label478_count": 0,
+    "primitive_source_component_shared_with_label478": false,
+    "continuation_beyond_3px_established": false,
+    "result": "UNRESOLVED",
+    "interpretation": "Existing primitive bbox intersections do not establish that any primitive covers a portion of the same source-edge connected structure as residual label 478. The proposed geometry-owner coverage-mismatch RED is not reissued."
+  },
+  "per_primitive": [
+    {"id": "rawline-3e846dc7", "type": "line", "raster_bbox_px": [556, 475, 704, 475], "source_edge_pixels_near_3px": 296, "near_source_pixels_vector_covered": 296, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 24.3595},
+    {"id": "rawline-3ced4ef5", "type": "line", "raster_bbox_px": [501, 469, 567, 469], "source_edge_pixels_near_3px": 174, "near_source_pixels_vector_covered": 174, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 8.595},
+    {"id": "rawline-8a2e76ee", "type": "line", "raster_bbox_px": [309, 445, 520, 445], "source_edge_pixels_near_3px": 473, "near_source_pixels_vector_covered": 473, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 5.73},
+    {"id": "rawline-0538975b", "type": "line", "raster_bbox_px": [459, 497, 518, 500], "source_edge_pixels_near_3px": 171, "near_source_pixels_vector_covered": 171, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 20.5395},
+    {"id": "rawline-8f4df7f9", "type": "line", "raster_bbox_px": [460, 495, 588, 497], "source_edge_pixels_near_3px": 355, "near_source_pixels_vector_covered": 355, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 20.1252},
+    {"id": "rawline-84bb66f5", "type": "line", "raster_bbox_px": [531, 497, 587, 498], "source_edge_pixels_near_3px": 148, "near_source_pixels_vector_covered": 148, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 35.335},
+    {"id": "rawline-cf216e80", "type": "line", "raster_bbox_px": [458, 498, 518, 501], "source_edge_pixels_near_3px": 169, "near_source_pixels_vector_covered": 169, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 20.5395},
+    {"id": "rawline-8d25bdb0", "type": "line", "raster_bbox_px": [458, 499, 519, 502], "source_edge_pixels_near_3px": 176, "near_source_pixels_vector_covered": 176, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 21.0802},
+    {"id": "rawline-0d83a7ef", "type": "line", "raster_bbox_px": [492, 493, 560, 494], "source_edge_pixels_near_3px": 184, "near_source_pixels_vector_covered": 184, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 31.515},
+    {"id": "rawline-b92cb9ed", "type": "line", "raster_bbox_px": [504, 464, 567, 467], "source_edge_pixels_near_3px": 174, "near_source_pixels_vector_covered": 174, "near_source_pixels_vector_uncovered": 0, "shared_label478_source_component": false, "nearest_residual_distance_px": 4.775},
+    {"id": "rawcirc-e9ce88aa", "type": "circle", "raster_bbox_px": [453, 483, 523, 553], "source_edge_pixels_near_3px": 502, "near_source_pixels_vector_covered": 501, "near_source_pixels_vector_uncovered": 1, "shared_label478_source_component": false, "nearest_residual_distance_px": 21.4945}
+  ],
+  "causal_conclusion": "BBOX_INTERSECTION_DOES_NOT_ESTABLISH_TRACE_TO_RESIDUAL_PIXEL_CORRESPONDENCE. No existing primitive is independently shown to cover one portion of the same source-edge structure while label 478 is an uncovered continuation beyond 3 px.",
+  "red": "NOT_REISSUED; GEOMETRY_OWNER_COVERAGE_MISMATCH_RED remains unproven.",
+  "green": "NOT_RUN; no production delta.",
+  "next": "Classify label 478 as UNRESOLVED and, after PO22 verdict, resume one read-only residual-frontier triage iteration using the same existing owners. Do not tune, promote, or add a new owner."
+}
