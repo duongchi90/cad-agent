@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import pytest
 
-from primitive_ir_lib.geometry_extraction import RawArc, RawGeometry, extract_raw_geometry
+from primitive_ir_lib.geometry_extraction import extract_raw_geometry
 
 
 _CROP_ENV = "CAD_AGENT_PAGE1_CROP"
