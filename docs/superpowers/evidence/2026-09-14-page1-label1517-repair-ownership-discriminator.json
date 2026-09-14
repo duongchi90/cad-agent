@@ -1,0 +1,102 @@
+{
+  "schema_version": "page1-label1517-repair-ownership-discriminator-1.0",
+  "state": "REPAIR_OWNERSHIP_DISCRIMINATOR_COMPLETE",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "17638505863776891ba6211fc9f3d5f2785351fc",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only repair-ownership discriminator for rawcirc-2d8338b2 versus residual label1517 using the same approved source/vector renders, verified calibration, source component1082, and existing geometry extraction/layout_ir selection path. The accepted RED was not rerun and no production or candidate artifact was mutated.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "source_edge_method": "BGR-to-gray Canny-50-150",
+    "vector_tolerance": "7x7 dilation (3 px each side)",
+    "calibration": {
+      "unit": "mm",
+      "pixel_to_unit_scale": 0.17634073294549343,
+      "origin_px": [0.0, 1685.0],
+      "method": "manual_override",
+      "status": "verified"
+    }
+  },
+  "existing_circle_parameterization": {
+    "id": "rawcirc-2d8338b2",
+    "type": "circle",
+    "center_px_float": [379.5, 1006.5],
+    "radius_px_float": 68.400002,
+    "raster_center_px": [380, 1006],
+    "raster_radius_px": 68,
+    "layout_ir_present": true,
+    "validation_status": "unreviewed"
+  },
+  "selected_residual": {
+    "label": 1517,
+    "area": 286,
+    "bbox_px": [413, 989, 594, 1075],
+    "source_parent_component": {
+      "label": 1082,
+      "area": 5897,
+      "bbox_px": [273, 737, 1228, 1126]
+    },
+    "radial_error_to_existing_circle_px": {
+      "min": 5.169693,
+      "median": 120.100084,
+      "p95": 146.109893,
+      "max": 147.360282,
+      "within_3px": 0,
+      "within_5px": 0,
+      "within_10px": 9
+    },
+    "ideal_ring_distance_px": {
+      "min": 6.0179,
+      "median": 125.090889,
+      "max": 151.156677,
+      "within_3px": 0
+    }
+  },
+  "circle_supported_parent_evidence": {
+    "source_component": 1082,
+    "seed_count_in_existing_circle_7x7_neighborhood": 86,
+    "seed_radial_error_px": {
+      "min": 0.029686,
+      "median": 2.237327,
+      "p95": 5.407957,
+      "max": 5.946018,
+      "within_3px": 56
+    },
+    "local_branch_path_points_px": [
+      [410, 1071],
+      [411, 1072],
+      [412, 1072],
+      [413, 1072]
+    ],
+    "local_branch_path_coordinate_convention": "[x,y]",
+    "local_branch_path_radial_error_px": [2.947738, 4.280807, 4.719763, 5.169693],
+    "local_branch_max_radial_error_px": 5.169693,
+    "junction_or_branch_pixel_count": 0,
+    "other_existing_primitive_neighborhood_hits_before_target": []
+  },
+  "residual_shape_oracle": {
+    "pca_eigenvalues": [415.203429, 3679.392211],
+    "pca_major_minor_ratio": 8.861661,
+    "orthogonal_rmse_px": 20.376541,
+    "orthogonal_max_px": 46.259699
+  },
+  "selection_path_observation": {
+    "existing_circle_owner_is_present": true,
+    "existing_circle_owner_id": "rawcirc-2d8338b2",
+    "residual_is_not_circle_ring_consistent": true,
+    "center_radius_repair_supported": false,
+    "missing_circle_selection_proven": false,
+    "line_continuation_or_semantic_owner_proven": false
+  },
+  "locus_result": "CENTER_RADIUS_REPAIR_NOT_SUPPORTED; the selected residual is not geometrically consistent with the existing circle parameterization. The existing circle is present in layout_ir, but the evidence does not distinguish a missing line continuation from an extraction/selection semantic ambiguity. Smallest existing-owner locus remains GEOMETRY_EXTRACTION_SELECTION_SEMANTIC_BOUNDARY_UNRESOLVED.",
+  "repair_test_basis": "A future bounded test may inspect the existing geometry extraction/selection candidate path on a source crop that distinguishes a missing circle arc from a separate line continuation. No repair, threshold change, selector change, semantic promotion, or production mutation is authorized by this oracle.",
+  "red": "ACCEPTED_PRIOR_RED_NOT_RERUN; GEOMETRY_OWNER_COVERAGE_MISMATCH_RED remains reviewable evidence.",
+  "green": "NOT_RUN; prohibited.",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this read-only discriminator to SOL PO 22 and await verdict before any bounded repair test or further frontier action."
+}
