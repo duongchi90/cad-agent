@@ -1,0 +1,235 @@
+{
+  "schema_version": "page1-component-198-admissibility-lineage-v1",
+  "state": "read_only_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "e91b96a478a4bc5815cc89ed33caaeeca93d42ac",
+  "branch": "codex/page1-dimension-acceptance-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "oracle": "COMPONENT_198_ADMISSIBILITY_AND_LINEAGE_DISCRIMINATOR",
+  "scope": {
+    "page": 1,
+    "approved_region_bbox_px": [59, 38, 2320, 1646],
+    "comparator": "existing rendered-edge comparator with 7x7 dilation (3px tolerance)",
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "threshold_or_preset_tuning": false,
+    "dimensions": false,
+    "new_control_plane": false
+  },
+  "provenance": {
+    "source_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "page1_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "text_observation_sha256": "b3b1429c1331d19321012c2d828ec92081b76354d8a8f3e8b001f770626548d1",
+    "dimension_observation_sha256": "483da8fe56aed158a2fe6fc29bae6b61973e575c079d07febeea772baf6476c9"
+  },
+  "existing_owners": {
+    "crop_extraction": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "full_page_extraction": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "selection": "cad_agent.fidelity._select_fidelity_geometry",
+    "reconstruction_consumer": "cad_agent.fidelity.run_fidelity_reconstruct",
+    "raster_comparator": "cad_agent.fidelity._edge_metrics"
+  },
+  "component_198": {
+    "source_edge_component_label": 198,
+    "area_px": 1135,
+    "bbox_xyxy_px_crop": [263, 250, 524, 525],
+    "bbox_xyxy_px_global": [322, 288, 583, 563],
+    "sidecar_overlap_px": 0,
+    "outside_existing_table_roi": true,
+    "crop_candidate_coverage_within_3px": 0.593833,
+    "reuse_coverage_within_3px": 0.482819,
+    "coverage_delta_reuse_minus_crop": -0.111013,
+    "crop_only_trace_union_coverage_within_3px": 0.452863
+  },
+  "population": {
+    "crop_selected": {"LINE": 520, "CIRCLE": 19, "profile": "baseline"},
+    "full_page_raw": {"LINE": 517, "CIRCLE": 19},
+    "reuse_selected": {"LINE": 515, "CIRCLE": 19, "profile": "baseline"},
+    "near_component_crop_traces": 14,
+    "crop_only_traces_endpoint_error_gt_3px": 7,
+    "source_supported_crop_only_traces_at_ratio_ge_0_5": 0
+  },
+  "first_differing_primitive": {
+    "classification": "run-scoped crop extraction trace; durable geometry identity is endpoint-bound",
+    "crop_id": "rawline-08dec4bb",
+    "p1_px": [509.0, 402.0],
+    "p2_px": [509.0, 251.0],
+    "length_px": 151.0,
+    "nearest_reuse_id": "rawline-581f9cf1",
+    "nearest_reuse_endpoint_error_px": 4.0,
+    "component_coverage_contribution_within_3px": 0.146256,
+    "source_edge_support_within_3px": 0.138326
+  },
+  "near_component_traces": [
+    {
+      "crop_id": "rawline-ca2604d8",
+      "p1_px": [523.0, 420.0],
+      "p2_px": [523.0, 251.0],
+      "length_px": 169.0,
+      "nearest_reuse_id": "rawline-6f7323f6",
+      "nearest_reuse_endpoint_error_px": 0.0,
+      "component_coverage_contribution_within_3px": 0.168282,
+      "source_edge_support_within_3px": 0.162115
+    },
+    {
+      "crop_id": "rawline-08dec4bb",
+      "p1_px": [509.0, 402.0],
+      "p2_px": [509.0, 251.0],
+      "length_px": 151.0,
+      "nearest_reuse_id": "rawline-581f9cf1",
+      "nearest_reuse_endpoint_error_px": 4.0,
+      "component_coverage_contribution_within_3px": 0.146256,
+      "source_edge_support_within_3px": 0.138326
+    },
+    {
+      "crop_id": "rawline-6d938a02",
+      "p1_px": [505.0, 402.0],
+      "p2_px": [505.0, 247.0],
+      "length_px": 155.0,
+      "nearest_reuse_id": "rawline-581f9cf1",
+      "nearest_reuse_endpoint_error_px": 0.0,
+      "component_coverage_contribution_within_3px": 0.135683,
+      "source_edge_support_within_3px": 0.0
+    },
+    {
+      "crop_id": "rawline-66072cf3",
+      "p1_px": [261.0, 478.0],
+      "p2_px": [408.0, 478.0],
+      "length_px": 147.0,
+      "nearest_reuse_id": "rawline-046eac1a",
+      "nearest_reuse_endpoint_error_px": 42.0,
+      "component_coverage_contribution_within_3px": 0.129515,
+      "source_edge_support_within_3px": 0.119824
+    },
+    {
+      "crop_id": "rawline-f722fb52",
+      "p1_px": [303.0, 475.0],
+      "p2_px": [381.0, 475.0],
+      "length_px": 78.0,
+      "nearest_reuse_id": "rawline-046eac1a",
+      "nearest_reuse_endpoint_error_px": 0.0,
+      "component_coverage_contribution_within_3px": 0.096916,
+      "source_edge_support_within_3px": 0.088987
+    },
+    {
+      "crop_id": "rawline-4eb2b92a",
+      "p1_px": [304.0, 496.0],
+      "p2_px": [409.0, 532.0],
+      "length_px": 111.0,
+      "nearest_reuse_id": "rawline-046eac1a",
+      "nearest_reuse_endpoint_error_px": 57.0,
+      "component_coverage_contribution_within_3px": 0.085463,
+      "source_edge_support_within_3px": 0.062555
+    },
+    {
+      "crop_id": "rawline-34e30fe7",
+      "p1_px": [264.0, 479.0],
+      "p2_px": [332.0, 502.0],
+      "length_px": 71.784,
+      "nearest_reuse_id": "rawline-2af02555",
+      "nearest_reuse_endpoint_error_px": 24.0,
+      "component_coverage_contribution_within_3px": 0.076652,
+      "source_edge_support_within_3px": 0.069604
+    },
+    {
+      "crop_id": "rawline-49172b09",
+      "p1_px": [526.0, 295.0],
+      "p2_px": [526.0, 351.0],
+      "length_px": 56.0,
+      "nearest_reuse_id": "rawline-181ce64f",
+      "nearest_reuse_endpoint_error_px": 35.0,
+      "component_coverage_contribution_within_3px": 0.055507,
+      "source_edge_support_within_3px": 0.05022
+    },
+    {
+      "crop_id": "rawline-3d3c7018",
+      "p1_px": [250.0, 403.0],
+      "p2_px": [551.0, 403.0],
+      "length_px": 301.0,
+      "nearest_reuse_id": "rawline-8bbb8625",
+      "nearest_reuse_endpoint_error_px": 0.0,
+      "component_coverage_contribution_within_3px": 0.051982,
+      "source_edge_support_within_3px": 0.035242
+    },
+    {
+      "crop_id": "rawline-495903fa",
+      "p1_px": [377.0, 250.0],
+      "p2_px": [526.0, 250.0],
+      "length_px": 149.0,
+      "nearest_reuse_id": "rawline-c3a19bec",
+      "nearest_reuse_endpoint_error_px": 12.0,
+      "component_coverage_contribution_within_3px": 0.018502,
+      "source_edge_support_within_3px": 0.01674
+    },
+    {
+      "crop_id": "rawline-d76e0b11",
+      "p1_px": [396.0, 247.0],
+      "p2_px": [525.0, 247.0],
+      "length_px": 129.0,
+      "nearest_reuse_id": "rawline-fb586073",
+      "nearest_reuse_endpoint_error_px": 0.0,
+      "component_coverage_contribution_within_3px": 0.013216,
+      "source_edge_support_within_3px": 0.011454
+    },
+    {
+      "crop_id": "rawline-b4d09cec",
+      "p1_px": [523.0, 308.0],
+      "p2_px": [1034.0, 308.0],
+      "length_px": 511.0,
+      "nearest_reuse_id": "rawline-2a454ed5",
+      "nearest_reuse_endpoint_error_px": 18.0,
+      "component_coverage_contribution_within_3px": 0.00793,
+      "source_edge_support_within_3px": 0.006167
+    },
+    {
+      "crop_id": "rawline-ccf2c9b5",
+      "p1_px": [523.0, 305.0],
+      "p2_px": [1080.0, 305.0],
+      "length_px": 557.0,
+      "nearest_reuse_id": "rawline-1496cc27",
+      "nearest_reuse_endpoint_error_px": 0.0,
+      "component_coverage_contribution_within_3px": 0.00793,
+      "source_edge_support_within_3px": 0.006167
+    },
+    {
+      "crop_id": "rawline-e8b2dd55",
+      "p1_px": [523.0, 421.0],
+      "p2_px": [1080.0, 421.0],
+      "length_px": 557.0,
+      "nearest_reuse_id": "rawline-30117da0",
+      "nearest_reuse_endpoint_error_px": 0.0,
+      "component_coverage_contribution_within_3px": 0.00793,
+      "source_edge_support_within_3px": 0.006167
+    }
+  ],
+  "sidecar_admissibility": {
+    "ocr_box_count": 80,
+    "ocr_component_overlap": "NONE",
+    "approved_dimension_line_ids": ["rawline-2e7a2d81", "rawline-5c0fc7e1"],
+    "approved_dimension_component_overlap": "NONE",
+    "table_roi_global_y_start": 1095,
+    "table_owner_records": "NONE; current table audit is NOT_EVALUATED",
+    "linetype_hatch_owner_records": "NONE",
+    "component_outside_table_roi": true,
+    "policy": "No universal semantic-occurrence coverage was added; only established sidecar/exclusion records were checked."
+  },
+  "classification": {
+    "status": "PENDING_REVIEW",
+    "allowed_values": ["GENUINE_CROP_GEOMETRY_WITNESS", "EXPECTED_SIDECAR", "EXTRACTION_ARTIFACT"],
+    "evidence": "Component 198 has no current OCR/dimension sidecar overlap and is outside the table ROI. Seven crop-only traces differ by >3px; their union contributes 0.452863 of the component under the existing 3px geometry raster, with positive source-edge support on multiple traces. No current linetype/hatch owner record exists. The current evidence is sufficient to route classification but does not self-authorize production repair."
+  },
+  "causal_path": "crop-selected RawLine/RawCircle traces -> existing source-edge support and sidecar checks -> comparison with full-page-reuse selected traces",
+  "production_repair_authorized": false,
+  "green_authorized": false,
+  "next_single_bounded_action": "ROUTE_THIS_CLASSIFICATION_PACKET_TO_SOL_PO22_AND_WAIT_FOR_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Fresh-read exact GitHub/source/evidence. Independently verify component 198 identity, crop-only trace matching, source support, sidecar/table exclusions, and coverage contribution. Return exactly one classification and one smallest causal next action. Do not authorize GREEN, dimensions, tuning, source/CAD mutation, crop+reuse combination, or a new classifier/control plane."
+}
