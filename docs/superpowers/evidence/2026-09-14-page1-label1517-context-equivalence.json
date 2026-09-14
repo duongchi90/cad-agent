@@ -1,0 +1,146 @@
+{
+  "schema_version": "page1-label1517-context-equivalence-1.0",
+  "state": "DOWNSTREAM_GEOMETRY_HANDOFF_LOCUS",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "a969f6db3a66cb63bf4d7973757c166272579e0f",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only context-equivalence discriminator replaying the unchanged extraction, filter, and selection owners on the exact approved Page-1 region whose reconstruction path covers residual label 1517. No production code, tests, thresholds, selectors, or private artifacts were changed; the accepted RED was not rerun.",
+  "approved_context": {
+    "manifest": {
+      "path": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\fidelity-run-manifest.json",
+      "sha256": "0b05eb742a2cf08573755e8e58d3ad03857b25498839182ffc50cb28b87eecec",
+      "source": {
+        "name": "BVTL_raster_A3_sheets.pdf",
+        "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+        "kind": "pdf"
+      }
+    },
+    "proposal": {
+      "path": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\region_proposals\\page_01-r2.json",
+      "sha256": "5515bdd5ace64fcfc2dd763301e663f8ee52d8792c2bcf8fef03c94cde54252d",
+      "definition_sha256": "a69f8d53e6862b9275ebed6e6c933de026a2bc3e1cb8052b64280132e3dc8c02",
+      "revision": 2,
+      "page": {
+        "number": 1,
+        "render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+        "render_width_px": 2382,
+        "render_height_px": 1685,
+        "dpi": 144,
+        "coordinate_system": "pixel-top-left"
+      },
+      "region": {
+        "id": "page1",
+        "bbox_px": [59, 38, 2320, 1646],
+        "purpose": "layout-reconstruction"
+      }
+    },
+    "approval": {
+      "path": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\region_approvals\\page_01-r2.json",
+      "sha256": "c4a98156643b868ffc6f2e40d317ceed9d4bb0101f0c822df3dfb8ec070bf503",
+      "proposal_artifact": "region_proposals/page_01-r2.json",
+      "proposal_sha256": "5515bdd5ace64fcfc2dd763301e663f8ee52d8792c2bcf8fef03c94cde54252d",
+      "approved_region_ids": ["page1"],
+      "approval_reference": "github-409-comment-5651230636; approved semantic multiplicity contract; page1 replay only"
+    }
+  },
+  "inputs": {
+    "approved_render_path": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\rendered\\page_01.png",
+    "approved_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "current_vector_render_path": "C:\\temp\\cad-agent-page1-geometry-attribution-20260914-01\\vector_render_page_01.png",
+    "current_vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5bf16337ce6b97568e5",
+    "current_layout_ir_path": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-15\\layout_ir\\page_01.json",
+    "current_layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "residual_label": 1517,
+    "residual_area": 286,
+    "residual_bbox_px": [413, 989, 595, 1076],
+    "vector_covered_residual_pixels": 0,
+    "vector_uncovered_residual_pixels": 286,
+    "source_edge_method": "BGR-to-gray Canny-50-150",
+    "vector_tolerance": "7x7 dilation (3 px each side)"
+  },
+  "exact_crop_replay": {
+    "bbox_px": [59, 38, 2320, 1646],
+    "shape_px": [2261, 1608],
+    "owner": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "preset": "real_scan_tuned_v1",
+    "filter_owner": "cad_agent.fidelity._filter_fidelity_geometry",
+    "selection_owner": "cad_agent.fidelity._select_fidelity_geometry",
+    "raw_line_count": 520,
+    "raw_circle_count": 19,
+    "filtered_line_count": 409,
+    "filtered_circle_count": 19,
+    "selected_profile": "baseline",
+    "selected_line_count": 520,
+    "selected_circle_count": 19,
+    "baseline_edge_metric": {
+      "precision": 0.986543,
+      "recall": 0.6757,
+      "f1": 0.802057,
+      "line_entities": 520,
+      "circle_entities": 19
+    },
+    "filtered_edge_metric": {
+      "precision": 0.984582,
+      "recall": 0.641721,
+      "f1": 0.77701,
+      "line_entities": 409,
+      "circle_entities": 19
+    },
+    "qualifying_rawline_candidates": [
+      {
+        "id": "rawline-881d50a4",
+        "p1_px_global": [597.0, 1074.0],
+        "p2_px_global": [597.0, 979.0],
+        "length_px": 95.0,
+        "confidence": 0.521,
+        "segment_min_distance_to_residual_px": 3.0,
+        "segment_pixels_within_3px": 1,
+        "raster_pixels_within_3px": 1,
+        "survives_filter": true,
+        "survives_selected_profile": true
+      }
+    ]
+  },
+  "exact_region_candidate": {
+    "report_path": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\reconstruction_candidates\\page_01\\page1\\report.json",
+    "report_sha256": "9efed6abcfcee349117fc682c36cbf5facbd443f877d071d2c3d2dcf748233d7",
+    "geometry_dxf_path": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\reconstruction_candidates\\page_01\\page1\\geometry.dxf",
+    "geometry_dxf_sha256": "8efe79eada8d4f49a4ca660cd990d01581398b1668d3dc1c4316273af7ce149e",
+    "state": "needs_review",
+    "region": {
+      "id": "page1",
+      "bbox_px": [59, 38, 2320, 1646]
+    },
+    "entities": {
+      "LINE": 520,
+      "CIRCLE": 19
+    },
+    "selected_profile": "baseline",
+    "occurrence_mapping": {
+      "mapped": 2,
+      "unresolved": 518
+    },
+    "qualifying_candidate_present_exactly": {
+      "candidate_id": "rawline-881d50a4",
+      "p1_px_global": [597.0, 1074.0],
+      "p2_px_global": [597.0, 979.0],
+      "matching_dxf_segment": true,
+      "gap_px": 0.0
+    }
+  },
+  "current_page1_handoff": {
+    "line_trace_count_intersecting_residual_bbox": 11,
+    "max_intersecting_trace_y_px": 1069.0,
+    "qualifying_candidate_trace_in_current_layout": false,
+    "candidate_present_in_current_vector_within_3px": false
+  },
+  "locus_result": "DOWNSTREAM_GEOMETRY_HANDOFF_LOCUS",
+  "causal_conclusion": "The exact approved Page-1 crop reproduces the existing region reconstruction path: the unchanged real_scan_tuned_v1 extraction returns 520 lines and 19 circles, the unchanged selector chooses baseline, and a qualifying RawLine reaches residual label 1517, survives filtering and selection, and is present exactly in the approved page1 candidate DXF. The current accepted Page-1 layout/vector still covers 0/286 residual pixels and has no matching qualifying candidate trace. This isolates the smallest defensible locus to the handoff/context between the approved region candidate and the current accepted Page-1 layout/vector; it does not distinguish artifact composition from another downstream owner.",
+  "material_finding": "NONE",
+  "red": "ACCEPTED_PRIOR_RED_NOT_RERUN",
+  "green": "NOT_RUN; prohibited",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this exact-head context-equivalence discriminator to SOL PO 22 and await verdict before any downstream handoff test or repair consideration."
+}
