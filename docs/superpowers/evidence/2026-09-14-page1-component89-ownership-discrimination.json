@@ -1,0 +1,74 @@
+{
+  "schema_version": "page1-component-ownership-discrimination-1.0",
+  "state": "OWNERSHIP_DISCRIMINATED",
+  "boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "4f9230d48b28d935bf866f6a401a1b9bb00c698b",
+  "candidate_state": "FROZEN_NON_PASS",
+  "owner_scope": "Read-only inspection of existing approved render, existing attribution crop, existing OCR/layout-audit sidecar, existing layout_ir, and existing primitive model definitions. No classifier, authority, registry, or runtime capability added.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235",
+    "attribution_packet_sha256": "1eed6e45d3f8f2631a470999133bb286670ca2dc5a3716e316016f0b58a3af33",
+    "existing_attribution_crop_sha256": "6449a82b4b677d5fcbf571ff2194d14689c5e6f799955532717868fe72a9da85"
+  },
+  "selected_region": {
+    "component_label": 89,
+    "bbox_px": [1898, 216, 1942, 519],
+    "source_only_edge_pixels": 441,
+    "visual_owner_observation": "The existing source/vector/residual crop shows a continuous rounded outer contour around the drawing object and side-mirror area. The selected residual is a smooth curved or compound outline, not a text glyph, dimension-value glyph, table grid, or repeated hatch mark.",
+    "eligibility": "NOT_LINE_OR_CIRCLE_AS_SINGLE_RAW_PRIMITIVE",
+    "best_supported_classification": "CURVED_OR_COMPOUND_DRAWING_CONTOUR"
+  },
+  "existing_owner_outputs": {
+    "layout_ir_primitive_type_counts": {
+      "line": 517,
+      "circle": 19,
+      "arc": 0,
+      "text": 0
+    },
+    "layout_ir_trace_bbox_intersections": 0,
+    "ocr_text_count": 80,
+    "ocr_text_bbox_intersections": 0,
+    "ocr_roi_count": 9,
+    "ocr_roi_intersections": 0,
+    "dimension_value_bbox_intersections": 0,
+    "scale_candidate_bbox_intersections": 0,
+    "table_audit_status": "not_evaluated",
+    "table_audit_note": "The existing sidecar does not provide a table-region approval; no positive table attribution is claimed.",
+    "source_pdf_structure": "Raster-only Page-1 image; no native PDF text/vector semantic records."
+  },
+  "owner_discrimination": {
+    "text": "NOT_SUPPORTED_BY_EXISTING_OCR_OUTPUT",
+    "dimension": "NOT_SUPPORTED_BY_EXISTING_DIMENSION_TEXT_OUTPUT",
+    "table": "NOT_IDENTIFIED; existing table audit is not_evaluated, while the bound crop visually places the selected pixels on the drawing contour rather than a table grid",
+    "hatch": "NOT_IDENTIFIED; selected pixels are a continuous smooth boundary in the bound crop, not repeated hatch strokes",
+    "line_or_circle": "NOT_ELIGIBLE_AS_SINGLE_PRIMITIVE; the bound contour is curved or compound and current raw geometry owner emits only RawLine/RawCircle",
+    "arc_or_compound_curve": "BEST_SUPPORTED_VISUAL_CLASSIFICATION; existing primitive model permits ArcGeometry, but current raster extraction has no RawArc output and no production change is authorized"
+  },
+  "existing_capability_reuse": {
+    "inspected": [
+      "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+      "primitive_ir_lib.models.ArcGeometry",
+      "existing layout_ir geometry output",
+      "existing layout_audit OCR/table/scale sidecar"
+    ],
+    "reused_api": "None beyond read-only existing outputs",
+    "adapter_required": "Not established by this oracle",
+    "new_capability_genuinely_missing": "Potential curved/compound raster extraction path; not implemented or promoted by this action",
+    "files_allowed_to_change": [
+      "docs/superpowers/evidence/2026-09-14-page1-component89-ownership-discrimination.json"
+    ],
+    "files_forbidden_to_duplicate": [
+      "primitive_ir_lib/geometry_extraction.py",
+      "primitive_ir_lib/models.py",
+      "schemas",
+      "governance/runtime/authority surfaces"
+    ]
+  },
+  "red_disposition": "RETIRED_EXPECTATION_NOT_PROVEN",
+  "product_consequence": "GEOMETRY_VISUAL remains the first unsatisfied boundary and remains NON_PASS. The earlier RED assertion requiring a RawLine/RawCircle for component 89 cannot be treated as a proven causal RED because this oracle does not classify the component as LINE/CIRCLE-eligible.",
+  "next": "Route this ownership result to SOL PO 22 for verdict. Do not tune thresholds, change selectors, implement GREEN, mutate source/candidate/CAD artifacts, or add governance/runtime capability before verdict."
+}
