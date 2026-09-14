@@ -1,0 +1,88 @@
+{
+  "schema_version": "page1-geometry-candidate-visual-verdict-v1",
+  "state": "bounded_private_candidate_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "77c670071c0c6ba33e1f0b3fe7a7a89688b3f8de",
+  "branch": "codex/page1-dimension-acceptance-20260914",
+  "scope": {
+    "page": 1,
+    "approved_region": "page1",
+    "approved_bbox_px": [59, 38, 2320, 1646],
+    "mode": "existing cad_agent.fidelity owner; disposable private output only",
+    "production_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions_run": false,
+    "semantic_occurrence_authority": false
+  },
+  "provenance": {
+    "source": {
+      "name": "BVTL_raster_A3_sheets.pdf",
+      "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+    },
+    "render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "region_approval_sha256": "c4a98156643b868ffc6f2e40d317ceed9d4bb0101f0c822df3dfb8ec070bf503",
+    "region_proposal_sha256": "5515bdd5ace64fcfc2dd763301e663f8ee52d8792c2bcf8fef03c94cde54252d"
+  },
+  "owner_execution": {
+    "owner": "cad_agent.fidelity.run_fidelity_reconstruct",
+    "runtime": ".venv-py311/Scripts/python.exe",
+    "selected_profile": "baseline",
+    "entities": {
+      "LINE": 520,
+      "CIRCLE": 19
+    },
+    "candidate_report_state": "needs_review",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "overlay_sha256": "c46f6435870f0e3d830aa9f4c2a341a3448e6596f2f402a0ea35acc5d603de76",
+    "source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7"
+  },
+  "visual_oracle": {
+    "renderer": "existing ezdxf-pymupdf candidate renderer",
+    "edge_detector": "canny-50-150",
+    "tolerance_px": 3,
+    "baseline": {
+      "precision": 0.986543,
+      "recall": 0.6757,
+      "f1": 0.802057,
+      "line_entities": 520,
+      "circle_entities": 19
+    },
+    "filtered": {
+      "precision": 0.984582,
+      "recall": 0.641721,
+      "f1": 0.77701,
+      "line_entities": 409,
+      "circle_entities": 19
+    },
+    "selected_candidate": {
+      "precision": 0.985836,
+      "recall": 0.679721,
+      "f1": 0.804648
+    },
+    "visual_inspection": "Overlay contains substantial source-only residual strokes across the approved page; the candidate report remains needs_review and explicitly leaves text/dimensions/linetypes/tables sidecar-only. The overlay and metric are diagnostic evidence, not an acceptance PASS."
+  },
+  "verdict": {
+    "geometry_visual": "FAIL",
+    "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+    "why": "A current-main-equivalent candidate now exists, but the bounded visual oracle does not pass and the existing owner reports unresolved visual fidelity. The metric increase is not product acceptance.",
+    "dimensions": "NOT_REACHED",
+    "duplicate_overmerge_missing_geometry": "NOT_REACHED",
+    "editable_readback": "NOT_RUN",
+    "save_reopen_deterministic_equivalence": "NOT_RUN"
+  },
+  "causal_attribution": {
+    "causal_path": "current-main source/render/approved region -> run_fidelity_reconstruct -> current candidate overlay/report",
+    "current_reachability": "Candidate generation and bounded visual comparison are reachable through the existing owner; acceptance remains needs_review.",
+    "material_consequence": "Do not promote candidate, run dimensions, or claim Page-1 acceptance.",
+    "existing_owner": "cad_agent.fidelity.run_fidelity_reconstruct and existing visual edge oracle",
+    "repair_authorization": "NO"
+  },
+  "next_single_bounded_action": "WAIT_FOR_SOL_PO22_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Independently verify current-main product-code identity, region/source/render bindings, candidate counts, visual residual claim, and that the metric increase is not acceptance. Return whether a causal RED is justified or whether the current hypothesis must be retired, with one next bounded action only."
+}
