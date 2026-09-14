@@ -1,0 +1,113 @@
+{
+  "schema_version": "page1-label1517-lineage-discriminator-1.0",
+  "state": "PROVENANCE_LINEAGE_MISMATCH",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "4e9d97e0b0c695d5cab22e62647c35aaa7e3b88f",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only witness-line lineage discriminator through the existing downstream chain. It checked the exact approved page1 candidate, available run_fidelity_compose outputs, and current accepted Page-1 layout IR/vector identities. No production code, tests, thresholds, selectors, source, candidate, CAD, or private artifacts were changed.",
+  "witness": {
+    "id": "rawline-881d50a4",
+    "p1_px_global": [597.0, 1074.0],
+    "p2_px_global": [597.0, 979.0],
+    "residual_label": 1517,
+    "candidate_survives_exact_approved_crop": true,
+    "candidate_present_exact_approved_candidate": true,
+    "candidate_segment_gap_px": 0.0
+  },
+  "exact_approved_candidate": {
+    "source": {
+      "name": "BVTL_raster_A3_sheets.pdf",
+      "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+    },
+    "render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "proposal": {
+      "artifact": "region_proposals/page_01-r2.json",
+      "sha256": "5515bdd5ace64fcfc2dd763301e663f8ee52d8792c2bcf8fef03c94cde54252d",
+      "definition_sha256": "a69f8d53e6862b9275ebed6e6c933de026a2bc3e1cb8052b64280132e3dc8c02",
+      "revision": 2
+    },
+    "approval": {
+      "artifact": "region_approvals/page_01-r2.json",
+      "sha256": "c4a98156643b868ffc6f2e40d317ceed9d4bb0101f0c822df3dfb8ec070bf503",
+      "approved_region_id": "page1",
+      "bbox_px": [59, 38, 2320, 1646]
+    },
+    "candidate_report": {
+      "sha256": "9efed6abcfcee349117fc682c36cbf5facbd443f877d071d2c3d2dcf748233d7",
+      "state": "needs_review",
+      "entities": {"LINE": 520, "CIRCLE": 19}
+    },
+    "candidate_geometry_dxf": {
+      "sha256": "8efe79eada8d4f49a4ca660cd990d01581398b1668d3dc1c4316273af7ce149e",
+      "witness_exact_match": true
+    }
+  },
+  "downstream_chain_check": {
+    "compose_owner": "cad_agent.fidelity.run_fidelity_compose",
+    "compose_source_reference": "cad_agent/fidelity.py:2300-2494",
+    "compose_contract_observed": "The existing owner consumes approved region candidate geometry.dxf and copies LINE entities into reconstruction_pages/page_01/layout.dxf.",
+    "expected_compose_root_for_current_approval": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\reconstruction_pages\\page_01-r2",
+    "expected_compose_root_exists": false,
+    "standard_compose_root_for_current_approval_run": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-14\\reconstruction_pages\\page_01",
+    "standard_compose_root_exists": false,
+    "exact_current_approved_compose_output": "NOT_OBSERVED"
+  },
+  "non_matching_historical_compose_outputs": [
+    {
+      "run": "cad-agent-bvtl-sheets-fidelity-20260913-06",
+      "approval_sha256": "342d8ad7a84e0baa718b2e3fc5cb29e8680d7880031e97b5ac7c07b7c7c70a82",
+      "candidate_geometry_sha256": "5f223ef59b5d74e72f51675b6a31d2cd155cda860c94dc8641640aaa62f6e44e",
+      "composed_layout_sha256": "645d06e6cb0b710cfcdf5cebba92c4a58fbecfcc8163ab15bf2d40a6bbde3298",
+      "candidate_has_witness": true,
+      "composed_has_witness": true,
+      "current_approval_identity_match": false
+    },
+    {
+      "run": "cad-agent-bvtl-sheets-fidelity-20260913-07",
+      "approval_sha256": "342d8ad7a84e0baa718b2e3fc5cb29e8680d7880031e97b5ac7c07b7c7c70a82",
+      "candidate_geometry_sha256": "150c2fbf980b750af6f17b6c58778618e23972f671747b6c6e1a1a291a7d70b7",
+      "composed_layout_sha256": "4dee87dd5331cccf58da4644152d612180302e8b7f74c33b5b0c9f4764d82d28",
+      "candidate_has_witness": true,
+      "composed_has_witness": true,
+      "current_approval_identity_match": false
+    },
+    {
+      "run": "cad-agent-bvtl-sheets-fidelity-20260913-08",
+      "approval_sha256": "342d8ad7a84e0baa718b2e3fc5cb29e8680d7880031e97b5ac7c07b7c7c70a82",
+      "candidate_geometry_sha256": "52becbd62ac299cd464d0c18aea5e50e5cc0e67887cd80c8641441d5c4f5c070",
+      "composed_layout_sha256": "d2b154de5ce1706037a08d279a799e261577a999ff6ddcbf76d42bb02dfa060f",
+      "candidate_has_witness": true,
+      "composed_has_witness": true,
+      "current_approval_identity_match": false
+    },
+    {
+      "run": "cad-agent-bvtl-sheets-fidelity-20260913-10",
+      "approval_sha256": "0826e157d104473ded9b1eff656a53ca7536599a6f08bcb2981566cf5a67ce84",
+      "candidate_geometry_sha256": "5c754868c1f8d2d0a622541bd8fdc9d61c2e9030d51d7972d02a1325c1e46131",
+      "composed_layout_sha256": "e26af34d6daf0e05b4f2550a67d885fb92ffdb8fc704120617a3afa5bf03676d",
+      "candidate_has_witness": true,
+      "composed_has_witness": true,
+      "current_approval_identity_match": false
+    }
+  ],
+  "current_accepted_artifacts": {
+    "layout_ir": {
+      "sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+      "matching_witness_trace_ids": []
+    },
+    "vector_render": {
+      "sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5bf16337ce6b97568e5",
+      "residual_label_1517_covered": 0,
+      "residual_label_1517_total": 286
+    },
+    "same_current_approved_candidate_to_compose_to_layout_vector_chain_proven": false
+  },
+  "causal_conclusion": "The exact current approved candidate contains the witness, and historical same-source compose runs preserve analogous witness geometry, but no compose output bound to the current approval/candidate identity exists. The current accepted layout IR/vector are not deterministically proven to descend from that approved candidate/composed artifact. Therefore the first falsifiable result is PROVENANCE_LINEAGE_MISMATCH; COMPOSE_LOCUS, LAYOUT_IR_HANDOFF_LOCUS, and VECTOR_RENDER_LOCUS cannot be distinguished from the current artifacts.",
+  "material_finding": "PROVENANCE_LINEAGE_MISMATCH",
+  "red": "ACCEPTED_PRIOR_RED_NOT_RERUN",
+  "green": "NOT_RUN; prohibited",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Freeze this candidate/HEAD, route the exact evidence packet to SOL PO 22, and await verdict. Do not repair or create a compose artifact until lineage disposition is reviewed."
+}
