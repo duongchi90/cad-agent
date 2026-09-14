@@ -87,7 +87,7 @@ def test_raw_geometry_arcs_are_empty_by_default():
     assert geometry.arcs == []
 
 
-def test_arc_to_primitive_reflects_pixel_y_and_reverses_arc_orientation():
+def test_arc_to_primitive_preserves_current_cartesian_angle_convention():
     calibration = Calibration(
         unit="mm",
         pixel_to_unit_scale=0.17634073294549343,
@@ -102,8 +102,8 @@ def test_arc_to_primitive_reflects_pixel_y_and_reverses_arc_orientation():
     assert math.isclose(primitive.geometry.center.x, 75.697733529292, abs_tol=1e-9)
     assert math.isclose(primitive.geometry.center.y, 198.800141154143, abs_tol=1e-9)
     assert math.isclose(primitive.geometry.radius, 8.305648521733, abs_tol=1e-9)
-    assert math.isclose(primitive.geometry.start_angle_deg, 185.1656, abs_tol=1e-9)
-    assert math.isclose(primitive.geometry.end_angle_deg, 8.9062, abs_tol=1e-9)
+    assert math.isclose(primitive.geometry.start_angle_deg, 351.0938, abs_tol=1e-9)
+    assert math.isclose(primitive.geometry.end_angle_deg, 534.8344 % 360.0, abs_tol=1e-9)
 
 
 def test_build_document_accepts_optional_arcs_without_changing_line_circle_behavior():

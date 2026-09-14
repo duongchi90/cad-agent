@@ -15,7 +15,9 @@ import numpy as np
 import pytest
 
 from cad_agent.fidelity import _render_layout_dxf
+from primitive_ir_lib.assemble import arc_to_primitive
 from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+from primitive_ir_lib.models import Calibration
 
 
 _CROP_ENV = "CAD_AGENT_PAGE1_CROP"
@@ -92,6 +94,45 @@ def _component_coverage(component: np.ndarray, arc, shape: tuple[int, int]) -> f
     return float(np.logical_and(component, tolerance).sum() / max(1, component.sum()))
 
 
+def _rasterize_arc_primitive(primitive, calibration: Calibration, shape: tuple[int, int]) -> np.ndarray:
+    geometry = primitive.geometry
+    scale = calibration.pixel_to_unit_scale
+    center_x = geometry.center.x / scale + calibration.origin_px[0]
+    center_y = calibration.origin_px[1] - geometry.center.y / scale
+    radius = geometry.radius / scale
+    start = geometry.start_angle_deg
+    end = geometry.end_angle_deg
+    if end <= start:
+        end += 360.0
+    angles = np.arange(start, end + 0.25, 0.25)
+    points = np.column_stack(
+        (
+            center_x + radius * np.cos(np.radians(angles)),
+            center_y - radius * np.sin(np.radians(angles)),
+        )
+    )
+    mask = np.zeros(shape, dtype=np.uint8)
+    cv2.polylines(
+        mask,
+        [np.rint(points).astype(np.int32).reshape((-1, 1, 2))],
+        isClosed=False,
+        color=255,
+        thickness=1,
+    )
+    return mask
+
+
+def _primitive_component_coverage(
+    component: np.ndarray,
+    primitive,
+    calibration: Calibration,
+    shape: tuple[int, int],
+) -> float:
+    primitive_mask = _rasterize_arc_primitive(primitive, calibration, shape)
+    tolerance = cv2.dilate(primitive_mask, _COMPARATOR_KERNEL) > 0
+    return float(np.logical_and(component, tolerance).sum() / max(1, component.sum()))
+
+
 def test_page1_arc_extraction_red_green_contract():
     crop_value = os.environ.get(_CROP_ENV)
     candidate_value = os.environ.get(_CANDIDATE_DXF_ENV)
@@ -121,6 +162,53 @@ def test_page1_arc_extraction_red_green_contract():
     coverage = {
         name: max(
             (_component_coverage(components[name], arc, image.shape[:2]) for arc in geometry.arcs),
+            default=0.0,
+        )
+        for name in _EXPECTED_COMPONENTS
+    }
+    assert coverage["720"] >= 0.5, coverage
+    assert coverage["501"] >= 0.5, coverage
+    assert coverage["385"] < 0.5, coverage
+
+
+def test_page1_arc_assembly_transform_red_green_contract():
+    crop_value = os.environ.get(_CROP_ENV)
+    candidate_value = os.environ.get(_CANDIDATE_DXF_ENV)
+    if not crop_value or not candidate_value:
+        pytest.skip(
+            f"set {_CROP_ENV} and {_CANDIDATE_DXF_ENV} to run the approved Page-1 source-bound test"
+        )
+    crop = Path(crop_value)
+    candidate_dxf = Path(candidate_value)
+    if not crop.is_file():
+        raise AssertionError(f"{_CROP_ENV} does not point to a file: {crop}")
+    if not candidate_dxf.is_file():
+        raise AssertionError(
+            f"{_CANDIDATE_DXF_ENV} does not point to a file: {candidate_dxf}"
+        )
+    assert _sha256(crop) == _EXPECTED_CROP_SHA256
+    assert _sha256(candidate_dxf) == _EXPECTED_CANDIDATE_DXF_SHA256
+
+    image = cv2.imread(str(crop), cv2.IMREAD_COLOR)
+    assert image is not None and tuple(image.shape[:2]) == (1608, 2261)
+    geometry = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+    components = _source_residual_components(crop, candidate_dxf)
+    calibration = Calibration(
+        unit="mm",
+        pixel_to_unit_scale=0.17634073294549343,
+        origin_px=(0.0, 1608.0),
+        method="manual_override",
+        status="verified",
+    )
+    primitives = [arc_to_primitive(arc, calibration) for arc in geometry.arcs]
+    coverage = {
+        name: max(
+            (
+                _primitive_component_coverage(
+                    components[name], primitive, calibration, image.shape[:2]
+                )
+                for primitive in primitives
+            ),
             default=0.0,
         )
         for name in _EXPECTED_COMPONENTS

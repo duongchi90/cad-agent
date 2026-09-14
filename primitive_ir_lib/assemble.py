@@ -49,10 +49,10 @@ def circle_to_primitive(raw: RawCircle, calibration: Calibration, tool: str = "o
 def arc_to_primitive(raw: RawArc, calibration: Calibration, tool: str = "opencv-canny-hough-v1") -> Primitive:
     """Convert an observed pixel-space arc to the existing CAD ArcGeometry.
 
-    Pixel angles increase clockwise because image y points down.  CAD angles
-    increase counter-clockwise because CAD y points up, so the endpoints are
-    negated and swapped while normalizing to one turn.  An unwrapped pixel
-    end angle therefore preserves the observed sweep across the zero angle.
+    The extraction owner already computes angles in the Cartesian/y-up frame
+    implied by ``Calibration.pixel_to_cad``.  Preserve that convention at the
+    existing CAD handoff; normalize only the endpoint values required by the
+    native ARC representation.
     """
     center = calibration.pixel_to_cad(*raw.center_px)
     radius = raw.radius_px * calibration.pixel_to_unit_scale
@@ -64,8 +64,8 @@ def arc_to_primitive(raw: RawArc, calibration: Calibration, tool: str = "opencv-
         geometry=ArcGeometry(
             center=center,
             radius=radius,
-            start_angle_deg=(-raw.end_angle_deg) % 360.0,
-            end_angle_deg=(-raw.start_angle_deg) % 360.0,
+            start_angle_deg=raw.start_angle_deg % 360.0,
+            end_angle_deg=raw.end_angle_deg % 360.0,
         ),
         trace=Trace(bbox_px=raw.bbox_px, extraction_tool=tool, extracted_at=now_iso()),
     )
