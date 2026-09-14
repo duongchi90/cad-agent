@@ -1,0 +1,52 @@
+{
+  "schema_version": "page1-geometry-extraction-red-1.0",
+  "state": "CAUSAL_RED",
+  "boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_red_packet_commit": "29de0778f497169b63f018103d39c80f1a5a221a",
+  "canonical_branch": "origin/codex/page1-acceptance-matrix-20260914",
+  "owner": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+  "causal_claim": "The approved Page-1 source-supported residual component is lost before layout emission because the unchanged existing extractor emits no raw primitive intersecting the component bbox.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_dwg_sha256": "6b2e138112e85dc744de8406484652b3c18774e36a414d54344687f9ec7e32d2",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "attribution_packet_sha256": "1eed6e45d3f8f2631a470999133bb286670ca2dc5a3716e316016f0b58a3af33",
+    "fidelity_report_sha256": "75e6a20f8acef0e477dc321dabf8cdb5a94cd938292e369f95f33c5200dbcfb1"
+  },
+  "extraction": {
+    "preset": "real_scan_tuned_v1",
+    "configuration_unchanged": true,
+    "source_render_is_approved_identity": true,
+    "command": "extract_raw_geometry(cv2.imread(approved_page1_render), preset='real_scan_tuned_v1')",
+    "raw_total": 536,
+    "raw_lines": 517,
+    "raw_circles": 19
+  },
+  "selected_region": {
+    "attribution_component_label": 89,
+    "bbox_px": [1898, 216, 1942, 519],
+    "source_only_edge_pixels": 441,
+    "expected": "At least one existing RawLine or RawCircle bbox_px intersects the source-supported component bbox.",
+    "observed_intersecting_primitives": [],
+    "observed_intersection_count": 0
+  },
+  "red_command_result": {
+    "status": "EXPECTED_FAILURE",
+    "exit_code": 1,
+    "assertion": "source-supported component 89 yielded no extracted primitive",
+    "harness_api_binding": "RawGeometry.lines plus RawGeometry.circles; no production adapter or behavior change"
+  },
+  "scope_guards": {
+    "production_files_changed": false,
+    "thresholds_changed": false,
+    "selector_semantics_changed": false,
+    "fidelity_logic_changed": false,
+    "source_or_candidate_mutated": false,
+    "cad_artifact_mutated": false,
+    "authority_or_governance_added": false
+  },
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this exact-head test-only RED to SOL PO 22; do not implement GREEN or change extraction parameters until verdict."
+}
