@@ -1,0 +1,100 @@
+{
+  "schema_version": "page1-rawtext-lifecycle-1.0",
+  "state": "EXPECTED_SIDECAR_ONLY",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "44fe95d6c41a35ed2f1b0b0609fa2895334b310c",
+  "candidate_state": "FROZEN_NON_PASS",
+  "trace_scope": "One read-only Page-1 text-owner lifecycle trace for the first residual-frontier component with an existing OCR-owner intersection. No OCR tuning, approval creation, production emission change, source/candidate/CAD mutation, PR, promotion, or merge.",
+  "source_identity": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "page": 1,
+    "render_size_px": [2382, 1685]
+  },
+  "current_candidate": {
+    "owner": "TEXT_TESSERACT_EXISTING_LAYOUT_AUDIT_OWNER",
+    "layout_audit_artifact": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-15\\layout_audit\\page_01.json",
+    "layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235",
+    "id": "rawtext-04cde499",
+    "content": "Ll",
+    "bbox_px": [1844, 1132, 1875, 1162],
+    "semantic_role": "unknown",
+    "confidence": 0.52,
+    "source": "text_tesseract",
+    "residual_component": {
+      "label": 1839,
+      "area": 401,
+      "bbox_px": [1847, 1131, 1875, 1162],
+      "ocr_bbox_intersection": true
+    }
+  },
+  "equivalent_fidelity_observation": {
+    "artifact": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-01\\fidelity_text_observations\\page_01.json",
+    "sha256": "b3b1429c1331d19321012c2d828ec92081b76354d8a8f3e8b001f770626548d1",
+    "state": "needs_human_approval",
+    "source_layout_audit_sha256": "859299f8a95169add3389985d226c163d01e39c172c0874a9be38ae9f5c266f1",
+    "equivalence_key": {
+      "content": "Ll",
+      "bbox_px": [1844, 1132, 1875, 1162],
+      "source": "text_tesseract"
+    },
+    "equivalent_candidate_id": "rawtext-48f76126",
+    "render_identity_matches_current_candidate": true,
+    "note": "The generated candidate IDs differ between sidecar runs, but the approved PDF identity, Page-1 render hash, content, bbox, and OCR owner match. This is an evidence identity equivalence, not a new semantic identity claim."
+  },
+  "per_text_approval": {
+    "approval_artifact": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-01\\fidelity_text_approvals\\page_01.json",
+    "sha256": "0bd670ec0cd4788ee4981378dc79f91e9af95f20860e700bc1b583242a4a2427",
+    "state": "approved-text-candidates-only",
+    "approval_reference": "human-chat-2026-09-10-five-candidate-approval; rebound to canonical BVTL_raster_A3_sheets.pdf",
+    "selected_candidate_status": "NOT_APPROVED",
+    "approved_candidates": [
+      {
+        "id": "rawtext-447d99c4",
+        "content": "TAO O TO THUNG KIN THACO K190",
+        "bbox_px": [1819, 1330, 2272, 1347]
+      },
+      {
+        "id": "rawtext-4249da82",
+        "content": "THANH 0 TO TAl TAP LAI",
+        "bbox_px": [1820, 1347, 2113, 1379]
+      },
+      {
+        "id": "rawtext-992ef985",
+        "content": "O TO SAU CAl TAGs",
+        "bbox_px": [1629, 1461, 2020, 1499]
+      }
+    ],
+    "selected_candidate_matches_approved_set": false,
+    "approval_contract": "No OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check."
+  },
+  "text_reconstruction": {
+    "report_artifact": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260913-01\\text_reconstruction\\page_01\\report.json",
+    "sha256": "4fd818cd8fdfda97cb77c44dcfa18765a42dc1210dd9ae0c76838b93e4ce8e8e",
+    "state": "needs_review",
+    "text_approval_sha256": "0bd670ec0cd4788ee4981378dc79f91e9af95f20860e700bc1b583242a4a2427",
+    "emitted_text_entities": 3,
+    "emitted_candidate_ids": [
+      "rawtext-447d99c4",
+      "rawtext-4249da82",
+      "rawtext-992ef985"
+    ],
+    "selected_candidate_emitted": false,
+    "selected_candidate_reconstruction_admissible": false,
+    "unresolved_contract": "Text placement, height, style, and DXF emission require a separate approved reconstruction step."
+  },
+  "lifecycle_result": {
+    "observation": "PRESENT_AS_OCR_SIDECAR",
+    "approval": "MISSING_FOR_SELECTED_CANDIDATE",
+    "text_reconstruction": "NOT_ADMISSIBLE",
+    "final_review_candidate": "NOT_REACHED",
+    "first_required_stage_where_selected_text_disappears": "PER_TEXT_APPROVAL_GATE",
+    "causal_conclusion": "The selected residual is associated with an existing OCR observation, but the existing approval contract intentionally prevents its reconstruction/emission. layout_ir text=0 is therefore expected sidecar-only behavior, not a text-emission defect."
+  },
+  "red": "NOT_CREATED; a RED would bypass the existing per-text approval and semantic handoff contract.",
+  "green": "NOT_RUN; no production delta.",
+  "product_acceptance": "NON_PASS; GEOMETRY_VISUAL remains the first unsatisfied boundary.",
+  "next": "After PO22 verdict, return to residual-frontier triage and inspect the next decision-grade existing owner. Do not request new approval solely to advance this evidence."
+}
