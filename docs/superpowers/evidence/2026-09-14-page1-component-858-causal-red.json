@@ -1,0 +1,74 @@
+{
+  "schema_version": "page1-component-858-causal-red-v1",
+  "state": "intentional_red_failed",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "b3600c76bd5b79103aed49f6674f6f16b46315c3",
+  "branch": "codex/page1-dimension-acceptance-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "red": {
+    "oracle": "test_only_component_858_geometry_red_v1",
+    "command": ".\\.venv-py311\\Scripts\\python.exe -",
+    "exit_code": 1,
+    "intended_failure": "Missing extraction coverage for geometry-obligated component 858",
+    "fixture_identity_checks": "PASS",
+    "source_render_identity_checks": "PASS",
+    "candidate_identity_checks": "PASS",
+    "calibration_identity_checks": "PASS",
+    "assertion": "component_858_coverage_within_3px >= 0.5",
+    "actual_coverage_within_3px": 0.0,
+    "result": "RED_CONFIRMED"
+  },
+  "provenance": {
+    "source": {
+      "name": "BVTL_raster_A3_sheets.pdf",
+      "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+    },
+    "render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_overlay_sha256": "c46f6435870f0e3d830aa9f4c2a341a3448e6596f2f402a0ea35acc5d603de76",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "current_layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e"
+  },
+  "candidate_population": {
+    "preset": "real_scan_tuned_v1",
+    "raw_lines": 520,
+    "raw_circles": 19,
+    "selected_profile": "baseline",
+    "selected_lines": 520,
+    "selected_circles": 19,
+    "candidate_dxf_lines": 520,
+    "candidate_dxf_circles": 19
+  },
+  "obligated_component": {
+    "label": 858,
+    "area_px": 288,
+    "bbox_px_crop": [318, 511, 400, 544],
+    "target_segment_px_crop": [[330.0, 535.0], [500.0, 535.0]],
+    "required_coverage_within_3px": 0.5,
+    "actual_coverage_within_3px": 0.0
+  },
+  "causal_attribution": {
+    "causal_path": "approved crop -> existing extract_raw_geometry(real_scan_tuned_v1) -> selected baseline -> existing raster comparator",
+    "first_failure": "EXTRACTION_IDENTITY_MISMATCH",
+    "owner": "primitive_ir_lib.geometry_extraction.extract_raw_geometry consumed by cad_agent.fidelity.run_fidelity_reconstruct",
+    "mechanism": "The geometry-obligated source-supported target segment is absent from the selected crop extraction before selection; candidate/DXF identity is intact and no downstream loss is needed to explain the RED.",
+    "repair_scope": "test-only causal RED established; smallest production delta not yet authorized",
+    "green_authorized": false,
+    "production_mutation_authorized": false
+  },
+  "safety": {
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "production_code_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions_run": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "next_single_bounded_action": "WAIT_FOR_SOL_PO22_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Independently verify that all identity checks pass and the intended RED is the missing extraction coverage, not a fixture/calibration failure. If clear, return exactly one smallest existing-owner production delta to consider; do not authorize GREEN or merge."
+}
