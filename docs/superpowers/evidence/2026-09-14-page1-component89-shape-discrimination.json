@@ -1,0 +1,93 @@
+{
+  "schema_version": "page1-component-shape-discrimination-1.0",
+  "state": "SHAPE_DISCRIMINATION_COMPLETE",
+  "boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "b16cd8e0859cdb3c78b24051e7306a1ab00735d0",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "Read-only numeric analysis of the already-derived component-89 residual pixels. Existing Canny-50-150, 7x7 vector tolerance, and existing content-mask construction were replayed without changing production configuration. Shape summaries use direct least-squares fits and pixel topology only; no tuned classifier or production capability was added.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "attribution_packet_sha256": "1eed6e45d3f8f2631a470999133bb286670ca2dc5a3716e316016f0b58a3af33",
+    "ownership_packet_sha256": "8fb1074228fc897cead81c5b5eb9b33f6b36947e66f1363821c5fb626795c5a"
+  },
+  "residual_replay": {
+    "component_label": 89,
+    "bbox_px_inclusive": [1898, 216, 1942, 519],
+    "point_count": 441,
+    "source_only_edge_pixels": 441,
+    "residual_pixels_in_content_total": 44272,
+    "connected_component_count_area_ge_250": 8,
+    "component_reproduced_exactly": true,
+    "centroid_px": [1912.029478, 367.979592]
+  },
+  "point_and_contour_geometry": {
+    "unique_rows": 304,
+    "unique_columns": 45,
+    "bbox_width_px": 45,
+    "bbox_height_px": 304,
+    "contour_count_external": 1,
+    "contour_length_px": [883.752307],
+    "convex_hull_area_px2": 7062.5,
+    "pixel_degree_histogram_8_neighbor": {
+      "1": 2,
+      "2": 403,
+      "3": 26,
+      "4": 10
+    },
+    "degree1_endpoints": 2,
+    "degree_ge3_junction_pixels": 36,
+    "rows_with_pixels": 304,
+    "rows_span_gt_0": 38,
+    "rows_span_ge_10": 36,
+    "rows_span_ge_20": 36,
+    "rows_span_ge_30": 36,
+    "max_points_per_row": 26,
+    "max_points_per_column": 189
+  },
+  "untuned_fits": {
+    "straight_line_pca": {
+      "major_std_px": 74.056804,
+      "minor_std_px": 12.282997,
+      "minor_to_major_std_ratio": 0.165859,
+      "principal_angle_deg": 90.009128,
+      "orthogonal_rmse_px": 12.282997,
+      "orthogonal_max_px": 29.972914
+    },
+    "single_circle_algebraic_least_squares": {
+      "center_px": [1799.087987, 368.616031],
+      "radius_px": 135.615145,
+      "radial_rmse_px": 21.70551,
+      "radial_max_px": 50.150856
+    },
+    "row_median_centerline_linear_fit": {
+      "slope_x_per_y": 0.002383307,
+      "rmse_px": 5.700834,
+      "max_abs_residual_px": 35.028916,
+      "first_difference_sign_changes": 40
+    }
+  },
+  "discrimination": {
+    "straight_line": "NOT_SUPPORTED_AS_SINGLE_PRIMITIVE: the 45x304 component has PCA minor std 12.282997 px, line orthogonal max residual 29.972914 px, and 36 rows spanning at least 30 px.",
+    "single_circle": "NOT_SUPPORTED_AS_SINGLE_PRIMITIVE: best-fit circle radial RMSE is 21.70551 px with maximum radial residual 50.150856 px; the component is an open elongated contour, not a closed circular locus.",
+    "table_grid_or_hatch": "NOT_SUPPORTED_BY_TOPOLOGY: one connected component spans 304 rows with two degree-1 endpoints; 36 wide rows form a localized two-rail/connection pattern rather than repeated separated short strokes. No table/hatch owner output intersects the region; table sidecar remains not_evaluated.",
+    "curved_or_compound_contour": "BEST_SUPPORTED: the component is an open elongated contour with localized multi-pixel width, nonzero line-fit deviation, poor single-circle fit, and a two-endpoint connected topology. This is sufficient to retire the single RawLine/RawCircle expectation, but it does not establish a production repair design.",
+    "result": "DISCRIMINATED_AS_CURVED_OR_COMPOUND_VISUAL_GEOMETRY"
+  },
+  "scope_guards": {
+    "production_files_changed": false,
+    "extractor_configuration_changed": false,
+    "threshold_sweep_performed": false,
+    "selector_semantics_changed": false,
+    "new_classifier_added": false,
+    "raw_arc_implemented": false,
+    "source_candidate_or_cad_mutated": false,
+    "authority_or_governance_added": false
+  },
+  "red_disposition": "RETIRED_EXPECTATION_NOT_PROVEN",
+  "product_consequence": "GEOMETRY_VISUAL remains the first unsatisfied boundary and remains NON_PASS. Component 89 is not a proven RawLine/RawCircle extraction defect; current evidence points to curved/compound visual geometry and does not authorize GREEN.",
+  "next": "Route this exact numeric packet to SOL PO 22. Await verdict before any production change, capability extension, candidate promotion, PR, or merge."
+}
