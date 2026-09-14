@@ -1,0 +1,77 @@
+{
+  "schema_version": "page1-label1517-trace-correspondence-1.0",
+  "state": "CORRESPONDENCE_ESTABLISHED_RED_PENDING_REVIEW",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "bc37f7e8f8aa7991c90f8b300da4730325039c7b",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only trace-to-residual correspondence oracle for label 1517. The 10 RawLine and 1 RawCircle layout_ir primitives were rasterized with the existing verified calibration; source-edge connected components touched by each primitive within the unchanged 3 px tolerance were compared with the selected residual source component. No production or artifact mutation.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "source_edge_method": "BGR-to-gray Canny-50-150",
+    "vector_tolerance": "7x7 dilation (3 px each side)",
+    "calibration": {
+      "unit": "mm",
+      "pixel_to_unit_scale": 0.17634073294549343,
+      "origin_px": [0.0, 1685.0],
+      "method": "manual_override",
+      "status": "verified"
+    }
+  },
+  "selected_residual": {
+    "label": 1517,
+    "area": 286,
+    "bbox_px": [413, 989, 594, 1075],
+    "centroid_px": [533.437, 1056.007],
+    "source_edge_component_labels": [1082],
+    "source_edge_component": {
+      "label": 1082,
+      "area": 5897,
+      "bbox_px": [273, 737, 1228, 1126],
+      "selected_residual_is_in_parent": true
+    }
+  },
+  "correspondence_result": {
+    "rasterized_primitive_count": 12,
+    "rawline_count": 11,
+    "rawcircle_count": 1,
+    "primitive_source_component_shared_with_label1517_count": 1,
+    "primitive_source_component_shared_with_label1517": ["rawcirc-2d8338b2"],
+    "continuation_beyond_3px_established": true,
+    "shared_primitive_evidence": {
+      "id": "rawcirc-2d8338b2",
+      "type": "circle",
+      "raster_bbox_px": [312, 938, 448, 1074],
+      "source_edge_pixels_near_3px": 570,
+      "near_source_pixels_vector_covered": 540,
+      "near_source_pixels_vector_uncovered": 30,
+      "nearest_residual_distance_px": 6.0179,
+      "residual_to_primitive_distance_px": 6.0179,
+      "interpretation": "The circle rasterization touches the same pre-subtraction source-edge component as residual 1517; the residual is not covered within the existing 3 px tolerance and begins as an uncovered continuation beyond that tolerance."
+    },
+    "result": "CORRESPONDENCE_ESTABLISHED"
+  },
+  "per_primitive_summary": [
+    {"id": "rawline-560f5c7c", "type": "line", "raster_bbox_px": [576, 813, 576, 1038], "source_edge_pixels_near_3px": 649, "near_source_pixels_vector_covered": 649, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 10.505},
+    {"id": "rawline-9dfef755", "type": "line", "raster_bbox_px": [579, 837, 579, 1014], "source_edge_pixels_near_3px": 474, "near_source_pixels_vector_covered": 474, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 7.64},
+    {"id": "rawline-f34f4b97", "type": "line", "raster_bbox_px": [546, 868, 546, 999], "source_edge_pixels_near_3px": 411, "near_source_pixels_vector_covered": 411, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 39.155},
+    {"id": "rawline-7f675605", "type": "line", "raster_bbox_px": [574, 821, 574, 1022], "source_edge_pixels_near_3px": 435, "near_source_pixels_vector_covered": 435, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 12.415},
+    {"id": "rawline-2e652268", "type": "line", "raster_bbox_px": [544, 867, 544, 1000], "source_edge_pixels_near_3px": 417, "near_source_pixels_vector_covered": 417, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 41.065},
+    {"id": "rawline-c41adfd5", "type": "line", "raster_bbox_px": [548, 875, 548, 993], "source_edge_pixels_near_3px": 248, "near_source_pixels_vector_covered": 248, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 37.245},
+    {"id": "rawline-7efa3fc5", "type": "line", "raster_bbox_px": [391, 1036, 505, 1042], "source_edge_pixels_near_3px": 242, "near_source_pixels_vector_covered": 240, "near_source_pixels_vector_uncovered": 2, "shared_label1517_source_component": false, "nearest_residual_distance_px": 30.56},
+    {"id": "rawline-b6c835ff", "type": "line", "raster_bbox_px": [432, 1069, 490, 1069], "source_edge_pixels_near_3px": 125, "near_source_pixels_vector_covered": 125, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 3.82},
+    {"id": "rawline-8f08194f", "type": "line", "raster_bbox_px": [541, 872, 541, 990], "source_edge_pixels_near_3px": 256, "near_source_pixels_vector_covered": 256, "near_source_pixels_vector_uncovered": 0, "shared_label1517_source_component": false, "nearest_residual_distance_px": 44.3443},
+    {"id": "rawline-98af8b93", "type": "line", "raster_bbox_px": [448, 1065, 521, 1065], "source_edge_pixels_near_3px": 87, "near_source_pixels_vector_covered": 86, "near_source_pixels_vector_uncovered": 1, "shared_label1517_source_component": false, "nearest_residual_distance_px": 8.0543},
+    {"id": "rawline-2733c1ac", "type": "line", "raster_bbox_px": [445, 1059, 495, 1059], "source_edge_pixels_near_3px": 58, "near_source_pixels_vector_covered": 57, "near_source_pixels_vector_uncovered": 1, "shared_label1517_source_component": false, "nearest_residual_distance_px": 13.37},
+    {"id": "rawcirc-2d8338b2", "type": "circle", "raster_bbox_px": [312, 938, 448, 1074], "source_edge_pixels_near_3px": 570, "near_source_pixels_vector_covered": 540, "near_source_pixels_vector_uncovered": 30, "shared_label1517_source_component": true, "nearest_residual_distance_px": 6.0179}
+  ],
+  "causal_conclusion": "The circle primitive is independently shown to cover a portion of the same source-edge connected structure as residual label 1517, while the selected residual remains outside the unchanged 3 px coverage tolerance. This establishes the precondition for a test-only geometry-owner coverage RED, but not a production repair or semantic promotion.",
+  "red": "NOT_RUN; correspondence evidence is pending PO22 review before reissuing the test-only GEOMETRY_OWNER_COVERAGE_MISMATCH_RED.",
+  "green": "NOT_RUN; no production delta.",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this correspondence-established bounded result to SOL PO 22. Await verdict before running the test-only coverage RED."
+}
