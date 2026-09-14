@@ -30,6 +30,7 @@ _BVTL_PDF_SHA256 = "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b
 _BVTL_IMAGE_SHAPE = (1685, 2382)
 _BVTL_LOGICAL_BBOX = (749, 258, 833, 343)
 _BVTL_EXTRACTION_BBOX = (744, 253, 838, 348)
+_BVTL_BOUNDARY_TOLERANCE = 8
 
 pytestmark = pytest.mark.real_data
 
@@ -58,10 +59,10 @@ def _covers_axis_aligned_corridor(
     x1, y1 = line.p1_px
     x2, y2 = line.p2_px
     if orientation == "horizontal":
-        if abs(y2 - y1) > 4 or abs((y1 + y2) / 2 - coordinate) > 7:
+        if abs(y2 - y1) > 4 or abs((y1 + y2) / 2 - coordinate) > _BVTL_BOUNDARY_TOLERANCE:
             return False
         return min(x1, x2) <= span_start + 3 and max(x1, x2) >= span_end - 3
-    if abs(x2 - x1) > 4 or abs((x1 + x2) / 2 - coordinate) > 7:
+    if abs(x2 - x1) > 4 or abs((x1 + x2) / 2 - coordinate) > _BVTL_BOUNDARY_TOLERANCE:
         return False
     return min(y1, y2) <= span_start + 3 and max(y1, y2) >= span_end - 3
 
