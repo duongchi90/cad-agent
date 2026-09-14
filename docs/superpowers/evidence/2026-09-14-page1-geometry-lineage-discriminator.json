@@ -1,0 +1,97 @@
+{
+  "schema_version": "page1-geometry-lineage-discriminator-v1",
+  "state": "read_only_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "3124a40273b7263d9a77721aab8dd141c421a83b",
+  "branch": "codex/page1-dimension-acceptance-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "scope": {
+    "page": 1,
+    "candidate_epoch": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260914-current-main-geom-v1",
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "production_code_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions": false,
+    "tuning": false,
+    "new_classifier_or_control_plane": false
+  },
+  "provenance": {
+    "source": {
+      "name": "BVTL_raster_A3_sheets.pdf",
+      "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+    },
+    "render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "candidate_overlay_sha256": "c46f6435870f0e3d830aa9f4c2a341a3448e6596f2f402a0ea35acc5d603de76",
+    "current_layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e"
+  },
+  "target_witness": {
+    "full_page_primitive_id": "rawline-4bcc0188",
+    "full_page_trace_bbox_px": [389, 573, 559, 573],
+    "full_page_geometry_paper_mm": {
+      "start": [68.59654511579694, 196.0908950353887],
+      "end": [98.57446971653083, 196.0908950353887]
+    },
+    "same_calibration_crop_segment_px": {
+      "start": [330.0, 535.0],
+      "end": [500.0, 535.0]
+    },
+    "residual_component": {
+      "label": 858,
+      "area_px": 288,
+      "bbox_px_crop": [318, 511, 400, 544]
+    }
+  },
+  "lineage_checks": {
+    "fresh_crop_extraction": {
+      "preset": "real_scan_tuned_v1",
+      "raw_lines": 520,
+      "raw_circles": 19,
+      "selected_profile": "baseline",
+      "selected_lines": 520,
+      "selected_circles": 19,
+      "target_segment_present_within_1px_endpoints": false,
+      "closest_selected_line": {
+        "id": "rawline-d434e559",
+        "p1_px": [304.0, 496.0],
+        "p2_px": [409.0, 532.0],
+        "endpoint_error_px": 137.921604
+      }
+    },
+    "candidate_dxf": {
+      "line_entities": 520,
+      "target_segment_present_within_1px_endpoints": false,
+      "closest_line_handle": "1B7",
+      "closest_line_p1_px": [304.0, 496.0],
+      "closest_line_p2_px": [409.0, 532.0],
+      "closest_line_endpoint_error_px": 137.921604
+    },
+    "same_calibration_raster": {
+      "component_858_coverage_by_fresh_selected_target_ratio": 0.0,
+      "component_858_coverage_by_candidate_render_target_ratio": 0.0
+    }
+  },
+  "result": {
+    "first_loss_stage": "EXTRACTION_IDENTITY_MISMATCH",
+    "finding": "The full-page layout witness rawline-4bcc0188 is not present in the fresh approved-crop extraction population; selection, DXF handoff, and rendering cannot be blamed for this witness because the exact segment is already absent before selection.",
+    "wrong_hypothesis_retired": "rawline-4bcc0188 was treated as a primitive in the fresh selected 520-line candidate; it is only a full-page owner witness.",
+    "causal_status": "RED_READY",
+    "production_repair_authorized": false
+  },
+  "causal_attribution": {
+    "causal_path": "full-page extract_raw_geometry witness -> approved-crop extract_raw_geometry context -> selected baseline -> candidate DXF -> same-calibration raster",
+    "current_reachability": "The existing primitive_ir_lib.geometry_extraction owner is reachable and shows crop-context-dependent primitive identity; no downstream loss is implicated for this witness.",
+    "material_consequence": "A geometry visual defect is localized to extraction-context identity for this witness, but the product repair contract and smallest safe delta still require review.",
+    "existing_owner": "primitive_ir_lib.geometry_extraction.extract_raw_geometry consumed by cad_agent.fidelity.run_fidelity_reconstruct",
+    "cheapest_oracle": "Same-epoch exact endpoint comparison plus current candidate DXF and raster coverage",
+    "repair_authorization": "NO"
+  },
+  "next_single_bounded_action": "WAIT_FOR_SOL_PO22_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Independently verify the target segment identity, same-calibration endpoint comparison, selected population, candidate-DXF absence, and first-loss classification. Decide whether this RED is decision-grade and name one smallest existing-owner next action; do not authorize GREEN, tuning, dimensions, or production mutation."
+}
