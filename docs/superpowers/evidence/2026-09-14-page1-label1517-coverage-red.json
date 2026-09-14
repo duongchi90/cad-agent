@@ -1,0 +1,75 @@
+{
+  "schema_version": "page1-label1517-coverage-red-1.0",
+  "state": "GEOMETRY_OWNER_COVERAGE_MISMATCH_RED_CONFIRMED",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "e96abe7a8bd033dc28737b070c5e6712c58cf82e6",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One test-only causal RED on the unchanged approved Page-1 render, existing layout_ir RawCircle owner, verified calibration, source component correspondence, and existing 3px/7x7 coverage comparator. No production or candidate mutation.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "source_edge_method": "BGR-to-gray Canny-50-150",
+    "vector_tolerance": "7x7 dilation (3 px each side)",
+    "calibration": {
+      "unit": "mm",
+      "pixel_to_unit_scale": 0.17634073294549343,
+      "origin_px": [0.0, 1685.0],
+      "method": "manual_override",
+      "status": "verified"
+    }
+  },
+  "selected_residual": {
+    "label": 1517,
+    "area": 286,
+    "bbox_px": [413, 989, 594, 1075],
+    "vector_covered_pixels": 0,
+    "source_parent_component": {
+      "label": 1082,
+      "area": 5897,
+      "bbox_px": [273, 737, 1228, 1126]
+    }
+  },
+  "existing_owner": {
+    "id": "rawcirc-2d8338b2",
+    "type": "circle",
+    "raster_center_px": [380, 1006],
+    "raster_radius_px": 68,
+    "source_edge_pixels_near_3px": 570,
+    "near_source_pixels_vector_covered": 540,
+    "near_source_pixels_vector_uncovered": 30,
+    "shared_parent_source_pixels": 86,
+    "nearest_residual_distance_px": 6.0179
+  },
+  "local_branch": {
+    "source_component": 1082,
+    "path_connectivity": "8-neighbor",
+    "path_pixel_count": 4,
+    "path_steps": 3,
+    "path_points_px": [
+      [410, 1071],
+      [411, 1072],
+      [412, 1072],
+      [413, 1072]
+    ],
+    "junction_or_branch_pixel_count": 0,
+    "other_existing_primitive_neighborhood_hits_before_target": [],
+    "result": "JUNCTION_FREE_CIRCLE_SUPPORTED_LOCAL_CONTINUATION"
+  },
+  "red_execution": {
+    "name": "GEOMETRY_OWNER_COVERAGE_MISMATCH_RED",
+    "exit_code": 1,
+    "assertion": "Existing circle owner covers all source-supported label1517 residual pixels under unchanged 3px/7x7 contract.",
+    "observed_failure": "EXPECTED_RED: existing circle owner does not cover label1517 residual under unchanged 3px/7x7 contract",
+    "intended_causal_failure": "The existing circle-supported junction-free source branch reaches residual label1517, but current vector output covers 0/286 selected residual pixels."
+  },
+  "causal_conclusion": "The existing geometry owner has a verified local source continuation to residual label1517, with no junction or competing primitive owner, while the current vector output leaves the complete selected residual outside coverage tolerance. This proves a test-only existing-owner coverage mismatch; it does not authorize production repair, semantic promotion, threshold tuning, or product acceptance PASS.",
+  "red": "PASS_AS_INTENDED_FAILURE",
+  "green": "NOT_RUN; prohibited pending independent review.",
+  "production_mutation": "NONE",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this bounded RED to SOL PO 22 and await verdict before any GREEN or repair consideration."
+}
