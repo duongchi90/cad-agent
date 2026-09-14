@@ -1,0 +1,62 @@
+{
+  "schema_version": "page1-residual-frontier-triage-1.0",
+  "state": "FRONTIER_TRIAGE_STOPPED_AT_FIRST_DECISION_GRADE_OWNER",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "9ebd800596b6d5b19825e2f9efe3c166d9e3ba77",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "Read-only residual-frontier ranking using the same approved Page-1 source/vector renders, existing Canny-50-150 plus 7x7 vector tolerance/content mask, existing layout_ir, and existing layout_audit OCR/dimension/table sidecar. Triage stopped at the first remaining material component with decision-grade existing ownership.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235",
+    "prior_parent_source_packet_sha256": "0a6c4cd67c695c11d6f40479ddf0b5b1acdf4790b4cbcad2587074559cb95578"
+  },
+  "ranked_remaining_components": [
+    {"rank": 1, "label": 1839, "area": 401, "bbox_px": [1847, 1131, 1875, 1162], "centroid_px": [1860.673, 1145.678]},
+    {"rank": 2, "label": 92, "area": 385, "bbox_px": [1625, 245, 1886, 314], "centroid_px": [1751.894, 276.855]},
+    {"rank": 3, "label": 478, "area": 365, "bbox_px": [425, 445, 576, 507], "centroid_px": [480.403, 466.025]},
+    {"rank": 4, "label": 106, "area": 336, "bbox_px": [1728, 289, 1892, 377], "centroid_px": [1823.095, 353.854]},
+    {"rank": 5, "label": 1517, "area": 286, "bbox_px": [413, 989, 594, 1075], "centroid_px": [533.437, 1056.007]},
+    {"rank": 6, "label": 784, "area": 267, "bbox_px": [301, 511, 461, 567], "centroid_px": [382.974, 545.577]},
+    {"rank": 7, "label": 1853, "area": 267, "bbox_px": [1647, 1133, 1697, 1183], "centroid_px": [1666.127, 1160.315]}
+  ],
+  "stopped_component": {
+    "rank": 1,
+    "label": 1839,
+    "area": 401,
+    "bbox_px": [1847, 1131, 1875, 1162],
+    "centroid_px": [1860.673, 1145.678],
+    "owner": "TEXT_TESSERACT_EXISTING_LAYOUT_AUDIT_OWNER",
+    "decision_grade": true,
+    "decision_basis": "The residual bbox directly intersects an existing OCR text bbox and OCR ROI; this is an existing owner output, not a visual guess.",
+    "ocr_hits": [
+      {
+        "id": "rawtext-04cde499",
+        "content": "Ll",
+        "bbox_px": [1844, 1132, 1875, 1162],
+        "semantic_role": "unknown",
+        "confidence": 0.52,
+        "source": "text_tesseract"
+      }
+    ],
+    "ocr_bbox_intersection_count": 1,
+    "ocr_roi_intersection_count": 1,
+    "dimension_value_intersection_count": 0,
+    "existing_layout_ir_trace_intersection_count": 0,
+    "existing_layout_ir_type_counts": {"line": 517, "circle": 19, "arc": 0, "text": 0}
+  },
+  "causal_path": "Approved Page-1 source render -> residual component 1839 -> existing tesseract RawText bbox -> current layout_ir emission",
+  "cheapest_causal_red_candidate": {
+    "status": "CANDIDATE_NOT_RUN",
+    "assertion": "An OCR-owned RawText at bbox [1844,1132,1875,1162] must have a corresponding emitted text primitive/trace intersecting the same Page-1 region.",
+    "expected_observation_if_defect": "Existing layout_ir has zero text primitives while the existing OCR owner has one direct bbox hit.",
+    "scope": "Test/evidence-only; no OCR tuning, text semantic changes, production emission change, source/candidate/CAD mutation, PR, promotion, or merge."
+  },
+  "stop_reason": "First remaining material residual component has decision-grade ownership in an existing text owner; later components were not advanced to causal action.",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this single selected component and RED candidate to SOL PO 22. Await verdict before running RED or changing production."
+}
