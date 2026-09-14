@@ -1,0 +1,92 @@
+{
+  "schema_version": "page1-label1517-candidate-path-discriminator-1.0",
+  "state": "DOWNSTREAM_GEOMETRY_HANDOFF_LOCUS",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "18adaf2d713514f8c4c6742f87b0b3b9f3d96c97",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only pre-selection/post-selection candidate-path discriminator on the bounded source area containing residual label1517. It reused the unchanged real_scan_tuned_v1 extraction path and the existing _filter_fidelity_geometry and _select_fidelity_geometry logic. No thresholds, presets, selectors, production code, tests, or artifacts were changed; the accepted RED was not rerun.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "bounded_source_area_bbox_px": [349, 925, 657, 1138],
+    "selected_residual_bbox_px": [413, 989, 594, 1075],
+    "selected_residual_area": 286
+  },
+  "extraction": {
+    "owner": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "preset": "real_scan_tuned_v1",
+    "raw_line_count": 22,
+    "raw_circle_count": 0,
+    "raw_total": 22
+  },
+  "filter": {
+    "owner": "cad_agent.fidelity._filter_fidelity_geometry",
+    "filtered_line_count": 19,
+    "filtered_circle_count": 0
+  },
+  "selection": {
+    "owner": "cad_agent.fidelity._select_fidelity_geometry",
+    "selected_profile": "baseline",
+    "selected_line_count": 22,
+    "selected_circle_count": 0,
+    "baseline_edge_metric": {
+      "precision": 1.0,
+      "recall": 0.579079,
+      "f1": 0.733439,
+      "line_entities": 22,
+      "circle_entities": 0
+    },
+    "filtered_edge_metric": {
+      "precision": 1.0,
+      "recall": 0.559377,
+      "f1": 0.717436,
+      "line_entities": 19,
+      "circle_entities": 0
+    }
+  },
+  "qualifying_rawline_candidates": [
+    {
+      "id": "rawline-f5fd5c82",
+      "p1_px_global": [597.0, 1075.0],
+      "p2_px_global": [597.0, 978.0],
+      "length_px": 97.0,
+      "confidence": 0.817,
+      "segment_min_distance_to_residual_px": 3.0,
+      "segment_pixels_within_3px": 1,
+      "existing_edge_raster_pixels_within_3px": 2,
+      "survives_filter": true,
+      "survives_selected_profile": true
+    },
+    {
+      "id": "rawline-8c063f23",
+      "p1_px_global": [451.0, 1074.0],
+      "p2_px_global": [547.0, 1075.0],
+      "length_px": 96.005,
+      "confidence": 0.814,
+      "segment_min_distance_to_residual_px": 0.0,
+      "segment_pixels_within_3px": 102,
+      "existing_edge_raster_pixels_within_3px": 103,
+      "survives_filter": true,
+      "survives_selected_profile": true
+    }
+  ],
+  "accepted_page1_context": {
+    "current_vector_coverage_of_selected_residual_pixels": 0,
+    "current_layout_ir_line_traces_intersecting_residual_bbox": 11,
+    "current_layout_ir_intersecting_line_trace_max_y_px": 1069.0,
+    "bounded_selected_candidate_horizontal_end_y_px": 1075.0,
+    "accepted_artifact_contains_qualifying_local_candidate_trace": false,
+    "note": "The accepted Page-1 layout/vector remains source-only residual for label1517. The bounded crop candidate survives local filter/selection, while the accepted full-page artifact has no intersecting line trace extending to the candidate's y=1074/1075 continuation. This is a handoff/context observation, not a production defect claim by itself."
+  },
+  "locus_result": "DOWNSTREAM_GEOMETRY_HANDOFF_LOCUS",
+  "causal_conclusion": "A qualifying RawLine candidate exists immediately after the unchanged extraction path, and the same candidate survives _filter_fidelity_geometry and the baseline profile selected by _select_fidelity_geometry. Therefore this bounded oracle does not support SELECTION_FILTER_LOCUS. Because the accepted Page-1 vector/layout artifact still leaves 0/286 residual pixels covered and does not contain the qualifying local continuation trace, the smallest defensible locus is downstream geometry handoff/context between bounded candidate selection and the accepted Page-1 artifact. The oracle does not prove whether the cause is crop/full-page context, artifact construction handoff, or semantic ownership.",
+  "repair_test_basis": "A future bounded test may compare the existing region candidate handoff against the accepted full-page geometry artifact using exact candidate geometry and source identity. No repair, threshold change, selector change, semantic promotion, or production mutation is authorized by this result.",
+  "red": "ACCEPTED_PRIOR_RED_NOT_RERUN",
+  "green": "NOT_RUN; prohibited.",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this bounded discriminator to SOL PO 22 and await verdict before any downstream handoff test or repair consideration."
+}
