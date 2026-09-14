@@ -1,0 +1,138 @@
+{
+  "schema_version": "page1-next-geometry-residual-owner-oracle-v1",
+  "state": "read_only_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "branch": "codex/page1-geometry-residual-owner-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "oracle": "NEXT_GEOMETRY_RESIDUAL_OWNER_ORACLE",
+  "scope": {
+    "page": 1,
+    "approved_region_bbox_px": [59, 38, 2320, 1646],
+    "selection_rule": "highest-area current-candidate source-only residual excluding components 858/198 and established OCR/dimension sidecars",
+    "comparator": "existing 7x7 dilation / 3px tolerance",
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "threshold_or_preset_tuning": false,
+    "dimensions": false,
+    "new_control_plane": false
+  },
+  "provenance": {
+    "source_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "page1_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "text_observation_sha256": "b3b1429c1331d19321012c2d828ec92081b76354d8a8f3e8b001f770626548d1",
+    "dimension_observation_sha256": "483da8fe56aed158a2fe6fc29bae6b61973e575c079d07febeea772baf6476c9"
+  },
+  "existing_owners": {
+    "crop_extraction": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "crop_selection": "cad_agent.fidelity._select_fidelity_geometry",
+    "full_page_extraction": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "raster_comparator": "cad_agent.fidelity._edge_metrics",
+    "consumer": "cad_agent.fidelity.run_fidelity_reconstruct"
+  },
+  "residual_population": {
+    "source_only_residual_components": 2221,
+    "sidecar_or_excluded_components": 416,
+    "eligible_components": 1805,
+    "excluded_component_labels": [198, 858],
+    "selected_is_largest_eligible": true
+  },
+  "selected_component": {
+    "label": 720,
+    "area_px": 474,
+    "bbox_xyxy_px_crop": [378, 465, 483, 536],
+    "bbox_xyxy_px_global": [437, 503, 542, 574],
+    "sidecar_overlap_px": 0,
+    "outside_existing_table_roi": true,
+    "current_candidate_coverage_within_3px": 0.0,
+    "crop_selected_geometry_raster_coverage_within_3px": 0.004219,
+    "full_page_bounded_geometry_raster_coverage_within_3px": 0.261603
+  },
+  "populations": {
+    "crop_raw": {"LINE": 520, "CIRCLE": 19},
+    "crop_selected": {"LINE": 520, "CIRCLE": 19, "profile": "baseline"},
+    "full_page_raw": {"LINE": 517, "CIRCLE": 19},
+    "full_page_bounded": {"LINE": 515, "CIRCLE": 19},
+    "full_page_selected": {"LINE": 515, "CIRCLE": 19, "profile": "baseline"}
+  },
+  "owner_binding": {
+    "crop_raw_max_source_support_within_3px": 0.0,
+    "crop_selected_max_source_support_within_3px": 0.0,
+    "full_page_bounded_max_source_support_within_3px": 0.099156,
+    "first_loss_stage": "OWNER_WITNESS_UNPROVEN",
+    "interpretation": "No current crop-extraction or selected primitive independently explains component 720 at the established 0.5 source-support threshold. Full-page evidence is also below threshold; no extraction/selection/DXF/render causal loss is established."
+  },
+  "best_full_page_bounded_witnesses": [
+    {
+      "kind": "LINE",
+      "id": "rawline-2105ad3f",
+      "support_within_3px": 0.099156,
+      "p1_px_crop": [430.0, 605.0],
+      "p2_px_crop": [430.0, 514.0]
+    },
+    {
+      "kind": "LINE",
+      "id": "rawline-9b454cef",
+      "support_within_3px": 0.097046,
+      "p1_px_crop": [427.0, 610.0],
+      "p2_px_crop": [427.0, 511.0]
+    },
+    {
+      "kind": "LINE",
+      "id": "rawline-f0e2ec6a",
+      "support_within_3px": 0.06962,
+      "p1_px_crop": [330.0, 535.0],
+      "p2_px_crop": [500.0, 535.0]
+    },
+    {
+      "kind": "LINE",
+      "id": "rawline-ea544cdd",
+      "support_within_3px": 0.054852,
+      "p1_px_crop": [432.0, 483.0],
+      "p2_px_crop": [493.0, 480.0]
+    },
+    {
+      "kind": "LINE",
+      "id": "rawline-1b8bcc45",
+      "support_within_3px": 0.050632,
+      "p1_px_crop": [447.0, 478.0],
+      "p2_px_crop": [528.0, 479.0]
+    }
+  ],
+  "sidecar_admissibility": {
+    "ocr_box_count": 80,
+    "ocr_component_overlap": "NONE",
+    "approved_dimension_line_ids": ["rawline-2e7a2d81", "rawline-5c0fc7e1"],
+    "approved_dimension_component_overlap": "NONE",
+    "table_roi_global_y_start": 1095,
+    "table_owner_records": "NONE; current table audit is NOT_EVALUATED",
+    "linetype_hatch_owner_records": "NONE"
+  },
+  "classification": {
+    "status": "OWNER_WITNESS_UNPROVEN",
+    "material_finding": "NONE; this is an unresolved owner witness, not a causal RED",
+    "production_repair_authorized": false,
+    "green_authorized": false
+  },
+  "safety": {
+    "read_only_oracle": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions_acceptance": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "next_single_bounded_action": "ROUTE_THIS_ORACLE_TO_SOL_PO22_AND_WAIT_FOR_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Fresh-read exact GitHub/source/evidence. Independently verify the selected residual component, sidecar exclusions, crop/full-page owner supports, and first-loss stage. Return exactly one causal next action; do not authorize GREEN, dimensions, tuning, source/CAD mutation, or a new control plane."
+}
