@@ -7,6 +7,7 @@
   "exact_head_before_packet_commit": "18adaf2d713514f8c4c6742f87b0b3b9f3d96c97",
   "candidate_state": "FROZEN_NON_PASS",
   "oracle_scope": "One read-only pre-selection/post-selection candidate-path discriminator on the bounded source area containing residual label1517. It reused the unchanged real_scan_tuned_v1 extraction path and the existing _filter_fidelity_geometry and _select_fidelity_geometry logic. No thresholds, presets, selectors, production code, tests, or artifacts were changed; the accepted RED was not rerun.",
+  "execution_note": "The environment lacks optional pytesseract, which prevents importing the broad cad_agent.fidelity module. To keep the oracle read-only and avoid dependency installation, the exact four function definitions (_filter_fidelity_geometry, _raw_geometry_edges, _select_fidelity_geometry, _edge_metrics) were loaded from the canonical source file without modification; extract_raw_geometry and the unchanged function bodies then executed on the bounded crop.",
   "inputs": {
     "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
     "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
