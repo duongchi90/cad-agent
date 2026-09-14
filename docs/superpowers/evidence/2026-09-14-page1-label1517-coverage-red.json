@@ -4,7 +4,7 @@
   "boundary": "GEOMETRY_VISUAL",
   "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
   "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
-  "exact_head_before_packet_commit": "e96abe7a8bd033dc28737b070c5e6712c58cf82e6",
+  "exact_head_before_packet_commit": "e96abe7a8bd033dc28737b070c5e6712c58cf82e",
   "candidate_state": "FROZEN_NON_PASS",
   "oracle_scope": "One test-only causal RED on the unchanged approved Page-1 render, existing layout_ir RawCircle owner, verified calibration, source component correspondence, and existing 3px/7x7 coverage comparator. No production or candidate mutation.",
   "inputs": {
