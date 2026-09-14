@@ -74,6 +74,16 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("ls-files", script)
         self.assertIn('Write-Host "Tesseract: $tesseractPath ($tesseractVersion)"', script)
 
+    def test_verify_owns_bvtl_private_fixture_cleanup(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        specialized_variables = script[
+            script.index("$specializedVariables = @(") : script.index(
+                "$savedEnvironment = @{}"
+            )
+        ]
+        for name in ("CAD_AGENT_BVTL_PAGE1_IMAGE", "CAD_AGENT_BVTL_PAGE1_PDF"):
+            self.assertIn(f'"{name}"', specialized_variables)
+
     def test_causal_red_is_an_independent_expected_failure_gate(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
         self.assertIn("Invoke-CausalRedGate", script)

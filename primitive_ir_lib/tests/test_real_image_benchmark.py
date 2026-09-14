@@ -7,6 +7,7 @@ real Tesseract OCR and the witness-zone merge regression together.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -22,6 +23,13 @@ from primitive_ir_lib.cross_validation import cross_validate
 
 _IMAGE_ENV = "CAD_AGENT_REAL_IMAGE"
 _TESSERACT_ENV = "CAD_AGENT_TESSERACT_CMD"
+_BVTL_IMAGE_ENV = "CAD_AGENT_BVTL_PAGE1_IMAGE"
+_BVTL_PDF_ENV = "CAD_AGENT_BVTL_PAGE1_PDF"
+_BVTL_RENDER_SHA256 = "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0"
+_BVTL_PDF_SHA256 = "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+_BVTL_IMAGE_SHAPE = (1685, 2382)
+_BVTL_LOGICAL_BBOX = (749, 258, 833, 343)
+_BVTL_EXTRACTION_BBOX = (744, 253, 838, 348)
 
 pytestmark = pytest.mark.real_data
 
@@ -34,6 +42,28 @@ def _configure_tesseract() -> None:
     default = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
     if default.is_file():
         pytesseract.pytesseract.tesseract_cmd = str(default)
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _covers_axis_aligned_corridor(
+    line,
+    orientation: str,
+    coordinate: float,
+    span_start: float,
+    span_end: float,
+) -> bool:
+    x1, y1 = line.p1_px
+    x2, y2 = line.p2_px
+    if orientation == "horizontal":
+        if abs(y2 - y1) > 4 or abs((y1 + y2) / 2 - coordinate) > 7:
+            return False
+        return min(x1, x2) <= span_start + 3 and max(x1, x2) >= span_end - 3
+    if abs(x2 - x1) > 4 or abs((x1 + x2) / 2 - coordinate) > 7:
+        return False
+    return min(y1, y2) <= span_start + 3 and max(y1, y2) >= span_end - 3
 
 
 def test_real_scan_2760_1525_boundary_survives_full_merge():
@@ -107,6 +137,46 @@ def test_real_scan_2760_1525_boundary_survives_full_merge():
         Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 0), method="manual_override"),
         merge_collinear=False,
     )
+
+
+def test_bvtl_page1_source_bound_geometry():
+    image_path = os.environ.get(_BVTL_IMAGE_ENV)
+    pdf_path = os.environ.get(_BVTL_PDF_ENV)
+    if not image_path or not pdf_path:
+        pytest.skip(
+            f"set both {_BVTL_IMAGE_ENV} and {_BVTL_PDF_ENV} to run the BVTL Page-1 gate"
+        )
+
+    image_file = Path(image_path)
+    pdf_file = Path(pdf_path)
+    assert image_file.is_file(), f"{_BVTL_IMAGE_ENV} does not point to a file: {image_path}"
+    assert pdf_file.is_file(), f"{_BVTL_PDF_ENV} does not point to a file: {pdf_path}"
+    assert _sha256(image_file) == _BVTL_RENDER_SHA256
+    assert _sha256(pdf_file) == _BVTL_PDF_SHA256
+
+    image = cv2.imread(str(image_file), cv2.IMREAD_COLOR)
+    assert image is not None
+    assert image.shape[:2] == _BVTL_IMAGE_SHAPE
+
+    logical_x0, logical_y0, logical_x1, logical_y1 = _BVTL_LOGICAL_BBOX
+    extraction_x0, extraction_y0, extraction_x1, extraction_y1 = _BVTL_EXTRACTION_BBOX
+    assert extraction_x0 <= logical_x0 < logical_x1 <= extraction_x1
+    assert extraction_y0 <= logical_y0 < logical_y1 <= extraction_y1
+    crop = image[extraction_y0:extraction_y1, extraction_x0:extraction_x1]
+    geometry = extract_raw_geometry(crop, preset="real_scan_tuned_v1")
+
+    corridors = {
+        "top": ("horizontal", logical_y0 - extraction_y0, logical_x0 - extraction_x0, logical_x1 - extraction_x0),
+        "bottom": ("horizontal", logical_y1 - extraction_y0, logical_x0 - extraction_x0, logical_x1 - extraction_x0),
+        "left": ("vertical", logical_x0 - extraction_x0, logical_y0 - extraction_y0, logical_y1 - extraction_y0),
+        "right": ("vertical", logical_x1 - extraction_x0, logical_y0 - extraction_y0, logical_y1 - extraction_y0),
+    }
+    observed = {
+        name: any(_covers_axis_aligned_corridor(line, *spec) for line in geometry.lines)
+        for name, spec in corridors.items()
+    }
+    assert not geometry.circles
+    assert observed == {name: True for name in corridors}, observed
 
 
 if __name__ == "__main__":
