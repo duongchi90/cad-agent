@@ -66,6 +66,14 @@ def _covers_axis_aligned_corridor(
     return min(y1, y2) <= span_start + 3 and max(y1, y2) >= span_end - 3
 
 
+def _line_intersects_box(line, x0: float, y0: float, x1: float, y1: float) -> bool:
+    line_x0 = min(line.p1_px[0], line.p2_px[0])
+    line_x1 = max(line.p1_px[0], line.p2_px[0])
+    line_y0 = min(line.p1_px[1], line.p2_px[1])
+    line_y1 = max(line.p1_px[1], line.p2_px[1])
+    return line_x0 <= x1 and line_x1 >= x0 and line_y0 <= y1 and line_y1 >= y0
+
+
 def test_real_scan_2760_1525_boundary_survives_full_merge():
     image_path = os.environ.get(_IMAGE_ENV)
     if not image_path:
@@ -171,6 +179,24 @@ def test_bvtl_page1_source_bound_geometry():
         "left": ("vertical", logical_x0 - extraction_x0, logical_y0 - extraction_y0, logical_y1 - extraction_y0),
         "right": ("vertical", logical_x1 - extraction_x0, logical_y0 - extraction_y0, logical_y1 - extraction_y0),
     }
+    residual_lines = [
+        line
+        for line in geometry.lines
+        if _line_intersects_box(
+            line,
+            logical_x0 - extraction_x0,
+            logical_y0 - extraction_y0,
+            logical_x1 - extraction_x0,
+            logical_y1 - extraction_y0,
+        )
+        and not any(
+            _covers_axis_aligned_corridor(line, *spec)
+            for spec in corridors.values()
+        )
+    ]
+    assert not residual_lines, [
+        (*line.p1_px, *line.p2_px) for line in residual_lines
+    ]
     observed = {
         name: any(_covers_axis_aligned_corridor(line, *spec) for line in geometry.lines)
         for name, spec in corridors.items()
