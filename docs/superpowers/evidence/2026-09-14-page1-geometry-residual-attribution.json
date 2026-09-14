@@ -1,0 +1,90 @@
+{
+  "schema_version": "page1-geometry-residual-attribution-v1",
+  "state": "read_only_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "b5994998920af9808e6bf9892a4a635ec30dd41a",
+  "branch": "codex/page1-dimension-acceptance-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "scope": {
+    "page": 1,
+    "candidate": "C:\\temp\\cad-agent-bvtl-sheets-fidelity-20260914-current-main-geom-v1\\reconstruction_candidates\\page_01\\page1",
+    "read_only": true,
+    "production_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimension_text_acceptance": false,
+    "threshold_or_preset_tuning": false,
+    "bbox_only_attribution": false
+  },
+  "provenance": {
+    "source": {
+      "name": "BVTL_raster_A3_sheets.pdf",
+      "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+    },
+    "render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "candidate_report_sha256": "da731e78ca835e709d34ac8577f14772278b25aa7748d0b979b769aabe8f2a16",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "candidate_overlay_sha256": "c46f6435870f0e3d830aa9f4c2a341a3448e6596f2f402a0ea35acc5d603de76",
+    "current_layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "current_layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235"
+  },
+  "oracle": {
+    "name": "read_only_residual_attribution_v1",
+    "source_only_mask": "Canny-50-150(source) minus 7x7 dilation(candidate)",
+    "sidecar_classification": "existing current-main OCR text boxes plus two source/render-bound approved dimension line observations; sidecar wins before geometry classification",
+    "geometry_classification": "at least 50 percent of component pixels within exact 3px Euclidean distance of existing current-main RawLine/RawCircle raster evidence",
+    "geometry_evidence": {
+      "RawLine": 517,
+      "RawCircle": 19,
+      "owner_source": "current-main layout_ir/page_01.json"
+    }
+  },
+  "result": {
+    "source_only_residual_edge_pixels": 60853,
+    "source_only_residual_components": 2221,
+    "classes": {
+      "EXPECTED_SIDECAR": {
+        "components": 423,
+        "area_px": 13988
+      },
+      "GEOMETRY_ATTRIBUTABLE": {
+        "components": 253,
+        "area_px": 7104
+      },
+      "UNRESOLVED": {
+        "components": 1545,
+        "area_px": 39761
+      }
+    },
+    "highest_area_geometry_attributable": {
+      "component_label": 858,
+      "area_px": 288,
+      "bbox_px_crop": [318, 511, 400, 544],
+      "existing_owner_id": "rawline-4bcc0188",
+      "existing_owner_type": "LINE",
+      "within_3px_ratio": 0.541667,
+      "median_distance_px": 2.0,
+      "owner_basis": "component pixel-to-segment correspondence against existing RawLine evidence; not bbox overlap alone"
+    },
+    "largest_unresolved": {
+      "component_label": 720,
+      "area_px": 474,
+      "bbox_px_crop": [378, 465, 482, 535],
+      "geometry_within_3px_ratio": 0.225738
+    }
+  },
+  "causal_attribution": {
+    "causal_path": "current candidate source-only residual mask -> sidecar exclusion -> exact correspondence against current-main RawLine/RawCircle evidence",
+    "current_reachability": "Existing geometry evidence can attribute a bounded subset to rawline-4bcc0188, but most residual area remains unresolved and the stage/repair mechanism is not proven.",
+    "material_consequence": "Whole-page visual mismatch cannot be treated as all-geometry failure; no production repair or tuning is authorized.",
+    "existing_owner": "primitive_ir_lib.geometry_extraction output consumed by cad_agent.fidelity existing geometry path",
+    "repair_authorization": "NO",
+    "causal_status": "UNPROVEN"
+  },
+  "next_single_bounded_action": "WAIT_FOR_SOL_PO22_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Independently verify the mask, sidecar precedence, exact pixel-to-primitive correspondence, and rawline-4bcc0188 attribution. Decide whether this is a decision-grade causal RED or only an owner witness; return one next bounded action, without dimension work, tuning, or production mutation."
+}
