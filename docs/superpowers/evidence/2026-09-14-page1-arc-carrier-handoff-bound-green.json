@@ -1,0 +1,104 @@
+{
+  "schema_version": "page1-arc-carrier-handoff-bound-green-v1",
+  "state": "test_only_focused_green",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "7179654a1da6560c4312c0ca7ed86b28604e0016",
+  "branch": "codex/page1-geometry-residual-owner-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "oracle": "ARC_CARRIER_HANDOFF_BOUND_GREEN_ORACLE",
+  "scope": {
+    "page": 1,
+    "component_label": 720,
+    "same_bound_page1_epoch": true,
+    "unchanged_extractor": "primitive_ir_lib.geometry_extraction.extract_raw_geometry",
+    "unchanged_extractor_output": {
+      "RawLine": 520,
+      "RawCircle": 19,
+      "RawArc_default": 0
+    },
+    "test_only_observed_raw_arc_injection": true,
+    "existing_owner_build_document": true,
+    "existing_native_dxf_builder": true,
+    "existing_renderer_comparator": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "provenance": {
+    "source_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "page1_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "oracle_dxf_sha256": "d9e60eeb94ca77f629399e26ff726a1690d555113885e96296133087d5e598bf",
+    "oracle_report_sha256": "d1fd7eb332ce490f7f5ee27c575eaf35731b498ef7c350cc53c98ed43903abaf",
+    "oracle_dxf_path_private": "C:/temp/cad-agent-bvtl-sheets-fidelity-20260914-current-main-arc-carrier-green-v1/arc-carrier-with-baseline-geometry.dxf",
+    "oracle_report_path_private": "C:/temp/cad-agent-bvtl-sheets-fidelity-20260914-current-main-arc-carrier-green-v1/oracle-report.json"
+  },
+  "observed_arc_carrier": {
+    "center_px": [429.2697, 480.6363],
+    "radius_px": 47.1,
+    "start_angle_deg": 351.0938,
+    "end_angle_deg_unwrapped": 534.8344,
+    "bbox_px": [378.0, 465.0, 483.0, 536.0]
+  },
+  "handoff": {
+    "primitive_type_counts": {
+      "line": 520,
+      "circle": 19,
+      "arc": 1
+    },
+    "original_line_circle_population_unchanged": true,
+    "entity_count": 540,
+    "skipped_primitive_ids": [],
+    "written_entity_type": "ARC",
+    "cad_center": [75.697733529292, 198.800141154143],
+    "cad_radius": 8.305648521733,
+    "cad_start_angle_deg": 185.1656,
+    "cad_end_angle_deg": 8.9062
+  },
+  "round_trip": {
+    "read_entity_type": "ARC",
+    "read_center": [75.69773352929208, 198.80014115414335],
+    "read_radius": 8.30564852173274,
+    "read_start_angle_deg": 185.16560000000004,
+    "read_end_angle_deg": 8.906200000000013,
+    "center_max_abs_delta": 0.0,
+    "radius_abs_delta": 0.0,
+    "start_mod360_delta": 0.0,
+    "end_mod360_delta": 0.0,
+    "status": "PASS"
+  },
+  "raster_comparator": {
+    "tolerance": "existing 7x7 dilation / 3px",
+    "component_720_bbox_xyxy_px_crop": [378, 465, 483, 536],
+    "component_720_covered_px": 399,
+    "component_720_area_px": 474,
+    "component_720_coverage_within_3px": 0.8417721518987342,
+    "threshold": 0.5,
+    "status": "PASS"
+  },
+  "classification": {
+    "status": "FOCUSED_CARRIER_HANDOFF_GREEN_ONLY",
+    "product_geometry_visual_green": false,
+    "causal_interpretation": "The new existing-owner RawArc -> build_document -> native DXF ARC -> renderer path carries the evidence-bound component-720 witness while preserving the unchanged 520 line/19 circle population. Production extraction still emits zero arcs, so this focused seam GREEN does not close product GEOMETRY_VISUAL."
+  },
+  "safety": {
+    "read_only_oracle": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions_acceptance": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "next_single_bounded_action": "ROUTE_THIS_ORACLE_TO_SOL_PO22_AND_WAIT_FOR_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Fresh-read exact GitHub/source/evidence. Independently verify the same-epoch source/candidate/calibration identity, unchanged 520/19 baseline population, RawArc carrier handoff, native ARC readback, and component-720 coverage. Treat this as focused seam GREEN only, not product GEOMETRY_VISUAL GREEN. Return one verdict and one smallest causal next action; do not authorize detector tuning, product promotion, dimensions, source/CAD mutation, merge, or a new control plane."
+}
