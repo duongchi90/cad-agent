@@ -1,0 +1,104 @@
+{
+  "schema_version": "page1-acceptance-matrix-v1",
+  "state": "read_only_complete",
+  "issue": "#409",
+  "base": {
+    "ref": "origin/main",
+    "sha256_commit": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2"
+  },
+  "exact_head": {
+    "branch": "codex/page1-dimension-acceptance-20260914",
+    "sha256_commit": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+    "worktree_clean_before_packet": true,
+    "rejected_ancestry_included": false
+  },
+  "scope": {
+    "page": 1,
+    "sequence": [
+      "source/provenance identity",
+      "geometry/visual",
+      "dimensions",
+      "duplicate/overmerge/missing geometry",
+      "editable/readback",
+      "save/reopen/deterministic equivalence"
+    ],
+    "mode": "existing owners and private read-only artifacts only",
+    "production_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "new_control_plane": false
+  },
+  "source_provenance": {
+    "status": "PASS",
+    "source": {
+      "name": "BVTL_raster_A3_sheets.pdf",
+      "sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+    },
+    "render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "configuration": {
+      "dpi": 144,
+      "transform": "displayed-page-box-v1",
+      "ocr": "tesseract-local-psm11"
+    },
+    "manifest_sha256": "53c477c0026c0f52855b46ac53df6e266cac708a3ccf0fa3c885527642660c05",
+    "manifest_approval_reference": "github-409-comment-5650602380-current-main-0fc0f64289d0732f767fd4df486e1eeab3ace7b2"
+  },
+  "geometry_visual": {
+    "status": "FAIL",
+    "failure": "GEOMETRY_VISUAL_CURRENT_CANDIDATE_BINDING",
+    "current_main_base_layout": {
+      "layout_dxf_sha256": "cee47d88f5801a2b0c3e47c8b15528011086653221111d145654f208560fa1ff",
+      "layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235",
+      "structural_roundtrip": "PASS",
+      "layout_audit_state": "needs_review"
+    },
+    "acceptance_observation": "No geometry candidate and visual verdict are bound to exact HEAD 0fc0f64289d0732f767fd4df486e1eeab3ace7b2. The available prior candidate is not current-head evidence.",
+    "prior_candidate_reference_excluded_from_acceptance": {
+      "candidate_report_sha256": "9efed6abcfcee349117fc682c36cbf5facbd443f877d071d2c3d2dcf748233d7",
+      "candidate_dxf_sha256": "8efe79eada8d4f49a4ca660cd990d01581398b1668d3dc1c4316273af7ce149e",
+      "state": "needs_review",
+      "unresolved": [
+        "text/dimensions/linetypes/tables remain sidecar-only",
+        "occurrence mapping was unresolved for 518 geometry entities",
+        "no exact-head binding"
+      ]
+    }
+  },
+  "dimensions": {
+    "status": "NOT_REACHED",
+    "reason": "Geometry/visual current-candidate binding fails first; dimension artifacts are not promoted past this boundary.",
+    "stale_source_bound_artifacts": {
+      "observation_sha256": "483da8fe56aed158a2fe6fc29bae6b61973e575c079d07febeea772baf6476c9",
+      "reconstruction_report_sha256": "55874fd1b8b8146d5cf2c8e3826378b75133e42e1c0f0e122197358663abb4ec",
+      "semantic_handoff_sha256": "9efe95317e07de1a0b3228f8d4a282f55d7768be3d3099478b1a5e84952acea8",
+      "candidate_report_sha256": "6473d1b089aca906b36cd5c95f3c0b6d68adc75cb65e3aa11b0829fbf1278362",
+      "reviewed_head": "5bf19b08092f97d2461413c49c2998cd07ec2eb8"
+    },
+    "available_owner": "cad_agent.fidelity.run_fidelity_dimension_reconstruct",
+    "current_owner_note": "Current main already uses source-observed normal placement and keeps dimension base on the selected line; no production delta is authorized by this matrix."
+  },
+  "downstream_boundaries": {
+    "duplicate_overmerge_missing_geometry": "NOT_REACHED",
+    "editable_readback": "NOT_RUN",
+    "save_reopen_deterministic_equivalence": "NOT_RUN"
+  },
+  "causal_attribution": {
+    "causal_path": "Current-main manifest -> page-1 base layout/audit is available; candidate/visual acceptance output is absent or stale, so the product acceptance identity cannot reach geometry/visual PASS.",
+    "current_reachability": "The existing fidelity owner can produce the missing private candidate from the current-main artifacts, but that action is outside this read-only matrix.",
+    "material_consequence": "Do not claim Page-1 acceptance and do not use stale dimension or geometry artifacts as current evidence.",
+    "existing_owner": "cad_agent.fidelity private fidelity orchestration and existing layout/candidate owners",
+    "cheapest_oracle": "Exact-head comparison plus source/render/layout artifact hashes and candidate state/unresolved fields",
+    "repair_authorization": "NO"
+  },
+  "matrix_action": {
+    "action": "Fresh-read current main/#409 and run one read-only Page-1 acceptance matrix",
+    "changed_files": [
+      "docs/superpowers/evidence/2026-09-14-page1-acceptance-matrix-current-main.json"
+    ],
+    "production_code_changed": false,
+    "result": "FIRST_UNSATISFIED_BOUNDARY=GEOMETRY_VISUAL_CURRENT_CANDIDATE_BINDING"
+  },
+  "next_single_bounded_action": "WAIT_FOR_SOL_PO22_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Independently verify exact-head currentness, source/provenance identity, exclusion of stale candidates, and whether the missing current-head geometry candidate/visual verdict is the first product acceptance failure. Return one next bounded action; do not authorize dimension work or production mutation from this packet."
+}
