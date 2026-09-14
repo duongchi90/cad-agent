@@ -1,0 +1,79 @@
+{
+  "schema_version": "page1-residual-frontier-geometry-owner-1517-1.0",
+  "state": "FRONTIER_TRIAGE_STOPPED_AT_NEXT_UNIQUE_EXISTING_OWNER",
+  "boundary": "GEOMETRY_VISUAL",
+  "first_unsatisfied_boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "593031339f873ed17845a5b77733f87b36044fdc",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "One read-only residual-frontier triage iteration using the same approved Page-1 source/vector identities, BGR-to-gray Canny-50-150, 7x7 vector dilation tolerance, existing content mask, layout_ir traces, and layout_audit OCR sidecar. Previously unresolved labels 89, 478 and expected-sidecar label 1839 were excluded; mixed-owner label 92 was preserved without repeating its prior oracle.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235",
+    "render_size_px": [2382, 1685],
+    "source_edge_pixels_in_content": 144961,
+    "vector_edge_pixels_in_content": 100158,
+    "source_only_residual_pixels_in_content": 44272
+  },
+  "intermediate_component": {
+    "label": 106,
+    "area": 336,
+    "bbox_px": [1728, 289, 1892, 377],
+    "classification": "MIXED_GEOMETRY_OCR; NOT_DECISION_GRADE_AS_SINGLE_OWNER",
+    "geometry_hits": [
+      {"id": "rawline-9b1810be", "type": "line", "bbox_px": [1892.0, 158.0, 1892.0, 306.0]},
+      {"id": "rawline-7c112017", "type": "line", "bbox_px": [1727.0, 377.0, 1793.0, 378.0]}
+    ],
+    "ocr_hits": [
+      {"id": "rawtext-bf55b227", "content": "VX", "bbox_px": [1758, 293, 1786, 308], "confidence": 0.22},
+      {"id": "rawtext-08587255", "content": "NN", "bbox_px": [1740, 313, 1753, 328], "confidence": 0.44},
+      {"id": "rawtext-dbf71375", "content": "NN", "bbox_px": [1777, 324, 1790, 339], "confidence": 0.48}
+    ],
+    "ocr_roi_hits": 1,
+    "decision": "Preserve as MIXED_GEOMETRY_OCR and skip; no single-owner causal RED is justified."
+  },
+  "selected_component": {
+    "residual_frontier_rank": 6,
+    "rank_after_exclusions_and_mixed_skips": 2,
+    "label": 1517,
+    "area": 286,
+    "bbox_px": [413, 989, 594, 1075],
+    "centroid_px": [533.437, 1056.007],
+    "owner": "GEOMETRY_OPENCV_EXISTING_LAYOUT_IR_OWNER",
+    "decision_grade": true,
+    "decision_basis": "The residual bbox directly intersects existing layout_ir geometry traces and has no OCR text-bbox, OCR ROI, or dimension-value intersection. This is the first unique existing owner after preserving mixed-owner label 106; it does not yet establish trace-to-residual pixel correspondence or authorize repair.",
+    "layout_ir_geometry_trace_hits": [
+      {"id": "rawline-560f5c7c", "type": "line", "bbox_px": [576.0, 813.0, 576.0, 1038.0], "validation": "unreviewed"},
+      {"id": "rawline-9dfef755", "type": "line", "bbox_px": [579.0, 837.0, 579.0, 1014.0], "validation": "unreviewed"},
+      {"id": "rawline-f34f4b97", "type": "line", "bbox_px": [546.0, 868.0, 546.0, 999.0], "validation": "unreviewed"},
+      {"id": "rawline-7f675605", "type": "line", "bbox_px": [574.0, 821.0, 574.0, 1022.0], "validation": "unreviewed"},
+      {"id": "rawline-2e652268", "type": "line", "bbox_px": [544.0, 867.0, 544.0, 1000.0], "validation": "unreviewed"},
+      {"id": "rawline-c41adfd5", "type": "line", "bbox_px": [548.0, 875.0, 548.0, 993.0], "validation": "unreviewed"},
+      {"id": "rawline-7efa3fc5", "type": "line", "bbox_px": [391.0, 1036.0, 505.0, 1042.0], "validation": "unreviewed"},
+      {"id": "rawline-b6c835ff", "type": "line", "bbox_px": [432.0, 1069.0, 490.0, 1069.0], "validation": "unreviewed"},
+      {"id": "rawline-8f08194f", "type": "line", "bbox_px": [541.0, 872.0, 541.0, 990.0], "validation": "unreviewed"},
+      {"id": "rawline-98af8b93", "type": "line", "bbox_px": [448.0, 1065.0, 521.0, 1065.0], "validation": "unreviewed"},
+      {"id": "rawline-2733c1ac", "type": "line", "bbox_px": [445.0, 1059.0, 495.0, 1059.0], "validation": "unreviewed"},
+      {"id": "rawcirc-2d8338b2", "type": "circle", "bbox_px": [311.1000061035156, 938.0999755859375, 447.8999938964844, 1074.9000244140625], "validation": "unreviewed"}
+    ],
+    "ocr_bbox_intersection_count": 0,
+    "ocr_roi_intersection_count": 0,
+    "dimension_value_intersection_count": 0,
+    "table_audit_status": "not_evaluated"
+  },
+  "cheapest_causal_red_candidate": {
+    "status": "CANDIDATE_NOT_RUN",
+    "name": "TRACE_TO_RESIDUAL_CORRESPONDENCE_RED_CANDIDATE",
+    "assertion": "At least one existing geometry primitive that intersects residual label 1517 must rasterize under the verified calibration to source-edge pixels belonging to the same source-edge connected component as the residual before a geometry-owner coverage RED can be issued.",
+    "expected_observation_if_causal": "An existing primitive covers one portion of the same source-edge structure while the label-1517 residual is an uncovered continuation beyond the unchanged 3 px tolerance.",
+    "scope": "Read-only test/evidence-only correspondence oracle using existing geometry, calibration, and source/vector renders; no threshold tuning, selector/extractor change, semantic promotion, new classifier/owner, production GREEN, source/candidate/CAD mutation, PR, promotion, or merge."
+  },
+  "causal_path": "Approved Page-1 render -> source-only residual label 1517 -> existing geometry_opencv layout_ir owner -> pending pixel/component correspondence; bbox ownership alone is not causal proof.",
+  "red": "NOT_RUN; pending PO22 review.",
+  "green": "NOT_RUN; no production delta.",
+  "product_state": "FROZEN_NON_PASS",
+  "next": "Route this single selected label-1517 triage result to SOL PO 22 and await verdict before running correspondence or inspecting a later component."
+}
