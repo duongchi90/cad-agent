@@ -1,0 +1,118 @@
+{
+  "schema_version": "page1-component-720-arc-handoff-representability-v1",
+  "state": "test_only_complete",
+  "issue": "#409",
+  "product_code_base": "0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "review_head": "cb61a19f0ee7277d374bdb9dcf9e2cde59769287",
+  "branch": "codex/page1-geometry-residual-owner-20260914",
+  "boundary": "GEOMETRY_VISUAL",
+  "oracle": "ARC_HANDOFF_REPRESENTABILITY_ORACLE",
+  "scope": {
+    "page": 1,
+    "component_label": 720,
+    "source_edge_pixels_only": true,
+    "test_only_in_memory_primitive": true,
+    "disposable_private_dxf": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "threshold_or_preset_tuning": false,
+    "dimensions": false,
+    "new_control_plane": false
+  },
+  "existing_owner_reuse": {
+    "primitive_ir_type": "primitive_ir_lib.models.Primitive(type='arc', geometry=ArcGeometry(...))",
+    "calibration": "primitive_ir_lib.models.Calibration.pixel_to_cad",
+    "dxf_builder": "dxf_builder_lib.builder.build_dxf native ARC branch",
+    "renderer": "cad_agent.fidelity._render_layout_dxf",
+    "comparator": "existing 7x7 dilation / 3px tolerance",
+    "new_capability_downstream": false,
+    "upstream_gap_remaining": "geometry_extraction.RawGeometry and assemble.build_document carry RawLine/RawCircle only",
+    "no_new_owner_or_control_plane": true
+  },
+  "provenance": {
+    "source_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "page1_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "candidate_source_crop_sha256": "e04056a6606f2351f53756050311aefca4bb8248e25db4928e533633f4b195b7",
+    "candidate_dxf_sha256": "fdf696a3b98ae6f8a40a5730a8d007bf2abc3a5ee914ee85c22ad120296f3669",
+    "oracle_dxf_sha256": "1b742835983220f19f42fe110dd6fa6aa874d5f719710003d6d894fa85ea7452",
+    "oracle_dxf_path_private": "C:/temp/cad-agent-bvtl-sheets-fidelity-20260914-current-main-arc-handoff-v1/component-720-arc-handoff.dxf"
+  },
+  "component": {
+    "area_px": 474,
+    "bbox_xyxy_px_crop": [378, 465, 483, 536],
+    "observed_arc_band_px": {
+      "center": [429.2697, 480.6363],
+      "radius": 47.1,
+      "start_angle_deg": 351.0938,
+      "span_deg": 183.7406,
+      "end_angle_deg_unwrapped": 534.8344,
+      "source_support_within_3px": 0.565401
+    }
+  },
+  "handoff_input": {
+    "primitive_id": "component-720-arc-oracle",
+    "primitive_type": "arc",
+    "cad_center": [75.697733529292, 198.800141154143],
+    "cad_radius": 8.305648521733,
+    "cad_start_angle_deg": 185.1656,
+    "cad_end_angle_deg": 8.9062,
+    "calibration": {
+      "unit": "mm",
+      "pixel_to_unit_scale": 0.17634073294549343,
+      "origin_px": [0.0, 1608.0],
+      "method": "manual_override",
+      "status": "verified",
+      "reference": "Private test-only Page-1 component-720 ARC handoff oracle."
+    }
+  },
+  "build_result": {
+    "entity_count": 1,
+    "skipped_primitive_ids": [],
+    "written_entity_type": "ARC",
+    "written_center": [75.69773352929208, 198.80014115414335],
+    "written_radius": 8.30564852173274,
+    "written_start_angle_deg": 185.16560000000004,
+    "written_end_angle_deg": 8.906200000000013
+  },
+  "round_trip": {
+    "read_entity_type": "ARC",
+    "read_center": [75.69773352929208, 198.80014115414335],
+    "read_radius": 8.30564852173274,
+    "read_start_angle_deg": 185.16560000000004,
+    "read_end_angle_deg": 8.906200000000013,
+    "center_max_abs_delta": 0.0,
+    "radius_abs_delta": 0.0,
+    "start_mod360_delta": 0.0,
+    "end_mod360_delta": 0.0,
+    "round_trip_status": "PASS"
+  },
+  "raster_comparator": {
+    "tolerance": "existing 7x7 dilation / 3px",
+    "component_720_covered_px": 399,
+    "component_720_area_px": 474,
+    "component_720_coverage_within_3px": 0.841772,
+    "representability_status": "PASS"
+  },
+  "classification": {
+    "status": "DOWNSTREAM_ARC_HANDOFF_REPRESENTABLE",
+    "causal_interpretation": "The existing Primitive IR -> DXF builder ARC -> renderer/comparator path faithfully carries the observed ARC geometry. The remaining product loss is upstream representation/extraction handoff, not a missing DXF/render owner.",
+    "production_repair_authorized": false,
+    "green_authorized": false
+  },
+  "safety": {
+    "read_only_oracle": true,
+    "production_code_mutation": false,
+    "source_customer_drawing_mutation": false,
+    "candidate_mutation": false,
+    "cad_live_state_mutation": false,
+    "dimensions_acceptance": false,
+    "tuning": false,
+    "new_control_plane": false
+  },
+  "next_single_bounded_action": "ROUTE_THIS_ORACLE_TO_SOL_PO22_AND_WAIT_FOR_VERDICT",
+  "human_gate": "NO",
+  "selected_sol_role": "EVIDENCE_ACCEPTANCE",
+  "review_request": "Fresh-read exact GitHub/source/evidence. Independently verify the existing Primitive-IR ARC construction, calibration orientation, native DXF ARC write/readback, and component-720 raster coverage. Return one verdict and one smallest causal next action; do not authorize RawArc/extraction changes, GREEN, dimensions, tuning, source/CAD mutation, or a new control plane."
+}
