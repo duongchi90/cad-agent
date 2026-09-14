@@ -1,0 +1,84 @@
+{
+  "schema_version": "page1-component-parent-source-oracle-1.0",
+  "state": "PARENT_SOURCE_ORACLE_COMPLETE",
+  "boundary": "GEOMETRY_VISUAL",
+  "base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "exact_head_before_packet_commit": "7025a8fb7fd37f80736085f3e1a84bf1b6cefa46",
+  "candidate_state": "FROZEN_NON_PASS",
+  "oracle_scope": "Read-only tracing of the 441 component-89 residual seeds into the pre-vector-subtraction source_edges mask, using the same approved render, Canny-50-150 configuration, content mask, and 8-neighbor connectivity. No threshold sweep, selector change, classifier, production capability, or artifact mutation.",
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "vector_render_sha256": "426fe046b71da1a30ffdbaa8fa7beec65fbf8b650828bb5f16337ce6b97568e5",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "prior_shape_packet_sha256": "abfeee9f56ff0d625f6d6c3fff397f5165a909e65b10dc1a86fb7e0138d35ad"
+  },
+  "seed_trace": {
+    "residual_component_label": 89,
+    "seed_count": 441,
+    "seed_bbox_px": [1898, 216, 1942, 519],
+    "source_parent_component_count_touched": 1,
+    "source_parent_label": 3,
+    "seed_count_in_parent": 441,
+    "seed_parent_label_zero": false,
+    "parent_connects_beyond_seed_bbox": true,
+    "parent_points_outside_seed_bbox": 3661
+  },
+  "parent_source_component": {
+    "point_count": 4102,
+    "bbox_px_inclusive": [1566, 158, 1997, 615],
+    "bbox_width_px": 432,
+    "bbox_height_px": 458,
+    "centroid_px": [1825.14432, 424.372989],
+    "unique_rows": 458,
+    "unique_columns": 432,
+    "external_contour_count": 1,
+    "external_contour_length_px": [5230.422565],
+    "pixel_degree_histogram_8_neighbor": {
+      "1": 27,
+      "2": 3417,
+      "3": 398,
+      "4": 245,
+      "5": 11,
+      "6": 4
+    },
+    "degree1_endpoints": 27,
+    "degree_ge3_junction_pixels": 658,
+    "max_points_per_row": 379,
+    "max_points_per_column": 405
+  },
+  "untuned_parent_fits": {
+    "straight_line_pca": {
+      "major_std_px": 166.361643,
+      "minor_std_px": 138.876577,
+      "minor_to_major_std_ratio": 0.835402,
+      "orthogonal_rmse_px": 138.876577,
+      "orthogonal_max_px": 316.06653
+    },
+    "single_circle_algebraic_least_squares": {
+      "center_px": [1786.546846, 377.502887],
+      "radius_px": 225.054374,
+      "radial_rmse_px": 38.546722,
+      "radial_max_px": 106.549609
+    }
+  },
+  "ownership_result": {
+    "parent_shape": "COMPOUND_SOURCE_EDGE_COMPONENT",
+    "straight_line_eligibility": "NOT_ESTABLISHED; parent fit spans 432x458 px with 27 endpoints and 658 junction pixels",
+    "single_circle_eligibility": "NOT_ESTABLISHED; parent radial fit residual is 38.546722 px RMSE and 106.549609 px maximum",
+    "table_grid_or_hatch_eligibility": "NOT_RESOLVED_BY_SEMANTIC_OWNER; parent connectivity alone cannot assign visual semantics",
+    "source_shape_ownership": "UNRESOLVED",
+    "reason": "The seed pixels join a large pre-subtraction source-edge component containing many connected contours. Parent geometry disproves a single-parent-line/single-parent-circle assumption but cannot prove what semantic sub-owner generated the seed subset."
+  },
+  "red_disposition": "RETIRED_EXPECTATION_NOT_PROVEN",
+  "product_consequence": "GEOMETRY_VISUAL remains the first unsatisfied boundary and remains NON_PASS. The old RawLine/RawCircle RED stays retired; no production repair is authorized.",
+  "scope_guards": {
+    "production_files_changed": false,
+    "extractor_configuration_changed": false,
+    "source_or_candidate_mutated": false,
+    "cad_artifact_mutated": false,
+    "new_classifier_or_authority_added": false,
+    "governance_or_runtime_added": false
+  },
+  "next": "Route this exact parent-source oracle to SOL PO 22. Await verdict; do not reissue the old RED, tune extraction, implement RawArc, promote a candidate, open a PR, or merge."
+}
