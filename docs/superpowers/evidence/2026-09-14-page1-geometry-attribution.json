@@ -1,0 +1,99 @@
+{
+  "schema_version": "page1-geometry-attribution-1.0",
+  "state": "ATTRIBUTION_ONLY",
+  "boundary": "GEOMETRY_VISUAL",
+  "matrix_base": "origin/main@0fc0f64289d0732f767fd4df486e1eeab3ace7b2",
+  "matrix_exact_head": "bcd195b89f844c28e1691a3be613f66c0c7f104d",
+  "owner": "cad_agent.fidelity plus existing layout geometry output",
+  "method": {
+    "description": "Use the existing fidelity detector and 3 px tolerance (7x7 dilation) to identify source-edge pixels inside the existing content mask that are not covered by current vector edges. Select the largest material connected component and compare its source-pixel bounding box with emitted layout_ir trace boxes.",
+    "content_mask": "existing fidelity mask: top 3%, bottom 25%, left/right 3% excluded",
+    "edge_detector": "canny-50-150",
+    "tolerance_px": 3,
+    "no_production_mutation": true,
+    "no_threshold_or_selector_tuning": true
+  },
+  "inputs": {
+    "approved_page1_pdf_sha256": "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38",
+    "source_dwg_sha256": "6b2e138112e85dc744de8406484652b3c18774e36a414d54344687f9ec7e32d2",
+    "source_render_sha256": "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0",
+    "layout_dxf_sha256": "cee47d88f5801a2b0c3e47c8b15528011086653221111d145654f208560fa1ff",
+    "layout_ir_sha256": "0a06b08aecf32b631ad2982b251d65f282147e417f14f90c273241e8a659a59e",
+    "layout_audit_sha256": "3a5af70606d1729d405dab47347a45e35e8ba30d3467a053ea17a4439f4cf235",
+    "fidelity_report_sha256": "75e6a20f8acef0e477dc321dabf8cdb5a94cd938292e369f95f33c5200dbcfb1",
+    "fidelity_overlay_sha256": "4ef95ce1fe6a0f54d6ac6331dbd77447237903c90aee8ff42cf85c4d670ef178"
+  },
+  "summary": {
+    "render_size_px": [2382, 1685],
+    "report_state": "needs_review",
+    "content_edge_metrics": {
+      "precision": 0.98093,
+      "recall": 0.694594,
+      "f1": 0.813295
+    },
+    "source_edge_pixels_in_content": 144961,
+    "vector_edge_pixels_in_content": 100158,
+    "source_only_residual_pixels_in_content": 44272,
+    "material_component_count_area_ge_250": 8
+  },
+  "selected_region": {
+    "selection_rule": "largest connected source-only residual component with area >=250 px and fully inside the existing content mask",
+    "component_label": 89,
+    "source_only_edge_pixels": 441,
+    "bbox_px": [1898, 216, 1942, 519],
+    "centroid_px": [1912.029, 367.98],
+    "vector_edge_pixels_inside_region": 0,
+    "emitted_trace_bboxes_intersecting_region": 0,
+    "nearest_emitted_primitives": [
+      {
+        "id": "rawline-0e5f4c6f",
+        "type": "line",
+        "trace_bbox_px": [1895.0, 171.0, 1895.0, 330.0],
+        "bbox_distance_px": 3.0,
+        "validation_status": "unreviewed"
+      },
+      {
+        "id": "rawline-43b786e9",
+        "type": "line",
+        "trace_bbox_px": [1902.0, 158.0, 1902.0, 212.0],
+        "bbox_distance_px": 4.0,
+        "validation_status": "unreviewed"
+      },
+      {
+        "id": "rawline-21823956",
+        "type": "line",
+        "trace_bbox_px": [1815.0, 522.0, 1895.0, 523.0],
+        "bbox_distance_px": 4.243,
+        "validation_status": "unreviewed"
+      },
+      {
+        "id": "rawline-b861f72c",
+        "type": "line",
+        "trace_bbox_px": [1815.0, 524.0, 1895.0, 524.0],
+        "bbox_distance_px": 5.831,
+        "validation_status": "unreviewed"
+      },
+      {
+        "id": "rawline-9b1810be",
+        "type": "line",
+        "trace_bbox_px": [1892.0, 158.0, 1892.0, 306.0],
+        "bbox_distance_px": 6.0,
+        "validation_status": "unreviewed"
+      },
+      {
+        "id": "rawline-e6d06fac",
+        "type": "line",
+        "trace_bbox_px": [1831.0, 530.0, 1895.0, 530.0],
+        "bbox_distance_px": 11.402,
+        "validation_status": "unreviewed"
+      }
+    ],
+    "evidence_interpretation": "The approved Page-1 render contains a contiguous 441-pixel edge region at x=1898..1942,y=216..519, while the current vector render contributes zero edge pixels in that region and no emitted layout_ir trace box intersects it. The nearest emitted traces terminate immediately outside or adjacent to the region. This is a missing/extraction-side geometry signal, not evidence that a present primitive was merely mis-rendered.",
+    "first_causal_owner_classification": "GEOMETRY_EXTRACTION_LOSS",
+    "classification_scope": "Attribution only; not a production defect proof and not an acceptance PASS."
+  },
+  "red": "NOT_RUN; this bounded action stops at attribution.",
+  "green": "NOT_APPLICABLE; no production change.",
+  "product_state": "FROZEN_NON_PASS",
+  "downstream_matrix_rows": "NOT_RUN after first GEOMETRY_VISUAL failure"
+}
