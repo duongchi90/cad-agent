@@ -155,7 +155,7 @@ PRESETS = {
         "param2": 30, "max_radius": 200, "min_dist": 20,
     },
     "real_scan_tuned_v1": {
-        "hough_threshold": 90, "min_line_length": 50, "max_line_gap": 5,
+        "hough_threshold": 87, "min_line_length": 50, "max_line_gap": 5,
         "param2": 55, "max_radius": 80, "min_dist": 40,
     },
 }
