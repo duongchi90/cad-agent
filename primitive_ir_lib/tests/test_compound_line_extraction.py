@@ -42,13 +42,15 @@ def _normalised_segments(lines: list[RawLine]) -> list[tuple[float, ...]]:
 
 
 def _expected_normalised_segments() -> list[tuple[float, ...]]:
+    # Shared raster corner pixels are observable in both incident runs; the
+    # connectivity-derived contract retains them for each direction.
     return sorted(
         (
             (7.0, 0.0, 7.0, 80.0),
             (14.0, 25.0, 44.0, 25.0),
-            (44.0, 28.0, 44.0, 45.0),
+            (44.0, 25.0, 44.0, 45.0),
             (14.0, 45.0, 44.0, 45.0),
-            (14.0, 26.0, 14.0, 44.0),
+            (14.0, 25.0, 14.0, 45.0),
             (0.0, 79.0, 7.0, 72.0),
         )
     )

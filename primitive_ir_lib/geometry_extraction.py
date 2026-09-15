@@ -26,6 +26,7 @@ KHÔNG tự động thay thế "default" (tham số gốc, giữ để không ph
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import List, Tuple
 
 import cv2
@@ -106,6 +107,117 @@ def extract_lines(
             bbox_px=bbox,
         ))
     return raw_lines
+
+
+def extract_compound_raw_lines(component_mask: np.ndarray) -> List[RawLine]:
+    """Vectorise a binary edge component into connected LINE primitives.
+
+    The input is already a bounded edge mask, so this reuses the existing
+    Hough line detector and adds only connectivity-aware grouping and endpoint
+    recovery.  All geometry is derived from the supplied mask; no source,
+    page, or absolute-coordinate identity participates in the result.
+    """
+    mask = np.asarray(component_mask)
+    if mask.ndim != 2:
+        raise ValueError("component_mask must be a 2-D edge mask")
+
+    binary = np.where(mask > 0, 255, 0).astype(np.uint8)
+    if not np.any(binary):
+        return []
+
+    height, width = binary.shape
+    min_line_length = max(3, int(round(min(height, width) * 0.03)))
+    max_line_gap = max(1, min_line_length // 2)
+    component_count, labels, _, _ = cv2.connectedComponentsWithStats(
+        (binary > 0).astype(np.uint8), connectivity=8,
+    )
+    del component_count
+
+    detected = cv2.HoughLinesP(
+        binary,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=min_line_length,
+        minLineLength=min_line_length,
+        maxLineGap=max_line_gap,
+    )
+    if detected is None:
+        return []
+
+    def angle_delta(first: float, second: float) -> float:
+        return abs((first - second + math.pi / 2) % math.pi - math.pi / 2)
+
+    groups = []
+    for row in np.asarray(detected).reshape(-1, 4):
+        x1, y1, x2, y2 = map(float, row)
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy)
+        if length == 0:
+            continue
+        direction = (dx / length, dy / length)
+        normal = (-direction[1], direction[0])
+        midpoint = ((x1 + x2) / 2, (y1 + y2) / 2)
+        label_x, label_y = round(midpoint[0]), round(midpoint[1])
+        label = int(labels[label_y, label_x])
+        if label == 0:
+            continue
+        angle = math.atan2(dy, dx) % math.pi
+        offset = normal[0] * midpoint[0] + normal[1] * midpoint[1]
+
+        group = next(
+            (
+                item for item in groups
+                if item["label"] == label
+                and angle_delta(angle, item["angle"]) <= math.radians(5)
+                and abs(offset - item["offset"]) <= max(1.0, min(height, width) * 0.015)
+            ),
+            None,
+        )
+        if group is None:
+            group = {"label": label, "angle": angle, "offset": offset, "segments": []}
+            groups.append(group)
+        group["segments"].append((x1, y1, x2, y2, length))
+
+    points = np.column_stack(np.where(binary > 0))[:, [1, 0]].astype(float)
+    support_tolerance = max(0.5, min(height, width) * 0.003)
+    segments = []
+    for group in groups:
+        x1, y1, x2, y2, length = max(group["segments"], key=lambda item: item[4])
+        direction = np.array((x2 - x1, y2 - y1), dtype=float) / length
+        normal = np.array((-direction[1], direction[0]), dtype=float)
+        midpoint = np.array(((x1 + x2) / 2, (y1 + y2) / 2), dtype=float)
+        pixel_labels = labels[points[:, 1].astype(int), points[:, 0].astype(int)]
+        distances = np.abs((points - midpoint) @ normal)
+        support = points[(pixel_labels == group["label"]) & (distances <= support_tolerance)]
+        if len(support) < 2:
+            continue
+        projections = support @ direction
+        start = support[int(np.argmin(projections))]
+        end = support[int(np.argmax(projections))]
+        if np.allclose(start, end):
+            continue
+        segments.append((tuple(map(float, start)), tuple(map(float, end))))
+
+    segments.sort(key=lambda item: (min(item[0][0], item[1][0]), min(item[0][1], item[1][1]), item))
+    max_length = max(
+        math.hypot(end[0] - start[0], end[1] - start[1])
+        for start, end in segments
+    ) if segments else 1.0
+    return [
+        RawLine(
+            id=new_id("rawline"),
+            p1_px=start,
+            p2_px=end,
+            confidence=round(min(1.0, 0.5 + 0.5 * (
+                math.hypot(end[0] - start[0], end[1] - start[1]) / max_length
+            )), 3),
+            bbox_px=(
+                min(start[0], end[0]), min(start[1], end[1]),
+                max(start[0], end[0]), max(start[1], end[1]),
+            ),
+        )
+        for start, end in segments
+    ]
 
 
 def extract_circles(
