@@ -1914,6 +1914,188 @@ def project_semantic_observations(
     return _copy.deepcopy(output)
 
 
+_EXTERNAL_PROPOSAL_FIELDS = {
+    "schema_version",
+    "proposal_source",
+    "source_sha256",
+    "page_index",
+    "source_render_sha256",
+    "roi_bbox_px",
+    "view_role_proposal",
+    "primitive_hypotheses",
+    "object_groups",
+    "excluded_memberships",
+}
+_EXTERNAL_PROPOSAL_HYPOTHESIS_FIELDS = {"id", "type", "start_px", "end_px"}
+_EXTERNAL_PROPOSAL_GROUP_FIELDS = {
+    "group_id",
+    "proposed_label",
+    "primitive_hypothesis_ids",
+}
+_EXTERNAL_PROPOSAL_EXCLUSION_FIELDS = {
+    "primitive_hypothesis_id",
+    "excluded_group_id",
+}
+
+
+def _external_proposal_pixel_point(value: object) -> list[int]:
+    if type(value) is not list or len(value) != 2:
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    return [
+        _strict_nonnegative_int(coordinate, "EXTERNAL_PROPOSAL_INVALID")
+        for coordinate in value
+    ]
+
+
+def _external_proposal_pixel_box(value: object) -> list[int]:
+    if type(value) is not list or len(value) != 4:
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    box = [
+        _strict_nonnegative_int(coordinate, "EXTERNAL_PROPOSAL_INVALID")
+        for coordinate in value
+    ]
+    if box[0] >= box[2] or box[1] >= box[3]:
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    return box
+
+
+def compile_external_visual_object_proposal(
+    *,
+    proposal: object,
+    source_fusion: object,
+) -> dict[str, object]:
+    """Bind one external proposal to existing fusion evidence without materializing it."""
+
+    fusion = validate_source_fusion_packet(source_fusion)
+    if fusion["status"] != "READY":
+        _fail("EXTERNAL_PROPOSAL_SOURCE_FUSION_NOT_READY")
+    record = _closed(proposal, _EXTERNAL_PROPOSAL_FIELDS, "EXTERNAL_PROPOSAL_INVALID")
+    if record["schema_version"] != "external-visual-object-proposal-1.0":
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    if record["proposal_source"] != "external_ai":
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    source_sha256 = _sha256(record["source_sha256"], "EXTERNAL_PROPOSAL_INVALID")
+    source_render_sha256 = _sha256(
+        record["source_render_sha256"], "EXTERNAL_PROPOSAL_INVALID"
+    )
+    page_index = _strict_nonnegative_int(
+        record["page_index"], "EXTERNAL_PROPOSAL_INVALID"
+    )
+    roi = _external_proposal_pixel_box(record["roi_bbox_px"])
+    _identifier(record["view_role_proposal"], "EXTERNAL_PROPOSAL_INVALID")
+
+    matching_renders = []
+    for render in fusion["render_provenance"]:
+        expected_page = render.get("pdf_page_index", 0)
+        if (
+            render["observed_source_sha256"] == source_sha256
+            and render["raster_sha256"] == source_render_sha256
+            and expected_page == page_index
+            and roi[2] <= render["raster_width_px"]
+            and roi[3] <= render["raster_height_px"]
+        ):
+            matching_renders.append(render)
+    if len(matching_renders) != 1:
+        _fail("EXTERNAL_PROPOSAL_SOURCE_RENDER_MISMATCH")
+
+    hypotheses = record["primitive_hypotheses"]
+    if type(hypotheses) is not list or not hypotheses or len(hypotheses) > 64:
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    hypothesis_ids: list[str] = []
+    for raw_hypothesis in hypotheses:
+        hypothesis = _closed(
+            raw_hypothesis,
+            _EXTERNAL_PROPOSAL_HYPOTHESIS_FIELDS,
+            "EXTERNAL_PROPOSAL_INVALID",
+        )
+        hypothesis_id = _identifier(
+            hypothesis["id"], "EXTERNAL_PROPOSAL_INVALID"
+        )
+        if hypothesis_id in hypothesis_ids or hypothesis["type"] != "LINE":
+            _fail("EXTERNAL_PROPOSAL_INVALID")
+        start = _external_proposal_pixel_point(hypothesis["start_px"])
+        end = _external_proposal_pixel_point(hypothesis["end_px"])
+        if any(
+            coordinate < lower or coordinate > upper
+            for point in (start, end)
+            for coordinate, lower, upper in zip(point, roi[:2], roi[2:])
+        ):
+            _fail("EXTERNAL_PROPOSAL_HYPOTHESIS_OUT_OF_ROI")
+        hypothesis_ids.append(hypothesis_id)
+
+    groups = record["object_groups"]
+    if type(groups) is not list or not groups or len(groups) > 32:
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    group_ids: list[str] = []
+    for raw_group in groups:
+        group = _closed(
+            raw_group,
+            _EXTERNAL_PROPOSAL_GROUP_FIELDS,
+            "EXTERNAL_PROPOSAL_INVALID",
+        )
+        group_id = _identifier(group["group_id"], "EXTERNAL_PROPOSAL_INVALID")
+        if group_id in group_ids:
+            _fail("EXTERNAL_PROPOSAL_INVALID")
+        _identifier(group["proposed_label"], "EXTERNAL_PROPOSAL_INVALID")
+        members = group["primitive_hypothesis_ids"]
+        if type(members) is not list or not members:
+            _fail("EXTERNAL_PROPOSAL_INVALID")
+        member_ids = [
+            _identifier(item, "EXTERNAL_PROPOSAL_INVALID") for item in members
+        ]
+        if len(member_ids) != len(set(member_ids)) or any(
+            item not in hypothesis_ids for item in member_ids
+        ):
+            _fail("EXTERNAL_PROPOSAL_REFERENCE_MISMATCH")
+        group_ids.append(group_id)
+
+    exclusions = record["excluded_memberships"]
+    if type(exclusions) is not list or len(exclusions) > 64:
+        _fail("EXTERNAL_PROPOSAL_INVALID")
+    seen_exclusions: set[tuple[str, str]] = set()
+    for raw_exclusion in exclusions:
+        exclusion = _closed(
+            raw_exclusion,
+            _EXTERNAL_PROPOSAL_EXCLUSION_FIELDS,
+            "EXTERNAL_PROPOSAL_INVALID",
+        )
+        primitive_id = _identifier(
+            exclusion["primitive_hypothesis_id"], "EXTERNAL_PROPOSAL_INVALID"
+        )
+        group_id = _identifier(
+            exclusion["excluded_group_id"], "EXTERNAL_PROPOSAL_INVALID"
+        )
+        identity = (primitive_id, group_id)
+        if (
+            identity in seen_exclusions
+            or primitive_id not in hypothesis_ids
+            or group_id not in group_ids
+        ):
+            _fail("EXTERNAL_PROPOSAL_REFERENCE_MISMATCH")
+        seen_exclusions.add(identity)
+
+    return {
+        "kind": "DETERMINISTIC_GEOMETRY_VERIFICATION_REQUEST",
+        "status": "PROPOSAL_ONLY",
+        "exact_source_binding": {
+            "source_sha256": source_sha256,
+            "page_index": page_index,
+            "source_render_sha256": source_render_sha256,
+            "roi_bbox_px": roi,
+        },
+        "checks_required": [
+            "EXACT_SOURCE_BINDING",
+            "PER_PRIMITIVE_SOURCE_SUPPORT",
+            "GROUP_TOPOLOGY",
+            "EXCLUSION_CONSISTENCY",
+        ],
+        "semantic_label_authority": "NONE",
+        "primitive_ir_materialized": False,
+        "semantic_observation_materialized": False,
+        "cad_mutation": False,
+    }
+
+
 __all__ = [
     "SOURCE_FUSION_SCHEMA_VERSION",
     "SourceFusionError",
