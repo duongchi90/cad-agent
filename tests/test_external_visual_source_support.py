@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import io
 
-import cv2
-import numpy as np
 import pytest
+from PIL import Image, ImageDraw
 
 from cad_agent.source_fusion_proposal import compile_external_visual_object_proposal
 from cad_agent.source_support_verifier import verify_external_visual_proposal_source_support
 
 
 def _render_bytes() -> bytes:
-    image = np.full((64, 64), 255, dtype=np.uint8)
-    cv2.rectangle(image, (10, 10), (30, 30), 0, 1, lineType=cv2.LINE_8)
-    ok, encoded = cv2.imencode(".png", image)
-    assert ok
-    return encoded.tobytes()
+    image = Image.new("L", (64, 64), 255)
+    ImageDraw.Draw(image).rectangle((10, 10, 30, 30), outline=0, width=1)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    return stream.getvalue()
 
 
 def _request(*, include_unsupported_connector: bool) -> tuple[dict[str, object], bytes]:
