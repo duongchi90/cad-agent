@@ -199,19 +199,6 @@ def extract_compound_raw_lines(component_mask: np.ndarray) -> List[RawLine]:
             np.diff(ordered_projections) > math.sqrt(2.0) + 1e-6
         ) + 1
         support = max(np.split(ordered_support, split_points), key=len)
-        if (
-            abs(direction[1]) >= abs(direction[0])
-            and len(support) >= 2
-        ):
-            def has_horizontal_neighbor(point: np.ndarray) -> bool:
-                px, py = map(int, point)
-                return (
-                    (px > 0 and binary[py, px - 1] > 0)
-                    or (px + 1 < width and binary[py, px + 1] > 0)
-                )
-
-            if has_horizontal_neighbor(support[0]) and has_horizontal_neighbor(support[-1]):
-                support = support[1:-1]
         if len(support) < 2:
             continue
         projections = support @ direction
@@ -220,6 +207,83 @@ def extract_compound_raw_lines(component_mask: np.ndarray) -> List[RawLine]:
         if np.allclose(start, end):
             continue
         segments.append((tuple(map(float, start)), tuple(map(float, end))))
+
+    def is_represented_by_hough(path: list[tuple[float, float]]) -> bool:
+        path_start = np.asarray(path[0], dtype=float)
+        path_end = np.asarray(path[-1], dtype=float)
+        path_delta = path_end - path_start
+        path_length = float(np.linalg.norm(path_delta))
+        path_direction = path_delta / path_length
+        if (
+            path_direction[0] < 0
+            or (abs(path_direction[0]) <= 1e-9 and path_direction[1] < 0)
+        ):
+            path_direction = -path_direction
+        path_normal = np.array((-path_direction[1], path_direction[0]))
+        path_midpoint = (path_start + path_end) / 2.0
+        path_offset = float(path_midpoint @ path_normal)
+        path_projections = np.asarray(path, dtype=float) @ path_direction
+        path_min = float(np.min(path_projections))
+        path_max = float(np.max(path_projections))
+        for existing_start, existing_end in segments:
+            existing_start = np.asarray(existing_start, dtype=float)
+            existing_end = np.asarray(existing_end, dtype=float)
+            existing_delta = existing_end - existing_start
+            existing_length = float(np.linalg.norm(existing_delta))
+            if existing_length == 0:
+                continue
+            existing_direction = existing_delta / existing_length
+            if (
+                existing_direction[0] < 0
+                or (abs(existing_direction[0]) <= 1e-9 and existing_direction[1] < 0)
+            ):
+                existing_direction = -existing_direction
+            existing_normal = np.array((-existing_direction[1], existing_direction[0]))
+            existing_midpoint = (existing_start + existing_end) / 2.0
+            existing_offset = float(existing_midpoint @ existing_normal)
+            existing_angle = math.atan2(
+                existing_direction[1], existing_direction[0]
+            ) % math.pi
+            path_angle = math.atan2(path_direction[1], path_direction[0]) % math.pi
+            if angle_delta(path_angle, existing_angle) > math.radians(5):
+                continue
+            if abs(path_offset - existing_offset) > max(1.0, min(height, width) * 0.015):
+                continue
+            existing_projections = np.asarray(
+                (existing_start, existing_end), dtype=float
+            ) @ path_direction
+            overlap = max(
+                0.0,
+                min(path_max, float(np.max(existing_projections)))
+                - max(path_min, float(np.min(existing_projections))),
+            )
+            if overlap >= path_length * 0.75:
+                return True
+        return False
+
+    foreground_points = np.column_stack(np.where(binary > 0))[:, [1, 0]]
+    for direction_x, direction_y in ((1, 0), (0, 1), (1, 1), (1, -1)):
+        for point_x, point_y in foreground_points:
+            previous_x = point_x - direction_x
+            previous_y = point_y - direction_y
+            if (
+                0 <= previous_x < width
+                and 0 <= previous_y < height
+                and binary[previous_y, previous_x] > 0
+            ):
+                continue
+            path = []
+            current_x, current_y = point_x, point_y
+            while (
+                0 <= current_x < width
+                and 0 <= current_y < height
+                and binary[current_y, current_x] > 0
+            ):
+                path.append((float(current_x), float(current_y)))
+                current_x += direction_x
+                current_y += direction_y
+            if len(path) >= min_line_length and not is_represented_by_hough(path):
+                segments.append((path[0], path[-1]))
 
     segments.sort(key=lambda item: (min(item[0][0], item[1][0]), min(item[0][1], item[1][1]), item))
     max_length = max(
