@@ -20,6 +20,11 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 __all__ = ["verify_external_visual_proposal_source_support"]
 
 
+_APPROVED_ENDPOINT_TOLERANCE_PX = 2
+_APPROVED_MIN_SUPPORT_FRACTION = 0.85
+_APPROVED_DARKNESS_THRESHOLD = 220
+
+
 def _fail(code: str) -> None:
     raise ValueError(code)
 
@@ -121,15 +126,16 @@ def verify_external_visual_proposal_source_support(
     *,
     verification_request: object,
     source_render_bytes: bytes,
-    endpoint_tolerance_px: int = 2,
-    min_support_fraction: float = 0.85,
-    darkness_threshold: int = 220,
+    endpoint_tolerance_px: int = _APPROVED_ENDPOINT_TOLERANCE_PX,
+    min_support_fraction: float = _APPROVED_MIN_SUPPORT_FRACTION,
+    darkness_threshold: int = _APPROVED_DARKNESS_THRESHOLD,
 ) -> dict[str, object]:
     """Verify that every proposed LINE is supported by exact bound raster ink.
 
     Support is measured by sampling the proposed segment at pixel cadence and
     asking whether each sample lies within ``endpoint_tolerance_px`` of a dark
-    source pixel. This is evidence for observed raster support only; it does not
+    source pixel. The acceptance profile is fixed here rather than delegated to
+    callers. This is evidence for observed raster support only; it does not
     prove semantic identity, physical connectivity, or CAD correctness.
     """
 
@@ -141,6 +147,12 @@ def verify_external_visual_proposal_source_support(
     support_threshold = _parameter_fraction(min_support_fraction)
     if tolerance < 0 or tolerance > 16 or threshold < 0 or threshold > 255:
         _fail("SOURCE_SUPPORT_PARAMETER_INVALID")
+    if (
+        tolerance != _APPROVED_ENDPOINT_TOLERANCE_PX
+        or support_threshold != _APPROVED_MIN_SUPPORT_FRACTION
+        or threshold != _APPROVED_DARKNESS_THRESHOLD
+    ):
+        _fail("SOURCE_SUPPORT_PROFILE_OVERRIDE_NOT_ALLOWED")
 
     actual_render_sha256 = hashlib.sha256(source_render_bytes).hexdigest()
     if actual_render_sha256 != expected_render_sha256:
