@@ -183,7 +183,7 @@ def _groups(
         if not isinstance(raw, _Mapping):
             _fail("GROUP_MEMBERSHIP_INVALID")
         raw_fields = set(raw)
-        if raw_fields not in {_GROUP_FIELDS, _GROUP_FIELDS_WITH_TOPOLOGY}:
+        if raw_fields != _GROUP_FIELDS and raw_fields != _GROUP_FIELDS_WITH_TOPOLOGY:
             _fail("GROUP_MEMBERSHIP_INVALID")
         record = raw
         group_id = _identifier(record["group_id"], "GROUP_MEMBERSHIP_INVALID")
