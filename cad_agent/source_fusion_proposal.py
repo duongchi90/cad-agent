@@ -7,6 +7,7 @@ or PrimitiveIR evidence and this seam has no CAD or source mutation side effect.
 from __future__ import annotations
 
 import copy as _copy
+import math as _math
 import re as _re
 from collections.abc import Mapping as _Mapping
 
@@ -46,6 +47,15 @@ _TOPOLOGY_FIELDS = {
     "endpoint_tolerance_px",
 }
 _EXCLUSION_FIELDS = {"primitive_hypothesis_id", "excluded_group_id"}
+_CALIBRATION_FIELDS = {
+    "unit",
+    "pixel_to_unit_scale",
+    "origin_px",
+    "method",
+    "reference_note",
+    "status",
+    "source_sha256",
+}
 
 
 def _fail(code: str) -> None:
@@ -95,6 +105,62 @@ def _binding(value: object, code: str) -> dict[str, object]:
         "page_index": _nonnegative_int(record["page_index"], code),
         "source_render_sha256": _sha256(record["source_render_sha256"], code),
         "roi_bbox_px": _roi(record["roi_bbox_px"], code),
+    }
+
+
+def _normalize_calibration_binding(
+    value: object,
+    *,
+    source_sha256: str,
+    code: str = "EXPECTED_CALIBRATION_BINDING_INVALID",
+) -> dict[str, object]:
+    if not isinstance(value, _Mapping):
+        _fail(code)
+    required_fields = _CALIBRATION_FIELDS - {"reference_note"}
+    if set(value) != required_fields and set(value) != _CALIBRATION_FIELDS:
+        _fail(code)
+    record = value
+    unit = record["unit"]
+    if unit not in {"mm", "cm", "m"}:
+        _fail(code)
+    scale = record["pixel_to_unit_scale"]
+    if (
+        isinstance(scale, bool)
+        or not isinstance(scale, (int, float))
+        or not _math.isfinite(float(scale))
+        or scale <= 0
+    ):
+        _fail(code)
+    origin = record["origin_px"]
+    if (
+        not isinstance(origin, (list, tuple))
+        or len(origin) != 2
+        or any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not _math.isfinite(float(item))
+            for item in origin
+        )
+    ):
+        _fail(code)
+    method = record["method"]
+    if method not in {"known_dimension_reference", "title_block_scale", "manual_override"}:
+        _fail(code)
+    reference_note = record.get("reference_note")
+    if reference_note is not None and not isinstance(reference_note, str):
+        _fail(code)
+    if record["status"] != "verified":
+        _fail("EXTERNAL_GEOMETRY_CALIBRATION_UNVERIFIED")
+    if record["source_sha256"] != source_sha256:
+        _fail("EXTERNAL_GEOMETRY_CALIBRATION_SOURCE_MISMATCH")
+    return {
+        "unit": unit,
+        "pixel_to_unit_scale": float(scale),
+        "origin_px": [float(origin[0]), float(origin[1])],
+        "method": method,
+        "reference_note": reference_note,
+        "status": "verified",
+        "source_sha256": source_sha256,
     }
 
 
@@ -295,6 +361,7 @@ def compile_external_visual_object_proposal(
     *,
     proposal: object,
     expected_binding: object,
+    expected_calibration_binding: object | None = None,
 ) -> dict[str, object]:
     """Compile an external-AI visual proposal into a verification-only request.
 
@@ -351,5 +418,10 @@ def compile_external_visual_object_proposal(
         "semantic_observation_materialized": False,
         "cad_mutation": False,
     }
+    if expected_calibration_binding is not None:
+        request["exact_calibration_binding"] = _normalize_calibration_binding(
+            expected_calibration_binding,
+            source_sha256=trusted_binding["source_sha256"],
+        )
     request["verification_request_sha256"] = _canonical_json_sha256(request)
     return request

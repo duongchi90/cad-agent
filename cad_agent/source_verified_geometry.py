@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from PIL import Image
 
 from cad_agent.drawing_contracts import canonical_json_sha256
+from cad_agent.source_fusion_proposal import _normalize_calibration_binding
 from cad_agent.source_support_verifier import (
     verify_external_visual_proposal_source_support,
 )
@@ -116,6 +117,21 @@ def materialize_verified_external_visual_lines(
         _fail("EXTERNAL_GEOMETRY_CALIBRATION_UNVERIFIED")
     if calibration.source_sha256 != binding["source_sha256"]:
         _fail("EXTERNAL_GEOMETRY_CALIBRATION_SOURCE_MISMATCH")
+    calibration_binding = verification_request.get("exact_calibration_binding")
+    if calibration_binding is None:
+        _fail("EXTERNAL_GEOMETRY_CALIBRATION_BINDING_MISSING")
+    expected_calibration = _normalize_calibration_binding(
+        calibration_binding,
+        source_sha256=binding["source_sha256"],
+        code="EXTERNAL_GEOMETRY_CALIBRATION_BINDING_INVALID",
+    )
+    actual_calibration = _normalize_calibration_binding(
+        calibration.to_dict(),
+        source_sha256=binding["source_sha256"],
+        code="EXTERNAL_GEOMETRY_CALIBRATION_BINDING_INVALID",
+    )
+    if actual_calibration != expected_calibration:
+        _fail("EXTERNAL_GEOMETRY_CALIBRATION_IDENTITY_MISMATCH")
     if not isinstance(source_file_name, str) or not source_file_name:
         _fail("SOURCE_FILE_NAME_INVALID")
     for value in (image_width_px, image_height_px):

@@ -46,6 +46,7 @@ def _verified_case() -> tuple[dict[str, object], dict[str, object], bytes]:
     request = compile_external_visual_object_proposal(
         proposal=proposal,
         expected_binding=binding,
+        expected_calibration_binding=_calibration().to_dict(),
     )
     result = verify_external_visual_proposal_source_support(
         verification_request=request,
@@ -123,6 +124,53 @@ def test_admission_rejects_calibration_bound_to_different_source() -> None:
             verification_result=result,
             source_render_bytes=render_bytes,
             calibration=_calibration("2" * 64),
+            source_file_name="source.png",
+            image_width_px=64,
+            image_height_px=64,
+        )
+
+
+def test_admission_rejects_same_source_with_tampered_calibration_transform() -> None:
+    request, result, render_bytes = _verified_case()
+    tampered = Calibration(
+        unit="mm",
+        pixel_to_unit_scale=3.0,
+        origin_px=(7.0, 59.0),
+        method="manual_override",
+        reference_note="same source, different transform",
+        status="verified",
+        source_sha256="1" * 64,
+    )
+
+    with pytest.raises(ValueError, match="EXTERNAL_GEOMETRY_CALIBRATION_IDENTITY_MISMATCH"):
+        materialize_verified_external_visual_lines(
+            verification_request=request,
+            verification_result=result,
+            source_render_bytes=render_bytes,
+            calibration=tampered,
+            source_file_name="source.png",
+            image_width_px=64,
+            image_height_px=64,
+        )
+
+
+def test_admission_rejects_request_without_calibration_binding() -> None:
+    request, _bound_result, render_bytes = _verified_case()
+    unbound_request = dict(request)
+    unbound_request.pop("exact_calibration_binding")
+    unbound_request.pop("verification_request_sha256")
+    unbound_request["verification_request_sha256"] = canonical_json_sha256(unbound_request)
+    result = verify_external_visual_proposal_source_support(
+        verification_request=unbound_request,
+        source_render_bytes=render_bytes,
+    )
+
+    with pytest.raises(ValueError, match="EXTERNAL_GEOMETRY_CALIBRATION_BINDING_MISSING"):
+        materialize_verified_external_visual_lines(
+            verification_request=unbound_request,
+            verification_result=result,
+            source_render_bytes=render_bytes,
+            calibration=_calibration(),
             source_file_name="source.png",
             image_width_px=64,
             image_height_px=64,
