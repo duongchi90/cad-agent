@@ -78,8 +78,6 @@ def test_source_support_accepts_real_strokes_and_rejects_invented_connector() ->
     supported = verify_external_visual_proposal_source_support(
         verification_request=supported_request,
         source_render_bytes=render_bytes,
-        endpoint_tolerance_px=1,
-        min_support_fraction=0.90,
     )
     assert supported["status"] == "VERIFIED"
     assert {item["primitive_hypothesis_id"] for item in supported["primitive_support"]} == {
@@ -94,8 +92,6 @@ def test_source_support_accepts_real_strokes_and_rejects_invented_connector() ->
         verify_external_visual_proposal_source_support(
             verification_request=contaminated_request,
             source_render_bytes=render_bytes,
-            endpoint_tolerance_px=1,
-            min_support_fraction=0.90,
         )
 
 
@@ -111,8 +107,6 @@ def test_source_support_rejects_tampered_verification_request_digest() -> None:
         verify_external_visual_proposal_source_support(
             verification_request=request,
             source_render_bytes=render_bytes,
-            endpoint_tolerance_px=1,
-            min_support_fraction=0.90,
         )
 
 
@@ -159,12 +153,20 @@ def test_source_support_does_not_leak_across_exact_roi_boundary() -> None:
         verify_external_visual_proposal_source_support(
             verification_request=request,
             source_render_bytes=render_bytes,
-            endpoint_tolerance_px=1,
-            min_support_fraction=0.90,
         )
 
 
-def test_source_support_rejects_caller_controlled_verification_profile() -> None:
+@pytest.mark.parametrize(
+    "profile_override",
+    [
+        {"darkness_threshold": 255},
+        {"endpoint_tolerance_px": 16},
+        {"min_support_fraction": 0.01},
+    ],
+)
+def test_source_support_rejects_caller_controlled_verification_profile(
+    profile_override: dict[str, int | float],
+) -> None:
     image = Image.new("L", (32, 32), 255)
     stream = io.BytesIO()
     image.save(stream, format="PNG")
@@ -206,5 +208,5 @@ def test_source_support_rejects_caller_controlled_verification_profile() -> None
         verify_external_visual_proposal_source_support(
             verification_request=request,
             source_render_bytes=render_bytes,
-            darkness_threshold=255,
+            **profile_override,
         )
