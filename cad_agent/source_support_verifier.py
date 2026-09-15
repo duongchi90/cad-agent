@@ -14,6 +14,8 @@ from collections.abc import Mapping
 import numpy as np
 from PIL import Image, ImageFilter
 
+from cad_agent.drawing_contracts import canonical_json_sha256
+
 
 __all__ = ["verify_external_visual_proposal_source_support"]
 
@@ -49,6 +51,19 @@ def _decode_render(source_render_bytes: object) -> np.ndarray:
     if result.ndim != 2 or result.size == 0:
         _fail("SOURCE_RENDER_DECODE_FAILED")
     return result
+
+
+def _request_digest(verification_request: object) -> str:
+    if not isinstance(verification_request, Mapping):
+        _fail("VERIFICATION_REQUEST_INVALID")
+    supplied = verification_request.get("verification_request_sha256")
+    if not isinstance(supplied, str) or len(supplied) != 64:
+        _fail("VERIFICATION_REQUEST_INVALID")
+    unsigned_request = dict(verification_request)
+    unsigned_request.pop("verification_request_sha256", None)
+    if canonical_json_sha256(unsigned_request) != supplied:
+        _fail("VERIFICATION_REQUEST_HASH_MISMATCH")
+    return supplied
 
 
 def _request_parts(
@@ -118,6 +133,7 @@ def verify_external_visual_proposal_source_support(
     prove semantic identity, physical connectivity, or CAD correctness.
     """
 
+    request_sha256 = _request_digest(verification_request)
     binding, primitives, expected_render_sha256 = _request_parts(verification_request)
 
     tolerance = _strict_int(endpoint_tolerance_px, "SOURCE_SUPPORT_PARAMETER_INVALID")
@@ -191,7 +207,7 @@ def verify_external_visual_proposal_source_support(
     return {
         "kind": "DETERMINISTIC_SOURCE_SUPPORT_RESULT",
         "status": "VERIFIED",
-        "verification_request_sha256": verification_request.get("verification_request_sha256"),
+        "verification_request_sha256": request_sha256,
         "source_render_sha256": actual_render_sha256,
         "parameters": {
             "endpoint_tolerance_px": tolerance,
