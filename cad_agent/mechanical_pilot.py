@@ -872,10 +872,238 @@ def bind_simple_shaft_pilot_from_primitive(
     )
 
 
+_P1_SOURCE_BOUND_PROPOSAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "proposal_source",
+        "source_sha256",
+        "page_index",
+        "roi_bbox_px",
+        "source_render_sha256",
+        "calibration",
+        "profile_id",
+        "dimensions_mm",
+        "evidence_refs",
+    }
+)
+_P1_SOURCE_BINDING_FIELDS = frozenset(
+    {
+        "source_sha256",
+        "page_index",
+        "roi_bbox_px",
+        "source_render_sha256",
+        "calibration",
+        "profile_id",
+    }
+)
+_P1_CALIBRATION_FIELDS = frozenset(
+    {
+        "unit",
+        "pixel_to_unit_scale",
+        "origin_px",
+        "method",
+        "reference_note",
+        "status",
+        "source_sha256",
+    }
+)
+_P1_DIMENSION_FIELDS = frozenset(
+    {
+        "shaft_diameter_a",
+        "shaft_diameter_b",
+        "segment_length_a",
+        "segment_length_b",
+        "hole_diameter",
+        "hole_axial_position",
+    }
+)
+_P1_PROFILE_ID = "simple-stepped-shaft-p1-v1"
+_P1_PROPOSAL_SCHEMA_VERSION = "p1-source-bound-proposal-1.0"
+_P1_COMPILE_PLAN_SCHEMA_VERSION = "p1-source-bound-compile-plan-1.0"
+
+
+def _p1_binding(payload: object, name: str) -> dict[str, object]:
+    binding = _mapping(payload, name)
+    _exact_fields(binding, _P1_SOURCE_BINDING_FIELDS, name)
+    source_sha256 = _hash(binding.get("source_sha256"), f"{name}_SOURCE_SHA256")
+    source_render_sha256 = _hash(
+        binding.get("source_render_sha256"), f"{name}_SOURCE_RENDER_SHA256"
+    )
+    page_index = _integer(binding.get("page_index"), f"{name}_PAGE_INDEX")
+    roi = binding.get("roi_bbox_px")
+    if (
+        not isinstance(roi, list)
+        or len(roi) != 4
+        or any(type(value) is not int or value < 0 for value in roi)
+        or roi[2] <= roi[0]
+        or roi[3] <= roi[1]
+    ):
+        raise ValueError(f"PILOT_{name}_ROI_INVALID")
+    calibration = _mapping(binding.get("calibration"), f"{name}_CALIBRATION")
+    _exact_fields(calibration, _P1_CALIBRATION_FIELDS, f"{name}_CALIBRATION")
+    if (
+        calibration.get("unit") != "mm"
+        or calibration.get("method") != "manual_override"
+        or calibration.get("status") != "verified"
+        or _hash(
+            calibration.get("source_sha256"),
+            f"{name}_CALIBRATION_SOURCE_SHA256",
+        )
+        != source_sha256
+    ):
+        raise ValueError(f"PILOT_{name}_CALIBRATION_INVALID")
+    scale = _number(
+        calibration.get("pixel_to_unit_scale"),
+        f"{name}_CALIBRATION_SCALE",
+        positive=True,
+    )
+    origin = _point(calibration.get("origin_px"), f"{name}_CALIBRATION_ORIGIN")
+    reference_note = _string(
+        calibration.get("reference_note"), f"{name}_CALIBRATION_REFERENCE"
+    )
+    profile_id = _string(binding.get("profile_id"), f"{name}_PROFILE_ID")
+    if profile_id != _P1_PROFILE_ID:
+        raise ValueError("PILOT_P1_PROFILE_UNSUPPORTED")
+    return {
+        "source_sha256": source_sha256,
+        "page_index": page_index,
+        "roi_bbox_px": list(roi),
+        "source_render_sha256": source_render_sha256,
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": scale,
+            "origin_px": [origin[0], origin[1]],
+            "method": "manual_override",
+            "reference_note": reference_note,
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+        "profile_id": profile_id,
+    }
+
+
+def compile_source_bound_simple_shaft_proposal(
+    proposal: Mapping[str, object],
+    *,
+    expected_binding: Mapping[str, object],
+) -> dict[str, object]:
+    """Compile one truthful external P1 proposal without materializing Primitive IR."""
+
+    root = _mapping(proposal, "P1_PROPOSAL")
+    _exact_fields(root, _P1_SOURCE_BOUND_PROPOSAL_FIELDS, "P1_PROPOSAL")
+    if root.get("schema_version") != _P1_PROPOSAL_SCHEMA_VERSION:
+        raise ValueError("PILOT_P1_PROPOSAL_SCHEMA_VERSION_INVALID")
+    if root.get("proposal_source") != "external_ai":
+        raise ValueError("PILOT_P1_PROPOSAL_SOURCE_UNSUPPORTED")
+
+    proposal_binding = _p1_binding(
+        {field: root[field] for field in _P1_SOURCE_BINDING_FIELDS},
+        "P1_PROPOSAL_BINDING",
+    )
+    normalized_expected = _p1_binding(expected_binding, "P1_EXPECTED_BINDING")
+    if proposal_binding != normalized_expected:
+        raise ValueError("PILOT_P1_SOURCE_BINDING_MISMATCH")
+
+    dimensions_raw = _mapping(root.get("dimensions_mm"), "P1_DIMENSIONS")
+    _exact_fields(dimensions_raw, _P1_DIMENSION_FIELDS, "P1_DIMENSIONS")
+    dimensions = {
+        field: _number(dimensions_raw[field], f"P1_{field.upper()}", positive=True)
+        for field in sorted(_P1_DIMENSION_FIELDS)
+    }
+    diameter_a = dimensions["shaft_diameter_a"]
+    diameter_b = dimensions["shaft_diameter_b"]
+    if diameter_a == diameter_b:
+        raise ValueError("PILOT_P1_SHAFT_STEP_REQUIRED")
+    length_a = dimensions["segment_length_a"]
+    length_b = dimensions["segment_length_b"]
+    total_length = length_a + length_b
+    hole_position = dimensions["hole_axial_position"]
+    if not 0.0 < hole_position < total_length:
+        raise ValueError("PILOT_P1_HOLE_POSITION_INVALID")
+    local_diameter = diameter_a if hole_position < length_a else diameter_b
+    if dimensions["hole_diameter"] >= local_diameter:
+        raise ValueError("PILOT_P1_HOLE_DIAMETER_INVALID")
+
+    evidence_refs_raw = _mapping(root.get("evidence_refs"), "P1_EVIDENCE_REFS")
+    if len(evidence_refs_raw) > 12:
+        raise ValueError("PILOT_P1_EVIDENCE_REFS_INVALID")
+    evidence_refs: dict[str, str] = {}
+    for key, value in sorted(evidence_refs_raw.items()):
+        evidence_refs[_string(key, "P1_EVIDENCE_REF_KEY")] = _string(
+            value, "P1_EVIDENCE_REF_VALUE"
+        )
+
+    x0 = 0.0
+    x1 = length_a
+    x2 = total_length
+    a = diameter_a / 2.0
+    b = diameter_b / 2.0
+    line_specs = [
+        ("shaft-profile-001:top-main", (x0, a), (x1, a)),
+        ("shaft-profile-001:step-rise", (x1, a), (x1, b)),
+        ("shaft-profile-001:top-step", (x1, b), (x2, b)),
+        ("shaft-profile-001:right-cap", (x2, b), (x2, -b)),
+        ("shaft-profile-001:bottom-step", (x2, -b), (x1, -b)),
+        ("shaft-profile-001:step-fall", (x1, -b), (x1, -a)),
+        ("shaft-profile-001:bottom-main", (x1, -a), (x0, -a)),
+        ("shaft-profile-001:left-cap", (x0, -a), (x0, a)),
+    ]
+    lines = [
+        {
+            "id": line_id,
+            "type": "line",
+            "start_mm": [start[0], start[1]],
+            "end_mm": [end[0], end[1]],
+        }
+        for line_id, start, end in line_specs
+    ]
+    circle = {
+        "id": "hole-axial-001",
+        "type": "circle",
+        "center_mm": [hole_position, 0.0],
+        "radius_mm": dimensions["hole_diameter"] / 2.0,
+    }
+    shaft_ids = [line["id"] for line in lines]
+    plan: dict[str, object] = {
+        "schema_version": _P1_COMPILE_PLAN_SCHEMA_VERSION,
+        "proposal_source": "external_ai",
+        "profile_id": _P1_PROFILE_ID,
+        "source_binding": proposal_binding,
+        "dimensions_mm": dimensions,
+        "geometry_contract": {
+            "line_count": 8,
+            "circle_count": 1,
+            "lines": lines,
+            "circle": circle,
+        },
+        "feature_contract": {
+            "shaft-profile-001": {
+                "kind": "shaft_step",
+                "primitive_ids": shaft_ids,
+            },
+            "hole-axial-001": {
+                "kind": "hole_feature",
+                "primitive_ids": ["hole-axial-001"],
+            },
+        },
+        "evidence_refs": evidence_refs,
+    }
+    encoded = json.dumps(
+        plan,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    plan["plan_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return plan
+
+
 __all__ = [
     "MechanicalPilotResult",
     "PILOT_SCHEMA_VERSION",
     "bind_simple_shaft_pilot_from_primitive",
     "build_simple_shaft_pilot",
+    "compile_source_bound_simple_shaft_proposal",
     "load_pilot_definition",
 ]
