@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -145,3 +146,63 @@ def test_source_bound_external_proposal_compiles_deterministically_without_false
     assert first["feature_contract"]["hole-axial-001"]["kind"] == "hole_feature"
     assert len(first["plan_sha256"]) == 64
     assert "geometry_opencv" not in json.dumps(first, sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["source_sha256", "source_render_sha256", "page_index", "roi_bbox_px", "calibration"],
+)
+def test_source_bound_proposal_refuses_stale_or_foreign_binding(field: str) -> None:
+    from cad_agent.mechanical_pilot import compile_source_bound_simple_shaft_proposal
+
+    expected = _source_bound_binding()
+    if field == "source_sha256":
+        expected["source_sha256"] = "3" * 64
+        expected["calibration"]["source_sha256"] = "3" * 64
+    elif field == "source_render_sha256":
+        expected[field] = "4" * 64
+    elif field == "page_index":
+        expected[field] = 1
+    elif field == "roi_bbox_px":
+        expected[field] = [11, 20, 410, 220]
+    else:
+        expected["calibration"] = deepcopy(expected["calibration"])
+        expected["calibration"]["pixel_to_unit_scale"] = 0.6
+
+    with pytest.raises(ValueError, match="PILOT_P1_SOURCE_BINDING_MISMATCH"):
+        compile_source_bound_simple_shaft_proposal(
+            _source_bound_proposal(), expected_binding=expected
+        )
+
+
+def test_source_bound_proposal_refuses_unsupported_extra_surface() -> None:
+    from cad_agent.mechanical_pilot import compile_source_bound_simple_shaft_proposal
+
+    proposal = _source_bound_proposal()
+    proposal["thread"] = {"pitch": 1.5}
+    with pytest.raises(ValueError, match="PILOT_P1_PROPOSAL_SCHEMA_INVALID"):
+        compile_source_bound_simple_shaft_proposal(
+            proposal, expected_binding=_source_bound_binding()
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("shaft_diameter_a", 0.0, "PILOT_P1_SHAFT_DIAMETER_A_INVALID"),
+        ("shaft_diameter_b", 40.0, "PILOT_P1_SHAFT_STEP_REQUIRED"),
+        ("hole_axial_position", 999.0, "PILOT_P1_HOLE_POSITION_INVALID"),
+        ("hole_diameter", 100.0, "PILOT_P1_HOLE_DIAMETER_INVALID"),
+    ],
+)
+def test_source_bound_proposal_refuses_invalid_or_inconsistent_dimensions(
+    field: str, value: float, error: str
+) -> None:
+    from cad_agent.mechanical_pilot import compile_source_bound_simple_shaft_proposal
+
+    proposal = _source_bound_proposal()
+    proposal["dimensions_mm"][field] = value
+    with pytest.raises(ValueError, match=error):
+        compile_source_bound_simple_shaft_proposal(
+            proposal, expected_binding=_source_bound_binding()
+        )
