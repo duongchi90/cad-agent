@@ -97,3 +97,20 @@ def test_source_support_accepts_real_strokes_and_rejects_invented_connector() ->
             endpoint_tolerance_px=1,
             min_support_fraction=0.90,
         )
+
+
+def test_source_support_rejects_tampered_verification_request_digest() -> None:
+    request, render_bytes = _request(include_unsupported_connector=False)
+    primitives = request["primitive_hypotheses"]
+    assert isinstance(primitives, list)
+    first = primitives[0]
+    assert isinstance(first, dict)
+    first["end_px"] = [29, 10]
+
+    with pytest.raises(ValueError, match="VERIFICATION_REQUEST_HASH_MISMATCH"):
+        verify_external_visual_proposal_source_support(
+            verification_request=request,
+            source_render_bytes=render_bytes,
+            endpoint_tolerance_px=1,
+            min_support_fraction=0.90,
+        )
