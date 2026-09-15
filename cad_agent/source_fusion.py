@@ -2002,6 +2002,7 @@ def compile_external_visual_object_proposal(
     if type(hypotheses) is not list or not hypotheses or len(hypotheses) > 64:
         _fail("EXTERNAL_PROPOSAL_INVALID")
     hypothesis_ids: list[str] = []
+    normalized_hypotheses: list[dict[str, object]] = []
     for raw_hypothesis in hypotheses:
         hypothesis = _closed(
             raw_hypothesis,
@@ -2022,11 +2023,20 @@ def compile_external_visual_object_proposal(
         ):
             _fail("EXTERNAL_PROPOSAL_HYPOTHESIS_OUT_OF_ROI")
         hypothesis_ids.append(hypothesis_id)
+        normalized_hypotheses.append(
+            {
+                "id": hypothesis_id,
+                "type": "LINE",
+                "start_px": start,
+                "end_px": end,
+            }
+        )
 
     groups = record["object_groups"]
     if type(groups) is not list or not groups or len(groups) > 32:
         _fail("EXTERNAL_PROPOSAL_INVALID")
     group_ids: list[str] = []
+    normalized_groups: list[dict[str, object]] = []
     for raw_group in groups:
         group = _closed(
             raw_group,
@@ -2048,11 +2058,19 @@ def compile_external_visual_object_proposal(
         ):
             _fail("EXTERNAL_PROPOSAL_REFERENCE_MISMATCH")
         group_ids.append(group_id)
+        normalized_groups.append(
+            {
+                "group_id": group_id,
+                "proposed_label": group["proposed_label"],
+                "primitive_hypothesis_ids": member_ids,
+            }
+        )
 
     exclusions = record["excluded_memberships"]
     if type(exclusions) is not list or len(exclusions) > 64:
         _fail("EXTERNAL_PROPOSAL_INVALID")
     seen_exclusions: set[tuple[str, str]] = set()
+    normalized_exclusions: list[dict[str, object]] = []
     for raw_exclusion in exclusions:
         exclusion = _closed(
             raw_exclusion,
@@ -2073,6 +2091,26 @@ def compile_external_visual_object_proposal(
         ):
             _fail("EXTERNAL_PROPOSAL_REFERENCE_MISMATCH")
         seen_exclusions.add(identity)
+        normalized_exclusions.append(
+            {
+                "primitive_hypothesis_id": primitive_id,
+                "excluded_group_id": group_id,
+            }
+        )
+
+    normalized_proposal = {
+        "schema_version": record["schema_version"],
+        "proposal_source": record["proposal_source"],
+        "source_sha256": source_sha256,
+        "page_index": page_index,
+        "source_render_sha256": source_render_sha256,
+        "roi_bbox_px": roi,
+        "view_role_proposal": record["view_role_proposal"],
+        "primitive_hypotheses": normalized_hypotheses,
+        "object_groups": normalized_groups,
+        "excluded_memberships": normalized_exclusions,
+    }
+    proposal_sha256 = _canonical_json_sha256(normalized_proposal)
 
     return {
         "kind": "DETERMINISTIC_GEOMETRY_VERIFICATION_REQUEST",
@@ -2083,6 +2121,7 @@ def compile_external_visual_object_proposal(
             "source_render_sha256": source_render_sha256,
             "roi_bbox_px": roi,
         },
+        "proposal_sha256": proposal_sha256,
         "checks_required": [
             "EXACT_SOURCE_BINDING",
             "PER_PRIMITIVE_SOURCE_SUPPORT",

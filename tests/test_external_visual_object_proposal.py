@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib
 
 from tests.test_cad_agent_source_fusion import _task6_ready_inputs
@@ -55,6 +56,7 @@ def test_compile_only_external_visual_object_proposal_binds_existing_fusion_with
         "kind",
         "status",
         "exact_source_binding",
+        "proposal_sha256",
         "checks_required",
         "semantic_label_authority",
         "primitive_ir_materialized",
@@ -63,6 +65,8 @@ def test_compile_only_external_visual_object_proposal_binds_existing_fusion_with
     }
     assert result["kind"] == "DETERMINISTIC_GEOMETRY_VERIFICATION_REQUEST"
     assert result["status"] == "PROPOSAL_ONLY"
+    assert isinstance(result["proposal_sha256"], str)
+    assert len(result["proposal_sha256"]) == 64
     assert result["exact_source_binding"] == {
         "source_sha256": render["observed_source_sha256"],
         "page_index": 0,
@@ -79,3 +83,51 @@ def test_compile_only_external_visual_object_proposal_binds_existing_fusion_with
     assert result["primitive_ir_materialized"] is False
     assert result["semantic_observation_materialized"] is False
     assert result["cad_mutation"] is False
+
+
+def test_compile_only_external_visual_object_proposal_binds_proposal_content() -> None:
+    """RED: distinct advisory proposals must not compile to one identity."""
+
+    source_fusion = importlib.import_module("cad_agent.source_fusion")
+    fusion = source_fusion.build_source_fusion_packet(**_task6_ready_inputs())
+    render = fusion["render_provenance"][0]
+    proposal = {
+        "schema_version": "external-visual-object-proposal-1.0",
+        "proposal_source": "external_ai",
+        "source_sha256": render["observed_source_sha256"],
+        "page_index": 0,
+        "source_render_sha256": render["raster_sha256"],
+        "roi_bbox_px": [100, 100, 220, 220],
+        "view_role_proposal": "FRONT",
+        "primitive_hypotheses": [
+            {
+                "id": "mirror-top",
+                "type": "LINE",
+                "start_px": [120, 120],
+                "end_px": [200, 120],
+            },
+            {
+                "id": "mirror-right",
+                "type": "LINE",
+                "start_px": [200, 120],
+                "end_px": [200, 200],
+            },
+        ],
+        "object_groups": [
+            {
+                "group_id": "front-right-mirror-001",
+                "proposed_label": "RIGHT_MIRROR_HOUSING",
+                "primitive_hypothesis_ids": ["mirror-top", "mirror-right"],
+            }
+        ],
+        "excluded_memberships": [],
+    }
+    altered = copy.deepcopy(proposal)
+    altered["primitive_hypotheses"][1]["end_px"] = [210, 210]
+    altered["object_groups"][0]["proposed_label"] = "OTHER_HOUSING"
+
+    compiler = source_fusion.compile_external_visual_object_proposal
+    result = compiler(proposal=proposal, source_fusion=fusion)
+    altered_result = compiler(proposal=altered, source_fusion=fusion)
+
+    assert result["proposal_sha256"] != altered_result["proposal_sha256"]
