@@ -38,6 +38,13 @@ _PROPOSAL_FIELDS = {
 }
 _PRIMITIVE_FIELDS = {"id", "type", "start_px", "end_px"}
 _GROUP_FIELDS = {"group_id", "proposed_label", "primitive_hypothesis_ids"}
+_GROUP_FIELDS_WITH_TOPOLOGY = {*_GROUP_FIELDS, "topology_hypothesis"}
+_TOPOLOGY_FIELDS = {
+    "kind",
+    "ordered_primitive_hypothesis_ids",
+    "closure",
+    "endpoint_tolerance_px",
+}
 _EXCLUSION_FIELDS = {"primitive_hypothesis_id", "excluded_group_id"}
 
 
@@ -131,6 +138,37 @@ def _primitives(value: object, *, roi: list[int]) -> list[dict[str, object]]:
     return normalized
 
 
+def _topology(value: object, *, member_ids: list[str]) -> dict[str, object]:
+    record = _closed(value, _TOPOLOGY_FIELDS, "GROUP_TOPOLOGY_INVALID")
+    if record["kind"] != "BOUNDARY_CHAIN":
+        _fail("GROUP_TOPOLOGY_INVALID")
+    closure = record["closure"]
+    if closure not in {"OPEN", "CLOSED", "UNRESOLVED"}:
+        _fail("GROUP_TOPOLOGY_INVALID")
+    tolerance = _nonnegative_int(record["endpoint_tolerance_px"], "GROUP_TOPOLOGY_INVALID")
+    if tolerance > 64:
+        _fail("GROUP_TOPOLOGY_INVALID")
+    ordered = record["ordered_primitive_hypothesis_ids"]
+    if not isinstance(ordered, list) or not ordered:
+        _fail("GROUP_TOPOLOGY_INVALID")
+    ordered_ids: list[str] = []
+    seen: set[str] = set()
+    for item in ordered:
+        item_id = _identifier(item, "GROUP_TOPOLOGY_INVALID")
+        if item_id in seen:
+            _fail("GROUP_TOPOLOGY_INVALID")
+        seen.add(item_id)
+        ordered_ids.append(item_id)
+    if set(ordered_ids) != set(member_ids):
+        _fail("GROUP_TOPOLOGY_INVALID")
+    return {
+        "kind": "BOUNDARY_CHAIN",
+        "ordered_primitive_hypothesis_ids": ordered_ids,
+        "closure": closure,
+        "endpoint_tolerance_px": tolerance,
+    }
+
+
 def _groups(
     value: object,
     *,
@@ -142,7 +180,12 @@ def _groups(
     normalized: list[dict[str, object]] = []
     memberships: dict[str, set[str]] = {}
     for raw in value:
-        record = _closed(raw, _GROUP_FIELDS, "GROUP_MEMBERSHIP_INVALID")
+        if not isinstance(raw, _Mapping):
+            _fail("GROUP_MEMBERSHIP_INVALID")
+        raw_fields = set(raw)
+        if raw_fields not in {_GROUP_FIELDS, _GROUP_FIELDS_WITH_TOPOLOGY}:
+            _fail("GROUP_MEMBERSHIP_INVALID")
+        record = raw
         group_id = _identifier(record["group_id"], "GROUP_MEMBERSHIP_INVALID")
         if group_id in memberships:
             _fail("GROUP_MEMBERSHIP_INVALID")
@@ -159,13 +202,17 @@ def _groups(
             seen_members.add(member_id)
             member_ids.append(member_id)
         memberships[group_id] = set(member_ids)
-        normalized.append(
-            {
-                "group_id": group_id,
-                "proposed_label": label,
-                "primitive_hypothesis_ids": member_ids,
-            }
-        )
+        normalized_group: dict[str, object] = {
+            "group_id": group_id,
+            "proposed_label": label,
+            "primitive_hypothesis_ids": member_ids,
+        }
+        if "topology_hypothesis" in record:
+            normalized_group["topology_hypothesis"] = _topology(
+                record["topology_hypothesis"],
+                member_ids=member_ids,
+            )
+        normalized.append(normalized_group)
     return normalized, memberships
 
 
