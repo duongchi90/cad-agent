@@ -138,7 +138,32 @@ def _primitives(value: object, *, roi: list[int]) -> list[dict[str, object]]:
     return normalized
 
 
-def _topology(value: object, *, member_ids: list[str]) -> dict[str, object]:
+def _lines_connect(
+    first: _Mapping[str, object],
+    second: _Mapping[str, object],
+    *,
+    tolerance: int,
+) -> bool:
+    first_points = (first["start_px"], first["end_px"])
+    second_points = (second["start_px"], second["end_px"])
+    limit_squared = tolerance * tolerance
+    for first_point in first_points:
+        for second_point in second_points:
+            if not isinstance(first_point, list) or not isinstance(second_point, list):
+                _fail("GROUP_TOPOLOGY_INVALID")
+            dx = first_point[0] - second_point[0]
+            dy = first_point[1] - second_point[1]
+            if dx * dx + dy * dy <= limit_squared:
+                return True
+    return False
+
+
+def _topology(
+    value: object,
+    *,
+    member_ids: list[str],
+    primitives_by_id: _Mapping[str, _Mapping[str, object]],
+) -> dict[str, object]:
     record = _closed(value, _TOPOLOGY_FIELDS, "GROUP_TOPOLOGY_INVALID")
     if record["kind"] != "BOUNDARY_CHAIN":
         _fail("GROUP_TOPOLOGY_INVALID")
@@ -161,6 +186,22 @@ def _topology(value: object, *, member_ids: list[str]) -> dict[str, object]:
         ordered_ids.append(item_id)
     if set(ordered_ids) != set(member_ids):
         _fail("GROUP_TOPOLOGY_INVALID")
+
+    for first_id, second_id in zip(ordered_ids, ordered_ids[1:]):
+        if not _lines_connect(
+            primitives_by_id[first_id],
+            primitives_by_id[second_id],
+            tolerance=tolerance,
+        ):
+            _fail("GROUP_TOPOLOGY_DISCONNECTED")
+    if closure == "CLOSED" and len(ordered_ids) > 1:
+        if not _lines_connect(
+            primitives_by_id[ordered_ids[-1]],
+            primitives_by_id[ordered_ids[0]],
+            tolerance=tolerance,
+        ):
+            _fail("GROUP_TOPOLOGY_DISCONNECTED")
+
     return {
         "kind": "BOUNDARY_CHAIN",
         "ordered_primitive_hypothesis_ids": ordered_ids,
@@ -172,11 +213,12 @@ def _topology(value: object, *, member_ids: list[str]) -> dict[str, object]:
 def _groups(
     value: object,
     *,
-    primitive_ids: set[str],
+    primitives_by_id: _Mapping[str, _Mapping[str, object]],
 ) -> tuple[list[dict[str, object]], dict[str, set[str]]]:
     if not isinstance(value, list) or not value or len(value) > 128:
         _fail("GROUP_MEMBERSHIP_INVALID")
 
+    primitive_ids = set(primitives_by_id)
     normalized: list[dict[str, object]] = []
     memberships: dict[str, set[str]] = {}
     for raw in value:
@@ -211,6 +253,7 @@ def _groups(
             normalized_group["topology_hypothesis"] = _topology(
                 record["topology_hypothesis"],
                 member_ids=member_ids,
+                primitives_by_id=primitives_by_id,
             )
         normalized.append(normalized_group)
     return normalized, memberships
@@ -279,8 +322,9 @@ def compile_external_visual_object_proposal(
         _fail("VIEW_ROLE_INVALID")
 
     primitives = _primitives(record["primitive_hypotheses"], roi=trusted_binding["roi_bbox_px"])
-    primitive_ids = {str(item["id"]) for item in primitives}
-    groups, memberships = _groups(record["object_groups"], primitive_ids=primitive_ids)
+    primitives_by_id = {str(item["id"]): item for item in primitives}
+    primitive_ids = set(primitives_by_id)
+    groups, memberships = _groups(record["object_groups"], primitives_by_id=primitives_by_id)
     exclusions = _exclusions(
         record["excluded_memberships"],
         primitive_ids=primitive_ids,
