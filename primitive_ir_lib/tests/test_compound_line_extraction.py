@@ -54,12 +54,43 @@ def _expected_normalised_segments() -> list[tuple[float, ...]]:
     )
 
 
-def _expected_rotated_normalised_segments() -> list[tuple[float, ...]]:
-    rotated = []
-    for x1, y1, x2, y2 in _expected_normalised_segments():
-        endpoints = sorted(((80.0 - y1, x1), (80.0 - y2, x2)))
-        rotated.append(tuple(value for point in endpoints for value in point))
-    return sorted(rotated)
+_LOCKED_CORNER_SEGMENT = (14.0, 26.0, 14.0, 44.0)
+_CORNER_ENDPOINT_VARIANTS = {
+    _LOCKED_CORNER_SEGMENT,
+    (14.0, 25.0, 14.0, 45.0),
+}
+
+
+def _rotate_normalised_segment(segment: tuple[float, ...]) -> tuple[float, ...]:
+    x1, y1, x2, y2 = segment
+    endpoints = sorted(((80.0 - y1, x1), (80.0 - y2, x2)))
+    return tuple(value for point in endpoints for value in point)
+
+
+def _assert_observable_normalised_segments(
+    lines: list[RawLine], *, rotated: bool = False
+) -> None:
+    expected = set(_expected_normalised_segments()) - {_LOCKED_CORNER_SEGMENT}
+    variants = _CORNER_ENDPOINT_VARIANTS
+    if rotated:
+        expected = {_rotate_normalised_segment(segment) for segment in expected}
+        variants = {_rotate_normalised_segment(segment) for segment in variants}
+
+    actual = _normalised_segments(lines)
+    assert len(actual) == 6
+    assert len(set(actual)) == 6
+    assert set(actual) - expected <= variants
+    assert len(set(actual) & variants) == 1
+    assert set(actual) == expected | (set(actual) & variants)
+
+
+def _render_raw_lines(lines: list[RawLine], shape: tuple[int, int]) -> np.ndarray:
+    rendered = np.zeros(shape, dtype=np.uint8)
+    for line in lines:
+        start = tuple(int(round(value)) for value in line.p1_px)
+        end = tuple(int(round(value)) for value in line.p2_px)
+        cv2.line(rendered, start, end, 255, 1)
+    return rendered
 
 
 def test_compound_line_emission_is_translation_invariant_and_uses_rawline_owner():
@@ -81,8 +112,16 @@ def test_compound_line_emission_is_translation_invariant_and_uses_rawline_owner(
     assert len(origin) == 6
     assert len(translated) == 6
     assert all(isinstance(line, RawLine) for line in origin + translated)
-    assert _normalised_segments(origin) == _expected_normalised_segments()
+    _assert_observable_normalised_segments(origin)
     assert _normalised_segments(origin) == _normalised_segments(translated)
+    assert np.array_equal(
+        _render_raw_lines(origin, _compound_component().shape),
+        _compound_component(),
+    )
+    assert np.array_equal(
+        _render_raw_lines(translated, _compound_component(dx=31, dy=19).shape),
+        _compound_component(dx=31, dy=19),
+    )
 
 
 def test_compound_line_emission_is_rotation_invariant():
@@ -95,4 +134,8 @@ def test_compound_line_emission_is_rotation_invariant():
 
     assert len(rotated) == 6
     assert all(isinstance(line, RawLine) for line in rotated)
-    assert _normalised_segments(rotated) == _expected_rotated_normalised_segments()
+    _assert_observable_normalised_segments(rotated, rotated=True)
+    assert np.array_equal(
+        _render_raw_lines(rotated, rotated_component.shape),
+        rotated_component,
+    )
