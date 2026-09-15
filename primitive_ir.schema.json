@@ -93,8 +93,8 @@
 
         "source": {
           "type": "string",
-          "enum": ["geometry_opencv", "text_tesseract", "text_vision"],
-          "description": "geometry_opencv: Canny+Hough đo hình học. text_tesseract: OCR rule-based, dùng cho title block/mã bản vẽ sạch (tier 1, mục 9.2). text_vision: VLM đọc trực tiếp crop, dùng cho ghi chú dài/số kích thước xoay/chữ nhỏ mà Tesseract thất bại (tier 3, mục 9.2)."
+          "enum": ["geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision"],
+          "description": "geometry_opencv: Canny+Hough đo hình học. geometry_external_ai: hình học do AI bên ngoài đề xuất nhưng chỉ sau khi exact source-bound deterministic verification đã pass. text_tesseract: OCR rule-based, dùng cho title block/mã bản vẽ sạch (tier 1, mục 9.2). text_vision: VLM đọc trực tiếp crop, dùng cho ghi chú dài/số kích thước xoay/chữ nhỏ mà Tesseract thất bại (tier 3, mục 9.2)."
         },
 
         "confidence": {
@@ -137,7 +137,9 @@
               "description": "[x_min, y_min, x_max, y_max] theo pixel ảnh gốc, vùng chứa entity/text này."
             },
             "extraction_tool": { "type": "string", "description": "vd. 'opencv-canny-hough-v1', 'tesseract-5.3', 'claude-vision'." },
-            "extracted_at": { "type": "string", "format": "date-time" }
+            "extracted_at": { "type": "string", "format": "date-time" },
+            "verification_request_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "verification_result_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
           }
         },
 

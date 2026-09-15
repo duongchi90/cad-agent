@@ -18,7 +18,9 @@ from typing import Literal, Optional
 SCHEMA_VERSION = "1.0.0"
 
 PrimitiveType = Literal["line", "circle", "arc", "text"]
-SourceType = Literal["geometry_opencv", "text_tesseract", "text_vision"]
+SourceType = Literal[
+    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision"
+]
 SemanticRole = Literal[
     "dimension_value", "title_block_field", "drawing_code",
     "general_note", "table_cell", "unknown",
@@ -114,6 +116,8 @@ class Trace:
     bbox_px: tuple  # (x_min, y_min, x_max, y_max)
     extraction_tool: Optional[str] = None
     extracted_at: Optional[str] = None
+    verification_request_sha256: Optional[str] = None
+    verification_result_sha256: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = {"bbox_px": list(self.bbox_px)}
@@ -121,6 +125,10 @@ class Trace:
             d["extraction_tool"] = self.extraction_tool
         if self.extracted_at is not None:
             d["extracted_at"] = self.extracted_at
+        if self.verification_request_sha256 is not None:
+            d["verification_request_sha256"] = self.verification_request_sha256
+        if self.verification_result_sha256 is not None:
+            d["verification_result_sha256"] = self.verification_result_sha256
         return d
 
 
