@@ -123,6 +123,47 @@ def test_boundary_topology_hypothesis_is_preserved_without_forcing_closure() -> 
     assert result["cad_mutation"] is False
 
 
+def test_boundary_topology_rejects_all_six_traces_as_one_chain() -> None:
+    proposal = _proposal_with_topology()
+    group = proposal["object_groups"][0]
+    group["primitive_hypothesis_ids"] = [
+        "mirror_top",
+        "mirror_right",
+        "mirror_bottom",
+        "mirror_left",
+        "main_vertical",
+        "lower_slope",
+    ]
+    group["topology_hypothesis"]["ordered_primitive_hypothesis_ids"] = list(
+        group["primitive_hypothesis_ids"]
+    )
+    proposal["excluded_memberships"] = []
+
+    with pytest.raises(ValueError, match="GROUP_TOPOLOGY_DISCONNECTED"):
+        _compiler()(proposal=proposal, expected_binding=_binding())
+
+
+def test_boundary_topology_rejects_neighbor_trace_substitution() -> None:
+    proposal = _proposal_with_topology()
+    group = proposal["object_groups"][0]
+    group["primitive_hypothesis_ids"] = [
+        "mirror_top",
+        "mirror_right",
+        "mirror_bottom",
+        "main_vertical",
+    ]
+    group["topology_hypothesis"]["ordered_primitive_hypothesis_ids"] = list(
+        group["primitive_hypothesis_ids"]
+    )
+    proposal["excluded_memberships"] = [
+        {"primitive_hypothesis_id": "mirror_left", "excluded_group_id": "front-right-mirror-001"},
+        {"primitive_hypothesis_id": "lower_slope", "excluded_group_id": "front-right-mirror-001"},
+    ]
+
+    with pytest.raises(ValueError, match="GROUP_TOPOLOGY_DISCONNECTED"):
+        _compiler()(proposal=proposal, expected_binding=_binding())
+
+
 @pytest.mark.parametrize("field", ["source_sha256", "page_index", "source_render_sha256", "roi_bbox_px"])
 def test_binding_mismatch_fails_closed(field: str) -> None:
     expected = _binding()
