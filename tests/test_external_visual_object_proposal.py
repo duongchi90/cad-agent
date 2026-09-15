@@ -54,6 +54,22 @@ def _proposal() -> dict[str, object]:
     }
 
 
+def _proposal_with_topology() -> dict[str, object]:
+    proposal = _proposal()
+    proposal["object_groups"][0]["topology_hypothesis"] = {
+        "kind": "BOUNDARY_CHAIN",
+        "ordered_primitive_hypothesis_ids": [
+            "mirror_top",
+            "mirror_right",
+            "mirror_bottom",
+            "mirror_left",
+        ],
+        "closure": "UNRESOLVED",
+        "endpoint_tolerance_px": 4,
+    }
+    return proposal
+
+
 def _compiler():
     module = importlib.import_module("cad_agent.source_fusion_proposal")
     compiler = getattr(module, "compile_external_visual_object_proposal", None)
@@ -93,6 +109,18 @@ def test_compile_is_deterministic_and_preserves_benchmark_membership_as_proposal
     assert first == second
     assert first["object_groups"] == _proposal()["object_groups"]
     assert first["excluded_memberships"] == _proposal()["excluded_memberships"]
+
+
+def test_boundary_topology_hypothesis_is_preserved_without_forcing_closure() -> None:
+    proposal = _proposal_with_topology()
+    result = _compiler()(proposal=proposal, expected_binding=_binding())
+
+    topology = result["object_groups"][0]["topology_hypothesis"]
+    assert topology == proposal["object_groups"][0]["topology_hypothesis"]
+    assert topology["closure"] == "UNRESOLVED"
+    assert result["semantic_label_authority"] == "NONE"
+    assert result["primitive_ir_materialized"] is False
+    assert result["cad_mutation"] is False
 
 
 @pytest.mark.parametrize("field", ["source_sha256", "page_index", "source_render_sha256", "roi_bbox_px"])
