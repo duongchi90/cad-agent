@@ -8,10 +8,11 @@ mutate CAD/source artifacts.
 from __future__ import annotations
 
 import hashlib
+import io
 from collections.abc import Mapping
 
-import cv2
 import numpy as np
+from PIL import Image, ImageFilter
 
 
 __all__ = ["verify_external_visual_proposal_source_support"]
@@ -39,11 +40,15 @@ def _parameter_fraction(value: object) -> float:
 def _decode_render(source_render_bytes: object) -> np.ndarray:
     if not isinstance(source_render_bytes, bytes) or not source_render_bytes:
         _fail("SOURCE_RENDER_BYTES_INVALID")
-    encoded = np.frombuffer(source_render_bytes, dtype=np.uint8)
-    image = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
-    if image is None or image.ndim != 2 or image.size == 0:
+    try:
+        with Image.open(io.BytesIO(source_render_bytes)) as image:
+            grayscale = image.convert("L")
+            result = np.array(grayscale, dtype=np.uint8, copy=True)
+    except (OSError, ValueError):
         _fail("SOURCE_RENDER_DECODE_FAILED")
-    return image
+    if result.ndim != 2 or result.size == 0:
+        _fail("SOURCE_RENDER_DECODE_FAILED")
+    return result
 
 
 def _request_parts(
@@ -134,11 +139,13 @@ def verify_external_visual_proposal_source_support(
     if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1 or x1 >= width or y1 >= height:
         _fail("SOURCE_BINDING_OUTSIDE_RENDER")
 
-    dark = (image <= threshold).astype(np.uint8)
+    dark = np.where(image <= threshold, 255, 0).astype(np.uint8)
     if tolerance:
         size = tolerance * 2 + 1
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
-        supported_pixels = cv2.dilate(dark, kernel, iterations=1)
+        supported_pixels = np.asarray(
+            Image.fromarray(dark).filter(ImageFilter.MaxFilter(size=size)),
+            dtype=np.uint8,
+        )
     else:
         supported_pixels = dark
 
