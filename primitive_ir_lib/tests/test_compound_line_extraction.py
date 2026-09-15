@@ -54,6 +54,14 @@ def _expected_normalised_segments() -> list[tuple[float, ...]]:
     )
 
 
+def _expected_rotated_normalised_segments() -> list[tuple[float, ...]]:
+    rotated = []
+    for x1, y1, x2, y2 in _expected_normalised_segments():
+        endpoints = sorted(((80.0 - y1, x1), (80.0 - y2, x2)))
+        rotated.append(tuple(value for point in endpoints for value in point))
+    return sorted(rotated)
+
+
 def test_compound_line_emission_is_translation_invariant_and_uses_rawline_owner():
     """A normalized branch/rectangle/segment component must emit six RawLines.
 
@@ -75,3 +83,16 @@ def test_compound_line_emission_is_translation_invariant_and_uses_rawline_owner(
     assert all(isinstance(line, RawLine) for line in origin + translated)
     assert _normalised_segments(origin) == _expected_normalised_segments()
     assert _normalised_segments(origin) == _normalised_segments(translated)
+
+
+def test_compound_line_emission_is_rotation_invariant():
+    """The same topology rotated in the image must rotate its RawLine output."""
+    extractor = getattr(geometry_extraction, "extract_compound_raw_lines", None)
+    assert callable(extractor)
+
+    rotated_component = cv2.rotate(_compound_component(), cv2.ROTATE_90_CLOCKWISE)
+    rotated = extractor(rotated_component)
+
+    assert len(rotated) == 6
+    assert all(isinstance(line, RawLine) for line in rotated)
+    assert _normalised_segments(rotated) == _expected_rotated_normalised_segments()
