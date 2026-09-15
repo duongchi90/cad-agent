@@ -155,7 +155,13 @@ def verify_external_visual_proposal_source_support(
     if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1 or x1 >= width or y1 >= height:
         _fail("SOURCE_BINDING_OUTSIDE_RENDER")
 
-    dark = np.where(image <= threshold, 255, 0).astype(np.uint8)
+    dark = np.zeros_like(image, dtype=np.uint8)
+    roi_pixels = image[y0 : y1 + 1, x0 : x1 + 1]
+    dark[y0 : y1 + 1, x0 : x1 + 1] = np.where(
+        roi_pixels <= threshold,
+        255,
+        0,
+    ).astype(np.uint8)
     if tolerance:
         size = tolerance * 2 + 1
         supported_pixels = np.asarray(
