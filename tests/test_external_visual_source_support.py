@@ -162,3 +162,49 @@ def test_source_support_does_not_leak_across_exact_roi_boundary() -> None:
             endpoint_tolerance_px=1,
             min_support_fraction=0.90,
         )
+
+
+def test_source_support_rejects_caller_controlled_verification_profile() -> None:
+    image = Image.new("L", (32, 32), 255)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    render_bytes = stream.getvalue()
+    binding = {
+        "source_sha256": "3" * 64,
+        "page_index": 0,
+        "source_render_sha256": hashlib.sha256(render_bytes).hexdigest(),
+        "roi_bbox_px": [5, 5, 25, 25],
+    }
+    proposal = {
+        "schema_version": "external-visual-object-proposal-1.0",
+        "proposal_source": "external_ai",
+        **binding,
+        "view_role_proposal": "FRONT",
+        "primitive_hypotheses": [
+            {
+                "id": "unsupported_white_line",
+                "type": "LINE",
+                "start_px": [8, 10],
+                "end_px": [22, 10],
+            }
+        ],
+        "object_groups": [
+            {
+                "group_id": "unknown-001",
+                "proposed_label": "UNKNOWN_BOUNDARY",
+                "primitive_hypothesis_ids": ["unsupported_white_line"],
+            }
+        ],
+        "excluded_memberships": [],
+    }
+    request = compile_external_visual_object_proposal(
+        proposal=proposal,
+        expected_binding=binding,
+    )
+
+    with pytest.raises(ValueError, match="SOURCE_SUPPORT_PROFILE_OVERRIDE_NOT_ALLOWED"):
+        verify_external_visual_proposal_source_support(
+            verification_request=request,
+            source_render_bytes=render_bytes,
+            darkness_threshold=255,
+        )
