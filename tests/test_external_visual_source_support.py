@@ -114,3 +114,51 @@ def test_source_support_rejects_tampered_verification_request_digest() -> None:
             endpoint_tolerance_px=1,
             min_support_fraction=0.90,
         )
+
+
+def test_source_support_does_not_leak_across_exact_roi_boundary() -> None:
+    image = Image.new("L", (32, 32), 255)
+    ImageDraw.Draw(image).line((9, 10, 9, 20), fill=0, width=1)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    render_bytes = stream.getvalue()
+    binding = {
+        "source_sha256": "2" * 64,
+        "page_index": 0,
+        "source_render_sha256": hashlib.sha256(render_bytes).hexdigest(),
+        "roi_bbox_px": [10, 10, 20, 20],
+    }
+    proposal = {
+        "schema_version": "external-visual-object-proposal-1.0",
+        "proposal_source": "external_ai",
+        **binding,
+        "view_role_proposal": "FRONT",
+        "primitive_hypotheses": [
+            {
+                "id": "inside_line",
+                "type": "LINE",
+                "start_px": [10, 10],
+                "end_px": [10, 20],
+            }
+        ],
+        "object_groups": [
+            {
+                "group_id": "boundary-001",
+                "proposed_label": "UNKNOWN_BOUNDARY",
+                "primitive_hypothesis_ids": ["inside_line"],
+            }
+        ],
+        "excluded_memberships": [],
+    }
+    request = compile_external_visual_object_proposal(
+        proposal=proposal,
+        expected_binding=binding,
+    )
+
+    with pytest.raises(ValueError, match="PRIMITIVE_SOURCE_SUPPORT_INSUFFICIENT:inside_line"):
+        verify_external_visual_proposal_source_support(
+            verification_request=request,
+            source_render_bytes=render_bytes,
+            endpoint_tolerance_px=1,
+            min_support_fraction=0.90,
+        )
