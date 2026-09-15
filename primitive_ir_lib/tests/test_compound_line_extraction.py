@@ -28,12 +28,29 @@ def _normalised_segments(lines: list[RawLine]) -> list[tuple[float, ...]]:
     points = [point for line in lines for point in (line.p1_px, line.p2_px)]
     min_x = min(point[0] for point in points)
     min_y = min(point[1] for point in points)
+    segments = []
+    for line in lines:
+        endpoints = sorted((line.p1_px, line.p2_px))
+        segments.append(
+            tuple(
+                round(value, 3)
+                for point in endpoints
+                for value in (point[0] - min_x, point[1] - min_y)
+            )
+        )
+    return sorted(segments)
+
+
+def _expected_normalised_segments() -> list[tuple[float, ...]]:
     return sorted(
-        tuple(round(value, 3) for point in (line.p1_px, line.p2_px) for value in (
-            point[0] - min_x,
-            point[1] - min_y,
-        ))
-        for line in lines
+        (
+            (7.0, 0.0, 7.0, 80.0),
+            (14.0, 25.0, 44.0, 25.0),
+            (44.0, 28.0, 44.0, 45.0),
+            (14.0, 45.0, 44.0, 45.0),
+            (14.0, 26.0, 14.0, 44.0),
+            (0.0, 79.0, 7.0, 72.0),
+        )
     )
 
 
@@ -56,4 +73,5 @@ def test_compound_line_emission_is_translation_invariant_and_uses_rawline_owner(
     assert len(origin) == 6
     assert len(translated) == 6
     assert all(isinstance(line, RawLine) for line in origin + translated)
+    assert _normalised_segments(origin) == _expected_normalised_segments()
     assert _normalised_segments(origin) == _normalised_segments(translated)
