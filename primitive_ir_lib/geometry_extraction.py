@@ -192,6 +192,29 @@ def extract_compound_raw_lines(component_mask: np.ndarray) -> List[RawLine]:
         if len(support) < 2:
             continue
         projections = support @ direction
+        order = np.argsort(projections)
+        ordered_support = support[order]
+        ordered_projections = projections[order]
+        split_points = np.flatnonzero(
+            np.diff(ordered_projections) > math.sqrt(2.0) + 1e-6
+        ) + 1
+        support = max(np.split(ordered_support, split_points), key=len)
+        if (
+            abs(direction[1]) >= abs(direction[0])
+            and len(support) >= 2
+        ):
+            def has_horizontal_neighbor(point: np.ndarray) -> bool:
+                px, py = map(int, point)
+                return (
+                    (px > 0 and binary[py, px - 1] > 0)
+                    or (px + 1 < width and binary[py, px + 1] > 0)
+                )
+
+            if has_horizontal_neighbor(support[0]) and has_horizontal_neighbor(support[-1]):
+                support = support[1:-1]
+        if len(support) < 2:
+            continue
+        projections = support @ direction
         start = support[int(np.argmin(projections))]
         end = support[int(np.argmax(projections))]
         if np.allclose(start, end):
