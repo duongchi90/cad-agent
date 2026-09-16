@@ -523,6 +523,7 @@ def test_r4_accepts_external_verified_geometry_registry_without_base_cad_handoff
     )
 
     assert normalized == registry
+    assert "primitive_ir_sha256" not in normalized["upstream_bindings"]
 
 
 def test_root_revision_is_sealed_closed_and_deterministic() -> None:

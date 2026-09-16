@@ -266,7 +266,6 @@ def _normalize_registry(
             "provenance_mode",
             "source_sha256",
             "render_sha256",
-            "primitive_ir_sha256",
             "candidate_id",
             "candidate_drawing_sha256",
             "verification_request_sha256",

@@ -42,7 +42,26 @@ _NATIVE_DWG_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "native_dwg_provenance"}
 )
 _EXTERNAL_GEOMETRY_CONTEXT_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "candidate",
+        "external_geometry_provenance",
+        "external_geometry_admission",
+    }
+)
+_EXTERNAL_GEOMETRY_REQUIRED_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "external_geometry_provenance"}
+)
+_EXTERNAL_GEOMETRY_ADMISSION_FIELDS = frozenset(
+    {
+        "verification_request",
+        "verification_result",
+        "source_render_bytes",
+        "calibration",
+        "source_file_name",
+        "image_width_px",
+        "image_height_px",
+    }
 )
 _CANDIDATE_FIELDS = frozenset({"candidate_id", "candidate_drawing_sha256"})
 _INPUT_COMPONENT_FIELDS = frozenset(
@@ -181,7 +200,6 @@ _EXTERNAL_GEOMETRY_UPSTREAM_BINDING_FIELDS = frozenset(
         "provenance_mode",
         "source_sha256",
         "render_sha256",
-        "primitive_ir_sha256",
         "candidate_id",
         "candidate_drawing_sha256",
         "verification_request_sha256",
@@ -196,7 +214,6 @@ _EXTERNAL_GEOMETRY_PROVENANCE_FIELDS = frozenset(
         "provenance_mode",
         "source_sha256",
         "render_sha256",
-        "primitive_ir_sha256",
         "verification_request_sha256",
         "verification_result_sha256",
         "candidate_id",
@@ -502,10 +519,11 @@ def _generated_upstream_context(
 def _external_geometry_upstream_context(
     upstream_context: Mapping[str, object],
 ) -> dict[str, object]:
-    context = _closed(
+    context = _closed_optional(
         upstream_context,
-        _EXTERNAL_GEOMETRY_CONTEXT_FIELDS,
-        "UPSTREAM_CONTEXT_INVALID",
+        required=_EXTERNAL_GEOMETRY_REQUIRED_CONTEXT_FIELDS,
+        allowed=_EXTERNAL_GEOMETRY_CONTEXT_FIELDS,
+        code="UPSTREAM_CONTEXT_INVALID",
     )
     if context["provenance_mode"] != _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
         _fail("PROVENANCE_MODE_INVALID")
@@ -535,7 +553,6 @@ def _external_geometry_upstream_context(
     for field in (
         "source_sha256",
         "render_sha256",
-        "primitive_ir_sha256",
         "verification_request_sha256",
         "verification_result_sha256",
     ):
@@ -546,12 +563,63 @@ def _external_geometry_upstream_context(
         _fail("EXTERNAL_GEOMETRY_CANDIDATE_HASH_MISMATCH")
     if reference["artifact_sha256"] != candidate_sha256:
         _fail("EXTERNAL_GEOMETRY_REFERENCE_HASH_MISMATCH")
+
+    admission = context.get("external_geometry_admission")
+    if not isinstance(admission, Mapping):
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    admission = _closed(
+        admission,
+        _EXTERNAL_GEOMETRY_ADMISSION_FIELDS,
+        "EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED",
+    )
+    try:
+        from cad_agent.source_verified_geometry import (
+            materialize_verified_external_visual_lines,
+        )
+
+        materialized = materialize_verified_external_visual_lines(
+            verification_request=admission["verification_request"],
+            verification_result=admission["verification_result"],
+            source_render_bytes=admission["source_render_bytes"],
+            calibration=admission["calibration"],
+            source_file_name=admission["source_file_name"],
+            image_width_px=admission["image_width_px"],
+            image_height_px=admission["image_height_px"],
+        )
+    except Exception as exc:
+        raise ComponentViewRegistryError(
+            "EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED"
+        ) from exc
+    if materialized.source_document.sha256 != packet["source_sha256"]:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    materialized_primitives = materialized.primitives
+    if not materialized_primitives:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    request_hashes = {
+        primitive.trace.verification_request_sha256
+        for primitive in materialized_primitives
+    }
+    result_hashes = {
+        primitive.trace.verification_result_sha256
+        for primitive in materialized_primitives
+    }
+    if request_hashes != {packet["verification_request_sha256"]}:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    if result_hashes != {packet["verification_result_sha256"]}:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    verification_result = admission["verification_result"]
+    if (
+        not isinstance(verification_result, Mapping)
+        or verification_result.get("source_render_sha256")
+        != packet["render_sha256"]
+    ):
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+
     packet_sha256 = canonical_json_sha256(packet)
     upstream_bindings = {
         "provenance_mode": _EXTERNAL_GEOMETRY_PROVENANCE_MODE,
         "source_sha256": packet["source_sha256"],
         "render_sha256": packet["render_sha256"],
-        "primitive_ir_sha256": packet["primitive_ir_sha256"],
         "candidate_id": candidate_id,
         "candidate_drawing_sha256": candidate_sha256,
         "verification_request_sha256": packet["verification_request_sha256"],
