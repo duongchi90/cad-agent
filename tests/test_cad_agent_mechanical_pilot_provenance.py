@@ -342,6 +342,49 @@ def test_external_geometry_provenance_rejects_injected_semantic_features() -> No
         provenance.validate_external_geometry_provenance(packet)
 
 
+def test_external_geometry_provenance_rejects_self_consistent_fabrication() -> None:
+    """A packet checksum cannot substitute for source-chain validation."""
+
+    exact = _external_geometry_packet_for_test()
+    fabricated = {
+        "source_render_sha256": "e" * 64,
+        "primitive_ir_sha256": "f" * 64,
+        "verification_request_sha256": "1" * 64,
+        "verification_result_sha256": "2" * 64,
+        "build_evidence_sha256": "3" * 64,
+    }
+
+    def exercise_untrusted_packet() -> None:
+        packet = provenance.build_external_geometry_provenance(
+            pilot_id=exact["pilot_id"],
+            candidate_id="foreign-candidate-id",
+            candidate_path_binding_sha256=exact[
+                "candidate_path_binding_sha256"
+            ],
+            source_sha256=exact["source_sha256"],
+            source_render_sha256=fabricated["source_render_sha256"],
+            primitive_ir_sha256=fabricated["primitive_ir_sha256"],
+            verification_request_sha256=fabricated[
+                "verification_request_sha256"
+            ],
+            verification_result_sha256=fabricated[
+                "verification_result_sha256"
+            ],
+            candidate_sha256=exact["candidate_sha256"],
+            build_evidence_sha256=fabricated["build_evidence_sha256"],
+            primitive_projections=deepcopy(exact["primitive_projections"]),
+        )
+        inputs = provenance.build_external_geometry_r3_inputs(packet)
+        registry = r3.build_component_view_registry(**inputs)
+        assert len(registry["components"]) == 1
+        raise AssertionError(
+            "EXTERNAL_GEOMETRY_PROVENANCE_FALSE_PASS_REACHED_R3"
+        )
+
+    with pytest.raises(ValueError, match="EXTERNAL_"):
+        exercise_untrusted_packet()
+
+
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(
     tmp_path: Path,
 ) -> None:
