@@ -249,6 +249,53 @@ def test_external_mode_rejects_semantic_projection_refs(tmp_path: Path) -> None:
         )
 
 
+def test_external_mode_rejects_detached_packet_direct_admission() -> None:
+    provenance_tests = _existing_test_module(
+        "test_cad_agent_mechanical_pilot_provenance.py"
+    )
+    provenance = importlib.import_module("cad_agent.mechanical_pilot_provenance")
+    packet = provenance_tests._external_geometry_packet_for_test()
+    primitive_projections = packet["primitive_projections"]
+    upstream_context = {
+        "provenance_mode": "EXTERNAL_GEOMETRY_ONLY",
+        "candidate": {
+            "candidate_id": packet["candidate_id"],
+            "candidate_drawing_sha256": packet["candidate_sha256"],
+        },
+        "external_geometry_provenance": packet,
+    }
+    component = {
+        "component_type": "EXTERNAL_GEOMETRY",
+        "origin_class": "RECONSTRUCTED_NEW",
+        "source_projection_refs": [
+            item["projection_ref"] for item in primitive_projections
+        ],
+        "semantic_projection_refs": [],
+        "base_cad_provenance_ref": None,
+        "candidate_entity_bindings": [
+            {
+                "target_namespace": "CANDIDATE",
+                "candidate_id": packet["candidate_id"],
+                "entity_handle": item["entity_handle"],
+                "block_name": item["block_name"],
+                "legacy_uuid": item["legacy_uuid"],
+                "relative_path": item["relative_path"],
+                "captured_at_utc": item["captured_at_utc"],
+            }
+            for item in primitive_projections
+        ],
+    }
+
+    with pytest.raises(
+        _registry_module().ComponentViewRegistryError,
+        match="EXTERNAL_",
+    ):
+        _registry_module().build_component_view_registry(
+            upstream_context=upstream_context,
+            components=[component],
+        )
+
+
 def test_builds_closed_task_one_registry_with_empty_views_and_links() -> None:
     module = _registry_module()
     context = _upstream_context()
