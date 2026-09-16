@@ -153,7 +153,12 @@ def resolve_component_insert(db, modelspace, handle, part_id, expected_block_nam
     return None, "missing"
 
 
-def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERANCE_MM) -> ReviewResult:
+def review_dxf(
+    build_result: BuildResult,
+    tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
+    *,
+    strict_primitive_inventory: bool = False,
+) -> ReviewResult:
     """Đọc lại `build_result.output_path` và đối chiếu từng primitive đã
     build (theo handle) với `written_geometry_by_primitive_id`. Raise
     ImportError nếu chưa cài `ezdxf` (cùng chiến lược lazy-import khác
@@ -171,6 +176,22 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
 
     mismatches: List[str] = []
     checked = 0
+
+    if strict_primitive_inventory:
+        authorized_handles = (
+            set(build_result.handle_by_primitive_id.values())
+            | set(build_result.dimension_handle_by_cross_validation_id.values())
+            | set(build_result.component_handle_by_part_id.values())
+        )
+        actual_handles = {entity.dxf.handle for entity in doc.modelspace()}
+        if actual_handles != authorized_handles:
+            missing = sorted(authorized_handles - actual_handles)
+            extra = sorted(actual_handles - authorized_handles)
+            mismatches.append(
+                "Primitive inventory mismatch: "
+                f"missing tracked handles={missing}, "
+                f"extra untracked handles={extra}"
+            )
 
     for pid, handle in build_result.handle_by_primitive_id.items():
         written = build_result.written_geometry_by_primitive_id.get(pid)

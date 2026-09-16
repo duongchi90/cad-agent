@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from cad_agent.live import write_build_evidence
+from cad_agent.live import load_build_evidence, write_build_evidence
 from cad_agent.manifest import sha256_file
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
 from dxf_builder_lib.builder import BuildResult, build_dxf
@@ -750,6 +750,78 @@ def _write_pilot_evidence(result: MechanicalPilotResult, path: Path) -> None:
     )
 
 
+def validate_primitive_bound_candidate(
+    primitive_path: Path,
+    candidate_path: Path,
+    build_evidence_path: Path,
+) -> tuple[str, str]:
+    """Validate one primitive artifact against its actual built candidate."""
+
+    source_path = Path(primitive_path).resolve(strict=True)
+    candidate_path = Path(candidate_path).resolve(strict=True)
+    evidence_path = Path(build_evidence_path).resolve(strict=True)
+    primitive_doc, source_sha256 = _load_primitive_document(source_path)
+    build = load_build_evidence(evidence_path, candidate_path)
+
+    expected_geometry: dict[str, dict[str, object]] = {}
+    for primitive in primitive_doc.primitives:
+        if primitive.type == "line" and isinstance(primitive.geometry, LineGeometry):
+            expected_geometry[primitive.id] = {
+                "type": "line",
+                "start": [
+                    primitive.geometry.start.x,
+                    primitive.geometry.start.y,
+                ],
+                "end": [
+                    primitive.geometry.end.x,
+                    primitive.geometry.end.y,
+                ],
+            }
+        elif primitive.type == "circle" and isinstance(
+            primitive.geometry, CircleGeometry
+        ):
+            expected_geometry[primitive.id] = {
+                "type": "circle",
+                "center": [
+                    primitive.geometry.center.x,
+                    primitive.geometry.center.y,
+                ],
+                "radius": primitive.geometry.radius,
+            }
+        else:
+            raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_UNSUPPORTED")
+
+    primitive_ids = set(expected_geometry)
+    if (
+        set(build.handle_by_primitive_id) != primitive_ids
+        or set(build.layer_by_primitive_id) != primitive_ids
+        or set(build.written_geometry_by_primitive_id) != primitive_ids
+        or set(build.skipped_primitive_ids)
+    ):
+        raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
+    for primitive_id, expected in expected_geometry.items():
+        if build.written_geometry_by_primitive_id[primitive_id] != expected:
+            raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
+
+    if (
+        build.dimension_count != 0
+        or build.dimension_handle_by_cross_validation_id
+        or build.written_dimension_by_cross_validation_id
+        or build.component_count != 0
+        or build.component_handle_by_part_id
+        or build.component_type_by_part_id
+        or build.written_component_by_part_id
+        or build.skipped_part_ids
+        or build.skipped_part_reasons
+    ):
+        raise ValueError("PILOT_PRIMITIVE_BUILD_REVIEW_FAILED")
+
+    review = review_dxf(build, strict_primitive_inventory=True)
+    if not review.passed:
+        raise ValueError("PILOT_PRIMITIVE_BUILD_REVIEW_FAILED")
+    return source_sha256, sha256_file(candidate_path)
+
+
 def build_simple_shaft_pilot(source_path: Path, candidate_path: Path) -> MechanicalPilotResult:
     """Build one candidate for the selected two-feature synthetic pilot."""
 
@@ -858,7 +930,7 @@ def bind_simple_shaft_pilot_from_primitive(
             matches.append(page)
         if len(matches) != 1:
             raise ValueError("PILOT_PDF_PRIMITIVE_BINDING_INVALID")
-    return _build_candidate_result(
+    result = _build_candidate_result(
         pilot_id=_PHASE4_PILOT_ID,
         source_path=source_path,
         candidate_path=candidate_path,
@@ -870,6 +942,15 @@ def bind_simple_shaft_pilot_from_primitive(
         source_pdf_sha256=source_pdf_sha256,
         pdf_manifest_path=bound_manifest_path,
     )
+    bound_source_sha256, bound_candidate_sha256 = validate_primitive_bound_candidate(
+        result.source_path, result.candidate_path, result.build_evidence_path
+    )
+    if (
+        bound_source_sha256 != result.source_sha256
+        or bound_candidate_sha256 != result.candidate_sha256
+    ):
+        raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
+    return result
 
 
 _P1_SOURCE_BOUND_PROPOSAL_FIELDS = frozenset(
@@ -1106,4 +1187,5 @@ __all__ = [
     "build_simple_shaft_pilot",
     "compile_source_bound_simple_shaft_proposal",
     "load_pilot_definition",
+    "validate_primitive_bound_candidate",
 ]
