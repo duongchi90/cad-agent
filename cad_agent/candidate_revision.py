@@ -254,6 +254,29 @@ def _normalize_registry(
         }:
             _fail("NATIVE_DWG_UPSTREAM_INVALID")
         return registry
+    if (
+        registry["schema_version"]
+        == _r3.COMPONENT_VIEW_REGISTRY_EXTERNAL_GEOMETRY_SCHEMA_VERSION
+    ):
+        if handoff is not None:
+            _fail("EXTERNAL_GEOMETRY_HANDOFF_FORBIDDEN")
+        if upstream.get("provenance_mode") != "EXTERNAL_VERIFIED_GEOMETRY":
+            _fail("EXTERNAL_GEOMETRY_UPSTREAM_INVALID")
+        if set(upstream) != {
+            "provenance_mode",
+            "source_sha256",
+            "render_sha256",
+            "primitive_ir_sha256",
+            "candidate_id",
+            "candidate_drawing_sha256",
+            "verification_request_sha256",
+            "verification_result_sha256",
+            "candidate_reference_id",
+            "candidate_reference_sha256",
+            "provenance_packet_sha256",
+        }:
+            _fail("EXTERNAL_GEOMETRY_UPSTREAM_INVALID")
+        return registry
     if handoff is None:
         _fail("BASE_CAD_HANDOFF_INVALID")
     if upstream["candidate_drawing_sha256"] != handoff["candidate_output_sha256"]:
