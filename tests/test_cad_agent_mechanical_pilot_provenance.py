@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -45,28 +46,99 @@ def _primitive_bound_pilot(tmp_path: Path):
 
 
 def _external_artifacts_for_test(tmp_path: Path) -> dict[str, object]:
-    helper_path = Path(__file__).with_name(
-        "test_external_visual_primitive_ir_admission.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "external_visual_admission_helpers_for_provenance", helper_path
-    )
-    if spec is None or spec.loader is None:
-        raise AssertionError("external visual helper module unavailable")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    request, result, render_bytes = module._verified_case()
+    from PIL import Image, ImageDraw
+
     from cad_agent.live import write_build_evidence
     from cad_agent.source_verified_geometry import (
         materialize_verified_external_visual_lines,
     )
+    from cad_agent.source_support_verifier import (
+        verify_external_visual_proposal_source_support,
+    )
+    from cad_agent.source_fusion_proposal import (
+        compile_external_visual_object_proposal,
+    )
     from dxf_builder_lib.builder import build_dxf
+
+    source_sha256 = "1" * 64
+    image = Image.new("L", (64, 64), 255)
+    draw = ImageDraw.Draw(image)
+    line_specs = [
+        ("main_vertical", [10, 5], [10, 50]),
+        ("mirror_top", [20, 10], [50, 10]),
+        ("mirror_right", [50, 12], [50, 40]),
+        ("mirror_bottom", [20, 40], [50, 40]),
+        ("mirror_left", [20, 12], [20, 38]),
+        ("lower_slope", [10, 50], [20, 40]),
+    ]
+    for _primitive_id, start, end in line_specs:
+        draw.line((*start, *end), fill=0, width=1)
+    render_stream = io.BytesIO()
+    image.save(render_stream, format="PNG")
+    render_bytes = render_stream.getvalue()
+    binding = {
+        "source_sha256": source_sha256,
+        "page_index": 0,
+        "source_render_sha256": hashlib.sha256(render_bytes).hexdigest(),
+        "roi_bbox_px": [0, 0, 63, 63],
+    }
+    proposal = {
+        "schema_version": "external-visual-object-proposal-1.0",
+        "proposal_source": "external_ai",
+        **binding,
+        "view_role_proposal": "FRONT",
+        "primitive_hypotheses": [
+            {
+                "id": primitive_id,
+                "type": "LINE",
+                "start_px": start,
+                "end_px": end,
+            }
+            for primitive_id, start, end in line_specs
+        ],
+        "object_groups": [
+            {
+                "group_id": "six-line-probe",
+                "proposed_label": "UNCLASSIFIED_BOUNDARY",
+                "primitive_hypothesis_ids": [
+                    primitive_id for primitive_id, _start, _end in line_specs
+                ],
+            }
+        ],
+        "excluded_memberships": [],
+    }
+    request = compile_external_visual_object_proposal(
+        proposal=proposal,
+        expected_binding=binding,
+        expected_calibration_binding={
+            "unit": "mm",
+            "pixel_to_unit_scale": 1.0,
+            "origin_px": [0.0, 64.0],
+            "method": "manual_override",
+            "reference_note": "test exact source-bound calibration",
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+    )
+    result = verify_external_visual_proposal_source_support(
+        verification_request=request,
+        source_render_bytes=render_bytes,
+    )
+    from primitive_ir_lib.models import Calibration
 
     primitive_doc = materialize_verified_external_visual_lines(
         verification_request=request,
         verification_result=result,
         source_render_bytes=render_bytes,
-        calibration=module._calibration(),
+        calibration=Calibration(
+            unit="mm",
+            pixel_to_unit_scale=1.0,
+            origin_px=(0.0, 64.0),
+            method="manual_override",
+            reference_note="test exact source-bound calibration",
+            status="verified",
+            source_sha256=source_sha256,
+        ),
         source_file_name="source.png",
         image_width_px=64,
         image_height_px=64,
@@ -323,32 +395,36 @@ def _external_geometry_packet_for_test() -> dict[str, object]:
     return provenance.validate_external_geometry_provenance(packet)
 
 
-def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_authority() -> None:
+def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_authority(
+    tmp_path: Path,
+) -> None:
     """A verified primitive-only candidate must not require fabricated pilot semantics."""
 
-    packet = _external_geometry_packet_for_test()
-    evidence = {
-        "source_sha256": (
-            "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
-        ),
-        "candidate_sha256": (
-            "497b5e8653842413927fa979f8be51c0f71b23239bc7d2da2cd15dd633dc6499"
-        ),
-    }
-    normalized = provenance.validate_external_geometry_provenance(packet)
+    artifacts = _external_artifacts_for_test(tmp_path)
+    inputs = provenance.build_external_geometry_r3_inputs(
+        pilot_id="external-geometry-ai-p1",
+        primitive_ir_path=artifacts["primitive_path"],
+        candidate_path=artifacts["candidate_path"],
+        build_evidence_path=artifacts["build_evidence_path"],
+        verification_request=artifacts["verification_request"],
+        verification_result=artifacts["verification_result"],
+        source_render_bytes=artifacts["source_render_bytes"],
+    )
+    normalized = inputs["upstream_context"]["external_geometry_provenance"]
 
     assert normalized["schema_version"] == (
         "external-geometry-provenance-1.0"
     )
     assert normalized["provenance_mode"] == "EXTERNAL_GEOMETRY_ONLY"
-    assert normalized["source_sha256"] == evidence["source_sha256"]
-    assert normalized["candidate_sha256"] == evidence["candidate_sha256"]
+    assert normalized["source_sha256"] == "1" * 64
+    assert normalized["candidate_sha256"] == hashlib.sha256(
+        artifacts["candidate_path"].read_bytes()
+    ).hexdigest()
     assert all(
         item["source"] == "geometry_external_ai"
         for item in normalized["primitive_projections"]
     )
 
-    inputs = provenance.build_external_geometry_r3_inputs(packet)
     registry = r3.build_component_view_registry(**inputs)
     assert registry["schema_version"] == "component-view-registry-1.1"
     assert registry["upstream_bindings"]["provenance_mode"] == (
@@ -358,9 +434,11 @@ def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_a
     component = registry["components"][0]
     assert component["origin_class"] == "RECONSTRUCTED_NEW"
     assert component["semantic_projection_refs"] == []
-    assert [
-        item["entity_handle"] for item in component["candidate_entity_bindings"]
-    ] == ["30", "31", "32", "33", "34", "35"]
+    assert len(component["candidate_entity_bindings"]) == 6
+    assert all(
+        binding["candidate_id"] == normalized["candidate_id"]
+        for binding in component["candidate_entity_bindings"]
+    )
     assert r3.validate_component_view_registry(
         registry, upstream_context=inputs["upstream_context"]
     ) == registry
@@ -476,16 +554,8 @@ def test_external_geometry_r3_rejects_detached_issuer_bypass() -> None:
         provenance._external_packet_without_checksum(packet)
     )
 
-    def exercise_untrusted_packet() -> None:
-        inputs = provenance.build_external_geometry_r3_inputs(packet)
-        registry = r3.build_component_view_registry(**inputs)
-        assert len(registry["components"]) == 1
-        raise AssertionError(
-            "EXTERNAL_GEOMETRY_PROVENANCE_ISSUER_BYPASS_REACHED_R3"
-        )
-
-    with pytest.raises(ValueError, match="EXTERNAL_"):
-        exercise_untrusted_packet()
+    with pytest.raises(TypeError):
+        provenance.build_external_geometry_r3_inputs(packet)
 
 
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(

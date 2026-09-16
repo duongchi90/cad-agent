@@ -914,10 +914,25 @@ def build_external_geometry_provenance(
 
 
 def build_external_geometry_r3_inputs(
-    packet: Mapping[str, object],
+    *,
+    pilot_id: str,
+    primitive_ir_path: str | os.PathLike[str],
+    candidate_path: str | os.PathLike[str],
+    build_evidence_path: str | os.PathLike[str],
+    verification_request: Mapping[str, object],
+    verification_result: Mapping[str, object],
+    source_render_bytes: bytes,
 ) -> dict[str, object]:
-    """Build the existing R3 inputs for one primitive-only external packet."""
-    normalized = validate_external_geometry_provenance(packet)
+    """Build external R3 inputs only after evidence-backed packet issuance."""
+    normalized = build_external_geometry_provenance(
+        pilot_id=pilot_id,
+        primitive_ir_path=primitive_ir_path,
+        candidate_path=candidate_path,
+        build_evidence_path=build_evidence_path,
+        verification_request=verification_request,
+        verification_result=verification_result,
+        source_render_bytes=source_render_bytes,
+    )
     primitive_by_id = {
         str(item["primitive_id"]): item
         for item in normalized["primitive_projections"]

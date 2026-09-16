@@ -221,13 +221,20 @@ def test_public_surface_uses_the_accepted_parameter_modes() -> None:
         assert parameters["upstream_context"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
-def test_external_mode_rejects_semantic_projection_refs() -> None:
+def test_external_mode_rejects_semantic_projection_refs(tmp_path: Path) -> None:
     provenance_tests = _existing_test_module(
         "test_cad_agent_mechanical_pilot_provenance.py"
     )
     provenance = importlib.import_module("cad_agent.mechanical_pilot_provenance")
+    artifacts = provenance_tests._external_artifacts_for_test(tmp_path)
     inputs = provenance.build_external_geometry_r3_inputs(
-        provenance_tests._external_geometry_packet_for_test()
+        pilot_id="external-geometry-ai-p1",
+        primitive_ir_path=artifacts["primitive_path"],
+        candidate_path=artifacts["candidate_path"],
+        build_evidence_path=artifacts["build_evidence_path"],
+        verification_request=artifacts["verification_request"],
+        verification_result=artifacts["verification_result"],
+        source_render_bytes=artifacts["source_render_bytes"],
     )
     components = deepcopy(inputs["components"])
     components[0]["semantic_projection_refs"] = ["f" * 64]
