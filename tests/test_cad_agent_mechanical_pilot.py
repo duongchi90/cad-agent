@@ -60,6 +60,70 @@ def test_simple_shaft_pilot_builds_typed_features_and_round_trips(tmp_path: Path
     )
 
 
+def test_primitive_bound_pilot_validates_source_candidate_binding(
+    tmp_path: Path,
+) -> None:
+    """Require the real build path to bind source geometry to its candidate."""
+
+    import importlib.util
+
+    helper_path = Path(__file__).with_name("test_cad_agent_phase4_pilot_binding.py")
+    spec = importlib.util.spec_from_file_location(
+        "phase4_pilot_test_helpers_for_build_binding", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    from cad_agent.live import load_build_evidence
+    from cad_agent.mechanical_pilot import (
+        bind_simple_shaft_pilot_from_primitive,
+        validate_primitive_bound_candidate,
+    )
+    from dxf_builder_lib.reviewer import review_dxf
+
+    primitive_a_path = tmp_path / "primitive-a" / "page_01.json"
+    primitive_a_path.parent.mkdir()
+    helper._write_primitive(primitive_a_path)
+    result_a = bind_simple_shaft_pilot_from_primitive(
+        primitive_a_path, tmp_path / "candidate-a" / "candidate.dxf"
+    )
+    assert validate_primitive_bound_candidate(
+        primitive_a_path, result_a.candidate_path, result_a.build_evidence_path
+    ) == (result_a.source_sha256, result_a.candidate_sha256)
+
+    primitive_b_path = tmp_path / "primitive-b" / "page_01.json"
+    primitive_b_path.parent.mkdir()
+    primitive_b = json.loads(primitive_a_path.read_text(encoding="utf-8"))
+    primitive_b["calibration"]["pixel_to_unit_scale"] = 2.0
+    for primitive in primitive_b["primitives"]:
+        geometry = primitive["geometry"]
+        if primitive["type"] == "line":
+            for point in (geometry["start"], geometry["end"]):
+                point["x"] *= 2.0
+                point["y"] *= 2.0
+        else:
+            geometry["center"]["x"] *= 2.0
+            geometry["center"]["y"] *= 2.0
+            geometry["radius"] *= 2.0
+    primitive_b_path.write_text(
+        json.dumps(primitive_b, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    result_b = bind_simple_shaft_pilot_from_primitive(
+        primitive_b_path, tmp_path / "candidate-b" / "candidate.dxf"
+    )
+    loaded_b = load_build_evidence(
+        result_b.build_evidence_path, result_b.candidate_path
+    )
+    assert review_dxf(loaded_b).passed is True
+
+    with pytest.raises(ValueError, match="PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH"):
+        validate_primitive_bound_candidate(
+            primitive_a_path, result_b.candidate_path, result_b.build_evidence_path
+        )
+
+
 def test_simple_shaft_pilot_refuses_source_as_candidate(tmp_path: Path) -> None:
     from cad_agent.mechanical_pilot import build_simple_shaft_pilot
 
