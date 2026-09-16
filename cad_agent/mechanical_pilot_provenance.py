@@ -361,6 +361,105 @@ def _require_stable_artifact(
         _fail(code)
 
 
+def compose_external_verified_candidate_provenance(
+    *,
+    admission: Mapping[str, object],
+    candidate_artifact_path: object,
+    candidate_artifact_bytes: object,
+    candidate_artifact_sha256: object,
+    build_evidence_path: object,
+) -> dict[str, object]:
+    """Bind one verified external admission to one exact pilot artifact.
+
+    The external admission is supplied by the canonical source-verification
+    owner.  This function only composes that admission with an artifact that
+    can be re-read and validated through the existing build-evidence owner.
+    """
+    admission_fields = {
+        "source_sha256",
+        "render_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+        "source_render_bytes",
+        "calibration",
+    }
+    if not isinstance(admission, Mapping) or set(admission) != admission_fields:
+        _fail("EXTERNAL_ADMISSION_INVALID")
+    source_sha256 = _sha(admission["source_sha256"], "EXTERNAL_ADMISSION_INVALID")
+    render_sha256 = _sha(admission["render_sha256"], "EXTERNAL_ADMISSION_INVALID")
+    verification_request_sha256 = _sha(
+        admission["verification_request_sha256"], "EXTERNAL_ADMISSION_INVALID"
+    )
+    verification_result_sha256 = _sha(
+        admission["verification_result_sha256"], "EXTERNAL_ADMISSION_INVALID"
+    )
+    render_bytes = admission["source_render_bytes"]
+    if type(render_bytes) is not bytes:
+        _fail("EXTERNAL_ADMISSION_RENDER_INVALID")
+    if hashlib.sha256(render_bytes).hexdigest() != render_sha256:
+        _fail("EXTERNAL_ADMISSION_RENDER_MISMATCH")
+    calibration = admission["calibration"]
+    if not hasattr(calibration, "to_dict"):
+        _fail("EXTERNAL_ADMISSION_CALIBRATION_INVALID")
+    try:
+        calibration_payload = calibration.to_dict()
+    except Exception as error:
+        raise GeneratedPilotProvenanceError(
+            "EXTERNAL_ADMISSION_CALIBRATION_INVALID"
+        ) from error
+    if (
+        not isinstance(calibration_payload, Mapping)
+        or calibration_payload.get("status") != "verified"
+        or calibration_payload.get("source_sha256") != source_sha256
+    ):
+        _fail("EXTERNAL_ADMISSION_CALIBRATION_MISMATCH")
+    calibration_sha256 = canonical_json_sha256(calibration_payload)
+
+    candidate_path, candidate_bytes, candidate_sha256 = _file_snapshot(
+        candidate_artifact_path, "EXTERNAL_CANDIDATE_BINDING_MISMATCH"
+    )
+    supplied_candidate_sha256 = _sha(
+        candidate_artifact_sha256, "EXTERNAL_CANDIDATE_BINDING_MISMATCH"
+    )
+    if (
+        type(candidate_artifact_bytes) is not bytes
+        or candidate_bytes != candidate_artifact_bytes
+        or candidate_sha256 != supplied_candidate_sha256
+    ):
+        _fail("EXTERNAL_CANDIDATE_BINDING_MISMATCH")
+    evidence_path, _evidence_bytes, evidence_sha256 = _file_snapshot(
+        build_evidence_path, "EXTERNAL_BUILD_EVIDENCE_INVALID"
+    )
+    try:
+        load_build_evidence(evidence_path, candidate_path)
+    except Exception as error:
+        raise GeneratedPilotProvenanceError(
+            "EXTERNAL_CANDIDATE_BINDING_MISMATCH"
+        ) from error
+    _require_stable_artifact(
+        candidate_path, candidate_sha256, "EXTERNAL_CANDIDATE_BINDING_MISMATCH"
+    )
+    _require_stable_artifact(
+        evidence_path, evidence_sha256, "EXTERNAL_BUILD_EVIDENCE_INVALID"
+    )
+    packet: dict[str, object] = {
+        "schema_version": "external-verified-geometry-pilot-provenance-1.0",
+        "source_sha256": source_sha256,
+        "render_sha256": render_sha256,
+        "verification_request_sha256": verification_request_sha256,
+        "verification_result_sha256": verification_result_sha256,
+        "calibration_sha256": calibration_sha256,
+        "candidate_path_binding_sha256": _candidate_path_binding_sha256(candidate_path),
+        "candidate_sha256": candidate_sha256,
+        "build_evidence_sha256": evidence_sha256,
+        "provenance_sha256": "",
+    }
+    packet["provenance_sha256"] = canonical_json_sha256(
+        {key: value for key, value in packet.items() if key != "provenance_sha256"}
+    )
+    return packet
+
+
 def _validate_result_files(
     result: MechanicalPilotResult,
 ) -> tuple[str, str, str, str, str]:
@@ -920,6 +1019,7 @@ __all__ = [
     "GeneratedPilotProvenanceError",
     "build_generated_pilot_provenance",
     "build_generated_pilot_r3_inputs",
+    "compose_external_verified_candidate_provenance",
     "compose_generated_pilot_query_binding",
     "validate_generated_pilot_provenance",
 ]
