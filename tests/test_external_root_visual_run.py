@@ -110,14 +110,33 @@ def test_external_root_currentness_fails_closed_for_wrong_or_mutating_identity(
     )
 
     wrong_mode = {**packet, "provenance_mode": "GENERATED_MECHANICAL_PILOT"}
-    with pytest.raises(VisualEvidenceError, match="EXTERNAL_GEOMETRY_ONLY"):
+    with pytest.raises(VisualEvidenceError, match="canonical external provenance"):
         derive_external_root_visual_currentness_sha256(wrong_mode)
 
     missing_identity = dict(packet)
     del missing_identity["source_render_sha256"]
-    with pytest.raises(VisualEvidenceError, match="source_render_sha256"):
+    with pytest.raises(VisualEvidenceError, match="canonical external provenance"):
         derive_external_root_visual_currentness_sha256(missing_identity)
 
     mutation_bound = {**packet, "mutation_evidence": {}}
-    with pytest.raises(VisualEvidenceError, match="mutation evidence"):
+    with pytest.raises(VisualEvidenceError, match="canonical external provenance"):
         derive_external_root_visual_currentness_sha256(mutation_bound)
+
+
+def test_external_root_currentness_rejects_forged_provenance_before_hashing(
+    tmp_path: Path,
+) -> None:
+    artifacts = _external_artifacts(tmp_path)
+    packet = provenance.build_external_geometry_provenance(
+        pilot_id="external-geometry-ai-p1",
+        primitive_ir_path=artifacts["primitive_path"],
+        candidate_path=artifacts["candidate_path"],
+        build_evidence_path=artifacts["build_evidence_path"],
+        verification_request=artifacts["verification_request"],
+        verification_result=artifacts["verification_result"],
+        source_render_bytes=artifacts["source_render_bytes"],
+    )
+    forged = {**packet, "candidate_sha256": "f" * 64}
+
+    with pytest.raises(VisualEvidenceError, match="canonical external provenance"):
+        derive_external_root_visual_currentness_sha256(forged)
