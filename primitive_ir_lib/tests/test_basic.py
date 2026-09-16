@@ -276,6 +276,29 @@ def test_validator_catches_missing_geometry():
     assert any("thiếu 'geometry'" in e for e in errors)
 
 
+def test_validator_rejects_unverified_external_geometry():
+    prim = Primitive(
+        id="external-unverified",
+        type="line",
+        source="geometry_external_ai",
+        confidence=0.99,
+        trace=Trace(bbox_px=(1, 1, 20, 20), extraction_tool="direct-caller"),
+        geometry=LineGeometry(Point2D(0, 0), Point2D(10, 0)),
+    )
+    doc = {
+        "schema_version": "1.0.0",
+        "source_document": {"file_name": "untrusted.png", "page_index": 0, "image_width_px": 64, "image_height_px": 64},
+        "calibration": {"unit": "mm", "pixel_to_unit_scale": 1.0, "origin_px": [0, 64], "method": "manual_override"},
+        "primitives": [prim.to_dict()],
+        "cross_validations": [],
+    }
+
+    errors = validate_document(doc)
+
+    assert any("verification_request_sha256" in error for error in errors)
+    assert any("verification_result_sha256" in error for error in errors)
+
+
 if __name__ == "__main__":
     # Cho phép chạy trực tiếp bằng `python3 test_basic.py` nếu máy không có pytest
     import sys

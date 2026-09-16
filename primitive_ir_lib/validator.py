@@ -11,6 +11,7 @@ buộc, sai enum, oneOf type/geometry không khớp.
 
 from __future__ import annotations
 
+import re
 from typing import List
 
 _VALID_TYPES = {"line", "circle", "arc", "text"}
@@ -20,6 +21,10 @@ _VALID_SOURCES = {
 _VALID_ROLES = {"dimension_value", "title_block_field", "drawing_code", "general_note", "table_cell", "unknown"}
 _VALID_VALIDATION_STATUS = {"unreviewed", "reviewer1_pass", "reviewer1_fail", "reviewer2_pass", "reviewer2_fail", "repaired"}
 _VALID_CV_STATUS = {"confirmed", "conflict", "unverified"}
+
+
+def _is_lower_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 class SchemaViolation(Exception):
@@ -56,6 +61,15 @@ def validate_document(doc: dict) -> List[str]:
         source = prim.get("source")
         if source not in _VALID_SOURCES:
             errors.append(f"{prefix}: source '{source}' không hợp lệ")
+
+        if source == "geometry_external_ai":
+            trace = prim.get("trace")
+            for field in ("verification_request_sha256", "verification_result_sha256"):
+                value = trace.get(field) if isinstance(trace, dict) else None
+                if not _is_lower_sha256(value):
+                    errors.append(
+                        f"{prefix}: external geometry trace thiếu hoặc sai '{field}'"
+                    )
 
         conf = prim.get("confidence")
         if not isinstance(conf, (int, float)) or not (0.0 <= conf <= 1.0):
