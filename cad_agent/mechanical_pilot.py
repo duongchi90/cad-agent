@@ -803,7 +803,7 @@ def validate_primitive_bound_candidate(
         if build.written_geometry_by_primitive_id[primitive_id] != expected:
             raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
 
-    review = review_dxf(build)
+    review = review_dxf(build, strict_primitive_inventory=True)
     if not review.passed:
         raise ValueError("PILOT_PRIMITIVE_BUILD_REVIEW_FAILED")
     return source_sha256, sha256_file(candidate_path)
