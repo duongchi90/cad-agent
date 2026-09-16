@@ -507,6 +507,25 @@ def test_public_surface_rejects_omitted_required_arguments() -> None:
         validate_candidate_revision({})
 
 
+def test_r4_accepts_external_verified_geometry_registry_without_base_cad_handoff() -> None:
+    r3_tests = _accepted_r3_test_module()
+    context = r3_tests._external_verified_geometry_context()
+    registry = r3.build_component_view_registry(
+        upstream_context=context,
+        components=[],
+        views=[],
+    )
+
+    normalized = candidate_module._normalize_registry(
+        registry,
+        None,
+        context,
+    )
+
+    assert normalized == registry
+    assert "primitive_ir_sha256" not in normalized["upstream_bindings"]
+
+
 def test_root_revision_is_sealed_closed_and_deterministic() -> None:
     args = _valid_args()
     first = build_candidate_revision(**deepcopy(args))

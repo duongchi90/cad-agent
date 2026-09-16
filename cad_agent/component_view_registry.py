@@ -17,8 +17,12 @@ COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION = "component-view-registry-1.1"
 COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION = (
     "component-view-registry-native-dwg-1.0"
 )
+COMPONENT_VIEW_REGISTRY_EXTERNAL_GEOMETRY_SCHEMA_VERSION = (
+    "component-view-registry-external-geometry-1.0"
+)
 _GENERATED_PROVENANCE_MODE = "GENERATED_MECHANICAL_" + chr(80) + "ILOT"
 _NATIVE_DWG_PROVENANCE_MODE = "NATIVE_DWG_FULL_DRAWING"
+_EXTERNAL_GEOMETRY_PROVENANCE_MODE = "EXTERNAL_VERIFIED_GEOMETRY"
 
 _CONTEXT_FIELDS = frozenset(
     {
@@ -36,6 +40,28 @@ _GENERATED_CONTEXT_FIELDS = frozenset(
 )
 _NATIVE_DWG_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "native_dwg_provenance"}
+)
+_EXTERNAL_GEOMETRY_CONTEXT_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "candidate",
+        "external_geometry_provenance",
+        "external_geometry_admission",
+    }
+)
+_EXTERNAL_GEOMETRY_REQUIRED_CONTEXT_FIELDS = frozenset(
+    {"provenance_mode", "candidate", "external_geometry_provenance"}
+)
+_EXTERNAL_GEOMETRY_ADMISSION_FIELDS = frozenset(
+    {
+        "verification_request",
+        "verification_result",
+        "source_render_bytes",
+        "calibration",
+        "source_file_name",
+        "image_width_px",
+        "image_height_px",
+    }
 )
 _CANDIDATE_FIELDS = frozenset({"candidate_id", "candidate_drawing_sha256"})
 _INPUT_COMPONENT_FIELDS = frozenset(
@@ -167,6 +193,32 @@ _NATIVE_DWG_UPSTREAM_BINDING_FIELDS = frozenset(
         "candidate_setup_audit_sha256",
         "calibration_mode",
         "provenance_packet_sha256",
+    }
+)
+_EXTERNAL_GEOMETRY_UPSTREAM_BINDING_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "source_sha256",
+        "render_sha256",
+        "candidate_id",
+        "candidate_drawing_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+        "candidate_reference_id",
+        "candidate_reference_sha256",
+        "provenance_packet_sha256",
+    }
+)
+_EXTERNAL_GEOMETRY_PROVENANCE_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "source_sha256",
+        "render_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+        "candidate_id",
+        "candidate_drawing_sha256",
+        "candidate_reference",
     }
 )
 _NATIVE_DWG_DRAWING_BINDING_FIELDS = frozenset(
@@ -464,6 +516,130 @@ def _generated_upstream_context(
     }
 
 
+def _external_geometry_upstream_context(
+    upstream_context: Mapping[str, object],
+) -> dict[str, object]:
+    context = _closed_optional(
+        upstream_context,
+        required=_EXTERNAL_GEOMETRY_REQUIRED_CONTEXT_FIELDS,
+        allowed=_EXTERNAL_GEOMETRY_CONTEXT_FIELDS,
+        code="UPSTREAM_CONTEXT_INVALID",
+    )
+    if context["provenance_mode"] != _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+        _fail("PROVENANCE_MODE_INVALID")
+    candidate = _closed(
+        context["candidate"], _CANDIDATE_FIELDS, "CANDIDATE_INVALID"
+    )
+    candidate_id = _identifier(candidate["candidate_id"], "CANDIDATE_INVALID")
+    candidate_sha256 = _sha256(
+        candidate["candidate_drawing_sha256"], "CANDIDATE_INVALID"
+    )
+    try:
+        packet = _closed(
+            context["external_geometry_provenance"],
+            _EXTERNAL_GEOMETRY_PROVENANCE_FIELDS,
+            "EXTERNAL_GEOMETRY_PROVENANCE_INVALID",
+        )
+        reference = _dara.validate_drawing_artifact_reference(
+            packet["candidate_reference"],
+            expected_artifact_role="R3_CANDIDATE",
+        )
+    except Exception as exc:
+        raise ComponentViewRegistryError(
+            "EXTERNAL_GEOMETRY_PROVENANCE_INVALID"
+        ) from exc
+    if packet["provenance_mode"] != _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+        _fail("EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    for field in (
+        "source_sha256",
+        "render_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+    ):
+        _sha256(packet[field], "EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    if packet["candidate_id"] != candidate_id:
+        _fail("EXTERNAL_GEOMETRY_CANDIDATE_ID_MISMATCH")
+    if packet["candidate_drawing_sha256"] != candidate_sha256:
+        _fail("EXTERNAL_GEOMETRY_CANDIDATE_HASH_MISMATCH")
+    if reference["artifact_sha256"] != candidate_sha256:
+        _fail("EXTERNAL_GEOMETRY_REFERENCE_HASH_MISMATCH")
+
+    admission = context.get("external_geometry_admission")
+    if not isinstance(admission, Mapping):
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    admission = _closed(
+        admission,
+        _EXTERNAL_GEOMETRY_ADMISSION_FIELDS,
+        "EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED",
+    )
+    try:
+        from cad_agent.source_verified_geometry import (
+            materialize_verified_external_visual_lines,
+        )
+
+        materialized = materialize_verified_external_visual_lines(
+            verification_request=admission["verification_request"],
+            verification_result=admission["verification_result"],
+            source_render_bytes=admission["source_render_bytes"],
+            calibration=admission["calibration"],
+            source_file_name=admission["source_file_name"],
+            image_width_px=admission["image_width_px"],
+            image_height_px=admission["image_height_px"],
+        )
+    except Exception as exc:
+        raise ComponentViewRegistryError(
+            "EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED"
+        ) from exc
+    if materialized.source_document.sha256 != packet["source_sha256"]:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    materialized_primitives = materialized.primitives
+    if not materialized_primitives:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    request_hashes = {
+        primitive.trace.verification_request_sha256
+        for primitive in materialized_primitives
+    }
+    result_hashes = {
+        primitive.trace.verification_result_sha256
+        for primitive in materialized_primitives
+    }
+    if request_hashes != {packet["verification_request_sha256"]}:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    if result_hashes != {packet["verification_result_sha256"]}:
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+    verification_result = admission["verification_result"]
+    if (
+        not isinstance(verification_result, Mapping)
+        or verification_result.get("source_render_sha256")
+        != packet["render_sha256"]
+    ):
+        _fail("EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED")
+
+    packet_sha256 = canonical_json_sha256(packet)
+    upstream_bindings = {
+        "provenance_mode": _EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+        "source_sha256": packet["source_sha256"],
+        "render_sha256": packet["render_sha256"],
+        "candidate_id": candidate_id,
+        "candidate_drawing_sha256": candidate_sha256,
+        "verification_request_sha256": packet["verification_request_sha256"],
+        "verification_result_sha256": packet["verification_result_sha256"],
+        "candidate_reference_id": reference["reference_id"],
+        "candidate_reference_sha256": reference["reference_sha256"],
+        "provenance_packet_sha256": packet_sha256,
+    }
+    return {
+        "provenance_mode": _EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+        "registry_schema_version": COMPONENT_VIEW_REGISTRY_EXTERNAL_GEOMETRY_SCHEMA_VERSION,
+        "packet": packet,
+        "handoff": None,
+        "upstream_bindings": upstream_bindings,
+        "primitive_index": {},
+        "semantic_index": {},
+        "generated_binding_by_projection": {},
+    }
+
+
 def _native_dwg_drawing_binding(
     packet: Mapping[str, object],
 ) -> dict[str, object]:
@@ -563,6 +739,8 @@ def _native_dwg_upstream_context(
 
 def _upstream_context(upstream_context: object) -> dict[str, object]:
     if isinstance(upstream_context, Mapping):
+        if upstream_context.get("provenance_mode") == _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+            return _external_geometry_upstream_context(upstream_context)
         if upstream_context.get("provenance_mode") == _GENERATED_PROVENANCE_MODE:
             return _generated_upstream_context(upstream_context)
         if upstream_context.get("provenance_mode") == _NATIVE_DWG_PROVENANCE_MODE:
@@ -1334,6 +1512,21 @@ def build_component_view_registry(
 ) -> dict[str, object]:
     """Build a detached deterministic registry snapshot."""
     state = _upstream_context(upstream_context)
+    if state["provenance_mode"] == _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+        if components not in ([], ()):
+            _fail("EXTERNAL_GEOMETRY_COMPONENTS_FORBIDDEN")
+        if views not in ([], ()):
+            _fail("EXTERNAL_GEOMETRY_VIEWS_FORBIDDEN")
+        material = _snapshot_material(
+            upstream_bindings=state["upstream_bindings"],
+            components=[],
+            views=[],
+            links=[],
+            schema_version=state["registry_schema_version"],
+        )
+        result = deepcopy(material)
+        result["registry_snapshot_sha256"] = canonical_json_sha256(material)
+        return result
     if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE:
         if components not in ([], ()):
             _fail("NATIVE_DWG_COMPONENTS_FORBIDDEN")
@@ -1569,21 +1762,45 @@ def validate_component_view_registry(
     if registry["schema_version"] != state["registry_schema_version"]:
         _fail("REGISTRY_SCHEMA_INVALID")
 
+    if state["provenance_mode"] == _GENERATED_PROVENANCE_MODE:
+        upstream_binding_fields = _GENERATED_UPSTREAM_BINDING_FIELDS
+    elif state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE:
+        upstream_binding_fields = _NATIVE_DWG_UPSTREAM_BINDING_FIELDS
+    elif state["provenance_mode"] == _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+        upstream_binding_fields = _EXTERNAL_GEOMETRY_UPSTREAM_BINDING_FIELDS
+    else:
+        upstream_binding_fields = _UPSTREAM_BINDING_FIELDS
     upstream_bindings = _closed(
         registry["upstream_bindings"],
-        (
-            _GENERATED_UPSTREAM_BINDING_FIELDS
-            if state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
-            else (
-                _NATIVE_DWG_UPSTREAM_BINDING_FIELDS
-                if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE
-                else _UPSTREAM_BINDING_FIELDS
-            )
-        ),
+        upstream_binding_fields,
         "UPSTREAM_BINDINGS_INVALID",
     )
     if upstream_bindings != state["upstream_bindings"]:
         _fail("UPSTREAM_BINDINGS_MISMATCH")
+
+    if state["provenance_mode"] == _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+        if registry["components"] != []:
+            _fail("EXTERNAL_GEOMETRY_COMPONENTS_FORBIDDEN")
+        if registry["views"] != []:
+            _fail("EXTERNAL_GEOMETRY_VIEWS_FORBIDDEN")
+        if registry["links"] != []:
+            _fail("EXTERNAL_GEOMETRY_LINKS_FORBIDDEN")
+        material = _snapshot_material(
+            upstream_bindings=state["upstream_bindings"],
+            components=[],
+            views=[],
+            links=[],
+            schema_version=state["registry_schema_version"],
+        )
+        supplied_snapshot = _sha256(
+            registry["registry_snapshot_sha256"], "REGISTRY_SNAPSHOT_INVALID"
+        )
+        expected_snapshot = canonical_json_sha256(material)
+        if supplied_snapshot != expected_snapshot:
+            _fail("REGISTRY_SNAPSHOT_MISMATCH")
+        result = deepcopy(material)
+        result["registry_snapshot_sha256"] = expected_snapshot
+        return result
 
     if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE:
         drawing_binding = _closed(
@@ -1970,6 +2187,7 @@ __all__ = [
     "COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION",
     "COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION",
     "COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION",
+    "COMPONENT_VIEW_REGISTRY_EXTERNAL_GEOMETRY_SCHEMA_VERSION",
     "ComponentViewRegistryError",
     "build_component_view_registry",
     "validate_component_view_registry",

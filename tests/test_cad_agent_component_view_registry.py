@@ -15,10 +15,70 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 
 MODULE_NAME = "cad_agent.component_view_registry"
 SCHEMA_VERSION = "component-view-registry-1.0"
+EXTERNAL_GEOMETRY_SCHEMA_VERSION = "component-view-registry-external-geometry-1.0"
+EXTERNAL_GEOMETRY_MODE = "EXTERNAL_VERIFIED_GEOMETRY"
 
 
 def _registry_module():
     return importlib.import_module(MODULE_NAME)
+
+
+def _external_verified_geometry_context() -> dict[str, object]:
+    """Build a truthful, source-bound external geometry upstream context."""
+    dara = importlib.import_module("cad_agent.drawing_artifact_reference")
+    admission_tests = _existing_test_module(
+        "test_external_visual_primitive_ir_admission.py"
+    )
+    verification_request, verification_result, render_bytes = (
+        admission_tests._verified_case()
+    )
+    artifact_bytes = b"external-verified-page1-candidate"
+    candidate_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+    candidate_reference = dara.issue_drawing_artifact_reference(
+        run_id="run-external-geometry-001",
+        project_id="project-external-geometry-001",
+        drawing_id="drawing-external-geometry-001",
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=artifact_bytes,
+        upstream_evidence={
+            "evidence_kind": "R3_CANDIDATE_CUSTODY",
+            "evidence_id": "external-geometry-custody-001",
+            "evidence_sha256": "1" * 64,
+        },
+        r3_provenance_binding={
+            "registry_snapshot_sha256": "2" * 64,
+            "provenance_sha256": "3" * 64,
+        },
+    )
+    packet = {
+        "provenance_mode": EXTERNAL_GEOMETRY_MODE,
+        "source_sha256": "1" * 64,
+        "render_sha256": verification_result["source_render_sha256"],
+        "verification_request_sha256": verification_request[
+            "verification_request_sha256"
+        ],
+        "verification_result_sha256": canonical_json_sha256(verification_result),
+        "candidate_id": "external-geometry-candidate-001",
+        "candidate_drawing_sha256": candidate_sha256,
+        "candidate_reference": candidate_reference,
+    }
+    return {
+        "provenance_mode": EXTERNAL_GEOMETRY_MODE,
+        "candidate": {
+            "candidate_id": packet["candidate_id"],
+            "candidate_drawing_sha256": candidate_sha256,
+        },
+        "external_geometry_provenance": packet,
+        "external_geometry_admission": {
+            "verification_request": verification_request,
+            "verification_result": verification_result,
+            "source_render_bytes": render_bytes,
+            "calibration": admission_tests._calibration(),
+            "source_file_name": "source.png",
+            "image_width_px": 64,
+            "image_height_px": 64,
+        },
+    }
 
 
 @lru_cache(maxsize=None)
@@ -219,6 +279,48 @@ def test_public_surface_uses_the_accepted_parameter_modes() -> None:
         parameters = inspect.signature(function).parameters
         assert parameters["payload"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
         assert parameters["upstream_context"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_external_verified_geometry_has_a_truthful_r3_registry_path() -> None:
+    module = _registry_module()
+    context = _external_verified_geometry_context()
+
+    registry = module.build_component_view_registry(
+        upstream_context=context,
+        components=[],
+        views=[],
+    )
+
+    assert registry["schema_version"] == EXTERNAL_GEOMETRY_SCHEMA_VERSION
+    assert registry["components"] == []
+    assert registry["views"] == []
+    assert registry["links"] == []
+    assert registry["upstream_bindings"]["provenance_mode"] == EXTERNAL_GEOMETRY_MODE
+    assert registry["upstream_bindings"]["candidate_drawing_sha256"] == context[
+        "candidate"
+    ]["candidate_drawing_sha256"]
+    assert "external_geometry_admission" not in registry
+    assert "external_geometry_admission" not in registry["upstream_bindings"]
+    assert module.validate_component_view_registry(
+        registry,
+        upstream_context=context,
+    ) == registry
+
+
+def test_external_verified_geometry_rejects_hash_only_forged_admission() -> None:
+    module = _registry_module()
+    context = _external_verified_geometry_context()
+    context.pop("external_geometry_admission")
+
+    with pytest.raises(
+        module.ComponentViewRegistryError,
+        match="EXTERNAL_GEOMETRY_ADMISSION_UNVERIFIED",
+    ):
+        module.build_component_view_registry(
+            upstream_context=context,
+            components=[],
+            views=[],
+        )
 
 
 def test_builds_closed_task_one_registry_with_empty_views_and_links() -> None:
