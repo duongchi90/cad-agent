@@ -263,6 +263,12 @@ def test_external_mode_rejects_detached_packet_direct_admission() -> None:
             "candidate_drawing_sha256": packet["candidate_sha256"],
         },
         "external_geometry_provenance": packet,
+        "primitive_ir_path": Path("detached-primitive.json"),
+        "candidate_path": Path("detached-candidate.dxf"),
+        "build_evidence_path": Path("detached-build-evidence.json"),
+        "verification_request": {},
+        "verification_result": {},
+        "source_render_bytes": b"detached-render",
     }
     component = {
         "component_type": "EXTERNAL_GEOMETRY",
@@ -288,7 +294,7 @@ def test_external_mode_rejects_detached_packet_direct_admission() -> None:
 
     with pytest.raises(
         _registry_module().ComponentViewRegistryError,
-        match="EXTERNAL_",
+        match="EXTERNAL_PROVENANCE_EVIDENCE_INVALID",
     ):
         _registry_module().build_component_view_registry(
             upstream_context=upstream_context,

@@ -958,6 +958,12 @@ def build_external_geometry_r3_inputs(
                 "candidate_drawing_sha256": normalized["candidate_sha256"],
             },
             "external_geometry_provenance": normalized,
+            "primitive_ir_path": primitive_ir_path,
+            "candidate_path": candidate_path,
+            "build_evidence_path": build_evidence_path,
+            "verification_request": verification_request,
+            "verification_result": verification_result,
+            "source_render_bytes": source_render_bytes,
         },
         "components": [
             {

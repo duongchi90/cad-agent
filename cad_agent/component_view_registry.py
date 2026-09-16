@@ -12,6 +12,7 @@ from cad_agent import source_fusion as _source_fusion
 from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.mechanical_pilot_provenance import (
     EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+    build_external_geometry_provenance,
     validate_external_geometry_provenance,
 )
 
@@ -40,7 +41,17 @@ _GENERATED_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "mechanical_pilot_provenance"}
 )
 _EXTERNAL_CONTEXT_FIELDS = frozenset(
-    {"provenance_mode", "candidate", "external_geometry_provenance"}
+    {
+        "provenance_mode",
+        "candidate",
+        "external_geometry_provenance",
+        "primitive_ir_path",
+        "candidate_path",
+        "build_evidence_path",
+        "verification_request",
+        "verification_result",
+        "source_render_bytes",
+    }
 )
 _NATIVE_DWG_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "native_dwg_provenance"}
@@ -506,13 +517,24 @@ def _external_upstream_context(
         candidate["candidate_drawing_sha256"], "CANDIDATE_INVALID"
     )
     try:
-        packet = validate_external_geometry_provenance(
+        supplied_packet = validate_external_geometry_provenance(
             context["external_geometry_provenance"]
+        )
+        packet = build_external_geometry_provenance(
+            pilot_id=supplied_packet["pilot_id"],
+            primitive_ir_path=context["primitive_ir_path"],
+            candidate_path=context["candidate_path"],
+            build_evidence_path=context["build_evidence_path"],
+            verification_request=context["verification_request"],
+            verification_result=context["verification_result"],
+            source_render_bytes=context["source_render_bytes"],
         )
     except Exception as exc:
         raise ComponentViewRegistryError(
-            "EXTERNAL_PROVENANCE_INVALID"
+            "EXTERNAL_PROVENANCE_EVIDENCE_INVALID"
         ) from exc
+    if packet != supplied_packet:
+        _fail("EXTERNAL_PROVENANCE_EVIDENCE_MISMATCH")
     if packet["candidate_id"] != candidate_id:
         _fail("EXTERNAL_CANDIDATE_ID_MISMATCH")
     if packet["candidate_sha256"] != candidate_sha256:
