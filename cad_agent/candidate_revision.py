@@ -211,6 +211,25 @@ def _normalize_registry(
         registry["schema_version"]
         == _r3.COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION
     ):
+        if upstream.get("provenance_mode") == "EXTERNAL_GEOMETRY_ONLY":
+            if handoff is not None:
+                _fail("EXTERNAL_HANDOFF_FORBIDDEN")
+            if set(upstream) != {
+                "provenance_mode",
+                "pilot_id",
+                "source_sha256",
+                "source_render_sha256",
+                "primitive_ir_sha256",
+                "verification_request_sha256",
+                "verification_result_sha256",
+                "candidate_id",
+                "candidate_drawing_sha256",
+                "candidate_path_binding_sha256",
+                "build_evidence_sha256",
+                "provenance_packet_sha256",
+            }:
+                _fail("EXTERNAL_UPSTREAM_INVALID")
+            return registry
         if handoff is not None:
             _fail("GENERATED_HANDOFF_FORBIDDEN")
         if upstream.get("provenance_mode") != "GENERATED_MECHANICAL_PILOT":
@@ -684,12 +703,22 @@ def _normalize_root_inputs(
     if normalized_registry["schema_version"] == (
         _r3.COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION
     ):
-        if handoff is not None:
-            _fail("GENERATED_HANDOFF_FORBIDDEN")
-        if root_reference["artifact_sha256"] != normalized_registry[
-            "upstream_bindings"
-        ]["candidate_drawing_sha256"]:
-            _fail("GENERATED_CANDIDATE_MISMATCH")
+        if normalized_registry["upstream_bindings"].get(
+            "provenance_mode"
+        ) == "EXTERNAL_GEOMETRY_ONLY":
+            if handoff is not None:
+                _fail("EXTERNAL_HANDOFF_FORBIDDEN")
+            if root_reference["artifact_sha256"] != normalized_registry[
+                "upstream_bindings"
+            ]["candidate_drawing_sha256"]:
+                _fail("EXTERNAL_CANDIDATE_MISMATCH")
+        else:
+            if handoff is not None:
+                _fail("GENERATED_HANDOFF_FORBIDDEN")
+            if root_reference["artifact_sha256"] != normalized_registry[
+                "upstream_bindings"
+            ]["candidate_drawing_sha256"]:
+                _fail("GENERATED_CANDIDATE_MISMATCH")
     elif normalized_registry["schema_version"] == (
         _r3.COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION
     ):
