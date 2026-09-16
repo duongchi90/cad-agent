@@ -484,6 +484,153 @@ def test_primitive_loader_accepts_verified_external_geometry_source(
     assert document.primitives[0].source == "geometry_external_ai"
 
 
+def test_primitive_bound_pilot_rejects_fabricated_external_provenance(
+    tmp_path: Path,
+) -> None:
+    """External provenance hashes must be backed by the source verifier."""
+
+    from cad_agent.live import write_build_evidence
+    from cad_agent.mechanical_pilot import (
+        _load_primitive_document,
+        validate_primitive_bound_candidate,
+    )
+    from dxf_builder_lib.builder import build_dxf
+
+    source_sha256 = "e" * 64
+    primitive_payload = {
+        "schema_version": "1.0.0",
+        "source_document": {
+            "file_name": "fabricated-source.png",
+            "page_index": 0,
+            "image_width_px": 140,
+            "image_height_px": 100,
+            "sha256": source_sha256,
+        },
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": 1.0,
+            "origin_px": [0.0, 0.0],
+            "method": "title_block_scale",
+            "reference_note": "fabricated but schema-valid calibration",
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+        "primitives": [
+            {
+                "id": "fabricated-external-line",
+                "type": "line",
+                "source": "geometry_external_ai",
+                "confidence": 1.0,
+                "layer": "UNCLASSIFIED",
+                "handle": None,
+                "trace": {
+                    "bbox_px": [0, 0, 100, 1],
+                    "verification_request_sha256": "c" * 64,
+                    "verification_result_sha256": "d" * 64,
+                },
+                "validation": {"status": "unreviewed"},
+                "geometry": {
+                    "start": {"x": 0.0, "y": 0.0},
+                    "end": {"x": 100.0, "y": 0.0},
+                },
+            }
+        ],
+    }
+
+    primitive_path = tmp_path / "fabricated-external.json"
+    primitive_path.write_text(
+        json.dumps(primitive_payload, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    document, _ = _load_primitive_document(primitive_path)
+
+    candidate_path = tmp_path / "candidate" / "candidate.dxf"
+    candidate_path.parent.mkdir()
+    build = build_dxf(
+        document,
+        str(candidate_path),
+        semantic_doc=None,
+        build_components=False,
+        build_dimensions=False,
+    )
+    assert build.entity_count == 1
+    assert set(build.handle_by_primitive_id) == {"fabricated-external-line"}
+
+    evidence_path = candidate_path.with_name("build-evidence.json")
+    write_build_evidence(evidence_path, build)
+
+    with pytest.raises(
+        ValueError, match="PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID"
+    ):
+        validate_primitive_bound_candidate(
+            primitive_path, candidate_path, evidence_path
+        )
+
+
+def test_primitive_bound_validator_accepts_canonical_external_verification(
+    tmp_path: Path,
+) -> None:
+    """Canonical source verification remains an accepted external path."""
+
+    import importlib.util
+
+    helper_path = Path(__file__).with_name(
+        "test_external_visual_primitive_ir_admission.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "external_visual_admission_helpers_for_mechanical_pilot", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    from cad_agent.live import write_build_evidence
+    from cad_agent.mechanical_pilot import validate_primitive_bound_candidate
+    from cad_agent.source_verified_geometry import (
+        materialize_verified_external_visual_lines,
+    )
+    from dxf_builder_lib.builder import build_dxf
+
+    request, result, render_bytes = helper._verified_case()
+    document = materialize_verified_external_visual_lines(
+        verification_request=request,
+        verification_result=result,
+        source_render_bytes=render_bytes,
+        calibration=helper._calibration(),
+        source_file_name="source.png",
+        image_width_px=64,
+        image_height_px=64,
+    )
+    primitive_path = tmp_path / "canonical-external.json"
+    primitive_path.write_text(
+        json.dumps(document.to_dict(), ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    candidate_path = tmp_path / "candidate" / "candidate.dxf"
+    candidate_path.parent.mkdir()
+    build = build_dxf(
+        document,
+        str(candidate_path),
+        semantic_doc=None,
+        build_components=False,
+        build_dimensions=False,
+    )
+    evidence_path = candidate_path.with_name("build-evidence.json")
+    write_build_evidence(evidence_path, build)
+
+    assert validate_primitive_bound_candidate(
+        primitive_path,
+        candidate_path,
+        evidence_path,
+        verification_request=request,
+        verification_result=result,
+        source_render_bytes=render_bytes,
+    ) == (
+        hashlib.sha256(primitive_path.read_bytes()).hexdigest(),
+        hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+    )
+
+
 def test_source_bound_external_proposal_compiles_deterministically_without_false_opencv_provenance() -> None:
     import cad_agent.mechanical_pilot as pilot
 

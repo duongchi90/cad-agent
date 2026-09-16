@@ -426,6 +426,22 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
                 if trace.get("extracted_at") is None
                 else _string(trace.get("extracted_at"), "PRIMITIVE_TRACE_TIME")
             ),
+            verification_request_sha256=(
+                _hash(
+                    trace.get("verification_request_sha256"),
+                    "PRIMITIVE_TRACE_REQUEST_SHA256",
+                )
+                if primitive_source == "geometry_external_ai"
+                else None
+            ),
+            verification_result_sha256=(
+                _hash(
+                    trace.get("verification_result_sha256"),
+                    "PRIMITIVE_TRACE_RESULT_SHA256",
+                )
+                if primitive_source == "geometry_external_ai"
+                else None
+            ),
         )
         validation = _mapping(primitive.get("validation"), "PRIMITIVE_VALIDATION")
         validation_status = validation.get("status")
@@ -755,10 +771,83 @@ def _write_pilot_evidence(result: MechanicalPilotResult, path: Path) -> None:
     )
 
 
+def _external_primitive_security_view(primitive: Primitive) -> dict[str, object]:
+    payload = primitive.to_dict()
+    payload.pop("handle", None)
+    payload.pop("validation", None)
+    trace = payload.get("trace")
+    if isinstance(trace, dict):
+        trace.pop("extracted_at", None)
+    return payload
+
+
+def _validate_external_provenance(
+    primitive_doc: PrimitiveIRDocument,
+    *,
+    verification_request: object | None,
+    verification_result: object | None,
+    source_render_bytes: bytes | None,
+) -> None:
+    external_primitives = [
+        primitive
+        for primitive in primitive_doc.primitives
+        if primitive.source == "geometry_external_ai"
+    ]
+    if not external_primitives:
+        return
+    if (
+        verification_request is None
+        or verification_result is None
+        or source_render_bytes is None
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    from cad_agent.source_verified_geometry import (
+        materialize_verified_external_visual_lines,
+    )
+
+    try:
+        rematerialized = materialize_verified_external_visual_lines(
+            verification_request=verification_request,
+            verification_result=verification_result,
+            source_render_bytes=source_render_bytes,
+            calibration=primitive_doc.calibration,
+            source_file_name=primitive_doc.source_document.file_name,
+            image_width_px=primitive_doc.source_document.image_width_px,
+            image_height_px=primitive_doc.source_document.image_height_px,
+        )
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID") from error
+
+    if (
+        rematerialized.source_document.to_dict()
+        != primitive_doc.source_document.to_dict()
+        or rematerialized.calibration.to_dict()
+        != primitive_doc.calibration.to_dict()
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    expected = {
+        primitive.id: _external_primitive_security_view(primitive)
+        for primitive in external_primitives
+    }
+    actual = {
+        primitive.id: _external_primitive_security_view(primitive)
+        for primitive in rematerialized.primitives
+        if primitive.source == "geometry_external_ai"
+    }
+    if actual != expected:
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+
 def validate_primitive_bound_candidate(
     primitive_path: Path,
     candidate_path: Path,
     build_evidence_path: Path,
+    *,
+    verification_request: object | None = None,
+    verification_result: object | None = None,
+    source_render_bytes: bytes | None = None,
 ) -> tuple[str, str]:
     """Validate one primitive artifact against its actual built candidate."""
 
@@ -766,6 +855,12 @@ def validate_primitive_bound_candidate(
     candidate_path = Path(candidate_path).resolve(strict=True)
     evidence_path = Path(build_evidence_path).resolve(strict=True)
     primitive_doc, source_sha256 = _load_primitive_document(source_path)
+    _validate_external_provenance(
+        primitive_doc,
+        verification_request=verification_request,
+        verification_result=verification_result,
+        source_render_bytes=source_render_bytes,
+    )
     build = load_build_evidence(evidence_path, candidate_path)
 
     expected_geometry: dict[str, dict[str, object]] = {}
