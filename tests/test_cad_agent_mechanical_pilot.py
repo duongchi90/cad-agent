@@ -370,6 +370,120 @@ def _source_bound_proposal() -> dict[str, object]:
     }
 
 
+def test_primitive_loader_accepts_verified_title_block_scale_calibration(
+    tmp_path: Path,
+) -> None:
+    """The pilot must accept the verified calibration emitted by the source owner."""
+
+    from cad_agent.mechanical_pilot import _load_primitive_document
+
+    source_sha256 = "a" * 64
+    primitive_payload = {
+        "schema_version": "1.0.0",
+        "source_document": {
+            "file_name": "page_01.png",
+            "page_index": 0,
+            "image_width_px": 140,
+            "image_height_px": 100,
+            "sha256": source_sha256,
+        },
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": 1.0,
+            "origin_px": [0.0, 0.0],
+            "method": "title_block_scale",
+            "reference_note": "verified source calibration",
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+        "primitives": [
+            {
+                "id": "source-bound-line",
+                "type": "line",
+                "source": "geometry_opencv",
+                "confidence": 1.0,
+                "layer": "UNCLASSIFIED",
+                "handle": None,
+                "trace": {"bbox_px": [0, 0, 1, 1]},
+                "validation": {"status": "unreviewed"},
+                "geometry": {
+                    "start": {"x": 0.0, "y": 0.0},
+                    "end": {"x": 100.0, "y": 0.0},
+                },
+            }
+        ],
+    }
+
+    primitive_path = tmp_path / "title-block-scale.json"
+    primitive_path.write_text(
+        json.dumps(primitive_payload, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    document, loaded_source_sha256 = _load_primitive_document(primitive_path)
+
+    assert loaded_source_sha256 == hashlib.sha256(primitive_path.read_bytes()).hexdigest()
+    assert document.calibration.method == "title_block_scale"
+    assert document.source_document.sha256 == source_sha256
+
+
+def test_primitive_loader_accepts_verified_external_geometry_source(
+    tmp_path: Path,
+) -> None:
+    """The pilot must accept source-bound primitives from the source owner."""
+
+    from cad_agent.mechanical_pilot import _load_primitive_document
+
+    source_sha256 = "b" * 64
+    primitive_payload = {
+        "schema_version": "1.0.0",
+        "source_document": {
+            "file_name": "page_01.png",
+            "page_index": 0,
+            "image_width_px": 140,
+            "image_height_px": 100,
+            "sha256": source_sha256,
+        },
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": 1.0,
+            "origin_px": [0.0, 0.0],
+            "method": "title_block_scale",
+            "reference_note": "verified source calibration",
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+        "primitives": [
+            {
+                "id": "source-bound-external-line",
+                "type": "line",
+                "source": "geometry_external_ai",
+                "confidence": 1.0,
+                "layer": "UNCLASSIFIED",
+                "handle": None,
+                "trace": {
+                    "bbox_px": [0, 0, 1, 1],
+                    "verification_request_sha256": "c" * 64,
+                    "verification_result_sha256": "d" * 64,
+                },
+                "validation": {"status": "unreviewed"},
+                "geometry": {
+                    "start": {"x": 0.0, "y": 0.0},
+                    "end": {"x": 100.0, "y": 0.0},
+                },
+            }
+        ],
+    }
+
+    primitive_path = tmp_path / "external-geometry.json"
+    primitive_path.write_text(
+        json.dumps(primitive_payload, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    document, _ = _load_primitive_document(primitive_path)
+
+    assert document.primitives[0].source == "geometry_external_ai"
+
+
 def test_source_bound_external_proposal_compiles_deterministically_without_false_opencv_provenance() -> None:
     import cad_agent.mechanical_pilot as pilot
 

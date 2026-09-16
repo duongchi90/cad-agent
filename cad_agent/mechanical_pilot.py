@@ -363,7 +363,11 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
     for field in ("unit", "pixel_to_unit_scale", "origin_px", "method"):
         if field not in calibration:
             raise ValueError("PILOT_PRIMITIVE_CALIBRATION_INVALID")
-    if calibration.get("unit") != "mm" or calibration.get("method") != "manual_override":
+    calibration_method = calibration.get("method")
+    if calibration.get("unit") != "mm" or calibration_method not in (
+        "manual_override",
+        "title_block_scale",
+    ):
         raise ValueError("PILOT_PRIMITIVE_CALIBRATION_INVALID")
     if calibration.get("status") != "verified":
         raise ValueError("PILOT_PRIMITIVE_CALIBRATION_UNVERIFIED")
@@ -384,7 +388,7 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
             _number(origin[0], "PRIMITIVE_CALIBRATION_ORIGIN"),
             _number(origin[1], "PRIMITIVE_CALIBRATION_ORIGIN"),
         ),
-        method="manual_override",
+        method=calibration_method,
         reference_note=(
             calibration.get("reference_note")
             if calibration.get("reference_note") is None
@@ -403,7 +407,8 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
         primitive_type = primitive.get("type")
         if primitive_type not in ("line", "circle"):
             raise ValueError("PILOT_PRIMITIVE_KIND_UNSUPPORTED")
-        if primitive.get("source") != "geometry_opencv":
+        primitive_source = primitive.get("source")
+        if primitive_source not in ("geometry_opencv", "geometry_external_ai"):
             raise ValueError("PILOT_PRIMITIVE_SOURCE_UNSUPPORTED")
         trace = _mapping(primitive.get("trace"), "PRIMITIVE_TRACE")
         bbox = trace.get("bbox_px")
@@ -449,7 +454,7 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
             Primitive(
                 id=_string(primitive.get("id"), "PRIMITIVE_ID"),
                 type=primitive_type,
-                source="geometry_opencv",
+                source=primitive_source,
                 confidence=_number(primitive.get("confidence"), "PRIMITIVE_CONFIDENCE"),
                 layer=_string(primitive.get("layer"), "PRIMITIVE_LAYER"),
                 handle=handle,
