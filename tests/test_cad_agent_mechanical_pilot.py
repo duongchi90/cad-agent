@@ -129,8 +129,6 @@ def test_primitive_bound_pilot_rejects_untracked_extra_dxf_entity(
 ) -> None:
     """The source-bound validator must reject extra actual DXF entities."""
 
-    import ezdxf
-
     import importlib.util
 
     helper_path = Path(__file__).with_name("test_cad_agent_phase4_pilot_binding.py")
@@ -147,6 +145,7 @@ def test_primitive_bound_pilot_rejects_untracked_extra_dxf_entity(
         validate_primitive_bound_candidate,
     )
     from dxf_builder_lib.reviewer import review_dxf
+    from dxf_builder_lib.tests.dxf_test_support import add_untracked_entity_for_test
 
     primitive_path = tmp_path / "primitive" / "page_01.json"
     primitive_path.parent.mkdir()
@@ -155,15 +154,63 @@ def test_primitive_bound_pilot_rejects_untracked_extra_dxf_entity(
         primitive_path, tmp_path / "candidate" / "candidate.dxf"
     )
 
-    document = ezdxf.readfile(result.candidate_path)
-    modelspace = document.modelspace()
-    modelspace.add_line(
-        (200.0, 200.0),
-        (210.0, 210.0),
-        dxfattribs={"layer": "UNCLASSIFIED"},
+    extra_handle = add_untracked_entity_for_test(result.candidate_path, "LINE")
+    assert extra_handle not in result.build.handle_by_primitive_id.values()
+
+    evidence = json.loads(result.build_evidence_path.read_text(encoding="utf-8"))
+    evidence["dxf"]["sha256"] = hashlib.sha256(
+        result.candidate_path.read_bytes()
+    ).hexdigest()
+    result.build_evidence_path.write_text(
+        json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
     )
-    assert sum(1 for entity in modelspace if entity.dxftype() == "LINE") == 9
-    document.saveas(result.candidate_path)
+
+    refreshed_build = load_build_evidence(
+        result.build_evidence_path, result.candidate_path
+    )
+    assert review_dxf(refreshed_build).passed is True
+
+    with pytest.raises(ValueError, match="PILOT_PRIMITIVE_BUILD_REVIEW_FAILED"):
+        validate_primitive_bound_candidate(
+            primitive_path, result.candidate_path, result.build_evidence_path
+        )
+
+
+def test_primitive_bound_pilot_rejects_untracked_lwpolyline_entity(
+    tmp_path: Path,
+) -> None:
+    """The source-bound validator must reject extra non-primitive entities."""
+
+    import importlib.util
+
+    helper_path = Path(__file__).with_name("test_cad_agent_phase4_pilot_binding.py")
+    spec = importlib.util.spec_from_file_location(
+        "phase4_pilot_test_helpers_for_lwpolyline_binding", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    from cad_agent.live import load_build_evidence
+    from cad_agent.mechanical_pilot import (
+        bind_simple_shaft_pilot_from_primitive,
+        validate_primitive_bound_candidate,
+    )
+    from dxf_builder_lib.reviewer import review_dxf
+    from dxf_builder_lib.tests.dxf_test_support import add_untracked_entity_for_test
+
+    primitive_path = tmp_path / "primitive" / "page_01.json"
+    primitive_path.parent.mkdir()
+    helper._write_primitive(primitive_path)
+    result = bind_simple_shaft_pilot_from_primitive(
+        primitive_path, tmp_path / "candidate" / "candidate.dxf"
+    )
+
+    extra_handle = add_untracked_entity_for_test(
+        result.candidate_path, "LWPOLYLINE"
+    )
+    assert extra_handle not in result.build.handle_by_primitive_id.values()
 
     evidence = json.loads(result.build_evidence_path.read_text(encoding="utf-8"))
     evidence["dxf"]["sha256"] = hashlib.sha256(

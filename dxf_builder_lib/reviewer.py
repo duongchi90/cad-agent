@@ -178,15 +178,15 @@ def review_dxf(
     checked = 0
 
     if strict_primitive_inventory:
-        tracked_handles = set(build_result.handle_by_primitive_id.values())
-        actual_handles = {
-            entity.dxf.handle
-            for entity in doc.modelspace()
-            if entity.dxftype() in _EXPECTED_DXFTYPE.values()
-        }
-        if actual_handles != tracked_handles:
-            missing = sorted(tracked_handles - actual_handles)
-            extra = sorted(actual_handles - tracked_handles)
+        authorized_handles = (
+            set(build_result.handle_by_primitive_id.values())
+            | set(build_result.dimension_handle_by_cross_validation_id.values())
+            | set(build_result.component_handle_by_part_id.values())
+        )
+        actual_handles = {entity.dxf.handle for entity in doc.modelspace()}
+        if actual_handles != authorized_handles:
+            missing = sorted(authorized_handles - actual_handles)
+            extra = sorted(actual_handles - authorized_handles)
             mismatches.append(
                 "Primitive inventory mismatch: "
                 f"missing tracked handles={missing}, "
