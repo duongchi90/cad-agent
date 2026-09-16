@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 
 from cad_agent import component_view_registry as r3
 from cad_agent import drawing_query
+from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent import mechanical_pilot_provenance as provenance
 from cad_agent.candidate_revision import CandidateRevisionError, validate_candidate_revision
 from cad_agent.mechanical_pilot import build_simple_shaft_pilot
@@ -409,4 +411,76 @@ def test_generated_r4_requires_no_fake_handoff_and_rejects_supplied_one(
             mutation_evidence=binding["mutation_evidence"],
             schema_version="candidate-revision-1.1",
             candidate_kind="ROOT_PRE_REPAIR",
+        )
+
+
+def test_external_verified_candidate_binding_rejects_candidate_swap(
+    tmp_path: Path,
+) -> None:
+    admission_path = Path(__file__).with_name(
+        "test_external_visual_primitive_ir_admission.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "external_admission_test_helpers", admission_path
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("external admission helper module unavailable")
+    admission_tests = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(admission_tests)
+    verification_request, verification_result, render_bytes = (
+        admission_tests._verified_case()
+    )
+    materialized = admission_tests.materialize_verified_external_visual_lines(
+        verification_request=verification_request,
+        verification_result=verification_result,
+        source_render_bytes=render_bytes,
+        calibration=admission_tests._calibration(),
+        source_file_name="source.png",
+        image_width_px=64,
+        image_height_px=64,
+    )
+    candidate = _pilot(tmp_path)
+    candidate_bytes = candidate.candidate_path.read_bytes()
+    candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
+    admission = {
+        "source_sha256": materialized.source_document.sha256,
+        "render_sha256": verification_result["source_render_sha256"],
+        "verification_request_sha256": verification_request[
+            "verification_request_sha256"
+        ],
+        "verification_result_sha256": canonical_json_sha256(verification_result),
+        "source_render_bytes": render_bytes,
+        "calibration": admission_tests._calibration(),
+    }
+    compose = getattr(
+        provenance, "compose_external_verified_candidate_provenance", None
+    )
+    if compose is None:
+        pytest.fail("EXTERNAL_CANDIDATE_BINDING_API_MISSING")
+
+    accepted = compose(
+        admission=admission,
+        candidate_artifact_path=candidate.candidate_path,
+        candidate_artifact_bytes=candidate_bytes,
+        candidate_artifact_sha256=candidate_sha256,
+        build_evidence_path=candidate.build_evidence_path,
+    )
+    assert accepted["candidate_sha256"] == candidate_sha256
+    assert accepted["source_sha256"] == admission["source_sha256"]
+    assert accepted["provenance_sha256"] == canonical_json_sha256(
+        {key: value for key, value in accepted.items() if key != "provenance_sha256"}
+    )
+
+    candidate_b_bytes = b"unrelated-candidate-artifact"
+    candidate_b_sha256 = hashlib.sha256(candidate_b_bytes).hexdigest()
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="EXTERNAL_CANDIDATE_BINDING_MISMATCH",
+    ):
+        compose(
+            admission=admission,
+            candidate_artifact_path=candidate.candidate_path,
+            candidate_artifact_bytes=candidate_b_bytes,
+            candidate_artifact_sha256=candidate_b_sha256,
+            build_evidence_path=candidate.build_evidence_path,
         )
