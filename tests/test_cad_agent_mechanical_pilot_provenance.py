@@ -461,6 +461,33 @@ def test_external_geometry_provenance_rejects_unbacked_request_identity(
         )
 
 
+def test_external_geometry_r3_rejects_detached_issuer_bypass() -> None:
+    packet = _external_geometry_packet_for_test()
+    packet.update(
+        {
+            "source_render_sha256": "e" * 64,
+            "primitive_ir_sha256": "f" * 64,
+            "verification_request_sha256": "1" * 64,
+            "verification_result_sha256": "2" * 64,
+            "build_evidence_sha256": "3" * 64,
+        }
+    )
+    packet["provenance_sha256"] = provenance.canonical_json_sha256(
+        provenance._external_packet_without_checksum(packet)
+    )
+
+    def exercise_untrusted_packet() -> None:
+        inputs = provenance.build_external_geometry_r3_inputs(packet)
+        registry = r3.build_component_view_registry(**inputs)
+        assert len(registry["components"]) == 1
+        raise AssertionError(
+            "EXTERNAL_GEOMETRY_PROVENANCE_ISSUER_BYPASS_REACHED_R3"
+        )
+
+    with pytest.raises(ValueError, match="EXTERNAL_"):
+        exercise_untrusted_packet()
+
+
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(
     tmp_path: Path,
 ) -> None:
