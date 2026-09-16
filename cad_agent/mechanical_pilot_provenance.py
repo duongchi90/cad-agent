@@ -25,6 +25,10 @@ from cad_agent.visual_evidence import _path_contains_windows_reparse_point
 GENERATED_PILOT_PROVENANCE_SCHEMA_VERSION = (
     "generated-mechanical-pilot-provenance-1.0"
 )
+EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION = (
+    "external-geometry-provenance-1.0"
+)
+EXTERNAL_GEOMETRY_PROVENANCE_MODE = "EXTERNAL_GEOMETRY_ONLY"
 _PACKET_FIELDS = frozenset(
     {
         "schema_version",
@@ -66,6 +70,25 @@ _FEATURE_KIND_TO_PART_TYPE = {
     "shaft_step": "mechanical_shaft_step",
     "hole_feature": "mechanical_hole_feature",
 }
+_EXTERNAL_PACKET_FIELDS = frozenset(
+    {
+        "schema_version",
+        "provenance_mode",
+        "pilot_id",
+        "candidate_id",
+        "candidate_path_binding_sha256",
+        "source_sha256",
+        "source_render_sha256",
+        "primitive_ir_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+        "candidate_sha256",
+        "build_evidence_sha256",
+        "primitive_projections",
+        "provenance_sha256",
+    }
+)
+_EXTERNAL_PRIMITIVE_FIELDS = _PRIMITIVE_FIELDS | frozenset({"source"})
 
 
 class GeneratedPilotProvenanceError(ValueError):
@@ -238,6 +261,31 @@ def _primitive_projection(
         "relative_path": relative_path,
         "captured_at_utc": "GENERATED_BUILD_EVIDENCE",
     }
+
+
+def _external_primitive_projection(
+    *,
+    pilot_id: str,
+    source_sha256: str,
+    candidate_sha256: str,
+    relative_path: str,
+    primitive: object,
+    written_geometry: object,
+    handle: object,
+    layer: object,
+) -> dict[str, object]:
+    projection = _primitive_projection(
+        pilot_id=pilot_id,
+        source_sha256=source_sha256,
+        candidate_sha256=candidate_sha256,
+        relative_path=relative_path,
+        primitive=primitive,
+        written_geometry=written_geometry,
+        handle=handle,
+        layer=layer,
+    )
+    projection["source"] = "geometry_external_ai"
+    return projection
 
 
 def _feature_projection(
@@ -627,6 +675,198 @@ def validate_generated_pilot_provenance(payload: object) -> dict[str, object]:
     return normalized
 
 
+def _validate_external_primitive_projections(
+    value: object,
+    *,
+    pilot_id: str,
+    source_sha256: str,
+    candidate_sha256: str,
+) -> list[dict[str, object]]:
+    if type(value) is not list or not value:
+        _fail("EXTERNAL_PRIMITIVE_PROJECTIONS_INVALID")
+    without_source: list[dict[str, object]] = []
+    for raw in value:
+        item = _closed(
+            raw,
+            _EXTERNAL_PRIMITIVE_FIELDS,
+            "EXTERNAL_PRIMITIVE_PROJECTION_INVALID",
+        )
+        if item["source"] != "geometry_external_ai":
+            _fail("EXTERNAL_PRIMITIVE_SOURCE_INVALID")
+        item.pop("source")
+        without_source.append(item)
+    normalized, _primitive_by_id = _validate_primitive_projections(
+        without_source,
+        pilot_id=pilot_id,
+        source_sha256=source_sha256,
+        candidate_sha256=candidate_sha256,
+    )
+    for item in normalized:
+        item["source"] = "geometry_external_ai"
+    return normalized
+
+
+def _external_packet_without_checksum(
+    packet: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        key: deepcopy(packet[key])
+        for key in _EXTERNAL_PACKET_FIELDS
+        if key != "provenance_sha256"
+    }
+
+
+def validate_external_geometry_provenance(
+    payload: object,
+) -> dict[str, object]:
+    """Validate one primitive-only, externally verified provenance packet."""
+    packet = _closed(
+        payload,
+        _EXTERNAL_PACKET_FIELDS,
+        "EXTERNAL_PROVENANCE_SCHEMA_INVALID",
+    )
+    if packet["schema_version"] != EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION:
+        _fail("EXTERNAL_PROVENANCE_SCHEMA_INVALID")
+    if packet["provenance_mode"] != EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+        _fail("EXTERNAL_PROVENANCE_MODE_INVALID")
+    pilot_id = _identifier(packet["pilot_id"], "EXTERNAL_PILOT_ID_INVALID")
+    candidate_id = _identifier(
+        packet["candidate_id"], "EXTERNAL_CANDIDATE_ID_INVALID"
+    )
+    for field in (
+        "candidate_path_binding_sha256",
+        "source_sha256",
+        "source_render_sha256",
+        "primitive_ir_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+        "candidate_sha256",
+        "build_evidence_sha256",
+    ):
+        _sha(packet[field], f"EXTERNAL_{field.upper()}_INVALID")
+    primitives = _validate_external_primitive_projections(
+        packet["primitive_projections"],
+        pilot_id=pilot_id,
+        source_sha256=packet["source_sha256"],
+        candidate_sha256=packet["candidate_sha256"],
+    )
+    normalized = {
+        "schema_version": EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION,
+        "provenance_mode": EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+        "pilot_id": pilot_id,
+        "candidate_id": candidate_id,
+        "candidate_path_binding_sha256": packet[
+            "candidate_path_binding_sha256"
+        ],
+        "source_sha256": packet["source_sha256"],
+        "source_render_sha256": packet["source_render_sha256"],
+        "primitive_ir_sha256": packet["primitive_ir_sha256"],
+        "verification_request_sha256": packet["verification_request_sha256"],
+        "verification_result_sha256": packet["verification_result_sha256"],
+        "candidate_sha256": packet["candidate_sha256"],
+        "build_evidence_sha256": packet["build_evidence_sha256"],
+        "primitive_projections": primitives,
+        "provenance_sha256": "",
+    }
+    expected_sha256 = canonical_json_sha256(
+        _external_packet_without_checksum(normalized)
+    )
+    if packet["provenance_sha256"] != expected_sha256:
+        _fail("EXTERNAL_PROVENANCE_HASH_MISMATCH")
+    normalized["provenance_sha256"] = expected_sha256
+    return normalized
+
+
+def build_external_geometry_provenance(
+    *,
+    pilot_id: str,
+    candidate_id: str,
+    candidate_path_binding_sha256: str,
+    source_sha256: str,
+    source_render_sha256: str,
+    primitive_ir_sha256: str,
+    verification_request_sha256: str,
+    verification_result_sha256: str,
+    candidate_sha256: str,
+    build_evidence_sha256: str,
+    primitive_projections: list[dict[str, object]],
+) -> dict[str, object]:
+    """Compose an external geometry packet without semantic/pilot authority."""
+    normalized_primitives = _validate_external_primitive_projections(
+        primitive_projections,
+        pilot_id=pilot_id,
+        source_sha256=source_sha256,
+        candidate_sha256=candidate_sha256,
+    )
+    packet: dict[str, object] = {
+        "schema_version": EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION,
+        "provenance_mode": EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+        "pilot_id": pilot_id,
+        "candidate_id": candidate_id,
+        "candidate_path_binding_sha256": candidate_path_binding_sha256,
+        "source_sha256": source_sha256,
+        "source_render_sha256": source_render_sha256,
+        "primitive_ir_sha256": primitive_ir_sha256,
+        "verification_request_sha256": verification_request_sha256,
+        "verification_result_sha256": verification_result_sha256,
+        "candidate_sha256": candidate_sha256,
+        "build_evidence_sha256": build_evidence_sha256,
+        "primitive_projections": normalized_primitives,
+        "provenance_sha256": "",
+    }
+    packet["provenance_sha256"] = canonical_json_sha256(
+        _external_packet_without_checksum(packet)
+    )
+    return validate_external_geometry_provenance(packet)
+
+
+def build_external_geometry_r3_inputs(
+    packet: Mapping[str, object],
+) -> dict[str, object]:
+    """Build the existing R3 inputs for one primitive-only external packet."""
+    normalized = validate_external_geometry_provenance(packet)
+    primitive_by_id = {
+        str(item["primitive_id"]): item
+        for item in normalized["primitive_projections"]
+    }
+    primitive_ids = sorted(primitive_by_id)
+    bindings = [
+        {
+            "target_namespace": "CANDIDATE",
+            "candidate_id": normalized["candidate_id"],
+            "entity_handle": primitive_by_id[primitive_id]["entity_handle"],
+            "block_name": primitive_by_id[primitive_id]["block_name"],
+            "legacy_uuid": primitive_by_id[primitive_id]["legacy_uuid"],
+            "relative_path": primitive_by_id[primitive_id]["relative_path"],
+            "captured_at_utc": primitive_by_id[primitive_id]["captured_at_utc"],
+        }
+        for primitive_id in primitive_ids
+    ]
+    return {
+        "upstream_context": {
+            "provenance_mode": EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+            "candidate": {
+                "candidate_id": normalized["candidate_id"],
+                "candidate_drawing_sha256": normalized["candidate_sha256"],
+            },
+            "external_geometry_provenance": normalized,
+        },
+        "components": [
+            {
+                "component_type": "EXTERNAL_GEOMETRY",
+                "origin_class": "RECONSTRUCTED_NEW",
+                "source_projection_refs": [
+                    primitive_by_id[primitive_id]["projection_ref"]
+                    for primitive_id in primitive_ids
+                ],
+                "semantic_projection_refs": [],
+                "base_cad_provenance_ref": None,
+                "candidate_entity_bindings": bindings,
+            }
+        ],
+    }
+
+
 def build_generated_pilot_provenance(
     result: MechanicalPilotResult,
 ) -> dict[str, object]:
@@ -916,10 +1156,15 @@ def compose_generated_pilot_query_binding(
 
 
 __all__ = [
+    "EXTERNAL_GEOMETRY_PROVENANCE_MODE",
+    "EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION",
     "GENERATED_PILOT_PROVENANCE_SCHEMA_VERSION",
     "GeneratedPilotProvenanceError",
+    "build_external_geometry_provenance",
+    "build_external_geometry_r3_inputs",
     "build_generated_pilot_provenance",
     "build_generated_pilot_r3_inputs",
     "compose_generated_pilot_query_binding",
+    "validate_external_geometry_provenance",
     "validate_generated_pilot_provenance",
 ]

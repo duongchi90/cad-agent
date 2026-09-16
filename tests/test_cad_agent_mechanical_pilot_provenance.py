@@ -187,9 +187,7 @@ def test_generated_pilot_reuses_primitive_bound_phase4_owner(tmp_path: Path) -> 
     assert len(packet["primitive_projections"]) == result.build.entity_count
 
 
-def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_authority() -> None:
-    """A verified primitive-only candidate must not require fabricated pilot semantics."""
-
+def _external_geometry_packet_for_test() -> dict[str, object]:
     evidence = {
         "source_sha256": (
             "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
@@ -234,7 +232,7 @@ def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_a
             to_dict=lambda raw=raw: deepcopy(raw),
         )
         primitives.append(
-            provenance._primitive_projection(
+            provenance._external_primitive_projection(
                 pilot_id=pilot_id,
                 source_sha256=evidence["source_sha256"],
                 candidate_sha256=evidence["candidate_sha256"],
@@ -246,39 +244,102 @@ def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_a
             )
         )
 
-    # The identity tuple is the exact current external candidate.  The packet
-    # envelope below is only the current owner's compatibility shape: it has no
-    # MechanicalPilotResult, pilot evidence artifact, semantic feature, or label.
-    packet = {
-        "schema_version": provenance.GENERATED_PILOT_PROVENANCE_SCHEMA_VERSION,
-        "pilot_id": pilot_id,
-        "candidate_id": candidate_id,
-        "candidate_path_binding_sha256": "a" * 64,
-        "source_sha256": evidence["source_sha256"],
-        "candidate_sha256": evidence["candidate_sha256"],
-        "build_evidence_sha256": evidence["build_evidence_sha256"],
-        "pilot_evidence_sha256": "0" * 64,
-        "primitive_projections": primitives,
-        "feature_projections": [],
-        "provenance_sha256": "",
-    }
-    packet["provenance_sha256"] = provenance.canonical_json_sha256(
-        provenance._packet_without_checksum(packet)
+    packet = provenance.build_external_geometry_provenance(
+        pilot_id=pilot_id,
+        candidate_id=candidate_id,
+        candidate_path_binding_sha256="a" * 64,
+        source_sha256=evidence["source_sha256"],
+        source_render_sha256=(
+            "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0"
+        ),
+        primitive_ir_sha256=evidence["primitive_ir_sha256"],
+        verification_request_sha256=evidence["verification_request_sha256"],
+        verification_result_sha256=evidence["verification_result_sha256"],
+        candidate_sha256=evidence["candidate_sha256"],
+        build_evidence_sha256=evidence["build_evidence_sha256"],
+        primitive_projections=primitives,
     )
 
-    normalized = provenance.validate_generated_pilot_provenance(packet)
+    return packet
 
+
+def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_authority() -> None:
+    """A verified primitive-only candidate must not require fabricated pilot semantics."""
+
+    packet = _external_geometry_packet_for_test()
+    evidence = {
+        "source_sha256": (
+            "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+        ),
+        "candidate_sha256": (
+            "497b5e8653842413927fa979f8be51c0f71b23239bc7d2da2cd15dd633dc6499"
+        ),
+    }
+    normalized = provenance.validate_external_geometry_provenance(packet)
+
+    assert normalized["schema_version"] == (
+        "external-geometry-provenance-1.0"
+    )
+    assert normalized["provenance_mode"] == "EXTERNAL_GEOMETRY_ONLY"
     assert normalized["source_sha256"] == evidence["source_sha256"]
     assert normalized["candidate_sha256"] == evidence["candidate_sha256"]
-    assert [item["entity_handle"] for item in normalized["primitive_projections"]] == [
-        "30",
-        "31",
-        "32",
-        "33",
-        "34",
-        "35",
-    ]
-    assert normalized["feature_projections"] == []
+    assert all(
+        item["source"] == "geometry_external_ai"
+        for item in normalized["primitive_projections"]
+    )
+
+    inputs = provenance.build_external_geometry_r3_inputs(packet)
+    registry = r3.build_component_view_registry(**inputs)
+    assert registry["schema_version"] == "component-view-registry-1.1"
+    assert registry["upstream_bindings"]["provenance_mode"] == (
+        "EXTERNAL_GEOMETRY_ONLY"
+    )
+    assert len(registry["components"]) == 1
+    component = registry["components"][0]
+    assert component["origin_class"] == "RECONSTRUCTED_NEW"
+    assert component["semantic_projection_refs"] == []
+    assert [
+        item["entity_handle"] for item in component["candidate_entity_bindings"]
+    ] == ["30", "31", "32", "33", "34", "35"]
+    assert r3.validate_component_view_registry(
+        registry, upstream_context=inputs["upstream_context"]
+    ) == registry
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "candidate_sha256",
+        "build_evidence_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+    ],
+)
+def test_external_geometry_provenance_rejects_tampered_identity(field: str) -> None:
+    packet = _external_geometry_packet_for_test()
+    packet[field] = "f" * 64
+
+    expected_error = (
+        "PRIMITIVE_CANDIDATE_MISMATCH"
+        if field == "candidate_sha256"
+        else "EXTERNAL_PROVENANCE_HASH_MISMATCH"
+    )
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match=expected_error,
+    ):
+        provenance.validate_external_geometry_provenance(packet)
+
+
+def test_external_geometry_provenance_rejects_injected_semantic_features() -> None:
+    packet = _external_geometry_packet_for_test()
+    packet["feature_projections"] = []
+
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="EXTERNAL_PROVENANCE_SCHEMA_INVALID",
+    ):
+        provenance.validate_external_geometry_provenance(packet)
 
 
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(

@@ -221,6 +221,27 @@ def test_public_surface_uses_the_accepted_parameter_modes() -> None:
         assert parameters["upstream_context"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
+def test_external_mode_rejects_semantic_projection_refs() -> None:
+    provenance_tests = _existing_test_module(
+        "test_cad_agent_mechanical_pilot_provenance.py"
+    )
+    provenance = importlib.import_module("cad_agent.mechanical_pilot_provenance")
+    inputs = provenance.build_external_geometry_r3_inputs(
+        provenance_tests._external_geometry_packet_for_test()
+    )
+    components = deepcopy(inputs["components"])
+    components[0]["semantic_projection_refs"] = ["f" * 64]
+
+    with pytest.raises(
+        _registry_module().ComponentViewRegistryError,
+        match="EXTERNAL_SEMANTIC_PROJECTION_REFS_FORBIDDEN",
+    ):
+        _registry_module().build_component_view_registry(
+            upstream_context=inputs["upstream_context"],
+            components=components,
+        )
+
+
 def test_builds_closed_task_one_registry_with_empty_views_and_links() -> None:
     module = _registry_module()
     context = _upstream_context()

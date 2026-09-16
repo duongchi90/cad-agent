@@ -10,6 +10,10 @@ from cad_agent import base_cad_adapter as _base_cad
 from cad_agent import drawing_artifact_reference as _dara
 from cad_agent import source_fusion as _source_fusion
 from cad_agent.drawing_contracts import canonical_json_sha256
+from cad_agent.mechanical_pilot_provenance import (
+    EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+    validate_external_geometry_provenance,
+)
 
 
 COMPONENT_VIEW_REGISTRY_SCHEMA_VERSION = "component-view-registry-1.0"
@@ -19,6 +23,7 @@ COMPONENT_VIEW_REGISTRY_NATIVE_DWG_SCHEMA_VERSION = (
 )
 _GENERATED_PROVENANCE_MODE = "GENERATED_MECHANICAL_" + chr(80) + "ILOT"
 _NATIVE_DWG_PROVENANCE_MODE = "NATIVE_DWG_FULL_DRAWING"
+_EXTERNAL_PROVENANCE_MODE = EXTERNAL_GEOMETRY_PROVENANCE_MODE
 
 _CONTEXT_FIELDS = frozenset(
     {
@@ -33,6 +38,9 @@ _CONTEXT_FIELDS = frozenset(
 )
 _GENERATED_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "mechanical_pilot_provenance"}
+)
+_EXTERNAL_CONTEXT_FIELDS = frozenset(
+    {"provenance_mode", "candidate", "external_geometry_provenance"}
 )
 _NATIVE_DWG_CONTEXT_FIELDS = frozenset(
     {"provenance_mode", "candidate", "native_dwg_provenance"}
@@ -148,6 +156,22 @@ _GENERATED_UPSTREAM_BINDING_FIELDS = frozenset(
         "candidate_path_binding_sha256",
         "build_evidence_sha256",
         "pilot_evidence_sha256",
+        "provenance_packet_sha256",
+    }
+)
+_EXTERNAL_UPSTREAM_BINDING_FIELDS = frozenset(
+    {
+        "provenance_mode",
+        "pilot_id",
+        "source_sha256",
+        "source_render_sha256",
+        "primitive_ir_sha256",
+        "verification_request_sha256",
+        "verification_result_sha256",
+        "candidate_id",
+        "candidate_drawing_sha256",
+        "candidate_path_binding_sha256",
+        "build_evidence_sha256",
         "provenance_packet_sha256",
     }
 )
@@ -464,6 +488,73 @@ def _generated_upstream_context(
     }
 
 
+def _external_upstream_context(
+    upstream_context: Mapping[str, object],
+) -> dict[str, object]:
+    context = _closed(
+        upstream_context,
+        _EXTERNAL_CONTEXT_FIELDS,
+        "UPSTREAM_CONTEXT_INVALID",
+    )
+    if context["provenance_mode"] != _EXTERNAL_PROVENANCE_MODE:
+        _fail("PROVENANCE_MODE_INVALID")
+    candidate = _closed(
+        context["candidate"], _CANDIDATE_FIELDS, "CANDIDATE_INVALID"
+    )
+    candidate_id = _identifier(candidate["candidate_id"], "CANDIDATE_INVALID")
+    candidate_sha256 = _sha256(
+        candidate["candidate_drawing_sha256"], "CANDIDATE_INVALID"
+    )
+    try:
+        packet = validate_external_geometry_provenance(
+            context["external_geometry_provenance"]
+        )
+    except Exception as exc:
+        raise ComponentViewRegistryError(
+            "EXTERNAL_PROVENANCE_INVALID"
+        ) from exc
+    if packet["candidate_id"] != candidate_id:
+        _fail("EXTERNAL_CANDIDATE_ID_MISMATCH")
+    if packet["candidate_sha256"] != candidate_sha256:
+        _fail("EXTERNAL_CANDIDATE_HASH_MISMATCH")
+    primitive_index, _semantic_index, binding_by_projection = (
+        _generated_projection_indexes(
+            {
+                "primitive_projections": packet["primitive_projections"],
+                "feature_projections": [],
+            }
+        )
+    )
+    upstream_bindings = {
+        "provenance_mode": _EXTERNAL_PROVENANCE_MODE,
+        "pilot_id": packet["pilot_id"],
+        "source_sha256": packet["source_sha256"],
+        "source_render_sha256": packet["source_render_sha256"],
+        "primitive_ir_sha256": packet["primitive_ir_sha256"],
+        "verification_request_sha256": packet[
+            "verification_request_sha256"
+        ],
+        "verification_result_sha256": packet["verification_result_sha256"],
+        "candidate_id": candidate_id,
+        "candidate_drawing_sha256": candidate_sha256,
+        "candidate_path_binding_sha256": packet[
+            "candidate_path_binding_sha256"
+        ],
+        "build_evidence_sha256": packet["build_evidence_sha256"],
+        "provenance_packet_sha256": packet["provenance_sha256"],
+    }
+    return {
+        "provenance_mode": _EXTERNAL_PROVENANCE_MODE,
+        "registry_schema_version": COMPONENT_VIEW_REGISTRY_GENERATED_SCHEMA_VERSION,
+        "packet": packet,
+        "handoff": None,
+        "upstream_bindings": upstream_bindings,
+        "primitive_index": primitive_index,
+        "semantic_index": {},
+        "generated_binding_by_projection": binding_by_projection,
+    }
+
+
 def _native_dwg_drawing_binding(
     packet: Mapping[str, object],
 ) -> dict[str, object]:
@@ -563,6 +654,8 @@ def _native_dwg_upstream_context(
 
 def _upstream_context(upstream_context: object) -> dict[str, object]:
     if isinstance(upstream_context, Mapping):
+        if upstream_context.get("provenance_mode") == _EXTERNAL_PROVENANCE_MODE:
+            return _external_upstream_context(upstream_context)
         if upstream_context.get("provenance_mode") == _GENERATED_PROVENANCE_MODE:
             return _generated_upstream_context(upstream_context)
         if upstream_context.get("provenance_mode") == _NATIVE_DWG_PROVENANCE_MODE:
@@ -841,17 +934,26 @@ def _normalize_input_component(
     origin_class = component["origin_class"]
     if origin_class not in _ORIGIN_CLASSES:
         _fail("ORIGIN_CLASS_INVALID")
-    generated = state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
+    external = state["provenance_mode"] == _EXTERNAL_PROVENANCE_MODE
+    generated = external or state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
     if generated and origin_class != "RECONSTRUCTED_NEW":
         _fail("GENERATED_ORIGIN_INVALID")
 
     source_refs = _sha_list(
         component["source_projection_refs"], "SOURCE_PROJECTION_REFS_INVALID"
     )
-    semantic_refs = _sha_list(
-        component["semantic_projection_refs"],
-        "SEMANTIC_PROJECTION_REFS_INVALID",
-    )
+    if external:
+        semantic_refs = _sha_list_allow_empty(
+            component["semantic_projection_refs"],
+            "EXTERNAL_SEMANTIC_PROJECTION_REFS_INVALID",
+        )
+        if semantic_refs:
+            _fail("EXTERNAL_SEMANTIC_PROJECTION_REFS_FORBIDDEN")
+    else:
+        semantic_refs = _sha_list(
+            component["semantic_projection_refs"],
+            "SEMANTIC_PROJECTION_REFS_INVALID",
+        )
 
     raw_base_reference = component.get("base_cad_provenance_ref")
     if generated:
@@ -1575,9 +1677,13 @@ def validate_component_view_registry(
             _GENERATED_UPSTREAM_BINDING_FIELDS
             if state["provenance_mode"] == _GENERATED_PROVENANCE_MODE
             else (
-                _NATIVE_DWG_UPSTREAM_BINDING_FIELDS
-                if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE
-                else _UPSTREAM_BINDING_FIELDS
+                _EXTERNAL_UPSTREAM_BINDING_FIELDS
+                if state["provenance_mode"] == _EXTERNAL_PROVENANCE_MODE
+                else (
+                    _NATIVE_DWG_UPSTREAM_BINDING_FIELDS
+                    if state["provenance_mode"] == _NATIVE_DWG_PROVENANCE_MODE
+                    else _UPSTREAM_BINDING_FIELDS
+                )
             )
         ),
         "UPSTREAM_BINDINGS_INVALID",
