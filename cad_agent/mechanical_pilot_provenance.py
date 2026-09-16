@@ -18,6 +18,7 @@ from cad_agent.mechanical_pilot import (
     _load_primitive_document,
     _semantic_from_primitive,
     load_pilot_definition,
+    validate_primitive_bound_candidate,
 )
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
 
@@ -744,6 +745,8 @@ def validate_external_geometry_provenance(
         "build_evidence_sha256",
     ):
         _sha(packet[field], f"EXTERNAL_{field.upper()}_INVALID")
+    if candidate_id != _candidate_id(pilot_id, packet["candidate_sha256"]):
+        _fail("EXTERNAL_CANDIDATE_ID_MISMATCH")
     primitives = _validate_external_primitive_projections(
         packet["primitive_projections"],
         pilot_id=pilot_id,
@@ -780,24 +783,114 @@ def validate_external_geometry_provenance(
 def build_external_geometry_provenance(
     *,
     pilot_id: str,
-    candidate_id: str,
-    candidate_path_binding_sha256: str,
-    source_sha256: str,
-    source_render_sha256: str,
-    primitive_ir_sha256: str,
-    verification_request_sha256: str,
-    verification_result_sha256: str,
-    candidate_sha256: str,
-    build_evidence_sha256: str,
-    primitive_projections: list[dict[str, object]],
+    primitive_ir_path: str | os.PathLike[str],
+    candidate_path: str | os.PathLike[str],
+    build_evidence_path: str | os.PathLike[str],
+    verification_request: Mapping[str, object],
+    verification_result: Mapping[str, object],
+    source_render_bytes: bytes,
 ) -> dict[str, object]:
-    """Compose an external geometry packet without semantic/pilot authority."""
-    normalized_primitives = _validate_external_primitive_projections(
-        primitive_projections,
-        pilot_id=pilot_id,
-        source_sha256=source_sha256,
-        candidate_sha256=candidate_sha256,
+    """Issue external provenance only after revalidating the exact artifact chain."""
+    pilot_id = _identifier(pilot_id, "EXTERNAL_PILOT_ID_INVALID")
+    primitive_path, _primitive_bytes, primitive_ir_sha256 = _file_snapshot(
+        primitive_ir_path, "EXTERNAL_PRIMITIVE_ARTIFACT_INVALID"
     )
+    candidate_file, _candidate_bytes, candidate_sha256 = _file_snapshot(
+        candidate_path, "EXTERNAL_CANDIDATE_ARTIFACT_INVALID"
+    )
+    evidence_path, _evidence_bytes, build_evidence_sha256 = _file_snapshot(
+        build_evidence_path, "EXTERNAL_BUILD_EVIDENCE_INVALID"
+    )
+    if not isinstance(verification_request, Mapping):
+        _fail("EXTERNAL_VERIFICATION_REQUEST_INVALID")
+    if not isinstance(verification_result, Mapping):
+        _fail("EXTERNAL_VERIFICATION_RESULT_INVALID")
+    if not isinstance(source_render_bytes, bytes) or not source_render_bytes:
+        _fail("EXTERNAL_SOURCE_RENDER_INVALID")
+
+    try:
+        primitive_doc, loaded_primitive_ir_sha256 = _load_primitive_document(
+            primitive_path
+        )
+        if loaded_primitive_ir_sha256 != primitive_ir_sha256:
+            _fail("EXTERNAL_PRIMITIVE_ARTIFACT_DRIFT")
+        bound_primitive_ir_sha256, bound_candidate_sha256 = (
+            validate_primitive_bound_candidate(
+                primitive_path,
+                candidate_file,
+                evidence_path,
+                verification_request=verification_request,
+                verification_result=verification_result,
+                source_render_bytes=source_render_bytes,
+            )
+        )
+    except GeneratedPilotProvenanceError:
+        raise
+    except Exception as error:
+        raise GeneratedPilotProvenanceError(
+            "EXTERNAL_ARTIFACT_CHAIN_INVALID"
+        ) from error
+    if (
+        bound_primitive_ir_sha256 != primitive_ir_sha256
+        or bound_candidate_sha256 != candidate_sha256
+    ):
+        _fail("EXTERNAL_ARTIFACT_CHAIN_DRIFT")
+
+    _primitive_path_after, _primitive_after, primitive_ir_sha256_after = _file_snapshot(
+        primitive_path, "EXTERNAL_PRIMITIVE_ARTIFACT_INVALID"
+    )
+    _candidate_path_after, _candidate_after, candidate_sha256_after = _file_snapshot(
+        candidate_file, "EXTERNAL_CANDIDATE_ARTIFACT_INVALID"
+    )
+    _evidence_path_after, _evidence_after, build_evidence_sha256_after = _file_snapshot(
+        evidence_path, "EXTERNAL_BUILD_EVIDENCE_INVALID"
+    )
+    if (
+        primitive_ir_sha256_after != primitive_ir_sha256
+        or candidate_sha256_after != candidate_sha256
+        or build_evidence_sha256_after != build_evidence_sha256
+    ):
+        _fail("EXTERNAL_ARTIFACT_CHAIN_DRIFT")
+
+    build = load_build_evidence(evidence_path, candidate_file)
+    source_sha256 = primitive_doc.source_document.sha256
+    if source_sha256 is None:
+        _fail("EXTERNAL_SOURCE_IDENTITY_INVALID")
+    _sha(source_sha256, "EXTERNAL_SOURCE_IDENTITY_INVALID")
+    source_render_sha256 = hashlib.sha256(source_render_bytes).hexdigest()
+    verification_request_sha256 = verification_request.get(
+        "verification_request_sha256"
+    )
+    _sha(verification_request_sha256, "EXTERNAL_VERIFICATION_REQUEST_INVALID")
+    verification_result_sha256 = canonical_json_sha256(verification_result)
+    candidate_path_binding_sha256 = _candidate_path_binding_sha256(candidate_file)
+    candidate_id = _candidate_id(pilot_id, candidate_sha256)
+
+    primitive_ids = [primitive.id for primitive in primitive_doc.primitives]
+    handles = build.handle_by_primitive_id
+    layers = build.layer_by_primitive_id
+    written = build.written_geometry_by_primitive_id
+    if (
+        len(primitive_ids) != len(set(primitive_ids))
+        or set(handles) != set(primitive_ids)
+        or set(layers) != set(primitive_ids)
+        or set(written) != set(primitive_ids)
+    ):
+        _fail("EXTERNAL_BUILD_BINDING_COVERAGE_INVALID")
+    normalized_primitives = [
+        _external_primitive_projection(
+            pilot_id=pilot_id,
+            source_sha256=source_sha256,
+            candidate_sha256=candidate_sha256,
+            relative_path=candidate_file.name,
+            primitive=primitive,
+            written_geometry=written[primitive.id],
+            handle=handles[primitive.id],
+            layer=layers[primitive.id],
+        )
+        for primitive in primitive_doc.primitives
+    ]
+    normalized_primitives.sort(key=lambda item: str(item["primitive_id"]))
     packet: dict[str, object] = {
         "schema_version": EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION,
         "provenance_mode": EXTERNAL_GEOMETRY_PROVENANCE_MODE,

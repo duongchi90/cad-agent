@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -41,6 +42,59 @@ def _primitive_bound_pilot(tmp_path: Path):
     return bind_simple_shaft_pilot_from_primitive(
         primitive_path, tmp_path / "primitive-candidate" / "candidate.dxf"
     )
+
+
+def _external_artifacts_for_test(tmp_path: Path) -> dict[str, object]:
+    helper_path = Path(__file__).with_name(
+        "test_external_visual_primitive_ir_admission.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "external_visual_admission_helpers_for_provenance", helper_path
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("external visual helper module unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    request, result, render_bytes = module._verified_case()
+    from cad_agent.live import write_build_evidence
+    from cad_agent.source_verified_geometry import (
+        materialize_verified_external_visual_lines,
+    )
+    from dxf_builder_lib.builder import build_dxf
+
+    primitive_doc = materialize_verified_external_visual_lines(
+        verification_request=request,
+        verification_result=result,
+        source_render_bytes=render_bytes,
+        calibration=module._calibration(),
+        source_file_name="source.png",
+        image_width_px=64,
+        image_height_px=64,
+    )
+    primitive_path = tmp_path / "external-primitive.json"
+    primitive_path.write_text(
+        json.dumps(primitive_doc.to_dict(), ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    candidate_path = tmp_path / "external-candidate" / "candidate.dxf"
+    candidate_path.parent.mkdir()
+    build = build_dxf(
+        primitive_doc,
+        str(candidate_path),
+        semantic_doc=None,
+        build_components=False,
+        build_dimensions=False,
+    )
+    build_evidence_path = candidate_path.with_name("build-evidence.json")
+    write_build_evidence(build_evidence_path, build)
+    return {
+        "primitive_path": primitive_path,
+        "candidate_path": candidate_path,
+        "build_evidence_path": build_evidence_path,
+        "verification_request": request,
+        "verification_result": result,
+        "source_render_bytes": render_bytes,
+    }
 
 
 def test_generated_pilot_packet_is_exact_and_replayable(tmp_path: Path) -> None:
@@ -244,23 +298,29 @@ def _external_geometry_packet_for_test() -> dict[str, object]:
             )
         )
 
-    packet = provenance.build_external_geometry_provenance(
-        pilot_id=pilot_id,
-        candidate_id=candidate_id,
-        candidate_path_binding_sha256="a" * 64,
-        source_sha256=evidence["source_sha256"],
-        source_render_sha256=(
+    primitives.sort(key=lambda item: str(item["primitive_id"]))
+    packet = {
+        "schema_version": "external-geometry-provenance-1.0",
+        "provenance_mode": "EXTERNAL_GEOMETRY_ONLY",
+        "pilot_id": pilot_id,
+        "candidate_id": candidate_id,
+        "candidate_path_binding_sha256": "a" * 64,
+        "source_sha256": evidence["source_sha256"],
+        "source_render_sha256": (
             "b03477a1f9cd5df4f8ee6125f8faed1bf35586cb4f891c30bf2351929833b9d0"
         ),
-        primitive_ir_sha256=evidence["primitive_ir_sha256"],
-        verification_request_sha256=evidence["verification_request_sha256"],
-        verification_result_sha256=evidence["verification_result_sha256"],
-        candidate_sha256=evidence["candidate_sha256"],
-        build_evidence_sha256=evidence["build_evidence_sha256"],
-        primitive_projections=primitives,
+        "primitive_ir_sha256": evidence["primitive_ir_sha256"],
+        "verification_request_sha256": evidence["verification_request_sha256"],
+        "verification_result_sha256": evidence["verification_result_sha256"],
+        "candidate_sha256": evidence["candidate_sha256"],
+        "build_evidence_sha256": evidence["build_evidence_sha256"],
+        "primitive_projections": primitives,
+        "provenance_sha256": "",
+    }
+    packet["provenance_sha256"] = provenance.canonical_json_sha256(
+        provenance._external_packet_without_checksum(packet)
     )
-
-    return packet
+    return provenance.validate_external_geometry_provenance(packet)
 
 
 def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_authority() -> None:
@@ -320,7 +380,7 @@ def test_external_geometry_provenance_rejects_tampered_identity(field: str) -> N
     packet[field] = "f" * 64
 
     expected_error = (
-        "PRIMITIVE_CANDIDATE_MISMATCH"
+        "EXTERNAL_CANDIDATE_ID_MISMATCH"
         if field == "candidate_sha256"
         else "EXTERNAL_PROVENANCE_HASH_MISMATCH"
     )
@@ -342,47 +402,63 @@ def test_external_geometry_provenance_rejects_injected_semantic_features() -> No
         provenance.validate_external_geometry_provenance(packet)
 
 
-def test_external_geometry_provenance_rejects_self_consistent_fabrication() -> None:
-    """A packet checksum cannot substitute for source-chain validation."""
+def test_external_geometry_provenance_issuer_rederives_identity(
+    tmp_path: Path,
+) -> None:
+    artifacts = _external_artifacts_for_test(tmp_path)
 
-    exact = _external_geometry_packet_for_test()
-    fabricated = {
-        "source_render_sha256": "e" * 64,
-        "primitive_ir_sha256": "f" * 64,
-        "verification_request_sha256": "1" * 64,
-        "verification_result_sha256": "2" * 64,
-        "build_evidence_sha256": "3" * 64,
-    }
+    packet = provenance.build_external_geometry_provenance(
+        pilot_id="external-geometry-ai-p1",
+        primitive_ir_path=artifacts["primitive_path"],
+        candidate_path=artifacts["candidate_path"],
+        build_evidence_path=artifacts["build_evidence_path"],
+        verification_request=artifacts["verification_request"],
+        verification_result=artifacts["verification_result"],
+        source_render_bytes=artifacts["source_render_bytes"],
+    )
 
-    def exercise_untrusted_packet() -> None:
-        packet = provenance.build_external_geometry_provenance(
-            pilot_id=exact["pilot_id"],
-            candidate_id="foreign-candidate-id",
-            candidate_path_binding_sha256=exact[
-                "candidate_path_binding_sha256"
-            ],
-            source_sha256=exact["source_sha256"],
-            source_render_sha256=fabricated["source_render_sha256"],
-            primitive_ir_sha256=fabricated["primitive_ir_sha256"],
-            verification_request_sha256=fabricated[
-                "verification_request_sha256"
-            ],
-            verification_result_sha256=fabricated[
-                "verification_result_sha256"
-            ],
-            candidate_sha256=exact["candidate_sha256"],
-            build_evidence_sha256=fabricated["build_evidence_sha256"],
-            primitive_projections=deepcopy(exact["primitive_projections"]),
+    candidate_sha256 = hashlib.sha256(
+        artifacts["candidate_path"].read_bytes()
+    ).hexdigest()
+    primitive_ir_sha256 = hashlib.sha256(
+        artifacts["primitive_path"].read_bytes()
+    ).hexdigest()
+    assert packet["candidate_sha256"] == candidate_sha256
+    assert packet["primitive_ir_sha256"] == primitive_ir_sha256
+    assert packet["candidate_id"] == (
+        "external-geometry-ai-p1:" + candidate_sha256
+    )
+    assert packet["source_render_sha256"] == hashlib.sha256(
+        artifacts["source_render_bytes"]
+    ).hexdigest()
+    assert packet["verification_request_sha256"] == artifacts[
+        "verification_request"
+    ]["verification_request_sha256"]
+    assert packet["verification_result_sha256"] == provenance.canonical_json_sha256(
+        artifacts["verification_result"]
+    )
+
+
+def test_external_geometry_provenance_rejects_unbacked_request_identity(
+    tmp_path: Path,
+) -> None:
+    artifacts = _external_artifacts_for_test(tmp_path)
+    tampered_request = deepcopy(artifacts["verification_request"])
+    tampered_request["verification_request_sha256"] = "e" * 64
+
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError,
+        match="EXTERNAL_ARTIFACT_CHAIN_INVALID",
+    ):
+        provenance.build_external_geometry_provenance(
+            pilot_id="external-geometry-ai-p1",
+            primitive_ir_path=artifacts["primitive_path"],
+            candidate_path=artifacts["candidate_path"],
+            build_evidence_path=artifacts["build_evidence_path"],
+            verification_request=tampered_request,
+            verification_result=artifacts["verification_result"],
+            source_render_bytes=artifacts["source_render_bytes"],
         )
-        inputs = provenance.build_external_geometry_r3_inputs(packet)
-        registry = r3.build_component_view_registry(**inputs)
-        assert len(registry["components"]) == 1
-        raise AssertionError(
-            "EXTERNAL_GEOMETRY_PROVENANCE_FALSE_PASS_REACHED_R3"
-        )
-
-    with pytest.raises(ValueError, match="EXTERNAL_"):
-        exercise_untrusted_packet()
 
 
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(
