@@ -13,10 +13,25 @@ from collections.abc import Mapping
 from ctypes import wintypes
 from pathlib import Path
 
+from .drawing_contracts import canonical_json_sha256
 from .visual_contracts import VisualContractError, validate_visual_contract
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION = "external-geometry-provenance-1.0"
+_EXTERNAL_GEOMETRY_PROVENANCE_MODE = "EXTERNAL_GEOMETRY_ONLY"
+_EXTERNAL_ROOT_CURRENTNESS_SCHEMA_VERSION = "external-root-visual-currentness-1.0"
+_EXTERNAL_ROOT_IDENTITY_FIELDS = (
+    "candidate_id",
+    "candidate_sha256",
+    "build_evidence_sha256",
+    "provenance_sha256",
+    "source_sha256",
+    "source_render_sha256",
+)
+_MUTATION_FIELDS = frozenset(
+    {"mutation_evidence", "mutation_sha256", "latest_mutation_sha256"}
+)
 _CAPTURED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 _MAX_TOTAL_BYTES = 32 * 1024 * 1024
 _MAX_BYTES = {"render": 8 * 1024 * 1024, "entity_map": 8 * 1024 * 1024, "measurements": 4 * 1024 * 1024}
@@ -26,6 +41,54 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 class VisualEvidenceError(ValueError):
     """Raised when VS-T3 evidence cannot be accepted or persisted."""
+
+
+def derive_external_root_visual_currentness_sha256(
+    provenance_identity: Mapping[str, object],
+) -> str:
+    """Derive a genesis/currentness token for a validated external root.
+
+    The returned digest may bind the existing manifest currentness field for a
+    no-mutation external root, but it is deliberately not mutation evidence.
+    """
+
+    if not isinstance(provenance_identity, Mapping):
+        raise VisualEvidenceError("external root provenance identity must be an object")
+    if provenance_identity.get("schema_version") != _EXTERNAL_GEOMETRY_PROVENANCE_SCHEMA_VERSION:
+        raise VisualEvidenceError(
+            "external root provenance identity has an unsupported schema_version"
+        )
+    if provenance_identity.get("provenance_mode") != _EXTERNAL_GEOMETRY_PROVENANCE_MODE:
+        raise VisualEvidenceError(
+            "external root provenance identity must use EXTERNAL_GEOMETRY_ONLY"
+        )
+    present_mutation_fields = sorted(
+        field for field in _MUTATION_FIELDS if field in provenance_identity
+    )
+    if present_mutation_fields:
+        raise VisualEvidenceError(
+            "external root provenance identity must not contain mutation evidence: "
+            + ", ".join(present_mutation_fields)
+        )
+    missing = [field for field in _EXTERNAL_ROOT_IDENTITY_FIELDS if field not in provenance_identity]
+    if missing:
+        raise VisualEvidenceError(
+            "external root provenance identity is missing required identity: "
+            + ", ".join(missing)
+        )
+    candidate_id = provenance_identity["candidate_id"]
+    if not isinstance(candidate_id, str) or _IDENTIFIER.fullmatch(candidate_id) is None:
+        raise VisualEvidenceError("external root candidate_id is invalid")
+    for field in _EXTERNAL_ROOT_IDENTITY_FIELDS[1:]:
+        value = provenance_identity[field]
+        if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+            raise VisualEvidenceError(f"external root {field} is invalid")
+    material = {
+        "schema_version": _EXTERNAL_ROOT_CURRENTNESS_SCHEMA_VERSION,
+        "provenance_mode": _EXTERNAL_GEOMETRY_PROVENANCE_MODE,
+        **{field: provenance_identity[field] for field in _EXTERNAL_ROOT_IDENTITY_FIELDS},
+    }
+    return canonical_json_sha256(material)
 
 
 def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
@@ -841,6 +904,7 @@ __all__ = [
     "assert_dimension_register_unchanged",
     "build_dimension_register_datum_bindings",
     "canonical_region_config_sha256",
+    "derive_external_root_visual_currentness_sha256",
     "sha256_file",
     "snapshot_publication_file",
     "prepare_publication_replacement",
