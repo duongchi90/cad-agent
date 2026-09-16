@@ -803,6 +803,19 @@ def validate_primitive_bound_candidate(
         if build.written_geometry_by_primitive_id[primitive_id] != expected:
             raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
 
+    if (
+        build.dimension_count != 0
+        or build.dimension_handle_by_cross_validation_id
+        or build.written_dimension_by_cross_validation_id
+        or build.component_count != 0
+        or build.component_handle_by_part_id
+        or build.component_type_by_part_id
+        or build.written_component_by_part_id
+        or build.skipped_part_ids
+        or build.skipped_part_reasons
+    ):
+        raise ValueError("PILOT_PRIMITIVE_BUILD_REVIEW_FAILED")
+
     review = review_dxf(build, strict_primitive_inventory=True)
     if not review.passed:
         raise ValueError("PILOT_PRIMITIVE_BUILD_REVIEW_FAILED")

@@ -232,6 +232,81 @@ def test_primitive_bound_pilot_rejects_untracked_lwpolyline_entity(
         )
 
 
+def test_primitive_bound_pilot_rejects_forged_component_inventory(
+    tmp_path: Path,
+) -> None:
+    """The primitive-bound pilot must not trust forged component evidence."""
+
+    import importlib.util
+
+    helper_path = Path(__file__).with_name("test_cad_agent_phase4_pilot_binding.py")
+    spec = importlib.util.spec_from_file_location(
+        "phase4_pilot_test_helpers_for_forged_component_binding", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    from cad_agent.live import load_build_evidence
+    from cad_agent.mechanical_pilot import (
+        bind_simple_shaft_pilot_from_primitive,
+        validate_primitive_bound_candidate,
+    )
+    from dxf_builder_lib.reviewer import review_dxf
+    from dxf_builder_lib.tests.dxf_test_support import add_untracked_entity_for_test
+
+    primitive_path = tmp_path / "primitive" / "page_01.json"
+    primitive_path.parent.mkdir()
+    helper._write_primitive(primitive_path)
+    result = bind_simple_shaft_pilot_from_primitive(
+        primitive_path, tmp_path / "candidate" / "candidate.dxf"
+    )
+
+    extra_handle = add_untracked_entity_for_test(
+        result.candidate_path, "INSERT"
+    )
+    assert extra_handle not in result.build.handle_by_primitive_id.values()
+
+    evidence = json.loads(result.build_evidence_path.read_text(encoding="utf-8"))
+    build_evidence = evidence["build_result"]
+    build_evidence["component_handle_by_part_id"] = {
+        "forged-component": extra_handle
+    }
+    build_evidence["component_type_by_part_id"] = {
+        "forged-component": "frame_beam"
+    }
+    build_evidence["component_count"] = 1
+    build_evidence["written_component_by_part_id"] = {
+        "forged-component": {
+            "block_name": "UNTRACKED_TEST_COMPONENT",
+            "layer": "UNCLASSIFIED",
+            "insert": [240.0, 240.0, 0.0],
+            "xscale": 1.0,
+            "yscale": 1.0,
+            "zscale": 1.0,
+            "rotation_deg": 0.0,
+            "attribs": {"PART_ID": "forged-component"},
+        }
+    }
+    evidence["dxf"]["sha256"] = hashlib.sha256(
+        result.candidate_path.read_bytes()
+    ).hexdigest()
+    result.build_evidence_path.write_text(
+        json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    refreshed_build = load_build_evidence(
+        result.build_evidence_path, result.candidate_path
+    )
+    assert review_dxf(refreshed_build).passed is True
+
+    with pytest.raises(ValueError, match="PILOT_PRIMITIVE_BUILD_REVIEW_FAILED"):
+        validate_primitive_bound_candidate(
+            primitive_path, result.candidate_path, result.build_evidence_path
+        )
+
+
 def test_simple_shaft_pilot_refuses_source_as_candidate(tmp_path: Path) -> None:
     from cad_agent.mechanical_pilot import build_simple_shaft_pilot
 
