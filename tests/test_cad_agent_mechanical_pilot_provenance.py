@@ -4,6 +4,7 @@ from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -184,6 +185,100 @@ def test_generated_pilot_reuses_primitive_bound_phase4_owner(tmp_path: Path) -> 
     assert packet["pilot_id"] == "synthetic-simple-stepped-shaft-v1"
     assert packet["source_sha256"] == result.source_sha256
     assert len(packet["primitive_projections"]) == result.build.entity_count
+
+
+def test_external_geometry_only_candidate_reaches_existing_r3_without_semantic_authority() -> None:
+    """A verified primitive-only candidate must not require fabricated pilot semantics."""
+
+    evidence = {
+        "source_sha256": (
+            "13d822cf828cccc6cd21b19ec3c410f0ea89aef440aeca4c96248e86c08b5b38"
+        ),
+        "primitive_ir_sha256": (
+            "82042917095aa5400b13e2098b4aadf35dd6414b869ac88087b3ad17a1f60814"
+        ),
+        "verification_request_sha256": (
+            "cf36fb0a271df58f4fb435d76c2dd14328026fd0ccc09f10993d355eef9c4417"
+        ),
+        "verification_result_sha256": (
+            "6300f84c5194290cee0818358f6cf7f7247bf87e3ad202eecc0682e5dcd413b7"
+        ),
+        "candidate_sha256": (
+            "497b5e8653842413927fa979f8be51c0f71b23239bc7d2da2cd15dd633dc6499"
+        ),
+        "build_evidence_sha256": (
+            "053d93bcdfda4a18a4628837eb24f6fc8a8b14b1fd11303faaaa9e435885ceb5"
+        ),
+    }
+    primitive_specs = [
+        ("main_vertical", "30", (1905.0, 216.0), (1905.0, 519.0)),
+        ("mirror_top", "31", (1912.0, 347.0), (1942.0, 347.0)),
+        ("mirror_right", "32", (1942.0, 350.0), (1942.0, 387.0)),
+        ("mirror_bottom", "33", (1912.0, 387.0), (1942.0, 387.0)),
+        ("mirror_left", "34", (1912.0, 351.0), (1912.0, 386.0)),
+        ("lower_slope", "35", (1905.0, 510.0), (1898.0, 519.0)),
+    ]
+    pilot_id = "external-geometry-ai-p1"
+    candidate_id = f"{pilot_id}:{evidence['candidate_sha256']}"
+    primitives = []
+    for primitive_id, handle, start, end in primitive_specs:
+        raw = {
+            "id": primitive_id,
+            "type": "line",
+            "geometry": {
+                "start": {"x": start[0], "y": start[1]},
+                "end": {"x": end[0], "y": end[1]},
+            },
+        }
+        primitive = SimpleNamespace(
+            to_dict=lambda raw=raw: deepcopy(raw),
+        )
+        primitives.append(
+            provenance._primitive_projection(
+                pilot_id=pilot_id,
+                source_sha256=evidence["source_sha256"],
+                candidate_sha256=evidence["candidate_sha256"],
+                relative_path="candidate.dxf",
+                primitive=primitive,
+                written_geometry=raw["geometry"],
+                handle=handle,
+                layer="UNCLASSIFIED",
+            )
+        )
+
+    # The identity tuple is the exact current external candidate.  The packet
+    # envelope below is only the current owner's compatibility shape: it has no
+    # MechanicalPilotResult, pilot evidence artifact, semantic feature, or label.
+    packet = {
+        "schema_version": provenance.GENERATED_PILOT_PROVENANCE_SCHEMA_VERSION,
+        "pilot_id": pilot_id,
+        "candidate_id": candidate_id,
+        "candidate_path_binding_sha256": "a" * 64,
+        "source_sha256": evidence["source_sha256"],
+        "candidate_sha256": evidence["candidate_sha256"],
+        "build_evidence_sha256": evidence["build_evidence_sha256"],
+        "pilot_evidence_sha256": "0" * 64,
+        "primitive_projections": primitives,
+        "feature_projections": [],
+        "provenance_sha256": "",
+    }
+    packet["provenance_sha256"] = provenance.canonical_json_sha256(
+        provenance._packet_without_checksum(packet)
+    )
+
+    normalized = provenance.validate_generated_pilot_provenance(packet)
+
+    assert normalized["source_sha256"] == evidence["source_sha256"]
+    assert normalized["candidate_sha256"] == evidence["candidate_sha256"]
+    assert [item["entity_handle"] for item in normalized["primitive_projections"]] == [
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+    ]
+    assert normalized["feature_projections"] == []
 
 
 def test_generated_r3_registry_accepts_only_explicit_generated_mode(
