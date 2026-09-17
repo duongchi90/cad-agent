@@ -248,6 +248,7 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input(
         ("source_hash", "SOURCE_HASH"),
         ("source_replacement", "SOURCE_HASH"),
         ("source_custody_replacement", "SOURCE_CUSTODY_BINDING"),
+        ("acquisition_evidence_replacement", "SOURCE_ACQUISITION_BINDING"),
         ("source_identity", "SOURCE_IDENTITY"),
         ("linked_artifact_hash", "LINKED_ARTIFACT_HASH"),
         ("linked_artifact_replacement", "LINKED_ARTIFACT_HASH"),
@@ -289,6 +290,23 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         custody_item["declared_sha256"] = call["source_sha256"]
         custody_item["observed_sha256"] = call["source_sha256"]
         validate_source_custody(call["source_custody"])
+    elif mutation == "acquisition_evidence_replacement":
+        replacement = SOURCE_BYTES.replace(b"12.7000", b"13.7000")
+        call["source_bytes"] = replacement
+        call["source_sha256"] = hashlib.sha256(replacement).hexdigest()
+        call["proposed_facts"][0]["value"] = "13.7000"
+        for fact in call["proposed_facts"]:
+            fact["source_sha256"] = call["source_sha256"]
+        custody_item = next(
+            item
+            for item in call["source_custody"]["items"]
+            if item["source_id"] == SOURCE_IDENTITY
+        )
+        custody_item["declared_sha256"] = call["source_sha256"]
+        custody_item["observed_sha256"] = call["source_sha256"]
+        validate_source_custody(call["source_custody"])
+        call["source_acquisition_evidence"] = deepcopy(call["source_custody"])
+        validate_source_custody(call["source_acquisition_evidence"])
     elif mutation == "source_identity":
         call["source_identity"] = "part-001-R2"
     elif mutation == "linked_artifact_hash":
