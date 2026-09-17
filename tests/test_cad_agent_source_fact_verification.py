@@ -26,9 +26,11 @@ SOURCE_LOCATOR = "official://part-001/item"
 LINKED_ARTIFACT_LOCATOR = "official://part-001/drawing"
 SOURCE_IDENTITY = "part-001@R1"
 LINKED_ARTIFACT_IDENTITY = "drawing-001@R1"
+EXTRACTION_PROFILE_ID = "source-facts-stepped-shaft-v1"
 
 EXTRACTION_SPEC = {
     "schema_version": "source-fact-extraction-spec-1.0",
+    "profile_id": EXTRACTION_PROFILE_ID,
     "source_encoding": "utf-8",
     "required_source_identity": SOURCE_IDENTITY,
     "required_source_locator": SOURCE_LOCATOR,
@@ -80,6 +82,7 @@ EXTRACTION_SPEC = {
     ],
 }
 EXTRACTION_SPEC_SHA256 = canonical_json_sha256(EXTRACTION_SPEC)
+TRUSTED_EXTRACTION_SPEC_SHA256 = EXTRACTION_SPEC_SHA256
 
 EXPECTED_DIMENSIONS = {
     "shaft_diameter_a": "12.7000",
@@ -122,8 +125,9 @@ def _base_call() -> dict[str, Any]:
         "linked_artifact_sha256": LINKED_ARTIFACT_SHA256,
         "linked_artifact_locator": LINKED_ARTIFACT_LOCATOR,
         "linked_artifact_identity": LINKED_ARTIFACT_IDENTITY,
+        "extraction_profile_id": EXTRACTION_PROFILE_ID,
         "extraction_spec": deepcopy(EXTRACTION_SPEC),
-        "extraction_spec_sha256": EXTRACTION_SPEC_SHA256,
+        "extraction_spec_sha256": TRUSTED_EXTRACTION_SPEC_SHA256,
         "proposed_facts": _expected_facts(),
         "evidence_basis": "declared_source_facts",
     }
@@ -142,7 +146,8 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input()
     assert result["linked_artifact_sha256"] == LINKED_ARTIFACT_SHA256
     assert result["source_locator"] == SOURCE_LOCATOR
     assert result["source_identity"] == SOURCE_IDENTITY
-    assert result["extraction_spec_sha256"] == EXTRACTION_SPEC_SHA256
+    assert result["extraction_profile_id"] == EXTRACTION_PROFILE_ID
+    assert result["extraction_spec_sha256"] == TRUSTED_EXTRACTION_SPEC_SHA256
     assert result["evidence_basis"] == "declared_source_facts"
     assert result["facts"] == _expected_facts()
     assert result["compile_input"] == {
@@ -163,7 +168,7 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input()
         ("linked_artifact_identity", "LINKED_ARTIFACT_IDENTITY"),
         ("source_locator", "SOURCE_LOCATOR"),
         ("linked_artifact_locator", "LINKED_ARTIFACT_LOCATOR"),
-        ("extraction_spec", "EXTRACTION_SPEC_HASH"),
+        ("extraction_spec", "EXTRACTION_PROFILE_BINDING"),
         ("raster_basis", "EVIDENCE_BASIS"),
     ],
 )
@@ -187,6 +192,9 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         call["linked_artifact_locator"] = "official://part-002/drawing"
     elif mutation == "extraction_spec":
         call["extraction_spec"]["facts"][0]["compile_field"] = "segment_length_b"
+        call["extraction_spec_sha256"] = canonical_json_sha256(
+            call["extraction_spec"]
+        )
     else:
         call["evidence_basis"] = "raster_derived"
 
