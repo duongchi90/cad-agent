@@ -12,6 +12,7 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.source_bundle import build_source_bundle
 from cad_agent.source_integrity import (
     inspect_source_bundle_media,
+    source_custody_sha256,
     validate_source_custody,
 )
 
@@ -106,6 +107,14 @@ def acquired_source_custody(tmp_path: Path) -> dict[str, object]:
         source_bundle=source_bundle,
     )
 
+
+@pytest.fixture
+def source_acquisition_binding_sha256(
+    acquired_source_custody: dict[str, object],
+) -> str:
+    return source_custody_sha256(acquired_source_custody)
+
+
 EXTRACTION_SPEC = {
     "schema_version": "source-fact-extraction-spec-1.0",
     "profile_id": EXTRACTION_PROFILE_ID,
@@ -193,7 +202,10 @@ def _expected_facts() -> list[dict[str, str]]:
     return facts
 
 
-def _base_call(source_custody: dict[str, object]) -> dict[str, Any]:
+def _base_call(
+    source_custody: dict[str, object],
+    acquisition_binding_sha256: str,
+) -> dict[str, Any]:
     return {
         "source_bytes": SOURCE_BYTES,
         "source_sha256": SOURCE_SHA256,
@@ -205,6 +217,7 @@ def _base_call(source_custody: dict[str, object]) -> dict[str, Any]:
         "linked_artifact_identity": LINKED_ARTIFACT_IDENTITY,
         "source_custody": deepcopy(source_custody),
         "source_acquisition_evidence": source_custody,
+        "source_acquisition_binding_sha256": acquisition_binding_sha256,
         "extraction_profile_id": EXTRACTION_PROFILE_ID,
         "extraction_spec": deepcopy(EXTRACTION_SPEC),
         "extraction_spec_sha256": TRUSTED_EXTRACTION_SPEC_SHA256,
@@ -221,8 +234,11 @@ def _verifier() -> Any:
 
 def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input(
     acquired_source_custody: dict[str, object],
+    source_acquisition_binding_sha256: str,
 ) -> None:
-    result = _verifier()(**_base_call(acquired_source_custody))
+    result = _verifier()(
+        **_base_call(acquired_source_custody, source_acquisition_binding_sha256)
+    )
 
     assert result["source_sha256"] == SOURCE_SHA256
     assert result["linked_artifact_sha256"] == LINKED_ARTIFACT_SHA256
@@ -261,9 +277,12 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input(
     ],
 )
 def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
-    mutation: str, error_code: str, acquired_source_custody: dict[str, object]
+    mutation: str,
+    error_code: str,
+    acquired_source_custody: dict[str, object],
+    source_acquisition_binding_sha256: str,
 ) -> None:
-    call = _base_call(acquired_source_custody)
+    call = _base_call(acquired_source_custody, source_acquisition_binding_sha256)
     if mutation == "caller_fact":
         call["proposed_facts"][0]["value"] = "999.0000"
     elif mutation == "source_hash":
@@ -307,6 +326,10 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         validate_source_custody(call["source_custody"])
         call["source_acquisition_evidence"] = deepcopy(call["source_custody"])
         validate_source_custody(call["source_acquisition_evidence"])
+        assert (
+            source_custody_sha256(call["source_acquisition_evidence"])
+            != call["source_acquisition_binding_sha256"]
+        )
     elif mutation == "source_identity":
         call["source_identity"] = "part-001-R2"
     elif mutation == "linked_artifact_hash":
