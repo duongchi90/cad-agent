@@ -870,8 +870,16 @@ def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3(
         assert len(primitives) == 9
         assert [item["type"] for item in primitives].count("line") == 8
         assert [item["type"] for item in primitives].count("circle") == 1
+        assert all(item["source"] == "geometry_external_ai" for item in primitives)
         assert isinstance(kwargs["verification_request"], dict)
         assert isinstance(kwargs["verification_result"], dict)
+        request_sha256 = kwargs["verification_request"]["verification_request_sha256"]
+        result_sha256 = provenance.canonical_json_sha256(kwargs["verification_result"])
+        assert all(
+            item["trace"]["verification_request_sha256"] == request_sha256
+            and item["trace"]["verification_result_sha256"] == result_sha256
+            for item in primitives
+        )
         assert kwargs["verification_request"]
         assert kwargs["verification_result"]
 
@@ -902,3 +910,33 @@ def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3(
     )
     assert result["components"]
     assert delegated["source_render_bytes"] == render_bytes
+
+
+def test_p1_handoff_rejects_reparse_artifact_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "artifact-target"
+    target.mkdir()
+    alias = tmp_path / "artifact-alias"
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"directory symlink unavailable: {error}")
+
+    render_bytes = b"bound render"
+    plan = {
+        "source_binding": {
+            "source_render_sha256": hashlib.sha256(render_bytes).hexdigest()
+        }
+    }
+    monkeypatch.setattr(provenance, "_validated_p1_compile_plan", lambda _plan: plan)
+
+    with pytest.raises(
+        provenance.GeneratedPilotProvenanceError, match="P1_ARTIFACT_ROOT_REPARSE"
+    ):
+        provenance.build_external_geometry_r3_inputs_from_compile_plan(
+            plan=plan,
+            pilot_id="lexco-ph008",
+            artifact_dir=alias,
+            source_render_bytes=render_bytes,
+        )
