@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from cad_agent import source_fusion
+from cad_agent.drawing_contracts import canonical_json_sha256
 
 
 SOURCE_BYTES = (
@@ -78,6 +79,7 @@ EXTRACTION_SPEC = {
         },
     ],
 }
+EXTRACTION_SPEC_SHA256 = canonical_json_sha256(EXTRACTION_SPEC)
 
 EXPECTED_DIMENSIONS = {
     "shaft_diameter_a": "12.7000",
@@ -121,6 +123,7 @@ def _base_call() -> dict[str, Any]:
         "linked_artifact_locator": LINKED_ARTIFACT_LOCATOR,
         "linked_artifact_identity": LINKED_ARTIFACT_IDENTITY,
         "extraction_spec": deepcopy(EXTRACTION_SPEC),
+        "extraction_spec_sha256": EXTRACTION_SPEC_SHA256,
         "proposed_facts": _expected_facts(),
         "evidence_basis": "declared_source_facts",
     }
@@ -139,6 +142,7 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input()
     assert result["linked_artifact_sha256"] == LINKED_ARTIFACT_SHA256
     assert result["source_locator"] == SOURCE_LOCATOR
     assert result["source_identity"] == SOURCE_IDENTITY
+    assert result["extraction_spec_sha256"] == EXTRACTION_SPEC_SHA256
     assert result["evidence_basis"] == "declared_source_facts"
     assert result["facts"] == _expected_facts()
     assert result["compile_input"] == {
@@ -159,6 +163,7 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input()
         ("linked_artifact_identity", "LINKED_ARTIFACT_IDENTITY"),
         ("source_locator", "SOURCE_LOCATOR"),
         ("linked_artifact_locator", "LINKED_ARTIFACT_LOCATOR"),
+        ("extraction_spec", "EXTRACTION_SPEC_HASH"),
         ("raster_basis", "EVIDENCE_BASIS"),
     ],
 )
@@ -180,6 +185,8 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         call["source_locator"] = "official://part-002/item"
     elif mutation == "linked_artifact_locator":
         call["linked_artifact_locator"] = "official://part-002/drawing"
+    elif mutation == "extraction_spec":
+        call["extraction_spec"]["facts"][0]["compile_field"] = "segment_length_b"
     else:
         call["evidence_basis"] = "raster_derived"
 
