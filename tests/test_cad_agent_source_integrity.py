@@ -1661,6 +1661,77 @@ def test_task3_requires_complete_media_custody_entrypoint() -> None:
     )
 
 
+def test_task3_one_shot_media_bytes_are_bound_to_final_custody(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = _PNG_1X1
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", data))
+    adapter = _FakeCustodyAdapter(
+        {"sources/a.png": _fake_file(data, volume_serial=7, file_index=10)}
+    )
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        lambda: adapter,
+        raising=False,
+    )
+    acquire = getattr(_source_integrity_task2, "inspect_source_bundle_media_bytes", None)
+    assert callable(acquire), "R1C Task 3 RED: byte-bearing acquisition owner is missing"
+
+    custody, snapshots = acquire(
+        approved_root_id="ROOT-SYNTHETIC",
+        approved_root_revision="ROOT-REV-1",
+        approved_root=_TASK2_ROOT,
+        identity_key=_TASK2_KEY,
+        identity_key_revision="KEY-REV-1",
+        policy_limits=dict(_TASK2_LIMITS),
+        media_limits=dict(_TASK3_MEDIA_LIMITS),
+        source_bundle=bundle,
+    )
+
+    item = custody["items"][0]
+    snapshot = snapshots["IMAGE-001"]
+    assert snapshot["source_id"] == item["source_id"]
+    assert snapshot["relative_path"] == item["relative_path"]
+    assert snapshot["observed_sha256"] == item["observed_sha256"]
+    assert snapshot["file_object_identity_token"] == item["file_object_identity_token"]
+    assert snapshot["path_binding_sha256"] == item["path_binding_sha256"]
+    assert snapshot["source_custody_sha256"] == source_custody_sha256(custody)
+    assert snapshot["bytes"] == data
+    assert hashlib.sha256(snapshot["bytes"]).hexdigest() == item["observed_sha256"]
+
+
+def test_task3_one_shot_media_bytes_expose_no_partial_result_on_handle_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = b"AAAA"
+    bundle = _task2_bundle(_task2_item("IMAGE-001", "sources/a.png", original))
+    adapter = _MutateAtHashBoundaryAdapter(
+        {"sources/a.png": _fake_file(original, volume_serial=7, file_index=10)},
+        replacement=b"BBBB",
+    )
+    monkeypatch.setattr(
+        _source_integrity_task2,
+        "_WINDOWS_ADAPTER_FACTORY",
+        lambda: adapter,
+        raising=False,
+    )
+
+    with pytest.raises(SourceIntegrityError, match="WRITE_SHARING_DENIED"):
+        _source_integrity_task2.inspect_source_bundle_media_bytes(
+            approved_root_id="ROOT-SYNTHETIC",
+            approved_root_revision="ROOT-REV-1",
+            approved_root=_TASK2_ROOT,
+            identity_key=_TASK2_KEY,
+            identity_key_revision="KEY-REV-1",
+            policy_limits=dict(_TASK2_LIMITS),
+            media_limits=dict(_TASK3_MEDIA_LIMITS),
+            source_bundle=bundle,
+        )
+    assert adapter.mutation_blocked is True
+    assert adapter.mutated is False
+
+
 def test_task3_png_content_observation_is_bounded_and_structural() -> None:
     observed = _task3_observe("IMAGE", "image/png", _PNG_1X1)
     assert observed["observed_media_type"] == "image/png"
