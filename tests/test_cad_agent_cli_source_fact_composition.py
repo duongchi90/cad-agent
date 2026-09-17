@@ -19,6 +19,7 @@ SOURCE_LOCATOR = "sources/part-001/item.json"
 LINKED_ARTIFACT_LOCATOR = "sources/part-001/drawing.json"
 CUSTODY_DIGEST = "c" * 64
 FACT_EVIDENCE_SHA256 = "e" * 64
+APPROVED_ROOT_SENTINEL = object()
 
 COMPILE_INPUT = {
     "profile_id": "simple-stepped-shaft-p1-v1",
@@ -37,7 +38,7 @@ def _acquisition_context() -> dict[str, object]:
     return {
         "approved_root_id": "ROOT-001",
         "approved_root_revision": "ROOT-REV-1",
-        "approved_root": object(),
+        "approved_root": APPROVED_ROOT_SENTINEL,
         "identity_key": b"server-owned-test-key-32-bytes!!",
         "identity_key_revision": "KEY-REV-1",
         "policy_limits": {"max_items": 2},
