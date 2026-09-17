@@ -30,7 +30,9 @@ EXTRACTION_SPEC = {
     "schema_version": "source-fact-extraction-spec-1.0",
     "source_encoding": "utf-8",
     "required_source_identity": SOURCE_IDENTITY,
+    "required_source_locator": SOURCE_LOCATOR,
     "required_linked_artifact_identity": LINKED_ARTIFACT_IDENTITY,
+    "required_linked_artifact_locator": LINKED_ARTIFACT_LOCATOR,
     "facts": [
         {
             "fact_id": "fact-001",
@@ -153,6 +155,10 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input()
         ("caller_fact", "FACT_REPRODUCTION"),
         ("source_hash", "SOURCE_HASH"),
         ("source_identity", "SOURCE_IDENTITY"),
+        ("linked_artifact_hash", "LINKED_ARTIFACT_HASH"),
+        ("linked_artifact_identity", "LINKED_ARTIFACT_IDENTITY"),
+        ("source_locator", "SOURCE_LOCATOR"),
+        ("linked_artifact_locator", "LINKED_ARTIFACT_LOCATOR"),
         ("raster_basis", "EVIDENCE_BASIS"),
     ],
 )
@@ -166,6 +172,14 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         call["source_bytes"] = SOURCE_BYTES + b"drift\n"
     elif mutation == "source_identity":
         call["source_identity"] = "part-001@R2"
+    elif mutation == "linked_artifact_hash":
+        call["linked_artifact_bytes"] = LINKED_ARTIFACT_BYTES + b"drift\n"
+    elif mutation == "linked_artifact_identity":
+        call["linked_artifact_identity"] = "drawing-001@R2"
+    elif mutation == "source_locator":
+        call["source_locator"] = "official://part-002/item"
+    elif mutation == "linked_artifact_locator":
+        call["linked_artifact_locator"] = "official://part-002/drawing"
     else:
         call["evidence_basis"] = "raster_derived"
 
