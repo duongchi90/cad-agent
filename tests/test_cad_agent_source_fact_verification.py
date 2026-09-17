@@ -537,3 +537,14 @@ def test_verified_source_fact_handoff_delegates_to_existing_p1_skill_and_rejects
             expected_binding=deepcopy(binding),
             source_fact_verification_replay=trusted_replay,
         )
+
+    def fake_replay() -> dict[str, object]:
+        return deepcopy(forged)
+
+    with pytest.raises((ValueError, skills.MechanicalSkillError)):
+        handoff(
+            verified_source_fact_evidence=forged,
+            proposal=forged_proposal,
+            expected_binding=deepcopy(binding),
+            source_fact_verification_replay=fake_replay,
+        )
