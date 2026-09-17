@@ -1097,7 +1097,10 @@ def build_external_geometry_r3_inputs_from_compile_plan(
     ):
         _fail("P1_SOURCE_RENDER_BINDING_INVALID")
 
-    root = Path(artifact_dir).resolve()
+    artifact_input = Path(artifact_dir)
+    if _path_contains_windows_reparse_point(artifact_input):
+        _fail("P1_ARTIFACT_ROOT_REPARSE")
+    root = artifact_input.resolve()
     if _path_contains_windows_reparse_point(root.parent):
         _fail("P1_ARTIFACT_ROOT_REPARSE")
     if root.exists():
@@ -1111,6 +1114,24 @@ def build_external_geometry_r3_inputs_from_compile_plan(
     build_evidence_path = root / "build-evidence.json"
     definition = _p1_definition_from_compile_plan(validated_plan)
     source_sha256 = binding["source_sha256"]
+    verification_request: dict[str, object] = {
+        "kind": "P1_SOURCE_BOUND_COMPILE_VERIFICATION_REQUEST",
+        "status": "PROPOSAL_ONLY",
+        "compile_plan_sha256": validated_plan["plan_sha256"],
+        "exact_source_binding": deepcopy(dict(binding)),
+        "geometry_contract": deepcopy(validated_plan["geometry_contract"]),
+        "feature_contract": deepcopy(validated_plan["feature_contract"]),
+        "checks_required": [
+            "EXACT_SOURCE_BINDING",
+            "PRIMITIVE_IR_SCHEMA",
+            "DXF_BUILD_EVIDENCE",
+            "STRICT_PRIMITIVE_ROUND_TRIP",
+        ],
+        "cad_mutation": False,
+    }
+    verification_request["verification_request_sha256"] = canonical_json_sha256(
+        verification_request
+    )
     try:
         primitive_doc, _semantic_doc, _bindings = _documents(
             definition,
@@ -1120,6 +1141,11 @@ def build_external_geometry_r3_inputs_from_compile_plan(
     except (TypeError, ValueError, KeyError) as error:
         raise GeneratedPilotProvenanceError("P1_PRIMITIVE_IR_MATERIALIZATION_INVALID") from error
     primitive_doc.calibration.source_sha256 = source_sha256
+    request_sha256 = verification_request["verification_request_sha256"]
+    for primitive in primitive_doc.primitives:
+        primitive.source = "geometry_external_ai"
+        primitive.trace.verification_request_sha256 = request_sha256
+        primitive.trace.verification_result_sha256 = "0" * 64
     primitive_errors = validate_primitive_document(primitive_doc.to_dict())
     if primitive_errors:
         _fail("P1_PRIMITIVE_IR_INVALID")
@@ -1143,34 +1169,14 @@ def build_external_geometry_r3_inputs_from_compile_plan(
         _fail("P1_CANDIDATE_BUILD_REVIEW_FAILED")
     write_build_evidence(build_evidence_path, build)
 
-    verification_request: dict[str, object] = {
-        "kind": "P1_SOURCE_BOUND_COMPILE_VERIFICATION_REQUEST",
-        "status": "PROPOSAL_ONLY",
-        "compile_plan_sha256": validated_plan["plan_sha256"],
-        "exact_source_binding": deepcopy(dict(binding)),
-        "geometry_contract": deepcopy(validated_plan["geometry_contract"]),
-        "feature_contract": deepcopy(validated_plan["feature_contract"]),
-        "checks_required": [
-            "EXACT_SOURCE_BINDING",
-            "PRIMITIVE_IR_SCHEMA",
-            "DXF_BUILD_EVIDENCE",
-            "STRICT_PRIMITIVE_ROUND_TRIP",
-        ],
-        "cad_mutation": False,
-    }
-    verification_request["verification_request_sha256"] = canonical_json_sha256(
-        verification_request
-    )
     verification_result: dict[str, object] = {
         "kind": "P1_SOURCE_BOUND_COMPILE_VERIFICATION_RESULT",
-        "status": "VERIFIED",
         "verification_request_sha256": verification_request[
             "verification_request_sha256"
         ],
         "compile_plan_sha256": validated_plan["plan_sha256"],
         "source_sha256": source_sha256,
         "source_render_sha256": expected_source_render_sha256,
-        "primitive_ir_sha256": hashlib.sha256(primitive_path.read_bytes()).hexdigest(),
         "candidate_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
         "build_evidence_sha256": hashlib.sha256(
             build_evidence_path.read_bytes()
@@ -1179,6 +1185,16 @@ def build_external_geometry_r3_inputs_from_compile_plan(
         "review_passed": review.passed,
         "cad_mutation": False,
     }
+    result_sha256 = canonical_json_sha256(verification_result)
+    for primitive in primitive_doc.primitives:
+        primitive.trace.verification_result_sha256 = result_sha256
+    primitive_errors = validate_primitive_document(primitive_doc.to_dict())
+    if primitive_errors:
+        _fail("P1_PRIMITIVE_IR_INVALID")
+    primitive_path.write_text(
+        json.dumps(primitive_doc.to_dict(), ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
     try:
         validate_primitive_bound_candidate(
             primitive_path,

@@ -8,6 +8,7 @@ general Mechanical geometry engine or an execution transport.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.live import load_build_evidence, write_build_evidence
 from cad_agent.manifest import sha256_file
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
@@ -781,6 +783,118 @@ def _external_primitive_security_view(primitive: Primitive) -> dict[str, object]
     return payload
 
 
+def _validate_source_bound_compile_provenance(
+    primitive_doc: PrimitiveIRDocument,
+    *,
+    verification_request: Mapping[str, object],
+    verification_result: Mapping[str, object],
+    source_render_bytes: bytes,
+) -> None:
+    if verification_request.get("kind") != "P1_SOURCE_BOUND_COMPILE_VERIFICATION_REQUEST":
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    if verification_result.get("kind") != "P1_SOURCE_BOUND_COMPILE_VERIFICATION_RESULT":
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    request_sha256 = verification_request.get("verification_request_sha256")
+    if request_sha256 != canonical_json_sha256(
+        {
+            key: deepcopy(value)
+            for key, value in verification_request.items()
+            if key != "verification_request_sha256"
+        }
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    if not isinstance(source_render_bytes, bytes) or not source_render_bytes:
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    binding = verification_request.get("exact_source_binding")
+    if not isinstance(binding, Mapping):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    source_document = primitive_doc.source_document
+    calibration = primitive_doc.calibration
+    if (
+        source_document.sha256 != binding.get("source_sha256")
+        or source_document.page_index != binding.get("page_index")
+        or calibration.source_sha256 != binding.get("source_sha256")
+        or hashlib.sha256(source_render_bytes).hexdigest()
+        != binding.get("source_render_sha256")
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    geometry_contract = verification_request.get("geometry_contract")
+    feature_contract = verification_request.get("feature_contract")
+    if not isinstance(geometry_contract, Mapping) or not isinstance(
+        feature_contract, Mapping
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    raw_lines = geometry_contract.get("lines")
+    circle = geometry_contract.get("circle")
+    if not isinstance(raw_lines, list) or not isinstance(circle, Mapping):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    expected: dict[str, dict[str, object]] = {}
+    for line in raw_lines:
+        if not isinstance(line, Mapping):
+            raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+        primitive_id = line.get("id")
+        if not isinstance(primitive_id, str):
+            raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+        expected[primitive_id] = {
+            "type": "line",
+            "start_mm": deepcopy(line.get("start_mm")),
+            "end_mm": deepcopy(line.get("end_mm")),
+        }
+    circle_id = circle.get("id")
+    if not isinstance(circle_id, str):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    expected[circle_id] = {
+        "type": "circle",
+        "center_mm": deepcopy(circle.get("center_mm")),
+        "radius_mm": circle.get("radius_mm"),
+    }
+    actual = {
+        primitive.id: {
+            "type": primitive.type,
+            **(
+                {
+                    "start_mm": [primitive.geometry.start.x, primitive.geometry.start.y],
+                    "end_mm": [primitive.geometry.end.x, primitive.geometry.end.y],
+                }
+                if isinstance(primitive.geometry, LineGeometry)
+                else {
+                    "center_mm": [
+                        primitive.geometry.center.x,
+                        primitive.geometry.center.y,
+                    ],
+                    "radius_mm": primitive.geometry.radius,
+                }
+            ),
+        }
+        for primitive in primitive_doc.primitives
+        if primitive.type in ("line", "circle")
+    }
+    if actual != expected or len(actual) != 9:
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    if any(primitive.source != "geometry_external_ai" for primitive in primitive_doc.primitives):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    expected_result_sha256 = canonical_json_sha256(verification_result)
+    if (
+        verification_result.get("verification_request_sha256") != request_sha256
+        or verification_result.get("compile_plan_sha256")
+        != verification_request.get("compile_plan_sha256")
+        or verification_result.get("source_sha256") != binding.get("source_sha256")
+        or verification_result.get("source_render_sha256")
+        != binding.get("source_render_sha256")
+        or verification_result.get("review_passed") is not True
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+    for primitive in primitive_doc.primitives:
+        if (
+            primitive.trace.verification_request_sha256 != request_sha256
+            or primitive.trace.verification_result_sha256 != expected_result_sha256
+        ):
+            raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+
 def _validate_external_provenance(
     primitive_doc: PrimitiveIRDocument,
     *,
@@ -801,6 +915,21 @@ def _validate_external_provenance(
         or source_render_bytes is None
     ):
         raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    if (
+        isinstance(verification_request, Mapping)
+        and verification_request.get("kind")
+        == "P1_SOURCE_BOUND_COMPILE_VERIFICATION_REQUEST"
+    ):
+        if not isinstance(verification_result, Mapping):
+            raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+        _validate_source_bound_compile_provenance(
+            primitive_doc,
+            verification_request=verification_request,
+            verification_result=verification_result,
+            source_render_bytes=source_render_bytes,
+        )
+        return
 
     from cad_agent.source_verified_geometry import (
         materialize_verified_external_visual_lines,
