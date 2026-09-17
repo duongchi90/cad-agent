@@ -782,3 +782,61 @@ def test_generated_r4_requires_no_fake_handoff_and_rejects_supplied_one(
             schema_version="candidate-revision-1.1",
             candidate_kind="ROOT_PRE_REPAIR",
         )
+
+
+def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3() -> None:
+    """A P1 compile plan must have a thin handoff into the existing artifact chain."""
+
+    from cad_agent.mechanical_pilot import compile_source_bound_simple_shaft_proposal
+
+    source_sha256 = "0c3db3046e9842dfcb6075ea2f6209dfe0afcc26f5e6d428dcd3ab2d72ac4ffa"
+    render_sha256 = "7fa3ce10bda49c40064995dca67c46a31d87d988e695e6394b2d79286546edbc"
+    binding = {
+        "source_sha256": source_sha256,
+        "page_index": 0,
+        "roi_bbox_px": [0, 0, 263, 108],
+        "source_render_sha256": render_sha256,
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": 1.0,
+            "origin_px": [0.0, 0.0],
+            "method": "manual_override",
+            "reference_note": "Exact PH008 table is authoritative; dimensions are not pixel-derived",
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+        "profile_id": "simple-stepped-shaft-p1-v1",
+    }
+    plan = compile_source_bound_simple_shaft_proposal(
+        {
+            "schema_version": "p1-source-bound-proposal-1.0",
+            "proposal_source": "external_ai",
+            **binding,
+            "dimensions_mm": {
+                "shaft_diameter_a": 20.6375,
+                "shaft_diameter_b": 12.7,
+                "segment_length_a": 5.55625,
+                "segment_length_b": 49.2125,
+                "hole_diameter": 3.175,
+                "hole_axial_position": 51.59375,
+            },
+            "evidence_refs": {
+                "item_url": "https://catalog.lexcocable.com/item/gs-hardware-structural-hardware-clevis-pins-headed/clevis-pin-headed/ph008",
+                "item_artifact_sha256": source_sha256,
+                "drawing_url": "https://catalog.lexcocable.com/Asset/PH008dimensions.jpg",
+                "drawing_sha256": render_sha256,
+                "variant_binding": "PH008 item identity + PH008 dimension table + linked manufacturer drawing",
+            },
+        },
+        expected_binding=binding,
+    )
+
+    handoff = getattr(
+        provenance,
+        "build_external_geometry_r3_inputs_from_compile_plan",
+        None,
+    )
+    assert callable(handoff), (
+        "P1 compile plan has no reuse-first handoff into the existing "
+        "verified PrimitiveIR/candidate/build-evidence chain"
+    )
