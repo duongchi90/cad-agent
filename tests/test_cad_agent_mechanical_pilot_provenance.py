@@ -836,6 +836,7 @@ def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3(
     )
 
     delegated: dict[str, object] = {}
+    real_r3 = provenance.build_external_geometry_r3_inputs
 
     def capture_existing_r3_inputs(**kwargs: object) -> dict[str, object]:
         delegated.update(kwargs)
@@ -874,7 +875,9 @@ def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3(
         assert kwargs["verification_request"]
         assert kwargs["verification_result"]
 
-        return {"delegated_to_existing_r3": True}
+        delegated_result = real_r3(**kwargs)
+        delegated["result"] = delegated_result
+        return delegated_result
 
     monkeypatch.setattr(
         provenance, "build_external_geometry_r3_inputs", capture_existing_r3_inputs
@@ -892,5 +895,10 @@ def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3(
         artifact_dir=tmp_path / "verified-artifacts",
         source_render_bytes=render_bytes,
     )
-    assert result == {"delegated_to_existing_r3": True}
+    assert result == delegated["result"]
+    assert isinstance(result, dict)
+    assert result["upstream_context"]["provenance_mode"] == (
+        "EXTERNAL_GEOMETRY_ONLY"
+    )
+    assert result["components"]
     assert delegated["source_render_bytes"] == render_bytes
