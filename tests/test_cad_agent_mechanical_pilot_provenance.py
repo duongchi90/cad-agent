@@ -784,13 +784,16 @@ def test_generated_r4_requires_no_fake_handoff_and_rejects_supplied_one(
         )
 
 
-def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3() -> None:
+def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A P1 compile plan must have a thin handoff into the existing artifact chain."""
 
     from cad_agent.mechanical_pilot import compile_source_bound_simple_shaft_proposal
 
     source_sha256 = "0c3db3046e9842dfcb6075ea2f6209dfe0afcc26f5e6d428dcd3ab2d72ac4ffa"
-    render_sha256 = "7fa3ce10bda49c40064995dca67c46a31d87d988e695e6394b2d79286546edbc"
+    render_bytes = b"PH008 drawing render bytes for the handoff contract"
+    render_sha256 = hashlib.sha256(render_bytes).hexdigest()
     binding = {
         "source_sha256": source_sha256,
         "page_index": 0,
@@ -824,19 +827,70 @@ def test_source_bound_compile_plan_has_reuse_first_handoff_to_external_r3() -> N
                 "item_url": "https://catalog.lexcocable.com/item/gs-hardware-structural-hardware-clevis-pins-headed/clevis-pin-headed/ph008",
                 "item_artifact_sha256": source_sha256,
                 "drawing_url": "https://catalog.lexcocable.com/Asset/PH008dimensions.jpg",
-                "drawing_sha256": render_sha256,
+                "drawing_sha256": "7fa3ce10bda49c40064995dca67c46a31d87d988e695e6394b2d79286546edbc",
+                "test_render_binding_sha256": render_sha256,
                 "variant_binding": "PH008 item identity + PH008 dimension table + linked manufacturer drawing",
             },
         },
         expected_binding=binding,
     )
 
+    delegated: dict[str, object] = {}
+
+    def capture_existing_r3_inputs(**kwargs: object) -> dict[str, object]:
+        delegated.update(kwargs)
+        assert set(kwargs) == {
+            "pilot_id",
+            "primitive_ir_path",
+            "candidate_path",
+            "build_evidence_path",
+            "verification_request",
+            "verification_result",
+            "source_render_bytes",
+        }
+        assert kwargs["pilot_id"] == "lexco-ph008"
+        assert kwargs["source_render_bytes"]
+        assert hashlib.sha256(kwargs["source_render_bytes"]).hexdigest() == (
+            plan["source_binding"]["source_render_sha256"]
+        )
+
+        primitive_path = Path(kwargs["primitive_ir_path"])
+        candidate_path = Path(kwargs["candidate_path"])
+        build_evidence_path = Path(kwargs["build_evidence_path"])
+        assert primitive_path.is_file()
+        assert candidate_path.is_file()
+        assert build_evidence_path.is_file()
+
+        primitive_doc = json.loads(primitive_path.read_text(encoding="utf-8"))
+        assert primitive_doc["source_document"]["sha256"] == (
+            plan["source_binding"]["source_sha256"]
+        )
+        primitives = primitive_doc["primitives"]
+        assert len(primitives) == 9
+        assert [item["type"] for item in primitives].count("line") == 8
+        assert [item["type"] for item in primitives].count("circle") == 1
+        assert isinstance(kwargs["verification_request"], dict)
+        assert isinstance(kwargs["verification_result"], dict)
+        assert kwargs["verification_request"]
+        assert kwargs["verification_result"]
+
+        return {"delegated_to_existing_r3": True}
+
+    monkeypatch.setattr(
+        provenance, "build_external_geometry_r3_inputs", capture_existing_r3_inputs
+    )
     handoff = getattr(
         provenance,
         "build_external_geometry_r3_inputs_from_compile_plan",
         None,
     )
-    assert callable(handoff), (
-        "P1 compile plan has no reuse-first handoff into the existing "
-        "verified PrimitiveIR/candidate/build-evidence chain"
+    assert callable(handoff), "P1 compile plan handoff owner is missing"
+
+    result = handoff(
+        plan=plan,
+        pilot_id="lexco-ph008",
+        artifact_dir=tmp_path / "verified-artifacts",
+        source_render_bytes=render_bytes,
     )
+    assert result == {"delegated_to_existing_r3": True}
+    assert delegated["source_render_bytes"] == render_bytes
