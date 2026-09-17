@@ -395,3 +395,90 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
 
     with pytest.raises(ValueError, match=error_code):
         _verifier(source_acquisition_replay)(**call)
+
+
+def test_verified_source_fact_handoff_delegates_to_existing_p1_skill_and_rejects_drift(
+    acquired_source_custody: dict[str, object],
+    source_acquisition_binding_sha256: str,
+    source_acquisition_replay: Any,
+) -> None:
+    """Verified facts must remain bound when handed to the existing P1 owner."""
+
+    from importlib import import_module
+
+    skills = import_module("cad_agent.mechanical_skills")
+    handoff = getattr(skills, "invoke_verified_source_fact_evidence", None)
+    assert callable(handoff), "MISSING_SOURCE_FACT_P1_HANDOFF"
+
+    verified = _verifier(source_acquisition_replay)(
+        **_base_call(
+            acquired_source_custody,
+            source_acquisition_binding_sha256,
+        )
+    )
+    binding = {
+        "source_sha256": verified["source_sha256"],
+        "page_index": 0,
+        "roi_bbox_px": [10, 20, 410, 220],
+        "source_render_sha256": "b" * 64,
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": 0.5,
+            "origin_px": [10.0, 20.0],
+            "method": "manual_override",
+            "reference_note": "verified source facts",
+            "status": "verified",
+            "source_sha256": verified["source_sha256"],
+        },
+        "profile_id": "simple-stepped-shaft-p1-v1",
+    }
+    proposal = {
+        "schema_version": "p1-source-bound-proposal-1.0",
+        "proposal_source": "external_ai",
+        **binding,
+        "dimensions_mm": deepcopy(verified["compile_input"]["dimensions_mm"]),
+        "evidence_refs": {
+            "source_fact_evidence_sha256": verified["fact_evidence_sha256"],
+            "source_custody_sha256": source_acquisition_binding_sha256,
+            "source_sha256": verified["source_sha256"],
+            "source_locator": verified["source_locator"],
+            "source_identity": verified["source_identity"],
+            "linked_artifact_sha256": verified["linked_artifact_sha256"],
+            "linked_artifact_locator": verified["linked_artifact_locator"],
+            "linked_artifact_identity": verified["linked_artifact_identity"],
+        },
+    }
+
+    plan = handoff(
+        verified_source_fact_evidence=verified,
+        proposal=proposal,
+        expected_binding=deepcopy(binding),
+    )
+    assert plan["dimensions_mm"] == verified["compile_input"]["dimensions_mm"]
+    assert plan["evidence_refs"] == proposal["evidence_refs"]
+    assert plan["geometry_contract"]["line_count"] == 8
+    assert plan["geometry_contract"]["circle_count"] == 1
+    assert plan["feature_contract"]["shaft-profile-001"]["kind"] == "shaft_step"
+    assert plan["feature_contract"]["hole-axial-001"]["kind"] == "hole_feature"
+
+    substitutions = []
+    dimensions = deepcopy(proposal)
+    dimensions["dimensions_mm"]["shaft_diameter_a"] = "13.7000"
+    substitutions.append((dimensions, deepcopy(binding)))
+    fact_hash = deepcopy(proposal)
+    fact_hash["evidence_refs"]["source_fact_evidence_sha256"] = "0" * 64
+    substitutions.append((fact_hash, deepcopy(binding)))
+    source_binding = deepcopy(proposal)
+    source_binding["source_render_sha256"] = "c" * 64
+    substitutions.append((source_binding, deepcopy(binding)))
+    expected_binding = deepcopy(binding)
+    expected_binding["source_render_sha256"] = "d" * 64
+    substitutions.append((deepcopy(proposal), expected_binding))
+
+    for substituted_proposal, substituted_expected in substitutions:
+        with pytest.raises((ValueError, skills.MechanicalSkillError)):
+            handoff(
+                verified_source_fact_evidence=verified,
+                proposal=substituted_proposal,
+                expected_binding=substituted_expected,
+            )
