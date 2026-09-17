@@ -711,15 +711,15 @@ def test_source_bound_external_proposal_compiles_deterministically_without_false
     assert "geometry_opencv" not in json.dumps(first, sort_keys=True)
 
 
-def test_source_fact_bound_compiler_reuses_one_geometry_plan_without_visual_claims() -> None:
+def test_p1_geometry_plan_reuses_one_geometry_owner_without_visual_claims() -> None:
     from cad_agent.mechanical_pilot import (
+        _compile_p1_geometry_plan,
         compile_source_bound_simple_shaft_proposal,
-        compile_source_fact_bound_simple_shaft_proposal,
     )
 
     fact_evidence = _source_fact_bound_evidence()
-    source_fact_plan = compile_source_fact_bound_simple_shaft_proposal(
-        fact_evidence
+    source_fact_plan = _compile_p1_geometry_plan(
+        fact_evidence["dimensions_mm"]
     )
     visual_plan = compile_source_bound_simple_shaft_proposal(
         _source_bound_proposal(), expected_binding=_source_bound_binding()
@@ -734,58 +734,15 @@ def test_source_fact_bound_compiler_reuses_one_geometry_plan_without_visual_clai
     assert "calibration" not in encoded
 
 
-@pytest.mark.parametrize(
-    "field",
-    [
-        "fact_evidence_sha256",
-        "source_sha256",
-        "linked_artifact_sha256",
-        "source_custody_sha256",
-        "source_acquisition_binding_sha256",
-        "profile_id",
-        "dimensions_mm",
-    ],
-)
-def test_source_fact_bound_compiler_rejects_mutated_verified_payload(
-    field: str,
-) -> None:
-    from cad_agent.mechanical_pilot import compile_source_fact_bound_simple_shaft_proposal
+def test_source_fact_bound_public_compiler_rejects_unverified_caller_payload() -> None:
+    """A caller must not self-authenticate a source-fact compile projection."""
 
-    payload = _source_fact_bound_evidence()
-    if field == "dimensions_mm":
-        dimensions = deepcopy(payload["dimensions_mm"])
-        assert isinstance(dimensions, dict)
-        dimensions["hole_diameter"] = 11.0
-        payload[field] = dimensions
-    elif field == "profile_id":
-        payload[field] = "other-profile"
-    else:
-        payload[field] = "9" * 64
+    import cad_agent.mechanical_pilot as pilot
 
-    with pytest.raises(ValueError):
-        compile_source_fact_bound_simple_shaft_proposal(payload)
+    fabricated = _source_fact_bound_evidence()
 
-
-@pytest.mark.parametrize("mutation", ["value", "fact_id", "quantity", "unit"])
-def test_source_fact_bound_compiler_rejects_semantically_unbound_fact_records(
-    mutation: str,
-) -> None:
-    from cad_agent.mechanical_pilot import compile_source_fact_bound_simple_shaft_proposal
-
-    payload = _source_fact_bound_evidence()
-    facts = payload["facts"]
-    assert isinstance(facts, list)
-    if mutation == "value":
-        facts[0]["value"] = "999.0000"
-    elif mutation == "fact_id":
-        facts[0]["fact_id"] = facts[1]["fact_id"]
-    elif mutation == "quantity":
-        facts[0]["quantity"] = "angle"
-    else:
-        facts[0]["unit"] = "inch"
-
-    with pytest.raises(ValueError, match="PILOT_P1_SOURCE_FACT"):
-        compile_source_fact_bound_simple_shaft_proposal(payload)
+    assert fabricated["facts"]
+    assert getattr(pilot, "compile_source_fact_bound_simple_shaft_proposal", None) is None
 
 
 @pytest.mark.parametrize(

@@ -1101,53 +1101,6 @@ _P1_DIMENSION_FIELDS = frozenset(
 _P1_PROFILE_ID = "simple-stepped-shaft-p1-v1"
 _P1_PROPOSAL_SCHEMA_VERSION = "p1-source-bound-proposal-1.0"
 _P1_COMPILE_PLAN_SCHEMA_VERSION = "p1-source-bound-compile-plan-1.0"
-_P1_SOURCE_FACT_PROFILE_ID = "source-facts-stepped-shaft-v1"
-_P1_SOURCE_FACT_COMPILE_PLAN_SCHEMA_VERSION = "p1-source-fact-bound-compile-plan-1.0"
-_P1_SOURCE_FACT_BOUND_FIELDS = frozenset(
-    {
-        "source_sha256",
-        "source_locator",
-        "source_identity",
-        "linked_artifact_sha256",
-        "linked_artifact_locator",
-        "linked_artifact_identity",
-        "source_custody_sha256",
-        "source_acquisition_binding_sha256",
-        "extraction_profile_id",
-        "extraction_spec_sha256",
-        "evidence_basis",
-        "fact_evidence_sha256",
-        "profile_id",
-        "dimensions_mm",
-        "compile_input",
-        "facts",
-        "evidence_refs",
-    }
-)
-_P1_SOURCE_FACT_COMPILE_INPUT_FIELDS = frozenset({"profile_id", "dimensions_mm"})
-_P1_SOURCE_FACT_FIELDS = frozenset(
-    {
-        "fact_id",
-        "source_key",
-        "quantity",
-        "unit",
-        "value",
-        "source_sha256",
-        "source_locator",
-        "source_identity",
-        "linked_artifact_sha256",
-        "linked_artifact_locator",
-        "linked_artifact_identity",
-    }
-)
-_P1_SOURCE_FACT_RECORD_CONTRACT = (
-    ("fact-001", "diameter_a_mm", "length", "mm", "shaft_diameter_a"),
-    ("fact-002", "diameter_b_mm", "length", "mm", "shaft_diameter_b"),
-    ("fact-003", "segment_a_mm", "length", "mm", "segment_length_a"),
-    ("fact-004", "segment_b_mm", "length", "mm", "segment_length_b"),
-    ("fact-005", "hole_diameter_mm", "length", "mm", "hole_diameter"),
-    ("fact-006", "hole_position_mm", "length", "mm", "hole_axial_position"),
-)
 
 
 def _p1_binding(payload: object, name: str) -> dict[str, object]:
@@ -1356,196 +1309,19 @@ def compile_source_bound_simple_shaft_proposal(
     return plan
 
 
-def _source_fact_bound_payload(payload: object) -> dict[str, object]:
-    root = _mapping(payload, "P1_SOURCE_FACT_BOUND")
-    _exact_fields(root, _P1_SOURCE_FACT_BOUND_FIELDS, "P1_SOURCE_FACT_BOUND")
-    source_sha256 = _hash(
-        root.get("source_sha256"), "P1_SOURCE_FACT_SOURCE_SHA256"
-    )
-    linked_sha256 = _hash(
-        root.get("linked_artifact_sha256"),
-        "P1_SOURCE_FACT_LINKED_ARTIFACT_SHA256",
-    )
-    source_identity = _string(
-        root.get("source_identity"), "P1_SOURCE_FACT_SOURCE_IDENTITY"
-    )
-    linked_identity = _string(
-        root.get("linked_artifact_identity"),
-        "P1_SOURCE_FACT_LINKED_ARTIFACT_IDENTITY",
-    )
-    source_locator = _string(
-        root.get("source_locator"), "P1_SOURCE_FACT_SOURCE_LOCATOR"
-    )
-    linked_locator = _string(
-        root.get("linked_artifact_locator"),
-        "P1_SOURCE_FACT_LINKED_ARTIFACT_LOCATOR",
-    )
-    custody_sha256 = _hash(
-        root.get("source_custody_sha256"), "P1_SOURCE_FACT_CUSTODY_SHA256"
-    )
-    acquisition_sha256 = _hash(
-        root.get("source_acquisition_binding_sha256"),
-        "P1_SOURCE_FACT_ACQUISITION_BINDING_SHA256",
-    )
-    if custody_sha256 != acquisition_sha256:
-        raise ValueError("PILOT_P1_SOURCE_FACT_CUSTODY_BINDING_INVALID")
-    if root.get("extraction_profile_id") != _P1_SOURCE_FACT_PROFILE_ID:
-        raise ValueError("PILOT_P1_SOURCE_FACT_PROFILE_UNSUPPORTED")
-    extraction_spec_sha256 = _hash(
-        root.get("extraction_spec_sha256"),
-        "P1_SOURCE_FACT_EXTRACTION_SPEC_SHA256",
-    )
-    if root.get("evidence_basis") != "declared_source_facts":
-        raise ValueError("PILOT_P1_SOURCE_FACT_EVIDENCE_BASIS_INVALID")
-    fact_evidence_sha256 = _hash(
-        root.get("fact_evidence_sha256"), "P1_SOURCE_FACT_EVIDENCE_SHA256"
-    )
-    profile_id = _string(root.get("profile_id"), "P1_SOURCE_FACT_PROFILE_ID")
-    if profile_id != _P1_PROFILE_ID:
-        raise ValueError("PILOT_P1_PROFILE_UNSUPPORTED")
-    dimensions = _p1_dimensions(
-        root.get("dimensions_mm"), allow_decimal_strings=True
-    )
-
-    compile_input = _mapping(
-        root.get("compile_input"), "P1_SOURCE_FACT_COMPILE_INPUT"
-    )
-    _exact_fields(
-        compile_input,
-        _P1_SOURCE_FACT_COMPILE_INPUT_FIELDS,
-        "P1_SOURCE_FACT_COMPILE_INPUT",
-    )
-    if compile_input.get("profile_id") != profile_id:
-        raise ValueError("PILOT_P1_SOURCE_FACT_COMPILE_PROFILE_INVALID")
-    if _p1_dimensions(
-        compile_input.get("dimensions_mm"), allow_decimal_strings=True
-    ) != dimensions:
-        raise ValueError("PILOT_P1_SOURCE_FACT_DIMENSIONS_MISMATCH")
-
-    facts = root.get("facts")
-    if not isinstance(facts, list) or len(facts) != len(
-        _P1_SOURCE_FACT_RECORD_CONTRACT
-    ):
-        raise ValueError("PILOT_P1_SOURCE_FACTS_INVALID")
-    for fact, expected_record in zip(facts, _P1_SOURCE_FACT_RECORD_CONTRACT):
-        normalized_fact = _mapping(fact, "P1_SOURCE_FACT")
-        _exact_fields(normalized_fact, _P1_SOURCE_FACT_FIELDS, "P1_SOURCE_FACT")
-        for field, expected in (
-            ("source_sha256", source_sha256),
-            ("source_locator", source_locator),
-            ("source_identity", source_identity),
-            ("linked_artifact_sha256", linked_sha256),
-            ("linked_artifact_locator", linked_locator),
-            ("linked_artifact_identity", linked_identity),
-        ):
-            if normalized_fact.get(field) != expected:
-                raise ValueError("PILOT_P1_SOURCE_FACT_PROVENANCE_MISMATCH")
-        (
-            expected_fact_id,
-            expected_source_key,
-            expected_quantity,
-            expected_unit,
-            compile_field,
-        ) = expected_record
-        if tuple(
-            normalized_fact.get(field)
-            for field in ("fact_id", "source_key", "quantity", "unit")
-        ) != (
-            expected_fact_id,
-            expected_source_key,
-            expected_quantity,
-            expected_unit,
-        ):
-            raise ValueError("PILOT_P1_SOURCE_FACT_CONTRACT_INVALID")
-        fact_value = _string(normalized_fact.get("value"), "P1_SOURCE_FACT_VALUE")
-        try:
-            fact_number = float(fact_value)
-        except ValueError:
-            raise ValueError("PILOT_P1_SOURCE_FACT_VALUE_INVALID") from None
-        if (
-            not math.isfinite(fact_number)
-            or fact_number != dimensions[compile_field]
-        ):
-            raise ValueError("PILOT_P1_SOURCE_FACT_DIMENSION_MISMATCH")
-
-    evidence_refs_raw = _mapping(root.get("evidence_refs"), "P1_SOURCE_FACT_REFS")
-    if len(evidence_refs_raw) > 12:
-        raise ValueError("PILOT_P1_SOURCE_FACT_REFS_INVALID")
-    evidence_refs: dict[str, str] = {}
-    for key, value in sorted(evidence_refs_raw.items()):
-        evidence_refs[_string(key, "P1_SOURCE_FACT_REF_KEY")] = _string(
-            value, "P1_SOURCE_FACT_REF_VALUE"
-        )
-    if evidence_refs.get("source_fact_evidence_sha256") != fact_evidence_sha256:
-        raise ValueError("PILOT_P1_SOURCE_FACT_EVIDENCE_REF_MISMATCH")
-
-    return {
-        "source_sha256": source_sha256,
-        "source_identity": source_identity,
-        "linked_artifact_sha256": linked_sha256,
-        "linked_artifact_identity": linked_identity,
-        "source_custody_sha256": custody_sha256,
-        "source_acquisition_binding_sha256": acquisition_sha256,
-        "extraction_profile_id": _P1_SOURCE_FACT_PROFILE_ID,
-        "extraction_spec_sha256": extraction_spec_sha256,
-        "evidence_basis": "declared_source_facts",
-        "fact_evidence_sha256": fact_evidence_sha256,
-        "profile_id": profile_id,
-        "dimensions_mm": dimensions,
-        "evidence_refs": evidence_refs,
-    }
-
-
-def compile_source_fact_bound_simple_shaft_proposal(
-    payload: Mapping[str, object],
+def _compile_p1_geometry_plan(
+    dimensions_mm: Mapping[str, object],
 ) -> dict[str, object]:
-    """Compile a closed projection produced by the source-fact verifier.
+    """Compile deterministic geometry without making a provenance claim."""
 
-    This lane carries no pixel/render/calibration claim. The CLI is responsible
-    for projecting the same-invocation verifier result into this closed payload;
-    this owner validates the projection and never accepts a verifier callback or
-    replay selector. Geometry construction is shared with the visual-bound lane.
-    """
-
-    normalized = _source_fact_bound_payload(payload)
-    geometry_contract, feature_contract = _p1_geometry_and_features(
-        normalized["dimensions_mm"]
-    )
-    plan: dict[str, object] = {
-        "schema_version": _P1_SOURCE_FACT_COMPILE_PLAN_SCHEMA_VERSION,
-        "evidence_lane": "SOURCE_FACT_BOUND",
-        "proposal_source": "verified_source_facts",
-        "profile_id": normalized["profile_id"],
-        "source_fact_binding": {
-            key: normalized[key]
-            for key in (
-                "source_sha256",
-                "source_identity",
-                "linked_artifact_sha256",
-                "linked_artifact_identity",
-                "source_custody_sha256",
-                "source_acquisition_binding_sha256",
-                "extraction_profile_id",
-                "extraction_spec_sha256",
-                "evidence_basis",
-                "fact_evidence_sha256",
-                "profile_id",
-            )
-        },
-        "dimensions_mm": normalized["dimensions_mm"],
+    dimensions = _p1_dimensions(dimensions_mm, allow_decimal_strings=True)
+    geometry_contract, feature_contract = _p1_geometry_and_features(dimensions)
+    return {
+        "profile_id": _P1_PROFILE_ID,
+        "dimensions_mm": dimensions,
         "geometry_contract": geometry_contract,
         "feature_contract": feature_contract,
-        "evidence_refs": normalized["evidence_refs"],
     }
-    encoded = json.dumps(
-        plan,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    plan["plan_sha256"] = hashlib.sha256(encoded).hexdigest()
-    return plan
 
 
 __all__ = [
@@ -1554,7 +1330,6 @@ __all__ = [
     "bind_simple_shaft_pilot_from_primitive",
     "build_simple_shaft_pilot",
     "compile_source_bound_simple_shaft_proposal",
-    "compile_source_fact_bound_simple_shaft_proposal",
     "load_pilot_definition",
     "validate_primitive_bound_candidate",
 ]

@@ -208,15 +208,11 @@ def _compose_source_bound_simple_shaft(
         extraction_profile_id = verified["extraction_profile_id"]
         extraction_spec_sha256 = verified["extraction_spec_sha256"]
         evidence_basis = verified["evidence_basis"]
-        fact_bound_payload = {
+        source_fact_binding = {
             "source_sha256": copy.deepcopy(verified["source_sha256"]),
-            "source_locator": copy.deepcopy(verified["source_locator"]),
             "source_identity": copy.deepcopy(verified["source_identity"]),
             "linked_artifact_sha256": copy.deepcopy(
                 verified["linked_artifact_sha256"]
-            ),
-            "linked_artifact_locator": copy.deepcopy(
-                verified["linked_artifact_locator"]
             ),
             "linked_artifact_identity": copy.deepcopy(
                 verified["linked_artifact_identity"]
@@ -234,26 +230,43 @@ def _compose_source_bound_simple_shaft(
                 verified["fact_evidence_sha256"]
             ),
             "profile_id": compile_profile,
-            "dimensions_mm": copy.deepcopy(dict(dimensions)),
-            "compile_input": copy.deepcopy(dict(compile_input)),
-            "facts": copy.deepcopy(facts),
-            "evidence_refs": {
-                "source_fact_evidence_sha256": copy.deepcopy(
-                    verified["fact_evidence_sha256"]
-                ),
-                "source_identity": copy.deepcopy(verified["source_identity"]),
-                "linked_artifact_identity": copy.deepcopy(
-                    verified["linked_artifact_identity"]
-                ),
-            },
+        }
+        evidence_refs = {
+            "source_fact_evidence_sha256": copy.deepcopy(
+                verified["fact_evidence_sha256"]
+            ),
+            "source_identity": copy.deepcopy(verified["source_identity"]),
+            "linked_artifact_identity": copy.deepcopy(
+                verified["linked_artifact_identity"]
+            ),
         }
     except KeyError:
         _source_fact_composition_fail()
     if not isinstance(facts, list):
         _source_fact_composition_fail()
-    return _mechanical_pilot.compile_source_fact_bound_simple_shaft_proposal(
-        fact_bound_payload
-    )
+    geometry_plan = _mechanical_pilot._compile_p1_geometry_plan(dimensions)
+    if geometry_plan["profile_id"] != compile_profile:
+        _source_fact_composition_fail()
+    plan: dict[str, object] = {
+        "schema_version": "p1-source-fact-bound-compile-plan-1.0",
+        "evidence_lane": "SOURCE_FACT_BOUND",
+        "proposal_source": "verified_source_facts",
+        "profile_id": geometry_plan["profile_id"],
+        "source_fact_binding": source_fact_binding,
+        "dimensions_mm": geometry_plan["dimensions_mm"],
+        "geometry_contract": geometry_plan["geometry_contract"],
+        "feature_contract": geometry_plan["feature_contract"],
+        "evidence_refs": evidence_refs,
+    }
+    encoded = json.dumps(
+        plan,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    plan["plan_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return plan
 
 
 def _refuse_fidelity_dxf(dxf: Path) -> None:

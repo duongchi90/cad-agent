@@ -219,28 +219,32 @@ def test_source_fact_composition_routes_same_verifier_payload_to_fact_bound_owne
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
+    original = cli._mechanical_pilot._compile_p1_geometry_plan
 
-    def compile_source_fact_bound(payload: dict[str, object]) -> dict[str, object]:
-        captured.update(payload)
-        return {"compiled": True}
+    def compile_geometry(dimensions: dict[str, object]) -> dict[str, object]:
+        captured["dimensions_mm"] = deepcopy(dimensions)
+        return original(dimensions)
 
     monkeypatch.setattr(
-        "cad_agent.mechanical_pilot.compile_source_fact_bound_simple_shaft_proposal",
-        compile_source_fact_bound,
-        raising=False,
+        "cad_agent.mechanical_pilot._compile_p1_geometry_plan",
+        compile_geometry,
     )
 
     result, calls = _run_composition(monkeypatch)
 
-    assert result == {"compiled": True}
-    assert captured["source_sha256"] == SOURCE_SHA256
-    assert captured["linked_artifact_sha256"] == LINKED_ARTIFACT_SHA256
-    assert captured["source_custody_sha256"] == CUSTODY_DIGEST
-    assert captured["fact_evidence_sha256"] == FACT_EVIDENCE_SHA256
-    assert "page_index" not in captured
-    assert "roi_bbox_px" not in captured
-    assert "source_render_sha256" not in captured
-    assert "calibration" not in captured
+    assert captured["dimensions_mm"] == COMPILE_INPUT["dimensions_mm"]
+    assert result["evidence_lane"] == "SOURCE_FACT_BOUND"
+    assert result["proposal_source"] == "verified_source_facts"
+    assert result["source_fact_binding"]["source_sha256"] == SOURCE_SHA256
+    assert result["source_fact_binding"]["linked_artifact_sha256"] == (
+        LINKED_ARTIFACT_SHA256
+    )
+    assert result["source_fact_binding"]["source_custody_sha256"] == CUSTODY_DIGEST
+    assert result["source_fact_binding"]["fact_evidence_sha256"] == FACT_EVIDENCE_SHA256
+    assert "page_index" not in json.dumps(result, sort_keys=True)
+    assert "roi_bbox_px" not in json.dumps(result, sort_keys=True)
+    assert "source_render_sha256" not in json.dumps(result, sort_keys=True)
+    assert "calibration" not in json.dumps(result, sort_keys=True)
     assert calls["invoke"] == []
 
 
