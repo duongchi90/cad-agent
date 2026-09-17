@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import importlib.metadata
 import json
 import os
 import shutil
 import sys
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from .manifest import (
@@ -23,10 +26,200 @@ from .manifest import (
     write_manifest,
 )
 from .live import LiveSafetyError, load_build_evidence, review_dict, review_live, repair_live, write_build_evidence, write_live_report
+from . import mechanical_skills as _mechanical_skills
+from . import source_fusion as _source_fusion
+from . import source_integrity as _source_integrity
 
 
 class CommandError(ValueError):
     """A user-correctable command error."""
+
+
+_SOURCE_FACT_REQUEST_FIELDS = (
+    "source_sha256",
+    "source_locator",
+    "source_identity",
+    "linked_artifact_sha256",
+    "linked_artifact_locator",
+    "linked_artifact_identity",
+    "extraction_profile_id",
+    "extraction_spec",
+    "extraction_spec_sha256",
+    "proposed_facts",
+    "evidence_basis",
+)
+_P1_SOURCE_BINDING_FIELDS = (
+    "source_sha256",
+    "page_index",
+    "roi_bbox_px",
+    "source_render_sha256",
+    "calibration",
+    "profile_id",
+)
+
+
+def _source_fact_composition_fail() -> None:
+    raise CommandError("SOURCE_FACT_COMPOSITION_BINDING")
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _compose_source_bound_simple_shaft(
+    *,
+    acquisition_context: Mapping[str, object],
+    fact_request: Mapping[str, object],
+    proposal: Mapping[str, object],
+) -> dict[str, object]:
+    """Compose verified source facts through the existing P1 compile owner."""
+
+    if not (
+        isinstance(acquisition_context, Mapping)
+        and isinstance(fact_request, Mapping)
+        and isinstance(proposal, Mapping)
+    ):
+        _source_fact_composition_fail()
+
+    acquired = _source_integrity.inspect_source_bundle_media_bytes(
+        **dict(acquisition_context)
+    )
+    if (
+        not isinstance(acquired, tuple)
+        or len(acquired) != 2
+        or not isinstance(acquired[0], Mapping)
+        or not isinstance(acquired[1], Mapping)
+    ):
+        _source_fact_composition_fail()
+    custody, snapshots = acquired
+
+    source_id = fact_request.get("source_identity")
+    source_locator = fact_request.get("source_locator")
+    source_sha256 = fact_request.get("source_sha256")
+    linked_id = fact_request.get("linked_artifact_identity")
+    linked_locator = fact_request.get("linked_artifact_locator")
+    linked_sha256 = fact_request.get("linked_artifact_sha256")
+    if not (
+        type(source_id) is str
+        and type(source_locator) is str
+        and _is_sha256(source_sha256)
+        and type(linked_id) is str
+        and type(linked_locator) is str
+        and _is_sha256(linked_sha256)
+    ):
+        _source_fact_composition_fail()
+
+    def snapshot_bytes(
+        source_key: str,
+        locator: str,
+        expected_sha256: str,
+    ) -> tuple[bytes, str]:
+        snapshot = snapshots.get(source_key)
+        if not isinstance(snapshot, Mapping):
+            _source_fact_composition_fail()
+        if (
+            snapshot.get("source_id") != source_key
+            or snapshot.get("relative_path") != locator
+            or snapshot.get("observed_sha256") != expected_sha256
+            or not isinstance(snapshot.get("bytes"), bytes)
+            or hashlib.sha256(snapshot["bytes"]).hexdigest() != expected_sha256
+            or not isinstance(snapshot.get("file_object_identity_token"), str)
+            or not _is_sha256(snapshot.get("path_binding_sha256"))
+            or not _is_sha256(snapshot.get("source_custody_sha256"))
+        ):
+            _source_fact_composition_fail()
+        return snapshot["bytes"], snapshot["source_custody_sha256"]
+
+    source_bytes, custody_digest = snapshot_bytes(
+        source_id, source_locator, source_sha256
+    )
+    linked_artifact_bytes, linked_custody_digest = snapshot_bytes(
+        linked_id, linked_locator, linked_sha256
+    )
+    if custody_digest != linked_custody_digest:
+        _source_fact_composition_fail()
+
+    def replay() -> dict[str, object]:
+        return custody
+
+    try:
+        verifier_request = {
+            field: fact_request[field] for field in _SOURCE_FACT_REQUEST_FIELDS
+        }
+    except KeyError:
+        _source_fact_composition_fail()
+    verifier_request.update(
+        {
+            "source_bytes": source_bytes,
+            "linked_artifact_bytes": linked_artifact_bytes,
+            "source_custody": custody,
+            "source_acquisition_evidence": custody,
+            "source_acquisition_binding_sha256": custody_digest,
+            "source_acquisition_replay": replay,
+        }
+    )
+    verified = _source_fusion.verify_source_fact_evidence(**verifier_request)
+    if not isinstance(verified, Mapping):
+        _source_fact_composition_fail()
+    if any(
+        verified.get(field) != fact_request.get(field)
+        for field in (
+            "source_sha256",
+            "source_locator",
+            "source_identity",
+            "linked_artifact_sha256",
+            "linked_artifact_locator",
+            "linked_artifact_identity",
+        )
+    ):
+        _source_fact_composition_fail()
+    if (
+        verified.get("source_custody") != custody
+        or verified.get("source_acquisition_binding_sha256") != custody_digest
+        or not _is_sha256(verified.get("fact_evidence_sha256"))
+    ):
+        _source_fact_composition_fail()
+
+    compile_input = verified.get("compile_input")
+    if not isinstance(compile_input, Mapping):
+        _source_fact_composition_fail()
+    compile_profile = compile_input.get("profile_id")
+    dimensions = compile_input.get("dimensions_mm")
+    if not isinstance(compile_profile, str) or not isinstance(dimensions, Mapping):
+        _source_fact_composition_fail()
+    if (
+        proposal.get("source_sha256") != source_sha256
+        or proposal.get("profile_id") != compile_profile
+    ):
+        _source_fact_composition_fail()
+    evidence_refs = proposal.get("evidence_refs")
+    if (
+        not isinstance(evidence_refs, Mapping)
+        or evidence_refs.get("source_fact_evidence_sha256")
+        != verified["fact_evidence_sha256"]
+    ):
+        _source_fact_composition_fail()
+    try:
+        expected_binding = {
+            field: copy.deepcopy(proposal[field])
+            for field in _P1_SOURCE_BINDING_FIELDS
+        }
+        compile_proposal = copy.deepcopy(dict(proposal))
+    except KeyError:
+        _source_fact_composition_fail()
+    compile_proposal["profile_id"] = compile_profile
+    compile_proposal["dimensions_mm"] = copy.deepcopy(dict(dimensions))
+    return _mechanical_skills.invoke_skill(
+        "geometry.simple_shaft_pilot",
+        parameters={
+            "proposal": compile_proposal,
+            "expected_binding": expected_binding,
+        },
+    )
 
 
 def _refuse_fidelity_dxf(dxf: Path) -> None:

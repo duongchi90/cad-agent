@@ -112,7 +112,9 @@ def _p1_proposal() -> dict[str, object]:
         "proposal_source": "external_ai",
         **source_binding,
         "dimensions_mm": deepcopy(COMPILE_INPUT["dimensions_mm"]),
-        "evidence_refs": {"source_fact": FACT_EVIDENCE_SHA256},
+        "evidence_refs": {
+            "source_fact_evidence_sha256": FACT_EVIDENCE_SHA256,
+        },
     }
 
 
