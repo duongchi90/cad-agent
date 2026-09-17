@@ -122,6 +122,7 @@ def _run_composition(
     monkeypatch: pytest.MonkeyPatch,
     *,
     verifier_result: dict[str, object] | None = None,
+    proposal: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, Any]]:
     custody = _custody()
     snapshots = _snapshots(custody)
@@ -169,7 +170,7 @@ def _run_composition(
     result = cli._compose_source_bound_simple_shaft(
         acquisition_context=context,
         fact_request=_fact_request(),
-        proposal=_p1_proposal(),
+        proposal=proposal or _p1_proposal(),
     )
     return result, calls
 
@@ -214,3 +215,28 @@ def test_source_fact_composition_rejects_substituted_verifier_output(
                 "compile_input": deepcopy(COMPILE_INPUT),
             },
         )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["page_index", "roi_bbox_px", "source_render_sha256", "calibration"],
+)
+def test_source_fact_composition_rejects_unanchored_visual_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    proposal = _p1_proposal()
+    if field == "page_index":
+        proposal[field] = 1
+    elif field == "roi_bbox_px":
+        proposal[field] = [11, 20, 410, 220]
+    elif field == "source_render_sha256":
+        proposal[field] = "9" * 64
+    else:
+        calibration = deepcopy(proposal["calibration"])
+        assert isinstance(calibration, dict)
+        calibration["pixel_to_unit_scale"] = 2.0
+        proposal["calibration"] = calibration
+
+    with pytest.raises(ValueError, match="SOURCE_FACT_COMPOSITION_BINDING"):
+        _run_composition(monkeypatch, proposal=proposal)
