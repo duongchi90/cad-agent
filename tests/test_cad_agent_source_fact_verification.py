@@ -116,6 +116,16 @@ def acquired_source_custody(
 
 
 @pytest.fixture
+def source_acquisition_replay(
+    source_acquisition_context: dict[str, object],
+) -> Any:
+    def replay() -> dict[str, object]:
+        return inspect_source_bundle_media(**source_acquisition_context)
+
+    return replay
+
+
+@pytest.fixture
 def source_acquisition_binding_sha256(
     acquired_source_custody: dict[str, object],
 ) -> str:
@@ -212,7 +222,7 @@ def _expected_facts() -> list[dict[str, str]]:
 def _base_call(
     source_custody: dict[str, object],
     acquisition_binding_sha256: str,
-    acquisition_context: dict[str, object],
+    acquisition_replay: Any,
 ) -> dict[str, Any]:
     return {
         "source_bytes": SOURCE_BYTES,
@@ -226,7 +236,7 @@ def _base_call(
         "source_custody": deepcopy(source_custody),
         "source_acquisition_evidence": source_custody,
         "source_acquisition_binding_sha256": acquisition_binding_sha256,
-        "source_acquisition_context": deepcopy(acquisition_context),
+        "source_acquisition_replay": acquisition_replay,
         "extraction_profile_id": EXTRACTION_PROFILE_ID,
         "extraction_spec": deepcopy(EXTRACTION_SPEC),
         "extraction_spec_sha256": TRUSTED_EXTRACTION_SPEC_SHA256,
@@ -244,13 +254,13 @@ def _verifier() -> Any:
 def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input(
     acquired_source_custody: dict[str, object],
     source_acquisition_binding_sha256: str,
-    source_acquisition_context: dict[str, object],
+    source_acquisition_replay: Any,
 ) -> None:
     result = _verifier()(
         **_base_call(
             acquired_source_custody,
             source_acquisition_binding_sha256,
-            source_acquisition_context,
+            source_acquisition_replay,
         )
     )
 
@@ -295,12 +305,12 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
     error_code: str,
     acquired_source_custody: dict[str, object],
     source_acquisition_binding_sha256: str,
-    source_acquisition_context: dict[str, object],
+    source_acquisition_replay: Any,
 ) -> None:
     call = _base_call(
         acquired_source_custody,
         source_acquisition_binding_sha256,
-        source_acquisition_context,
+        source_acquisition_replay,
     )
     if mutation == "caller_fact":
         call["proposed_facts"][0]["value"] = "999.0000"
