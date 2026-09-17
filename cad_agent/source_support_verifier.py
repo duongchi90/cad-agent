@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 from collections.abc import Mapping
 
 import numpy as np
@@ -122,6 +123,16 @@ def _line_samples(start: list[int], end: list[int]) -> tuple[np.ndarray, np.ndar
     return xs, ys
 
 
+def _circle_samples(
+    center: list[float], radius: float
+) -> tuple[np.ndarray, np.ndarray]:
+    sample_count = max(8, int(math.ceil(2.0 * math.pi * radius)) + 1)
+    angles = np.linspace(0.0, 2.0 * math.pi, sample_count, endpoint=False)
+    xs = np.rint(center[0] + radius * np.cos(angles)).astype(np.int32)
+    ys = np.rint(center[1] + radius * np.sin(angles)).astype(np.int32)
+    return xs, ys
+
+
 def verify_external_visual_proposal_source_support(
     *,
     verification_request: object,
@@ -186,19 +197,54 @@ def verify_external_visual_proposal_source_support(
     results: list[dict[str, object]] = []
     for primitive in primitives:
         primitive_id = primitive.get("id")
-        if not isinstance(primitive_id, str) or primitive.get("type") != "LINE":
+        primitive_type = primitive.get("type")
+        if not isinstance(primitive_id, str):
             _fail("VERIFICATION_REQUEST_INVALID")
-        start = primitive.get("start_px")
-        end = primitive.get("end_px")
-        if (
-            not isinstance(start, list)
-            or not isinstance(end, list)
-            or len(start) != 2
-            or len(end) != 2
-            or any(isinstance(value, bool) or not isinstance(value, int) for value in (*start, *end))
-        ):
+        if primitive_type == "LINE":
+            start = primitive.get("start_px")
+            end = primitive.get("end_px")
+            if (
+                not isinstance(start, list)
+                or not isinstance(end, list)
+                or len(start) != 2
+                or len(end) != 2
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in (*start, *end)
+                )
+            ):
+                _fail("VERIFICATION_REQUEST_INVALID")
+            xs, ys = _line_samples(start, end)
+        elif primitive_type == "CIRCLE":
+            center = primitive.get("center_px")
+            radius = primitive.get("radius_px")
+            if (
+                not isinstance(center, list)
+                or len(center) != 2
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    for value in center
+                )
+                or isinstance(radius, bool)
+                or not isinstance(radius, (int, float))
+                or not math.isfinite(float(radius))
+                or float(radius) <= 0
+            ):
+                _fail("VERIFICATION_REQUEST_INVALID")
+            center = [float(value) for value in center]
+            radius = float(radius)
+            if (
+                center[0] - radius < x0
+                or center[0] + radius > x1
+                or center[1] - radius < y0
+                or center[1] + radius > y1
+            ):
+                _fail("PRIMITIVE_OUTSIDE_BOUND_SOURCE")
+            xs, ys = _circle_samples(center, radius)
+        else:
             _fail("VERIFICATION_REQUEST_INVALID")
-        xs, ys = _line_samples(start, end)
         if (
             np.any(xs < x0)
             or np.any(xs > x1)

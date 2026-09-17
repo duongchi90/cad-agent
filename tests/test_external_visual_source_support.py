@@ -18,6 +18,59 @@ def _render_bytes() -> bytes:
     return stream.getvalue()
 
 
+def _circle_case(
+    *, center: tuple[float, float] = (32.0, 32.0), proposal_radius: float = 10.0,
+    rendered_radius: float = 10.0,
+) -> tuple[dict[str, object], bytes]:
+    image = Image.new("L", (64, 64), 255)
+    ImageDraw.Draw(image).ellipse(
+        (
+            center[0] - rendered_radius,
+            center[1] - rendered_radius,
+            center[0] + rendered_radius,
+            center[1] + rendered_radius,
+        ),
+        outline=0,
+        width=1,
+    )
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    render_bytes = stream.getvalue()
+    binding = {
+        "source_sha256": "4" * 64,
+        "page_index": 0,
+        "source_render_sha256": hashlib.sha256(render_bytes).hexdigest(),
+        "roi_bbox_px": [0, 0, 63, 63],
+    }
+    proposal = {
+        "schema_version": "external-visual-object-proposal-1.0",
+        "proposal_source": "external_ai",
+        **binding,
+        "view_role_proposal": "FRONT",
+        "primitive_hypotheses": [
+            {
+                "id": "hole-1",
+                "type": "CIRCLE",
+                "center_px": list(center),
+                "radius_px": proposal_radius,
+            }
+        ],
+        "object_groups": [
+            {
+                "group_id": "hole-group",
+                "proposed_label": "UNKNOWN_HOLE",
+                "primitive_hypothesis_ids": ["hole-1"],
+            }
+        ],
+        "excluded_memberships": [],
+    }
+    request = compile_external_visual_object_proposal(
+        proposal=proposal,
+        expected_binding=binding,
+    )
+    return request, render_bytes
+
+
 def _request(*, include_unsupported_connector: bool) -> tuple[dict[str, object], bytes]:
     render_bytes = _render_bytes()
     render_sha256 = hashlib.sha256(render_bytes).hexdigest()
@@ -209,4 +262,45 @@ def test_source_support_rejects_caller_controlled_verification_profile(
             verification_request=request,
             source_render_bytes=render_bytes,
             **profile_override,
+        )
+
+
+def test_source_support_accepts_source_bound_circle_circumference() -> None:
+    request, render_bytes = _circle_case()
+
+    result = verify_external_visual_proposal_source_support(
+        verification_request=request,
+        source_render_bytes=render_bytes,
+    )
+
+    assert result["status"] == "VERIFIED"
+    support = result["primitive_support"]
+    assert isinstance(support, list)
+    assert support[0]["primitive_hypothesis_id"] == "hole-1"
+    assert support[0]["sample_count"] > 50
+    assert support[0]["support_fraction"] >= 0.85
+
+
+def test_source_support_rejects_circle_with_wrong_render_hash() -> None:
+    request, render_bytes = _circle_case()
+
+    with pytest.raises(ValueError, match="SOURCE_RENDER_HASH_MISMATCH"):
+        verify_external_visual_proposal_source_support(
+            verification_request=request,
+            source_render_bytes=render_bytes + b"tampered",
+        )
+
+
+def test_source_support_rejects_circle_outside_roi() -> None:
+    with pytest.raises(ValueError, match="PRIMITIVE_OUTSIDE_ROI"):
+        _circle_case(center=(5.0, 5.0), proposal_radius=10.0)
+
+
+def test_source_support_rejects_insufficient_circle_circumference_support() -> None:
+    request, render_bytes = _circle_case(rendered_radius=5.0)
+
+    with pytest.raises(ValueError, match="PRIMITIVE_SOURCE_SUPPORT_INSUFFICIENT:hole-1"):
+        verify_external_visual_proposal_source_support(
+            verification_request=request,
+            source_render_bytes=render_bytes,
         )
