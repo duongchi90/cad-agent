@@ -26,6 +26,7 @@ from .manifest import (
     write_manifest,
 )
 from .live import LiveSafetyError, load_build_evidence, review_dict, review_live, repair_live, write_build_evidence, write_live_report
+from . import mechanical_pilot as _mechanical_pilot
 from . import mechanical_skills as _mechanical_skills
 from . import source_fusion as _source_fusion
 from . import source_integrity as _source_integrity
@@ -76,7 +77,7 @@ def _compose_source_bound_simple_shaft(
     fact_request: Mapping[str, object],
     proposal: Mapping[str, object],
 ) -> dict[str, object]:
-    """Compose verified source facts through the existing P1 compile owner."""
+    """Compose verified source facts through the existing P1 pilot owner."""
 
     if not (
         isinstance(acquisition_context, Mapping)
@@ -203,29 +204,56 @@ def _compose_source_bound_simple_shaft(
         != verified["fact_evidence_sha256"]
     ):
         _source_fact_composition_fail()
-
-    # Source-fact verification does not establish the independent visual and
-    # calibration binding required by the P1 compile contract.  Do not copy
-    # caller-controlled fields into expected_binding and self-authenticate
-    # them through the downstream equality check.
-    _source_fact_composition_fail()
-
     try:
-        expected_binding = {
-            field: copy.deepcopy(proposal[field])
-            for field in _P1_SOURCE_BINDING_FIELDS
+        facts = verified["facts"]
+        extraction_profile_id = verified["extraction_profile_id"]
+        extraction_spec_sha256 = verified["extraction_spec_sha256"]
+        evidence_basis = verified["evidence_basis"]
+        fact_bound_payload = {
+            "source_sha256": copy.deepcopy(verified["source_sha256"]),
+            "source_locator": copy.deepcopy(verified["source_locator"]),
+            "source_identity": copy.deepcopy(verified["source_identity"]),
+            "linked_artifact_sha256": copy.deepcopy(
+                verified["linked_artifact_sha256"]
+            ),
+            "linked_artifact_locator": copy.deepcopy(
+                verified["linked_artifact_locator"]
+            ),
+            "linked_artifact_identity": copy.deepcopy(
+                verified["linked_artifact_identity"]
+            ),
+            "source_custody_sha256": copy.deepcopy(
+                verified["source_acquisition_binding_sha256"]
+            ),
+            "source_acquisition_binding_sha256": copy.deepcopy(
+                verified["source_acquisition_binding_sha256"]
+            ),
+            "extraction_profile_id": copy.deepcopy(extraction_profile_id),
+            "extraction_spec_sha256": copy.deepcopy(extraction_spec_sha256),
+            "evidence_basis": copy.deepcopy(evidence_basis),
+            "fact_evidence_sha256": copy.deepcopy(
+                verified["fact_evidence_sha256"]
+            ),
+            "profile_id": compile_profile,
+            "dimensions_mm": copy.deepcopy(dict(dimensions)),
+            "compile_input": copy.deepcopy(dict(compile_input)),
+            "facts": copy.deepcopy(facts),
+            "evidence_refs": {
+                "source_fact_evidence_sha256": copy.deepcopy(
+                    verified["fact_evidence_sha256"]
+                ),
+                "source_identity": copy.deepcopy(verified["source_identity"]),
+                "linked_artifact_identity": copy.deepcopy(
+                    verified["linked_artifact_identity"]
+                ),
+            },
         }
-        compile_proposal = copy.deepcopy(dict(proposal))
     except KeyError:
         _source_fact_composition_fail()
-    compile_proposal["profile_id"] = compile_profile
-    compile_proposal["dimensions_mm"] = copy.deepcopy(dict(dimensions))
-    return _mechanical_skills.invoke_skill(
-        "geometry.simple_shaft_pilot",
-        parameters={
-            "proposal": compile_proposal,
-            "expected_binding": expected_binding,
-        },
+    if not isinstance(facts, list):
+        _source_fact_composition_fail()
+    return _mechanical_pilot.compile_source_fact_bound_simple_shaft_proposal(
+        fact_bound_payload
     )
 
 

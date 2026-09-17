@@ -1101,6 +1101,45 @@ _P1_DIMENSION_FIELDS = frozenset(
 _P1_PROFILE_ID = "simple-stepped-shaft-p1-v1"
 _P1_PROPOSAL_SCHEMA_VERSION = "p1-source-bound-proposal-1.0"
 _P1_COMPILE_PLAN_SCHEMA_VERSION = "p1-source-bound-compile-plan-1.0"
+_P1_SOURCE_FACT_PROFILE_ID = "source-facts-stepped-shaft-v1"
+_P1_SOURCE_FACT_COMPILE_PLAN_SCHEMA_VERSION = "p1-source-fact-bound-compile-plan-1.0"
+_P1_SOURCE_FACT_BOUND_FIELDS = frozenset(
+    {
+        "source_sha256",
+        "source_locator",
+        "source_identity",
+        "linked_artifact_sha256",
+        "linked_artifact_locator",
+        "linked_artifact_identity",
+        "source_custody_sha256",
+        "source_acquisition_binding_sha256",
+        "extraction_profile_id",
+        "extraction_spec_sha256",
+        "evidence_basis",
+        "fact_evidence_sha256",
+        "profile_id",
+        "dimensions_mm",
+        "compile_input",
+        "facts",
+        "evidence_refs",
+    }
+)
+_P1_SOURCE_FACT_COMPILE_INPUT_FIELDS = frozenset({"profile_id", "dimensions_mm"})
+_P1_SOURCE_FACT_FIELDS = frozenset(
+    {
+        "fact_id",
+        "source_key",
+        "quantity",
+        "unit",
+        "value",
+        "source_sha256",
+        "source_locator",
+        "source_identity",
+        "linked_artifact_sha256",
+        "linked_artifact_locator",
+        "linked_artifact_identity",
+    }
+)
 
 
 def _p1_binding(payload: object, name: str) -> dict[str, object]:
@@ -1163,6 +1202,99 @@ def _p1_binding(payload: object, name: str) -> dict[str, object]:
     }
 
 
+def _p1_dimensions(
+    value: object,
+    *,
+    allow_decimal_strings: bool = False,
+) -> dict[str, float]:
+    dimensions_raw = _mapping(value, "P1_DIMENSIONS")
+    _exact_fields(dimensions_raw, _P1_DIMENSION_FIELDS, "P1_DIMENSIONS")
+    dimensions: dict[str, float] = {}
+    for field in sorted(_P1_DIMENSION_FIELDS):
+        raw_value = dimensions_raw[field]
+        if allow_decimal_strings and isinstance(raw_value, str):
+            try:
+                raw_value = float(raw_value)
+            except ValueError:
+                pass
+        dimensions[field] = _number(
+            raw_value,
+            f"P1_{field.upper()}",
+            positive=True,
+        )
+    diameter_a = dimensions["shaft_diameter_a"]
+    diameter_b = dimensions["shaft_diameter_b"]
+    if diameter_a == diameter_b:
+        raise ValueError("PILOT_P1_SHAFT_STEP_REQUIRED")
+    length_a = dimensions["segment_length_a"]
+    length_b = dimensions["segment_length_b"]
+    total_length = length_a + length_b
+    hole_position = dimensions["hole_axial_position"]
+    if not 0.0 < hole_position < total_length:
+        raise ValueError("PILOT_P1_HOLE_POSITION_INVALID")
+    local_diameter = diameter_a if hole_position < length_a else diameter_b
+    if dimensions["hole_diameter"] >= local_diameter:
+        raise ValueError("PILOT_P1_HOLE_DIAMETER_INVALID")
+    return dimensions
+
+
+def _p1_geometry_and_features(
+    dimensions: Mapping[str, float],
+) -> tuple[dict[str, object], dict[str, object]]:
+    length_a = dimensions["segment_length_a"]
+    length_b = dimensions["segment_length_b"]
+    total_length = length_a + length_b
+    diameter_a = dimensions["shaft_diameter_a"]
+    diameter_b = dimensions["shaft_diameter_b"]
+    hole_position = dimensions["hole_axial_position"]
+    a = diameter_a / 2.0
+    b = diameter_b / 2.0
+    line_specs = [
+        ("shaft-profile-001:top-main", (0.0, a), (length_a, a)),
+        ("shaft-profile-001:step-rise", (length_a, a), (length_a, b)),
+        ("shaft-profile-001:top-step", (length_a, b), (total_length, b)),
+        ("shaft-profile-001:right-cap", (total_length, b), (total_length, -b)),
+        ("shaft-profile-001:bottom-step", (total_length, -b), (length_a, -b)),
+        ("shaft-profile-001:step-fall", (length_a, -b), (length_a, -a)),
+        ("shaft-profile-001:bottom-main", (length_a, -a), (0.0, -a)),
+        ("shaft-profile-001:left-cap", (0.0, -a), (0.0, a)),
+    ]
+    lines = [
+        {
+            "id": line_id,
+            "type": "line",
+            "start_mm": [start[0], start[1]],
+            "end_mm": [end[0], end[1]],
+        }
+        for line_id, start, end in line_specs
+    ]
+    circle = {
+        "id": "hole-axial-001",
+        "type": "circle",
+        "center_mm": [hole_position, 0.0],
+        "radius_mm": dimensions["hole_diameter"] / 2.0,
+    }
+    shaft_ids = [line["id"] for line in lines]
+    return (
+        {
+            "line_count": 8,
+            "circle_count": 1,
+            "lines": lines,
+            "circle": circle,
+        },
+        {
+            "shaft-profile-001": {
+                "kind": "shaft_step",
+                "primitive_ids": shaft_ids,
+            },
+            "hole-axial-001": {
+                "kind": "hole_feature",
+                "primitive_ids": ["hole-axial-001"],
+            },
+        },
+    )
+
+
 def compile_source_bound_simple_shaft_proposal(
     proposal: Mapping[str, object],
     *,
@@ -1185,26 +1317,7 @@ def compile_source_bound_simple_shaft_proposal(
     if proposal_binding != normalized_expected:
         raise ValueError("PILOT_P1_SOURCE_BINDING_MISMATCH")
 
-    dimensions_raw = _mapping(root.get("dimensions_mm"), "P1_DIMENSIONS")
-    _exact_fields(dimensions_raw, _P1_DIMENSION_FIELDS, "P1_DIMENSIONS")
-    dimensions = {
-        field: _number(dimensions_raw[field], f"P1_{field.upper()}", positive=True)
-        for field in sorted(_P1_DIMENSION_FIELDS)
-    }
-    diameter_a = dimensions["shaft_diameter_a"]
-    diameter_b = dimensions["shaft_diameter_b"]
-    if diameter_a == diameter_b:
-        raise ValueError("PILOT_P1_SHAFT_STEP_REQUIRED")
-    length_a = dimensions["segment_length_a"]
-    length_b = dimensions["segment_length_b"]
-    total_length = length_a + length_b
-    hole_position = dimensions["hole_axial_position"]
-    if not 0.0 < hole_position < total_length:
-        raise ValueError("PILOT_P1_HOLE_POSITION_INVALID")
-    local_diameter = diameter_a if hole_position < length_a else diameter_b
-    if dimensions["hole_diameter"] >= local_diameter:
-        raise ValueError("PILOT_P1_HOLE_DIAMETER_INVALID")
-
+    dimensions = _p1_dimensions(root.get("dimensions_mm"))
     evidence_refs_raw = _mapping(root.get("evidence_refs"), "P1_EVIDENCE_REFS")
     if len(evidence_refs_raw) > 12:
         raise ValueError("PILOT_P1_EVIDENCE_REFS_INVALID")
@@ -1213,61 +1326,181 @@ def compile_source_bound_simple_shaft_proposal(
         evidence_refs[_string(key, "P1_EVIDENCE_REF_KEY")] = _string(
             value, "P1_EVIDENCE_REF_VALUE"
         )
-
-    x0 = 0.0
-    x1 = length_a
-    x2 = total_length
-    a = diameter_a / 2.0
-    b = diameter_b / 2.0
-    line_specs = [
-        ("shaft-profile-001:top-main", (x0, a), (x1, a)),
-        ("shaft-profile-001:step-rise", (x1, a), (x1, b)),
-        ("shaft-profile-001:top-step", (x1, b), (x2, b)),
-        ("shaft-profile-001:right-cap", (x2, b), (x2, -b)),
-        ("shaft-profile-001:bottom-step", (x2, -b), (x1, -b)),
-        ("shaft-profile-001:step-fall", (x1, -b), (x1, -a)),
-        ("shaft-profile-001:bottom-main", (x1, -a), (x0, -a)),
-        ("shaft-profile-001:left-cap", (x0, -a), (x0, a)),
-    ]
-    lines = [
-        {
-            "id": line_id,
-            "type": "line",
-            "start_mm": [start[0], start[1]],
-            "end_mm": [end[0], end[1]],
-        }
-        for line_id, start, end in line_specs
-    ]
-    circle = {
-        "id": "hole-axial-001",
-        "type": "circle",
-        "center_mm": [hole_position, 0.0],
-        "radius_mm": dimensions["hole_diameter"] / 2.0,
-    }
-    shaft_ids = [line["id"] for line in lines]
+    geometry_contract, feature_contract = _p1_geometry_and_features(dimensions)
     plan: dict[str, object] = {
         "schema_version": _P1_COMPILE_PLAN_SCHEMA_VERSION,
         "proposal_source": "external_ai",
         "profile_id": _P1_PROFILE_ID,
         "source_binding": proposal_binding,
         "dimensions_mm": dimensions,
-        "geometry_contract": {
-            "line_count": 8,
-            "circle_count": 1,
-            "lines": lines,
-            "circle": circle,
-        },
-        "feature_contract": {
-            "shaft-profile-001": {
-                "kind": "shaft_step",
-                "primitive_ids": shaft_ids,
-            },
-            "hole-axial-001": {
-                "kind": "hole_feature",
-                "primitive_ids": ["hole-axial-001"],
-            },
-        },
+        "geometry_contract": geometry_contract,
+        "feature_contract": feature_contract,
         "evidence_refs": evidence_refs,
+    }
+    encoded = json.dumps(
+        plan,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    plan["plan_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return plan
+
+
+def _source_fact_bound_payload(payload: object) -> dict[str, object]:
+    root = _mapping(payload, "P1_SOURCE_FACT_BOUND")
+    _exact_fields(root, _P1_SOURCE_FACT_BOUND_FIELDS, "P1_SOURCE_FACT_BOUND")
+    source_sha256 = _hash(
+        root.get("source_sha256"), "P1_SOURCE_FACT_SOURCE_SHA256"
+    )
+    linked_sha256 = _hash(
+        root.get("linked_artifact_sha256"),
+        "P1_SOURCE_FACT_LINKED_ARTIFACT_SHA256",
+    )
+    source_identity = _string(
+        root.get("source_identity"), "P1_SOURCE_FACT_SOURCE_IDENTITY"
+    )
+    linked_identity = _string(
+        root.get("linked_artifact_identity"),
+        "P1_SOURCE_FACT_LINKED_ARTIFACT_IDENTITY",
+    )
+    source_locator = _string(
+        root.get("source_locator"), "P1_SOURCE_FACT_SOURCE_LOCATOR"
+    )
+    linked_locator = _string(
+        root.get("linked_artifact_locator"),
+        "P1_SOURCE_FACT_LINKED_ARTIFACT_LOCATOR",
+    )
+    custody_sha256 = _hash(
+        root.get("source_custody_sha256"), "P1_SOURCE_FACT_CUSTODY_SHA256"
+    )
+    acquisition_sha256 = _hash(
+        root.get("source_acquisition_binding_sha256"),
+        "P1_SOURCE_FACT_ACQUISITION_BINDING_SHA256",
+    )
+    if custody_sha256 != acquisition_sha256:
+        raise ValueError("PILOT_P1_SOURCE_FACT_CUSTODY_BINDING_INVALID")
+    if root.get("extraction_profile_id") != _P1_SOURCE_FACT_PROFILE_ID:
+        raise ValueError("PILOT_P1_SOURCE_FACT_PROFILE_UNSUPPORTED")
+    extraction_spec_sha256 = _hash(
+        root.get("extraction_spec_sha256"),
+        "P1_SOURCE_FACT_EXTRACTION_SPEC_SHA256",
+    )
+    if root.get("evidence_basis") != "declared_source_facts":
+        raise ValueError("PILOT_P1_SOURCE_FACT_EVIDENCE_BASIS_INVALID")
+    fact_evidence_sha256 = _hash(
+        root.get("fact_evidence_sha256"), "P1_SOURCE_FACT_EVIDENCE_SHA256"
+    )
+    profile_id = _string(root.get("profile_id"), "P1_SOURCE_FACT_PROFILE_ID")
+    if profile_id != _P1_PROFILE_ID:
+        raise ValueError("PILOT_P1_PROFILE_UNSUPPORTED")
+    dimensions = _p1_dimensions(
+        root.get("dimensions_mm"), allow_decimal_strings=True
+    )
+
+    compile_input = _mapping(
+        root.get("compile_input"), "P1_SOURCE_FACT_COMPILE_INPUT"
+    )
+    _exact_fields(
+        compile_input,
+        _P1_SOURCE_FACT_COMPILE_INPUT_FIELDS,
+        "P1_SOURCE_FACT_COMPILE_INPUT",
+    )
+    if compile_input.get("profile_id") != profile_id:
+        raise ValueError("PILOT_P1_SOURCE_FACT_COMPILE_PROFILE_INVALID")
+    if _p1_dimensions(
+        compile_input.get("dimensions_mm"), allow_decimal_strings=True
+    ) != dimensions:
+        raise ValueError("PILOT_P1_SOURCE_FACT_DIMENSIONS_MISMATCH")
+
+    facts = root.get("facts")
+    if not isinstance(facts, list) or len(facts) != 6:
+        raise ValueError("PILOT_P1_SOURCE_FACTS_INVALID")
+    for fact in facts:
+        normalized_fact = _mapping(fact, "P1_SOURCE_FACT")
+        _exact_fields(normalized_fact, _P1_SOURCE_FACT_FIELDS, "P1_SOURCE_FACT")
+        for field, expected in (
+            ("source_sha256", source_sha256),
+            ("source_locator", source_locator),
+            ("source_identity", source_identity),
+            ("linked_artifact_sha256", linked_sha256),
+            ("linked_artifact_locator", linked_locator),
+            ("linked_artifact_identity", linked_identity),
+        ):
+            if normalized_fact.get(field) != expected:
+                raise ValueError("PILOT_P1_SOURCE_FACT_PROVENANCE_MISMATCH")
+        for field in ("fact_id", "source_key", "quantity", "unit", "value"):
+            _string(normalized_fact.get(field), f"P1_SOURCE_FACT_{field.upper()}")
+
+    evidence_refs_raw = _mapping(root.get("evidence_refs"), "P1_SOURCE_FACT_REFS")
+    if len(evidence_refs_raw) > 12:
+        raise ValueError("PILOT_P1_SOURCE_FACT_REFS_INVALID")
+    evidence_refs: dict[str, str] = {}
+    for key, value in sorted(evidence_refs_raw.items()):
+        evidence_refs[_string(key, "P1_SOURCE_FACT_REF_KEY")] = _string(
+            value, "P1_SOURCE_FACT_REF_VALUE"
+        )
+    if evidence_refs.get("source_fact_evidence_sha256") != fact_evidence_sha256:
+        raise ValueError("PILOT_P1_SOURCE_FACT_EVIDENCE_REF_MISMATCH")
+
+    return {
+        "source_sha256": source_sha256,
+        "source_identity": source_identity,
+        "linked_artifact_sha256": linked_sha256,
+        "linked_artifact_identity": linked_identity,
+        "source_custody_sha256": custody_sha256,
+        "source_acquisition_binding_sha256": acquisition_sha256,
+        "extraction_profile_id": _P1_SOURCE_FACT_PROFILE_ID,
+        "extraction_spec_sha256": extraction_spec_sha256,
+        "evidence_basis": "declared_source_facts",
+        "fact_evidence_sha256": fact_evidence_sha256,
+        "profile_id": profile_id,
+        "dimensions_mm": dimensions,
+        "evidence_refs": evidence_refs,
+    }
+
+
+def compile_source_fact_bound_simple_shaft_proposal(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Compile a closed projection produced by the source-fact verifier.
+
+    This lane carries no pixel/render/calibration claim. The CLI is responsible
+    for projecting the same-invocation verifier result into this closed payload;
+    this owner validates the projection and never accepts a verifier callback or
+    replay selector. Geometry construction is shared with the visual-bound lane.
+    """
+
+    normalized = _source_fact_bound_payload(payload)
+    geometry_contract, feature_contract = _p1_geometry_and_features(
+        normalized["dimensions_mm"]
+    )
+    plan: dict[str, object] = {
+        "schema_version": _P1_SOURCE_FACT_COMPILE_PLAN_SCHEMA_VERSION,
+        "evidence_lane": "SOURCE_FACT_BOUND",
+        "proposal_source": "verified_source_facts",
+        "profile_id": normalized["profile_id"],
+        "source_fact_binding": {
+            key: normalized[key]
+            for key in (
+                "source_sha256",
+                "source_identity",
+                "linked_artifact_sha256",
+                "linked_artifact_identity",
+                "source_custody_sha256",
+                "source_acquisition_binding_sha256",
+                "extraction_profile_id",
+                "extraction_spec_sha256",
+                "evidence_basis",
+                "fact_evidence_sha256",
+                "profile_id",
+            )
+        },
+        "dimensions_mm": normalized["dimensions_mm"],
+        "geometry_contract": geometry_contract,
+        "feature_contract": feature_contract,
+        "evidence_refs": normalized["evidence_refs"],
     }
     encoded = json.dumps(
         plan,
@@ -1286,6 +1519,7 @@ __all__ = [
     "bind_simple_shaft_pilot_from_primitive",
     "build_simple_shaft_pilot",
     "compile_source_bound_simple_shaft_proposal",
+    "compile_source_fact_bound_simple_shaft_proposal",
     "load_pilot_definition",
     "validate_primitive_bound_candidate",
 ]

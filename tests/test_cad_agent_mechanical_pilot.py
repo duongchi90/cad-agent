@@ -372,6 +372,16 @@ def _source_bound_proposal() -> dict[str, object]:
 
 def _source_fact_bound_evidence() -> dict[str, object]:
     proposal = _source_bound_proposal()
+    dimensions = deepcopy(proposal["dimensions_mm"])
+    assert isinstance(dimensions, dict)
+    fact_specs = (
+        ("fact-001", "diameter_a_mm", "shaft_diameter_a"),
+        ("fact-002", "diameter_b_mm", "shaft_diameter_b"),
+        ("fact-003", "segment_a_mm", "segment_length_a"),
+        ("fact-004", "segment_b_mm", "segment_length_b"),
+        ("fact-005", "hole_diameter_mm", "hole_diameter"),
+        ("fact-006", "hole_position_mm", "hole_axial_position"),
+    )
     return {
         "source_sha256": "1" * 64,
         "source_locator": "sources/part-001/item.json",
@@ -383,8 +393,30 @@ def _source_fact_bound_evidence() -> dict[str, object]:
         "source_acquisition_binding_sha256": "3" * 64,
         "fact_evidence_sha256": "4" * 64,
         "extraction_profile_id": "source-facts-stepped-shaft-v1",
+        "extraction_spec_sha256": "5" * 64,
+        "evidence_basis": "declared_source_facts",
         "profile_id": "simple-stepped-shaft-p1-v1",
-        "dimensions_mm": deepcopy(proposal["dimensions_mm"]),
+        "dimensions_mm": dimensions,
+        "compile_input": {
+            "profile_id": "simple-stepped-shaft-p1-v1",
+            "dimensions_mm": deepcopy(dimensions),
+        },
+        "facts": [
+            {
+                "fact_id": fact_id,
+                "source_key": source_key,
+                "quantity": "length",
+                "unit": "mm",
+                "value": str(dimensions[compile_field]),
+                "source_sha256": "1" * 64,
+                "source_locator": "sources/part-001/item.json",
+                "source_identity": "part-001-R1",
+                "linked_artifact_sha256": "2" * 64,
+                "linked_artifact_locator": "sources/part-001/drawing.json",
+                "linked_artifact_identity": "drawing-001-R1",
+            }
+            for fact_id, source_key, compile_field in fact_specs
+        ],
         "evidence_refs": {
             "source_fact_evidence_sha256": "4" * 64,
             "source_identity": "part-001-R1",
