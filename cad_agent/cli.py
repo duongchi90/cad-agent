@@ -203,6 +203,13 @@ def _compose_source_bound_simple_shaft(
         != verified["fact_evidence_sha256"]
     ):
         _source_fact_composition_fail()
+
+    # Source-fact verification does not establish the independent visual and
+    # calibration binding required by the P1 compile contract.  Do not copy
+    # caller-controlled fields into expected_binding and self-authenticate
+    # them through the downstream equality check.
+    _source_fact_composition_fail()
+
     try:
         expected_binding = {
             field: copy.deepcopy(proposal[field])

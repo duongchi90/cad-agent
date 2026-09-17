@@ -123,6 +123,7 @@ def _run_composition(
     *,
     verifier_result: dict[str, object] | None = None,
     proposal: dict[str, object] | None = None,
+    calls_sink: dict[str, Any] | None = None,
 ) -> tuple[dict[str, object], dict[str, Any]]:
     custody = _custody()
     snapshots = _snapshots(custody)
@@ -167,28 +168,31 @@ def _run_composition(
     monkeypatch.setattr("cad_agent.source_fusion.verify_source_fact_evidence", verify)
     monkeypatch.setattr("cad_agent.mechanical_skills.invoke_skill", invoke)
 
-    result = cli._compose_source_bound_simple_shaft(
-        acquisition_context=context,
-        fact_request=_fact_request(),
-        proposal=proposal or _p1_proposal(),
-    )
+    try:
+        result = cli._compose_source_bound_simple_shaft(
+            acquisition_context=context,
+            fact_request=_fact_request(),
+            proposal=proposal or _p1_proposal(),
+        )
+    except Exception:
+        if calls_sink is not None:
+            calls_sink.update(calls)
+        raise
+    if calls_sink is not None:
+        calls_sink.update(calls)
     return result, calls
 
 
-def test_source_fact_composition_uses_one_shot_snapshots_and_existing_compile_owner(
+def test_source_fact_composition_fails_closed_without_authoritative_visual_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result, calls = _run_composition(monkeypatch)
-
+    calls: dict[str, Any] = {}
+    with pytest.raises(ValueError, match="SOURCE_FACT_COMPOSITION_BINDING"):
+        _run_composition(monkeypatch, calls_sink=calls)
     assert len(calls["acquire"]) == 1
     assert calls["acquire"][0] == _acquisition_context()
     assert len(calls["verify"]) == 1
-    assert len(calls["invoke"]) == 1
-    skill_id, parameters = calls["invoke"][0]
-    assert skill_id == "geometry.simple_shaft_pilot"
-    assert parameters["proposal"]["dimensions_mm"] == COMPILE_INPUT["dimensions_mm"]
-    assert parameters["proposal"]["profile_id"] == COMPILE_INPUT["profile_id"]
-    assert result["compiled"] is True
+    assert len(calls["invoke"]) == 0
 
 
 @pytest.mark.parametrize(
