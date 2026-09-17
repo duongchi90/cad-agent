@@ -766,6 +766,28 @@ def test_source_fact_bound_compiler_rejects_mutated_verified_payload(
         compile_source_fact_bound_simple_shaft_proposal(payload)
 
 
+@pytest.mark.parametrize("mutation", ["value", "fact_id", "quantity", "unit"])
+def test_source_fact_bound_compiler_rejects_semantically_unbound_fact_records(
+    mutation: str,
+) -> None:
+    from cad_agent.mechanical_pilot import compile_source_fact_bound_simple_shaft_proposal
+
+    payload = _source_fact_bound_evidence()
+    facts = payload["facts"]
+    assert isinstance(facts, list)
+    if mutation == "value":
+        facts[0]["value"] = "999.0000"
+    elif mutation == "fact_id":
+        facts[0]["fact_id"] = facts[1]["fact_id"]
+    elif mutation == "quantity":
+        facts[0]["quantity"] = "angle"
+    else:
+        facts[0]["unit"] = "inch"
+
+    with pytest.raises(ValueError, match="PILOT_P1_SOURCE_FACT"):
+        compile_source_fact_bound_simple_shaft_proposal(payload)
+
+
 @pytest.mark.parametrize(
     "field",
     ["source_sha256", "source_render_sha256", "page_index", "roi_bbox_px", "calibration"],

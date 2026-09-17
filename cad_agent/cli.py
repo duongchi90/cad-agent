@@ -27,7 +27,6 @@ from .manifest import (
 )
 from .live import LiveSafetyError, load_build_evidence, review_dict, review_live, repair_live, write_build_evidence, write_live_report
 from . import mechanical_pilot as _mechanical_pilot
-from . import mechanical_skills as _mechanical_skills
 from . import source_fusion as _source_fusion
 from . import source_integrity as _source_integrity
 

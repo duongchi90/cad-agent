@@ -1140,6 +1140,14 @@ _P1_SOURCE_FACT_FIELDS = frozenset(
         "linked_artifact_identity",
     }
 )
+_P1_SOURCE_FACT_RECORD_CONTRACT = (
+    ("fact-001", "diameter_a_mm", "length", "mm", "shaft_diameter_a"),
+    ("fact-002", "diameter_b_mm", "length", "mm", "shaft_diameter_b"),
+    ("fact-003", "segment_a_mm", "length", "mm", "segment_length_a"),
+    ("fact-004", "segment_b_mm", "length", "mm", "segment_length_b"),
+    ("fact-005", "hole_diameter_mm", "length", "mm", "hole_diameter"),
+    ("fact-006", "hole_position_mm", "length", "mm", "hole_axial_position"),
+)
 
 
 def _p1_binding(payload: object, name: str) -> dict[str, object]:
@@ -1415,9 +1423,11 @@ def _source_fact_bound_payload(payload: object) -> dict[str, object]:
         raise ValueError("PILOT_P1_SOURCE_FACT_DIMENSIONS_MISMATCH")
 
     facts = root.get("facts")
-    if not isinstance(facts, list) or len(facts) != 6:
+    if not isinstance(facts, list) or len(facts) != len(
+        _P1_SOURCE_FACT_RECORD_CONTRACT
+    ):
         raise ValueError("PILOT_P1_SOURCE_FACTS_INVALID")
-    for fact in facts:
+    for fact, expected_record in zip(facts, _P1_SOURCE_FACT_RECORD_CONTRACT):
         normalized_fact = _mapping(fact, "P1_SOURCE_FACT")
         _exact_fields(normalized_fact, _P1_SOURCE_FACT_FIELDS, "P1_SOURCE_FACT")
         for field, expected in (
@@ -1430,8 +1440,33 @@ def _source_fact_bound_payload(payload: object) -> dict[str, object]:
         ):
             if normalized_fact.get(field) != expected:
                 raise ValueError("PILOT_P1_SOURCE_FACT_PROVENANCE_MISMATCH")
-        for field in ("fact_id", "source_key", "quantity", "unit", "value"):
-            _string(normalized_fact.get(field), f"P1_SOURCE_FACT_{field.upper()}")
+        (
+            expected_fact_id,
+            expected_source_key,
+            expected_quantity,
+            expected_unit,
+            compile_field,
+        ) = expected_record
+        if tuple(
+            normalized_fact.get(field)
+            for field in ("fact_id", "source_key", "quantity", "unit")
+        ) != (
+            expected_fact_id,
+            expected_source_key,
+            expected_quantity,
+            expected_unit,
+        ):
+            raise ValueError("PILOT_P1_SOURCE_FACT_CONTRACT_INVALID")
+        fact_value = _string(normalized_fact.get("value"), "P1_SOURCE_FACT_VALUE")
+        try:
+            fact_number = float(fact_value)
+        except ValueError:
+            raise ValueError("PILOT_P1_SOURCE_FACT_VALUE_INVALID") from None
+        if (
+            not math.isfinite(fact_number)
+            or fact_number != dimensions[compile_field]
+        ):
+            raise ValueError("PILOT_P1_SOURCE_FACT_DIMENSION_MISMATCH")
 
     evidence_refs_raw = _mapping(root.get("evidence_refs"), "P1_SOURCE_FACT_REFS")
     if len(evidence_refs_raw) > 12:
