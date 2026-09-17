@@ -56,7 +56,7 @@ _CUSTODY_IDENTITY_KEY = b"server-owned-test-key-32-bytes!!"
 
 
 @pytest.fixture
-def acquired_source_custody(tmp_path: Path) -> dict[str, object]:
+def source_acquisition_context(tmp_path: Path) -> dict[str, object]:
     root = tmp_path / "approved-source-root"
     for locator, data in (
         (SOURCE_LOCATOR, SOURCE_BYTES),
@@ -96,16 +96,23 @@ def acquired_source_custody(tmp_path: Path) -> dict[str, object]:
             },
         ],
     )
-    return inspect_source_bundle_media(
-        approved_root_id="ROOT-SOURCE-001",
-        approved_root_revision="ROOT-REV-1",
-        approved_root=root,
-        identity_key=_CUSTODY_IDENTITY_KEY,
-        identity_key_revision="KEY-REV-1",
-        policy_limits=dict(_CUSTODY_POLICY_LIMITS),
-        media_limits=dict(_CUSTODY_MEDIA_LIMITS),
-        source_bundle=source_bundle,
-    )
+    return {
+        "approved_root_id": "ROOT-SOURCE-001",
+        "approved_root_revision": "ROOT-REV-1",
+        "approved_root": root,
+        "identity_key": _CUSTODY_IDENTITY_KEY,
+        "identity_key_revision": "KEY-REV-1",
+        "policy_limits": dict(_CUSTODY_POLICY_LIMITS),
+        "media_limits": dict(_CUSTODY_MEDIA_LIMITS),
+        "source_bundle": source_bundle,
+    }
+
+
+@pytest.fixture
+def acquired_source_custody(
+    source_acquisition_context: dict[str, object],
+) -> dict[str, object]:
+    return inspect_source_bundle_media(**source_acquisition_context)
 
 
 @pytest.fixture
@@ -205,6 +212,7 @@ def _expected_facts() -> list[dict[str, str]]:
 def _base_call(
     source_custody: dict[str, object],
     acquisition_binding_sha256: str,
+    acquisition_context: dict[str, object],
 ) -> dict[str, Any]:
     return {
         "source_bytes": SOURCE_BYTES,
@@ -218,6 +226,7 @@ def _base_call(
         "source_custody": deepcopy(source_custody),
         "source_acquisition_evidence": source_custody,
         "source_acquisition_binding_sha256": acquisition_binding_sha256,
+        "source_acquisition_context": deepcopy(acquisition_context),
         "extraction_profile_id": EXTRACTION_PROFILE_ID,
         "extraction_spec": deepcopy(EXTRACTION_SPEC),
         "extraction_spec_sha256": TRUSTED_EXTRACTION_SPEC_SHA256,
@@ -235,9 +244,14 @@ def _verifier() -> Any:
 def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input(
     acquired_source_custody: dict[str, object],
     source_acquisition_binding_sha256: str,
+    source_acquisition_context: dict[str, object],
 ) -> None:
     result = _verifier()(
-        **_base_call(acquired_source_custody, source_acquisition_binding_sha256)
+        **_base_call(
+            acquired_source_custody,
+            source_acquisition_binding_sha256,
+            source_acquisition_context,
+        )
     )
 
     assert result["source_sha256"] == SOURCE_SHA256
@@ -281,8 +295,13 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
     error_code: str,
     acquired_source_custody: dict[str, object],
     source_acquisition_binding_sha256: str,
+    source_acquisition_context: dict[str, object],
 ) -> None:
-    call = _base_call(acquired_source_custody, source_acquisition_binding_sha256)
+    call = _base_call(
+        acquired_source_custody,
+        source_acquisition_binding_sha256,
+        source_acquisition_context,
+    )
     if mutation == "caller_fact":
         call["proposed_facts"][0]["value"] = "999.0000"
     elif mutation == "source_hash":
@@ -326,10 +345,9 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         validate_source_custody(call["source_custody"])
         call["source_acquisition_evidence"] = deepcopy(call["source_custody"])
         validate_source_custody(call["source_acquisition_evidence"])
-        assert (
-            source_custody_sha256(call["source_acquisition_evidence"])
-            != call["source_acquisition_binding_sha256"]
-        )
+        forged_binding = source_custody_sha256(call["source_acquisition_evidence"])
+        assert forged_binding != call["source_acquisition_binding_sha256"]
+        call["source_acquisition_binding_sha256"] = forged_binding
     elif mutation == "source_identity":
         call["source_identity"] = "part-001-R2"
     elif mutation == "linked_artifact_hash":
