@@ -482,3 +482,43 @@ def test_verified_source_fact_handoff_delegates_to_existing_p1_skill_and_rejects
                 proposal=substituted_proposal,
                 expected_binding=substituted_expected,
             )
+
+    forged = deepcopy(verified)
+    forged["source_identity"] = "forged-source"
+    forged["source_locator"] = "forged/source.json"
+    forged["facts"][0]["source_identity"] = "forged-source"
+    forged["facts"][0]["source_locator"] = "forged/source.json"
+    forged["facts"][0]["value"] = "99.0000"
+    forged["compile_input"]["dimensions_mm"]["shaft_diameter_a"] = "99.0000"
+    forged["fact_evidence_sha256"] = canonical_json_sha256(
+        {
+            "schema_version": source_fusion.SOURCE_FUSION_SCHEMA_VERSION,
+            "source_sha256": forged["source_sha256"],
+            "source_locator": forged["source_locator"],
+            "source_identity": forged["source_identity"],
+            "linked_artifact_sha256": forged["linked_artifact_sha256"],
+            "linked_artifact_locator": forged["linked_artifact_locator"],
+            "linked_artifact_identity": forged["linked_artifact_identity"],
+            "source_custody_sha256": source_acquisition_binding_sha256,
+            "extraction_profile_id": forged["extraction_profile_id"],
+            "extraction_spec_sha256": forged["extraction_spec_sha256"],
+            "evidence_basis": forged["evidence_basis"],
+            "facts": forged["facts"],
+            "compile_input": forged["compile_input"],
+        }
+    )
+    forged_proposal = deepcopy(proposal)
+    forged_proposal["dimensions_mm"] = deepcopy(
+        forged["compile_input"]["dimensions_mm"]
+    )
+    forged_proposal["evidence_refs"]["source_fact_evidence_sha256"] = (
+        forged["fact_evidence_sha256"]
+    )
+    forged_proposal["evidence_refs"]["source_locator"] = forged["source_locator"]
+    forged_proposal["evidence_refs"]["source_identity"] = forged["source_identity"]
+    with pytest.raises((ValueError, skills.MechanicalSkillError)):
+        handoff(
+            verified_source_fact_evidence=forged,
+            proposal=forged_proposal,
+            expected_binding=deepcopy(binding),
+        )
