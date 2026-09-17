@@ -370,6 +370,29 @@ def _source_bound_proposal() -> dict[str, object]:
     }
 
 
+def _source_fact_bound_evidence() -> dict[str, object]:
+    proposal = _source_bound_proposal()
+    return {
+        "source_sha256": "1" * 64,
+        "source_locator": "sources/part-001/item.json",
+        "source_identity": "part-001-R1",
+        "linked_artifact_sha256": "2" * 64,
+        "linked_artifact_locator": "sources/part-001/drawing.json",
+        "linked_artifact_identity": "drawing-001-R1",
+        "source_custody_sha256": "3" * 64,
+        "source_acquisition_binding_sha256": "3" * 64,
+        "fact_evidence_sha256": "4" * 64,
+        "extraction_profile_id": "source-facts-stepped-shaft-v1",
+        "profile_id": "simple-stepped-shaft-p1-v1",
+        "dimensions_mm": deepcopy(proposal["dimensions_mm"]),
+        "evidence_refs": {
+            "source_fact_evidence_sha256": "4" * 64,
+            "source_identity": "part-001-R1",
+            "linked_artifact_identity": "drawing-001-R1",
+        },
+    }
+
+
 def test_primitive_loader_accepts_verified_title_block_scale_calibration(
     tmp_path: Path,
 ) -> None:
@@ -654,6 +677,61 @@ def test_source_bound_external_proposal_compiles_deterministically_without_false
     assert first["feature_contract"]["hole-axial-001"]["kind"] == "hole_feature"
     assert len(first["plan_sha256"]) == 64
     assert "geometry_opencv" not in json.dumps(first, sort_keys=True)
+
+
+def test_source_fact_bound_compiler_reuses_one_geometry_plan_without_visual_claims() -> None:
+    from cad_agent.mechanical_pilot import (
+        compile_source_bound_simple_shaft_proposal,
+        compile_source_fact_bound_simple_shaft_proposal,
+    )
+
+    fact_evidence = _source_fact_bound_evidence()
+    source_fact_plan = compile_source_fact_bound_simple_shaft_proposal(
+        fact_evidence
+    )
+    visual_plan = compile_source_bound_simple_shaft_proposal(
+        _source_bound_proposal(), expected_binding=_source_bound_binding()
+    )
+
+    assert source_fact_plan["geometry_contract"] == visual_plan["geometry_contract"]
+    assert source_fact_plan["feature_contract"] == visual_plan["feature_contract"]
+    encoded = json.dumps(source_fact_plan, sort_keys=True)
+    assert "page_index" not in encoded
+    assert "roi_bbox_px" not in encoded
+    assert "source_render_sha256" not in encoded
+    assert "calibration" not in encoded
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "fact_evidence_sha256",
+        "source_sha256",
+        "linked_artifact_sha256",
+        "source_custody_sha256",
+        "source_acquisition_binding_sha256",
+        "profile_id",
+        "dimensions_mm",
+    ],
+)
+def test_source_fact_bound_compiler_rejects_mutated_verified_payload(
+    field: str,
+) -> None:
+    from cad_agent.mechanical_pilot import compile_source_fact_bound_simple_shaft_proposal
+
+    payload = _source_fact_bound_evidence()
+    if field == "dimensions_mm":
+        dimensions = deepcopy(payload["dimensions_mm"])
+        assert isinstance(dimensions, dict)
+        dimensions["hole_diameter"] = 11.0
+        payload[field] = dimensions
+    elif field == "profile_id":
+        payload[field] = "other-profile"
+    else:
+        payload[field] = "9" * 64
+
+    with pytest.raises(ValueError):
+        compile_source_fact_bound_simple_shaft_proposal(payload)
 
 
 @pytest.mark.parametrize(

@@ -195,6 +195,35 @@ def test_source_fact_composition_fails_closed_without_authoritative_visual_bindi
     assert len(calls["invoke"]) == 0
 
 
+def test_source_fact_composition_routes_same_verifier_payload_to_fact_bound_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def compile_source_fact_bound(payload: dict[str, object]) -> dict[str, object]:
+        captured.update(payload)
+        return {"compiled": True}
+
+    monkeypatch.setattr(
+        "cad_agent.mechanical_pilot.compile_source_fact_bound_simple_shaft_proposal",
+        compile_source_fact_bound,
+        raising=False,
+    )
+
+    result, calls = _run_composition(monkeypatch)
+
+    assert result == {"compiled": True}
+    assert captured["source_sha256"] == SOURCE_SHA256
+    assert captured["linked_artifact_sha256"] == LINKED_ARTIFACT_SHA256
+    assert captured["source_custody_sha256"] == CUSTODY_DIGEST
+    assert captured["fact_evidence_sha256"] == FACT_EVIDENCE_SHA256
+    assert "page_index" not in captured
+    assert "roi_bbox_px" not in captured
+    assert "source_render_sha256" not in captured
+    assert "calibration" not in captured
+    assert calls["invoke"] == []
+
+
 @pytest.mark.parametrize(
     "field",
     ["source_custody", "source_sha256", "fact_evidence_sha256"],
