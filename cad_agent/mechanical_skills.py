@@ -563,6 +563,70 @@ def invoke_skill(
     return validate_skill_invocation_plan(plan)
 
 
+def invoke_verified_source_fact_evidence(
+    *,
+    verified_source_fact_evidence: Mapping[str, object],
+    proposal: Mapping[str, object],
+    expected_binding: Mapping[str, object],
+    source_fact_verification_replay: object,
+) -> dict[str, object]:
+    """Route one trusted source-fact result through the existing P1 skill."""
+
+    if not callable(source_fact_verification_replay):
+        _fail("SOURCE_FACT_VERIFICATION_REPLAY_INVALID")
+    if not isinstance(verified_source_fact_evidence, Mapping):
+        _fail("SOURCE_FACT_VERIFICATION_BINDING")
+    if not isinstance(proposal, Mapping) or not isinstance(expected_binding, Mapping):
+        _fail("P1_PROPOSAL_INVALID")
+    try:
+        replayed = source_fact_verification_replay()
+    except Exception as error:
+        raise MechanicalSkillError("SOURCE_FACT_VERIFICATION_REPLAY_FAILED") from error
+    if not isinstance(replayed, Mapping) or dict(replayed) != dict(
+        verified_source_fact_evidence
+    ):
+        _fail("SOURCE_FACT_VERIFICATION_BINDING")
+
+    compile_input = replayed.get("compile_input")
+    if not isinstance(compile_input, Mapping):
+        _fail("SOURCE_FACT_VERIFICATION_BINDING")
+    if proposal.get("dimensions_mm") != compile_input.get("dimensions_mm"):
+        _fail("SOURCE_FACT_PROPOSAL_MISMATCH")
+    evidence_refs = proposal.get("evidence_refs")
+    if not isinstance(evidence_refs, Mapping):
+        _fail("SOURCE_FACT_PROPOSAL_MISMATCH")
+    expected_evidence = {
+        "source_fact_evidence_sha256": replayed.get("fact_evidence_sha256"),
+        "source_custody_sha256": replayed.get("source_acquisition_binding_sha256"),
+        "source_sha256": replayed.get("source_sha256"),
+        "source_locator": replayed.get("source_locator"),
+        "source_identity": replayed.get("source_identity"),
+        "linked_artifact_sha256": replayed.get("linked_artifact_sha256"),
+        "linked_artifact_locator": replayed.get("linked_artifact_locator"),
+        "linked_artifact_identity": replayed.get("linked_artifact_identity"),
+    }
+    if any(evidence_refs.get(key) != value for key, value in expected_evidence.items()):
+        _fail("SOURCE_FACT_PROPOSAL_MISMATCH")
+    if proposal.get("source_sha256") != replayed.get("source_sha256"):
+        _fail("SOURCE_FACT_PROPOSAL_MISMATCH")
+
+    normalized_proposal = deepcopy(dict(proposal))
+    try:
+        normalized_proposal["dimensions_mm"] = {
+            key: float(value)
+            for key, value in compile_input["dimensions_mm"].items()
+        }
+    except (AttributeError, TypeError, ValueError) as error:
+        raise MechanicalSkillError("SOURCE_FACT_PROPOSAL_MISMATCH") from error
+    return invoke_skill(
+        "geometry.simple_shaft_pilot",
+        parameters={
+            "proposal": normalized_proposal,
+            "expected_binding": deepcopy(dict(expected_binding)),
+        },
+    )
+
+
 __all__ = [
     "MAX_SEARCH_INTENT_LENGTH",
     "MAX_SEARCH_RESULTS",
@@ -572,6 +636,7 @@ __all__ = [
     "SKILL_INVOCATION_PLAN_SCHEMA_VERSION",
     "get_mechanical_skill_catalog",
     "invoke_skill",
+    "invoke_verified_source_fact_evidence",
     "search_skills",
     "validate_mechanical_skill_catalog",
     "validate_skill_invocation_plan",

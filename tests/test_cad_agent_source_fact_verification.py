@@ -416,6 +416,15 @@ def test_verified_source_fact_handoff_delegates_to_existing_p1_skill_and_rejects
             source_acquisition_binding_sha256,
         )
     )
+
+    def trusted_replay() -> dict[str, object]:
+        return _verifier(source_acquisition_replay)(
+            **_base_call(
+                acquired_source_custody,
+                source_acquisition_binding_sha256,
+            )
+        )
+
     binding = {
         "source_sha256": verified["source_sha256"],
         "page_index": 0,
@@ -453,8 +462,12 @@ def test_verified_source_fact_handoff_delegates_to_existing_p1_skill_and_rejects
         verified_source_fact_evidence=verified,
         proposal=proposal,
         expected_binding=deepcopy(binding),
+        source_fact_verification_replay=trusted_replay,
     )
-    assert plan["dimensions_mm"] == verified["compile_input"]["dimensions_mm"]
+    assert plan["dimensions_mm"] == {
+        key: float(value)
+        for key, value in verified["compile_input"]["dimensions_mm"].items()
+    }
     assert plan["evidence_refs"] == proposal["evidence_refs"]
     assert plan["geometry_contract"]["line_count"] == 8
     assert plan["geometry_contract"]["circle_count"] == 1
@@ -481,6 +494,7 @@ def test_verified_source_fact_handoff_delegates_to_existing_p1_skill_and_rejects
                 verified_source_fact_evidence=verified,
                 proposal=substituted_proposal,
                 expected_binding=substituted_expected,
+                source_fact_verification_replay=trusted_replay,
             )
 
     forged = deepcopy(verified)
@@ -521,4 +535,5 @@ def test_verified_source_fact_handoff_delegates_to_existing_p1_skill_and_rejects
             verified_source_fact_evidence=forged,
             proposal=forged_proposal,
             expected_binding=deepcopy(binding),
+            source_fact_verification_replay=trusted_replay,
         )
