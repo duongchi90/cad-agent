@@ -22,6 +22,10 @@ SOURCE_BYTES = (
 LINKED_ARTIFACT_BYTES = b"linked_identity=drawing-001@R1\nprofile=stepped_shaft\n"
 SOURCE_SHA256 = hashlib.sha256(SOURCE_BYTES).hexdigest()
 LINKED_ARTIFACT_SHA256 = hashlib.sha256(LINKED_ARTIFACT_BYTES).hexdigest()
+# These are immutable outputs of the existing upstream provenance owner.  They
+# must not be recomputed from the bytes supplied to the verifier.
+TRUSTED_SOURCE_SHA256 = "e64458ea7cd21a3558ab8678527fb3867815cff8fe8568daa93859b727c706b1"
+TRUSTED_LINKED_ARTIFACT_SHA256 = "5ec0af25e361a390384df403bdd7442e3a293f79d13991c0ea673263741aee80"
 SOURCE_LOCATOR = "official://part-001/item"
 LINKED_ARTIFACT_LOCATOR = "official://part-001/drawing"
 SOURCE_IDENTITY = "part-001@R1"
@@ -119,10 +123,12 @@ def _base_call() -> dict[str, Any]:
     return {
         "source_bytes": SOURCE_BYTES,
         "source_sha256": SOURCE_SHA256,
+        "trusted_source_sha256": TRUSTED_SOURCE_SHA256,
         "source_locator": SOURCE_LOCATOR,
         "source_identity": SOURCE_IDENTITY,
         "linked_artifact_bytes": LINKED_ARTIFACT_BYTES,
         "linked_artifact_sha256": LINKED_ARTIFACT_SHA256,
+        "trusted_linked_artifact_sha256": TRUSTED_LINKED_ARTIFACT_SHA256,
         "linked_artifact_locator": LINKED_ARTIFACT_LOCATOR,
         "linked_artifact_identity": LINKED_ARTIFACT_IDENTITY,
         "extraction_profile_id": EXTRACTION_PROFILE_ID,
@@ -163,8 +169,10 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input()
     [
         ("caller_fact", "FACT_REPRODUCTION"),
         ("source_hash", "SOURCE_HASH"),
+        ("source_replacement", "SOURCE_HASH"),
         ("source_identity", "SOURCE_IDENTITY"),
         ("linked_artifact_hash", "LINKED_ARTIFACT_HASH"),
+        ("linked_artifact_replacement", "LINKED_ARTIFACT_HASH"),
         ("linked_artifact_identity", "LINKED_ARTIFACT_IDENTITY"),
         ("source_locator", "SOURCE_LOCATOR"),
         ("linked_artifact_locator", "LINKED_ARTIFACT_LOCATOR"),
@@ -180,10 +188,23 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         call["proposed_facts"][0]["value"] = "999.0000"
     elif mutation == "source_hash":
         call["source_bytes"] = SOURCE_BYTES + b"drift\n"
+    elif mutation == "source_replacement":
+        replacement = SOURCE_BYTES.replace(b"12.7000", b"13.7000")
+        call["source_bytes"] = replacement
+        call["source_sha256"] = hashlib.sha256(replacement).hexdigest()
+        call["proposed_facts"][0]["value"] = "13.7000"
+        for fact in call["proposed_facts"]:
+            fact["source_sha256"] = call["source_sha256"]
     elif mutation == "source_identity":
         call["source_identity"] = "part-001@R2"
     elif mutation == "linked_artifact_hash":
         call["linked_artifact_bytes"] = LINKED_ARTIFACT_BYTES + b"drift\n"
+    elif mutation == "linked_artifact_replacement":
+        replacement = LINKED_ARTIFACT_BYTES.replace(b"stepped_shaft", b"other_profile")
+        call["linked_artifact_bytes"] = replacement
+        call["linked_artifact_sha256"] = hashlib.sha256(replacement).hexdigest()
+        for fact in call["proposed_facts"]:
+            fact["linked_artifact_sha256"] = call["linked_artifact_sha256"]
     elif mutation == "linked_artifact_identity":
         call["linked_artifact_identity"] = "drawing-001@R2"
     elif mutation == "source_locator":
