@@ -11,16 +11,20 @@ from pathlib import Path
 import re
 
 from cad_agent.drawing_contracts import canonical_json_sha256
-from cad_agent.live import load_build_evidence
+from cad_agent.live import load_build_evidence, write_build_evidence
 from cad_agent.mechanical_pilot import (
     MechanicalPilotResult,
     _documents,
     _load_primitive_document,
     _semantic_from_primitive,
+    compile_source_bound_simple_shaft_proposal,
     load_pilot_definition,
     validate_primitive_bound_candidate,
 )
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
+from dxf_builder_lib.builder import build_dxf
+from dxf_builder_lib.reviewer import review_dxf
+from primitive_ir_lib.validator import validate_document as validate_primitive_document
 
 
 GENERATED_PILOT_PROVENANCE_SCHEMA_VERSION = (
@@ -981,6 +985,223 @@ def build_external_geometry_r3_inputs(
     }
 
 
+def _validated_p1_compile_plan(plan: object) -> dict[str, object]:
+    if not isinstance(plan, Mapping):
+        _fail("P1_COMPILE_PLAN_INVALID")
+    binding = plan.get("source_binding")
+    dimensions = plan.get("dimensions_mm")
+    evidence_refs = plan.get("evidence_refs")
+    if not isinstance(binding, Mapping) or not isinstance(dimensions, Mapping):
+        _fail("P1_COMPILE_PLAN_INVALID")
+    if not isinstance(evidence_refs, Mapping):
+        _fail("P1_COMPILE_PLAN_INVALID")
+    proposal = {
+        "schema_version": "p1-source-bound-proposal-1.0",
+        "proposal_source": "external_ai",
+        **deepcopy(dict(binding)),
+        "dimensions_mm": deepcopy(dict(dimensions)),
+        "evidence_refs": deepcopy(dict(evidence_refs)),
+    }
+    try:
+        expected = compile_source_bound_simple_shaft_proposal(
+            proposal,
+            expected_binding=binding,
+        )
+    except (TypeError, ValueError) as error:
+        raise GeneratedPilotProvenanceError("P1_COMPILE_PLAN_INVALID") from error
+    if dict(plan) != expected:
+        _fail("P1_COMPILE_PLAN_INVALID")
+    return expected
+
+
+def _p1_definition_from_compile_plan(plan: Mapping[str, object]) -> dict[str, object]:
+    binding = plan["source_binding"]
+    assert isinstance(binding, Mapping)
+    roi = binding["roi_bbox_px"]
+    assert isinstance(roi, list)
+    evidence_refs = plan["evidence_refs"]
+    assert isinstance(evidence_refs, Mapping)
+    drawing_url = evidence_refs.get("drawing_url")
+    source_file_name = (
+        str(drawing_url).rstrip("/").rsplit("/", 1)[-1]
+        if isinstance(drawing_url, str) and drawing_url.rstrip("/")
+        else f"p1-page-{int(binding['page_index']) + 1}.render"
+    )
+    geometry = plan["geometry_contract"]
+    assert isinstance(geometry, Mapping)
+    raw_lines = geometry["lines"]
+    circle = geometry["circle"]
+    assert isinstance(raw_lines, list) and isinstance(circle, Mapping)
+    segments = []
+    for line in raw_lines:
+        assert isinstance(line, Mapping)
+        primitive_id = line["id"]
+        assert isinstance(primitive_id, str)
+        prefix, separator, segment_id = primitive_id.partition(":")
+        if prefix != "shaft-profile-001" or not separator or not segment_id:
+            _fail("P1_COMPILE_PLAN_GEOMETRY_INVALID")
+        segments.append(
+            {
+                "id": segment_id,
+                "start": list(line["start_mm"]),
+                "end": list(line["end_mm"]),
+            }
+        )
+    center = circle["center_mm"]
+    radius = circle["radius_mm"]
+    if not isinstance(center, list) or not isinstance(radius, (int, float)):
+        _fail("P1_COMPILE_PLAN_GEOMETRY_INVALID")
+    return {
+        "schema_version": "mechanical-shaft-pilot-1.0",
+        "pilot_id": "p1-source-bound-simple-shaft-v1",
+        "source_document": {
+            "file_name": source_file_name,
+            "page_index": binding["page_index"],
+            "image_width_px": roi[2] + 1,
+            "image_height_px": roi[3] + 1,
+        },
+        "calibration": deepcopy(dict(binding["calibration"])),
+        "features": [
+            {
+                "id": "shaft-profile-001",
+                "kind": "shaft_step",
+                "segments": segments,
+            },
+            {
+                "id": "hole-axial-001",
+                "kind": "hole_feature",
+                "center": list(center),
+                "diameter_mm": float(radius) * 2.0,
+            },
+        ],
+    }
+
+
+def build_external_geometry_r3_inputs_from_compile_plan(
+    *,
+    plan: object,
+    pilot_id: str,
+    artifact_dir: str | os.PathLike[str],
+    source_render_bytes: bytes,
+) -> dict[str, object]:
+    """Materialize one validated P1 plan through the existing artifact owners."""
+    validated_plan = _validated_p1_compile_plan(plan)
+    binding = validated_plan["source_binding"]
+    assert isinstance(binding, Mapping)
+    expected_source_render_sha256 = binding["source_render_sha256"]
+    if (
+        not isinstance(source_render_bytes, bytes)
+        or not source_render_bytes
+        or hashlib.sha256(source_render_bytes).hexdigest()
+        != expected_source_render_sha256
+    ):
+        _fail("P1_SOURCE_RENDER_BINDING_INVALID")
+
+    root = Path(artifact_dir).resolve()
+    if _path_contains_windows_reparse_point(root.parent):
+        _fail("P1_ARTIFACT_ROOT_REPARSE")
+    if root.exists():
+        if not root.is_dir() or any(root.iterdir()):
+            _fail("P1_ARTIFACT_ROOT_NOT_EMPTY")
+    else:
+        root.mkdir(parents=True, exist_ok=False)
+
+    primitive_path = root / "primitive-ir.json"
+    candidate_path = root / "candidate.dxf"
+    build_evidence_path = root / "build-evidence.json"
+    definition = _p1_definition_from_compile_plan(validated_plan)
+    source_sha256 = binding["source_sha256"]
+    try:
+        primitive_doc, _semantic_doc, _bindings = _documents(
+            definition,
+            source_sha256,
+            primitive_path,
+        )
+    except (TypeError, ValueError, KeyError) as error:
+        raise GeneratedPilotProvenanceError("P1_PRIMITIVE_IR_MATERIALIZATION_INVALID") from error
+    primitive_doc.calibration.source_sha256 = source_sha256
+    primitive_errors = validate_primitive_document(primitive_doc.to_dict())
+    if primitive_errors:
+        _fail("P1_PRIMITIVE_IR_INVALID")
+    primitive_path.write_text(
+        json.dumps(primitive_doc.to_dict(), ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    try:
+        build = build_dxf(
+            primitive_doc,
+            str(candidate_path),
+            semantic_doc=None,
+            build_components=False,
+            build_dimensions=False,
+        )
+        review = review_dxf(build, strict_primitive_inventory=True)
+    except (OSError, TypeError, ValueError) as error:
+        raise GeneratedPilotProvenanceError("P1_CANDIDATE_BUILD_INVALID") from error
+    if not review.passed:
+        _fail("P1_CANDIDATE_BUILD_REVIEW_FAILED")
+    write_build_evidence(build_evidence_path, build)
+
+    verification_request: dict[str, object] = {
+        "kind": "P1_SOURCE_BOUND_COMPILE_VERIFICATION_REQUEST",
+        "status": "PROPOSAL_ONLY",
+        "compile_plan_sha256": validated_plan["plan_sha256"],
+        "exact_source_binding": deepcopy(dict(binding)),
+        "geometry_contract": deepcopy(validated_plan["geometry_contract"]),
+        "feature_contract": deepcopy(validated_plan["feature_contract"]),
+        "checks_required": [
+            "EXACT_SOURCE_BINDING",
+            "PRIMITIVE_IR_SCHEMA",
+            "DXF_BUILD_EVIDENCE",
+            "STRICT_PRIMITIVE_ROUND_TRIP",
+        ],
+        "cad_mutation": False,
+    }
+    verification_request["verification_request_sha256"] = canonical_json_sha256(
+        verification_request
+    )
+    verification_result: dict[str, object] = {
+        "kind": "P1_SOURCE_BOUND_COMPILE_VERIFICATION_RESULT",
+        "status": "VERIFIED",
+        "verification_request_sha256": verification_request[
+            "verification_request_sha256"
+        ],
+        "compile_plan_sha256": validated_plan["plan_sha256"],
+        "source_sha256": source_sha256,
+        "source_render_sha256": expected_source_render_sha256,
+        "primitive_ir_sha256": hashlib.sha256(primitive_path.read_bytes()).hexdigest(),
+        "candidate_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+        "build_evidence_sha256": hashlib.sha256(
+            build_evidence_path.read_bytes()
+        ).hexdigest(),
+        "entity_count": build.entity_count,
+        "review_passed": review.passed,
+        "cad_mutation": False,
+    }
+    try:
+        validate_primitive_bound_candidate(
+            primitive_path,
+            candidate_path,
+            build_evidence_path,
+            verification_request=verification_request,
+            verification_result=verification_result,
+            source_render_bytes=source_render_bytes,
+        )
+    except (OSError, TypeError, ValueError) as error:
+        raise GeneratedPilotProvenanceError("P1_VERIFIED_ARTIFACT_CHAIN_INVALID") from error
+
+    return build_external_geometry_r3_inputs(
+        pilot_id=pilot_id,
+        primitive_ir_path=primitive_path,
+        candidate_path=candidate_path,
+        build_evidence_path=build_evidence_path,
+        verification_request=verification_request,
+        verification_result=verification_result,
+        source_render_bytes=source_render_bytes,
+    )
+
+
 def build_generated_pilot_provenance(
     result: MechanicalPilotResult,
 ) -> dict[str, object]:
@@ -1276,6 +1497,7 @@ __all__ = [
     "GeneratedPilotProvenanceError",
     "build_external_geometry_provenance",
     "build_external_geometry_r3_inputs",
+    "build_external_geometry_r3_inputs_from_compile_plan",
     "build_generated_pilot_provenance",
     "build_generated_pilot_r3_inputs",
     "compose_generated_pilot_query_binding",
