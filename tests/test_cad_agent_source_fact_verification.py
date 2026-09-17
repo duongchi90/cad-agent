@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import partial
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -222,7 +223,6 @@ def _expected_facts() -> list[dict[str, str]]:
 def _base_call(
     source_custody: dict[str, object],
     acquisition_binding_sha256: str,
-    acquisition_replay: Any,
 ) -> dict[str, Any]:
     return {
         "source_bytes": SOURCE_BYTES,
@@ -236,7 +236,6 @@ def _base_call(
         "source_custody": deepcopy(source_custody),
         "source_acquisition_evidence": source_custody,
         "source_acquisition_binding_sha256": acquisition_binding_sha256,
-        "source_acquisition_replay": acquisition_replay,
         "extraction_profile_id": EXTRACTION_PROFILE_ID,
         "extraction_spec": deepcopy(EXTRACTION_SPEC),
         "extraction_spec_sha256": TRUSTED_EXTRACTION_SPEC_SHA256,
@@ -245,10 +244,10 @@ def _base_call(
     }
 
 
-def _verifier() -> Any:
+def _verifier(acquisition_replay: Any) -> Any:
     verifier = getattr(source_fusion, "verify_source_fact_evidence", None)
     assert callable(verifier), "MISSING_GENERIC_SOURCE_FACT_VERIFIER"
-    return verifier
+    return partial(verifier, source_acquisition_replay=acquisition_replay)
 
 
 def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input(
@@ -256,11 +255,10 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input(
     source_acquisition_binding_sha256: str,
     source_acquisition_replay: Any,
 ) -> None:
-    result = _verifier()(
+    result = _verifier(source_acquisition_replay)(
         **_base_call(
             acquired_source_custody,
             source_acquisition_binding_sha256,
-            source_acquisition_replay,
         )
     )
 
@@ -310,7 +308,6 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
     call = _base_call(
         acquired_source_custody,
         source_acquisition_binding_sha256,
-        source_acquisition_replay,
     )
     if mutation == "caller_fact":
         call["proposed_facts"][0]["value"] = "999.0000"
@@ -397,4 +394,4 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         call["evidence_basis"] = "raster_derived"
 
     with pytest.raises(ValueError, match=error_code):
-        _verifier()(**call)
+        _verifier(source_acquisition_replay)(**call)
