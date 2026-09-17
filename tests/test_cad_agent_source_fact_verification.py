@@ -170,9 +170,11 @@ def test_generic_source_fact_verifier_reproduces_bound_facts_and_compile_input()
         ("caller_fact", "FACT_REPRODUCTION"),
         ("source_hash", "SOURCE_HASH"),
         ("source_replacement", "SOURCE_HASH"),
+        ("source_trusted_replacement", "SOURCE_HASH"),
         ("source_identity", "SOURCE_IDENTITY"),
         ("linked_artifact_hash", "LINKED_ARTIFACT_HASH"),
         ("linked_artifact_replacement", "LINKED_ARTIFACT_HASH"),
+        ("linked_artifact_trusted_replacement", "LINKED_ARTIFACT_HASH"),
         ("linked_artifact_identity", "LINKED_ARTIFACT_IDENTITY"),
         ("source_locator", "SOURCE_LOCATOR"),
         ("linked_artifact_locator", "LINKED_ARTIFACT_LOCATOR"),
@@ -195,6 +197,14 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         call["proposed_facts"][0]["value"] = "13.7000"
         for fact in call["proposed_facts"]:
             fact["source_sha256"] = call["source_sha256"]
+    elif mutation == "source_trusted_replacement":
+        replacement = SOURCE_BYTES.replace(b"12.7000", b"13.7000")
+        call["source_bytes"] = replacement
+        call["source_sha256"] = hashlib.sha256(replacement).hexdigest()
+        call["trusted_source_sha256"] = call["source_sha256"]
+        call["proposed_facts"][0]["value"] = "13.7000"
+        for fact in call["proposed_facts"]:
+            fact["source_sha256"] = call["source_sha256"]
     elif mutation == "source_identity":
         call["source_identity"] = "part-001@R2"
     elif mutation == "linked_artifact_hash":
@@ -203,6 +213,13 @@ def test_generic_source_fact_verifier_rejects_unbound_or_false_evidence(
         replacement = LINKED_ARTIFACT_BYTES.replace(b"stepped_shaft", b"other_profile")
         call["linked_artifact_bytes"] = replacement
         call["linked_artifact_sha256"] = hashlib.sha256(replacement).hexdigest()
+        for fact in call["proposed_facts"]:
+            fact["linked_artifact_sha256"] = call["linked_artifact_sha256"]
+    elif mutation == "linked_artifact_trusted_replacement":
+        replacement = LINKED_ARTIFACT_BYTES.replace(b"stepped_shaft", b"other_profile")
+        call["linked_artifact_bytes"] = replacement
+        call["linked_artifact_sha256"] = hashlib.sha256(replacement).hexdigest()
+        call["trusted_linked_artifact_sha256"] = call["linked_artifact_sha256"]
         for fact in call["proposed_facts"]:
             fact["linked_artifact_sha256"] = call["linked_artifact_sha256"]
     elif mutation == "linked_artifact_identity":
