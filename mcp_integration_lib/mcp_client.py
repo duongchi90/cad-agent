@@ -675,6 +675,9 @@ class FileIPCLiveMCPClient:
     def _dimension_native_fields(self, entity_id: str) -> Dict[str, Any]:
         if not re.fullmatch(r"[0-9A-Fa-f]+", entity_id):
             raise MCPToolError("DIMENSION native placement requires a valid handle")
+        expected_literal = self._assert_active_document_matches(
+            self._active_drawing_path
+        )
         token = uuid.uuid4().hex[:12]
         result = self._dir / f"autocad_mcp_dimension_measurement_{token}.txt"
         lisp_path = str(result).replace("\\", "/").replace('"', '\\"')
@@ -682,7 +685,19 @@ class FileIPCLiveMCPClient:
         try:
             self._raw_lisp_trigger(
                 '(progn (vl-load-com) '
-                f'(setq mcp-dim-ent (handent "{entity_id}")) '
+                '(setq mcp-dim-doc (vla-get-ActiveDocument (vlax-get-acad-object)) '
+                '(setq mcp-dim-target (findfile '
+                + expected_literal
+                + ')) '
+                '(if (not mcp-dim-target) '
+                '(setq mcp-dim-target '
+                + expected_literal
+                + ')) '
+                '(setq mcp-dim-ent '
+                '(if (= (strcase (vla-get-FullName mcp-dim-doc)) '
+                '(strcase mcp-dim-target)) '
+                f'(handent "{entity_id}") '
+                'nil)) '
                 f'(setq mcp-dim-file (open "{lisp_path}" "w")) '
                 '(defun mcp-dim-point-list (value / converted) '
                 "(setq converted (if (= (type value) 'VARIANT) "

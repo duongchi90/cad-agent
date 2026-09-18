@@ -127,6 +127,11 @@ class FileIPCClientTests(unittest.TestCase):
                 .001,
                 raw_lisp_trigger=raw_lisp_trigger,
             )
+            client._active_drawing_path = r"c:\drawings\target.dwg"
+            client.drawing_get_variables = lambda names: {
+                "DWGPREFIX": "c:\\drawings\\",
+                "DWGNAME": "target.dwg",
+            }
             self.assertEqual(client.entity_get("20")["measurement"], 80.0)
             self.assertEqual(len(expressions), 1)
             self.assertIn("(assoc 42 mcp-dim-data)", expressions[0])
@@ -181,6 +186,11 @@ class FileIPCClientTests(unittest.TestCase):
                 .001,
                 raw_lisp_trigger=raw_lisp_trigger,
             )
+            client._active_drawing_path = r"c:\drawings\target.dwg"
+            client.drawing_get_variables = lambda names: {
+                "DWGPREFIX": "c:\\drawings\\",
+                "DWGNAME": "target.dwg",
+            }
             payload = client.entity_get("20")
 
             self.assertTrue(
@@ -207,6 +217,8 @@ class FileIPCClientTests(unittest.TestCase):
             self.assertIn("(assoc 14 mcp-dim-data)", expressions[0])
             self.assertIn("(assoc 10 mcp-dim-data)", expressions[0])
             self.assertIn("GetBoundingBox", expressions[0])
+            self.assertIn("(vla-get-FullName mcp-dim-doc)", expressions[0])
+            self.assertIn("mcp-dim-target", expressions[0])
             self.assertNotIn("XLine1Point", expressions[0])
             self.assertNotIn("XLine2Point", expressions[0])
             self.assertNotIn("DimLinePoint", expressions[0])
@@ -266,6 +278,11 @@ class FileIPCClientTests(unittest.TestCase):
                 .001,
                 raw_lisp_trigger=raw_lisp_trigger,
             )
+            client._active_drawing_path = r"c:\drawings\target.dwg"
+            client.drawing_get_variables = lambda names: {
+                "DWGPREFIX": "c:\\drawings\\",
+                "DWGNAME": "target.dwg",
+            }
             try:
                 payload = client.entity_get("20")
             except MCPToolError as error:
