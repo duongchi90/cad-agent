@@ -80,6 +80,12 @@ _ENTITY_GEOMETRY_FIELDS = (
     "content",
     "height",
     "rotation_deg",
+    "measurement",
+    "text_position",
+    "xline1",
+    "xline2",
+    "dimline",
+    "bounding_box",
     "attributes",
 )
 _ENTITY_FIELDS = frozenset(
@@ -91,6 +97,14 @@ _GEOMETRY_BY_TYPE = {
     "ARC": ("center", "radius", "start_angle_deg", "end_angle_deg"),
     "TEXT": ("insert", "content"),
     "MTEXT": ("insert", "content"),
+    "DIMENSION": (
+        "measurement",
+        "text_position",
+        "xline1",
+        "xline2",
+        "dimline",
+        "bounding_box",
+    ),
 }
 
 

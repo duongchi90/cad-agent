@@ -367,3 +367,110 @@ def test_production_adapter_has_no_unbounded_or_mutating_owner_calls() -> None:
         "raw_lisp",
     )
     assert not [marker for marker in forbidden if marker in source]
+
+
+def test_dimension_geometry_serializes_native_placement_tuple() -> None:
+    module = _module()
+    raw = {
+        "handle": "D1",
+        "type": "DIMENSION",
+        "layer": "DIMENSIONS",
+        "measurement": 100.0,
+        "text_position": (20.0, 30.0, 0.0),
+        "xline1": (0.0, 0.0, 0.0),
+        "xline2": (100.0, 0.0, 0.0),
+        "dimline": (50.0, 20.0, 0.0),
+        "bounding_box": {
+            "min": (0.0, 0.0),
+            "max": (100.0, 30.0),
+        },
+    }
+
+    result = module._entity_record(raw, "D1", "GEOMETRY")
+
+    assert result == {
+        "handle": "D1",
+        "type": "DIMENSION",
+        "layer": "DIMENSIONS",
+        "measurement": 100.0,
+        "text_position": (20.0, 30.0, 0.0),
+        "xline1": (0.0, 0.0, 0.0),
+        "xline2": (100.0, 0.0, 0.0),
+        "dimline": (50.0, 20.0, 0.0),
+        "bounding_box": {
+            "min": (0.0, 0.0),
+            "max": (100.0, 30.0),
+        },
+    }
+
+
+def test_existing_geometry_types_keep_their_current_shapes() -> None:
+    module = _module()
+    cases = (
+        (
+            {
+                "handle": "L1",
+                "type": "LINE",
+                "layer": "0",
+                "start": (0.0, 0.0),
+                "end": (1.0, 0.0),
+            },
+            {"start": (0.0, 0.0), "end": (1.0, 0.0)},
+        ),
+        (
+            {
+                "handle": "C1",
+                "type": "CIRCLE",
+                "layer": "0",
+                "center": (1.0, 1.0),
+                "radius": 2.0,
+            },
+            {"center": (1.0, 1.0), "radius": 2.0},
+        ),
+        (
+            {
+                "handle": "A1",
+                "type": "ARC",
+                "layer": "0",
+                "center": (1.0, 1.0),
+                "radius": 2.0,
+                "start_angle_deg": 0.0,
+                "end_angle_deg": 90.0,
+            },
+            {
+                "center": (1.0, 1.0),
+                "radius": 2.0,
+                "start_angle_deg": 0.0,
+                "end_angle_deg": 90.0,
+            },
+        ),
+        (
+            {
+                "handle": "T1",
+                "type": "TEXT",
+                "layer": "0",
+                "insert": (1.0, 2.0),
+                "content": "TEXT",
+            },
+            {"insert": (1.0, 2.0), "content": "TEXT"},
+        ),
+        (
+            {
+                "handle": "M1",
+                "type": "MTEXT",
+                "layer": "0",
+                "insert": (1.0, 2.0),
+                "content": "MTEXT",
+            },
+            {"insert": (1.0, 2.0), "content": "MTEXT"},
+        ),
+    )
+
+    for raw, expected_geometry in cases:
+        result = module._entity_record(raw, raw["handle"], "GEOMETRY")
+        assert result == {
+            "handle": raw["handle"],
+            "type": raw["type"],
+            "layer": "0",
+            **expected_geometry,
+        }
