@@ -274,6 +274,77 @@ class FileIPCClientTests(unittest.TestCase):
             self.assertEqual(payload["measurement"], 80.0)
             self.assertIn("(assoc 10 mcp-dim-data)", expressions[0])
 
+    def test_entity_get_rejects_dimension_fallback_after_active_document_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            raw_lisp_calls = []
+
+            def trigger():
+                command = json.loads(
+                    next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text()
+                )
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": command["request_id"],
+                            "ok": True,
+                            "payload": {
+                                "type": "DIMENSION",
+                                "handle": "20",
+                                "layer": "DIMENSIONS",
+                            },
+                        }
+                    )
+                )
+
+            def raw_lisp_trigger(expression):
+                raw_lisp_calls.append(expression)
+                next(ipc_dir.glob("autocad_mcp_dimension_measurement_*.txt")).write_text(
+                    "\n".join(
+                        (
+                            "measurement|900.0",
+                            "text_position|900.0,901.0,0.0",
+                            "xline1|900.0,0.0,0.0",
+                            "xline2|1000.0,0.0,0.0",
+                            "dimline|950.0,920.0,0.0",
+                            "bounding_box|900.0,0.0,1000.0,920.0",
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+
+            client = FileIPCLiveMCPClient(
+                tmp,
+                trigger,
+                .1,
+                .001,
+                raw_lisp_trigger=raw_lisp_trigger,
+            )
+            client._active_drawing_path = r"c:\drawings\target.dwg"
+            identity_reads = []
+
+            def drifting_identity(names):
+                del names
+                identity_reads.append(None)
+                path = (
+                    r"c:\drawings\foreign.dwg"
+                    if len(identity_reads) == 1
+                    else r"c:\drawings\target.dwg"
+                )
+                document = Path(path)
+                return {
+                    "DWGPREFIX": str(document.parent) + "\\",
+                    "DWGNAME": document.name,
+                }
+
+            with patch.object(client, "drawing_get_variables", drifting_identity):
+                with self.assertRaises(MCPToolError) as raised:
+                    client.entity_get("20")
+
+            self.assertIsInstance(raised.exception, MCPToolError)
+            self.assertEqual(len(identity_reads), 1)
+            self.assertEqual(raw_lisp_calls, [])
+
     def test_maps_drawing_save(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
