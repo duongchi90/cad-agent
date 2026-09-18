@@ -212,6 +212,69 @@ class FileIPCClientTests(unittest.TestCase):
             ):
                 self.assertIn(native_property, expressions[0])
 
+    def test_entity_get_handles_standard_dimension_activex_property_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            expressions = []
+
+            def trigger():
+                command = json.loads(
+                    next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text()
+                )
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": command["request_id"],
+                            "ok": True,
+                            "payload": {
+                                "type": "DIMENSION",
+                                "handle": "20",
+                                "layer": "DIMENSIONS",
+                            },
+                        }
+                    )
+                )
+
+            def raw_lisp_trigger(expression):
+                expressions.append(expression)
+                if any(
+                    f"'{property_name}" in expression
+                    for property_name in (
+                        "XLine1Point",
+                        "XLine2Point",
+                        "DimLinePoint",
+                    )
+                ):
+                    raise MCPToolError("ActiveX property unavailable for standard DIMENSION")
+                next(ipc_dir.glob("autocad_mcp_dimension_measurement_*.txt")).write_text(
+                    "\n".join(
+                        (
+                            "measurement|80.000000",
+                            "text_position|20.0,30.0,0.0",
+                            "xline1|0.0,0.0,0.0",
+                            "xline2|100.0,0.0,0.0",
+                            "dimline|50.0,20.0,0.0",
+                            "bounding_box|0.0,0.0,100.0,30.0",
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+
+            client = FileIPCLiveMCPClient(
+                tmp,
+                trigger,
+                .1,
+                .001,
+                raw_lisp_trigger=raw_lisp_trigger,
+            )
+            try:
+                payload = client.entity_get("20")
+            except MCPToolError as error:
+                self.fail(f"standard DIMENSION property gap is not handled: {error}")
+
+            self.assertEqual(payload["measurement"], 80.0)
+            self.assertIn("(assoc 10 mcp-dim-data)", expressions[0])
+
     def test_maps_drawing_save(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
