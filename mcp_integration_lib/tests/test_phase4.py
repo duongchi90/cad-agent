@@ -203,14 +203,13 @@ class FileIPCClientTests(unittest.TestCase):
                 {"min": (0.0, 0.0), "max": (100.0, 30.0)},
             )
             self.assertEqual(len(expressions), 1)
-            for native_property in (
-                "TextPosition",
-                "XLine1Point",
-                "XLine2Point",
-                "DimLinePoint",
-                "GetBoundingBox",
-            ):
-                self.assertIn(native_property, expressions[0])
+            self.assertIn("(assoc 13 mcp-dim-data)", expressions[0])
+            self.assertIn("(assoc 14 mcp-dim-data)", expressions[0])
+            self.assertIn("(assoc 10 mcp-dim-data)", expressions[0])
+            self.assertIn("GetBoundingBox", expressions[0])
+            self.assertNotIn("XLine1Point", expressions[0])
+            self.assertNotIn("XLine2Point", expressions[0])
+            self.assertNotIn("DimLinePoint", expressions[0])
 
     def test_entity_get_handles_standard_dimension_activex_property_gap(self):
         with tempfile.TemporaryDirectory() as tmp:

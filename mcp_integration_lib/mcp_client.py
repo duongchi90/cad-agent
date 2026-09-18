@@ -748,16 +748,16 @@ class FileIPCLiveMCPClient:
                 "(vlax-get-property mcp-dim-object 'TextPosition) "
                 'nil)) '
                 '(setq mcp-dim-xline1 '
-                '(if mcp-dim-object '
-                "(vlax-get-property mcp-dim-object 'XLine1Point) "
+                '(if mcp-dim-data '
+                '(cdr (assoc 13 mcp-dim-data)) '
                 'nil)) '
                 '(setq mcp-dim-xline2 '
-                '(if mcp-dim-object '
-                "(vlax-get-property mcp-dim-object 'XLine2Point) "
+                '(if mcp-dim-data '
+                '(cdr (assoc 14 mcp-dim-data)) '
                 'nil)) '
                 '(setq mcp-dim-dimline '
-                '(if mcp-dim-object '
-                "(vlax-get-property mcp-dim-object 'DimLinePoint) "
+                '(if mcp-dim-data '
+                '(cdr (assoc 10 mcp-dim-data)) '
                 'nil)) '
                 '(setq mcp-dim-min nil mcp-dim-max nil) '
                 '(if mcp-dim-object '
