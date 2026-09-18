@@ -895,7 +895,20 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         show_window = user32.ShowWindow
         set_foreground_window = user32.SetForegroundWindow
         get_foreground_window = user32.GetForegroundWindow
+        get_gui_thread_info = user32.GetGUIThreadInfo
         post_message = user32.PostMessageW
+        class gui_thread_info(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", wintypes.RECT),
+            ]
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         set_native_signature(
             get_window_thread_process_id,
@@ -916,6 +929,11 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         set_native_signature(show_window, [wintypes.HWND, ctypes.c_int], wintypes.BOOL)
         set_native_signature(set_foreground_window, [wintypes.HWND], wintypes.BOOL)
         set_native_signature(get_foreground_window, [], wintypes.HWND)
+        set_native_signature(
+            get_gui_thread_info,
+            [wintypes.DWORD, ctypes.POINTER(gui_thread_info)],
+            wintypes.BOOL,
+        )
         set_native_signature(
             post_message,
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
@@ -966,6 +984,17 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
             set_foreground_window(hwnd)
         if get_foreground_window() != hwnd:
             raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+
+        target_thread_id = get_window_thread_process_id(target, ctypes.byref(wintypes.DWORD()))
+        if not target_thread_id:
+            raise MCPToolError("WINDOW_RECEIVER_FOCUS_INVALID")
+        thread_info = gui_thread_info()
+        thread_info.cbSize = ctypes.sizeof(gui_thread_info)
+        if (
+            not get_gui_thread_info(target_thread_id, ctypes.byref(thread_info))
+            or int(thread_info.hwndFocus or 0) != int(target)
+        ):
+            raise MCPToolError("WINDOW_RECEIVER_FOCUS_INVALID")
 
         framed_text = ("\x1b\x1b" + text + "\r").encode("utf-16-le")
         for offset in range(0, len(framed_text), 2):

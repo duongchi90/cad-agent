@@ -69,6 +69,8 @@ class RecordingUser32:
         send_returns: list[int] | None = None,
         send_errors: list[int] | None = None,
         send_result: int = 1,
+        focus_hwnd: int | None = RECEIVER_HWND,
+        gui_thread_info_result: int = 1,
     ) -> None:
         self.children = children if children is not None else [
             (RECEIVER_HWND, "MDIClient", OWNED_PID)
@@ -86,6 +88,8 @@ class RecordingUser32:
         self.send_returns = send_returns or [1]
         self.send_errors = send_errors or [0]
         self.send_result = send_result
+        self.focus_hwnd = focus_hwnd
+        self.gui_thread_info_result = gui_thread_info_result
         self.kernel32 = RecordingKernel32()
         self.enum_calls: list[tuple[int, int]] = []
         self.window_pid_calls: list[int] = []
@@ -95,6 +99,7 @@ class RecordingUser32:
         self.post_results: list[int] = []
         self.send_calls: list[tuple[int, int, int, int, int, int]] = []
         self.message_calls: list[tuple[str, int, int, int, int]] = []
+        self.gui_thread_info_calls: list[int] = []
         self.receiver_queue: list[tuple[int, int, int, int]] = []
         self.receiver_acknowledgements: list[bool] = []
         self.class_names = {child: name for child, name, _pid in self.children}
@@ -131,6 +136,17 @@ class RecordingUser32:
     def SetForegroundWindow(self, hwnd):
         self.focus_calls.append(("SetForegroundWindow", hwnd))
         return self.set_foreground_result
+
+    def GetGUIThreadInfo(self, thread_id, info):
+        self.gui_thread_info_calls.append(thread_id)
+        result = info._obj
+        result.hwndActive = OWNED_HWND
+        result.hwndFocus = self.focus_hwnd or 0
+        result.hwndCapture = 0
+        result.hwndMenuOwner = 0
+        result.hwndMoveSize = 0
+        result.flags = 1
+        return self.gui_thread_info_result
 
     def PostMessageW(self, target, message, wparam, lparam):
         call = (target, message, wparam, lparam)
@@ -272,6 +288,26 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         with self.assertRaises(MCPToolError):
             self._run_current_trigger(user32)
         self.assertEqual(user32.post_calls, [])
+
+    def test_focus_divergence_fails_closed_before_posting(self) -> None:
+        user32 = RecordingUser32(focus_hwnd=FOREIGN_HWND)
+        with self.assertRaisesRegex(MCPToolError, "WINDOW_RECEIVER_FOCUS_INVALID"):
+            self._run_current_trigger(user32)
+        self.assertEqual(user32.post_calls, [])
+
+    def test_gui_thread_info_failure_fails_closed_before_posting(self) -> None:
+        user32 = RecordingUser32(gui_thread_info_result=0)
+        with self.assertRaisesRegex(MCPToolError, "WINDOW_RECEIVER_FOCUS_INVALID"):
+            self._run_current_trigger(user32)
+        self.assertEqual(user32.post_calls, [])
+
+    def test_matching_focus_preserves_the_full_wm_char_sequence(self) -> None:
+        user32 = RecordingUser32(focus_hwnd=RECEIVER_HWND)
+        self._run_current_trigger(user32)
+        self.assertEqual(
+            [call[0] for call in user32.post_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
 
     def test_exact_foreground_does_not_reacquire_before_delivery(self) -> None:
         """The exact foreground precondition must avoid a destructive reacquisition."""
