@@ -80,7 +80,14 @@ public sealed class CommandContext
                 ContractValidator.EnsureRequestId(requestId);
                 if (File.Exists(Store.GetResultPath(requestId)))
                 {
-                    Store.ReadResult(requestId);
+                    var request = Store.ReadRequest(requestId);
+                    var result = Store.ReadResult(requestId);
+                    if (!MatchesCurrentRequest(request, result))
+                    {
+                        throw new InvalidDataException(
+                            $"The result for request '{requestId}' does not match the current request.");
+                    }
+
                     continue;
                 }
 
@@ -100,6 +107,24 @@ public sealed class CommandContext
         }
 
         return orderedRequestIds;
+    }
+
+    private static bool MatchesCurrentRequest(IpcRequest request, IpcResult result)
+    {
+        if (!string.Equals(request.Operation, result.Operation, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (request.DrawingFullPath is null || result.DrawingFullPath is null)
+        {
+            return request.DrawingFullPath is null && result.DrawingFullPath is null;
+        }
+
+        return string.Equals(
+            ContractValidator.NormalizeWindowsAbsolutePath(request.DrawingFullPath),
+            ContractValidator.NormalizeWindowsAbsolutePath(result.DrawingFullPath),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     public static CommandContext CreateLive()

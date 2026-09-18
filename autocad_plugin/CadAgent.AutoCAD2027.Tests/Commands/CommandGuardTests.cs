@@ -252,6 +252,28 @@ public sealed class CommandGuardTests
         Assert.Throws<InvalidDataException>(() => context.GetPendingRequestIds());
     }
 
+    [Fact]
+    public void PendingRequestsFailClosedWhenMatchingResultDoesNotMatchCurrentRequest()
+    {
+        var store = new JsonFileStore(Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-t06-command-tests",
+            Guid.NewGuid().ToString("N")));
+        store.WriteRequest(HealthRequest("same-id"));
+        store.WriteResult(HealthResult("same-id") with
+        {
+            Operation = "close_disposable",
+            DrawingFullPath = @"C:\drawings\stale.dwg"
+        });
+
+        var context = new CommandContext(
+            store,
+            new SpyDrawingGateway(),
+            () => { });
+
+        Assert.Throws<InvalidDataException>(() => context.GetPendingRequestIds());
+    }
+
     private static IpcRequest HealthRequest(string requestId) => new()
     {
         RequestId = requestId,
