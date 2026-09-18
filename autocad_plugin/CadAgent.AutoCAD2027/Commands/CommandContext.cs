@@ -116,6 +116,14 @@ public sealed class CommandContext
             return false;
         }
 
+        if (request.DrawingSha256 is not null
+            || request.Approval.HasValue
+            || request.Parameters is null
+            || request.Parameters.Count != 0)
+        {
+            return false;
+        }
+
         if (request.DrawingFullPath is null || result.DrawingFullPath is null)
         {
             return request.DrawingFullPath is null && result.DrawingFullPath is null;

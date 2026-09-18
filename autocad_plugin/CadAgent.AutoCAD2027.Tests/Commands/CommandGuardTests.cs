@@ -274,6 +274,30 @@ public sealed class CommandGuardTests
         Assert.Throws<InvalidDataException>(() => context.GetPendingRequestIds());
     }
 
+    [Fact]
+    public void PendingRequestsFailClosedWhenSameOperationAndPathHaveDifferentParameters()
+    {
+        var store = new JsonFileStore(Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-t06-command-tests",
+            Guid.NewGuid().ToString("N")));
+        store.WriteRequest(ReviewRequest("same-id", "A"));
+        store.WriteResult(HealthResult("same-id") with
+        {
+            Operation = "review",
+            DrawingFullPath = @"C:\drawings\sample.dwg",
+            EntityHandles = new List<string> { "A" }
+        });
+        store.WriteRequest(ReviewRequest("same-id", "B"));
+
+        var context = new CommandContext(
+            store,
+            new SpyDrawingGateway(),
+            () => { });
+
+        Assert.Throws<InvalidDataException>(() => context.GetPendingRequestIds());
+    }
+
     private static IpcRequest HealthRequest(string requestId) => new()
     {
         RequestId = requestId,
@@ -282,6 +306,20 @@ public sealed class CommandGuardTests
         DrawingFullPath = null,
         DrawingSha256 = null,
         Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+        Approval = null
+    };
+
+    private static IpcRequest ReviewRequest(string requestId, string handle) => new()
+    {
+        RequestId = requestId,
+        SchemaVersion = ContractConstants.SchemaVersion,
+        Operation = "review",
+        DrawingFullPath = @"C:\drawings\sample.dwg",
+        DrawingSha256 = null,
+        Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["handles"] = JsonSerializer.SerializeToElement(new[] { handle })
+        },
         Approval = null
     };
 
