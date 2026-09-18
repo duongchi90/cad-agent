@@ -896,6 +896,7 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         set_foreground_window = user32.SetForegroundWindow
         get_foreground_window = user32.GetForegroundWindow
         get_gui_thread_info = user32.GetGUIThreadInfo
+        is_child = user32.IsChild
         post_message = user32.PostMessageW
         class gui_thread_info(ctypes.Structure):
             _fields_ = [
@@ -932,6 +933,11 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         set_native_signature(
             get_gui_thread_info,
             [wintypes.DWORD, ctypes.POINTER(gui_thread_info)],
+            wintypes.BOOL,
+        )
+        set_native_signature(
+            is_child,
+            [wintypes.HWND, wintypes.HWND],
             wintypes.BOOL,
         )
         set_native_signature(
@@ -990,10 +996,21 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
             raise MCPToolError("WINDOW_RECEIVER_FOCUS_INVALID")
         thread_info = gui_thread_info()
         thread_info.cbSize = ctypes.sizeof(gui_thread_info)
-        if (
-            not get_gui_thread_info(target_thread_id, ctypes.byref(thread_info))
-            or int(thread_info.hwndFocus or 0) != int(target)
-        ):
+        if not get_gui_thread_info(target_thread_id, ctypes.byref(thread_info)):
+            raise MCPToolError("WINDOW_RECEIVER_FOCUS_INVALID")
+        focused_hwnd = int(thread_info.hwndFocus or 0)
+        focused_thread_id = (
+            get_window_thread_process_id(focused_hwnd, ctypes.byref(wintypes.DWORD()))
+            if focused_hwnd
+            else 0
+        )
+        focused_is_valid = focused_hwnd == int(target) or bool(
+            focused_hwnd
+            and int(focused_thread_id) == int(target_thread_id)
+            and window_pid(focused_hwnd) == owner_pid
+            and is_child(target, focused_hwnd)
+        )
+        if not focused_is_valid:
             raise MCPToolError("WINDOW_RECEIVER_FOCUS_INVALID")
 
         framed_text = ("\x1b\x1b" + text + "\r").encode("utf-16-le")

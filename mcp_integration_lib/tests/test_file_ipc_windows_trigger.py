@@ -28,6 +28,8 @@ OWNED_PID = 0x2001
 FOREIGN_HWND = 0x1002
 FOREIGN_PID = 0x2002
 RECEIVER_HWND = 0x1101
+FOCUS_DESCENDANT = 0x1201
+OUTSIDE_FOCUS = 0x1301
 EXPRESSION = '(setq *r8d-test* "é")'
 EXPECTED_FRAMED_TEXT = "\x1b\x1b" + EXPRESSION + "\r"
 
@@ -70,6 +72,7 @@ class RecordingUser32:
         send_errors: list[int] | None = None,
         send_result: int = 1,
         focus_hwnd: int | None = RECEIVER_HWND,
+        parent_map: dict[int, int] | None = None,
         gui_thread_info_result: int = 1,
     ) -> None:
         self.children = children if children is not None else [
@@ -89,6 +92,7 @@ class RecordingUser32:
         self.send_errors = send_errors or [0]
         self.send_result = send_result
         self.focus_hwnd = focus_hwnd
+        self.parent_map = parent_map or {}
         self.gui_thread_info_result = gui_thread_info_result
         self.kernel32 = RecordingKernel32()
         self.enum_calls: list[tuple[int, int]] = []
@@ -100,6 +104,7 @@ class RecordingUser32:
         self.send_calls: list[tuple[int, int, int, int, int, int]] = []
         self.message_calls: list[tuple[str, int, int, int, int]] = []
         self.gui_thread_info_calls: list[int] = []
+        self.is_child_calls: list[tuple[int, int]] = []
         self.receiver_queue: list[tuple[int, int, int, int]] = []
         self.receiver_acknowledgements: list[bool] = []
         self.class_names = {child: name for child, name, _pid in self.children}
@@ -147,6 +152,15 @@ class RecordingUser32:
         result.hwndMoveSize = 0
         result.flags = 1
         return self.gui_thread_info_result
+
+    def IsChild(self, parent, child):
+        self.is_child_calls.append((parent, child))
+        current = child
+        while current in self.parent_map:
+            current = self.parent_map[current]
+            if current == parent:
+                return 1
+        return 0
 
     def PostMessageW(self, target, message, wparam, lparam):
         call = (target, message, wparam, lparam)
@@ -308,6 +322,23 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             [call[0] for call in user32.post_calls],
             [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
         )
+
+    def test_document_view_descendant_focus_preserves_the_full_wm_char_sequence(self) -> None:
+        user32 = RecordingUser32(
+            focus_hwnd=FOCUS_DESCENDANT,
+            parent_map={FOCUS_DESCENDANT: RECEIVER_HWND},
+        )
+        self._run_current_trigger(user32)
+        self.assertEqual(
+            [call[0] for call in user32.post_calls],
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+        )
+
+    def test_same_pid_same_thread_focus_outside_receiver_subtree_fails_closed(self) -> None:
+        user32 = RecordingUser32(focus_hwnd=OUTSIDE_FOCUS)
+        with self.assertRaisesRegex(MCPToolError, "WINDOW_RECEIVER_FOCUS_INVALID"):
+            self._run_current_trigger(user32)
+        self.assertEqual(user32.post_calls, [])
 
     def test_exact_foreground_does_not_reacquire_before_delivery(self) -> None:
         """The exact foreground precondition must avoid a destructive reacquisition."""
