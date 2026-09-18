@@ -122,10 +122,12 @@ def test_file_ipc_dispatch_accepts_exact_claim_on_terminal_error(tmp_path) -> No
 def test_file_ipc_dispatch_accepts_claim_bound_entity_get_success_payload(tmp_path) -> None:
     expected = {
         "handle": "15E5949",
-        "type": "LINE",
-        "layer": "0",
-        "start": [1.0, 2.0, 0.0],
-        "end": [3.0, 4.0, 0.0],
+        "type": "MTEXT",
+        "layer": "NET CHIINH 1",
+        "insert": [1.0, 2.0, 0.0],
+        "content": "TẬP LÁI",
+        "height": 2.5,
+        "rotation_deg": 0.0,
     }
 
     def trigger() -> None:
