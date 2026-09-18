@@ -195,6 +195,51 @@ public sealed class CommandGuardTests
         Assert.Equal(1, closeCalls);
     }
 
+    [Fact]
+    public void PendingRequestsExcludeRequestsThatAlreadyHaveResults()
+    {
+        var store = new JsonFileStore(Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-t06-command-tests",
+            Guid.NewGuid().ToString("N")));
+        store.WriteRequest(HealthRequest("completed-first"));
+        store.WriteResult(HealthResult("completed-first"));
+        store.WriteRequest(HealthRequest("pending-second"));
+
+        var context = new CommandContext(
+            store,
+            new SpyDrawingGateway(),
+            () => { });
+
+        Assert.Equal(new[] { "pending-second" }, context.GetPendingRequestIds());
+    }
+
+    private static IpcRequest HealthRequest(string requestId) => new()
+    {
+        RequestId = requestId,
+        SchemaVersion = ContractConstants.SchemaVersion,
+        Operation = "health",
+        DrawingFullPath = null,
+        DrawingSha256 = null,
+        Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+        Approval = null
+    };
+
+    private static IpcResult HealthResult(string requestId) => new()
+    {
+        RequestId = requestId,
+        Success = true,
+        Operation = "health",
+        DrawingFullPath = null,
+        Changed = false,
+        EntityHandles = new List<string>(),
+        Warnings = new List<string>(),
+        Errors = new List<string>(),
+        StartedAt = new DateTimeOffset(2026, 9, 18, 0, 0, 0, TimeSpan.Zero),
+        CompletedAt = new DateTimeOffset(2026, 9, 18, 0, 0, 0, TimeSpan.Zero),
+        Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+    };
+
     private static CommandContext CreateContext(
         SpyDrawingGateway gateway,
         ICollection<string> reports,

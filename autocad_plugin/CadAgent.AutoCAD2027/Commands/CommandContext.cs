@@ -78,6 +78,11 @@ public sealed class CommandContext
             try
             {
                 ContractValidator.EnsureRequestId(requestId);
+                if (File.Exists(Store.GetResultPath(requestId)))
+                {
+                    continue;
+                }
+
                 requestIds.Add(requestId);
             }
             catch (ArgumentException)
