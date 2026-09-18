@@ -935,6 +935,11 @@ def test_failures_use_fixed_categorical_material_and_never_own_python_cleanup() 
     assert "autocad_mcp_cmd_" in lowered
 
 
+def test_result_writer_uses_explicit_utf8_encoding() -> None:
+    source = _dispatcher_source()
+    assert '(open part "w" "utf8")' in source
+
+
 def test_dispatcher_contains_no_second_transport_or_forbidden_system_authority() -> None:
     source = _dispatcher_source().casefold()
     forbidden = (

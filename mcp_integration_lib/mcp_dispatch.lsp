@@ -689,7 +689,7 @@
       (if (> (strlen encoded) *mcp-max-json-bytes*)
         nil
         (progn
-          (setq handle (open part "w"))
+          (setq handle (open part "w" "utf8"))
           (if (not handle)
             nil
             (progn
