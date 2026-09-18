@@ -119,6 +119,39 @@ def test_file_ipc_dispatch_accepts_exact_claim_on_terminal_error(tmp_path) -> No
         client._dispatch("ping", {})
 
 
+def test_file_ipc_dispatch_accepts_claim_bound_entity_get_success_payload(tmp_path) -> None:
+    expected = {
+        "handle": "15E5949",
+        "type": "LINE",
+        "layer": "0",
+        "start": [1.0, 2.0, 0.0],
+        "end": [3.0, 4.0, 0.0],
+    }
+
+    def trigger() -> None:
+        request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        result = {
+            "request_id": request["request_id"],
+            "claim": request["claim"],
+            "ok": True,
+            "payload": expected,
+        }
+        (tmp_path / f"autocad_mcp_result_{request['request_id']}.json").write_bytes(
+            json.dumps(result, ensure_ascii=False).encode("utf-8")
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        legacy_fixture_mode=False,
+        timeout_s=0.2,
+        poll_interval_s=0.001,
+    )
+
+    assert client._dispatch("entity-get", {"entity_id": "15E5949"}) == expected
+
+
 @pytest.mark.autocad_mechanical
 @unittest.skipUnless(os.getenv("CAD_AGENT_FILE_IPC") == "1", "requires AutoCAD File IPC")
 class FileIPCEndToEndTests(unittest.TestCase):
