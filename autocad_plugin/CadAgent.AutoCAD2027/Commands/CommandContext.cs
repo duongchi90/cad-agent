@@ -80,6 +80,7 @@ public sealed class CommandContext
                 ContractValidator.EnsureRequestId(requestId);
                 if (File.Exists(Store.GetResultPath(requestId)))
                 {
+                    Store.ReadResult(requestId);
                     continue;
                 }
 
@@ -91,7 +92,14 @@ public sealed class CommandContext
             }
         }
 
-        return requestIds.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        var orderedRequestIds = requestIds.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        if (orderedRequestIds.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Ambiguous pending .NET requests: {string.Join(", ", orderedRequestIds)}.");
+        }
+
+        return orderedRequestIds;
     }
 
     public static CommandContext CreateLive()

@@ -214,6 +214,44 @@ public sealed class CommandGuardTests
         Assert.Equal(new[] { "pending-second" }, context.GetPendingRequestIds());
     }
 
+    [Fact]
+    public void PendingRequestsFailClosedWhenMoreThanOneResultLessRequestExists()
+    {
+        var store = new JsonFileStore(Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-t06-command-tests",
+            Guid.NewGuid().ToString("N")));
+        store.WriteRequest(HealthRequest("aaa-stale-timeout"));
+        store.WriteRequest(HealthRequest("zzz-intended-current"));
+
+        var context = new CommandContext(
+            store,
+            new SpyDrawingGateway(),
+            () => { });
+
+        var exception = Assert.Throws<InvalidOperationException>(() => context.GetPendingRequestIds());
+
+        Assert.Contains("ambiguous", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PendingRequestsFailClosedWhenMatchingResultCannotBeValidated()
+    {
+        var store = new JsonFileStore(Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-t06-command-tests",
+            Guid.NewGuid().ToString("N")));
+        store.WriteRequest(HealthRequest("malformed-result"));
+        File.WriteAllText(store.GetResultPath("malformed-result"), "{ malformed");
+
+        var context = new CommandContext(
+            store,
+            new SpyDrawingGateway(),
+            () => { });
+
+        Assert.Throws<InvalidDataException>(() => context.GetPendingRequestIds());
+    }
+
     private static IpcRequest HealthRequest(string requestId) => new()
     {
         RequestId = requestId,
