@@ -135,6 +135,83 @@ class FileIPCClientTests(unittest.TestCase):
             self.assertIn("(distance", expressions[0])
             self.assertNotIn("vla-get-Measurement", expressions[0])
 
+    def test_entity_get_composes_complete_native_dimension_placement_for_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+            expressions = []
+
+            def trigger():
+                command = json.loads(
+                    next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text()
+                )
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": command["request_id"],
+                            "ok": True,
+                            "payload": {
+                                "type": "DIMENSION",
+                                "handle": "20",
+                                "layer": "DIMENSIONS",
+                            },
+                        }
+                    )
+                )
+
+            def raw_lisp_trigger(expression):
+                expressions.append(expression)
+                next(ipc_dir.glob("autocad_mcp_dimension_measurement_*.txt")).write_text(
+                    "\n".join(
+                        (
+                            "measurement|80.000000",
+                            "text_position|20.0,30.0,0.0",
+                            "xline1|0.0,0.0,0.0",
+                            "xline2|100.0,0.0,0.0",
+                            "dimline|50.0,20.0,0.0",
+                            "bounding_box|0.0,0.0,100.0,30.0",
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+
+            client = FileIPCLiveMCPClient(
+                tmp,
+                trigger,
+                .1,
+                .001,
+                raw_lisp_trigger=raw_lisp_trigger,
+            )
+            payload = client.entity_get("20")
+
+            self.assertTrue(
+                {
+                    "measurement",
+                    "text_position",
+                    "xline1",
+                    "xline2",
+                    "dimline",
+                    "bounding_box",
+                }.issubset(payload)
+            )
+            self.assertEqual(payload["measurement"], 80.0)
+            self.assertEqual(payload["text_position"], (20.0, 30.0, 0.0))
+            self.assertEqual(payload["xline1"], (0.0, 0.0, 0.0))
+            self.assertEqual(payload["xline2"], (100.0, 0.0, 0.0))
+            self.assertEqual(payload["dimline"], (50.0, 20.0, 0.0))
+            self.assertEqual(
+                payload["bounding_box"],
+                {"min": (0.0, 0.0), "max": (100.0, 30.0)},
+            )
+            self.assertEqual(len(expressions), 1)
+            for native_property in (
+                "TextPosition",
+                "XLine1Point",
+                "XLine2Point",
+                "DimLinePoint",
+                "GetBoundingBox",
+            ):
+                self.assertIn(native_property, expressions[0])
+
     def test_maps_drawing_save(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)

@@ -5,6 +5,7 @@ import base64
 import json
 import ctypes
 from ctypes import wintypes
+import math
 import ntpath
 import os
 import re
@@ -655,20 +656,27 @@ class FileIPCLiveMCPClient:
         payload = self._dispatch("entity-get", {"entity_id": entity_id})
         if (
             str(payload.get("type", "")).upper() == "DIMENSION"
-            and "measurement" not in payload
             and self._raw_lisp_trigger is not None
+            and not {
+                "measurement",
+                "text_position",
+                "xline1",
+                "xline2",
+                "dimline",
+                "bounding_box",
+            }.issubset(payload)
         ):
-            payload["measurement"] = self._dimension_measurement(entity_id)
+            payload.update(self._dimension_native_fields(entity_id))
         return payload
 
     def _dimension_measurement(self, entity_id: str) -> float:
+        return float(self._dimension_native_fields(entity_id)["measurement"])
+
+    def _dimension_native_fields(self, entity_id: str) -> Dict[str, Any]:
         if not re.fullmatch(r"[0-9A-Fa-f]+", entity_id):
-            raise MCPToolError("DIMENSION measurement requires a valid handle")
+            raise MCPToolError("DIMENSION native placement requires a valid handle")
         token = uuid.uuid4().hex[:12]
-        result = (
-            self._dir
-            / f"autocad_mcp_dimension_measurement_{token}.txt"
-        )
+        result = self._dir / f"autocad_mcp_dimension_measurement_{token}.txt"
         lisp_path = str(result).replace("\\", "/").replace('"', '\\"')
         result.touch()
         try:
@@ -676,9 +684,46 @@ class FileIPCLiveMCPClient:
                 '(progn (vl-load-com) '
                 f'(setq mcp-dim-ent (handent "{entity_id}")) '
                 f'(setq mcp-dim-file (open "{lisp_path}" "w")) '
+                '(defun mcp-dim-point-list (value / converted) '
+                "(setq converted (if (= (type value) 'VARIANT) "
+                '(vlax-variant-value value) value)) '
+                '(cond '
+                '((and converted (vlax-safearray-p converted)) '
+                '(vlax-safearray->list converted)) '
+                '((and (listp converted) (= (length converted) 3)) converted) '
+                '(T nil))) '
+                '(defun mcp-dim-write-point (file label value / point) '
+                '(setq point (mcp-dim-point-list value)) '
+                '(if (and point (= (length point) 3) '
+                '(numberp (car point)) (numberp (cadr point)) '
+                '(numberp (caddr point))) '
+                '(write-line '
+                '(strcat label "|" '
+                '(rtos (car point) 2 16) "," '
+                '(rtos (cadr point) 2 16) "," '
+                '(rtos (caddr point) 2 16)) file) '
+                '(write-line (strcat "ERROR:missing " label) file))) '
+                '(defun mcp-dim-write-bounding (file min-value max-value / min-point max-point) '
+                '(setq min-point (mcp-dim-point-list min-value) '
+                '      max-point (mcp-dim-point-list max-value)) '
+                '(if (and min-point max-point '
+                '(= (length min-point) 3) (= (length max-point) 3) '
+                '(numberp (car min-point)) (numberp (cadr min-point)) '
+                '(numberp (car max-point)) (numberp (cadr max-point))) '
+                '(write-line '
+                '(strcat "bounding_box|" '
+                '(rtos (car min-point) 2 16) "," '
+                '(rtos (cadr min-point) 2 16) "," '
+                '(rtos (car max-point) 2 16) "," '
+                '(rtos (cadr max-point) 2 16)) file) '
+                '(write-line "ERROR:missing bounding_box" file))) '
                 '(setq mcp-dim-data '
                 '(if mcp-dim-ent '
                 '(entget mcp-dim-ent) '
+                'nil)) '
+                '(setq mcp-dim-object '
+                '(if mcp-dim-ent '
+                '(vlax-ename->vla-object mcp-dim-ent) '
                 'nil)) '
                 '(setq mcp-dim-value '
                 '(if mcp-dim-data '
@@ -687,38 +732,109 @@ class FileIPCLiveMCPClient:
                 '(if (or (not (numberp mcp-dim-value)) '
                 '(< mcp-dim-value 0.0)) '
                 '(setq mcp-dim-value '
+                '(if mcp-dim-object '
+                "(vlax-get-property mcp-dim-object 'Measurement) "
+                'nil))) '
+                '(if (or (not (numberp mcp-dim-value)) '
+                '(< mcp-dim-value 0.0)) '
+                '(setq mcp-dim-value '
                 '(if (and (assoc 13 mcp-dim-data) '
                 '(assoc 14 mcp-dim-data)) '
                 '(distance (cdr (assoc 13 mcp-dim-data)) '
                 '(cdr (assoc 14 mcp-dim-data))) '
                 'nil))) '
+                '(setq mcp-dim-text-position '
+                '(if mcp-dim-object '
+                "(vlax-get-property mcp-dim-object 'TextPosition) "
+                'nil)) '
+                '(setq mcp-dim-xline1 '
+                '(if mcp-dim-object '
+                "(vlax-get-property mcp-dim-object 'XLine1Point) "
+                'nil)) '
+                '(setq mcp-dim-xline2 '
+                '(if mcp-dim-object '
+                "(vlax-get-property mcp-dim-object 'XLine2Point) "
+                'nil)) '
+                '(setq mcp-dim-dimline '
+                '(if mcp-dim-object '
+                "(vlax-get-property mcp-dim-object 'DimLinePoint) "
+                'nil)) '
+                '(setq mcp-dim-min nil mcp-dim-max nil) '
+                '(if mcp-dim-object '
+                "(vla-GetBoundingBox mcp-dim-object 'mcp-dim-min 'mcp-dim-max)) "
                 '(cond '
                 '((not mcp-dim-ent) '
                 '(write-line "ERROR:entity not found" mcp-dim-file)) '
                 '((not (numberp mcp-dim-value)) '
                 '(write-line "ERROR:DXF measurement and dimension endpoints are missing" mcp-dim-file)) '
-                '(T (write-line (rtos mcp-dim-value 2 12) mcp-dim-file))) '
+                '(T '
+                '(write-line (strcat "measurement|" (rtos mcp-dim-value 2 16)) mcp-dim-file) '
+                '(mcp-dim-write-point mcp-dim-file "text_position" mcp-dim-text-position) '
+                '(mcp-dim-write-point mcp-dim-file "xline1" mcp-dim-xline1) '
+                '(mcp-dim-write-point mcp-dim-file "xline2" mcp-dim-xline2) '
+                '(mcp-dim-write-point mcp-dim-file "dimline" mcp-dim-dimline) '
+                '(mcp-dim-write-bounding mcp-dim-file mcp-dim-min mcp-dim-max))) '
                 '(close mcp-dim-file) '
                 '(setq mcp-dim-file nil))'
             )
             deadline = time.time() + self._timeout
             while time.time() < deadline:
-                content = result.read_text(encoding="utf-8").strip()
-                if content:
-                    if content.startswith("ERROR:"):
+                lines = [
+                    line.strip()
+                    for line in result.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                if lines:
+                    if any(line.startswith("ERROR:") for line in lines):
                         raise MCPToolError(
-                            "AutoCAD DIMENSION measurement failed: "
-                            + content.removeprefix("ERROR:")
+                            "AutoCAD DIMENSION native placement failed: "
+                            + next(line for line in lines if line.startswith("ERROR:"))
                         )
+                    if len(lines) == 1 and "|" not in lines[0]:
+                        try:
+                            return {"measurement": float(lines[0])}
+                        except ValueError as exc:
+                            raise MCPToolError(
+                                "AutoCAD returned an invalid DIMENSION measurement"
+                            ) from exc
+                    fields: Dict[str, Any] = {}
                     try:
-                        return float(content)
-                    except ValueError as exc:
+                        for line in lines:
+                            label, value = line.split("|", 1)
+                            numbers = [float(item) for item in value.split(",")]
+                            if any(not math.isfinite(item) for item in numbers):
+                                raise ValueError(label)
+                            if label == "measurement" and len(numbers) == 1:
+                                fields[label] = numbers[0]
+                            elif label in {"text_position", "xline1", "xline2", "dimline"} and len(numbers) == 3:
+                                fields[label] = tuple(numbers)
+                            elif label == "bounding_box" and len(numbers) == 4:
+                                fields[label] = {
+                                    "min": (numbers[0], numbers[1]),
+                                    "max": (numbers[2], numbers[3]),
+                                }
+                            else:
+                                raise ValueError(label)
+                    except (ValueError, TypeError) as exc:
                         raise MCPToolError(
-                            "AutoCAD returned an invalid DIMENSION measurement"
+                            "AutoCAD returned invalid DIMENSION native placement"
                         ) from exc
+                    required = {
+                        "measurement",
+                        "text_position",
+                        "xline1",
+                        "xline2",
+                        "dimline",
+                        "bounding_box",
+                    }
+                    if required.issubset(fields):
+                        return fields
+                    raise MCPToolError(
+                        "AutoCAD returned incomplete DIMENSION native placement"
+                    )
                 time.sleep(self._poll)
             raise MCPTimeoutError(
-                "Timeout waiting for AutoCAD DIMENSION measurement"
+                "Timeout waiting for AutoCAD DIMENSION native placement"
             )
         finally:
             for _ in range(10):
