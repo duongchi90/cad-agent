@@ -875,8 +875,17 @@ class FileIPCLiveMCPClient:
         return self._dispatch("create-text", {k: v for k, v in {"x": x, "y": y, "text": text, "height": height, "rotation": rotation, "layer": layer}.items() if v is not None})
 
 
-def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
+def _make_windows_text_trigger(
+    hwnd: int,
+    *,
+    execution_probe: Optional[Callable[[], bool]] = None,
+    execution_timeout_s: float = 1.0,
+    execution_poll_s: float = 0.01,
+) -> Callable[[str], None]:
     """Return a bounded, exact-owner trigger for AutoCAD's command boundary."""
+    if execution_timeout_s < 0 or execution_poll_s < 0:
+        raise ValueError("execution timing must be non-negative")
+
     def trigger(text: str) -> None:
         user32 = ctypes.windll.user32
 
@@ -1022,26 +1031,71 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
             code_unit = int.from_bytes(framed_text[offset:offset + 2], "little")
             if not post_message(target, 0x0102, code_unit, 0):
                 raise MCPToolError("WINDOW_DELIVERY_FAILED")
+        if execution_probe is None:
+            return
+        deadline = time.monotonic() + execution_timeout_s
+        while True:
+            try:
+                if execution_probe():
+                    return
+            except Exception:
+                pass
+            if time.monotonic() >= deadline:
+                raise MCPTimeoutError("WINDOW_EXECUTION_UNCONFIRMED")
+            time.sleep(execution_poll_s)
     return trigger
 
 
-def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
+def make_windows_lisp_trigger(
+    hwnd: int,
+    *,
+    execution_probe: Optional[Callable[[], bool]] = None,
+    execution_timeout_s: float = 1.0,
+    execution_poll_s: float = 0.01,
+) -> Callable[[str], None]:
     """Return a trigger that types a complete AutoLISP expression in AutoCAD."""
-    return _make_windows_text_trigger(hwnd)
+    return _make_windows_text_trigger(
+        hwnd,
+        execution_probe=execution_probe,
+        execution_timeout_s=execution_timeout_s,
+        execution_poll_s=execution_poll_s,
+    )
 
 
-def make_windows_command_trigger(hwnd: int) -> Callable[[str], None]:
+def make_windows_command_trigger(
+    hwnd: int,
+    *,
+    execution_probe: Optional[Callable[[], bool]] = None,
+    execution_timeout_s: float = 1.0,
+    execution_poll_s: float = 0.01,
+) -> Callable[[str], None]:
     """Return a trigger that types an AutoCAD command sequence.
 
     Use ``\r`` between command inputs, for example ``"_.CLOSE\r_N"``.
     The final Enter is appended by the trigger.
     """
-    return _make_windows_text_trigger(hwnd)
+    return _make_windows_text_trigger(
+        hwnd,
+        execution_probe=execution_probe,
+        execution_timeout_s=execution_timeout_s,
+        execution_poll_s=execution_poll_s,
+    )
 
 
-def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:
+def make_windows_dispatch_trigger(
+    hwnd: int,
+    *,
+    execution_probe: Optional[Callable[[], bool]] = None,
+    execution_timeout_s: float = 1.0,
+    execution_poll_s: float = 0.01,
+) -> Callable[[], None]:
     """Return a trigger that invokes the loaded AutoLISP dispatcher."""
-    raw_trigger = make_windows_lisp_trigger(hwnd)
+    raw_trigger = make_windows_lisp_trigger(
+        hwnd,
+        execution_probe=execution_probe,
+        execution_timeout_s=execution_timeout_s,
+        execution_poll_s=execution_poll_s,
+    )
 
     def trigger() -> None:
         raw_trigger("(c:mcp-dispatch)")

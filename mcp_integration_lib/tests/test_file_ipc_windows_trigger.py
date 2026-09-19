@@ -18,6 +18,7 @@ import pytest
 from mcp_integration_lib import mcp_client
 from mcp_integration_lib.mcp_client import (
     MCPToolError,
+    MCPTimeoutError,
     make_windows_dispatch_trigger,
     make_windows_lisp_trigger,
 )
@@ -406,6 +407,40 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         user32 = RecordingUser32(post_returns=[1] * len(EXPECTED_FRAMED_TEXT))
         self._run_current_trigger(user32)
         self.assertEqual(user32.send_calls, [])
+        self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
+
+    def test_execution_probe_failure_is_not_reported_as_trigger_success(self) -> None:
+        """A supplied execution proof must fail closed after enqueue-only delivery."""
+        user32 = RecordingUser32(post_returns=[1] * len(EXPECTED_FRAMED_TEXT))
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
+            trigger = make_windows_lisp_trigger(
+                OWNED_HWND,
+                execution_probe=lambda: False,
+                execution_timeout_s=0.0,
+            )
+            with self.assertRaisesRegex(
+                MCPTimeoutError, "WINDOW_EXECUTION_UNCONFIRMED"
+            ):
+                trigger(EXPRESSION)
+        self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
+
+    def test_execution_probe_success_is_a_bounded_terminal_oracle(self) -> None:
+        user32 = RecordingUser32(post_returns=[1] * len(EXPECTED_FRAMED_TEXT))
+        probe_results = iter((False, True))
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
+            trigger = make_windows_lisp_trigger(
+                OWNED_HWND,
+                execution_probe=lambda: next(probe_results),
+                execution_timeout_s=0.05,
+                execution_poll_s=0.0,
+            )
+            trigger(EXPRESSION)
         self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
 
     @pytest.mark.causal_red
