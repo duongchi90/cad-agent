@@ -739,6 +739,7 @@ class DotNetIPCClient:
                 normalized_parameters["source_full_path"],
                 candidate_output_path=normalized_parameters.get("candidate_output_path"),
                 allow_source_drawing_alias=allow_source_drawing_alias,
+                require_source_drawing_alias=allow_source_drawing_alias,
             )
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
@@ -1307,6 +1308,7 @@ class DotNetIPCClient:
             normalized_source,
             candidate_output_path=None,
             allow_source_drawing_alias=validated_inspection["xref"] is None,
+            require_source_drawing_alias=validated_inspection["xref"] is None,
         )
         result = self.request(
             _EXACT_BASE_XREF_INSPECTION,
@@ -1838,11 +1840,14 @@ class DotNetIPCClient:
         *,
         candidate_output_path: str | Path | None,
         allow_source_drawing_alias: bool = False,
+        require_source_drawing_alias: bool = False,
     ) -> None:
         if drawing_full_path is None:
             raise ValueError("drawing_full_path is required for exact-base Xref operations")
         normalized_drawing = normalize_windows_absolute_path(drawing_full_path).casefold()
         normalized_source = normalize_windows_absolute_path(source_full_path).casefold()
+        if require_source_drawing_alias and normalized_source != normalized_drawing:
+            raise ValueError("direct-native source_full_path must equal drawing_full_path")
         if normalized_source == normalized_drawing and not allow_source_drawing_alias:
             raise ValueError("source_full_path must not equal drawing_full_path")
         if candidate_output_path is not None:

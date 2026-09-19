@@ -61,13 +61,24 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
     [Fact]
     public void InspectsDirectNativeBaseFromModelSpaceWithoutXrefIdentity()
     {
-        var database = new FakeExactBaseXrefDatabase(_targetPath, _sourcePath, TargetHash, SourceHash)
+        var database = new FakeExactBaseXrefDatabase(_sourcePath, _sourcePath, SourceHash, SourceHash)
         {
             IsExternalReference = false,
             IsReadOnly = true
         };
 
-        var result = CreateReader(database).Read(Request(directNativeBase: true));
+        var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            _root,
+            _sourcePath,
+            SourceHash,
+            _sourcePath,
+            SourceHash,
+            null));
+        var result = new AutoCadExactBaseXrefReader(
+            database,
+            directPolicy,
+            () => new DateTimeOffset(2026, 8, 6, 8, 0, 1, TimeSpan.Zero))
+            .Read(Request(directNativeBase: true));
 
         Assert.True(result.Success);
         Assert.True(result.Evidence!.Eligible);

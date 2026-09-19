@@ -151,6 +151,10 @@ public sealed class ExactBaseXrefPolicy
         var parameters = ParseInspectionParameters(request, extraction: false);
         EnsureConfigured();
         EnsureSourceMatchesConfiguration(parameters.SourceFullPath, parameters.SourceRevision, parameters.InspectionExpectations!);
+        if (parameters.InspectionExpectations!.Xref is null)
+        {
+            EnsureDirectNativeDrawingMatchesSource(request.DrawingFullPath, parameters.SourceFullPath);
+        }
         EnsureTargetHash(request, allowAcceptedTarget: true);
         return parameters;
     }
@@ -831,6 +835,30 @@ public sealed class ExactBaseXrefPolicy
             throw new ExactBaseXrefPolicyException(
                 SourceAliasCode,
                 "configured source and accepted DWG resolve to the same file identity");
+        }
+        if (directNativeBase && !SameFile(configuredSource, accepted))
+        {
+            throw new ExactBaseXrefPolicyException(
+                ActiveDocumentMismatchCode,
+                "direct-native source and accepted DWG must resolve to the same file identity");
+        }
+    }
+
+    private static void EnsureDirectNativeDrawingMatchesSource(string? drawingPath, string? sourcePath)
+    {
+        var source = EnsureExistingCanonicalFile(
+            sourcePath,
+            SourceIdentityMismatchCode,
+            "direct-native source");
+        var drawing = EnsureExistingCanonicalFile(
+            drawingPath,
+            ActiveDocumentMismatchCode,
+            "direct-native active drawing");
+        if (!SameFile(source, drawing))
+        {
+            throw new ExactBaseXrefPolicyException(
+                ActiveDocumentMismatchCode,
+                "direct-native active drawing must resolve to the bound source file");
         }
     }
 

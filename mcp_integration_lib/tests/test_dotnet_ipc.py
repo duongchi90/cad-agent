@@ -514,6 +514,33 @@ class DotNetIPCClientTests(unittest.TestCase):
         self.assertEqual([], parameters["inspection_expectations"]["components"])
         self.assertEqual([], result["entity_handles"])
 
+    def test_direct_native_base_rejects_distinct_active_drawing(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["base_source"]["source_id"] = None
+        inspection["base_source"]["revision"] = None
+        inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
+
+        def unexpected_trigger() -> None:
+            raise AssertionError("direct-native path must reject before FileIPC dispatch")
+
+        with TemporaryDirectory() as temporary:
+            client = DotNetIPCClient(
+                ipc_dir=Path(temporary),
+                trigger=unexpected_trigger,
+            )
+            with self.assertRaises(ValueError):
+                client.exact_base_xref_inspection(
+                    r"C:\temp\accepted-target.dwg",
+                    drawing_sha256="b" * 64,
+                    source_full_path=r"C:\approved\BVTL.dwg",
+                    inspection=inspection,
+                    request_id="direct-native-mismatch-001",
+                )
+
     def test_exact_base_xref_extraction_validates_plan_and_binds_approval(self) -> None:
         fixture = _exact_base_fixture()
         inspection = fixture["inspection"]
