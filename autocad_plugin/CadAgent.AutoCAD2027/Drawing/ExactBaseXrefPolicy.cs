@@ -71,6 +71,9 @@ public sealed class ExactBaseXrefPolicy
     private static readonly IReadOnlySet<string> ExpectationFields = new HashSet<string>(
         new[] { "source", "identity", "critical_dimensions", "xref", "components" },
         StringComparer.Ordinal);
+    private static readonly IReadOnlySet<string> DirectNativeOptionalExpectationFields = new HashSet<string>(
+        new[] { "identity", "critical_dimensions", "components" },
+        StringComparer.Ordinal);
     private static readonly IReadOnlySet<string> SourceFields = new HashSet<string>(
         new[] { "source_id", "revision", "sha256" },
         StringComparer.Ordinal);
@@ -148,6 +151,10 @@ public sealed class ExactBaseXrefPolicy
         var parameters = ParseInspectionParameters(request, extraction: false);
         EnsureConfigured();
         EnsureSourceMatchesConfiguration(parameters.SourceFullPath, parameters.SourceRevision, parameters.InspectionExpectations!);
+        if (parameters.InspectionExpectations!.Xref is null)
+        {
+            EnsureDirectNativeDrawingMatchesSource(request.DrawingFullPath, parameters.SourceFullPath);
+        }
         EnsureTargetHash(request, allowAcceptedTarget: true);
         return parameters;
     }
@@ -189,67 +196,83 @@ public sealed class ExactBaseXrefPolicy
                 SourceIdentityMismatchCode,
                 "live inspection identity or target hash does not match the request");
         }
+        var directNativeBase = request.InspectionExpectations!.Xref is null;
         if (evidence.BaseSource is null
-            || evidence.BaseSource.SourceId != request.InspectionExpectations!.Source!.SourceId
-            || evidence.BaseSource.Revision != _configuration.ExactBaseSourceRevision
-            || evidence.BaseSource.Sha256 != _configuration.ExactBaseSourceSha256)
+            || evidence.BaseSource.Sha256 != _configuration.ExactBaseSourceSha256
+            || (!directNativeBase
+                && (evidence.BaseSource.SourceId != request.InspectionExpectations.Source!.SourceId
+                    || evidence.BaseSource.Revision != _configuration.ExactBaseSourceRevision)))
         {
             throw new ExactBaseXrefPolicyException(
                 SourceHashMismatchCode,
                 "live inspection source evidence does not match the server-owned source");
         }
 
-        var expectedIdentity = new Dictionary<string, string>(StringComparer.Ordinal)
+        if (!directNativeBase)
         {
-            ["vehicle"] = request.InspectionExpectations.Identity!.Vehicle!,
-            ["model"] = request.InspectionExpectations.Identity.Model!
-        };
-        var identityObservations = evidence.IdentityObservations ?? throw InvalidRequest("live identity observations are required");
-        if (identityObservations.Count != expectedIdentity.Count
-            || identityObservations.Select(observation => observation.Field).Distinct(StringComparer.Ordinal).Count()
-                != identityObservations.Count)
-        {
-            throw new ExactBaseXrefPolicyException(
-                SourceIdentityMismatchCode,
-                "live identity observations must contain vehicle and model exactly once");
-        }
-        foreach (var observation in identityObservations)
-        {
-            if (observation.Field is null
-                || !expectedIdentity.TryGetValue(observation.Field, out var expected)
-                || observation.Observed != expected
-                || observation.Target != expected
-                || observation.Status != "PASS")
+            var expectedIdentity = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["vehicle"] = request.InspectionExpectations.Identity!.Vehicle!,
+                ["model"] = request.InspectionExpectations.Identity.Model!
+            };
+            var identityObservations = evidence.IdentityObservations
+                ?? throw InvalidRequest("live identity observations are required");
+            if (identityObservations.Count != expectedIdentity.Count
+                || identityObservations.Select(observation => observation.Field).Distinct(StringComparer.Ordinal).Count()
+                    != identityObservations.Count)
             {
                 throw new ExactBaseXrefPolicyException(
                     SourceIdentityMismatchCode,
-                    "live vehicle/model identity did not PASS exactly");
+                    "live identity observations must contain vehicle and model exactly once");
             }
-        }
-
-        var expectedDimensions = request.InspectionExpectations.CriticalDimensions!
-            .ToDictionary(dimension => dimension.Control!, StringComparer.Ordinal);
-        var dimensions = evidence.CriticalDimensions ?? throw InvalidRequest("live critical dimensions are required");
-        if (dimensions.Count != expectedDimensions.Count
-            || dimensions.Select(dimension => dimension.Control).Distinct(StringComparer.Ordinal).Count() != dimensions.Count)
-        {
-            throw InvalidRequest("live critical dimensions must contain every required control exactly once");
-        }
-        foreach (var dimension in dimensions)
-        {
-            if (dimension.Control is null
-                || !expectedDimensions.TryGetValue(dimension.Control, out var expected)
-                || dimension.Status != "PASS"
-                || dimension.Unit != expected.Unit
-                || dimension.Target != expected.Target
-                || dimension.Tolerance != expected.Tolerance
-                || Math.Abs(dimension.Observed - expected.Target) > expected.Tolerance)
+            foreach (var observation in identityObservations)
             {
-                throw InvalidRequest("a live critical dimension did not PASS its approved tolerance");
+                if (observation.Field is null
+                    || !expectedIdentity.TryGetValue(observation.Field, out var expected)
+                    || observation.Observed != expected
+                    || observation.Target != expected
+                    || observation.Status != "PASS")
+                {
+                    throw new ExactBaseXrefPolicyException(
+                        SourceIdentityMismatchCode,
+                        "live vehicle/model identity did not PASS exactly");
+                }
+            }
+
+            var expectedDimensions = request.InspectionExpectations.CriticalDimensions!
+                .ToDictionary(dimension => dimension.Control!, StringComparer.Ordinal);
+            var dimensions = evidence.CriticalDimensions
+                ?? throw InvalidRequest("live critical dimensions are required");
+            if (dimensions.Count != expectedDimensions.Count
+                || dimensions.Select(dimension => dimension.Control).Distinct(StringComparer.Ordinal).Count() != dimensions.Count)
+            {
+                throw InvalidRequest("live critical dimensions must contain every required control exactly once");
+            }
+            foreach (var dimension in dimensions)
+            {
+                if (dimension.Control is null
+                    || !expectedDimensions.TryGetValue(dimension.Control, out var expected)
+                    || dimension.Status != "PASS"
+                    || dimension.Unit != expected.Unit
+                    || dimension.Target != expected.Target
+                    || dimension.Tolerance != expected.Tolerance
+                    || Math.Abs(dimension.Observed - expected.Target) > expected.Tolerance)
+                {
+                    throw InvalidRequest("a live critical dimension did not PASS its approved tolerance");
+                }
             }
         }
 
-        if (evidence.Xref is null
+        if (directNativeBase)
+        {
+            if (evidence.Xref is not null)
+            {
+                throw new ExactBaseXrefPolicyException(
+                    SourceIdentityMismatchCode,
+                    "direct native base inspection must not report an Xref identity");
+            }
+        }
+        else if (evidence.Xref is null
             || evidence.Xref.Name != request.InspectionExpectations.Xref!.Name
             || !evidence.Xref.ReadOnly
             || evidence.Xref.Status != "INSPECTED")
@@ -259,32 +282,44 @@ public sealed class ExactBaseXrefPolicy
                 "the exact-base Xref must be inspected and read-only");
         }
 
-        var components = evidence.Components ?? throw InvalidRequest("live Xref components are required");
-        var seenIds = new HashSet<string>(StringComparer.Ordinal);
-        var seenHandles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var component in components)
+        if (directNativeBase)
         {
-            if (component.LogicalComponentId is null
-                || !seenIds.Add(component.LogicalComponentId)
-                || component.SourceHandle is null
-                || !seenHandles.Add(component.SourceHandle)
-                || component.Bounding is null
-                || !IsValidBounding(component.Bounding))
+            if ((evidence.IdentityObservations?.Count ?? 0) != 0
+                || (evidence.CriticalDimensions?.Count ?? 0) != 0
+                || (evidence.Components?.Count ?? 0) != 0)
             {
-                throw InvalidRequest("live Xref components must have unique bounded BLOCK evidence");
+                throw InvalidRequest("direct native base inspection must not include semantic evidence");
             }
-            var expected = request.InspectionExpectations.Components!
-                .SingleOrDefault(item => item.LogicalComponentId == component.LogicalComponentId);
-            if (expected is null
-                || component.ComponentType != expected.ComponentType
-                || component.Provenance != expected.Provenance
-                || component.SourceBlock != expected.SourceBlock
-                || component.SourceHandle != expected.SourceHandle
-                || component.SourceLayer != expected.SourceLayer)
+        }
+        else
+        {
+            var components = evidence.Components ?? throw InvalidRequest("live Xref components are required");
+            var seenIds = new HashSet<string>(StringComparer.Ordinal);
+            var seenHandles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var component in components)
             {
-                throw new ExactBaseXrefPolicyException(
-                    SourceIdentityMismatchCode,
-                    "live Xref component provenance does not match inspection expectations");
+                if (component.LogicalComponentId is null
+                    || !seenIds.Add(component.LogicalComponentId)
+                    || component.SourceHandle is null
+                    || !seenHandles.Add(component.SourceHandle)
+                    || component.Bounding is null
+                    || !IsValidBounding(component.Bounding))
+                {
+                    throw InvalidRequest("live Xref components must have unique bounded BLOCK evidence");
+                }
+                var expected = request.InspectionExpectations.Components!
+                    .SingleOrDefault(item => item.LogicalComponentId == component.LogicalComponentId);
+                if (expected is null
+                    || component.ComponentType != expected.ComponentType
+                    || component.Provenance != expected.Provenance
+                    || component.SourceBlock != expected.SourceBlock
+                    || component.SourceHandle != expected.SourceHandle
+                    || component.SourceLayer != expected.SourceLayer)
+                {
+                    throw new ExactBaseXrefPolicyException(
+                        SourceIdentityMismatchCode,
+                        "live Xref component provenance does not match inspection expectations");
+                }
             }
         }
         if (evidence.Conflicts is null || evidence.Conflicts.Count != 0
@@ -346,14 +381,27 @@ public sealed class ExactBaseXrefPolicy
         var fields = extraction
             ? InspectionParameterFields.Concat(new[] { "extraction_plan", "candidate_output_path" }).ToHashSet(StringComparer.Ordinal)
             : InspectionParameterFields;
-        RequireClosedObject(parameterObject, fields, "parameters");
+        RequireClosedObject(
+            parameterObject,
+            fields,
+            "parameters",
+            extraction
+                ? null
+                : new HashSet<string>(new[] { "source_revision" }, StringComparer.Ordinal));
+        var inspectionExpectations = ParseInspectionExpectations(
+            RequiredProperty(parameters, "inspection_expectations"));
+        if (extraction && inspectionExpectations.Xref is null)
+        {
+            throw InvalidRequest("direct native base inspection cannot be used for Xref extraction");
+        }
         var baseParameters = new ExactBaseXrefInspectionParameters
         {
             RunId = RequiredIdentifier(parameters, "run_id"),
             SourceFullPath = RequiredAbsolutePath(parameters, "source_full_path"),
-            SourceRevision = RequiredIdentifier(parameters, "source_revision"),
-            InspectionExpectations = ParseInspectionExpectations(
-                RequiredProperty(parameters, "inspection_expectations")),
+            SourceRevision = inspectionExpectations.Xref is null
+                ? OptionalIdentifier(parameters, "source_revision")
+                : RequiredIdentifier(parameters, "source_revision"),
+            InspectionExpectations = inspectionExpectations,
             TargetRole = RequiredString(parameters, "target_role")
         };
         if (baseParameters.TargetRole != (extraction
@@ -402,53 +450,102 @@ public sealed class ExactBaseXrefPolicy
 
     private static ExactBaseXrefInspectionExpectations ParseInspectionExpectations(JsonElement value)
     {
-        var objectValue = RequireClosedObject(value, ExpectationFields, "inspection_expectations");
+        if (value.ValueKind != JsonValueKind.Object
+            || !value.TryGetProperty("xref", out var xrefValue))
+        {
+            throw InvalidRequest("inspection_expectations must contain xref");
+        }
+        var directNativeBase = xrefValue.ValueKind == JsonValueKind.Null;
+        var objectValue = RequireClosedObject(
+            value,
+            ExpectationFields,
+            "inspection_expectations",
+            directNativeBase ? DirectNativeOptionalExpectationFields : null);
         var source = RequireClosedObject(RequiredProperty(objectValue, "source"), SourceFields, "inspection_expectations.source");
-        var identity = RequireClosedObject(RequiredProperty(objectValue, "identity"), IdentityFields, "inspection_expectations.identity");
-        var xref = RequireClosedObject(RequiredProperty(objectValue, "xref"), XrefFields, "inspection_expectations.xref");
-        var dimensions = RequireArray(RequiredProperty(objectValue, "critical_dimensions"), "inspection_expectations.critical_dimensions");
-        if (dimensions.Count != 5)
+        var xref = directNativeBase
+            ? (JsonElement?)null
+            : RequireClosedObject(xrefValue, XrefFields, "inspection_expectations.xref");
+
+        ExactBaseXrefIdentityExpectation? identity = null;
+        if (objectValue.TryGetProperty("identity", out var identityValue)
+            && identityValue.ValueKind != JsonValueKind.Null)
         {
-            throw InvalidRequest("inspection_expectations.critical_dimensions must contain exactly five controls");
+            if (directNativeBase)
+            {
+                throw InvalidRequest("direct native base inspection must not require identity expectations");
+            }
+            var identityObject = RequireClosedObject(identityValue, IdentityFields, "inspection_expectations.identity");
+            identity = new ExactBaseXrefIdentityExpectation
+            {
+                Vehicle = RequiredIdentifier(RequiredProperty(identityObject, "vehicle"), "vehicle"),
+                Model = RequiredIdentifier(RequiredProperty(identityObject, "model"), "model")
+            };
         }
 
-        var parsedDimensions = dimensions
-            .Select((item, index) => ParseDimension(item, $"inspection_expectations.critical_dimensions[{index}]") )
-            .ToList();
-        if (parsedDimensions.Select(item => item.Control).Distinct(StringComparer.Ordinal).Count() != parsedDimensions.Count
-            || !parsedDimensions.Select(item => item.Control).ToHashSet(StringComparer.Ordinal).SetEquals(RequiredControls))
+        List<ExactBaseXrefDimensionExpectation>? parsedDimensions = null;
+        if (objectValue.TryGetProperty("critical_dimensions", out var dimensionsValue)
+            && dimensionsValue.ValueKind != JsonValueKind.Null)
         {
-            throw InvalidRequest("inspection_expectations.critical_dimensions must contain each required control once");
+            var dimensions = RequireArray(dimensionsValue, "inspection_expectations.critical_dimensions");
+            if (directNativeBase && dimensions.Count != 0)
+            {
+                throw InvalidRequest("direct native base inspection must not require critical dimensions");
+            }
+            if (!directNativeBase && dimensions.Count != 5)
+            {
+                throw InvalidRequest("inspection_expectations.critical_dimensions must contain exactly five controls");
+            }
+
+            parsedDimensions = dimensions
+                .Select((item, index) => ParseDimension(item, $"inspection_expectations.critical_dimensions[{index}]") )
+                .ToList();
+            if (!directNativeBase
+                && (parsedDimensions.Select(item => item.Control).Distinct(StringComparer.Ordinal).Count() != parsedDimensions.Count
+                    || !parsedDimensions.Select(item => item.Control).ToHashSet(StringComparer.Ordinal).SetEquals(RequiredControls)))
+            {
+                throw InvalidRequest("inspection_expectations.critical_dimensions must contain each required control once");
+            }
         }
 
-        var components = RequireArray(RequiredProperty(objectValue, "components"), "inspection_expectations.components");
-        if (components.Count == 0)
+        List<ExactBaseXrefComponentExpectation>? parsedComponents = null;
+        if (objectValue.TryGetProperty("components", out var componentsValue)
+            && componentsValue.ValueKind != JsonValueKind.Null)
         {
-            throw InvalidRequest("inspection_expectations.components must not be empty");
+            var components = RequireArray(componentsValue, "inspection_expectations.components");
+            if (directNativeBase && components.Count != 0)
+            {
+                throw InvalidRequest("direct native base inspection must not require component expectations");
+            }
+            if (!directNativeBase && components.Count == 0)
+            {
+                throw InvalidRequest("inspection_expectations.components must not be empty");
+            }
+            parsedComponents = components
+                .Select((item, index) => ParseComponent(item, $"inspection_expectations.components[{index}]") )
+                .ToList();
+            EnsureUniqueComponents(parsedComponents, "inspection_expectations.components");
         }
-        var parsedComponents = components
-            .Select((item, index) => ParseComponent(item, $"inspection_expectations.components[{index}]") )
-            .ToList();
-        EnsureUniqueComponents(parsedComponents, "inspection_expectations.components");
 
         var result = new ExactBaseXrefInspectionExpectations
         {
             Source = new ExactBaseXrefSourceExpectation
             {
-                SourceId = RequiredIdentifier(RequiredProperty(source, "source_id"), "source_id"),
-                Revision = RequiredIdentifier(RequiredProperty(source, "revision"), "revision"),
+                SourceId = directNativeBase
+                    ? OptionalIdentifier(source, "source_id")
+                    : RequiredIdentifier(RequiredProperty(source, "source_id"), "source_id"),
+                Revision = directNativeBase
+                    ? OptionalIdentifier(source, "revision")
+                    : RequiredIdentifier(RequiredProperty(source, "revision"), "revision"),
                 Sha256 = RequiredHash(RequiredProperty(source, "sha256"), "sha256")
             },
-            Identity = new ExactBaseXrefIdentityExpectation
-            {
-                Vehicle = RequiredIdentifier(RequiredProperty(identity, "vehicle"), "vehicle"),
-                Model = RequiredIdentifier(RequiredProperty(identity, "model"), "model")
-            },
+            Identity = identity,
             CriticalDimensions = parsedDimensions,
-            Xref = new ExactBaseXrefReference
-            {
-                Name = RequiredIdentifier(RequiredProperty(xref, "name"), "name")
-            },
+            Xref = xref is null
+                ? null
+                : new ExactBaseXrefReference
+                {
+                    Name = RequiredIdentifier(RequiredProperty(xref.Value, "name"), "name")
+                },
             Components = parsedComponents
         };
         return result;
@@ -705,14 +802,24 @@ public sealed class ExactBaseXrefPolicy
                 SourceIdentityMismatchCode,
                 "source_full_path is not the server-configured exact-base source file");
         }
-        if (!string.Equals(sourceRevision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal)
-            || !string.Equals(expectations.Source!.Revision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal))
+        var directNativeBase = expectations.Xref is null;
+        if (!directNativeBase)
         {
-            throw new ExactBaseXrefPolicyException(
-                SourceRevisionMismatchCode,
-                "source revision does not match the server-configured source revision");
+            if (!IdentifierPattern.IsMatch(_configuration.ExactBaseSourceRevision ?? string.Empty))
+            {
+                throw new ExactBaseXrefPolicyException(
+                    ConfigurationRequiredCode,
+                    "exact-base source revision is required for Xref inspection");
+            }
+            if (!string.Equals(sourceRevision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal)
+                || !string.Equals(expectations.Source!.Revision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal))
+            {
+                throw new ExactBaseXrefPolicyException(
+                    SourceRevisionMismatchCode,
+                    "source revision does not match the server-configured source revision");
+            }
         }
-        if (!string.Equals(expectations.Source.Sha256, _configuration.ExactBaseSourceSha256, StringComparison.Ordinal))
+        if (!string.Equals(expectations.Source!.Sha256, _configuration.ExactBaseSourceSha256, StringComparison.Ordinal))
         {
             throw new ExactBaseXrefPolicyException(
                 SourceHashMismatchCode,
@@ -723,11 +830,35 @@ public sealed class ExactBaseXrefPolicy
             _configuration.AcceptedDwgPath,
             AcceptedAliasCode,
             "configured accepted DWG");
-        if (SameFile(configuredSource, accepted))
+        if (!directNativeBase && SameFile(configuredSource, accepted))
         {
             throw new ExactBaseXrefPolicyException(
                 SourceAliasCode,
                 "configured source and accepted DWG resolve to the same file identity");
+        }
+        if (directNativeBase && !SameFile(configuredSource, accepted))
+        {
+            throw new ExactBaseXrefPolicyException(
+                ActiveDocumentMismatchCode,
+                "direct-native source and accepted DWG must resolve to the same file identity");
+        }
+    }
+
+    private static void EnsureDirectNativeDrawingMatchesSource(string? drawingPath, string? sourcePath)
+    {
+        var source = EnsureExistingCanonicalFile(
+            sourcePath,
+            SourceIdentityMismatchCode,
+            "direct-native source");
+        var drawing = EnsureExistingCanonicalFile(
+            drawingPath,
+            ActiveDocumentMismatchCode,
+            "direct-native active drawing");
+        if (!SameFile(source, drawing))
+        {
+            throw new ExactBaseXrefPolicyException(
+                ActiveDocumentMismatchCode,
+                "direct-native active drawing must resolve to the bound source file");
         }
     }
 
@@ -845,7 +976,6 @@ public sealed class ExactBaseXrefPolicy
             && !ContractValidator.TryNormalizeWindowsAbsolutePath(configuration.ExactBaseSourcePath, out _)) errors.Add("exact-base source path is invalid");
         if (configuration.AcceptedDwgSha256 is null || !HashPattern.IsMatch(configuration.AcceptedDwgSha256)) errors.Add("accepted DWG hash is invalid");
         if (configuration.ExactBaseSourceSha256 is null || !HashPattern.IsMatch(configuration.ExactBaseSourceSha256)) errors.Add("exact-base source hash is invalid");
-        if (configuration.ExactBaseSourceRevision is null || !IdentifierPattern.IsMatch(configuration.ExactBaseSourceRevision)) errors.Add("exact-base source revision is invalid");
         return errors;
     }
 
@@ -1073,7 +1203,11 @@ public sealed class ExactBaseXrefPolicy
         return JsonSerializer.SerializeToElement(value, ContractJson.Options);
     }
 
-    private static JsonElement RequireClosedObject(JsonElement value, IReadOnlySet<string> fields, string name)
+    private static JsonElement RequireClosedObject(
+        JsonElement value,
+        IReadOnlySet<string> fields,
+        string name,
+        IReadOnlySet<string>? optionalFields = null)
     {
         if (value.ValueKind != JsonValueKind.Object)
         {
@@ -1085,7 +1219,10 @@ public sealed class ExactBaseXrefPolicy
         {
             throw InvalidRequest($"{name} contains unsupported field '{unknown[0]}'");
         }
-        var missing = fields.Except(present, StringComparer.Ordinal).ToArray();
+        var missing = fields
+            .Except(present, StringComparer.Ordinal)
+            .Where(field => optionalFields is null || !optionalFields.Contains(field))
+            .ToArray();
         if (missing.Length > 0)
         {
             throw InvalidRequest($"{name} is missing field '{missing[0]}'");
@@ -1154,6 +1291,30 @@ public sealed class ExactBaseXrefPolicy
 
     private static string RequiredIdentifier(IReadOnlyDictionary<string, JsonElement> value, string name) =>
         RequiredIdentifier(RequiredProperty(value, name), name);
+
+    private static string? OptionalIdentifier(
+        IReadOnlyDictionary<string, JsonElement> value,
+        string name)
+    {
+        if (!value.TryGetValue(name, out var property)
+            || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return RequiredIdentifier(property, name);
+    }
+
+    private static string? OptionalIdentifier(JsonElement value, string name)
+    {
+        if (!value.TryGetProperty(name, out var property)
+            || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return RequiredIdentifier(property, name);
+    }
 
     private static string RequiredAbsolutePath(IReadOnlyDictionary<string, JsonElement> value, string name)
     {

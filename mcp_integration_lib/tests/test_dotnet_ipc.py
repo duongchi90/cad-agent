@@ -466,6 +466,81 @@ class DotNetIPCClientTests(unittest.TestCase):
         self.assertFalse(result["changed"])
         self.assertEqual([], result["entity_handles"])
 
+    def test_direct_native_base_inspection_binds_absolute_source_without_xref_metadata(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["base_source"]["source_id"] = None
+        inspection["base_source"]["revision"] = None
+        inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
+        inspection["request_id"] = "direct-native-request-001"
+        requests: list[dict[str, object]] = []
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                requests.append(request)
+                atomic_write_json(
+                    result_path(ipc_dir, str(request["request_id"])),
+                    _exact_result(
+                        request,
+                        copy.deepcopy(inspection),
+                        changed=False,
+                        entity_handles=[],
+                    ),
+                )
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            result = client.exact_base_xref_inspection(
+                r"C:\approved\BVTL.dwg",
+                drawing_sha256="b" * 64,
+                source_full_path=r"C:\approved\BVTL.dwg",
+                inspection=inspection,
+                request_id="direct-native-request-001",
+            )
+
+        parameters = requests[0]["parameters"]
+        self.assertIsNone(parameters["source_revision"])
+        self.assertIsNone(parameters["inspection_expectations"]["xref"])
+        self.assertIsNone(parameters["inspection_expectations"]["source"]["source_id"])
+        self.assertEqual("a" * 64, parameters["inspection_expectations"]["source"]["sha256"])
+        self.assertEqual({}, parameters["inspection_expectations"]["identity"])
+        self.assertEqual([], parameters["inspection_expectations"]["critical_dimensions"])
+        self.assertEqual([], parameters["inspection_expectations"]["components"])
+        self.assertEqual([], result["entity_handles"])
+
+    def test_direct_native_base_rejects_distinct_active_drawing(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["base_source"]["source_id"] = None
+        inspection["base_source"]["revision"] = None
+        inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
+
+        def unexpected_trigger() -> None:
+            raise AssertionError("direct-native path must reject before FileIPC dispatch")
+
+        with TemporaryDirectory() as temporary:
+            client = DotNetIPCClient(
+                ipc_dir=Path(temporary),
+                trigger=unexpected_trigger,
+            )
+            with self.assertRaises(ValueError):
+                client.exact_base_xref_inspection(
+                    r"C:\temp\accepted-target.dwg",
+                    drawing_sha256="b" * 64,
+                    source_full_path=r"C:\approved\BVTL.dwg",
+                    inspection=inspection,
+                    request_id="direct-native-mismatch-001",
+                )
+
     def test_exact_base_xref_extraction_validates_plan_and_binds_approval(self) -> None:
         fixture = _exact_base_fixture()
         inspection = fixture["inspection"]

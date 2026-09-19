@@ -809,25 +809,36 @@ public sealed class AutoCadExactBaseXrefReader
             ?? throw new ExactBaseXrefPolicyException(
                 ExactBaseXrefPolicy.RequestInvalidCode,
                 "inspection expectations are required");
-        var identity = new List<ExactBaseXrefIdentityObservation>
-        {
-            Identity("vehicle", capture.Vehicle, expectations.Identity?.Vehicle),
-            Identity("model", capture.Model, expectations.Identity?.Model)
-        };
-        if (identity.Any(observation => observation.Status != Pass))
+        var directNativeBase = expectations.Xref is null;
+        var identity = directNativeBase
+            ? new List<ExactBaseXrefIdentityObservation>()
+            : new List<ExactBaseXrefIdentityObservation>
+            {
+                Identity("vehicle", capture.Vehicle, expectations.Identity!.Vehicle),
+                Identity("model", capture.Model, expectations.Identity.Model)
+            };
+        if (!directNativeBase && identity.Any(observation => observation.Status != Pass))
         {
             errors.Add("S3B_SOURCE_IDENTITY_MISMATCH: live vehicle/model identity did not match expectations");
         }
-        var dimensions = BuildDimensions(expectations, capture, errors);
-        var components = BuildComponents(expectations, capture, errors);
+        var dimensions = directNativeBase
+            ? new List<ExactBaseXrefLiveDimension>()
+            : BuildDimensions(expectations, capture, errors);
+        var components = directNativeBase
+            ? new List<ExactBaseXrefLiveComponent>()
+            : BuildComponents(expectations, capture, errors);
         var xrefMatches = string.Equals(
             capture.XrefName,
             expectations.Xref?.Name,
             StringComparison.Ordinal);
-        var xrefValid = capture.IsExternalReference && capture.IsReadOnly && xrefMatches;
+        var xrefValid = directNativeBase
+            ? capture.XrefName is null && !capture.IsExternalReference && capture.IsReadOnly
+            : capture.IsExternalReference && capture.IsReadOnly && xrefMatches;
         if (!xrefValid)
         {
-            errors.Add("S3B_XREF_NOT_READ_ONLY: named source must be an external read-only reference");
+            errors.Add(directNativeBase
+                ? "S3B_DIRECT_NATIVE_BASE_NOT_READ_ONLY: direct native base must be read-only model-space evidence"
+                : "S3B_XREF_NOT_READ_ONLY: named source must be an external read-only reference");
         }
 
         var changed = !string.Equals(sourceHashBefore, sourceHashAfter, StringComparison.Ordinal)
@@ -844,9 +855,9 @@ public sealed class AutoCadExactBaseXrefReader
             BaseSource = new ExactBaseXrefPlanSource
             {
                 RelativePath = Path.GetFileName(_policy.Configuration.ExactBaseSourcePath),
-                Revision = _policy.Configuration.ExactBaseSourceRevision,
+                Revision = directNativeBase ? null : _policy.Configuration.ExactBaseSourceRevision,
                 Sha256 = sourceHashBefore,
-                SourceId = expectations.Source?.SourceId
+                SourceId = directNativeBase ? null : expectations.Source?.SourceId
             },
             SchemaVersion = LiveSchemaVersion,
             CaptureTimestamp = EnsureUtc(_clock()),
@@ -863,12 +874,14 @@ public sealed class AutoCadExactBaseXrefReader
             RunId = request.RunId,
             TargetDrawingSha256 = targetHash,
             Warnings = new List<string>(),
-            Xref = new ExactBaseXrefLiveXref
-            {
-                Name = capture.XrefName,
-                ReadOnly = capture.IsReadOnly,
-                Status = xrefValid ? "INSPECTED" : Fail
-            }
+            Xref = directNativeBase
+                ? null
+                : new ExactBaseXrefLiveXref
+                {
+                    Name = capture.XrefName,
+                    ReadOnly = capture.IsReadOnly,
+                    Status = xrefValid ? "INSPECTED" : Fail
+                }
         };
     }
 
@@ -1015,8 +1028,8 @@ public sealed class AutoCadExactBaseXrefDatabase : IExactBaseXrefDatabase
     {
         var database = _document.Database
             ?? throw new InvalidOperationException("the active AutoCAD document has no database");
-        var xrefName = request.InspectionExpectations?.Xref?.Name
-            ?? throw new InvalidOperationException("the approved Xref name is missing");
+        var xrefName = request.InspectionExpectations?.Xref?.Name;
+        var directNativeBase = xrefName is null;
         var expectedHandles = (request.InspectionExpectations.Components ?? new List<ExactBaseXrefComponentExpectation>())
             .Select(component => component.SourceHandle)
             .Where(handle => handle is not null)
@@ -1024,80 +1037,89 @@ public sealed class AutoCadExactBaseXrefDatabase : IExactBaseXrefDatabase
 
         using var transaction = database.TransactionManager.StartOpenCloseTransaction();
         var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-        if (!blockTable.Has(xrefName))
+        if (!directNativeBase && !blockTable.Has(xrefName!))
         {
             throw new InvalidOperationException($"approved Xref '{xrefName}' was not found");
         }
 
-        var xref = (BlockTableRecord)transaction.GetObject(blockTable[xrefName], OpenMode.ForRead);
+        var sourceRecord = (BlockTableRecord)transaction.GetObject(
+            directNativeBase
+                ? blockTable[BlockTableRecord.ModelSpace]
+                : blockTable[xrefName!],
+            OpenMode.ForRead);
         var components = new List<ExactBaseXrefDatabaseComponent>();
-        foreach (ObjectId objectId in xref)
+        if (!directNativeBase)
         {
-            if (transaction.GetObject(objectId, OpenMode.ForRead, false) is not Entity entity)
+            foreach (ObjectId objectId in sourceRecord)
             {
-                continue;
-            }
-
-            var handle = entity.Handle.ToString().ToUpperInvariant();
-            if (!expectedHandles.Contains(handle))
-            {
-                continue;
-            }
-
-            Extents3d extents;
-            try
-            {
-                extents = entity.GeometricExtents;
-            }
-            catch (Exception exception)
-            {
-                throw new InvalidOperationException(
-                    $"source component '{handle}' has no readable geometric bounds",
-                    exception);
-            }
-
-            components.Add(new ExactBaseXrefDatabaseComponent
-            {
-                ComponentType = entity is BlockReference ? "BLOCK" : entity.GetType().Name.ToUpperInvariant(),
-                SourceBlock = entity is BlockReference blockReference
-                    ? blockReference.Name
-                    : entity.GetType().Name.ToUpperInvariant(),
-                SourceHandle = handle,
-                SourceLayer = entity.Layer,
-                Bounding = new ExactBaseXrefBounding
+                if (transaction.GetObject(objectId, OpenMode.ForRead, false) is not Entity entity)
                 {
-                    Min = new ExactBaseXrefPoint
-                    {
-                        X = extents.MinPoint.X,
-                        Y = extents.MinPoint.Y,
-                        Z = extents.MinPoint.Z
-                    },
-                    Max = new ExactBaseXrefPoint
-                    {
-                        X = extents.MaxPoint.X,
-                        Y = extents.MaxPoint.Y,
-                        Z = extents.MaxPoint.Z
-                    }
+                    continue;
                 }
-            });
+
+                var handle = entity.Handle.ToString().ToUpperInvariant();
+                if (!expectedHandles.Contains(handle))
+                {
+                    continue;
+                }
+
+                Extents3d extents;
+                try
+                {
+                    extents = entity.GeometricExtents;
+                }
+                catch (Exception exception)
+                {
+                    throw new InvalidOperationException(
+                        $"source component '{handle}' has no readable geometric bounds",
+                        exception);
+                }
+
+                components.Add(new ExactBaseXrefDatabaseComponent
+                {
+                    ComponentType = entity is BlockReference ? "BLOCK" : entity.GetType().Name.ToUpperInvariant(),
+                    SourceBlock = entity is BlockReference blockReference
+                        ? blockReference.Name
+                        : entity.GetType().Name.ToUpperInvariant(),
+                    SourceHandle = handle,
+                    SourceLayer = entity.Layer,
+                    Bounding = new ExactBaseXrefBounding
+                    {
+                        Min = new ExactBaseXrefPoint
+                        {
+                            X = extents.MinPoint.X,
+                            Y = extents.MinPoint.Y,
+                            Z = extents.MinPoint.Z
+                        },
+                        Max = new ExactBaseXrefPoint
+                        {
+                            X = extents.MaxPoint.X,
+                            Y = extents.MaxPoint.Y,
+                            Z = extents.MaxPoint.Z
+                        }
+                    }
+                });
+            }
         }
 
-        var properties = ReadCustomProperties(database);
+        var properties = directNativeBase ? null : ReadCustomProperties(database);
         return new ExactBaseXrefDatabaseCapture
         {
-            XrefName = xref.Name,
-            IsExternalReference = xref.IsFromExternalReference,
-            IsReadOnly = !xref.IsWriteEnabled,
-            Vehicle = RequiredProperty(properties, "CAD_AGENT_VEHICLE"),
-            Model = RequiredProperty(properties, "CAD_AGENT_MODEL"),
-            CriticalDimensions = (request.InspectionExpectations.CriticalDimensions ?? new List<ExactBaseXrefDimensionExpectation>())
-                .Select(dimension => new ExactBaseXrefDatabaseDimension
-                {
-                    Control = dimension.Control,
-                    Observed = RequiredDoubleProperty(properties, "CAD_AGENT_DIMENSION_" + dimension.Control),
-                    Unit = RequiredProperty(properties, "CAD_AGENT_DIMENSION_" + dimension.Control + "_UNIT")
-                })
-                .ToArray(),
+            XrefName = directNativeBase ? null : sourceRecord.Name,
+            IsExternalReference = directNativeBase ? false : sourceRecord.IsFromExternalReference,
+            IsReadOnly = !sourceRecord.IsWriteEnabled,
+            Vehicle = directNativeBase ? null : RequiredProperty(properties!, "CAD_AGENT_VEHICLE"),
+            Model = directNativeBase ? null : RequiredProperty(properties!, "CAD_AGENT_MODEL"),
+            CriticalDimensions = directNativeBase
+                ? Array.Empty<ExactBaseXrefDatabaseDimension>()
+                : (request.InspectionExpectations.CriticalDimensions ?? new List<ExactBaseXrefDimensionExpectation>())
+                    .Select(dimension => new ExactBaseXrefDatabaseDimension
+                    {
+                        Control = dimension.Control,
+                        Observed = RequiredDoubleProperty(properties!, "CAD_AGENT_DIMENSION_" + dimension.Control),
+                        Unit = RequiredProperty(properties!, "CAD_AGENT_DIMENSION_" + dimension.Control + "_UNIT")
+                    })
+                    .ToArray(),
             Components = components
         };
     }

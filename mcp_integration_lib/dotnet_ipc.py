@@ -729,10 +729,17 @@ class DotNetIPCClient:
             _EXACT_BASE_XREF_EXTRACTION,
         }:
             self._validate_exact_base_xref_hash(normalized_sha256, "drawing_sha256")
+            allow_source_drawing_alias = (
+                normalized_operation == _EXACT_BASE_XREF_INSPECTION
+                and isinstance(normalized_parameters.get("inspection_expectations"), Mapping)
+                and normalized_parameters["inspection_expectations"].get("xref") is None
+            )
             self._validate_exact_base_xref_paths(
                 normalized_path,
                 normalized_parameters["source_full_path"],
                 candidate_output_path=normalized_parameters.get("candidate_output_path"),
+                allow_source_drawing_alias=allow_source_drawing_alias,
+                require_source_drawing_alias=allow_source_drawing_alias,
             )
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
@@ -1300,6 +1307,8 @@ class DotNetIPCClient:
             normalized_drawing,
             normalized_source,
             candidate_output_path=None,
+            allow_source_drawing_alias=validated_inspection["xref"] is None,
+            require_source_drawing_alias=validated_inspection["xref"] is None,
         )
         result = self.request(
             _EXACT_BASE_XREF_INSPECTION,
@@ -1767,10 +1776,12 @@ class DotNetIPCClient:
             item["field"]: item["target"]
             for item in inspection["identity_observations"]
         }
+        direct_native_base = inspection["xref"] is None
         return {
             "source": {
-                key: inspection["base_source"][key]
-                for key in ("source_id", "revision", "sha256")
+                "source_id": None if direct_native_base else inspection["base_source"]["source_id"],
+                "revision": None if direct_native_base else inspection["base_source"]["revision"],
+                "sha256": inspection["base_source"]["sha256"],
             },
             "identity": identity,
             "critical_dimensions": [
@@ -1782,7 +1793,7 @@ class DotNetIPCClient:
                 }
                 for item in inspection["critical_dimensions"]
             ],
-            "xref": {"name": inspection["xref"]["name"]},
+            "xref": None if direct_native_base else {"name": inspection["xref"]["name"]},
             "components": [
                 {
                     key: component[key]
@@ -1808,6 +1819,8 @@ class DotNetIPCClient:
     ) -> tuple[str, str]:
         expected_revision = inspection["base_source"]["revision"]
         expected_run_id = inspection["run_id"]
+        if source_revision is not None and expected_revision is None:
+            raise ValueError("source_revision is not valid for a direct native base inspection")
         if source_revision is not None and source_revision != expected_revision:
             raise ValueError("source_revision does not match the offline inspection")
         if run_id is not None and run_id != expected_run_id:
@@ -1826,12 +1839,16 @@ class DotNetIPCClient:
         source_full_path: str | Path,
         *,
         candidate_output_path: str | Path | None,
+        allow_source_drawing_alias: bool = False,
+        require_source_drawing_alias: bool = False,
     ) -> None:
         if drawing_full_path is None:
             raise ValueError("drawing_full_path is required for exact-base Xref operations")
         normalized_drawing = normalize_windows_absolute_path(drawing_full_path).casefold()
         normalized_source = normalize_windows_absolute_path(source_full_path).casefold()
-        if normalized_source == normalized_drawing:
+        if require_source_drawing_alias and normalized_source != normalized_drawing:
+            raise ValueError("direct-native source_full_path must equal drawing_full_path")
+        if normalized_source == normalized_drawing and not allow_source_drawing_alias:
             raise ValueError("source_full_path must not equal drawing_full_path")
         if candidate_output_path is not None:
             normalized_output = normalize_windows_absolute_path(candidate_output_path).casefold()
@@ -1842,8 +1859,13 @@ class DotNetIPCClient:
 
     @staticmethod
     def _validate_exact_base_xref_expectations(expectations: Any) -> None:
-        required = {"source", "identity", "critical_dimensions", "xref", "components"}
-        if not isinstance(expectations, Mapping) or set(expectations) != required:
+        required = {"source", "xref"}
+        allowed = required | {"identity", "critical_dimensions", "components"}
+        if (
+            not isinstance(expectations, Mapping)
+            or not required.issubset(expectations)
+            or set(expectations) - allowed
+        ):
             raise ValueError("inspection_expectations must be a closed object")
 
         def reject_live_owned(value: Any, context: str) -> None:
@@ -1857,6 +1879,7 @@ class DotNetIPCClient:
                     reject_live_owned(nested, f"{context}[{index}]")
 
         reject_live_owned(expectations, "inspection_expectations")
+        direct_native_base = expectations.get("xref") is None
         if not isinstance(expectations["source"], Mapping) or set(expectations["source"]) != {
             "source_id",
             "revision",
@@ -1868,47 +1891,57 @@ class DotNetIPCClient:
             "inspection_expectations.source.sha256",
         )
         for name in ("source_id", "revision"):
-            if not isinstance(expectations["source"][name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
-                expectations["source"][name]
-            ):
+            value = expectations["source"][name]
+            if direct_native_base and value is None:
+                continue
+            if not isinstance(value, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(value):
                 raise ValueError(f"inspection_expectations.source.{name} is invalid")
-        if not isinstance(expectations["identity"], Mapping) or set(expectations["identity"]) != {
-            "vehicle",
-            "model",
-        }:
-            raise ValueError("inspection_expectations.identity is not closed")
-        for name in ("vehicle", "model"):
-            if not isinstance(expectations["identity"][name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
-                expectations["identity"][name]
-            ):
-                raise ValueError(f"inspection_expectations.identity.{name} is invalid")
-        dimensions = expectations["critical_dimensions"]
-        if not isinstance(dimensions, list) or len(dimensions) != 5:
-            raise ValueError("inspection_expectations.critical_dimensions must contain five controls")
-        for dimension in dimensions:
-            if not isinstance(dimension, Mapping) or set(dimension) != {
-                "control",
-                "target",
-                "tolerance",
-                "unit",
-            }:
-                raise ValueError("inspection_expectations.critical_dimensions entries are not closed")
-        if not isinstance(expectations["xref"], Mapping) or set(expectations["xref"]) != {"name"}:
+        if direct_native_base:
+            if expectations["xref"] is not None:
+                raise ValueError("direct native base Xref must be null")
+            identity = expectations.get("identity")
+            if identity not in (None, {}):
+                raise ValueError("direct native base identity expectations must be empty")
+            dimensions = expectations.get("critical_dimensions")
+            if dimensions not in (None, []):
+                raise ValueError("direct native base dimension expectations must be empty")
+            components = expectations.get("components")
+            if components not in (None, []):
+                raise ValueError("direct native base component expectations must be empty")
+        elif not isinstance(expectations["xref"], Mapping) or set(expectations["xref"]) != {"name"}:
             raise ValueError("inspection_expectations.xref is not closed")
-        components = expectations["components"]
-        if not isinstance(components, list) or not components:
-            raise ValueError("inspection_expectations.components must not be empty")
-        component_fields = {
-            "component_type",
-            "logical_component_id",
-            "provenance",
-            "source_block",
-            "source_handle",
-            "source_layer",
-        }
-        for component in components:
-            if not isinstance(component, Mapping) or set(component) != component_fields:
-                raise ValueError("inspection_expectations.components entries are not closed")
+        else:
+            identity = expectations.get("identity")
+            if not isinstance(identity, Mapping) or set(identity) != {"vehicle", "model"}:
+                raise ValueError("inspection_expectations.identity is not closed")
+            for name in ("vehicle", "model"):
+                if not isinstance(identity[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(identity[name]):
+                    raise ValueError(f"inspection_expectations.identity.{name} is invalid")
+            dimensions = expectations.get("critical_dimensions")
+            if not isinstance(dimensions, list) or len(dimensions) != 5:
+                raise ValueError("inspection_expectations.critical_dimensions must contain five controls")
+            for dimension in dimensions:
+                if not isinstance(dimension, Mapping) or set(dimension) != {
+                    "control",
+                    "target",
+                    "tolerance",
+                    "unit",
+                }:
+                    raise ValueError("inspection_expectations.critical_dimensions entries are not closed")
+            components = expectations.get("components")
+            if not isinstance(components, list) or not components:
+                raise ValueError("inspection_expectations.components must not be empty")
+            component_fields = {
+                "component_type",
+                "logical_component_id",
+                "provenance",
+                "source_block",
+                "source_handle",
+                "source_layer",
+            }
+            for component in components:
+                if not isinstance(component, Mapping) or set(component) != component_fields:
+                    raise ValueError("inspection_expectations.components entries are not closed")
 
     @staticmethod
     def _validate_exact_base_xref_inspection_parameters(parameters: Mapping[str, Any]) -> None:
@@ -1919,19 +1952,30 @@ class DotNetIPCClient:
             "inspection_expectations",
             "target_role",
         }
-        if set(parameters) != required:
+        missing = required - set(parameters)
+        unknown = set(parameters) - required
+        if unknown or missing - {"source_revision"}:
             raise ValueError("exact_base_xref_inspection parameters must be closed")
-        for name in ("run_id", "source_revision"):
+        DotNetIPCClient._validate_exact_base_xref_expectations(
+            parameters["inspection_expectations"]
+        )
+        direct_native_base = parameters["inspection_expectations"].get("xref") is None
+        if "source_revision" not in parameters and not direct_native_base:
+            raise ValueError("parameters.source_revision is required for Xref inspection")
+        for name in ("run_id",):
             if not isinstance(parameters[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
                 parameters[name]
             ):
                 raise ValueError(f"parameters.{name} is invalid")
+        source_revision = parameters.get("source_revision")
+        if source_revision is not None and (
+            not isinstance(source_revision, str)
+            or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(source_revision)
+        ):
+            raise ValueError("parameters.source_revision is invalid")
         normalize_windows_absolute_path(parameters["source_full_path"])
         if parameters["target_role"] != _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE:
             raise ValueError("parameters.target_role must be INSPECTION_HOST")
-        DotNetIPCClient._validate_exact_base_xref_expectations(
-            parameters["inspection_expectations"]
-        )
 
     @staticmethod
     def _validate_exact_base_xref_extraction_parameters(parameters: Mapping[str, Any]) -> None:
