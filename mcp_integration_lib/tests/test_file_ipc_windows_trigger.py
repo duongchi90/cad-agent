@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import math
 import textwrap
 import unittest
 from unittest.mock import patch
@@ -442,6 +443,44 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
             )
             trigger(EXPRESSION)
         self.assertEqual(len(user32.post_calls), len(EXPECTED_FRAMED_TEXT))
+
+    def test_execution_probe_exception_fails_closed(self) -> None:
+        user32 = RecordingUser32(post_returns=[1] * len(EXPECTED_FRAMED_TEXT))
+
+        def failing_probe() -> bool:
+            raise RuntimeError("probe unavailable")
+
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
+            trigger = make_windows_lisp_trigger(
+                OWNED_HWND,
+                execution_probe=failing_probe,
+                execution_timeout_s=0.0,
+            )
+            with self.assertRaisesRegex(
+                MCPTimeoutError, "WINDOW_EXECUTION_UNCONFIRMED"
+            ):
+                trigger(EXPRESSION)
+
+    def test_execution_timing_must_be_finite_and_non_negative(self) -> None:
+        for value in (math.nan, math.inf, -math.inf, -0.001):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError, "execution timing must be finite and non-negative"
+                ):
+                    make_windows_lisp_trigger(
+                        OWNED_HWND,
+                        execution_timeout_s=value,
+                    )
+                with self.assertRaisesRegex(
+                    ValueError, "execution timing must be finite and non-negative"
+                ):
+                    make_windows_lisp_trigger(
+                        OWNED_HWND,
+                        execution_poll_s=value,
+                    )
 
     @pytest.mark.causal_red
     def test_enqueue_true_without_receiver_consumption_is_causal_red(self) -> None:

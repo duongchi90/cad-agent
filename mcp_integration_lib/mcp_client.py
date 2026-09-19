@@ -883,8 +883,13 @@ def _make_windows_text_trigger(
     execution_poll_s: float = 0.01,
 ) -> Callable[[str], None]:
     """Return a bounded, exact-owner trigger for AutoCAD's command boundary."""
-    if execution_timeout_s < 0 or execution_poll_s < 0:
-        raise ValueError("execution timing must be non-negative")
+    if (
+        not math.isfinite(execution_timeout_s)
+        or not math.isfinite(execution_poll_s)
+        or execution_timeout_s < 0
+        or execution_poll_s < 0
+    ):
+        raise ValueError("execution timing must be finite and non-negative")
 
     def trigger(text: str) -> None:
         user32 = ctypes.windll.user32
