@@ -92,6 +92,20 @@ def _identifier(value: object, context: str) -> str:
     return value
 
 
+def _base_source(value: object, context: str) -> dict[str, object]:
+    result = _closed(value, _BASE_SOURCE_FIELDS, context)
+    source_id = result["source_id"]
+    revision = result["revision"]
+    if (source_id is None) != (revision is None):
+        _fail(f"{context}.source_id and {context}.revision must both be null or identifiers")
+    if source_id is not None:
+        _identifier(source_id, f"{context}.source_id")
+    _sha256(result["sha256"], f"{context}.sha256")
+    if revision is not None:
+        _identifier(revision, f"{context}.revision")
+    return result
+
+
 def _sha256(value: object, context: str) -> str:
     if type(value) is not str or not _SHA256_PATTERN.fullmatch(value):
         _fail(f"{context} must be a lowercase SHA-256")
@@ -112,10 +126,7 @@ def _validate_binding(payload: object) -> dict[str, object]:
     ):
         _sha256(result[field], f"binding.{field}")
 
-    base_source = _closed(result["base_source"], _BASE_SOURCE_FIELDS, "binding.base_source")
-    _identifier(base_source["source_id"], "binding.base_source.source_id")
-    _sha256(base_source["sha256"], "binding.base_source.sha256")
-    _identifier(base_source["revision"], "binding.base_source.revision")
+    base_source = _base_source(result["base_source"], "binding.base_source")
     _identifier(result["inspection_id"], "binding.inspection_id")
 
     component_ids = result["eligible_component_ids"]
@@ -189,10 +200,7 @@ def _validate_reuse_handoff(payload: object) -> dict[str, object]:
     ):
         _sha256(result[field], f"reuse handoff.{field}")
 
-    source = _closed(result["base_source"], _HANDOFF_SOURCE_FIELDS, "reuse handoff.base_source")
-    _identifier(source["source_id"], "reuse handoff.base_source.source_id")
-    _sha256(source["sha256"], "reuse handoff.base_source.sha256")
-    _identifier(source["revision"], "reuse handoff.base_source.revision")
+    source = _base_source(result["base_source"], "reuse handoff.base_source")
 
     components = result["components"]
     if type(components) is not list or not components:
@@ -230,7 +238,10 @@ def _validate_reuse_handoff(payload: object) -> dict[str, object]:
             _fail("reuse handoff components must have unique candidate handles")
         candidates_by_handle.add(candidate_key)
         _sha256(component["source_sha256"], f"{context}.source_sha256")
-        _identifier(component["source_revision"], f"{context}.source_revision")
+        if source["revision"] is not None:
+            _identifier(component["source_revision"], f"{context}.source_revision")
+        elif component["source_revision"] is not None:
+            _fail(f"{context}.source_revision must be null for a direct-native base")
         if component["source_sha256"] != source["sha256"]:
             _fail(f"{context}.source_sha256 does not match reuse handoff.base_source")
         if component["source_revision"] != source["revision"]:

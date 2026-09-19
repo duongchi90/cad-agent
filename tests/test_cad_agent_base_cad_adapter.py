@@ -69,6 +69,39 @@ def test_validation_returns_detached_sorted_normalized_copy() -> None:
     assert normalized["eligible_component_ids"] == ["component-A", "component-B"]
 
 
+def test_direct_native_binding_accepts_null_source_identity() -> None:
+    module = _module()
+    payload = _binding()
+    payload["base_source"] = {
+        "source_id": None,
+        "sha256": "4" * 64,
+        "revision": None,
+    }
+
+    normalized = module.validate_base_cad_binding(payload)
+
+    assert normalized["base_source"] == payload["base_source"]
+
+
+@pytest.mark.parametrize(
+    "source_id,revision",
+    [(None, "rev-A"), ("base-cad-001", None)],
+)
+def test_direct_native_binding_rejects_partial_source_identity(
+    source_id: object, revision: object
+) -> None:
+    module = _module()
+    payload = _binding()
+    payload["base_source"] = {
+        "source_id": source_id,
+        "sha256": "4" * 64,
+        "revision": revision,
+    }
+
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_binding(payload)
+
+
 @pytest.mark.parametrize("payload", [None, [], "binding", 42, True])
 def test_non_mapping_root_fails_closed(payload: object) -> None:
     module = _module()
@@ -216,6 +249,24 @@ def test_proposal_rejects_ineligible_inspection_without_live_fallback() -> None:
         )
 
 
+def test_direct_native_proposal_remains_rejected_as_xref_extraction() -> None:
+    module = _module()
+    inspection = _inspection()
+    inspection["base_source"]["source_id"] = None
+    inspection["base_source"]["revision"] = None
+    inspection["xref"] = None
+    inspection["identity_observations"] = []
+    inspection["critical_dimensions"] = []
+    inspection["components"] = []
+
+    with pytest.raises(module.BaseCadAdapterError, match="proposed extraction plan is invalid"):
+        module.build_proposed_base_cad_extraction(
+            plan_id="direct-native-proposal-must-not-extract",
+            inspection=inspection,
+            selections=[],
+        )
+
+
 def test_approved_match_requires_same_proposal_identity_and_explicit_approval() -> None:
     module = _module()
     proposed = module.build_proposed_base_cad_extraction(
@@ -294,6 +345,45 @@ def _handoff() -> dict[str, object]:
         ],
         "source_handle_to_candidate_handle": [{"source_handle": "A1B2", "candidate_handle": "C3D4"}],
     }
+
+
+def test_direct_native_reuse_handoff_accepts_null_source_identity() -> None:
+    module = _module()
+    payload = _handoff()
+    payload["base_source"] = {
+        "source_id": None,
+        "sha256": "a" * 64,
+        "revision": None,
+    }
+    payload["components"][0]["source_revision"] = None
+
+    normalized = module.validate_base_cad_reuse_handoff(payload)
+
+    assert normalized["base_source"] == payload["base_source"]
+    assert normalized["components"][0]["source_revision"] is None
+
+
+@pytest.mark.parametrize(
+    "source_id,revision,component_revision",
+    [
+        (None, "rev-2026-08-05-01", "rev-2026-08-05-01"),
+        ("base-vehicle-001", None, None),
+    ],
+)
+def test_direct_native_reuse_handoff_rejects_partial_source_identity(
+    source_id: object, revision: object, component_revision: object
+) -> None:
+    module = _module()
+    payload = _handoff()
+    payload["base_source"] = {
+        "source_id": source_id,
+        "sha256": "a" * 64,
+        "revision": revision,
+    }
+    payload["components"][0]["source_revision"] = component_revision
+
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_reuse_handoff(payload)
 
 
 def _source(
