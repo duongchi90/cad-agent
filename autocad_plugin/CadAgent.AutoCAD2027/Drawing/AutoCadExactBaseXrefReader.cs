@@ -809,18 +809,24 @@ public sealed class AutoCadExactBaseXrefReader
             ?? throw new ExactBaseXrefPolicyException(
                 ExactBaseXrefPolicy.RequestInvalidCode,
                 "inspection expectations are required");
-        var identity = new List<ExactBaseXrefIdentityObservation>
-        {
-            Identity("vehicle", capture.Vehicle, expectations.Identity?.Vehicle),
-            Identity("model", capture.Model, expectations.Identity?.Model)
-        };
-        if (identity.Any(observation => observation.Status != Pass))
+        var directNativeBase = expectations.Xref is null;
+        var identity = directNativeBase
+            ? new List<ExactBaseXrefIdentityObservation>()
+            : new List<ExactBaseXrefIdentityObservation>
+            {
+                Identity("vehicle", capture.Vehicle, expectations.Identity!.Vehicle),
+                Identity("model", capture.Model, expectations.Identity.Model)
+            };
+        if (!directNativeBase && identity.Any(observation => observation.Status != Pass))
         {
             errors.Add("S3B_SOURCE_IDENTITY_MISMATCH: live vehicle/model identity did not match expectations");
         }
-        var dimensions = BuildDimensions(expectations, capture, errors);
-        var components = BuildComponents(expectations, capture, errors);
-        var directNativeBase = expectations.Xref is null;
+        var dimensions = directNativeBase
+            ? new List<ExactBaseXrefLiveDimension>()
+            : BuildDimensions(expectations, capture, errors);
+        var components = directNativeBase
+            ? new List<ExactBaseXrefLiveComponent>()
+            : BuildComponents(expectations, capture, errors);
         var xrefMatches = string.Equals(
             capture.XrefName,
             expectations.Xref?.Name,
@@ -1042,73 +1048,78 @@ public sealed class AutoCadExactBaseXrefDatabase : IExactBaseXrefDatabase
                 : blockTable[xrefName!],
             OpenMode.ForRead);
         var components = new List<ExactBaseXrefDatabaseComponent>();
-        foreach (ObjectId objectId in sourceRecord)
+        if (!directNativeBase)
         {
-            if (transaction.GetObject(objectId, OpenMode.ForRead, false) is not Entity entity)
+            foreach (ObjectId objectId in sourceRecord)
             {
-                continue;
-            }
-
-            var handle = entity.Handle.ToString().ToUpperInvariant();
-            if (!expectedHandles.Contains(handle))
-            {
-                continue;
-            }
-
-            Extents3d extents;
-            try
-            {
-                extents = entity.GeometricExtents;
-            }
-            catch (Exception exception)
-            {
-                throw new InvalidOperationException(
-                    $"source component '{handle}' has no readable geometric bounds",
-                    exception);
-            }
-
-            components.Add(new ExactBaseXrefDatabaseComponent
-            {
-                ComponentType = entity is BlockReference ? "BLOCK" : entity.GetType().Name.ToUpperInvariant(),
-                SourceBlock = entity is BlockReference blockReference
-                    ? blockReference.Name
-                    : entity.GetType().Name.ToUpperInvariant(),
-                SourceHandle = handle,
-                SourceLayer = entity.Layer,
-                Bounding = new ExactBaseXrefBounding
+                if (transaction.GetObject(objectId, OpenMode.ForRead, false) is not Entity entity)
                 {
-                    Min = new ExactBaseXrefPoint
-                    {
-                        X = extents.MinPoint.X,
-                        Y = extents.MinPoint.Y,
-                        Z = extents.MinPoint.Z
-                    },
-                    Max = new ExactBaseXrefPoint
-                    {
-                        X = extents.MaxPoint.X,
-                        Y = extents.MaxPoint.Y,
-                        Z = extents.MaxPoint.Z
-                    }
+                    continue;
                 }
-            });
+
+                var handle = entity.Handle.ToString().ToUpperInvariant();
+                if (!expectedHandles.Contains(handle))
+                {
+                    continue;
+                }
+
+                Extents3d extents;
+                try
+                {
+                    extents = entity.GeometricExtents;
+                }
+                catch (Exception exception)
+                {
+                    throw new InvalidOperationException(
+                        $"source component '{handle}' has no readable geometric bounds",
+                        exception);
+                }
+
+                components.Add(new ExactBaseXrefDatabaseComponent
+                {
+                    ComponentType = entity is BlockReference ? "BLOCK" : entity.GetType().Name.ToUpperInvariant(),
+                    SourceBlock = entity is BlockReference blockReference
+                        ? blockReference.Name
+                        : entity.GetType().Name.ToUpperInvariant(),
+                    SourceHandle = handle,
+                    SourceLayer = entity.Layer,
+                    Bounding = new ExactBaseXrefBounding
+                    {
+                        Min = new ExactBaseXrefPoint
+                        {
+                            X = extents.MinPoint.X,
+                            Y = extents.MinPoint.Y,
+                            Z = extents.MinPoint.Z
+                        },
+                        Max = new ExactBaseXrefPoint
+                        {
+                            X = extents.MaxPoint.X,
+                            Y = extents.MaxPoint.Y,
+                            Z = extents.MaxPoint.Z
+                        }
+                    }
+                });
+            }
         }
 
-        var properties = ReadCustomProperties(database);
+        var properties = directNativeBase ? null : ReadCustomProperties(database);
         return new ExactBaseXrefDatabaseCapture
         {
             XrefName = directNativeBase ? null : sourceRecord.Name,
             IsExternalReference = directNativeBase ? false : sourceRecord.IsFromExternalReference,
             IsReadOnly = !sourceRecord.IsWriteEnabled,
-            Vehicle = RequiredProperty(properties, "CAD_AGENT_VEHICLE"),
-            Model = RequiredProperty(properties, "CAD_AGENT_MODEL"),
-            CriticalDimensions = (request.InspectionExpectations.CriticalDimensions ?? new List<ExactBaseXrefDimensionExpectation>())
-                .Select(dimension => new ExactBaseXrefDatabaseDimension
-                {
-                    Control = dimension.Control,
-                    Observed = RequiredDoubleProperty(properties, "CAD_AGENT_DIMENSION_" + dimension.Control),
-                    Unit = RequiredProperty(properties, "CAD_AGENT_DIMENSION_" + dimension.Control + "_UNIT")
-                })
-                .ToArray(),
+            Vehicle = directNativeBase ? null : RequiredProperty(properties!, "CAD_AGENT_VEHICLE"),
+            Model = directNativeBase ? null : RequiredProperty(properties!, "CAD_AGENT_MODEL"),
+            CriticalDimensions = directNativeBase
+                ? Array.Empty<ExactBaseXrefDatabaseDimension>()
+                : (request.InspectionExpectations.CriticalDimensions ?? new List<ExactBaseXrefDimensionExpectation>())
+                    .Select(dimension => new ExactBaseXrefDatabaseDimension
+                    {
+                        Control = dimension.Control,
+                        Observed = RequiredDoubleProperty(properties!, "CAD_AGENT_DIMENSION_" + dimension.Control),
+                        Unit = RequiredProperty(properties!, "CAD_AGENT_DIMENSION_" + dimension.Control + "_UNIT")
+                    })
+                    .ToArray(),
             Components = components
         };
     }

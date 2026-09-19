@@ -51,6 +51,9 @@ def test_direct_native_base_accepts_hash_bound_source_without_xref_metadata() ->
     inspection["base_source"]["source_id"] = None
     inspection["base_source"]["revision"] = None
     inspection["xref"] = None
+    inspection["identity_observations"] = []
+    inspection["critical_dimensions"] = []
+    inspection["components"] = []
 
     validated = contract.validate_xref_inspection(inspection)
 
@@ -58,6 +61,9 @@ def test_direct_native_base_accepts_hash_bound_source_without_xref_metadata() ->
     assert validated["base_source"]["source_id"] is None
     assert validated["base_source"]["revision"] is None
     assert validated["xref"] is None
+    assert validated["identity_observations"] == []
+    assert validated["critical_dimensions"] == []
+    assert validated["components"] == []
 
     with pytest.raises(contract.ExactBaseXrefError):
         contract.build_extraction_plan(

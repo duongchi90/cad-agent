@@ -54,7 +54,7 @@ public sealed class ExactBaseXrefPolicyTests : IDisposable
     }
 
     [Fact]
-    public void AcceptsDirectNativeBaseWithoutXrefOrContractOnlyRevision()
+    public void AcceptsDirectNativeBaseWithBindingFactsOnly()
     {
         var parameters = InspectionRequest().Parameters!
             .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
@@ -68,7 +68,10 @@ public sealed class ExactBaseXrefPolicyTests : IDisposable
             revision = (string?)null,
             sha256 = new string('a', 64)
         });
+        expectations.Remove("identity");
+        expectations.Remove("critical_dimensions");
         expectations["xref"] = JsonSerializer.SerializeToElement<object?>(null);
+        expectations.Remove("components");
         parameters["inspection_expectations"] = JsonSerializer.SerializeToElement(expectations);
 
         var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
@@ -86,9 +89,10 @@ public sealed class ExactBaseXrefPolicyTests : IDisposable
                 Parameters = parameters
             });
 
-        Assert.Null(result.SourceRevision);
-        Assert.Null(result.InspectionExpectations!.Source!.SourceId);
-        Assert.Null(result.InspectionExpectations.Source.Revision);
+        Assert.Equal(new string('a', 64), result.InspectionExpectations!.Source!.Sha256);
+        Assert.Null(result.InspectionExpectations.Identity);
+        Assert.Null(result.InspectionExpectations.CriticalDimensions);
+        Assert.Null(result.InspectionExpectations.Components);
         Assert.Null(result.InspectionExpectations.Xref);
     }
 

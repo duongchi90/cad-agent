@@ -1854,8 +1854,13 @@ class DotNetIPCClient:
 
     @staticmethod
     def _validate_exact_base_xref_expectations(expectations: Any) -> None:
-        required = {"source", "identity", "critical_dimensions", "xref", "components"}
-        if not isinstance(expectations, Mapping) or set(expectations) != required:
+        required = {"source", "xref"}
+        allowed = required | {"identity", "critical_dimensions", "components"}
+        if (
+            not isinstance(expectations, Mapping)
+            or not required.issubset(expectations)
+            or set(expectations) - allowed
+        ):
             raise ValueError("inspection_expectations must be a closed object")
 
         def reject_live_owned(value: Any, context: str) -> None:
@@ -1886,46 +1891,52 @@ class DotNetIPCClient:
                 continue
             if not isinstance(value, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(value):
                 raise ValueError(f"inspection_expectations.source.{name} is invalid")
-        if not isinstance(expectations["identity"], Mapping) or set(expectations["identity"]) != {
-            "vehicle",
-            "model",
-        }:
-            raise ValueError("inspection_expectations.identity is not closed")
-        for name in ("vehicle", "model"):
-            if not isinstance(expectations["identity"][name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
-                expectations["identity"][name]
-            ):
-                raise ValueError(f"inspection_expectations.identity.{name} is invalid")
-        dimensions = expectations["critical_dimensions"]
-        if not isinstance(dimensions, list) or len(dimensions) != 5:
-            raise ValueError("inspection_expectations.critical_dimensions must contain five controls")
-        for dimension in dimensions:
-            if not isinstance(dimension, Mapping) or set(dimension) != {
-                "control",
-                "target",
-                "tolerance",
-                "unit",
-            }:
-                raise ValueError("inspection_expectations.critical_dimensions entries are not closed")
         if direct_native_base:
             if expectations["xref"] is not None:
                 raise ValueError("direct native base Xref must be null")
+            identity = expectations.get("identity")
+            if identity not in (None, {}):
+                raise ValueError("direct native base identity expectations must be empty")
+            dimensions = expectations.get("critical_dimensions")
+            if dimensions not in (None, []):
+                raise ValueError("direct native base dimension expectations must be empty")
+            components = expectations.get("components")
+            if components not in (None, []):
+                raise ValueError("direct native base component expectations must be empty")
         elif not isinstance(expectations["xref"], Mapping) or set(expectations["xref"]) != {"name"}:
             raise ValueError("inspection_expectations.xref is not closed")
-        components = expectations["components"]
-        if not isinstance(components, list) or not components:
-            raise ValueError("inspection_expectations.components must not be empty")
-        component_fields = {
-            "component_type",
-            "logical_component_id",
-            "provenance",
-            "source_block",
-            "source_handle",
-            "source_layer",
-        }
-        for component in components:
-            if not isinstance(component, Mapping) or set(component) != component_fields:
-                raise ValueError("inspection_expectations.components entries are not closed")
+        else:
+            identity = expectations.get("identity")
+            if not isinstance(identity, Mapping) or set(identity) != {"vehicle", "model"}:
+                raise ValueError("inspection_expectations.identity is not closed")
+            for name in ("vehicle", "model"):
+                if not isinstance(identity[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(identity[name]):
+                    raise ValueError(f"inspection_expectations.identity.{name} is invalid")
+            dimensions = expectations.get("critical_dimensions")
+            if not isinstance(dimensions, list) or len(dimensions) != 5:
+                raise ValueError("inspection_expectations.critical_dimensions must contain five controls")
+            for dimension in dimensions:
+                if not isinstance(dimension, Mapping) or set(dimension) != {
+                    "control",
+                    "target",
+                    "tolerance",
+                    "unit",
+                }:
+                    raise ValueError("inspection_expectations.critical_dimensions entries are not closed")
+            components = expectations.get("components")
+            if not isinstance(components, list) or not components:
+                raise ValueError("inspection_expectations.components must not be empty")
+            component_fields = {
+                "component_type",
+                "logical_component_id",
+                "provenance",
+                "source_block",
+                "source_handle",
+                "source_layer",
+            }
+            for component in components:
+                if not isinstance(component, Mapping) or set(component) != component_fields:
+                    raise ValueError("inspection_expectations.components entries are not closed")
 
     @staticmethod
     def _validate_exact_base_xref_inspection_parameters(parameters: Mapping[str, Any]) -> None:

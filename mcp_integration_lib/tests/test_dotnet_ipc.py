@@ -472,6 +472,9 @@ class DotNetIPCClientTests(unittest.TestCase):
         inspection["base_source"]["source_id"] = None
         inspection["base_source"]["revision"] = None
         inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
         inspection["request_id"] = "direct-native-request-001"
         requests: list[dict[str, object]] = []
 
@@ -506,6 +509,9 @@ class DotNetIPCClientTests(unittest.TestCase):
         self.assertIsNone(parameters["inspection_expectations"]["xref"])
         self.assertIsNone(parameters["inspection_expectations"]["source"]["source_id"])
         self.assertEqual("a" * 64, parameters["inspection_expectations"]["source"]["sha256"])
+        self.assertEqual({}, parameters["inspection_expectations"]["identity"])
+        self.assertEqual([], parameters["inspection_expectations"]["critical_dimensions"])
+        self.assertEqual([], parameters["inspection_expectations"]["components"])
         self.assertEqual([], result["entity_handles"])
 
     def test_exact_base_xref_extraction_validates_plan_and_binds_approval(self) -> None:

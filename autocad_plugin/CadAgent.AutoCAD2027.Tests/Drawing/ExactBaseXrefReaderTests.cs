@@ -72,6 +72,9 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         Assert.True(result.Success);
         Assert.True(result.Evidence!.Eligible);
         Assert.Null(result.Evidence.Xref);
+        Assert.Empty(result.Evidence.IdentityObservations!);
+        Assert.Empty(result.Evidence.CriticalDimensions!);
+        Assert.Empty(result.Evidence.Components!);
         Assert.Equal(0, database.NamedXrefReadCount);
         Assert.Equal(1, database.ModelSpaceScanCount);
         Assert.Equal(0, database.SaveCallCount);
@@ -393,41 +396,45 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
                 Revision = directNativeBase ? null : "rev-2026-08-05-01",
                 Sha256 = SourceHash
             },
-            Identity = new ExactBaseXrefIdentityExpectation
+            Identity = directNativeBase ? null : new ExactBaseXrefIdentityExpectation
             {
                 Vehicle = "vehicle-001",
                 Model = "model-x"
             },
-            CriticalDimensions = new List<ExactBaseXrefDimensionExpectation>
-            {
-                new() { Control = "axle", Target = 100, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "cabin", Target = 200, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "chassis", Target = 300, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "track", Target = 400, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "wheelbase", Target = 500, Tolerance = 0.1, Unit = "mm" }
-            },
-            Xref = directNativeBase ? null : new ExactBaseXrefReference { Name = "BASE_XREF" },
-            Components = new List<ExactBaseXrefComponentExpectation>
-            {
-                new()
+            CriticalDimensions = directNativeBase
+                ? new List<ExactBaseXrefDimensionExpectation>()
+                : new List<ExactBaseXrefDimensionExpectation>
                 {
-                    ComponentType = "BLOCK",
-                    LogicalComponentId = "cab-001",
-                    Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
-                    SourceBlock = "CAB",
-                    SourceHandle = "1A2B",
-                    SourceLayer = "BODY"
+                    new() { Control = "axle", Target = 100, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "cabin", Target = 200, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "chassis", Target = 300, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "track", Target = 400, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "wheelbase", Target = 500, Tolerance = 0.1, Unit = "mm" }
                 },
-                new()
+            Xref = directNativeBase ? null : new ExactBaseXrefReference { Name = "BASE_XREF" },
+            Components = directNativeBase
+                ? new List<ExactBaseXrefComponentExpectation>()
+                : new List<ExactBaseXrefComponentExpectation>
                 {
-                    ComponentType = "BLOCK",
-                    LogicalComponentId = "wheel-001",
-                    Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
-                    SourceBlock = "WHEEL",
-                    SourceHandle = "1A2C",
-                    SourceLayer = "RUNNING_GEAR"
+                    new()
+                    {
+                        ComponentType = "BLOCK",
+                        LogicalComponentId = "cab-001",
+                        Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
+                        SourceBlock = "CAB",
+                        SourceHandle = "1A2B",
+                        SourceLayer = "BODY"
+                    },
+                    new()
+                    {
+                        ComponentType = "BLOCK",
+                        LogicalComponentId = "wheel-001",
+                        Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
+                        SourceBlock = "WHEEL",
+                        SourceHandle = "1A2C",
+                        SourceLayer = "RUNNING_GEAR"
+                    }
                 }
-            }
         }
     };
 

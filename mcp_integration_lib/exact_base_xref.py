@@ -271,8 +271,14 @@ def _warnings_or_conflicts(value: object, context: str) -> list[object]:
     return result
 
 
-def _identity_observations(value: object) -> list[dict[str, object]]:
+def _identity_observations(
+    value: object,
+    *,
+    allow_empty: bool = False,
+) -> list[dict[str, object]]:
     observations = _list(value, "identity_observations")
+    if allow_empty and not observations:
+        return []
     if len(observations) != len(_REQUIRED_IDENTITY_FIELDS):
         _error("identity_observations must contain vehicle and model exactly once")
     seen: set[str] = set()
@@ -297,8 +303,14 @@ def _identity_observations(value: object) -> list[dict[str, object]]:
     return normalized
 
 
-def _critical_dimensions(value: object) -> list[dict[str, object]]:
+def _critical_dimensions(
+    value: object,
+    *,
+    allow_empty: bool = False,
+) -> list[dict[str, object]]:
     dimensions = _list(value, "critical_dimensions")
+    if allow_empty and not dimensions:
+        return []
     if len(dimensions) != len(_REQUIRED_DIMENSION_CONTROLS):
         _error("critical_dimensions must contain every required control exactly once")
     seen: set[str] = set()
@@ -399,15 +411,23 @@ def validate_xref_inspection(payload: object) -> dict[str, object]:
         direct_native_base=direct_native_base,
     )
     _hash(result["target_drawing_sha256"], "inspection.target_drawing_sha256")
-    identity = _identity_observations(result["identity_observations"])
-    dimensions = _critical_dimensions(result["critical_dimensions"])
+    identity = _identity_observations(
+        result["identity_observations"],
+        allow_empty=direct_native_base,
+    )
+    dimensions = _critical_dimensions(
+        result["critical_dimensions"],
+        allow_empty=direct_native_base,
+    )
     result["xref"] = (
         _direct_native_xref(result["xref"])
         if direct_native_base
         else _xref(result["xref"])
     )
     components = _list(result["components"], "components")
-    if not components:
+    if direct_native_base and (identity or dimensions or components):
+        _error("direct native base inspection must not include semantic evidence")
+    if not direct_native_base and not components:
         _error("components must contain at least one inspected component")
     normalized_components = [
         _component(item, f"components[{index}]") for index, item in enumerate(components)
