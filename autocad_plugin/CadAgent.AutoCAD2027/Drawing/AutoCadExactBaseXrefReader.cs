@@ -820,14 +820,19 @@ public sealed class AutoCadExactBaseXrefReader
         }
         var dimensions = BuildDimensions(expectations, capture, errors);
         var components = BuildComponents(expectations, capture, errors);
+        var directNativeBase = expectations.Xref is null;
         var xrefMatches = string.Equals(
             capture.XrefName,
             expectations.Xref?.Name,
             StringComparison.Ordinal);
-        var xrefValid = capture.IsExternalReference && capture.IsReadOnly && xrefMatches;
+        var xrefValid = directNativeBase
+            ? capture.XrefName is null && !capture.IsExternalReference && capture.IsReadOnly
+            : capture.IsExternalReference && capture.IsReadOnly && xrefMatches;
         if (!xrefValid)
         {
-            errors.Add("S3B_XREF_NOT_READ_ONLY: named source must be an external read-only reference");
+            errors.Add(directNativeBase
+                ? "S3B_DIRECT_NATIVE_BASE_NOT_READ_ONLY: direct native base must be read-only model-space evidence"
+                : "S3B_XREF_NOT_READ_ONLY: named source must be an external read-only reference");
         }
 
         var changed = !string.Equals(sourceHashBefore, sourceHashAfter, StringComparison.Ordinal)
@@ -844,9 +849,9 @@ public sealed class AutoCadExactBaseXrefReader
             BaseSource = new ExactBaseXrefPlanSource
             {
                 RelativePath = Path.GetFileName(_policy.Configuration.ExactBaseSourcePath),
-                Revision = _policy.Configuration.ExactBaseSourceRevision,
+                Revision = directNativeBase ? null : _policy.Configuration.ExactBaseSourceRevision,
                 Sha256 = sourceHashBefore,
-                SourceId = expectations.Source?.SourceId
+                SourceId = directNativeBase ? null : expectations.Source?.SourceId
             },
             SchemaVersion = LiveSchemaVersion,
             CaptureTimestamp = EnsureUtc(_clock()),
@@ -863,12 +868,14 @@ public sealed class AutoCadExactBaseXrefReader
             RunId = request.RunId,
             TargetDrawingSha256 = targetHash,
             Warnings = new List<string>(),
-            Xref = new ExactBaseXrefLiveXref
-            {
-                Name = capture.XrefName,
-                ReadOnly = capture.IsReadOnly,
-                Status = xrefValid ? "INSPECTED" : Fail
-            }
+            Xref = directNativeBase
+                ? null
+                : new ExactBaseXrefLiveXref
+                {
+                    Name = capture.XrefName,
+                    ReadOnly = capture.IsReadOnly,
+                    Status = xrefValid ? "INSPECTED" : Fail
+                }
         };
     }
 
@@ -1015,8 +1022,8 @@ public sealed class AutoCadExactBaseXrefDatabase : IExactBaseXrefDatabase
     {
         var database = _document.Database
             ?? throw new InvalidOperationException("the active AutoCAD document has no database");
-        var xrefName = request.InspectionExpectations?.Xref?.Name
-            ?? throw new InvalidOperationException("the approved Xref name is missing");
+        var xrefName = request.InspectionExpectations?.Xref?.Name;
+        var directNativeBase = xrefName is null;
         var expectedHandles = (request.InspectionExpectations.Components ?? new List<ExactBaseXrefComponentExpectation>())
             .Select(component => component.SourceHandle)
             .Where(handle => handle is not null)
@@ -1024,14 +1031,18 @@ public sealed class AutoCadExactBaseXrefDatabase : IExactBaseXrefDatabase
 
         using var transaction = database.TransactionManager.StartOpenCloseTransaction();
         var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-        if (!blockTable.Has(xrefName))
+        if (!directNativeBase && !blockTable.Has(xrefName!))
         {
             throw new InvalidOperationException($"approved Xref '{xrefName}' was not found");
         }
 
-        var xref = (BlockTableRecord)transaction.GetObject(blockTable[xrefName], OpenMode.ForRead);
+        var sourceRecord = (BlockTableRecord)transaction.GetObject(
+            directNativeBase
+                ? blockTable[BlockTableRecord.ModelSpace]
+                : blockTable[xrefName!],
+            OpenMode.ForRead);
         var components = new List<ExactBaseXrefDatabaseComponent>();
-        foreach (ObjectId objectId in xref)
+        foreach (ObjectId objectId in sourceRecord)
         {
             if (transaction.GetObject(objectId, OpenMode.ForRead, false) is not Entity entity)
             {
@@ -1085,9 +1096,9 @@ public sealed class AutoCadExactBaseXrefDatabase : IExactBaseXrefDatabase
         var properties = ReadCustomProperties(database);
         return new ExactBaseXrefDatabaseCapture
         {
-            XrefName = xref.Name,
-            IsExternalReference = xref.IsFromExternalReference,
-            IsReadOnly = !xref.IsWriteEnabled,
+            XrefName = directNativeBase ? null : sourceRecord.Name,
+            IsExternalReference = directNativeBase ? false : sourceRecord.IsFromExternalReference,
+            IsReadOnly = !sourceRecord.IsWriteEnabled,
             Vehicle = RequiredProperty(properties, "CAD_AGENT_VEHICLE"),
             Model = RequiredProperty(properties, "CAD_AGENT_MODEL"),
             CriticalDimensions = (request.InspectionExpectations.CriticalDimensions ?? new List<ExactBaseXrefDimensionExpectation>())

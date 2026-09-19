@@ -189,10 +189,12 @@ public sealed class ExactBaseXrefPolicy
                 SourceIdentityMismatchCode,
                 "live inspection identity or target hash does not match the request");
         }
+        var directNativeBase = request.InspectionExpectations!.Xref is null;
         if (evidence.BaseSource is null
-            || evidence.BaseSource.SourceId != request.InspectionExpectations!.Source!.SourceId
-            || evidence.BaseSource.Revision != _configuration.ExactBaseSourceRevision
-            || evidence.BaseSource.Sha256 != _configuration.ExactBaseSourceSha256)
+            || evidence.BaseSource.Sha256 != _configuration.ExactBaseSourceSha256
+            || (!directNativeBase
+                && (evidence.BaseSource.SourceId != request.InspectionExpectations.Source!.SourceId
+                    || evidence.BaseSource.Revision != _configuration.ExactBaseSourceRevision)))
         {
             throw new ExactBaseXrefPolicyException(
                 SourceHashMismatchCode,
@@ -249,7 +251,16 @@ public sealed class ExactBaseXrefPolicy
             }
         }
 
-        if (evidence.Xref is null
+        if (directNativeBase)
+        {
+            if (evidence.Xref is not null)
+            {
+                throw new ExactBaseXrefPolicyException(
+                    SourceIdentityMismatchCode,
+                    "direct native base inspection must not report an Xref identity");
+            }
+        }
+        else if (evidence.Xref is null
             || evidence.Xref.Name != request.InspectionExpectations.Xref!.Name
             || !evidence.Xref.ReadOnly
             || evidence.Xref.Status != "INSPECTED")
@@ -346,14 +357,27 @@ public sealed class ExactBaseXrefPolicy
         var fields = extraction
             ? InspectionParameterFields.Concat(new[] { "extraction_plan", "candidate_output_path" }).ToHashSet(StringComparer.Ordinal)
             : InspectionParameterFields;
-        RequireClosedObject(parameterObject, fields, "parameters");
+        RequireClosedObject(
+            parameterObject,
+            fields,
+            "parameters",
+            extraction
+                ? null
+                : new HashSet<string>(new[] { "source_revision" }, StringComparer.Ordinal));
+        var inspectionExpectations = ParseInspectionExpectations(
+            RequiredProperty(parameters, "inspection_expectations"));
+        if (extraction && inspectionExpectations.Xref is null)
+        {
+            throw InvalidRequest("direct native base inspection cannot be used for Xref extraction");
+        }
         var baseParameters = new ExactBaseXrefInspectionParameters
         {
             RunId = RequiredIdentifier(parameters, "run_id"),
             SourceFullPath = RequiredAbsolutePath(parameters, "source_full_path"),
-            SourceRevision = RequiredIdentifier(parameters, "source_revision"),
-            InspectionExpectations = ParseInspectionExpectations(
-                RequiredProperty(parameters, "inspection_expectations")),
+            SourceRevision = inspectionExpectations.Xref is null
+                ? OptionalIdentifier(parameters, "source_revision")
+                : RequiredIdentifier(parameters, "source_revision"),
+            InspectionExpectations = inspectionExpectations,
             TargetRole = RequiredString(parameters, "target_role")
         };
         if (baseParameters.TargetRole != (extraction
@@ -405,7 +429,11 @@ public sealed class ExactBaseXrefPolicy
         var objectValue = RequireClosedObject(value, ExpectationFields, "inspection_expectations");
         var source = RequireClosedObject(RequiredProperty(objectValue, "source"), SourceFields, "inspection_expectations.source");
         var identity = RequireClosedObject(RequiredProperty(objectValue, "identity"), IdentityFields, "inspection_expectations.identity");
-        var xref = RequireClosedObject(RequiredProperty(objectValue, "xref"), XrefFields, "inspection_expectations.xref");
+        var xrefValue = RequiredProperty(objectValue, "xref");
+        var directNativeBase = xrefValue.ValueKind == JsonValueKind.Null;
+        var xref = directNativeBase
+            ? (JsonElement?)null
+            : RequireClosedObject(xrefValue, XrefFields, "inspection_expectations.xref");
         var dimensions = RequireArray(RequiredProperty(objectValue, "critical_dimensions"), "inspection_expectations.critical_dimensions");
         if (dimensions.Count != 5)
         {
@@ -435,8 +463,12 @@ public sealed class ExactBaseXrefPolicy
         {
             Source = new ExactBaseXrefSourceExpectation
             {
-                SourceId = RequiredIdentifier(RequiredProperty(source, "source_id"), "source_id"),
-                Revision = RequiredIdentifier(RequiredProperty(source, "revision"), "revision"),
+                SourceId = directNativeBase
+                    ? OptionalIdentifier(source, "source_id")
+                    : RequiredIdentifier(RequiredProperty(source, "source_id"), "source_id"),
+                Revision = directNativeBase
+                    ? OptionalIdentifier(source, "revision")
+                    : RequiredIdentifier(RequiredProperty(source, "revision"), "revision"),
                 Sha256 = RequiredHash(RequiredProperty(source, "sha256"), "sha256")
             },
             Identity = new ExactBaseXrefIdentityExpectation
@@ -445,10 +477,12 @@ public sealed class ExactBaseXrefPolicy
                 Model = RequiredIdentifier(RequiredProperty(identity, "model"), "model")
             },
             CriticalDimensions = parsedDimensions,
-            Xref = new ExactBaseXrefReference
-            {
-                Name = RequiredIdentifier(RequiredProperty(xref, "name"), "name")
-            },
+            Xref = xref is null
+                ? null
+                : new ExactBaseXrefReference
+                {
+                    Name = RequiredIdentifier(RequiredProperty(xref.Value, "name"), "name")
+                },
             Components = parsedComponents
         };
         return result;
@@ -705,14 +739,24 @@ public sealed class ExactBaseXrefPolicy
                 SourceIdentityMismatchCode,
                 "source_full_path is not the server-configured exact-base source file");
         }
-        if (!string.Equals(sourceRevision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal)
-            || !string.Equals(expectations.Source!.Revision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal))
+        var directNativeBase = expectations.Xref is null;
+        if (!directNativeBase)
         {
-            throw new ExactBaseXrefPolicyException(
-                SourceRevisionMismatchCode,
-                "source revision does not match the server-configured source revision");
+            if (!IdentifierPattern.IsMatch(_configuration.ExactBaseSourceRevision ?? string.Empty))
+            {
+                throw new ExactBaseXrefPolicyException(
+                    ConfigurationRequiredCode,
+                    "exact-base source revision is required for Xref inspection");
+            }
+            if (!string.Equals(sourceRevision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal)
+                || !string.Equals(expectations.Source!.Revision, _configuration.ExactBaseSourceRevision, StringComparison.Ordinal))
+            {
+                throw new ExactBaseXrefPolicyException(
+                    SourceRevisionMismatchCode,
+                    "source revision does not match the server-configured source revision");
+            }
         }
-        if (!string.Equals(expectations.Source.Sha256, _configuration.ExactBaseSourceSha256, StringComparison.Ordinal))
+        if (!string.Equals(expectations.Source!.Sha256, _configuration.ExactBaseSourceSha256, StringComparison.Ordinal))
         {
             throw new ExactBaseXrefPolicyException(
                 SourceHashMismatchCode,
@@ -723,7 +767,7 @@ public sealed class ExactBaseXrefPolicy
             _configuration.AcceptedDwgPath,
             AcceptedAliasCode,
             "configured accepted DWG");
-        if (SameFile(configuredSource, accepted))
+        if (!directNativeBase && SameFile(configuredSource, accepted))
         {
             throw new ExactBaseXrefPolicyException(
                 SourceAliasCode,
@@ -845,7 +889,6 @@ public sealed class ExactBaseXrefPolicy
             && !ContractValidator.TryNormalizeWindowsAbsolutePath(configuration.ExactBaseSourcePath, out _)) errors.Add("exact-base source path is invalid");
         if (configuration.AcceptedDwgSha256 is null || !HashPattern.IsMatch(configuration.AcceptedDwgSha256)) errors.Add("accepted DWG hash is invalid");
         if (configuration.ExactBaseSourceSha256 is null || !HashPattern.IsMatch(configuration.ExactBaseSourceSha256)) errors.Add("exact-base source hash is invalid");
-        if (configuration.ExactBaseSourceRevision is null || !IdentifierPattern.IsMatch(configuration.ExactBaseSourceRevision)) errors.Add("exact-base source revision is invalid");
         return errors;
     }
 
@@ -1073,7 +1116,11 @@ public sealed class ExactBaseXrefPolicy
         return JsonSerializer.SerializeToElement(value, ContractJson.Options);
     }
 
-    private static JsonElement RequireClosedObject(JsonElement value, IReadOnlySet<string> fields, string name)
+    private static JsonElement RequireClosedObject(
+        JsonElement value,
+        IReadOnlySet<string> fields,
+        string name,
+        IReadOnlySet<string>? optionalFields = null)
     {
         if (value.ValueKind != JsonValueKind.Object)
         {
@@ -1085,7 +1132,10 @@ public sealed class ExactBaseXrefPolicy
         {
             throw InvalidRequest($"{name} contains unsupported field '{unknown[0]}'");
         }
-        var missing = fields.Except(present, StringComparer.Ordinal).ToArray();
+        var missing = fields
+            .Except(present, StringComparer.Ordinal)
+            .Where(field => optionalFields is null || !optionalFields.Contains(field))
+            .ToArray();
         if (missing.Length > 0)
         {
             throw InvalidRequest($"{name} is missing field '{missing[0]}'");
@@ -1154,6 +1204,30 @@ public sealed class ExactBaseXrefPolicy
 
     private static string RequiredIdentifier(IReadOnlyDictionary<string, JsonElement> value, string name) =>
         RequiredIdentifier(RequiredProperty(value, name), name);
+
+    private static string? OptionalIdentifier(
+        IReadOnlyDictionary<string, JsonElement> value,
+        string name)
+    {
+        if (!value.TryGetValue(name, out var property)
+            || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return RequiredIdentifier(property, name);
+    }
+
+    private static string? OptionalIdentifier(JsonElement value, string name)
+    {
+        if (!value.TryGetProperty(name, out var property)
+            || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return RequiredIdentifier(property, name);
+    }
 
     private static string RequiredAbsolutePath(IReadOnlyDictionary<string, JsonElement> value, string name)
     {

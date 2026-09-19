@@ -54,6 +54,45 @@ public sealed class ExactBaseXrefPolicyTests : IDisposable
     }
 
     [Fact]
+    public void AcceptsDirectNativeBaseWithoutXrefOrContractOnlyRevision()
+    {
+        var parameters = InspectionRequest().Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters.Remove("source_revision");
+
+        var expectations = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            parameters["inspection_expectations"].GetRawText())!;
+        expectations["source"] = JsonSerializer.SerializeToElement(new
+        {
+            source_id = (string?)null,
+            revision = (string?)null,
+            sha256 = new string('a', 64)
+        });
+        expectations["xref"] = JsonSerializer.SerializeToElement<object?>(null);
+        parameters["inspection_expectations"] = JsonSerializer.SerializeToElement(expectations);
+
+        var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            _root,
+            _sourcePath,
+            new string('a', 64),
+            _sourcePath,
+            new string('a', 64),
+            null));
+        var result = directPolicy.ValidateInspectionRequest(
+            InspectionRequest() with
+            {
+                DrawingFullPath = _sourcePath,
+                DrawingSha256 = new string('a', 64),
+                Parameters = parameters
+            });
+
+        Assert.Null(result.SourceRevision);
+        Assert.Null(result.InspectionExpectations!.Source!.SourceId);
+        Assert.Null(result.InspectionExpectations.Source.Revision);
+        Assert.Null(result.InspectionExpectations.Xref);
+    }
+
+    [Fact]
     public void LoadsAllSixS3BValuesFromServerOwnedConfiguration()
     {
         var values = new Dictionary<string, string?>(StringComparer.Ordinal)

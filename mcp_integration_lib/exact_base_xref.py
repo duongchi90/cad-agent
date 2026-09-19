@@ -227,12 +227,23 @@ def _safe_relative_path(value: object, context: str) -> str:
     return path
 
 
-def _base_source(value: object, context: str = "base_source") -> dict[str, object]:
+def _base_source(
+    value: object,
+    context: str = "base_source",
+    *,
+    direct_native_base: bool = False,
+) -> dict[str, object]:
     result = _closed_fields(value, _BASE_SOURCE_FIELDS, context)
-    _string(result["source_id"], f"{context}.source_id", identifier=True)
+    if direct_native_base and result["source_id"] is None:
+        pass
+    else:
+        _string(result["source_id"], f"{context}.source_id", identifier=True)
     _safe_relative_path(result["relative_path"], f"{context}.relative_path")
     _hash(result["sha256"], f"{context}.sha256")
-    _string(result["revision"], f"{context}.revision", identifier=True)
+    if direct_native_base and result["revision"] is None:
+        pass
+    else:
+        _string(result["revision"], f"{context}.revision", identifier=True)
     return result
 
 
@@ -325,6 +336,12 @@ def _xref(value: object) -> dict[str, object]:
     return result
 
 
+def _direct_native_xref(value: object) -> None:
+    if value is not None:
+        _error("direct native base inspection must not contain an Xref identity")
+    return None
+
+
 def _component(value: object, context: str = "component") -> dict[str, object]:
     result = _closed_fields(value, _COMPONENT_FIELDS, context)
     _string(result["source_handle"], f"{context}.source_handle", identifier=True)
@@ -350,7 +367,7 @@ def _unique_components(components: list[dict[str, object]], context: str) -> Non
 def _inspection_eligibility(
     identity: list[dict[str, object]],
     dimensions: list[dict[str, object]],
-    xref: dict[str, object],
+    xref: dict[str, object] | None,
     changed: bool,
     dbmod_before: int,
     dbmod_after: int,
@@ -359,7 +376,7 @@ def _inspection_eligibility(
     return (
         all(item["status"] == "PASS" for item in identity)
         and all(item["status"] == "PASS" for item in dimensions)
-        and xref["read_only"] is True
+        and (xref is None or xref["read_only"] is True)
         and changed is False
         and dbmod_before == dbmod_after
         and not conflicts
@@ -376,11 +393,19 @@ def validate_xref_inspection(payload: object) -> dict[str, object]:
     _string(result["request_id"], "inspection.request_id", identifier=True)
     _string(result["run_id"], "inspection.run_id", identifier=True)
     _timestamp(result["capture_timestamp"], "inspection.capture_timestamp")
-    result["base_source"] = _base_source(result["base_source"])
+    direct_native_base = result["xref"] is None
+    result["base_source"] = _base_source(
+        result["base_source"],
+        direct_native_base=direct_native_base,
+    )
     _hash(result["target_drawing_sha256"], "inspection.target_drawing_sha256")
     identity = _identity_observations(result["identity_observations"])
     dimensions = _critical_dimensions(result["critical_dimensions"])
-    result["xref"] = _xref(result["xref"])
+    result["xref"] = (
+        _direct_native_xref(result["xref"])
+        if direct_native_base
+        else _xref(result["xref"])
+    )
     components = _list(result["components"], "components")
     if not components:
         _error("components must contain at least one inspected component")
@@ -454,6 +479,8 @@ def _plan_component(value: object, context: str) -> dict[str, object]:
 def _validate_plan_against_inspection(
     plan: dict[str, object], inspection: dict[str, object]
 ) -> None:
+    if inspection["xref"] is None:
+        _error("direct native base inspection cannot be used for Xref extraction")
     if inspection["eligible"] is not True:
         _error("base CAD inspection is not eligible for extraction")
     for field in ("request_id", "run_id", "inspection_id", "target_drawing_sha256"):
@@ -527,6 +554,8 @@ def build_extraction_plan(
 ) -> dict[str, object]:
     """Build a deterministic plan from eligible inspection metadata only."""
     validated_inspection = validate_xref_inspection(inspection)
+    if validated_inspection["xref"] is None:
+        _error("direct native base inspection cannot be used for Xref extraction")
     if validated_inspection["eligible"] is not True:
         _error("base CAD inspection is not eligible for extraction")
     _string(plan_id, "plan_id", identifier=True)

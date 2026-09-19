@@ -46,6 +46,27 @@ def test_fixture_round_trip_validates_inspection_and_plan() -> None:
     assert plan["provenance"] == "REUSED_FROM_BASE_CAD"
 
 
+def test_direct_native_base_accepts_hash_bound_source_without_xref_metadata() -> None:
+    inspection = _inspection()
+    inspection["base_source"]["source_id"] = None
+    inspection["base_source"]["revision"] = None
+    inspection["xref"] = None
+
+    validated = contract.validate_xref_inspection(inspection)
+
+    assert validated["base_source"]["sha256"] == "a" * 64
+    assert validated["base_source"]["source_id"] is None
+    assert validated["base_source"]["revision"] is None
+    assert validated["xref"] is None
+
+    with pytest.raises(contract.ExactBaseXrefError):
+        contract.build_extraction_plan(
+            plan_id="direct-native-base-must-not-extract-as-xref",
+            inspection=validated,
+            selections=[],
+        )
+
+
 def test_builder_is_deterministic_and_copies_only_inspected_component_metadata() -> None:
     fixture = _fixture()
     inspection = contract.validate_xref_inspection(fixture["inspection"])

@@ -59,6 +59,25 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
     }
 
     [Fact]
+    public void InspectsDirectNativeBaseFromModelSpaceWithoutXrefIdentity()
+    {
+        var database = new FakeExactBaseXrefDatabase(_targetPath, _sourcePath, TargetHash, SourceHash)
+        {
+            IsExternalReference = false,
+            IsReadOnly = true
+        };
+
+        var result = CreateReader(database).Read(Request(directNativeBase: true));
+
+        Assert.True(result.Success);
+        Assert.True(result.Evidence!.Eligible);
+        Assert.Null(result.Evidence.Xref);
+        Assert.Equal(0, database.NamedXrefReadCount);
+        Assert.Equal(1, database.ModelSpaceScanCount);
+        Assert.Equal(0, database.SaveCallCount);
+    }
+
+    [Fact]
     public void RebuildsLiveIdentityFromDatabaseInsteadOfCallerOwnedEvidence()
     {
         var database = new FakeExactBaseXrefDatabase(_targetPath, _sourcePath, TargetHash, SourceHash)
@@ -360,18 +379,18 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         };
     }
 
-    private ExactBaseXrefInspectionParameters Request() => new()
+    private ExactBaseXrefInspectionParameters Request(bool directNativeBase = false) => new()
     {
         RunId = "run-001",
         SourceFullPath = _sourcePath,
-        SourceRevision = "rev-2026-08-05-01",
+        SourceRevision = directNativeBase ? null : "rev-2026-08-05-01",
         TargetRole = ExactBaseXrefOperationNames.InspectionTargetRole,
         InspectionExpectations = new ExactBaseXrefInspectionExpectations
         {
             Source = new ExactBaseXrefSourceExpectation
             {
-                SourceId = "base-vehicle-001",
-                Revision = "rev-2026-08-05-01",
+                SourceId = directNativeBase ? null : "base-vehicle-001",
+                Revision = directNativeBase ? null : "rev-2026-08-05-01",
                 Sha256 = SourceHash
             },
             Identity = new ExactBaseXrefIdentityExpectation
@@ -387,7 +406,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
                 new() { Control = "track", Target = 400, Tolerance = 0.1, Unit = "mm" },
                 new() { Control = "wheelbase", Target = 500, Tolerance = 0.1, Unit = "mm" }
             },
-            Xref = new ExactBaseXrefReference { Name = "BASE_XREF" },
+            Xref = directNativeBase ? null : new ExactBaseXrefReference { Name = "BASE_XREF" },
             Components = new List<ExactBaseXrefComponentExpectation>
             {
                 new()
@@ -477,13 +496,15 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
 
         public Exception? InspectionException { get; init; }
 
-        public int ReadDbmod() => NamedXrefReadCount == 0 ? DbmodBefore : DbmodAfter;
+        private int ReadCount => NamedXrefReadCount + ModelSpaceScanCount;
+
+        public int ReadDbmod() => ReadCount == 0 ? DbmodBefore : DbmodAfter;
 
         public string ComputeSha256(string path)
         {
             if (string.Equals(path, _sourcePath, StringComparison.OrdinalIgnoreCase))
             {
-                if (NamedXrefReadCount == 0)
+                if (ReadCount == 0)
                 {
                     return SourceHashBefore;
                 }
@@ -496,7 +517,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
                 return "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
             }
 
-            return NamedXrefReadCount == 0 ? _targetHash : TargetHashAfter;
+            return ReadCount == 0 ? _targetHash : TargetHashAfter;
         }
 
         public ExactBaseXrefDatabaseExtractionResult ExtractApprovedComponents(
@@ -532,7 +553,14 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         public ExactBaseXrefDatabaseCapture ReadNamedExternalXref(
             ExactBaseXrefInspectionParameters request)
         {
-            NamedXrefReadCount++;
+            if (request.InspectionExpectations!.Xref is null)
+            {
+                ModelSpaceScanCount++;
+            }
+            else
+            {
+                NamedXrefReadCount++;
+            }
             if (InspectionException is not null)
             {
                 throw InspectionException;
@@ -540,7 +568,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
 
             return new ExactBaseXrefDatabaseCapture
             {
-                XrefName = request.InspectionExpectations!.Xref!.Name!,
+                XrefName = request.InspectionExpectations!.Xref?.Name,
                 IsExternalReference = IsExternalReference,
                 IsReadOnly = IsReadOnly,
                 Vehicle = Vehicle,
