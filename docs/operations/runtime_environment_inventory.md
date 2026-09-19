@@ -19,7 +19,7 @@ Classification vocabulary: `CANONICAL`, `ACTIVE`, `APPROVED`, `DISPOSABLE`, `HIS
 | AutoCAD | AutoCAD Mechanical 2027 / AutoCAD 2027, PID `21320`, HWND `525948` (`EPHEMERAL_SESSION_FACT`) |
 | Active drawing | `C:\Users\dkv\Downloads\BVTL.dwg`, title `BVTL.dwg`; path proven, hash not readable while locked |
 | Loaded CAD Agent DLL | `UNKNOWN / NOT_OBSERVED`; no `CadAgent.AutoCAD2027.dll` module appeared in the AutoCAD module census |
-| Loaded dispatcher LSP | `UNKNOWN / NOT_VERIFIED` |
+| Trusted/runtime dispatcher LSP | `C:\cad-agent\trusted-dispatcher\mcp_dispatch.lsp`; SHA256 `D80190A1621963E420B8E90566B1F858EEB3775C8FEE86B70352AA6FBE2CB222`; source/deployed hash equality and fresh raw-LISP execution proof in #409/5738282459 |
 | FileIPC / .NET IPC | `UNKNOWN / NOT_VERIFIED` active roots; both code defaults are `C:\temp`, environment overrides are unset |
 | Secrets | `SECRETS_RECORDED=NO`; token-bearing environment variable names were observed but values were not read or stored |
 
@@ -66,7 +66,8 @@ No suitable single existing owner document was found before creation; existing I
 | `TOP_HWND` | `525948` — `EPHEMERAL_SESSION_FACT` |
 | `ACTIVE_DRAWING_TITLE` | `Autodesk AutoCAD 2027 - [BVTL.dwg]` |
 | `ACTIVE_DRAWING_PATH_IF_PROVEN` | `C:\Users\dkv\Downloads\BVTL.dwg` — proven by process command line; hash read failed because file is locked |
-| `DBMOD_IF_PROVEN` | `UNKNOWN / NOT_VERIFIED` |
+| `DBMOD_IF_PROVEN` | `UNKNOWN / NOT_VERIFIED` in the post-inventory #409/5738282459 snapshot; the earlier `DBMOD=0` proof predates commit `662dda7` and is not reused |
+| `FILEIPC_PING_DRAWING_GET_VARIABLES_CURRENTNESS` | `NOT_RUN` in post-inventory #409/5738282459; the latest post-662 root-census checkpoint intentionally performed no ping or `drawing_get_variables` request. Earlier PASS evidence predates commit `662dda7` and is not reused |
 | `SESSION_STATUS` | AutoCAD process running; no `CadAgent.AutoCAD2027.dll` module observed in the read-only module census |
 | `STARTUP_ARGUMENT` | `D:\Cad agent temp\luna-readonly-lsp-load-20260919.scr`; the path was missing at verification, so its content/loading effect is `UNKNOWN / NOT_VERIFIED` |
 
@@ -82,7 +83,7 @@ Read-only registry census; no setting was changed.
 | `ACAD` support paths | `C:\Users\dkv\AppData\Roaming\Autodesk\AutoCAD 2027\R26.0\enu\support;C:\Program Files\Autodesk\AutoCAD 2027\support;C:\Program Files\Autodesk\AutoCAD 2027\support\en-US;C:\Program Files\Autodesk\AutoCAD 2027\fonts;C:\Program Files\Autodesk\AutoCAD 2027\help;C:\Program Files\Autodesk\AutoCAD 2027\Express` | existing directories confirmed where readable | `ACTIVE` | profile registry read |
 | `XrefLoadPath` / `SaveFilePath` | `C:\Users\dkv\AppData\Local\Temp\` | existing directory | `ACTIVE` | profile registry read |
 | `APPLOAD/STARTUP_RELEVANT_PATHS` | Startup script argument above; referenced `.scr` missing | file `MISSING` | `STALE / UNKNOWN` | WMI command line plus filesystem read |
-| `TRUSTED_DISPATCHER_PATH` | `UNKNOWN / NOT_VERIFIED` | not proven | `UNKNOWN` | no trusted LSP path established |
+| `TRUSTED_DISPATCHER_PATH` | `C:\cad-agent\trusted-dispatcher\mcp_dispatch.lsp` | deployed file; SHA256 equals repo LSP hash | `APPROVED + ACTIVE` | #409/5738282459 exact hash and source/deployed equality; raw-LISP sentinel/root readback |
 
 ## .NET / NETLOAD DLLs
 
@@ -101,10 +102,11 @@ These are on-disk identities only. AutoCAD module evidence did not show a `CadAg
 
 | Role | Path | SHA256 | Source commit | Trust | Currently loaded | Status |
 |---|---|---|---|---|---|---|
-| `REPO_CANONICAL` | `C:\Users\dkv\Downloads\cad-agent-merge\mcp_integration_lib\mcp_dispatch.lsp` | `D80190A1621963E420B8E90566B1F858EEB3775C8FEE86B70352AA6FBE2CB222` | current worktree content; exact source commit not separately proven | repo copy; trusted copy not proven | `UNKNOWN / NOT_VERIFIED` | `CANONICAL + ACTIVE` |
+| `REPO_CANONICAL` | `C:\Users\dkv\Downloads\cad-agent-merge\mcp_integration_lib\mcp_dispatch.lsp` | `D80190A1621963E420B8E90566B1F858EEB3775C8FEE86B70352AA6FBE2CB222` | current worktree content; exact source commit not separately proven | source bytes | `YES` through fresh raw-LISP execution proof #409/5738282459 | `CANONICAL + ACTIVE` |
+| `TRUSTED_RUNTIME_COPY` | `C:\cad-agent\trusted-dispatcher\mcp_dispatch.lsp` | `D80190A1621963E420B8E90566B1F858EEB3775C8FEE86B70352AA6FBE2CB222` | source/deployed equality proven by #409/5738282459 | explicit trust/deployed copy | `YES` through sentinel/content readback; session identity is ephemeral | `APPROVED + ACTIVE` |
 | `DISPOSABLE / TEST` | `D:\Cad agent temp\pytest-of-dkv\...\mcp_dispatch.lsp` and `D:\Cad agent temp\pytest-temp\...\mcp_dispatch.lsp` | mostly zero-byte stubs; one observed 28-byte stub `C2C1477D02BA0AFF369307B768033C5D72E2B71008FE45D268B24D666E5FBAFC` | test-generated | not trusted | `NO / UNKNOWN` | `DISPOSABLE` |
 
-`REPO_LSP_PATH/HASH` is the canonical row above. `TRUSTED_LSP_PATH/HASH=UNKNOWN / NOT_VERIFIED`. `CURRENTLY_LOADED_LSP_IDENTITY=UNKNOWN / NOT_VERIFIED`; the AutoCAD command line referenced a missing `.scr`, which does not prove any LSP load. Hash differences between repo and test stubs are intentional evidence of distinct disposable files, not a repair target.
+`REPO_LSP_PATH/HASH` and `TRUSTED_LSP_PATH/HASH` are the two equal-hash rows above. `CURRENTLY_LOADED_LSP_IDENTITY` is proven for the fresh session by #409/5738282459: the exact trusted LSP expression executed and returned sentinel plus `*cad-agent-file-ipc-root*` content. This proves LSP execution/currentness for that ephemeral session, not a permanent runtime guarantee; later root/timeout evidence remains unresolved. Hash differences between repo and test stubs are intentional evidence of distinct disposable files, not a repair target.
 
 ## FileIPC / DotNet IPC
 
@@ -120,7 +122,7 @@ The defaults are equal (`C:\temp`) but the bindings are not interchangeable. `C:
 
 | Root | Owner / purpose | How bound | Default or explicit | Status | Cleanup policy |
 |---|---|---|---|---|---|
-| `C:\temp` | legacy/default FileIPC and DotNet IPC root | code defaults when env unset | default | `HISTORICAL + ACTIVE-CANDIDATE` | do not clear automatically; inspect request/result ownership first |
+| `C:\temp` | legacy/default FileIPC and DotNet IPC root | code defaults when env unset | default | `HISTORICAL / DEFAULT; active currentness UNKNOWN` | do not clear automatically; inspect request/result ownership first |
 | `D:\Cad agent temp` | disposable build, pytest, live/evidence roots | explicit test/session tooling | explicit | `DISPOSABLE` | no automatic deletion in this task |
 | `C:\Users\dkv\AppData\Local\Temp\cad-agent-r6-204-*` | test/disposable runtime roots | test tooling | explicit | `DISPOSABLE` | no automatic deletion in this task |
 
@@ -142,7 +144,7 @@ Roles below are based on current process evidence, repository/issue evidence, an
 |---|---|---|---|---|---|---|---|
 | `BVTL source/base` | `BASE_PRODUCT_INPUT` | `C:\Users\dkv\Downloads\BVTL.dwg` | `UNKNOWN / NOT_VERIFIED` (locked by AutoCAD) | DWG | active drawing path proven by AutoCAD process; private source outside Git | `SOURCE_MUTATION_ALLOWED=NO` | `APPROVED + ACTIVE` |
 | `BVTL rollback copy` | `HISTORICAL_EVIDENCE` / rollback companion | `C:\Users\dkv\Downloads\BVTL.bak` | `B1C69C435BCAE6774414928AD8143412583016723DE6C6B8F30C9942CD19C01C` | BAK/DWG backup | local timestamp/hash only; not generation authority | preserve; no mutation | `HISTORICAL` |
-| `BVTL modified observation` | `TARGET_OBSERVATION` | `C:\Users\dkv\Downloads\BVTL_raster_A3_sheets.pdf` | `13D822CF828CCCC6CD21B19EC3C410F0EA89AEF440AECA4C96248E86C08B5B38` | PDF | approved private target observation represented by current #291/#409 evidence | read-only observation | `APPROVED + ACTIVE` |
+| `BVTL modified observation` | `TARGET_OBSERVATION` | `C:\Users\dkv\Downloads\BVTL_raster_A3_sheets.pdf` | `13D822CF828CCCC6CD21B19EC3C410F0EA89AEF440AECA4C96248E86C08B5B38` | PDF | canonical GitHub #409 execution-input rule admits modified-vehicle PDF/image; post-inventory #409/5738808062 re-read proves this exact path/hash. It is not admitted from filename alone. | read-only observation | `APPROVED + ACTIVE` |
 | `BVTL page-1 fidelity candidate` | `UNKNOWN` / possible `EVALUATOR_ONLY_GROUND_TRUTH` | `C:\Users\dkv\Downloads\BVTL_raster_A3_page1_fidelity_candidate.dxf` | `BF9984363A6B7B3FECF8FD5F80ED7218765109A64244DB49866B1B84DA5EBC39` | DXF | local artifact; role not proven by current GitHub evidence | `MUST_NOT_BE_USED_FOR_GENERATION=YES` until explicitly admitted | `UNKNOWN` |
 | `BVTL Layout1` | `DISPOSABLE_CANDIDATE` / role not otherwise proven | `C:\Users\dkv\Downloads\BVTL_Layout1.dwg` | `25BE26C53F718D3E14FDD33193B2A69DE8B18CC5B3CEF10873D84D87D5D484F3` | DWG | local candidate; not source authority | no mutation without human gate | `DISPOSABLE` |
 
@@ -155,7 +157,7 @@ For any completed target DXF that is later proven to be evaluator ground truth, 
 | `C:\Users\dkv\Downloads\cad-agent-merge` | repository/worktree | Git | durable | `NO` | `CANONICAL + ACTIVE` |
 | `C:\Users\dkv\Downloads\cad-agent-merge\autocad_plugin\CadAgent.AutoCAD2027\bin\x64\Release\net10.0-windows` | repo build output | .NET build | reproducible but local | `UNKNOWN` | `REPO_BUILD` |
 | `D:\Cad agent temp\cadagent-build`; `D:\Cad agent temp\cadagent-build-ed1db3c` | disposable plugin builds | local build/test | disposable | `UNKNOWN` | `DISPOSABLE` |
-| `C:\temp` | default/legacy IPC and retained evidence root | FileIPC/.NET clients and tests | retained local | `NO` without ownership check | `HISTORICAL + ACTIVE-CANDIDATE` |
+| `C:\temp` | default/legacy IPC and retained evidence root | FileIPC/.NET clients and tests | retained local | `NO` without ownership check | `HISTORICAL / DEFAULT; active currentness UNKNOWN` |
 | `D:\Cad agent temp\pytest-of-dkv`; `D:\Cad agent temp\pytest-temp` | pytest/test IPC/LSP artifacts | tests | disposable/retained for evidence | `UNKNOWN` | `DISPOSABLE` |
 | `C:\temp\artifacts` | retained forensic/evidence artifacts | local evidence workflows | retained | `NO` | `FORENSIC_EVIDENCE` |
 | `C:\Users\dkv\AppData\Local\Temp\cad-agent-r6-204-*` | isolated test roots | tests | disposable | `UNKNOWN` | `DISPOSABLE` |
@@ -194,8 +196,8 @@ repo C:\Users\dkv\Downloads\cad-agent-merge
   -> AutoCAD 2027 PID 21320 (CadAgent DLL not observed; loaded identity UNKNOWN)
 
 repo mcp_integration_lib\mcp_dispatch.lsp
-  -> trusted runtime copy UNKNOWN
-  -> AutoCAD loaded dispatcher UNKNOWN
+  -> trusted runtime copy C:\cad-agent\trusted-dispatcher\mcp_dispatch.lsp (same SHA256)
+  -> fresh raw-LISP execution/currentness proof in AutoCAD PID 21320/HWND 525948
 
 Python FileIPC client
   -> default C:\temp unless CAD_AGENT_FILE_IPC_DIR is explicitly bound
@@ -263,9 +265,13 @@ Do not create a second inventory file.
 
 | Date | Checkpoint / evidence | Result |
 |---|---|---|
+| 2026-09-19 | Fresh GitHub read of `origin/main` and current #409; post-inventory checkpoint #409/5738282459 | trusted/runtime LSP refresh: `C:\cad-agent\trusted-dispatcher\mcp_dispatch.lsp`, source/deployed SHA equality, exact raw-LISP execution and root-content readback PASS |
+| 2026-09-19 | Runtime transition | `inventory snapshot -> trusted LSP refresh -> explicit trust -> fresh runtime load/currentness PASS` |
+| 2026-09-19 | #409/5738282459 session snapshot | PID `21320`, HWND `525948`, active `BVTL.dwg`; PID/HWND are `EPHEMERAL_SESSION_FACT`; no ping/`drawing_get_variables` was run in this post-inventory checkpoint |
+| 2026-09-19 | #409 post-662 root/timeout follow-up | active FileIPC/DotNet root currentness remains `UNKNOWN / NOT_VERIFIED`; later missing-root, timeout, and DotNet module-absence evidence was not promoted to a usable runtime |
 | 2026-09-19 | Fresh GitHub read of `origin/main`, #291, #305, #429 latest corrections, and #409 latest checkpoints | current product/runtime boundary re-established; GitHub treated as canonical |
 | 2026-09-19 | `git status`, branch/HEAD, remote, and worktree census | clean before edit; current branch/head recorded; no unrelated file changes |
-| 2026-09-19 | AutoCAD process, WMI command line, module census, registry profile/trust read | PID/HWND/title/path and trust values recorded; loaded CadAgent DLL/LSP remain unproven |
+| 2026-09-19 | AutoCAD process, WMI command line, module census, registry profile/trust read | PID/HWND/title/path and trust values recorded; loaded CadAgent DLL remains unproven; LSP currentness is separately proven by #409/5738282459 |
 | 2026-09-19 | SHA256 of readable DLL, LSP, BAK, PDF, DXF, and candidate DWG artifacts | hashes recorded above; active BVTL DWG remained locked/unreadable |
 | 2026-09-19 | relevant environment read | IPC overrides unset; bridge token values intentionally not read |
 | 2026-09-19 | `git diff --check` and one-file write-set validation | required before commit; full product/live verification intentionally not run |
