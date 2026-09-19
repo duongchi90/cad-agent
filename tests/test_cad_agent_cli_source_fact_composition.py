@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import json
 from typing import Any
 
 import pytest
@@ -32,6 +33,33 @@ COMPILE_INPUT = {
         "hole_axial_position": "51.59375",
     },
 }
+
+
+def _verified_facts() -> list[dict[str, str]]:
+    facts = (
+        ("fact-001", "diameter_a_mm", "shaft_diameter_a"),
+        ("fact-002", "diameter_b_mm", "shaft_diameter_b"),
+        ("fact-003", "segment_a_mm", "segment_length_a"),
+        ("fact-004", "segment_b_mm", "segment_length_b"),
+        ("fact-005", "hole_diameter_mm", "hole_diameter"),
+        ("fact-006", "hole_position_mm", "hole_axial_position"),
+    )
+    return [
+        {
+            "fact_id": fact_id,
+            "source_key": source_key,
+            "quantity": "length",
+            "unit": "mm",
+            "value": str(COMPILE_INPUT["dimensions_mm"][compile_field]),
+            "source_sha256": SOURCE_SHA256,
+            "source_locator": SOURCE_LOCATOR,
+            "source_identity": SOURCE_IDENTITY,
+            "linked_artifact_sha256": LINKED_ARTIFACT_SHA256,
+            "linked_artifact_locator": LINKED_ARTIFACT_LOCATOR,
+            "linked_artifact_identity": LINKED_ARTIFACT_IDENTITY,
+        }
+        for fact_id, source_key, compile_field in facts
+    ]
 
 
 def _acquisition_context() -> dict[str, object]:
@@ -153,6 +181,10 @@ def _run_composition(
             "source_custody": custody,
             "source_acquisition_binding_sha256": CUSTODY_DIGEST,
             "fact_evidence_sha256": FACT_EVIDENCE_SHA256,
+            "extraction_profile_id": "source-facts-stepped-shaft-v1",
+            "extraction_spec_sha256": "d" * 64,
+            "evidence_basis": "declared_source_facts",
+            "facts": _verified_facts(),
             "compile_input": deepcopy(COMPILE_INPUT),
         }
 
@@ -183,16 +215,37 @@ def _run_composition(
     return result, calls
 
 
-def test_source_fact_composition_fails_closed_without_authoritative_visual_binding(
+def test_source_fact_composition_routes_same_verifier_payload_to_fact_bound_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: dict[str, Any] = {}
-    with pytest.raises(ValueError, match="SOURCE_FACT_COMPOSITION_BINDING"):
-        _run_composition(monkeypatch, calls_sink=calls)
-    assert len(calls["acquire"]) == 1
-    assert calls["acquire"][0] == _acquisition_context()
-    assert len(calls["verify"]) == 1
-    assert len(calls["invoke"]) == 0
+    captured: dict[str, object] = {}
+    original = cli._mechanical_pilot._compile_p1_geometry_plan
+
+    def compile_geometry(dimensions: dict[str, object]) -> dict[str, object]:
+        captured["dimensions_mm"] = deepcopy(dimensions)
+        return original(dimensions)
+
+    monkeypatch.setattr(
+        "cad_agent.mechanical_pilot._compile_p1_geometry_plan",
+        compile_geometry,
+    )
+
+    result, calls = _run_composition(monkeypatch)
+
+    assert captured["dimensions_mm"] == COMPILE_INPUT["dimensions_mm"]
+    assert result["evidence_lane"] == "SOURCE_FACT_BOUND"
+    assert result["proposal_source"] == "verified_source_facts"
+    assert result["source_fact_binding"]["source_sha256"] == SOURCE_SHA256
+    assert result["source_fact_binding"]["linked_artifact_sha256"] == (
+        LINKED_ARTIFACT_SHA256
+    )
+    assert result["source_fact_binding"]["source_custody_sha256"] == CUSTODY_DIGEST
+    assert result["source_fact_binding"]["fact_evidence_sha256"] == FACT_EVIDENCE_SHA256
+    assert "page_index" not in json.dumps(result, sort_keys=True)
+    assert "roi_bbox_px" not in json.dumps(result, sort_keys=True)
+    assert "source_render_sha256" not in json.dumps(result, sort_keys=True)
+    assert "calibration" not in json.dumps(result, sort_keys=True)
+    assert calls["invoke"] == []
 
 
 @pytest.mark.parametrize(
@@ -225,7 +278,7 @@ def test_source_fact_composition_rejects_substituted_verifier_output(
     "field",
     ["page_index", "roi_bbox_px", "source_render_sha256", "calibration"],
 )
-def test_source_fact_composition_rejects_unanchored_visual_binding(
+def test_source_fact_composition_ignores_unanchored_visual_binding(
     monkeypatch: pytest.MonkeyPatch,
     field: str,
 ) -> None:
@@ -242,5 +295,11 @@ def test_source_fact_composition_rejects_unanchored_visual_binding(
         calibration["pixel_to_unit_scale"] = 2.0
         proposal["calibration"] = calibration
 
-    with pytest.raises(ValueError, match="SOURCE_FACT_COMPOSITION_BINDING"):
-        _run_composition(monkeypatch, proposal=proposal)
+    result, calls = _run_composition(monkeypatch, proposal=proposal)
+
+    assert result["evidence_lane"] == "SOURCE_FACT_BOUND"
+    assert "page_index" not in json.dumps(result, sort_keys=True)
+    assert "roi_bbox_px" not in json.dumps(result, sort_keys=True)
+    assert "source_render_sha256" not in json.dumps(result, sort_keys=True)
+    assert "calibration" not in json.dumps(result, sort_keys=True)
+    assert calls["invoke"] == []

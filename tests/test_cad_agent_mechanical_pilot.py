@@ -370,6 +370,61 @@ def _source_bound_proposal() -> dict[str, object]:
     }
 
 
+def _source_fact_bound_evidence() -> dict[str, object]:
+    proposal = _source_bound_proposal()
+    dimensions = deepcopy(proposal["dimensions_mm"])
+    assert isinstance(dimensions, dict)
+    fact_specs = (
+        ("fact-001", "diameter_a_mm", "shaft_diameter_a"),
+        ("fact-002", "diameter_b_mm", "shaft_diameter_b"),
+        ("fact-003", "segment_a_mm", "segment_length_a"),
+        ("fact-004", "segment_b_mm", "segment_length_b"),
+        ("fact-005", "hole_diameter_mm", "hole_diameter"),
+        ("fact-006", "hole_position_mm", "hole_axial_position"),
+    )
+    return {
+        "source_sha256": "1" * 64,
+        "source_locator": "sources/part-001/item.json",
+        "source_identity": "part-001-R1",
+        "linked_artifact_sha256": "2" * 64,
+        "linked_artifact_locator": "sources/part-001/drawing.json",
+        "linked_artifact_identity": "drawing-001-R1",
+        "source_custody_sha256": "3" * 64,
+        "source_acquisition_binding_sha256": "3" * 64,
+        "fact_evidence_sha256": "4" * 64,
+        "extraction_profile_id": "source-facts-stepped-shaft-v1",
+        "extraction_spec_sha256": "5" * 64,
+        "evidence_basis": "declared_source_facts",
+        "profile_id": "simple-stepped-shaft-p1-v1",
+        "dimensions_mm": dimensions,
+        "compile_input": {
+            "profile_id": "simple-stepped-shaft-p1-v1",
+            "dimensions_mm": deepcopy(dimensions),
+        },
+        "facts": [
+            {
+                "fact_id": fact_id,
+                "source_key": source_key,
+                "quantity": "length",
+                "unit": "mm",
+                "value": str(dimensions[compile_field]),
+                "source_sha256": "1" * 64,
+                "source_locator": "sources/part-001/item.json",
+                "source_identity": "part-001-R1",
+                "linked_artifact_sha256": "2" * 64,
+                "linked_artifact_locator": "sources/part-001/drawing.json",
+                "linked_artifact_identity": "drawing-001-R1",
+            }
+            for fact_id, source_key, compile_field in fact_specs
+        ],
+        "evidence_refs": {
+            "source_fact_evidence_sha256": "4" * 64,
+            "source_identity": "part-001-R1",
+            "linked_artifact_identity": "drawing-001-R1",
+        },
+    }
+
+
 def test_primitive_loader_accepts_verified_title_block_scale_calibration(
     tmp_path: Path,
 ) -> None:
@@ -654,6 +709,40 @@ def test_source_bound_external_proposal_compiles_deterministically_without_false
     assert first["feature_contract"]["hole-axial-001"]["kind"] == "hole_feature"
     assert len(first["plan_sha256"]) == 64
     assert "geometry_opencv" not in json.dumps(first, sort_keys=True)
+
+
+def test_p1_geometry_plan_reuses_one_geometry_owner_without_visual_claims() -> None:
+    from cad_agent.mechanical_pilot import (
+        _compile_p1_geometry_plan,
+        compile_source_bound_simple_shaft_proposal,
+    )
+
+    fact_evidence = _source_fact_bound_evidence()
+    source_fact_plan = _compile_p1_geometry_plan(
+        fact_evidence["dimensions_mm"]
+    )
+    visual_plan = compile_source_bound_simple_shaft_proposal(
+        _source_bound_proposal(), expected_binding=_source_bound_binding()
+    )
+
+    assert source_fact_plan["geometry_contract"] == visual_plan["geometry_contract"]
+    assert source_fact_plan["feature_contract"] == visual_plan["feature_contract"]
+    encoded = json.dumps(source_fact_plan, sort_keys=True)
+    assert "page_index" not in encoded
+    assert "roi_bbox_px" not in encoded
+    assert "source_render_sha256" not in encoded
+    assert "calibration" not in encoded
+
+
+def test_source_fact_bound_public_compiler_rejects_unverified_caller_payload() -> None:
+    """A caller must not self-authenticate a source-fact compile projection."""
+
+    import cad_agent.mechanical_pilot as pilot
+
+    fabricated = _source_fact_bound_evidence()
+
+    assert fabricated["facts"]
+    assert getattr(pilot, "compile_source_fact_bound_simple_shaft_proposal", None) is None
 
 
 @pytest.mark.parametrize(
