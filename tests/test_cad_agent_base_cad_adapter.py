@@ -83,6 +83,20 @@ def test_direct_native_binding_accepts_null_source_identity() -> None:
     assert normalized["base_source"] == payload["base_source"]
 
 
+@pytest.mark.causal_red
+def test_named_xref_shape_with_null_identity_is_rejected() -> None:
+    module = _module()
+    payload = _binding()
+    payload["base_source"] = {
+        "source_id": None,
+        "sha256": "4" * 64,
+        "revision": None,
+    }
+
+    with pytest.raises(module.BaseCadAdapterError):
+        module.validate_base_cad_binding(payload)
+
+
 @pytest.mark.parametrize(
     "source_id,revision",
     [(None, "rev-A"), ("base-cad-001", None)],
