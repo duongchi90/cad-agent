@@ -16,7 +16,29 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-## Current canonical snapshot (2026-09-09)
+## Current canonical snapshot (2026-09-20)
+
+- Fresh GitHub `main` is `7b3c6c4b9af7ced91d4dfb758072d7ba1cacffd1`, the
+  merge commit for PR #450. PR #450 merged exact head
+  `dd85761016f6caecf6110a526039eb3a8d7a5af7` after all hosted checks passed.
+- The bounded direct-native exact-base repair is **Verified** locally and live.
+  The repaired AutoCAD plugin was loaded in AutoCAD Mechanical 2027 with PID
+  `6372`, HWND `1705898`, and installed DLL SHA-256
+  `b2fc560e53eee7b4d3d3c5616b86dba41e5683f75280184693bc7ad5c2ad04db`.
+  Live health passed, and the read-only exact-base inspection returned
+  `eligible=true`, `changed=false`, no entity handles, `DBMOD 0 -> 0`, and
+  request id `0000-s3a-inspection-pass2-20260920`.
+- Local verification on the merged candidate recorded .NET Release x64
+  `205 passed`, offline Python `3330 passed`, `72` subtests, and
+  `scripts/verify.ps1` completed with `All checks passed!`. The live evidence
+  used `C:\Users\dkv\Downloads\BVTL.dwg` with SHA-256
+  `74f2367e0b74314c3f48c955da2bd2e25dcbcb7e2522e9de92ae3e6dfdd7b5cd`.
+  No CAD/source drawing mutation, save, or target-DXF generation was performed.
+- Live private-data and broader AutoCAD/FileIPC gates not covered by this
+  bounded read-only inspection remain **NOT RUN**; no release claim is made.
+  PR #447 remains open, unmerged, and frozen.
+
+## Previous canonical snapshot (2026-09-09)
 
 - Fresh GitHub `main` is `2d320361e2146d0602aac6f226f5bffed5f931a5`.
   The drawing-setup expectation-policy candidate is tracked by open PR #422
