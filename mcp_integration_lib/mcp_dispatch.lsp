@@ -1101,6 +1101,33 @@
             )
           )
         )
+        ((= entity-type "DIMENSION")
+          (setq pairs
+            (append
+              pairs
+              (if (assoc 10 data)
+                (list (cons "dxf_group_10" (mcp-array (cdr (assoc 10 data)))))
+                nil
+              )
+              (if (assoc 11 data)
+                (list (cons "dxf_group_11" (mcp-array (cdr (assoc 11 data)))))
+                nil
+              )
+              (if (assoc 13 data)
+                (list (cons "dxf_group_13" (mcp-array (cdr (assoc 13 data)))))
+                nil
+              )
+              (if (assoc 14 data)
+                (list (cons "dxf_group_14" (mcp-array (cdr (assoc 14 data)))))
+                nil
+              )
+              (if (assoc 42 data)
+                (list (cons "measurement" (cdr (assoc 42 data))))
+                nil
+              )
+            )
+          )
+        )
         ((member entity-type '("TEXT" "MTEXT"))
           (setq pairs
             (append pairs

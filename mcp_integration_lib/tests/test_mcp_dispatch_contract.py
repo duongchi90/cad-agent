@@ -181,6 +181,25 @@ def test_entity_get_source_exposes_text_height_and_rotation() -> None:
     assert '(cons "rotation_deg" (mcp-angle-degrees (cdr (assoc 50 data))))' in source
 
 
+def test_entity_get_dimension_exposes_present_native_dxf_points_and_measurement() -> None:
+    source = _dispatcher_source()
+    assert '(= entity-type "DIMENSION")' in source
+    dimension_start = source.index('(= entity-type "DIMENSION")')
+    dimension_body = source[
+        dimension_start : source.index('(mcp-object pairs)', dimension_start)
+    ]
+
+    for code in (10, 11, 13, 14):
+        assert f'(if (assoc {code} data)' in dimension_body
+        assert (
+            f'(cons "dxf_group_{code}" (mcp-array (cdr (assoc {code} data))))'
+            in dimension_body
+        )
+
+    assert '(if (assoc 42 data)' in dimension_body
+    assert '(cons "measurement" (cdr (assoc 42 data)))' in dimension_body
+
+
 def test_dispatcher_serializes_real_numbers_with_round_trip_precision() -> None:
     source = _dispatcher_source()
     helper_start = source.index("(defun mcp-json-normalize-real-text")
