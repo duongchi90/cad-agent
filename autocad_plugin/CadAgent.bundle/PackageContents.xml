@@ -8,9 +8,9 @@
                     FriendlyVersion="0.0.0"
                     Description="CadAgent for AutoCAD Mechanical 2027"
                     Author="cad-agent">
-  <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+  <RuntimeRequirements OS="Win64" Platform="ACADM" SeriesMin="R26.0" SeriesMax="R26.0" />
   <Components Description="AutoCAD Mechanical 2027">
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+    <RuntimeRequirements OS="Win64" Platform="ACADM" SeriesMin="R26.0" SeriesMax="R26.0" />
     <ComponentEntry AppName="CadAgent.AutoCAD2027"
                     Version="0.0.0"
                     ModuleName="./Contents/Windows/CadAgent.AutoCAD2027.dll"

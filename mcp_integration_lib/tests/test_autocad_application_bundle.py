@@ -40,7 +40,7 @@ def test_autocad2027_bundle_loads_the_existing_plugin_on_dispatch() -> None:
     assert runtime is not None
     assert runtime.attrib == {
         "OS": "Win64",
-        "Platform": "AutoCAD*",
+        "Platform": "ACADM",
         "SeriesMin": "R26.0",
         "SeriesMax": "R26.0",
     }
