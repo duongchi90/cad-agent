@@ -1777,38 +1777,44 @@ class DotNetIPCClient:
             for item in inspection["identity_observations"]
         }
         direct_native_base = inspection["xref"] is None
-        return {
+        expectations = {
             "source": {
                 "source_id": None if direct_native_base else inspection["base_source"]["source_id"],
                 "revision": None if direct_native_base else inspection["base_source"]["revision"],
                 "sha256": inspection["base_source"]["sha256"],
             },
-            "identity": identity,
-            "critical_dimensions": [
-                {
-                    "control": item["control"],
-                    "target": item["target"],
-                    "tolerance": item["tolerance"],
-                    "unit": item["unit"],
-                }
-                for item in inspection["critical_dimensions"]
-            ],
             "xref": None if direct_native_base else {"name": inspection["xref"]["name"]},
-            "components": [
-                {
-                    key: component[key]
-                    for key in (
-                        "component_type",
-                        "logical_component_id",
-                        "provenance",
-                        "source_block",
-                        "source_handle",
-                        "source_layer",
-                    )
-                }
-                for component in inspection["components"]
-            ],
         }
+        if not direct_native_base:
+            expectations.update(
+                {
+                    "identity": identity,
+                    "critical_dimensions": [
+                        {
+                            "control": item["control"],
+                            "target": item["target"],
+                            "tolerance": item["tolerance"],
+                            "unit": item["unit"],
+                        }
+                        for item in inspection["critical_dimensions"]
+                    ],
+                    "components": [
+                        {
+                            key: component[key]
+                            for key in (
+                                "component_type",
+                                "logical_component_id",
+                                "provenance",
+                                "source_block",
+                                "source_handle",
+                                "source_layer",
+                            )
+                        }
+                        for component in inspection["components"]
+                    ],
+                }
+            )
+        return expectations
 
     @staticmethod
     def _resolve_xref_identity(

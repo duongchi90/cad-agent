@@ -36,6 +36,8 @@ public sealed class OperationDispatcherTests
             Assert.Empty(result.Errors!);
             Assert.Equal(1, gateway.ReadExactBaseXrefInspectionCallCount);
             Assert.Equal("exact-base-xref-inspection-1.0", result.Payload!["schema_version"].GetString());
+            Assert.Equal(fixture.Request.RequestId, result.Payload["request_id"].GetString());
+            Assert.Equal("2026-08-01T12:00:00.000000Z", result.Payload["capture_timestamp"].GetString());
             Assert.False(result.Payload["changed"].GetBoolean());
             Assert.True(result.Payload["eligible"].GetBoolean());
         }

@@ -396,6 +396,7 @@ public sealed class ExactBaseXrefPolicy
         }
         var baseParameters = new ExactBaseXrefInspectionParameters
         {
+            RequestId = request.RequestId,
             RunId = RequiredIdentifier(parameters, "run_id"),
             SourceFullPath = RequiredAbsolutePath(parameters, "source_full_path"),
             SourceRevision = inspectionExpectations.Xref is null

@@ -509,9 +509,9 @@ class DotNetIPCClientTests(unittest.TestCase):
         self.assertIsNone(parameters["inspection_expectations"]["xref"])
         self.assertIsNone(parameters["inspection_expectations"]["source"]["source_id"])
         self.assertEqual("a" * 64, parameters["inspection_expectations"]["source"]["sha256"])
-        self.assertEqual({}, parameters["inspection_expectations"]["identity"])
-        self.assertEqual([], parameters["inspection_expectations"]["critical_dimensions"])
-        self.assertEqual([], parameters["inspection_expectations"]["components"])
+        self.assertNotIn("identity", parameters["inspection_expectations"])
+        self.assertNotIn("critical_dimensions", parameters["inspection_expectations"])
+        self.assertNotIn("components", parameters["inspection_expectations"])
         self.assertEqual([], result["entity_handles"])
 
     def test_fallback_result_surfaces_server_error_before_operation_mismatch(self) -> None:
