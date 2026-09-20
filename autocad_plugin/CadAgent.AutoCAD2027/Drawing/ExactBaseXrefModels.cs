@@ -212,6 +212,9 @@ public sealed class ExactBaseXrefExtractionPlan
 
 public class ExactBaseXrefInspectionParameters
 {
+    [JsonIgnore]
+    public string? RequestId { get; init; }
+
     [JsonPropertyName("run_id")]
     public string? RunId { get; init; }
 

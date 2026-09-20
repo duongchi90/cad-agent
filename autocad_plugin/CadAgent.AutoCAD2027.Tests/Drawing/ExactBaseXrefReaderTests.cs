@@ -44,7 +44,8 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
     public void InspectsOnlyNamedExternalXrefAndReturnsReadOnlyResult()
     {
         var database = new FakeExactBaseXrefDatabase(_targetPath, _sourcePath, TargetHash, SourceHash);
-        var result = CreateReader(database).Read(Request());
+        var request = Request();
+        var result = CreateReader(database).Read(request);
 
         Assert.True(result.Success);
         Assert.Equal(_targetPath, result.DrawingFullPath);
@@ -52,6 +53,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         Assert.Empty(result.EntityHandles);
         Assert.NotNull(result.Evidence);
         Assert.True(result.Evidence!.Eligible);
+        Assert.Equal(request.RequestId, result.Evidence.RequestId);
         Assert.Equal("vehicle-001", result.Evidence.IdentityObservations![0].Observed);
         Assert.Equal(1, database.NamedXrefReadCount);
         Assert.Equal(0, database.ModelSpaceScanCount);
@@ -338,6 +340,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         var inspection = Request();
         return new ExactBaseXrefExtractionParameters
         {
+            RequestId = inspection.RequestId,
             RunId = inspection.RunId,
             SourceFullPath = inspection.SourceFullPath,
             SourceRevision = inspection.SourceRevision,
@@ -395,6 +398,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
 
     private ExactBaseXrefInspectionParameters Request(bool directNativeBase = false) => new()
     {
+        RequestId = "xref-inspection-request-001",
         RunId = "run-001",
         SourceFullPath = _sourcePath,
         SourceRevision = directNativeBase ? null : "rev-2026-08-05-01",

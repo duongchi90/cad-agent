@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
@@ -369,10 +370,23 @@ public sealed class OperationDispatcher
 
     private static Dictionary<string, JsonElement> SerializeInspectionEvidence(
         ExactBaseXrefLiveInspection evidence) =>
-        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-            JsonSerializer.Serialize(evidence, ContractJson.Options),
-            ContractJson.Options)
-        ?? throw new InvalidOperationException("exact-base inspection evidence could not be serialized");
+        NormalizeInspectionEvidenceTimestamp(
+            JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                JsonSerializer.Serialize(evidence, ContractJson.Options),
+                ContractJson.Options)
+            ?? throw new InvalidOperationException("exact-base inspection evidence could not be serialized"),
+            evidence.CaptureTimestamp);
+
+    private static Dictionary<string, JsonElement> NormalizeInspectionEvidenceTimestamp(
+        Dictionary<string, JsonElement> payload,
+        DateTimeOffset captureTimestamp)
+    {
+        payload["capture_timestamp"] = JsonSerializer.SerializeToElement(
+            captureTimestamp.ToUniversalTime().ToString(
+                "yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'",
+                CultureInfo.InvariantCulture));
+        return payload;
+    }
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
         IReadOnlyList<MechanicalComponentSnapshot> components) =>

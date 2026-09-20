@@ -870,7 +870,7 @@ public sealed class AutoCadExactBaseXrefReader
             CriticalDimensions = dimensions,
             IdentityObservations = identity,
             InspectionId = "inspection-" + Guid.NewGuid().ToString("N"),
-            RequestId = "reader-" + Guid.NewGuid().ToString("N"),
+            RequestId = request.RequestId,
             RunId = request.RunId,
             TargetDrawingSha256 = targetHash,
             Warnings = new List<string>(),
