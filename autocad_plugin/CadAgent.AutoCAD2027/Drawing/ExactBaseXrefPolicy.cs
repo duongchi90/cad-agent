@@ -149,13 +149,24 @@ public sealed class ExactBaseXrefPolicy
     public ExactBaseXrefInspectionParameters ValidateInspectionRequest(IpcRequest request)
     {
         var parameters = ParseInspectionParameters(request, extraction: false);
-        EnsureConfigured();
+        var directNativeBase = parameters.InspectionExpectations!.Xref is null;
+        if (directNativeBase)
+        {
+            EnsureDirectNativeConfigured();
+        }
+        else
+        {
+            EnsureConfigured();
+        }
         EnsureSourceMatchesConfiguration(parameters.SourceFullPath, parameters.SourceRevision, parameters.InspectionExpectations!);
-        if (parameters.InspectionExpectations!.Xref is null)
+        if (directNativeBase)
         {
             EnsureDirectNativeDrawingMatchesSource(request.DrawingFullPath, parameters.SourceFullPath);
         }
-        EnsureTargetHash(request, allowAcceptedTarget: true);
+        EnsureTargetHash(
+            request,
+            allowAcceptedTarget: true,
+            directNativeSourceHash: directNativeBase ? parameters.InspectionExpectations.Source!.Sha256 : null);
         return parameters;
     }
 
@@ -198,7 +209,9 @@ public sealed class ExactBaseXrefPolicy
         }
         var directNativeBase = request.InspectionExpectations!.Xref is null;
         if (evidence.BaseSource is null
-            || evidence.BaseSource.Sha256 != _configuration.ExactBaseSourceSha256
+            || evidence.BaseSource.Sha256 != (directNativeBase
+                ? request.InspectionExpectations.Source!.Sha256
+                : _configuration.ExactBaseSourceSha256)
             || (!directNativeBase
                 && (evidence.BaseSource.SourceId != request.InspectionExpectations.Source!.SourceId
                     || evidence.BaseSource.Revision != _configuration.ExactBaseSourceRevision)))
@@ -827,6 +840,11 @@ public sealed class ExactBaseXrefPolicy
                 "source hash does not match the server-configured source hash");
         }
 
+        if (directNativeBase)
+        {
+            return;
+        }
+
         var accepted = EnsureExistingCanonicalFile(
             _configuration.AcceptedDwgPath,
             AcceptedAliasCode,
@@ -836,12 +854,6 @@ public sealed class ExactBaseXrefPolicy
             throw new ExactBaseXrefPolicyException(
                 SourceAliasCode,
                 "configured source and accepted DWG resolve to the same file identity");
-        }
-        if (directNativeBase && !SameFile(configuredSource, accepted))
-        {
-            throw new ExactBaseXrefPolicyException(
-                ActiveDocumentMismatchCode,
-                "direct-native source and accepted DWG must resolve to the same file identity");
         }
     }
 
@@ -863,13 +875,28 @@ public sealed class ExactBaseXrefPolicy
         }
     }
 
-    private void EnsureTargetHash(IpcRequest request, bool allowAcceptedTarget)
+    private void EnsureTargetHash(
+        IpcRequest request,
+        bool allowAcceptedTarget,
+        string? directNativeSourceHash = null)
     {
         if (request.DrawingSha256 is null || !HashPattern.IsMatch(request.DrawingSha256))
         {
             throw new ExactBaseXrefPolicyException(
                 RequestInvalidCode,
                 "drawing_sha256 must be a lowercase SHA-256");
+        }
+
+        if (directNativeSourceHash is not null)
+        {
+            if (!string.Equals(request.DrawingSha256, directNativeSourceHash, StringComparison.Ordinal))
+            {
+                throw new ExactBaseXrefPolicyException(
+                    SourceHashMismatchCode,
+                    "direct-native active drawing hash does not match the bound source hash");
+            }
+
+            return;
         }
 
         var accepted = EnsureExistingCanonicalFile(
@@ -960,6 +987,31 @@ public sealed class ExactBaseXrefPolicy
             throw new ExactBaseXrefPolicyException(
                 ConfigurationRequiredCode,
                 string.Join(", ", ConfigurationErrors));
+        }
+    }
+
+    private void EnsureDirectNativeConfigured()
+    {
+        var errors = new List<string>();
+        if (string.IsNullOrWhiteSpace(_configuration.ExactBaseSourcePath))
+        {
+            errors.Add("exact-base source path is missing");
+        }
+        else if (!ContractValidator.TryNormalizeWindowsAbsolutePath(_configuration.ExactBaseSourcePath, out _))
+        {
+            errors.Add("exact-base source path is invalid");
+        }
+
+        if (!HashPattern.IsMatch(_configuration.ExactBaseSourceSha256 ?? string.Empty))
+        {
+            errors.Add("exact-base source hash is invalid");
+        }
+
+        if (errors.Count != 0)
+        {
+            throw new ExactBaseXrefPolicyException(
+                ConfigurationRequiredCode,
+                string.Join(", ", errors));
         }
     }
 

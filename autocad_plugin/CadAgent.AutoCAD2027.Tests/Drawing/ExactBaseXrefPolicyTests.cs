@@ -97,6 +97,105 @@ public sealed class ExactBaseXrefPolicyTests : IDisposable
     }
 
     [Fact]
+    public void AcceptsDirectNativeInspectionWithSourceBindingOnly()
+    {
+        var parameters = InspectionRequest().Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters.Remove("source_revision");
+
+        var expectations = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            parameters["inspection_expectations"].GetRawText())!;
+        expectations["source"] = JsonSerializer.SerializeToElement(new
+        {
+            source_id = (string?)null,
+            revision = (string?)null,
+            sha256 = new string('a', 64)
+        });
+        expectations.Remove("identity");
+        expectations.Remove("critical_dimensions");
+        expectations["xref"] = JsonSerializer.SerializeToElement<object?>(null);
+        expectations.Remove("components");
+        parameters["inspection_expectations"] = JsonSerializer.SerializeToElement(expectations);
+
+        var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            null,
+            null,
+            null,
+            _sourcePath,
+            new string('a', 64),
+            null));
+        var result = directPolicy.ValidateInspectionRequest(
+            InspectionRequest() with
+            {
+                DrawingFullPath = _sourcePath,
+                DrawingSha256 = new string('a', 64),
+                Parameters = parameters
+            });
+
+        Assert.Equal(_sourcePath, result.SourceFullPath);
+        Assert.Equal(new string('a', 64), result.InspectionExpectations!.Source!.Sha256);
+        Assert.Null(result.SourceRevision);
+        Assert.Null(result.InspectionExpectations.Xref);
+    }
+
+    [Fact]
+    public void RejectsDirectNativeInspectionWhenTargetHashDiffersFromSourceBinding()
+    {
+        var parameters = InspectionRequest().Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters.Remove("source_revision");
+
+        var expectations = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            parameters["inspection_expectations"].GetRawText())!;
+        expectations["source"] = JsonSerializer.SerializeToElement(new
+        {
+            source_id = (string?)null,
+            revision = (string?)null,
+            sha256 = new string('a', 64)
+        });
+        expectations.Remove("identity");
+        expectations.Remove("critical_dimensions");
+        expectations["xref"] = JsonSerializer.SerializeToElement<object?>(null);
+        expectations.Remove("components");
+        parameters["inspection_expectations"] = JsonSerializer.SerializeToElement(expectations);
+
+        var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            null,
+            null,
+            null,
+            _sourcePath,
+            new string('a', 64),
+            null));
+        var error = Assert.Throws<ExactBaseXrefPolicyException>(() =>
+            directPolicy.ValidateInspectionRequest(
+                InspectionRequest() with
+                {
+                    DrawingFullPath = _sourcePath,
+                    DrawingSha256 = new string('b', 64),
+                    Parameters = parameters
+                }));
+
+        Assert.Equal(ExactBaseXrefPolicy.SourceHashMismatchCode, error.Code);
+    }
+
+    [Fact]
+    public void KeepsNamedXrefInspectionFailClosedWithoutFullS3BConfiguration()
+    {
+        var sourceOnlyPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            null,
+            null,
+            null,
+            _sourcePath,
+            new string('a', 64),
+            null));
+
+        var error = Assert.Throws<ExactBaseXrefPolicyException>(() =>
+            sourceOnlyPolicy.ValidateInspectionRequest(InspectionRequest()));
+
+        Assert.Equal(ExactBaseXrefPolicy.ConfigurationRequiredCode, error.Code);
+    }
+
+    [Fact]
     public void RejectsDirectNativeBaseWhenActiveDrawingDiffersFromBoundSource()
     {
         var parameters = InspectionRequest().Parameters!

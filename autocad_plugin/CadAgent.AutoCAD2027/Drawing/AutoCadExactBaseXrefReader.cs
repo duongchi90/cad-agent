@@ -524,21 +524,28 @@ public sealed class AutoCadExactBaseXrefReader
         {
             activePath = CanonicalActivePath(_database.ActiveDocumentFullPath);
             var configuration = _policy.Configuration;
+            var directNativeBase = request.InspectionExpectations?.Xref is null;
             var errors = new List<string>();
-            if (!_policy.IsConfigured)
+            if (!_policy.IsConfigured && !directNativeBase)
             {
                 errors.AddRange(_policy.ConfigurationErrors);
             }
 
-            if (requireAcceptedTarget && !SamePath(activePath, configuration.AcceptedDwgPath))
+            if (requireAcceptedTarget
+                && !SamePath(activePath, directNativeBase ? request.SourceFullPath : configuration.AcceptedDwgPath))
             {
-                errors.Add("S3B_ACTIVE_DOCUMENT_MISMATCH: active drawing is not the server-owned accepted DWG");
+                errors.Add(directNativeBase
+                    ? "S3B_ACTIVE_DOCUMENT_MISMATCH: active drawing is not the bound direct-native source"
+                    : "S3B_ACTIVE_DOCUMENT_MISMATCH: active drawing is not the server-owned accepted DWG");
             }
 
-            var sourcePath = configuration.ExactBaseSourcePath
+            var sourcePath = (directNativeBase ? request.SourceFullPath : configuration.ExactBaseSourcePath)
                 ?? throw new ExactBaseXrefPolicyException(
                     ExactBaseXrefPolicy.ConfigurationRequiredCode,
                     "exact-base source path is missing");
+            var expectedSourceHash = directNativeBase
+                ? request.InspectionExpectations!.Source!.Sha256
+                : configuration.ExactBaseSourceSha256;
             var sourceHashBefore = _database.ComputeSha256(sourcePath);
             var targetHashBefore = _database.ComputeSha256(activePath);
             var dbmodBefore = _database.ReadDbmod();
@@ -549,7 +556,7 @@ public sealed class AutoCadExactBaseXrefReader
             var dbmodAfter = _database.ReadDbmod();
 
             if (!string.Equals(sourceHashBefore, sourceHashAfter, StringComparison.Ordinal)
-                || !string.Equals(sourceHashBefore, configuration.ExactBaseSourceSha256, StringComparison.Ordinal))
+                || !string.Equals(sourceHashBefore, expectedSourceHash, StringComparison.Ordinal))
             {
                 errors.Add("S3B_SOURCE_HASH_MISMATCH: source hash was not stable or did not match server configuration");
             }
@@ -571,6 +578,7 @@ public sealed class AutoCadExactBaseXrefReader
             }
 
             if (requireAcceptedTarget
+                && !directNativeBase
                 && !string.Equals(targetHashBefore, configuration.AcceptedDwgSha256, StringComparison.Ordinal))
             {
                 errors.Add("S3B_TARGET_HASH_MISMATCH: target DWG hash did not match server configuration");
@@ -854,7 +862,7 @@ public sealed class AutoCadExactBaseXrefReader
         {
             BaseSource = new ExactBaseXrefPlanSource
             {
-                RelativePath = Path.GetFileName(_policy.Configuration.ExactBaseSourcePath),
+                RelativePath = Path.GetFileName(directNativeBase ? request.SourceFullPath : _policy.Configuration.ExactBaseSourcePath),
                 Revision = directNativeBase ? null : _policy.Configuration.ExactBaseSourceRevision,
                 Sha256 = sourceHashBefore,
                 SourceId = directNativeBase ? null : expectations.Source?.SourceId
