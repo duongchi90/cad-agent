@@ -514,6 +514,52 @@ class DotNetIPCClientTests(unittest.TestCase):
         self.assertEqual([], parameters["inspection_expectations"]["components"])
         self.assertEqual([], result["entity_handles"])
 
+    def test_fallback_result_surfaces_server_error_before_operation_mismatch(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["base_source"]["source_id"] = None
+        inspection["base_source"]["revision"] = None
+        inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
+        inspection["request_id"] = "causal-red-20260920-001"
+        inspection["run_id"] = "causal-red-run-001"
+        request_id = "causal-red-20260920-001"
+        drawing_path = r"C:\approved\BVTL.dwg"
+        sentinel = "sentinel-read-request-failure"
+
+        with TemporaryDirectory(prefix="dotnet-causal-red-", dir=r"D:\Cad agent temp") as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob(f"{dotnet_ipc.REQUEST_PREFIX}*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                fallback = _result(request)
+                fallback["success"] = False
+                fallback["operation"] = "health"
+                fallback["errors"] = [sentinel]
+                atomic_write_json(result_path(ipc_dir, request_id), fallback)
+
+            client = DotNetIPCClient(
+                ipc_dir=ipc_dir,
+                trigger=trigger,
+                request_id_factory=lambda: request_id,
+            )
+            with self.assertRaises(DotNetIPCResultError) as raised:
+                client.exact_base_xref_inspection(
+                    drawing_path,
+                    drawing_sha256="b" * 64,
+                    source_full_path=drawing_path,
+                    inspection=inspection,
+                    request_id=request_id,
+                )
+
+            self.assertEqual(sentinel, str(raised.exception))
+            self.assertEqual("health", raised.exception.result["operation"])
+            self.assertFalse(request_path(ipc_dir, request_id).exists())
+            self.assertFalse(result_path(ipc_dir, request_id).exists())
+
     def test_direct_native_base_rejects_distinct_active_drawing(self) -> None:
         fixture = _exact_base_fixture()
         inspection = copy.deepcopy(fixture["inspection"])

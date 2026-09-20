@@ -2297,6 +2297,14 @@ class DotNetIPCClient:
         if type(result["success"]) is not bool:
             raise DotNetIPCProtocolError("result success must be a boolean")
         if result["operation"] != operation:
+            errors = result.get("errors")
+            if (
+                result["success"] is False
+                and isinstance(errors, list)
+                and errors
+                and all(isinstance(error, str) for error in errors)
+            ):
+                raise DotNetIPCResultError("; ".join(errors), result=result)
             raise DotNetIPCProtocolError("result operation does not match the request")
         if result["drawing_full_path"] is not None:
             try:
