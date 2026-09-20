@@ -11,7 +11,7 @@ from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.source_fusion_proposal import compile_external_visual_object_proposal
 from cad_agent.source_support_verifier import verify_external_visual_proposal_source_support
 from cad_agent.source_verified_geometry import materialize_verified_external_visual_lines
-from primitive_ir_lib.models import Calibration, LineGeometry
+from primitive_ir_lib.models import Calibration, CircleGeometry, LineGeometry
 
 
 def _verified_case() -> tuple[dict[str, object], dict[str, object], bytes]:
@@ -67,6 +67,52 @@ def _calibration(source_sha256: str = "1" * 64) -> Calibration:
     )
 
 
+def _verified_circle_case() -> tuple[dict[str, object], dict[str, object], bytes]:
+    image = Image.new("L", (64, 64), 255)
+    ImageDraw.Draw(image).ellipse((22, 22, 42, 42), outline=0, width=1)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    render_bytes = stream.getvalue()
+    binding = {
+        "source_sha256": "1" * 64,
+        "page_index": 0,
+        "source_render_sha256": hashlib.sha256(render_bytes).hexdigest(),
+        "roi_bbox_px": [0, 0, 63, 63],
+    }
+    proposal = {
+        "schema_version": "external-visual-object-proposal-1.0",
+        "proposal_source": "external_ai",
+        **binding,
+        "view_role_proposal": "FRONT",
+        "primitive_hypotheses": [
+            {
+                "id": "hole-1",
+                "type": "CIRCLE",
+                "center_px": [32, 32],
+                "radius_px": 10.0,
+            }
+        ],
+        "object_groups": [
+            {
+                "group_id": "hole-group",
+                "proposed_label": "UNKNOWN_HOLE",
+                "primitive_hypothesis_ids": ["hole-1"],
+            }
+        ],
+        "excluded_memberships": [],
+    }
+    request = compile_external_visual_object_proposal(
+        proposal=proposal,
+        expected_binding=binding,
+        expected_calibration_binding=_calibration().to_dict(),
+    )
+    result = verify_external_visual_proposal_source_support(
+        verification_request=request,
+        source_render_bytes=render_bytes,
+    )
+    return request, result, render_bytes
+
+
 def test_verified_external_line_materializes_truthful_source_bound_primitive_ir() -> None:
     request, result, render_bytes = _verified_case()
 
@@ -93,6 +139,75 @@ def test_verified_external_line_materializes_truthful_source_bound_primitive_ir(
     assert primitive.geometry.end.y == 108.0
     assert primitive.trace.verification_request_sha256 == request["verification_request_sha256"]
     assert primitive.trace.verification_result_sha256 == canonical_json_sha256(result)
+
+
+def test_verified_external_circle_materializes_truthful_source_bound_primitive_ir() -> None:
+    request, result, render_bytes = _verified_circle_case()
+
+    doc = materialize_verified_external_visual_lines(
+        verification_request=request,
+        verification_result=result,
+        source_render_bytes=render_bytes,
+        calibration=_calibration(),
+        source_file_name="source.png",
+        image_width_px=64,
+        image_height_px=64,
+    )
+
+    assert len(doc.primitives) == 1
+    primitive = doc.primitives[0]
+    assert primitive.id == "hole-1"
+    assert primitive.source == "geometry_external_ai"
+    assert isinstance(primitive.geometry, CircleGeometry)
+    assert primitive.geometry.center.x == 64.0
+    assert primitive.geometry.center.y == 64.0
+    assert primitive.geometry.radius == 20.0
+    assert primitive.trace.verification_request_sha256 == request["verification_request_sha256"]
+    assert primitive.trace.verification_result_sha256 == canonical_json_sha256(result)
+
+
+def test_circle_admission_rejects_tampered_verification_result() -> None:
+    request, result, render_bytes = _verified_circle_case()
+    tampered = copy.deepcopy(result)
+    support = tampered["primitive_support"]
+    assert isinstance(support, list)
+    assert isinstance(support[0], dict)
+    support[0]["support_fraction"] = 0.1
+
+    with pytest.raises(ValueError, match="SOURCE_SUPPORT_RESULT_MISMATCH"):
+        materialize_verified_external_visual_lines(
+            verification_request=request,
+            verification_result=tampered,
+            source_render_bytes=render_bytes,
+            calibration=_calibration(),
+            source_file_name="source.png",
+            image_width_px=64,
+            image_height_px=64,
+        )
+
+
+def test_circle_admission_rejects_same_source_with_tampered_calibration() -> None:
+    request, result, render_bytes = _verified_circle_case()
+    tampered = Calibration(
+        unit="mm",
+        pixel_to_unit_scale=3.0,
+        origin_px=(7.0, 59.0),
+        method="manual_override",
+        reference_note="same source, different transform",
+        status="verified",
+        source_sha256="1" * 64,
+    )
+
+    with pytest.raises(ValueError, match="EXTERNAL_GEOMETRY_CALIBRATION_IDENTITY_MISMATCH"):
+        materialize_verified_external_visual_lines(
+            verification_request=request,
+            verification_result=result,
+            source_render_bytes=render_bytes,
+            calibration=tampered,
+            source_file_name="source.png",
+            image_width_px=64,
+            image_height_px=64,
+        )
 
 
 def test_admission_rejects_caller_tampered_verification_result() -> None:

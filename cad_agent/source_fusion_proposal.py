@@ -37,7 +37,8 @@ _PROPOSAL_FIELDS = {
     "object_groups",
     "excluded_memberships",
 }
-_PRIMITIVE_FIELDS = {"id", "type", "start_px", "end_px"}
+_LINE_PRIMITIVE_FIELDS = {"id", "type", "start_px", "end_px"}
+_CIRCLE_PRIMITIVE_FIELDS = {"id", "type", "center_px", "radius_px"}
 _GROUP_FIELDS = {"group_id", "proposed_label", "primitive_hypothesis_ids"}
 _GROUP_FIELDS_WITH_TOPOLOGY = {*_GROUP_FIELDS, "topology_hypothesis"}
 _TOPOLOGY_FIELDS = {
@@ -182,23 +183,71 @@ def _primitives(value: object, *, roi: list[int]) -> list[dict[str, object]]:
     normalized: list[dict[str, object]] = []
     seen_ids: set[str] = set()
     for raw in value:
-        record = _closed(raw, _PRIMITIVE_FIELDS, "PRIMITIVE_HYPOTHESIS_INVALID")
+        if not isinstance(raw, _Mapping):
+            _fail("PRIMITIVE_HYPOTHESIS_INVALID")
+        fields = set(raw)
+        if fields == _LINE_PRIMITIVE_FIELDS:
+            record = _closed(raw, _LINE_PRIMITIVE_FIELDS, "PRIMITIVE_HYPOTHESIS_INVALID")
+        elif fields == _CIRCLE_PRIMITIVE_FIELDS:
+            record = _closed(raw, _CIRCLE_PRIMITIVE_FIELDS, "PRIMITIVE_HYPOTHESIS_INVALID")
+        else:
+            _fail("PRIMITIVE_HYPOTHESIS_INVALID")
         primitive_id = _identifier(record["id"], "PRIMITIVE_HYPOTHESIS_INVALID")
         if primitive_id in seen_ids:
             _fail("DUPLICATE_PRIMITIVE_HYPOTHESIS")
         seen_ids.add(primitive_id)
-        if record["type"] != "LINE":
+        if fields == _LINE_PRIMITIVE_FIELDS and record["type"] == "LINE":
+            start = _point(record["start_px"], roi=roi)
+            end = _point(record["end_px"], roi=roi)
+            if start == end:
+                _fail("PRIMITIVE_HYPOTHESIS_INVALID")
+            normalized.append(
+                {
+                    "id": primitive_id,
+                    "type": "LINE",
+                    "start_px": start,
+                    "end_px": end,
+                }
+            )
+            continue
+
+        if fields != _CIRCLE_PRIMITIVE_FIELDS or record["type"] != "CIRCLE":
             _fail("PRIMITIVE_HYPOTHESIS_INVALID")
-        start = _point(record["start_px"], roi=roi)
-        end = _point(record["end_px"], roi=roi)
-        if start == end:
+        center_value = record["center_px"]
+        if not isinstance(center_value, list) or len(center_value) != 2:
             _fail("PRIMITIVE_HYPOTHESIS_INVALID")
+        center: list[float] = []
+        for item in center_value:
+            if (
+                isinstance(item, bool)
+                or not isinstance(item, (int, float))
+                or not _math.isfinite(float(item))
+            ):
+                _fail("PRIMITIVE_HYPOTHESIS_INVALID")
+            center.append(float(item))
+        radius_value = record["radius_px"]
+        if (
+            isinstance(radius_value, bool)
+            or not isinstance(radius_value, (int, float))
+            or not _math.isfinite(float(radius_value))
+            or float(radius_value) <= 0
+        ):
+            _fail("PRIMITIVE_HYPOTHESIS_INVALID")
+        radius = float(radius_value)
+        x0, y0, x1, y1 = roi
+        if (
+            center[0] - radius < x0
+            or center[0] + radius > x1
+            or center[1] - radius < y0
+            or center[1] + radius > y1
+        ):
+            _fail("PRIMITIVE_OUTSIDE_ROI")
         normalized.append(
             {
                 "id": primitive_id,
-                "type": "LINE",
-                "start_px": start,
-                "end_px": end,
+                "type": "CIRCLE",
+                "center_px": center,
+                "radius_px": radius,
             }
         )
     return normalized
@@ -210,6 +259,8 @@ def _lines_connect(
     *,
     tolerance: int,
 ) -> bool:
+    if first.get("type") != "LINE" or second.get("type") != "LINE":
+        _fail("GROUP_TOPOLOGY_INVALID")
     first_points = (first["start_px"], first["end_px"])
     second_points = (second["start_px"], second["end_px"])
     limit_squared = tolerance * tolerance

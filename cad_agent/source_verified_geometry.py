@@ -8,6 +8,7 @@ the supplied result from the exact render bytes.
 from __future__ import annotations
 
 import io
+import math
 import re
 from collections.abc import Mapping
 
@@ -20,6 +21,7 @@ from cad_agent.source_support_verifier import (
 )
 from primitive_ir_lib.models import (
     Calibration,
+    CircleGeometry,
     LineGeometry,
     Primitive,
     PrimitiveIRDocument,
@@ -89,6 +91,15 @@ def _primitive_bbox(start: list[int], end: list[int]) -> tuple[int, int, int, in
     )
 
 
+def _circle_bbox(center: list[float], radius: float) -> tuple[int, int, int, int]:
+    return (
+        math.floor(center[0] - radius),
+        math.floor(center[1] - radius),
+        math.ceil(center[0] + radius),
+        math.ceil(center[1] + radius),
+    )
+
+
 def materialize_verified_external_visual_lines(
     *,
     verification_request: object,
@@ -99,7 +110,7 @@ def materialize_verified_external_visual_lines(
     image_width_px: int,
     image_height_px: int,
 ) -> PrimitiveIRDocument:
-    """Create a truthful PrimitiveIR document from verified external LINEs.
+    """Create a truthful PrimitiveIR document from verified external geometry.
 
     The result is accepted only when the current verifier reproduces it exactly;
     caller-supplied support scores or semantic/group labels are never trusted.
@@ -153,32 +164,64 @@ def materialize_verified_external_visual_lines(
     result_sha256 = canonical_json_sha256(expected_result)
     primitives: list[Primitive] = []
     for hypothesis in hypotheses:
-        if not isinstance(hypothesis, Mapping) or hypothesis.get("type") != "LINE":
+        if not isinstance(hypothesis, Mapping):
             _fail("VERIFICATION_REQUEST_INVALID")
         primitive_id = hypothesis.get("id")
-        start_px = hypothesis.get("start_px")
-        end_px = hypothesis.get("end_px")
         support = support_by_id.get(primitive_id)
-        if (
-            not isinstance(primitive_id, str)
-            or not isinstance(start_px, list)
-            or not isinstance(end_px, list)
-            or len(start_px) != 2
-            or len(end_px) != 2
-            or not isinstance(support, Mapping)
-        ):
+        if not isinstance(primitive_id, str) or not isinstance(support, Mapping):
             _fail("VERIFICATION_RESULT_INVALID")
-        start = calibration.pixel_to_cad(*start_px)
-        end = calibration.pixel_to_cad(*end_px)
+        primitive_type = hypothesis.get("type")
+        if primitive_type == "LINE":
+            start_px = hypothesis.get("start_px")
+            end_px = hypothesis.get("end_px")
+            if (
+                not isinstance(start_px, list)
+                or not isinstance(end_px, list)
+                or len(start_px) != 2
+                or len(end_px) != 2
+            ):
+                _fail("VERIFICATION_RESULT_INVALID")
+            start = calibration.pixel_to_cad(*start_px)
+            end = calibration.pixel_to_cad(*end_px)
+            geometry = LineGeometry(start=start, end=end)
+            bbox_px = _primitive_bbox(start_px, end_px)
+        elif primitive_type == "CIRCLE":
+            center_px = hypothesis.get("center_px")
+            radius_px = hypothesis.get("radius_px")
+            if (
+                not isinstance(center_px, list)
+                or len(center_px) != 2
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    for value in center_px
+                )
+                or isinstance(radius_px, bool)
+                or not isinstance(radius_px, (int, float))
+                or not math.isfinite(float(radius_px))
+                or float(radius_px) <= 0
+            ):
+                _fail("VERIFICATION_RESULT_INVALID")
+            center_px = [float(value) for value in center_px]
+            radius_px = float(radius_px)
+            center = calibration.pixel_to_cad(*center_px)
+            geometry = CircleGeometry(
+                center=center,
+                radius=radius_px * calibration.pixel_to_unit_scale,
+            )
+            bbox_px = _circle_bbox(center_px, radius_px)
+        else:
+            _fail("VERIFICATION_REQUEST_INVALID")
         primitives.append(
             Primitive(
                 id=primitive_id,
-                type="line",
+                type="line" if primitive_type == "LINE" else "circle",
                 source=_SOURCE_TYPE,
                 confidence=float(support["support_fraction"]),
-                geometry=LineGeometry(start=start, end=end),
+                geometry=geometry,
                 trace=Trace(
-                    bbox_px=_primitive_bbox(start_px, end_px),
+                    bbox_px=bbox_px,
                     extraction_tool=_TRACE_TOOL,
                     extracted_at=now_iso(),
                     verification_request_sha256=request_sha256,
