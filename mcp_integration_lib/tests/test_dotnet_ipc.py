@@ -529,7 +529,7 @@ class DotNetIPCClientTests(unittest.TestCase):
         drawing_path = r"C:\approved\BVTL.dwg"
         sentinel = "sentinel-read-request-failure"
 
-        with TemporaryDirectory(prefix="dotnet-causal-red-", dir=r"D:\Cad agent temp") as temporary:
+        with TemporaryDirectory(prefix="dotnet-causal-red-") as temporary:
             ipc_dir = Path(temporary)
 
             def trigger() -> None:
