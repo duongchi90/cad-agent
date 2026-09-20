@@ -1163,6 +1163,99 @@ def _p1_binding(payload: object, name: str) -> dict[str, object]:
     }
 
 
+def _p1_dimensions(
+    value: object,
+    *,
+    allow_decimal_strings: bool = False,
+) -> dict[str, float]:
+    dimensions_raw = _mapping(value, "P1_DIMENSIONS")
+    _exact_fields(dimensions_raw, _P1_DIMENSION_FIELDS, "P1_DIMENSIONS")
+    dimensions: dict[str, float] = {}
+    for field in sorted(_P1_DIMENSION_FIELDS):
+        raw_value = dimensions_raw[field]
+        if allow_decimal_strings and isinstance(raw_value, str):
+            try:
+                raw_value = float(raw_value)
+            except ValueError:
+                pass
+        dimensions[field] = _number(
+            raw_value,
+            f"P1_{field.upper()}",
+            positive=True,
+        )
+    diameter_a = dimensions["shaft_diameter_a"]
+    diameter_b = dimensions["shaft_diameter_b"]
+    if diameter_a == diameter_b:
+        raise ValueError("PILOT_P1_SHAFT_STEP_REQUIRED")
+    length_a = dimensions["segment_length_a"]
+    length_b = dimensions["segment_length_b"]
+    total_length = length_a + length_b
+    hole_position = dimensions["hole_axial_position"]
+    if not 0.0 < hole_position < total_length:
+        raise ValueError("PILOT_P1_HOLE_POSITION_INVALID")
+    local_diameter = diameter_a if hole_position < length_a else diameter_b
+    if dimensions["hole_diameter"] >= local_diameter:
+        raise ValueError("PILOT_P1_HOLE_DIAMETER_INVALID")
+    return dimensions
+
+
+def _p1_geometry_and_features(
+    dimensions: Mapping[str, float],
+) -> tuple[dict[str, object], dict[str, object]]:
+    length_a = dimensions["segment_length_a"]
+    length_b = dimensions["segment_length_b"]
+    total_length = length_a + length_b
+    diameter_a = dimensions["shaft_diameter_a"]
+    diameter_b = dimensions["shaft_diameter_b"]
+    hole_position = dimensions["hole_axial_position"]
+    a = diameter_a / 2.0
+    b = diameter_b / 2.0
+    line_specs = [
+        ("shaft-profile-001:top-main", (0.0, a), (length_a, a)),
+        ("shaft-profile-001:step-rise", (length_a, a), (length_a, b)),
+        ("shaft-profile-001:top-step", (length_a, b), (total_length, b)),
+        ("shaft-profile-001:right-cap", (total_length, b), (total_length, -b)),
+        ("shaft-profile-001:bottom-step", (total_length, -b), (length_a, -b)),
+        ("shaft-profile-001:step-fall", (length_a, -b), (length_a, -a)),
+        ("shaft-profile-001:bottom-main", (length_a, -a), (0.0, -a)),
+        ("shaft-profile-001:left-cap", (0.0, -a), (0.0, a)),
+    ]
+    lines = [
+        {
+            "id": line_id,
+            "type": "line",
+            "start_mm": [start[0], start[1]],
+            "end_mm": [end[0], end[1]],
+        }
+        for line_id, start, end in line_specs
+    ]
+    circle = {
+        "id": "hole-axial-001",
+        "type": "circle",
+        "center_mm": [hole_position, 0.0],
+        "radius_mm": dimensions["hole_diameter"] / 2.0,
+    }
+    shaft_ids = [line["id"] for line in lines]
+    return (
+        {
+            "line_count": 8,
+            "circle_count": 1,
+            "lines": lines,
+            "circle": circle,
+        },
+        {
+            "shaft-profile-001": {
+                "kind": "shaft_step",
+                "primitive_ids": shaft_ids,
+            },
+            "hole-axial-001": {
+                "kind": "hole_feature",
+                "primitive_ids": ["hole-axial-001"],
+            },
+        },
+    )
+
+
 def compile_source_bound_simple_shaft_proposal(
     proposal: Mapping[str, object],
     *,
@@ -1185,26 +1278,7 @@ def compile_source_bound_simple_shaft_proposal(
     if proposal_binding != normalized_expected:
         raise ValueError("PILOT_P1_SOURCE_BINDING_MISMATCH")
 
-    dimensions_raw = _mapping(root.get("dimensions_mm"), "P1_DIMENSIONS")
-    _exact_fields(dimensions_raw, _P1_DIMENSION_FIELDS, "P1_DIMENSIONS")
-    dimensions = {
-        field: _number(dimensions_raw[field], f"P1_{field.upper()}", positive=True)
-        for field in sorted(_P1_DIMENSION_FIELDS)
-    }
-    diameter_a = dimensions["shaft_diameter_a"]
-    diameter_b = dimensions["shaft_diameter_b"]
-    if diameter_a == diameter_b:
-        raise ValueError("PILOT_P1_SHAFT_STEP_REQUIRED")
-    length_a = dimensions["segment_length_a"]
-    length_b = dimensions["segment_length_b"]
-    total_length = length_a + length_b
-    hole_position = dimensions["hole_axial_position"]
-    if not 0.0 < hole_position < total_length:
-        raise ValueError("PILOT_P1_HOLE_POSITION_INVALID")
-    local_diameter = diameter_a if hole_position < length_a else diameter_b
-    if dimensions["hole_diameter"] >= local_diameter:
-        raise ValueError("PILOT_P1_HOLE_DIAMETER_INVALID")
-
+    dimensions = _p1_dimensions(root.get("dimensions_mm"))
     evidence_refs_raw = _mapping(root.get("evidence_refs"), "P1_EVIDENCE_REFS")
     if len(evidence_refs_raw) > 12:
         raise ValueError("PILOT_P1_EVIDENCE_REFS_INVALID")
@@ -1213,60 +1287,15 @@ def compile_source_bound_simple_shaft_proposal(
         evidence_refs[_string(key, "P1_EVIDENCE_REF_KEY")] = _string(
             value, "P1_EVIDENCE_REF_VALUE"
         )
-
-    x0 = 0.0
-    x1 = length_a
-    x2 = total_length
-    a = diameter_a / 2.0
-    b = diameter_b / 2.0
-    line_specs = [
-        ("shaft-profile-001:top-main", (x0, a), (x1, a)),
-        ("shaft-profile-001:step-rise", (x1, a), (x1, b)),
-        ("shaft-profile-001:top-step", (x1, b), (x2, b)),
-        ("shaft-profile-001:right-cap", (x2, b), (x2, -b)),
-        ("shaft-profile-001:bottom-step", (x2, -b), (x1, -b)),
-        ("shaft-profile-001:step-fall", (x1, -b), (x1, -a)),
-        ("shaft-profile-001:bottom-main", (x1, -a), (x0, -a)),
-        ("shaft-profile-001:left-cap", (x0, -a), (x0, a)),
-    ]
-    lines = [
-        {
-            "id": line_id,
-            "type": "line",
-            "start_mm": [start[0], start[1]],
-            "end_mm": [end[0], end[1]],
-        }
-        for line_id, start, end in line_specs
-    ]
-    circle = {
-        "id": "hole-axial-001",
-        "type": "circle",
-        "center_mm": [hole_position, 0.0],
-        "radius_mm": dimensions["hole_diameter"] / 2.0,
-    }
-    shaft_ids = [line["id"] for line in lines]
+    geometry_contract, feature_contract = _p1_geometry_and_features(dimensions)
     plan: dict[str, object] = {
         "schema_version": _P1_COMPILE_PLAN_SCHEMA_VERSION,
         "proposal_source": "external_ai",
         "profile_id": _P1_PROFILE_ID,
         "source_binding": proposal_binding,
         "dimensions_mm": dimensions,
-        "geometry_contract": {
-            "line_count": 8,
-            "circle_count": 1,
-            "lines": lines,
-            "circle": circle,
-        },
-        "feature_contract": {
-            "shaft-profile-001": {
-                "kind": "shaft_step",
-                "primitive_ids": shaft_ids,
-            },
-            "hole-axial-001": {
-                "kind": "hole_feature",
-                "primitive_ids": ["hole-axial-001"],
-            },
-        },
+        "geometry_contract": geometry_contract,
+        "feature_contract": feature_contract,
         "evidence_refs": evidence_refs,
     }
     encoded = json.dumps(
@@ -1278,6 +1307,21 @@ def compile_source_bound_simple_shaft_proposal(
     ).encode("utf-8")
     plan["plan_sha256"] = hashlib.sha256(encoded).hexdigest()
     return plan
+
+
+def _compile_p1_geometry_plan(
+    dimensions_mm: Mapping[str, object],
+) -> dict[str, object]:
+    """Compile deterministic geometry without making a provenance claim."""
+
+    dimensions = _p1_dimensions(dimensions_mm, allow_decimal_strings=True)
+    geometry_contract, feature_contract = _p1_geometry_and_features(dimensions)
+    return {
+        "profile_id": _P1_PROFILE_ID,
+        "dimensions_mm": dimensions,
+        "geometry_contract": geometry_contract,
+        "feature_contract": feature_contract,
+    }
 
 
 __all__ = [
