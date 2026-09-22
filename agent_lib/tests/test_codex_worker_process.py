@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import hashlib
 import inspect
 import os
 import subprocess
@@ -13,12 +14,14 @@ from typing import Mapping
 
 import pytest
 
+import agent_lib.codex_worker_process as process_owner
 from agent_lib.codex_worker_process import (
     ProcessTreeIdentity,
     WorkerCleanupResult,
     WorkerEnvironmentAttestation,
     WorkerProcessError,
     WorkerProcessHandle,
+    purge_worker_authentication_state,
     cleanup_worker_process,
     launch_worker_process,
     prepare_worker_environment,
@@ -218,6 +221,210 @@ def test_worker_owned_directories_are_fresh_empty_and_disposable(tmp_path: Path)
     assert not list(prepared.codex_home.iterdir())
     assert not list(prepared.temp_dir.iterdir())
     assert set(prepared.writable_roots) == {prepared.cwd, prepared.codex_home, prepared.temp_dir}
+
+
+def test_causal_red_authenticated_home_needs_server_owned_custody_transition(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared(tmp_path)
+    (prepared.codex_home / "auth.json").write_bytes(b"opaque credential state")
+
+    with pytest.raises(WorkerProcessError) as caught:
+        _launch_with_boundary(
+            environment=prepared,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=_FakeProcessApi(),
+        )
+    assert caught.value.code == "WORKER_DISPOSABLE_STATE_UNSAFE"
+
+    # This is the decision-changing gap: the only existing launch seam rejects
+    # the exact home after official login and exposes no server-owned custody
+    # transition that can bind and later purge the authenticated state.
+    assert callable(getattr(process_owner, "attest_authenticated_worker_environment", None))
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _authenticated(
+    tmp_path: Path,
+    *,
+    command_runner=None,
+) -> tuple[WorkerEnvironmentAttestation, object, list[tuple[str, ...]]]:
+    prepared = _prepared(tmp_path)
+    (prepared.codex_home / "auth.json").write_bytes(b"opaque credential state")
+    executable = Path(sys.executable).resolve()
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command, *, cwd, environment):
+        calls.append(tuple(command))
+        assert cwd == prepared.cwd
+        assert environment["CODEX_HOME"] == str(prepared.codex_home)
+        assert "OPENAI_API_KEY" not in environment
+        if command[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="Python 3.11\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="Logged in using ChatGPT\n", stderr="")
+
+    attestation = process_owner.attest_authenticated_worker_environment(
+        environment=prepared,
+        executable=executable,
+        expected_executable_sha256=_file_sha256(executable),
+        expected_executable_version="Python 3.11",
+        _command_runner=command_runner or runner,
+    )
+    return prepared, attestation, calls
+
+
+def test_authenticated_attestation_is_observed_and_privacy_safe(tmp_path: Path) -> None:
+    prepared, attestation, calls = _authenticated(tmp_path)
+    assert calls == [
+        (str(Path(sys.executable).resolve()), "--version"),
+        (str(Path(sys.executable).resolve()), "login", "status"),
+    ]
+    assert attestation.state == "HUMAN_AUTHENTICATED_ATTESTED"
+    assert attestation.auth_mode == "chatgpt"
+    assert attestation.environment is prepared
+    assert attestation.executable == Path(sys.executable).resolve()
+    assert attestation.executable_sha256 == _file_sha256(Path(sys.executable).resolve())
+    assert any(entry.relative_path == "auth.json" for entry in attestation.home_entries)
+    assert all("opaque credential state" not in repr(entry) for entry in attestation.home_entries)
+    rendered = repr(attestation)
+    assert attestation.home_manifest_sha256 not in rendered
+    assert all(entry.sha256 not in rendered for entry in attestation.home_entries)
+
+
+def test_authenticated_attestation_rejects_claimed_status_and_stale_binary_identity(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared(tmp_path)
+    (prepared.codex_home / "auth.json").write_bytes(b"opaque credential state")
+    executable = Path(sys.executable).resolve()
+
+    def not_logged_in(command, *, cwd, environment):
+        del cwd, environment
+        if command[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="Python 3.11\n", stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="not logged in")
+
+    with pytest.raises(WorkerProcessError) as status_error:
+        process_owner.attest_authenticated_worker_environment(
+            environment=prepared,
+            executable=executable,
+            expected_executable_sha256=_file_sha256(executable),
+            expected_executable_version="Python 3.11",
+            _command_runner=not_logged_in,
+        )
+    assert status_error.value.code == "WORKER_NOT_AUTHENTICATED"
+
+    with pytest.raises(WorkerProcessError) as binary_error:
+        process_owner.attest_authenticated_worker_environment(
+            environment=prepared,
+            executable=executable,
+            expected_executable_sha256="0" * 64,
+            expected_executable_version="Python 3.11",
+            _command_runner=not_logged_in,
+        )
+    assert binary_error.value.code == "WORKER_EXECUTABLE_IDENTITY_MISMATCH"
+
+
+def test_authenticated_launch_refuses_ambient_drift_and_other_issued_home(
+    tmp_path: Path,
+) -> None:
+    prepared, attestation, _calls = _authenticated(tmp_path / "first")
+    (prepared.codex_home / "config.toml").write_text("injected", encoding="utf-8")
+    with pytest.raises(WorkerProcessError) as drift:
+        process_owner.launch_authenticated_worker_process(
+            custody=attestation,
+            expected_disposable_root=prepared.disposable_root,
+            expected_cwd=prepared.cwd,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=_FakeProcessApi(),
+        )
+    assert drift.value.code == "WORKER_AUTH_AMBIENT_STATE"
+    assert list(prepared.codex_home.iterdir()) == []
+
+    _other_prepared, other_attestation, _other_calls = _authenticated(tmp_path / "second")
+    with pytest.raises(WorkerProcessError) as foreign:
+        process_owner.launch_authenticated_worker_process(
+            custody=other_attestation,
+            expected_disposable_root=prepared.disposable_root,
+            expected_cwd=prepared.cwd,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=_FakeProcessApi(),
+        )
+    assert foreign.value.code == "WORKER_DISPOSABLE_ROOT_UNSAFE"
+
+
+def test_authenticated_launch_revalidates_provider_binary_separately_from_child_launcher(
+    tmp_path: Path,
+) -> None:
+    prepared, attestation, _calls = _authenticated(tmp_path)
+    child_launcher = tmp_path / "child-launcher.exe"
+    child_launcher.write_bytes(b"disposable child launcher")
+    api = _FakeProcessApi()
+    api.query_results = [(4101,), ()]
+
+    handle = process_owner.launch_authenticated_worker_process(
+        custody=attestation,
+        expected_disposable_root=prepared.disposable_root,
+        expected_cwd=prepared.cwd,
+        executable=child_launcher,
+        argv=("-c", "pass"),
+        cleanup_deadline_seconds=1.0,
+        max_processes=4,
+        _process_api=api,
+    )
+
+    result = cleanup_worker_process(handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None)
+    assert result.success is True
+    assert result.auth_state_purged is True
+
+
+def test_authenticated_cleanup_purges_exact_home_and_prevents_reuse(tmp_path: Path) -> None:
+    prepared, attestation, _calls = _authenticated(tmp_path)
+    api = _FakeProcessApi()
+    api.query_results = [(4101,), ()]
+    handle = process_owner.launch_authenticated_worker_process(
+        custody=attestation,
+        expected_disposable_root=prepared.disposable_root,
+        expected_cwd=prepared.cwd,
+        executable=Path(sys.executable).resolve(),
+        argv=("-c", "pass"),
+        cleanup_deadline_seconds=1.0,
+        max_processes=4,
+        _process_api=api,
+    )
+    result = cleanup_worker_process(handle, _clock=_FakeClock(0.0, 0.1), _sleep=lambda _: None)
+    assert result.success is True
+    assert result.auth_state_purged is True
+    assert list(prepared.codex_home.iterdir()) == []
+    assert purge_worker_authentication_state(attestation).success is True
+    with pytest.raises(WorkerProcessError) as reused:
+        process_owner.launch_authenticated_worker_process(
+            custody=attestation,
+            expected_disposable_root=prepared.disposable_root,
+            expected_cwd=prepared.cwd,
+            executable=Path(sys.executable).resolve(),
+            argv=("-c", "pass"),
+            cleanup_deadline_seconds=1.0,
+            max_processes=4,
+            _process_api=_FakeProcessApi(),
+        )
+    assert reused.value.code == "WORKER_AUTH_STATE_REUSE"
 
 
 @pytest.mark.parametrize("name", ["codex-home", "tmp"])
