@@ -132,6 +132,11 @@ public static class ContractValidator
             ExactBaseXrefPolicy.ValidateRequestShape(request, errors);
         }
 
+        if (request.Operation == BoundedNativeLineEditOperationNames.Edit)
+        {
+            errors.AddRange(BoundedNativeLineEditPolicy.ValidateRequestShape(request));
+        }
+
         return new ContractValidationResult(errors);
     }
 

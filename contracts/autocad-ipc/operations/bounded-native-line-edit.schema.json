@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/bounded-native-line-edit.schema.json",
+  "title": "CadAgent bounded native line edit request parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "target_role",
+    "target_handles",
+    "protected_competing_handles",
+    "expected_type",
+    "expected_before_length",
+    "target_after_length",
+    "length_tolerance",
+    "direction",
+    "save"
+  ],
+  "properties": {
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "target_role": { "const": "ACCEPTED_NATIVE_DWG" },
+    "target_handles": { "$ref": "#/$defs/handles" },
+    "protected_competing_handles": { "$ref": "#/$defs/handles" },
+    "expected_type": { "const": "LINE" },
+    "expected_before_length": { "const": 490 },
+    "target_after_length": { "const": 500 },
+    "length_tolerance": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "direction": { "const": "POSITIVE_Y" },
+    "save": { "const": true }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "handle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Fa-f]+$"
+    },
+    "handles": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/handle" }
+    }
+  }
+}

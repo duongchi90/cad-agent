@@ -36,7 +36,8 @@
         "visual_evidence_export",
         "native_render_evidence",
         "exact_base_xref_inspection",
-        "exact_base_xref_extraction"
+        "exact_base_xref_extraction",
+        "bounded_native_line_edit"
       ]
     },
     "drawing_full_path": {
@@ -405,6 +406,81 @@
                 "payload": {
                   "type": "object",
                   "maxProperties": 0
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "bounded_native_line_edit"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": true
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "required": [
+                "payload"
+              ],
+              "properties": {
+                "changed": {
+                  "const": true
+                },
+                "entity_handles": {
+                  "minItems": 12,
+                  "maxItems": 12
+                },
+                "payload": {
+                  "$ref": "operations/bounded-native-line-edit-result.schema.json"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "success": {
+                  "const": false
+                }
+              },
+              "required": [
+                "success"
+              ]
+            },
+            "then": {
+              "properties": {
+                "changed": {
+                  "const": false
+                },
+                "entity_handles": {
+                  "maxItems": 0
+                },
+                "payload": {
+                  "$ref": "operations/bounded-native-line-edit-result.schema.json"
                 }
               }
             }

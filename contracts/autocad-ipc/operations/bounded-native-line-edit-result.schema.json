@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/bounded-native-line-edit-result.schema.json",
+  "title": "CadAgent bounded native line edit result payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "target_role",
+    "approval_reference",
+    "expected_before_length",
+    "target_after_length",
+    "length_tolerance",
+    "dbmod_before",
+    "dbmod_after",
+    "save_performed",
+    "target_entities",
+    "protected_competing_entities"
+  ],
+  "properties": {
+    "schema_version": { "const": "bounded-native-line-edit-1.0" },
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "target_role": { "const": "ACCEPTED_NATIVE_DWG" },
+    "approval_reference": { "$ref": "#/$defs/identifier" },
+    "expected_before_length": { "const": 490 },
+    "target_after_length": { "const": 500 },
+    "length_tolerance": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "dbmod_before": { "type": "integer", "minimum": 0 },
+    "dbmod_after": { "type": "integer", "minimum": 0 },
+    "save_performed": { "type": "boolean" },
+    "target_entities": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/entity" }
+    },
+    "protected_competing_entities": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/entity" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "handle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Fa-f]+$"
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handle",
+        "type",
+        "layer",
+        "owner_handle",
+        "owner_name",
+        "reference_handles",
+        "shared_with_competing_occurrence",
+        "before_length",
+        "after_length",
+        "before_start",
+        "before_end",
+        "after_start",
+        "after_end"
+      ],
+      "properties": {
+        "handle": { "$ref": "#/$defs/handle" },
+        "type": { "const": "LINE" },
+        "layer": { "type": "string", "minLength": 1 },
+        "owner_handle": { "$ref": "#/$defs/handle" },
+        "owner_name": { "type": "string" },
+        "reference_handles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/handle" }
+        },
+        "shared_with_competing_occurrence": { "type": "boolean" },
+        "before_length": { "type": "number" },
+        "after_length": { "type": "number" },
+        "before_start": { "$ref": "#/$defs/point" },
+        "before_end": { "$ref": "#/$defs/point" },
+        "after_start": { "$ref": "#/$defs/point" },
+        "after_end": { "$ref": "#/$defs/point" }
+      }
+    }
+  }
+}

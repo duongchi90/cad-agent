@@ -549,6 +549,7 @@ public sealed class ContractTests
 
             Assert.Contains("exact_base_xref_inspection", operations);
             Assert.Contains("exact_base_xref_extraction", operations);
+            Assert.Contains("bounded_native_line_edit", operations);
         }
 
         Assert.Equal(
@@ -580,6 +581,24 @@ public sealed class ContractTests
         Assert.Equal(
             "operations/exact-base-xref-extraction-result.schema.json",
             FindOperationBranch(resultSchema.RootElement, "exact_base_xref_extraction")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/bounded-native-line-edit.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "bounded_native_line_edit")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/bounded-native-line-edit-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "bounded_native_line_edit")
                 .GetProperty("then")
                 .GetProperty("allOf")[0]
                 .GetProperty("then")

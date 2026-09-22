@@ -47,6 +47,7 @@ public sealed class OperationDispatcher
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
+                BoundedNativeLineEditOperationNames.Edit => DispatchBoundedNativeLineEdit(request, startedAt),
                 ExactBaseXrefOperationNames.Inspection => DispatchExactBaseXrefInspection(request, startedAt),
                 ExactBaseXrefOperationNames.Extraction => DispatchExactBaseXrefExtraction(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
@@ -289,6 +290,35 @@ public sealed class OperationDispatcher
             startedAt);
     }
 
+    private IpcResult DispatchBoundedNativeLineEdit(IpcRequest request, DateTimeOffset startedAt)
+    {
+        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(request, new[] { error }, startedAt);
+        }
+
+        var identityError = ValidateAcceptedDrawingIdentity(request, activePath);
+        if (identityError is not null)
+        {
+            return Failure(request, new[] { identityError }, startedAt);
+        }
+
+        var parameters = BoundedNativeLineEditPolicy.Parse(request);
+        var snapshot = _context.DrawingGateway.ApplyBoundedNativeLineEdit(parameters);
+        var payload = SerializeBoundedNativeLineEditSnapshot(snapshot, parameters);
+        return CreateResult(
+            request.RequestId!,
+            BoundedNativeLineEditOperationNames.Edit,
+            snapshot.DrawingFullPath ?? activePath,
+            snapshot.Success,
+            snapshot.Changed,
+            snapshot.Success ? snapshot.EntityHandles : Array.Empty<string>(),
+            snapshot.Warnings,
+            snapshot.Errors,
+            payload,
+            startedAt);
+    }
+
     private IpcResult DispatchExactBaseXrefInspection(IpcRequest request, DateTimeOffset startedAt)
     {
         if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
@@ -376,6 +406,73 @@ public sealed class OperationDispatcher
                 ContractJson.Options)
             ?? throw new InvalidOperationException("exact-base inspection evidence could not be serialized"),
             evidence.CaptureTimestamp);
+
+    private static Dictionary<string, JsonElement> SerializeBoundedNativeLineEditSnapshot(
+        BoundedNativeLineEditSnapshot snapshot,
+        BoundedNativeLineEditRequest request)
+    {
+        var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["schema_version"] = JsonSerializer.SerializeToElement("bounded-native-line-edit-1.0"),
+            ["run_id"] = JsonSerializer.SerializeToElement(request.RunId),
+            ["target_role"] = JsonSerializer.SerializeToElement(request.TargetRole),
+            ["approval_reference"] = JsonSerializer.SerializeToElement(request.ApprovalReference),
+            ["expected_before_length"] = JsonSerializer.SerializeToElement(request.ExpectedBeforeLength),
+            ["target_after_length"] = JsonSerializer.SerializeToElement(request.TargetAfterLength),
+            ["length_tolerance"] = JsonSerializer.SerializeToElement(request.LengthTolerance),
+            ["dbmod_before"] = JsonSerializer.SerializeToElement(snapshot.DbmodBefore),
+            ["dbmod_after"] = JsonSerializer.SerializeToElement(snapshot.DbmodAfter),
+            ["save_performed"] = JsonSerializer.SerializeToElement(snapshot.SavePerformed),
+            ["target_entities"] = JsonSerializer.SerializeToElement(
+                snapshot.TargetEntities.Select(SerializeBoundedEntity)),
+            ["protected_competing_entities"] = JsonSerializer.SerializeToElement(
+                snapshot.ProtectedEntities.Select(SerializeBoundedEntity))
+        };
+        return payload;
+    }
+
+    private static object SerializeBoundedEntity(BoundedNativeLineEditEntityEvidence entity) => new
+    {
+        handle = entity.Handle,
+        type = entity.Type,
+        layer = entity.Layer,
+        owner_handle = entity.OwnerHandle,
+        owner_name = entity.OwnerName,
+        reference_handles = entity.ReferenceHandles,
+        shared_with_competing_occurrence = entity.SharedWithCompetingOccurrence,
+        before_length = entity.BeforeLength,
+        after_length = entity.AfterLength,
+        before_start = new { x = entity.BeforeStartX, y = entity.BeforeStartY },
+        before_end = new { x = entity.BeforeEndX, y = entity.BeforeEndY },
+        after_start = new { x = entity.AfterStartX, y = entity.AfterStartY },
+        after_end = new { x = entity.AfterEndX, y = entity.AfterEndY }
+    };
+
+    private string? ValidateAcceptedDrawingIdentity(IpcRequest request, string activePath)
+    {
+        var policy = _context.ExactBaseXrefPolicy;
+        if (!policy.IsConfigured)
+        {
+            return $"{ExactBaseXrefPolicy.ConfigurationRequiredCode}: accepted drawing configuration is unavailable";
+        }
+
+        if (!ContractValidator.TryNormalizeWindowsAbsolutePath(
+                policy.Configuration.AcceptedDwgPath,
+                out var acceptedPath)
+            || !StringComparer.OrdinalIgnoreCase.Equals(activePath, acceptedPath))
+        {
+            return $"{ExactBaseXrefPolicy.AcceptedAliasCode}: bounded native mutation may target the configured accepted DWG only";
+        }
+
+        if (!StringComparer.OrdinalIgnoreCase.Equals(
+                request.DrawingSha256,
+                policy.Configuration.AcceptedDwgSha256))
+        {
+            return $"{ExactBaseXrefPolicy.SourceHashMismatchCode}: accepted drawing hash does not match the server-owned identity";
+        }
+
+        return null;
+    }
 
     private static Dictionary<string, JsonElement> NormalizeInspectionEvidenceTimestamp(
         Dictionary<string, JsonElement> payload,

@@ -14,6 +14,67 @@ namespace CadAgent.AutoCAD2027.Tests.Ipc;
 public sealed class OperationDispatcherTests
 {
     [Fact]
+    public void BoundedNativeLineEditRoutesAfterAcceptedIdentityGuard()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "cadagent-bounded-line-edit-dispatcher-" + Guid.NewGuid().ToString("N"));
+        var acceptedPath = Path.Combine(root, "accepted", "BVTL.dwg");
+        var sourcePath = Path.Combine(root, "source", "base-vehicle.dwg");
+        Directory.CreateDirectory(Path.GetDirectoryName(acceptedPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        File.WriteAllText(acceptedPath, "accepted");
+        File.WriteAllText(sourcePath, "source");
+
+        var request = BoundedNativeLineEditRequest(acceptedPath);
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = acceptedPath,
+            BoundedNativeLineEdit = new BoundedNativeLineEditSnapshot(
+                Success: true,
+                DrawingFullPath: acceptedPath,
+                Changed: true,
+                EntityHandles: BoundedNativeLineEditPolicy.TargetHandles,
+                Warnings: Array.Empty<string>(),
+                Errors: Array.Empty<string>(),
+                DbmodBefore: 0,
+                DbmodAfter: 0,
+                SavePerformed: true,
+                TargetEntities: Array.Empty<BoundedNativeLineEditEntityEvidence>(),
+                ProtectedEntities: Array.Empty<BoundedNativeLineEditEntityEvidence>())
+        };
+        var policy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            root,
+            acceptedPath,
+            new string('b', 64),
+            sourcePath,
+            new string('a', 64),
+            "rev-2026-09-22-01"));
+
+        try
+        {
+            var result = CreateDispatcher(gateway, exactBaseXrefPolicy: policy)
+                .Dispatch(request);
+
+            Assert.True(result.Success, string.Join("; ", result.Errors!));
+            Assert.Equal("bounded_native_line_edit", result.Operation);
+            Assert.True(result.Changed);
+            Assert.Equal(BoundedNativeLineEditPolicy.TargetHandles, result.EntityHandles);
+            Assert.Equal(1, gateway.ApplyBoundedNativeLineEditCallCount);
+            Assert.Equal(
+                "bounded-native-line-edit-1.0",
+                result.Payload!["schema_version"].GetString());
+            Assert.Equal(0, result.Payload["dbmod_before"].GetInt32());
+            Assert.Equal(0, result.Payload["dbmod_after"].GetInt32());
+            Assert.True(result.Payload["save_performed"].GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ExactBaseXrefInspectionRoutesFreshReadOnlySnapshotToResult()
     {
         var fixture = InspectionDispatcherFixture();
@@ -1122,6 +1183,34 @@ public sealed class OperationDispatcherTests
         Approval = null
     };
 
+    private static IpcRequest BoundedNativeLineEditRequest(string drawingFullPath) => new()
+    {
+        RequestId = "bounded-native-line-edit-request-001",
+        SchemaVersion = ContractConstants.SchemaVersion,
+        Operation = BoundedNativeLineEditOperationNames.Edit,
+        DrawingFullPath = drawingFullPath,
+        DrawingSha256 = new string('b', 64),
+        Parameters = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["run_id"] = JsonSerializer.SerializeToElement("bounded-native-line-edit-run-001"),
+            ["target_role"] = JsonSerializer.SerializeToElement("ACCEPTED_NATIVE_DWG"),
+            ["target_handles"] = JsonSerializer.SerializeToElement(BoundedNativeLineEditPolicy.TargetHandles),
+            ["protected_competing_handles"] = JsonSerializer.SerializeToElement(
+                BoundedNativeLineEditPolicy.ProtectedCompetingHandles),
+            ["expected_type"] = JsonSerializer.SerializeToElement("LINE"),
+            ["expected_before_length"] = JsonSerializer.SerializeToElement(490.0),
+            ["target_after_length"] = JsonSerializer.SerializeToElement(500.0),
+            ["length_tolerance"] = JsonSerializer.SerializeToElement(0.001),
+            ["direction"] = JsonSerializer.SerializeToElement("POSITIVE_Y"),
+            ["save"] = JsonSerializer.SerializeToElement(true)
+        },
+        Approval = JsonSerializer.SerializeToElement(new
+        {
+            reference = "phase4-owner-admission-20260922",
+            status = "APPROVED"
+        })
+    };
+
     private static IpcRequest ExactBaseXrefExtractionRequest() => new()
     {
         RequestId = "xref-extraction-request-001",
@@ -1301,6 +1390,8 @@ public sealed class OperationDispatcherTests
 
         public ExactBaseXrefExtractionSnapshot? ExactBaseXrefExtraction { get; init; }
 
+        public BoundedNativeLineEditSnapshot? BoundedNativeLineEdit { get; init; }
+
         public Exception? NativeRenderException { get; init; }
 
         public int ReadEntitiesCallCount { get; private set; }
@@ -1314,6 +1405,8 @@ public sealed class OperationDispatcherTests
         public int ReadExactBaseXrefInspectionCallCount { get; private set; }
 
         public int ExtractExactBaseXrefCallCount { get; private set; }
+
+        public int ApplyBoundedNativeLineEditCallCount { get; private set; }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
@@ -1366,8 +1459,18 @@ public sealed class OperationDispatcherTests
             ExtractExactBaseXrefCallCount++;
             return ExactBaseXrefExtraction
                 ?? ExactBaseXrefExtractionSnapshot.Failure(
+                ActiveDocumentFullPath,
+                new[] { "No extraction fixture was configured." });
+        }
+
+        public BoundedNativeLineEditSnapshot ApplyBoundedNativeLineEdit(
+            BoundedNativeLineEditRequest request)
+        {
+            ApplyBoundedNativeLineEditCallCount++;
+            return BoundedNativeLineEdit
+                ?? BoundedNativeLineEditSnapshot.Failure(
                     ActiveDocumentFullPath,
-                    new[] { "No extraction fixture was configured." });
+                    new[] { "No bounded native line edit fixture was configured." });
         }
     }
 

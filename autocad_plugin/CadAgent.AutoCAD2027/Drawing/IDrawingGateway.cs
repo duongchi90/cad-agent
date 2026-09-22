@@ -32,4 +32,9 @@ public interface IDrawingGateway
                 boundary.DrawingFullPath,
                 new[] { "S3B_LIVE_UNAVAILABLE" });
     }
+
+    BoundedNativeLineEditSnapshot ApplyBoundedNativeLineEdit(
+        BoundedNativeLineEditRequest request) =>
+        throw new InvalidOperationException(
+            "This drawing gateway does not provide the bounded native line edit operation.");
 }

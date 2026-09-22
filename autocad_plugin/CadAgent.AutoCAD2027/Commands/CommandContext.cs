@@ -180,6 +180,400 @@ public sealed class CommandContext
             return snapshots;
         }
 
+        public BoundedNativeLineEditSnapshot ApplyBoundedNativeLineEdit(
+            BoundedNativeLineEditRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            var database = _document.Database
+                ?? throw new InvalidOperationException("The active document has no database.");
+            var activePath = ActiveDocumentFullPath;
+            var dbmodBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"));
+            var targetBefore = Array.Empty<NativeLineState>();
+            var protectedBefore = Array.Empty<NativeLineState>();
+
+            using (var transaction = _document.TransactionManager.StartOpenCloseTransaction())
+            {
+                targetBefore = request.TargetHandles
+                    .Select(handle => ReadNativeLineState(database, transaction, handle))
+                    .ToArray();
+                protectedBefore = request.ProtectedCompetingHandles
+                    .Select(handle => ReadNativeLineState(database, transaction, handle))
+                    .ToArray();
+
+                var preconditions = ValidateNativeLineEditPreconditions(
+                    request,
+                    targetBefore,
+                    protectedBefore);
+                if (preconditions.Count != 0)
+                {
+                    return FailureWithEvidence(
+                        activePath,
+                        dbmodBefore,
+                        preconditions,
+                        targetBefore,
+                        protectedBefore,
+                        targetBefore,
+                        protectedBefore);
+                }
+
+                foreach (var lineState in targetBefore)
+                {
+                    var line = (Line)transaction.GetObject(lineState.ObjectId, OpenMode.ForWrite, false);
+                    line.EndPoint = new Point3d(
+                        line.StartPoint.X,
+                        line.StartPoint.Y + request.TargetAfterLength,
+                        line.StartPoint.Z);
+                }
+
+                transaction.Commit();
+            }
+
+            var targetAfter = ReadNativeLineStates(database, request.TargetHandles);
+            var protectedAfter = ReadNativeLineStates(database, request.ProtectedCompetingHandles);
+            var readbackErrors = ValidateNativeLineReadback(
+                request,
+                targetBefore,
+                protectedBefore,
+                targetAfter,
+                protectedAfter);
+            if (readbackErrors.Count != 0)
+            {
+                RestoreNativeLines(database, targetBefore);
+                return FailureWithEvidence(
+                    activePath,
+                    dbmodBefore,
+                    readbackErrors,
+                    targetBefore,
+                    protectedBefore,
+                    ReadNativeLineStates(database, request.TargetHandles),
+                    ReadNativeLineStates(database, request.ProtectedCompetingHandles));
+            }
+
+            var savePerformed = false;
+            try
+            {
+                if (request.Save)
+                {
+                    database.SaveAs(
+                        database.Filename,
+                        true,
+                        DwgVersion.Current,
+                        database.SecurityParameters);
+                    savePerformed = true;
+                }
+            }
+            catch (System.Exception exception)
+            {
+                RestoreNativeLines(database, targetBefore);
+                return FailureWithEvidence(
+                    activePath,
+                    dbmodBefore,
+                    new[] { $"native line edit save failed: {exception.Message}" },
+                    targetBefore,
+                    protectedBefore,
+                    ReadNativeLineStates(database, request.TargetHandles),
+                    ReadNativeLineStates(database, request.ProtectedCompetingHandles));
+            }
+
+            var targetAfterSave = ReadNativeLineStates(database, request.TargetHandles);
+            var protectedAfterSave = ReadNativeLineStates(database, request.ProtectedCompetingHandles);
+            var savedReadbackErrors = ValidateNativeLineReadback(
+                request,
+                targetBefore,
+                protectedBefore,
+                targetAfterSave,
+                protectedAfterSave);
+            if (savedReadbackErrors.Count != 0)
+            {
+                RestoreNativeLines(database, targetBefore);
+                if (savePerformed)
+                {
+                    database.SaveAs(
+                        database.Filename,
+                        true,
+                        DwgVersion.Current,
+                        database.SecurityParameters);
+                }
+
+                return FailureWithEvidence(
+                    activePath,
+                    dbmodBefore,
+                    savedReadbackErrors,
+                    targetBefore,
+                    protectedBefore,
+                    ReadNativeLineStates(database, request.TargetHandles),
+                    ReadNativeLineStates(database, request.ProtectedCompetingHandles));
+            }
+
+            return new BoundedNativeLineEditSnapshot(
+                Success: true,
+                DrawingFullPath: activePath,
+                Changed: true,
+                EntityHandles: request.TargetHandles.ToArray(),
+                Warnings: Array.Empty<string>(),
+                Errors: Array.Empty<string>(),
+                DbmodBefore: dbmodBefore,
+                DbmodAfter: Convert.ToInt32(ReadSystemNumber("DBMOD")),
+                SavePerformed: savePerformed,
+                TargetEntities: BuildNativeLineEvidence(targetBefore, targetAfterSave, protectedBefore),
+                ProtectedEntities: BuildNativeLineEvidence(protectedBefore, protectedAfterSave, targetBefore));
+        }
+
+        private NativeLineState[] ReadNativeLineStates(
+            Database database,
+            IReadOnlyList<string> handles)
+        {
+            using var transaction = _document.TransactionManager.StartOpenCloseTransaction();
+            return handles
+                .Select(handle => ReadNativeLineState(database, transaction, handle))
+                .ToArray();
+        }
+
+        private static NativeLineState ReadNativeLineState(
+            Database database,
+            Transaction transaction,
+            string handleText)
+        {
+            if (!TryParseHandle(handleText, out var handle))
+            {
+                throw new InvalidOperationException($"Invalid native line handle '{handleText}'.");
+            }
+
+            var objectId = database.GetObjectId(false, new Handle(handle), 0);
+            if (objectId.IsNull
+                || transaction.GetObject(objectId, OpenMode.ForRead, false) is not Line line)
+            {
+                throw new InvalidOperationException($"Native line handle '{handleText}' was not found.");
+            }
+
+            var owner = transaction.GetObject(line.OwnerId, OpenMode.ForRead, false) as BlockTableRecord
+                ?? throw new InvalidOperationException($"Native line handle '{handleText}' has no readable owner.");
+            var references = ReadReferenceHandles(database, transaction, line.OwnerId);
+            return new NativeLineState(
+                handleText.Trim().ToUpperInvariant(),
+                objectId,
+                line.Layer,
+                owner.Handle.ToString().ToUpperInvariant(),
+                owner.Name ?? string.Empty,
+                references,
+                line.StartPoint,
+                line.EndPoint);
+        }
+
+        private static IReadOnlyList<string> ReadReferenceHandles(
+            Database database,
+            Transaction transaction,
+            ObjectId definitionId)
+        {
+            var references = new List<string>();
+            var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+            foreach (ObjectId blockTableRecordId in blockTable)
+            {
+                if (transaction.GetObject(blockTableRecordId, OpenMode.ForRead, false)
+                    is not BlockTableRecord blockTableRecord)
+                {
+                    continue;
+                }
+
+                foreach (ObjectId objectId in blockTableRecord)
+                {
+                    if (transaction.GetObject(objectId, OpenMode.ForRead, false)
+                        is BlockReference blockReference
+                        && blockReference.BlockTableRecord == definitionId)
+                    {
+                        references.Add(blockReference.Handle.ToString().ToUpperInvariant());
+                    }
+                }
+            }
+
+            return references.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        }
+
+        private static IReadOnlyList<string> ValidateNativeLineEditPreconditions(
+            BoundedNativeLineEditRequest request,
+            IReadOnlyList<NativeLineState> target,
+            IReadOnlyList<NativeLineState> protectedLines)
+        {
+            var errors = new List<string>();
+            if (target.Count != request.TargetHandles.Count
+                || protectedLines.Count != request.ProtectedCompetingHandles.Count)
+            {
+                errors.Add("native line edit could not resolve every authorized handle");
+                return errors;
+            }
+
+            if (target.Select(line => line.OwnerHandle).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
+            {
+                errors.Add("native line edit target handles do not share one owner container");
+            }
+
+            if (target.Any(line => line.ReferenceHandles.Count != 0)
+                || protectedLines.Any(line => line.ReferenceHandles.Count != 0))
+            {
+                errors.Add("native line edit is not isolated from block-reference reachability");
+            }
+
+            var protectedByHandle = protectedLines.ToDictionary(
+                line => line.Handle,
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var line in target)
+            {
+                if (line.Type != ReviewEntityTypes.Line)
+                {
+                    errors.Add($"native line edit handle '{line.Handle}' is not a LINE");
+                    continue;
+                }
+
+                if (Math.Abs(line.Length - request.ExpectedBeforeLength) > request.LengthTolerance
+                    || Math.Abs(line.EndPoint.X - line.StartPoint.X) > request.LengthTolerance
+                    || line.EndPoint.Y <= line.StartPoint.Y)
+                {
+                    errors.Add($"native line edit handle '{line.Handle}' does not match the expected positive-Y 490 geometry");
+                }
+
+                if (protectedByHandle.ContainsKey(line.Handle))
+                {
+                    errors.Add($"native line edit handle '{line.Handle}' overlaps the protected occurrence");
+                }
+            }
+
+            if (protectedLines.Any(line => line.Type != ReviewEntityTypes.Line))
+            {
+                errors.Add("the protected competing occurrence must contain only LINE entities");
+            }
+
+            return errors;
+        }
+
+        private static IReadOnlyList<string> ValidateNativeLineReadback(
+            BoundedNativeLineEditRequest request,
+            IReadOnlyList<NativeLineState> targetBefore,
+            IReadOnlyList<NativeLineState> protectedBefore,
+            IReadOnlyList<NativeLineState> targetAfter,
+            IReadOnlyList<NativeLineState> protectedAfter)
+        {
+            var errors = new List<string>();
+            if (targetAfter.Count != targetBefore.Count || protectedAfter.Count != protectedBefore.Count)
+            {
+                errors.Add("native line edit readback did not return every authorized handle");
+                return errors;
+            }
+
+            for (var index = 0; index < targetBefore.Count; index++)
+            {
+                if (Math.Abs(targetAfter[index].Length - request.TargetAfterLength) > request.LengthTolerance)
+                {
+                    errors.Add($"native line edit readback length mismatch for '{targetBefore[index].Handle}'");
+                }
+
+                if (!SamePoint(targetBefore[index].StartPoint, targetAfter[index].StartPoint, request.LengthTolerance)
+                    || Math.Abs(targetAfter[index].EndPoint.Y - targetBefore[index].StartPoint.Y
+                        - request.TargetAfterLength) > request.LengthTolerance)
+                {
+                    errors.Add($"native line edit readback endpoint mismatch for '{targetBefore[index].Handle}'");
+                }
+            }
+
+            for (var index = 0; index < protectedBefore.Count; index++)
+            {
+                if (!SamePoint(protectedBefore[index].StartPoint, protectedAfter[index].StartPoint, request.LengthTolerance)
+                    || !SamePoint(protectedBefore[index].EndPoint, protectedAfter[index].EndPoint, request.LengthTolerance))
+                {
+                    errors.Add($"protected competing handle '{protectedBefore[index].Handle}' changed during native line edit");
+                }
+            }
+
+            return errors;
+        }
+
+        private void RestoreNativeLines(Database database, IReadOnlyList<NativeLineState> states)
+        {
+            using var transaction = _document.TransactionManager.StartOpenCloseTransaction();
+            foreach (var state in states)
+            {
+                if (transaction.GetObject(state.ObjectId, OpenMode.ForWrite, false) is Line line)
+                {
+                    line.StartPoint = state.StartPoint;
+                    line.EndPoint = state.EndPoint;
+                }
+            }
+
+            transaction.Commit();
+        }
+
+        private static IReadOnlyList<BoundedNativeLineEditEntityEvidence> BuildNativeLineEvidence(
+            IReadOnlyList<NativeLineState> before,
+            IReadOnlyList<NativeLineState> after,
+            IReadOnlyList<NativeLineState> competing)
+        {
+            var afterByHandle = after.ToDictionary(state => state.Handle, StringComparer.OrdinalIgnoreCase);
+            var competingReferences = competing
+                .SelectMany(state => state.ReferenceHandles)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return before.Select(state =>
+            {
+                var afterState = afterByHandle[state.Handle];
+                var shared = state.ReferenceHandles.Any(competingReferences.Contains);
+                return new BoundedNativeLineEditEntityEvidence(
+                    state.Handle,
+                    state.Type,
+                    state.Layer,
+                    state.OwnerHandle,
+                    state.OwnerName,
+                    state.ReferenceHandles,
+                    shared,
+                    state.Length,
+                    afterState.Length,
+                    state.StartPoint.X,
+                    state.StartPoint.Y,
+                    state.EndPoint.X,
+                    state.EndPoint.Y,
+                    afterState.StartPoint.X,
+                    afterState.StartPoint.Y,
+                    afterState.EndPoint.X,
+                    afterState.EndPoint.Y);
+            }).ToArray();
+        }
+
+        private static BoundedNativeLineEditSnapshot FailureWithEvidence(
+            string? drawingPath,
+            int dbmodBefore,
+            IEnumerable<string> errors,
+            IReadOnlyList<NativeLineState> targetBefore,
+            IReadOnlyList<NativeLineState> protectedBefore,
+            IReadOnlyList<NativeLineState> targetAfter,
+            IReadOnlyList<NativeLineState> protectedAfter) =>
+            new(
+                Success: false,
+                DrawingFullPath: drawingPath,
+                Changed: false,
+                EntityHandles: Array.Empty<string>(),
+                Warnings: Array.Empty<string>(),
+                Errors: errors.ToArray(),
+                DbmodBefore: dbmodBefore,
+                DbmodAfter: Convert.ToInt32(ReadSystemNumber("DBMOD")),
+                SavePerformed: false,
+                TargetEntities: BuildNativeLineEvidence(targetBefore, targetAfter, protectedBefore),
+                ProtectedEntities: BuildNativeLineEvidence(protectedBefore, protectedAfter, targetBefore));
+
+        private static bool SamePoint(Point3d left, Point3d right, double tolerance) =>
+            left.DistanceTo(right) <= tolerance;
+
+        private sealed record NativeLineState(
+            string Handle,
+            ObjectId ObjectId,
+            string Layer,
+            string OwnerHandle,
+            string OwnerName,
+            IReadOnlyList<string> ReferenceHandles,
+            Point3d StartPoint,
+            Point3d EndPoint)
+        {
+            public string Type => ReviewEntityTypes.Line;
+
+            public double Length => StartPoint.DistanceTo(EndPoint);
+        }
+
         public DrawingSetupSnapshot ReadDrawingSetup()
         {
             var database = _document.Database

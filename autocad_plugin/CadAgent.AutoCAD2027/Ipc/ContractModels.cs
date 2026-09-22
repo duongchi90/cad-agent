@@ -20,7 +20,8 @@ public static class ContractConstants
             "visual_evidence_export",
             "native_render_evidence",
             "exact_base_xref_inspection",
-            "exact_base_xref_extraction"
+            "exact_base_xref_extraction",
+            "bounded_native_line_edit"
         };
 }
 
