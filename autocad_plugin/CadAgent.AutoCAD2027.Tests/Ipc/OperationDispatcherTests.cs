@@ -40,6 +40,7 @@ public sealed class OperationDispatcherTests
                 DbmodBefore: 0,
                 DbmodAfter: 0,
                 SavePerformed: true,
+                DurableState: BoundedNativeLineEditDurableStates.Changed,
                 TargetEntities: Array.Empty<BoundedNativeLineEditEntityEvidence>(),
                 ProtectedEntities: Array.Empty<BoundedNativeLineEditEntityEvidence>())
         };
@@ -62,11 +63,14 @@ public sealed class OperationDispatcherTests
             Assert.Equal(BoundedNativeLineEditPolicy.TargetHandles, result.EntityHandles);
             Assert.Equal(1, gateway.ApplyBoundedNativeLineEditCallCount);
             Assert.Equal(
-                "bounded-native-line-edit-1.0",
+                BoundedNativeLineEditOperationNames.ResultSchemaVersion,
                 result.Payload!["schema_version"].GetString());
             Assert.Equal(0, result.Payload["dbmod_before"].GetInt32());
             Assert.Equal(0, result.Payload["dbmod_after"].GetInt32());
             Assert.True(result.Payload["save_performed"].GetBoolean());
+            Assert.Equal(
+                BoundedNativeLineEditDurableStates.Changed,
+                result.Payload["durable_state"].GetString());
         }
         finally
         {

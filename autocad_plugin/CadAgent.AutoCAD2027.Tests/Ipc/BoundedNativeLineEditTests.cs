@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
 using Xunit;
 
@@ -39,6 +40,17 @@ public sealed class BoundedNativeLineEditTests
         Assert.Contains(
             validation.Errors,
             error => error.Contains("overlap", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void SaveFailureAfterPossibleDurableWriteReportsRollbackState()
+    {
+        Assert.Equal(
+            BoundedNativeLineEditDurableStates.Unchanged,
+            BoundedNativeLineEditDurableStates.ResolveAfterSaveFailure(rollbackPersisted: true));
+        Assert.Equal(
+            BoundedNativeLineEditDurableStates.Uncertain,
+            BoundedNativeLineEditDurableStates.ResolveAfterSaveFailure(rollbackPersisted: false));
     }
 
     private static IpcRequest Request(

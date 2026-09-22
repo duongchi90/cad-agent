@@ -413,7 +413,8 @@ public sealed class OperationDispatcher
     {
         var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
         {
-            ["schema_version"] = JsonSerializer.SerializeToElement("bounded-native-line-edit-1.0"),
+            ["schema_version"] = JsonSerializer.SerializeToElement(
+                BoundedNativeLineEditOperationNames.ResultSchemaVersion),
             ["run_id"] = JsonSerializer.SerializeToElement(request.RunId),
             ["target_role"] = JsonSerializer.SerializeToElement(request.TargetRole),
             ["approval_reference"] = JsonSerializer.SerializeToElement(request.ApprovalReference),
@@ -423,6 +424,7 @@ public sealed class OperationDispatcher
             ["dbmod_before"] = JsonSerializer.SerializeToElement(snapshot.DbmodBefore),
             ["dbmod_after"] = JsonSerializer.SerializeToElement(snapshot.DbmodAfter),
             ["save_performed"] = JsonSerializer.SerializeToElement(snapshot.SavePerformed),
+            ["durable_state"] = JsonSerializer.SerializeToElement(snapshot.DurableState),
             ["target_entities"] = JsonSerializer.SerializeToElement(
                 snapshot.TargetEntities.Select(SerializeBoundedEntity)),
             ["protected_competing_entities"] = JsonSerializer.SerializeToElement(

@@ -3,6 +3,17 @@ namespace CadAgent.AutoCAD2027.Drawing;
 public static class BoundedNativeLineEditOperationNames
 {
     public const string Edit = "bounded_native_line_edit";
+    public const string ResultSchemaVersion = "bounded-native-line-edit-1.1";
+}
+
+public static class BoundedNativeLineEditDurableStates
+{
+    public const string Changed = "CHANGED";
+    public const string Unchanged = "UNCHANGED";
+    public const string Uncertain = "UNCERTAIN";
+
+    public static string ResolveAfterSaveFailure(bool rollbackPersisted) =>
+        rollbackPersisted ? Unchanged : Uncertain;
 }
 
 public sealed record BoundedNativeLineEditRequest(
@@ -50,6 +61,7 @@ public sealed record BoundedNativeLineEditSnapshot(
     int DbmodBefore,
     int DbmodAfter,
     bool SavePerformed,
+    string DurableState,
     IReadOnlyList<BoundedNativeLineEditEntityEvidence> TargetEntities,
     IReadOnlyList<BoundedNativeLineEditEntityEvidence> ProtectedEntities)
 {
@@ -66,6 +78,7 @@ public sealed record BoundedNativeLineEditSnapshot(
             DbmodBefore: 0,
             DbmodAfter: 0,
             SavePerformed: false,
+            DurableState: BoundedNativeLineEditDurableStates.Unchanged,
             TargetEntities: Array.Empty<BoundedNativeLineEditEntityEvidence>(),
             ProtectedEntities: Array.Empty<BoundedNativeLineEditEntityEvidence>());
 }

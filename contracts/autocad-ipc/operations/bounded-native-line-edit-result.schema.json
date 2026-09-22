@@ -15,11 +15,12 @@
     "dbmod_before",
     "dbmod_after",
     "save_performed",
+    "durable_state",
     "target_entities",
     "protected_competing_entities"
   ],
   "properties": {
-    "schema_version": { "const": "bounded-native-line-edit-1.0" },
+    "schema_version": { "const": "bounded-native-line-edit-1.1" },
     "run_id": { "$ref": "#/$defs/identifier" },
     "target_role": { "const": "ACCEPTED_NATIVE_DWG" },
     "approval_reference": { "$ref": "#/$defs/identifier" },
@@ -33,6 +34,9 @@
     "dbmod_before": { "type": "integer", "minimum": 0 },
     "dbmod_after": { "type": "integer", "minimum": 0 },
     "save_performed": { "type": "boolean" },
+    "durable_state": {
+      "enum": ["CHANGED", "UNCHANGED", "UNCERTAIN"]
+    },
     "target_entities": {
       "type": "array",
       "minItems": 0,

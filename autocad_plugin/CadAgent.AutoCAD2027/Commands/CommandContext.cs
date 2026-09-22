@@ -264,15 +264,33 @@ public sealed class CommandContext
             }
             catch (System.Exception exception)
             {
-                RestoreNativeLines(database, targetBefore);
+                var rollbackPersisted = TryRestoreAndPersistNativeLines(
+                    database,
+                    targetBefore,
+                    out var rollbackError);
+                var errors = new List<string>
+                {
+                    $"native line edit save failed: {exception.Message}"
+                };
+                if (rollbackPersisted)
+                {
+                    errors.Add("native line edit rollback persisted after save failure");
+                }
+                else
+                {
+                    errors.Add(
+                        $"DURABLE_STATE_UNCERTAIN: native line edit rollback could not be persisted: {rollbackError}");
+                }
+
                 return FailureWithEvidence(
                     activePath,
                     dbmodBefore,
-                    new[] { $"native line edit save failed: {exception.Message}" },
+                    errors,
                     targetBefore,
                     protectedBefore,
                     ReadNativeLineStates(database, request.TargetHandles),
-                    ReadNativeLineStates(database, request.ProtectedCompetingHandles));
+                    ReadNativeLineStates(database, request.ProtectedCompetingHandles),
+                    BoundedNativeLineEditDurableStates.ResolveAfterSaveFailure(rollbackPersisted));
             }
 
             var targetAfterSave = ReadNativeLineStates(database, request.TargetHandles);
@@ -285,24 +303,30 @@ public sealed class CommandContext
                 protectedAfterSave);
             if (savedReadbackErrors.Count != 0)
             {
-                RestoreNativeLines(database, targetBefore);
-                if (savePerformed)
+                var rollbackPersisted = TryRestoreAndPersistNativeLines(
+                    database,
+                    targetBefore,
+                    out var rollbackError);
+                var errors = savedReadbackErrors.ToList();
+                if (!rollbackPersisted)
                 {
-                    database.SaveAs(
-                        database.Filename,
-                        true,
-                        DwgVersion.Current,
-                        database.SecurityParameters);
+                    errors.Add(
+                        $"DURABLE_STATE_UNCERTAIN: native line edit rollback could not be persisted: {rollbackError}");
+                }
+                else if (savePerformed)
+                {
+                    errors.Add("native line edit rollback persisted after readback failure");
                 }
 
                 return FailureWithEvidence(
                     activePath,
                     dbmodBefore,
-                    savedReadbackErrors,
+                    errors,
                     targetBefore,
                     protectedBefore,
                     ReadNativeLineStates(database, request.TargetHandles),
-                    ReadNativeLineStates(database, request.ProtectedCompetingHandles));
+                    ReadNativeLineStates(database, request.ProtectedCompetingHandles),
+                    BoundedNativeLineEditDurableStates.ResolveAfterSaveFailure(rollbackPersisted));
             }
 
             return new BoundedNativeLineEditSnapshot(
@@ -315,6 +339,7 @@ public sealed class CommandContext
                 DbmodBefore: dbmodBefore,
                 DbmodAfter: Convert.ToInt32(ReadSystemNumber("DBMOD")),
                 SavePerformed: savePerformed,
+                DurableState: BoundedNativeLineEditDurableStates.Changed,
                 TargetEntities: BuildNativeLineEvidence(targetBefore, targetAfterSave, protectedBefore),
                 ProtectedEntities: BuildNativeLineEvidence(protectedBefore, protectedAfterSave, targetBefore));
         }
@@ -501,6 +526,29 @@ public sealed class CommandContext
             transaction.Commit();
         }
 
+        private bool TryRestoreAndPersistNativeLines(
+            Database database,
+            IReadOnlyList<NativeLineState> states,
+            out string? error)
+        {
+            try
+            {
+                RestoreNativeLines(database, states);
+                database.SaveAs(
+                    database.Filename,
+                    true,
+                    DwgVersion.Current,
+                    database.SecurityParameters);
+                error = null;
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
         private static IReadOnlyList<BoundedNativeLineEditEntityEvidence> BuildNativeLineEvidence(
             IReadOnlyList<NativeLineState> before,
             IReadOnlyList<NativeLineState> after,
@@ -542,7 +590,8 @@ public sealed class CommandContext
             IReadOnlyList<NativeLineState> targetBefore,
             IReadOnlyList<NativeLineState> protectedBefore,
             IReadOnlyList<NativeLineState> targetAfter,
-            IReadOnlyList<NativeLineState> protectedAfter) =>
+            IReadOnlyList<NativeLineState> protectedAfter,
+            string durableState = BoundedNativeLineEditDurableStates.Unchanged) =>
             new(
                 Success: false,
                 DrawingFullPath: drawingPath,
@@ -553,6 +602,7 @@ public sealed class CommandContext
                 DbmodBefore: dbmodBefore,
                 DbmodAfter: Convert.ToInt32(ReadSystemNumber("DBMOD")),
                 SavePerformed: false,
+                DurableState: durableState,
                 TargetEntities: BuildNativeLineEvidence(targetBefore, targetAfter, protectedBefore),
                 ProtectedEntities: BuildNativeLineEvidence(protectedBefore, protectedAfter, targetBefore));
 
