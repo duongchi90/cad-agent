@@ -158,6 +158,22 @@ internal static class BoundedNativeLineEditPolicy
                 ? "ROLLED_BACK"
                 : "UNCERTAIN";
 
+    internal static bool TryPersistRollbackIfDiskCurrent(
+        string expectedDiskSha256,
+        string currentDiskSha256,
+        Action persistRollback)
+    {
+        ArgumentNullException.ThrowIfNull(persistRollback);
+        if (string.IsNullOrWhiteSpace(expectedDiskSha256)
+            || !string.Equals(expectedDiskSha256, currentDiskSha256, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        persistRollback();
+        return true;
+    }
+
     internal static bool GeometryMatches(NativeLineGeometry actual, NativeLineGeometry expected) =>
         PointMatches(actual.Start, expected.Start)
         && PointMatches(actual.End, expected.End);

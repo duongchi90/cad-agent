@@ -162,6 +162,7 @@ public sealed class CommandContext
             var mutationStarted = false;
             var committed = false;
             string? candidatePath = null;
+            string? rollbackExpectedDiskSha256 = null;
 
             try
             {
@@ -171,6 +172,7 @@ public sealed class CommandContext
                     request.DrawingFullPath,
                     database.Filename);
                 drawingSha256Before = ComputeSha256(candidatePath);
+                rollbackExpectedDiskSha256 = drawingSha256Before;
                 dbmodBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"));
 
                 using (var transaction = _document.TransactionManager.StartTransaction())
@@ -268,6 +270,7 @@ public sealed class CommandContext
                     database.SecurityParameters);
 
                 var drawingSha256After = ComputeSha256(candidatePath);
+                rollbackExpectedDiskSha256 = drawingSha256After;
                 var activeAfterSave = ReadNativeLineObservations(database, request);
                 var reopenedAfterSave = ReadSavedNativeLineObservations(candidatePath, request);
                 BoundedNativeLineEditPolicy.ValidateReadback(request, before, activeAfterSave);
@@ -340,6 +343,7 @@ public sealed class CommandContext
                         database,
                         request,
                         candidatePath,
+                        rollbackExpectedDiskSha256,
                         before,
                         out rollbackSha256,
                         out rollbackError);
@@ -565,6 +569,7 @@ public sealed class CommandContext
             Database database,
             BoundedNativeLineEditRequest request,
             string candidatePath,
+            string? expectedDiskSha256,
             IReadOnlyCollection<NativeLineEditObservation> before,
             out string? drawingSha256After,
             out string error)
@@ -587,11 +592,21 @@ public sealed class CommandContext
                     return false;
                 }
 
-                database.SaveAs(
-                    canonicalCandidate,
-                    true,
-                    DwgVersion.Current,
-                    database.SecurityParameters);
+                var rollbackPersisted = BoundedNativeLineEditPolicy.TryPersistRollbackIfDiskCurrent(
+                    expectedDiskSha256 ?? string.Empty,
+                    ComputeSha256(canonicalCandidate),
+                    () => database.SaveAs(
+                        canonicalCandidate,
+                        true,
+                        DwgVersion.Current,
+                        database.SecurityParameters));
+                if (!rollbackPersisted)
+                {
+                    throw new InvalidOperationException(
+                        string.IsNullOrWhiteSpace(expectedDiskSha256)
+                            ? "no trusted candidate disk SHA was captured before rollback persistence"
+                            : "candidate disk SHA changed before rollback persistence");
+                }
                 drawingSha256After = ComputeSha256(canonicalCandidate);
                 var reopened = ReadSavedNativeLineObservations(canonicalCandidate, request);
                 BoundedNativeLineEditPolicy.ValidateRollbackReadback(request, before, reopened);
