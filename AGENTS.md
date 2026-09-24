@@ -35,6 +35,8 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 
 The authoritative scripts are `scripts/bootstrap.ps1` and `scripts/verify.ps1`.
 
+For portable local-session preparation, use the [Luna session runbook](docs/LUNA_SESSION_RUNBOOK.md); its helper prints manual AutoCAD instructions only.
+
 Do not copy the pytest selection into another script or workflow. Add a test
 root or lint target to `scripts/verify.ps1` and its contract test.
 
