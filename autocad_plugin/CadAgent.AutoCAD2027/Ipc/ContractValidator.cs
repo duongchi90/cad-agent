@@ -30,6 +30,7 @@ public sealed class ContractValidationException : ArgumentException
 
 public static class ContractValidator
 {
+    internal const double NativeLineEndpointTolerance = 1e-8;
     private static readonly Regex RequestIdPattern =
         new("^[A-Za-z0-9][A-Za-z0-9_-]*$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -717,8 +718,26 @@ public static class ContractValidator
         value.Length is > 0 and <= 64 && value.All(Uri.IsHexDigit);
 
     private static bool IsSameNativeLine(double[] start, double[] end, double[] otherStart, double[] otherEnd) =>
-        (start.SequenceEqual(otherStart) && end.SequenceEqual(otherEnd))
-        || (start.SequenceEqual(otherEnd) && end.SequenceEqual(otherStart));
+        (NativePointsMatch(start, otherStart) && NativePointsMatch(end, otherEnd))
+        || (NativePointsMatch(start, otherEnd) && NativePointsMatch(end, otherStart));
+
+    private static bool NativePointsMatch(IReadOnlyList<double> left, IReadOnlyList<double> right)
+    {
+        if (left.Count != 3 || right.Count != 3)
+        {
+            return false;
+        }
+        for (var index = 0; index < 3; index++)
+        {
+            if (!double.IsFinite(left[index])
+                || !double.IsFinite(right[index])
+                || Math.Abs(left[index] - right[index]) > NativeLineEndpointTolerance)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     private static void ValidateDisposableParameters(
         IReadOnlyDictionary<string, JsonElement> parameters,
