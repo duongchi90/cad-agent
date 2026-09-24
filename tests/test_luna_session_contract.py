@@ -216,6 +216,22 @@ def test_doctor_reports_missing_tools_without_launching_autocad(tmp_path: Path) 
     assert "AUTOCAD_ACTION=NOT RUN" in result.stdout
 
 
+def test_doctor_finds_standard_tesseract_installation_outside_path(tmp_path: Path) -> None:
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    tesseract = program_files / "Tesseract-OCR/tesseract.exe"
+    if not tesseract.is_file():
+        pytest.skip("standard Tesseract installation is unavailable")
+
+    repo, _, _ = _fixture_repo(tmp_path)
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    env = os.environ.copy()
+    env["PATH"] = str(empty_path) + os.pathsep + r"C:\Windows\System32"
+    result = _run_script(repo, "Doctor", env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "tesseract.exe=tesseract v5.4.0.20240606" in result.stdout
+
+
 def test_build_plugin_refuses_dirty_source_before_dotnet(tmp_path: Path) -> None:
     repo, _, _ = _fixture_repo(tmp_path)
     (repo / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")

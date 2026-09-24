@@ -79,15 +79,26 @@ function Write-StartReport {
 }
 
 function Test-ToolVersion {
-    param([string]$Name, [string[]]$VersionArguments, [string]$RequiredPattern)
+    param(
+        [string]$Name,
+        [string[]]$VersionArguments,
+        [string]$RequiredPattern,
+        [string]$FallbackPath
+    )
 
     $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -eq $command) {
+    $executable = if ($command) {
+        $command.Source
+    }
+    elseif ($FallbackPath -and (Test-Path -LiteralPath $FallbackPath -PathType Leaf)) {
+        $FallbackPath
+    }
+    else {
         Write-Output ('BLOCKER={0} not found' -f $Name)
         return
     }
 
-    $output = & $command.Source @VersionArguments 2>&1
+    $output = & $executable @VersionArguments 2>&1
     $exitCode = $LASTEXITCODE
     $version = (($output | ForEach-Object { [string]$_ }) -join ' ').Trim()
     if ($exitCode -ne 0 -or ($RequiredPattern -and $version -notmatch $RequiredPattern)) {
@@ -102,9 +113,15 @@ function Write-DoctorReport {
     Write-Output ('OS={0}' -f $env:OS)
     Test-ToolVersion 'py.exe' @('-3.11', '--version') '^Python 3\.11\.'
     Test-ToolVersion 'dotnet.exe' @('--version') '^10\.0\.'
-    Test-ToolVersion 'tesseract.exe' @('--version') '(?m)^tesseract 5\.4\.0\.20240606'
-
     $programFiles = ${env:ProgramFiles}
+    $tesseractPath = if ($programFiles) {
+        Join-Path $programFiles 'Tesseract-OCR/tesseract.exe'
+    }
+    else {
+        ''
+    }
+    Test-ToolVersion 'tesseract.exe' @('--version') '(?m)^tesseract v?5\.4\.0\.20240606' $tesseractPath
+
     $acadPath = if ($programFiles) {
         Join-Path $programFiles 'Autodesk/AutoCAD 2027/acad.exe'
     }
