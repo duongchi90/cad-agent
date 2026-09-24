@@ -22,6 +22,15 @@ public sealed class OperationDispatcher
     }
 
     public IpcResult Dispatch(IpcRequest? request)
+        => DispatchCore(request, requestRead: null);
+
+    internal IpcResult DispatchFileIpcRequest(IpcRequestReadSnapshot requestRead)
+    {
+        ArgumentNullException.ThrowIfNull(requestRead);
+        return DispatchCore(requestRead.Request, requestRead);
+    }
+
+    private IpcResult DispatchCore(IpcRequest? request, IpcRequestReadSnapshot? requestRead)
     {
         var startedAt = _context.Clock();
         _context.ClearMechanicalWarnings();
@@ -47,7 +56,7 @@ public sealed class OperationDispatcher
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
-                "bounded_native_line_edit" => DispatchBoundedNativeLineEdit(request, startedAt),
+                "bounded_native_line_edit" => DispatchBoundedNativeLineEdit(request, requestRead, startedAt),
                 ExactBaseXrefOperationNames.Inspection => DispatchExactBaseXrefInspection(request, startedAt),
                 ExactBaseXrefOperationNames.Extraction => DispatchExactBaseXrefExtraction(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
@@ -290,15 +299,19 @@ public sealed class OperationDispatcher
             startedAt);
     }
 
-    private IpcResult DispatchBoundedNativeLineEdit(IpcRequest request, DateTimeOffset startedAt)
+    private IpcResult DispatchBoundedNativeLineEdit(
+        IpcRequest request,
+        IpcRequestReadSnapshot? requestRead,
+        DateTimeOffset startedAt)
     {
-        if (!TryMatchActiveDocument(request.DrawingFullPath, out var activePath, out var error))
+        using var custody = _context.Store.AcquireNativeEditCustody(requestRead);
+        var boundRequest = custody.Request;
+        if (!TryMatchActiveDocument(boundRequest.DrawingFullPath, out var activePath, out var error))
         {
-            return Failure(request, new[] { error }, startedAt);
+            return Failure(boundRequest, new[] { error }, startedAt);
         }
 
-        var editRequest = ParseBoundedNativeLineEditRequest(request);
-        _context.Store.EnsureProtectedForNativeEdit();
+        var editRequest = ParseBoundedNativeLineEditRequest(boundRequest);
         var snapshot = _context.DrawingGateway.ApplyBoundedNativeLineEdit(editRequest);
         if (!snapshot.Changed
             || !string.Equals(snapshot.DurableState, "SAVED", StringComparison.Ordinal)
@@ -306,7 +319,7 @@ public sealed class OperationDispatcher
             || snapshot.Errors.Count != 0)
         {
             return Failure(
-                request,
+                boundRequest,
                 snapshot.Errors.Count > 0
                     ? snapshot.Errors
                     : new[] { "bounded_native_line_edit did not produce a saved readback" },
@@ -326,7 +339,7 @@ public sealed class OperationDispatcher
             ["errors"] = JsonSerializer.SerializeToElement(snapshot.Errors)
         };
         var result = CreateResult(
-            request.RequestId!,
+            boundRequest.RequestId!,
             "bounded_native_line_edit",
             activePath,
             success: true,

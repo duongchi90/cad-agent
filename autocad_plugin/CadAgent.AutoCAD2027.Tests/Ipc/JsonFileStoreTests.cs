@@ -38,6 +38,37 @@ public sealed class JsonFileStoreTests
     }
 
     [Fact]
+    public void AcceptsProtectedIpcRootUnderAnUntrustedParentWhenRootAclIsProtected()
+    {
+        var parentPath = Path.Combine(Path.GetTempPath(), "cadagent-untrusted-parent-" + Guid.NewGuid().ToString("N"));
+        var rootPath = Path.Combine(parentPath, "ipc");
+        Directory.CreateDirectory(rootPath);
+
+        try
+        {
+            var parent = new DirectoryInfo(parentPath);
+            var parentSecurity = parent.GetAccessControl();
+            parentSecurity.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+                FileSystemRights.Modify,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(parentSecurity);
+            SetProtectedAcl(rootPath);
+
+            ProtectedIpcDirectoryPolicy.EnsureProtected(rootPath, canonical: true);
+        }
+        finally
+        {
+            if (Directory.Exists(parentPath))
+            {
+                Directory.Delete(parentPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void RejectsProtectedIpcRootThatGrantsWriteToAnotherWindowsPrincipal()
     {
         using var fixture = new StoreFixture();
