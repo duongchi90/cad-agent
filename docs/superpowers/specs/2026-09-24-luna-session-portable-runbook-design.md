@@ -90,9 +90,15 @@ The tracked workflow is:
 7. Print the manual `NETLOAD`/`APPLOAD` packet and the post-load health check.
 8. Fresh-read the active GitHub issue/PR/CI and current review boundary before
    material work. Never use a stale mutable SHA or chat-only verdict.
-9. Execute the smallest bounded action. If SOL is silent, freeze the exact
-   reviewed state and enter `WAIT_SAFE`; continue only non-overlapping
-   read-only preparation and do not poll continuously.
+9. Execute the smallest bounded action. A required review that is still
+   pending holds only the affected mutation/promotion lane. `WAIT_SAFE` is a
+   coordination label, not a project stop condition, approval, or replacement
+   for the continuation/failover contract in Issue #305. Keep the exact gated
+   head frozen, continue safe non-overlapping/read-only work, consume a
+   required verdict once it exists, and use the channel-agnostic PO failover
+   when a review channel is known unresponsive. Do not use Human as a relay or
+   poll continuously. Do not mutate the gated head except to resolve a current
+   material finding.
 10. At every meaningful checkpoint, update the durable GitHub evidence and
     preserve the resume-state fields below.
 
@@ -113,25 +119,33 @@ to tracked documentation or use a caller-provided HWND/PID as runtime proof.
 
 ## Resume-state contract
 
-The tracked template and validator must require these fields exactly:
+Issue #305 owns the canonical Luna continuation/resume contract. The tracked
+template and validator must preserve its current minimum retained context;
+this design does not define a competing exact-field schema:
 
 ```text
-MAIN
-HEAD
-ACTIVE_ISSUE
+GOAL
+CURRENT_MAIN
+CURRENT_HEAD
 ACTIVE_PR
-BOUNDARY
-COMPLETED
-EVIDENCE_REFS
-MATERIAL_FINDING
-REVIEW_PENDING
-SAFE_NEXT_PREP
+DONE
+ACCEPTED_EVIDENCE_REFS
+FIRST_UNSATISFIED_BOUNDARY
+CURRENT_RISK
+ACTIVE_WRITESET
+LIVE_LOCK_STATE
+UNACKED_CURRENT_ADVISORIES
+NEXT_ACTION
 ```
 
-`HEAD`, `MAIN`, and evidence references must be exact values observed from the
-current run. The contract must reject blank values and obvious placeholders,
-but it must not assert that a cached value is still current. Freshness is
-re-established by the next session's GitHub/Git read.
+The validator must retain every field required by the current #305 contract,
+reject blank values and obvious placeholders, and fail closed for any
+unreconciled contract change. Supplemental summary fields are permitted only
+as non-authoritative views; they must not replace or discard canonical context.
+Currentness is re-established by fresh GitHub/Git reads, never inferred from a
+cached resume value. Coordination labels such as `COMPLETED`,
+`MATERIAL_FINDING`, `REVIEW_PENDING`, and `SAFE_NEXT_PREP` are not approval
+identities and cannot make a prior verdict current.
 
 ## Proposed interfaces
 
@@ -141,12 +155,17 @@ actions:
 - `Start`: print the runbook, repository identity, Git cleanliness, and the
   next required read-only checks.
 - `Doctor`: validate available local tools and report actionable blockers.
-- `BuildPlugin`: invoke the existing Release x64 build owner, then print the
-  derived DLL path and SHA-256 without loading it.
-- `Packet`: print the exact manual AutoCAD load packet for the built DLL and
-  repository LSP.
-- `ValidateResume -ResumeState <path>`: validate the ten required resume
-  fields without changing Git or AutoCAD state.
+- `BuildPlugin`: require the exact current clean source head, invoke the
+  existing solution's clean Release x64 build owner, then print the observed
+  source head/tree, derived DLL path, and SHA-256 without loading it.
+- `Packet`: establish exact clean HEAD-to-DLL provenance in the same
+  invocation before printing a load packet. Rebuild through the existing
+  solution and hash the resulting DLL; do not trust a pre-existing DLL merely
+  because its path or current bytes are known. If the current clean source
+  head cannot be bound to those bytes, fail closed. This run-scoped proof
+  requires no persistent provenance store.
+- `ValidateResume -ResumeState <path>`: validate and retain the current
+  canonical #305 minimum context without changing Git or AutoCAD state.
 
 The script must fail closed on unknown actions, missing files, dirty-source
 build requests, unsupported product boundaries, or missing required tools.
@@ -156,12 +175,17 @@ build requests, unsupported product boundaries, or missing required tools.
 The contract test must prove that:
 
 - the runbook names the canonical docs and authoritative scripts;
-- the runbook contains the ten resume fields and WAIT_SAFE rules;
+- the runbook preserves the current #305 minimum resume context and makes
+  WAIT_SAFE/failover semantics defer to that canonical continuation contract;
 - the script derives paths from its repository root;
 - the script names the existing solution, DLL output, LSP, and commands;
 - no private path, API key, conversation ID, HWND, or PID is required in the
   tracked interface;
 - invalid resume state is rejected and a complete state is accepted;
+- a missing canonical #305 field is rejected and supplemental coordination
+  labels cannot substitute for canonical context or fresh verdicts;
+- Packet fails closed on dirty/stale/unproven source-to-DLL provenance and
+  binds its printed SHA to a clean exact-head build in the same invocation;
 - the script does not duplicate `scripts\\verify.ps1` test selection.
 
 Run focused tests first, then `scripts\\verify.ps1` with the appropriate live
