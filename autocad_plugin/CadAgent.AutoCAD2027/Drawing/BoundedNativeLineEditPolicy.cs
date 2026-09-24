@@ -7,7 +7,8 @@ internal sealed record NativeLineEditObservation(
     bool IsAcDbLine,
     bool IsDirectModelSpace,
     bool HasSharedDefinitionReachability,
-    NativeLineGeometry Geometry);
+    NativeLineGeometry Geometry,
+    bool HasPersistentReactors = false);
 
 internal static class BoundedNativeLineEditPolicy
 {
@@ -54,7 +55,7 @@ internal static class BoundedNativeLineEditPolicy
 
         foreach (var target in request.Targets)
         {
-            var observed = RequireDirectModelSpaceLine(byHandle, target.Handle);
+            var observed = RequireTargetLine(byHandle, target.Handle);
             if (!GeometryMatches(observed.Geometry, target.Before))
             {
                 throw new InvalidOperationException(
@@ -88,8 +89,8 @@ internal static class BoundedNativeLineEditPolicy
 
         foreach (var target in request.Targets)
         {
-            _ = RequireDirectModelSpaceLine(beforeByHandle, target.Handle);
-            var readback = RequireDirectModelSpaceLine(afterByHandle, target.Handle);
+            _ = RequireTargetLine(beforeByHandle, target.Handle);
+            var readback = RequireTargetLine(afterByHandle, target.Handle);
             if (!GeometryMatches(readback.Geometry, target.After))
             {
                 throw new InvalidOperationException(
@@ -125,8 +126,8 @@ internal static class BoundedNativeLineEditPolicy
 
         foreach (var target in request.Targets)
         {
-            var original = RequireDirectModelSpaceLine(beforeByHandle, target.Handle);
-            var restored = RequireDirectModelSpaceLine(afterByHandle, target.Handle);
+            var original = RequireTargetLine(beforeByHandle, target.Handle);
+            var restored = RequireTargetLine(afterByHandle, target.Handle);
             if (!GeometryMatches(original.Geometry, target.Before)
                 || !GeometryMatches(restored.Geometry, original.Geometry))
             {
@@ -190,6 +191,19 @@ internal static class BoundedNativeLineEditPolicy
         {
             throw new InvalidOperationException(
                 $"native entity {handle} is not an isolated direct ModelSpace AcDbLine");
+        }
+        return observation;
+    }
+
+    private static NativeLineEditObservation RequireTargetLine(
+        IReadOnlyDictionary<string, NativeLineEditObservation> observations,
+        string handle)
+    {
+        var observation = RequireDirectModelSpaceLine(observations, handle);
+        if (observation.HasPersistentReactors)
+        {
+            throw new InvalidOperationException(
+                $"target LINE {handle} has persistent reactors; bounded native edit cannot prove associated state remains unchanged");
         }
         return observation;
     }

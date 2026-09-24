@@ -91,6 +91,25 @@ public sealed class BoundedNativeLineEditPolicyTests
     }
 
     [Fact]
+    public void RejectsDirectModelSpaceTargetWithPersistentReactorsBeforeMutation()
+    {
+        var observations = BeforeObservations()
+            .Select(item => item.Handle == "A1"
+                ? item with { HasPersistentReactors = true }
+                : item)
+            .ToArray();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            BoundedNativeLineEditPolicy.ValidateBeforeWrite(
+                Request(),
+                CandidatePath,
+                CandidatePath,
+                ExpectedSha256,
+                0,
+                observations));
+    }
+
+    [Fact]
     public void RejectsExpectedBeforeMismatch()
     {
         var observations = BeforeObservations()

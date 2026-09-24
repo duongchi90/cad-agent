@@ -414,12 +414,15 @@ public sealed class CommandContext
                 }
 
                 var directModelSpace = line.OwnerId == modelSpaceId;
+                var hasPersistentReactors = targets.Contains(handleText)
+                    && line.GetPersistentReactorIds().Count > 0;
                 observations.Add(new NativeLineEditObservation(
                     handleText.Trim().ToUpperInvariant(),
                     IsAcDbLine: true,
                     IsDirectModelSpace: directModelSpace,
                     HasSharedDefinitionReachability: !directModelSpace,
-                    ToNativeLineGeometry(line)));
+                    ToNativeLineGeometry(line),
+                    HasPersistentReactors: hasPersistentReactors));
                 if (targetLines is not null && targets.Contains(handleText))
                 {
                     targetLines.Add(handleText, line);
