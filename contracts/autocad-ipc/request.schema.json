@@ -33,7 +33,8 @@
         "visual_evidence_export",
         "native_render_evidence",
         "exact_base_xref_inspection",
-        "exact_base_xref_extraction"
+        "exact_base_xref_extraction",
+        "bounded_native_line_edit"
       ]
     },
     "drawing_full_path": {
@@ -220,6 +221,35 @@
           },
           "parameters": {
             "$ref": "operations/native-render-evidence.schema.json"
+          },
+          "approval": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "bounded_native_line_edit"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "drawing_full_path": {
+            "type": "string"
+          },
+          "drawing_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "parameters": {
+            "$ref": "operations/bounded-native-line-edit.schema.json"
           },
           "approval": {
             "const": null

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/bounded-native-line-edit.schema.json",
+  "title": "CadAgent bounded native ModelSpace LINE edit request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["targets", "protected"],
+  "properties": {
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/target" }
+    },
+    "protected": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/protectedEntity" }
+    }
+  },
+  "$defs": {
+    "handle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Fa-f]+$"
+    },
+    "point3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/point3" },
+        "end": { "$ref": "#/$defs/point3" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "before", "after"],
+      "properties": {
+        "handle": { "$ref": "#/$defs/handle" },
+        "before": { "$ref": "#/$defs/line" },
+        "after": { "$ref": "#/$defs/line" }
+      }
+    },
+    "protectedEntity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "before"],
+      "properties": {
+        "handle": { "$ref": "#/$defs/handle" },
+        "before": { "$ref": "#/$defs/line" }
+      }
+    }
+  }
+}

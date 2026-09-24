@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.DrawingSetup;
@@ -13,6 +15,124 @@ namespace CadAgent.AutoCAD2027.Tests.Ipc;
 
 public sealed class OperationDispatcherTests
 {
+    [Fact]
+    public void BoundedNativeLineEditRequiresProtectedIpcRootBeforeRoutingSavedSnapshot()
+    {
+        const string path = @"C:\drawings\candidate.dwg";
+        var ipcPath = Path.Combine(Path.GetTempPath(), "cadagent-native-edit-" + Guid.NewGuid().ToString("N"));
+        var store = new JsonFileStore(ipcPath);
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            BoundedNativeLineEdit = new BoundedNativeLineEditSnapshot(
+                true,
+                "SAVED",
+                true,
+                new string('a', 64),
+                new string('b', 64),
+                new[]
+                {
+                    new BoundedNativeLineEditState(
+                        "A1",
+                        new(new[] { 0d, 0d, 0d }, new[] { 4d, 0d, 0d }),
+                        new(new[] { 0d, 0d, 0d }, new[] { 5d, 0d, 0d }))
+                },
+                new[]
+                {
+                    new BoundedNativeLineEditState(
+                        "AF",
+                        new(new[] { 0d, 1d, 0d }, new[] { 0d, 4d, 0d }),
+                        new(new[] { 0d, 1d, 0d }, new[] { 0d, 4d, 0d }))
+                },
+                Array.Empty<string>(),
+                Array.Empty<string>())
+        };
+
+        try
+        {
+            SetProtectedAcl(ipcPath);
+            var rootFailure = Record.Exception(store.EnsureProtectedForNativeEdit);
+            var result = CreateDispatcher(gateway, store: store)
+                .Dispatch(BoundedNativeLineEditRequest(path));
+
+            if (rootFailure is not null)
+            {
+                Assert.False(result.Success);
+                Assert.False(result.Changed);
+                Assert.Empty(result.EntityHandles!);
+                Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
+                Assert.Contains(result.Errors!, error =>
+                    error.Contains("FileIPC", StringComparison.OrdinalIgnoreCase)
+                    || error.Contains("untrusted", StringComparison.OrdinalIgnoreCase));
+                return;
+            }
+
+            Assert.True(result.Success, string.Join("; ", result.Errors!));
+            Assert.True(result.Changed);
+            Assert.Equal(new[] { "A1" }, result.EntityHandles);
+            Assert.Equal(1, gateway.ApplyBoundedNativeLineEditCallCount);
+            Assert.Equal("SAVED", result.Payload!["durable_state"].GetString());
+            Assert.True(result.Payload["save_performed"].GetBoolean());
+            Assert.Equal(new string('a', 64), result.Payload["drawing_sha256_before"].GetString());
+            Assert.Equal(new string('b', 64), result.Payload["drawing_sha256_after"].GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(ipcPath))
+            {
+                Directory.Delete(ipcPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void BoundedNativeLineEditRejectsUnprotectedIpcRootBeforeGatewayCall()
+    {
+        const string path = @"C:\drawings\candidate.dwg";
+        var ipcPath = Path.Combine(Path.GetTempPath(), "cadagent-native-edit-unprotected-" + Guid.NewGuid().ToString("N"));
+        var gateway = new StubDrawingGateway { ActiveDocumentFullPath = path };
+        var store = new JsonFileStore(ipcPath);
+
+        try
+        {
+            SetUnprotectedAcl(ipcPath);
+            var result = CreateDispatcher(gateway, store: store)
+                .Dispatch(BoundedNativeLineEditRequest(path));
+
+            Assert.False(result.Success);
+            Assert.False(result.Changed);
+            Assert.Empty(result.EntityHandles!);
+            Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
+            Assert.Contains(result.Errors!, error =>
+                error.Contains("protected", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(ipcPath))
+            {
+                Directory.Delete(ipcPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void BoundedNativeLineEditRejectsActiveDocumentMismatchBeforeGatewayCall()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\open.dwg"
+        };
+
+        var result = CreateDispatcher(gateway).Dispatch(
+            BoundedNativeLineEditRequest(@"C:\drawings\other.dwg"));
+
+        Assert.False(result.Success);
+        Assert.False(result.Changed);
+        Assert.Empty(result.EntityHandles!);
+        Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
+        Assert.Contains(result.Errors!, error => error.Contains("does not match", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void ExactBaseXrefInspectionRoutesFreshReadOnlySnapshotToResult()
     {
@@ -853,15 +973,61 @@ public sealed class OperationDispatcherTests
         Action? closeWithoutSaving = null,
         IMechanicalAdapter? mechanicalAdapter = null,
         ICollection<string>? mechanicalWarnings = null,
-        ExactBaseXrefPolicy? exactBaseXrefPolicy = null) =>
+        ExactBaseXrefPolicy? exactBaseXrefPolicy = null,
+        JsonFileStore? store = null) =>
         new(new CommandContext(
-            new JsonFileStore(Path.Combine(Path.GetTempPath(), "cadagent-t06-tests", Guid.NewGuid().ToString("N"))),
+            store ?? new JsonFileStore(Path.Combine(Path.GetTempPath(), "cadagent-t06-tests", Guid.NewGuid().ToString("N"))),
             gateway,
             closeWithoutSaving ?? (() => { }),
             clock: () => new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
             mechanicalAdapter: mechanicalAdapter,
             mechanicalWarnings: mechanicalWarnings,
             exactBaseXrefPolicy: exactBaseXrefPolicy));
+
+    private static void SetUnprotectedAcl(string directoryPath)
+    {
+        var security = new DirectoryInfo(directoryPath).GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: false, preserveInheritance: true);
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        new DirectoryInfo(directoryPath).SetAccessControl(security);
+    }
+
+    private static void SetProtectedAcl(string directoryPath)
+    {
+        var directory = new DirectoryInfo(directoryPath);
+        var security = directory.GetAccessControl();
+        var trustedSids = new[]
+        {
+            WindowsIdentity.GetCurrent().User!,
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null)
+        };
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (FileSystemAccessRule rule in security.GetAccessRules(
+                     includeExplicit: true,
+                     includeInherited: false,
+                     targetType: typeof(SecurityIdentifier)))
+        {
+            security.RemoveAccessRuleAll(rule);
+        }
+
+        foreach (var trustedSid in trustedSids)
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                trustedSid,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+        }
+
+        directory.SetAccessControl(security);
+    }
 
     private static (IpcRequest Request, ExactBaseXrefPolicy Policy, string Root, string TargetPath)
         InspectionDispatcherFixture()
@@ -1225,6 +1391,14 @@ public sealed class OperationDispatcherTests
             Approval = null
         };
 
+    private static IpcRequest BoundedNativeLineEditRequest(string path) => Request(
+        "bounded_native_line_edit",
+        "native-edit-001",
+        path,
+        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            """{"targets":[{"handle":"A1","before":{"start":[0,0,0],"end":[4,0,0]},"after":{"start":[0,0,0],"end":[5,0,0]}}],"protected":[{"handle":"AF","before":{"start":[0,1,0],"end":[0,4,0]}}]}""")!,
+        new string('a', 64));
+
     private static Dictionary<string, JsonElement> Parameters(
         params (string Name, JsonElement Value)[] values) =>
         values.ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
@@ -1301,6 +1475,8 @@ public sealed class OperationDispatcherTests
 
         public ExactBaseXrefExtractionSnapshot? ExactBaseXrefExtraction { get; init; }
 
+        public BoundedNativeLineEditSnapshot? BoundedNativeLineEdit { get; init; }
+
         public Exception? NativeRenderException { get; init; }
 
         public int ReadEntitiesCallCount { get; private set; }
@@ -1314,6 +1490,8 @@ public sealed class OperationDispatcherTests
         public int ReadExactBaseXrefInspectionCallCount { get; private set; }
 
         public int ExtractExactBaseXrefCallCount { get; private set; }
+
+        public int ApplyBoundedNativeLineEditCallCount { get; private set; }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
@@ -1368,6 +1546,14 @@ public sealed class OperationDispatcherTests
                 ?? ExactBaseXrefExtractionSnapshot.Failure(
                     ActiveDocumentFullPath,
                     new[] { "No extraction fixture was configured." });
+        }
+
+        public BoundedNativeLineEditSnapshot ApplyBoundedNativeLineEdit(
+            BoundedNativeLineEditRequest request)
+        {
+            ApplyBoundedNativeLineEditCallCount++;
+            return BoundedNativeLineEdit
+                ?? throw new InvalidOperationException("No bounded native edit fixture was configured.");
         }
     }
 

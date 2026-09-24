@@ -5,6 +5,8 @@ namespace CadAgent.AutoCAD2027.Ipc;
 
 public sealed class JsonFileStore
 {
+    private readonly bool _ipcDirectoryIsCanonical;
+
     public JsonFileStore(
         string ipcDirectory,
         long maxReadBytes = ContractConstants.DefaultMaxReadBytes)
@@ -20,6 +22,7 @@ public sealed class JsonFileStore
         }
 
         IpcDirectory = Path.GetFullPath(ipcDirectory);
+        _ipcDirectoryIsCanonical = ProtectedIpcDirectoryPolicy.IsCanonical(ipcDirectory, IpcDirectory);
         MaxReadBytes = maxReadBytes;
         Directory.CreateDirectory(IpcDirectory);
     }
@@ -27,6 +30,9 @@ public sealed class JsonFileStore
     public string IpcDirectory { get; }
 
     public long MaxReadBytes { get; }
+
+    public void EnsureProtectedForNativeEdit() =>
+        ProtectedIpcDirectoryPolicy.EnsureProtected(IpcDirectory, _ipcDirectoryIsCanonical);
 
     public static string GetRequestFileName(string requestId)
     {

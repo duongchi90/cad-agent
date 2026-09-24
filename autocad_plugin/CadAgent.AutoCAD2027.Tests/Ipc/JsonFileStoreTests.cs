@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using CadAgent.AutoCAD2027.Ipc;
 using Xunit;
 
@@ -22,6 +24,40 @@ public sealed class JsonFileStoreTests
         var copy = fixture.Store.ReadRequest(request.RequestId!);
         Assert.Equal(request.RequestId, copy.RequestId);
         Assert.Equal(request.DrawingFullPath, copy.DrawingFullPath);
+    }
+
+    [Fact]
+    public void AcceptsProtectedIpcRootAclForTrustedWindowsPrincipals()
+    {
+        using var fixture = new StoreFixture();
+        SetProtectedAcl(fixture.DirectoryPath);
+
+        ProtectedIpcDirectoryPolicy.EnsureProtectedRootAcl(
+            new DirectoryInfo(fixture.DirectoryPath),
+            TrustedWindowsPrincipals());
+    }
+
+    [Fact]
+    public void RejectsProtectedIpcRootThatGrantsWriteToAnotherWindowsPrincipal()
+    {
+        using var fixture = new StoreFixture();
+        SetProtectedAcl(fixture.DirectoryPath);
+        var directory = new DirectoryInfo(fixture.DirectoryPath);
+        var security = directory.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        directory.SetAccessControl(security);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            ProtectedIpcDirectoryPolicy.EnsureProtectedRootAcl(
+                directory,
+                TrustedWindowsPrincipals()));
+
+        Assert.Contains("untrusted", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -235,6 +271,48 @@ public sealed class JsonFileStoreTests
         Parameters = new Dictionary<string, JsonElement>(),
         Approval = null
     };
+
+    private static void SetProtectedAcl(string directoryPath)
+    {
+        var directory = new DirectoryInfo(directoryPath);
+        var security = directory.GetAccessControl();
+        var currentUser = WindowsIdentity.GetCurrent().User!;
+        var trustedSids = TrustedWindowsPrincipals()
+            .Select(sid => new SecurityIdentifier(sid))
+            .ToArray();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        var existingRules = security.GetAccessRules(
+            includeExplicit: true,
+            includeInherited: false,
+            targetType: typeof(SecurityIdentifier));
+        foreach (FileSystemAccessRule rule in existingRules)
+        {
+            security.RemoveAccessRuleAll(rule);
+        }
+
+        foreach (var trustedSid in trustedSids)
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                trustedSid,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+        }
+
+        directory.SetAccessControl(security);
+    }
+
+    private static IReadOnlySet<string> TrustedWindowsPrincipals()
+    {
+        var currentUser = WindowsIdentity.GetCurrent().User!;
+        return new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            currentUser.Value,
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value,
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value
+        };
+    }
 
     private static IpcResult HealthResult(string requestId, bool success) => new()
     {
