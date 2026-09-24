@@ -16,6 +16,26 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## Luna portable session runbook candidate (2026-09-24)
+
+- Local implementation candidate `6e08989263445557adb8541d9d6a3f6e989d842c`
+  is based on PR #453, which remains open, draft, and unmerged. On this clean
+  exact head, `scripts/verify.ps1` exited `0` (`All checks passed!`). It
+  recorded .NET Release x64 `238 passed`; offline Python `3350 passed`,
+  `20 deselected`, and `74` subtests; `dotnet_ipc` `124` tests with zero
+  failures or errors.
+  The verifier's intentional causal-RED negative oracle failed as expected and
+  was accepted by the verifier.
+- The verifier recorded two private real-data tests and fifteen AutoCAD
+  unavailable-state checks as `SKIP`; AutoCAD live and M2 Mechanical benchmark
+  markers were `NOT RUN`. The Luna Doctor check found Python 3.11.9, .NET
+  10.0.302, Tesseract 5.4.0.20240606, and the AutoCAD installation without
+  launching AutoCAD. No drawing was opened, changed, saved, or generated.
+- Compilation completed with MSBuild reference/nullability warnings. This
+  candidate only adds portable operator documentation and local validation;
+  it is not a live CAD or release-acceptance claim. Independent exact-head
+  Security Redteam and Integration CI reviews remain pending.
+
 ## Current canonical snapshot (2026-09-20)
 
 - Fresh GitHub `main` is `7b3c6c4b9af7ced91d4dfb758072d7ba1cacffd1`, the

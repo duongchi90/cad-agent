@@ -143,21 +143,21 @@ Run: `.\.venv-py311\Scripts\python.exe -m pytest tests/test_luna_session_contrac
 
 Expected: exit `0`; no failures.
 
-- [ ] **Step 2: Run the authoritative verifier**
+- [x] **Step 2: Run the authoritative verifier**
 
 Run: `.\scripts\verify.ps1`
 
 Expected: exit `0` and `All checks passed!`; report each unavailable private/live gate exactly as `SKIP` or `NOT RUN`, never as PASS.
 
-- [ ] **Step 3: Check the write set and whitespace**
+- [x] **Step 3: Check the write set and whitespace**
 
 Run: `git diff --check 7523ac3641bcd2592ff9c3f7348ab29aba23dbec...HEAD` and `git status --short`.
 
-Expected: exit `0`; only the Task 1-2 allowlisted paths plus this plan are changed, and no generated/private artifact is tracked.
+Expected: exit `0`; only the allowlisted implementation/runbook paths, this plan, and the truthful `docs/STATUS.md` verification note are changed, and no generated/private artifact is tracked.
 
-- [ ] **Step 4: Record verification evidence and commit the plan lifecycle update**
+- [ ] **Step 4: Record verification evidence and commit the evidence checkpoint**
 
-Record the implementation head, exact verification result, and private/live states in this plan. Do not write unrun evidence into `docs/STATUS.md` or the stable runbook.
+Record the implementation head, exact verification result, and private/live states in this plan and `docs/STATUS.md`. Keep the final plan-only lifecycle-closing commit separate, after the exact-head review verdicts.
 
 - [ ] **Step 5: Request exact-head reviews and checkpoint PR453**
 
@@ -173,3 +173,4 @@ After fresh-reading main/#409/PR453/local state, submit the implementation head 
 - Forbidden duplication: second bootstrap/verifier/test selector, AutoCAD loader/UI driver, dispatcher, transport, resume store, provenance store, token/issuer/registry/approval authority, or control plane.
 - Compatibility: existing bootstrap, verify, .NET solution, LSP dispatch, and CAD Agent interfaces remain unchanged.
 - Migration/rollback: no persisted data migration; revert the bounded PR commits if declined. No machine-specific state is persisted.
+- Actual tracked write set: `AGENTS.md`, `docs/LUNA_SESSION_RUNBOOK.md`, `docs/STATUS.md` (one verification-evidence entry), `docs/templates/luna-resume-state.json`, this plan, `scripts/luna-session.ps1`, and `tests/test_luna_session_contract.py`.
