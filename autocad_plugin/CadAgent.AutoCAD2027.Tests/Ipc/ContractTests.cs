@@ -110,6 +110,40 @@ public sealed class ContractTests
     }
 
     [Fact]
+    public void UsesOneEndpointToleranceForNativeLineNoOpAndProtectedReadback()
+    {
+        var nearNoOp = ValidRequest("bounded_native_line_edit") with
+        {
+            DrawingSha256 = new string('a', 64),
+            Parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                """{"targets":[{"handle":"A1","before":{"start":[0,0,0],"end":[4,0,0]},"after":{"start":[0,0,0],"end":[4.000000005,0,0]}}],"protected":[]}""")
+        };
+        var nearNoOpValidation = ContractValidator.ValidateRequest(nearNoOp);
+
+        var stableProtectedResult = new IpcResult
+        {
+            RequestId = "native-edit-001",
+            Success = true,
+            Operation = "bounded_native_line_edit",
+            DrawingFullPath = @"C:\drawings\candidate.dwg",
+            Changed = true,
+            EntityHandles = new List<string> { "A1" },
+            Warnings = new List<string>(),
+            Errors = new List<string>(),
+            StartedAt = DateTimeOffset.Parse("2026-09-24T08:00:00Z"),
+            CompletedAt = DateTimeOffset.Parse("2026-09-24T08:00:01Z"),
+            Payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                """{"changed":true,"durable_state":"SAVED","save_performed":true,"drawing_sha256_before":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","drawing_sha256_after":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","targets":[{"handle":"A1","before":{"start":[0,0,0],"end":[4,0,0]},"after":{"start":[0,0,0],"end":[5,0,0]}}],"protected":[{"handle":"AF","before":{"start":[0,1,0],"end":[0,4,0]},"after":{"start":[0,1,0],"end":[0,4.000000005,0]}}],"warnings":[],"errors":[]}""")
+        };
+
+        var resultValidation = ContractValidator.ValidateResult(stableProtectedResult);
+
+        Assert.False(nearNoOpValidation.IsValid);
+        Assert.Contains(nearNoOpValidation.Errors, error => error.Contains("geometry must change", StringComparison.OrdinalIgnoreCase));
+        Assert.True(resultValidation.IsValid, string.Join("; ", resultValidation.Errors));
+    }
+
+    [Fact]
     public void RejectsUnsupportedSchemaVersion()
     {
         var request = ValidRequest() with { SchemaVersion = "9.9" };

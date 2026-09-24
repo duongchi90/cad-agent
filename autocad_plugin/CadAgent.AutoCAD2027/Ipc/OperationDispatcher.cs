@@ -353,7 +353,11 @@ public sealed class OperationDispatcher
                 entity.GetProperty("handle").GetString()!,
                 ParseNativeLineGeometry(entity.GetProperty("before"))))
             .ToArray();
-        return new BoundedNativeLineEditRequest(request.DrawingSha256!, targets, protectedEntities);
+        return new BoundedNativeLineEditRequest(
+            request.DrawingFullPath!,
+            request.DrawingSha256!,
+            targets,
+            protectedEntities);
     }
 
     private static NativeLineGeometry ParseNativeLineGeometry(JsonElement value) => new(

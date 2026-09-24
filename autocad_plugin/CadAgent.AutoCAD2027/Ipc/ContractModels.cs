@@ -37,6 +37,7 @@ public sealed record BoundedNativeLineProtectedEntity(
     NativeLineGeometry Before);
 
 public sealed record BoundedNativeLineEditRequest(
+    string DrawingFullPath,
     string DrawingSha256,
     IReadOnlyList<BoundedNativeLineTarget> Targets,
     IReadOnlyList<BoundedNativeLineProtectedEntity> Protected);

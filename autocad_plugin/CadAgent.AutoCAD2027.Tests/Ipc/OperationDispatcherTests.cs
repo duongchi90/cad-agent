@@ -71,6 +71,7 @@ public sealed class OperationDispatcherTests
             Assert.True(result.Changed);
             Assert.Equal(new[] { "A1" }, result.EntityHandles);
             Assert.Equal(1, gateway.ApplyBoundedNativeLineEditCallCount);
+            Assert.Equal(path, gateway.LastBoundedNativeLineEditRequest!.DrawingFullPath);
             Assert.Equal("SAVED", result.Payload!["durable_state"].GetString());
             Assert.True(result.Payload["save_performed"].GetBoolean());
             Assert.Equal(new string('a', 64), result.Payload["drawing_sha256_before"].GetString());
@@ -1477,6 +1478,8 @@ public sealed class OperationDispatcherTests
 
         public BoundedNativeLineEditSnapshot? BoundedNativeLineEdit { get; init; }
 
+        public BoundedNativeLineEditRequest? LastBoundedNativeLineEditRequest { get; private set; }
+
         public Exception? NativeRenderException { get; init; }
 
         public int ReadEntitiesCallCount { get; private set; }
@@ -1552,6 +1555,7 @@ public sealed class OperationDispatcherTests
             BoundedNativeLineEditRequest request)
         {
             ApplyBoundedNativeLineEditCallCount++;
+            LastBoundedNativeLineEditRequest = request;
             return BoundedNativeLineEdit
                 ?? throw new InvalidOperationException("No bounded native edit fixture was configured.");
         }

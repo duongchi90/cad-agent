@@ -169,6 +169,47 @@ public sealed class ExactBaseXrefPolicy
         return parameters;
     }
 
+    public string ValidateNativeEditCandidate(string? candidatePath, string? activeDocumentPath)
+    {
+        EnsureConfigured();
+
+        var root = EnsureExistingCanonicalDirectory(_configuration.DisposableRoot);
+        var source = EnsureExistingCanonicalFile(
+            _configuration.ExactBaseSourcePath,
+            SourceAliasCode,
+            "source");
+        var accepted = EnsureExistingCanonicalFile(
+            _configuration.AcceptedDwgPath,
+            AcceptedAliasCode,
+            "accepted DWG");
+        var candidate = EnsureExistingCanonicalFile(
+            candidatePath,
+            CandidatePathUnsafeCode,
+            "native-edit candidate");
+        var active = EnsureExistingCanonicalFile(
+            activeDocumentPath,
+            ActiveDocumentMismatchCode,
+            "active drawing");
+
+        if (!IsUnderRoot(root, candidate) || !IsUnderRoot(root, active))
+        {
+            throw new ExactBaseXrefPolicyException(
+                CandidatePathUnsafeCode,
+                "native-edit candidate and active drawing must both be contained by the disposable root");
+        }
+        EnsureDifferentFileIdentity(candidate, source, SourceAliasCode, "candidate aliases the exact-base source");
+        EnsureDifferentFileIdentity(active, source, SourceAliasCode, "active drawing aliases the exact-base source");
+        EnsureDifferentFileIdentity(candidate, accepted, AcceptedAliasCode, "candidate aliases the accepted DWG");
+        EnsureDifferentFileIdentity(active, accepted, AcceptedAliasCode, "active drawing aliases the accepted DWG");
+        EnsureSameFileIdentity(
+            candidate,
+            active,
+            ActiveDocumentMismatchCode,
+            "active drawing must be the same disposable candidate file as the request");
+
+        return candidate;
+    }
+
     public void ValidateLiveInspection(
         ExactBaseXrefLiveInspection evidence,
         ExactBaseXrefInspectionParameters request,
@@ -1116,6 +1157,44 @@ public sealed class ExactBaseXrefPolicy
         return TryGetFileIdentity(left, out var leftIdentity)
             && TryGetFileIdentity(right, out var rightIdentity)
             && leftIdentity == rightIdentity;
+    }
+
+    private static void EnsureDifferentFileIdentity(string left, string right, string code, string message)
+    {
+        if (SamePath(left, right))
+        {
+            throw new ExactBaseXrefPolicyException(code, message);
+        }
+        if (!TryGetFileIdentity(left, out var leftIdentity)
+            || !TryGetFileIdentity(right, out var rightIdentity))
+        {
+            throw new ExactBaseXrefPolicyException(
+                code,
+                "file identity could not be proven distinct for native-edit candidate admission");
+        }
+        if (leftIdentity == rightIdentity)
+        {
+            throw new ExactBaseXrefPolicyException(code, message);
+        }
+    }
+
+    private static void EnsureSameFileIdentity(string left, string right, string code, string message)
+    {
+        if (SamePath(left, right))
+        {
+            return;
+        }
+        if (!TryGetFileIdentity(left, out var leftIdentity)
+            || !TryGetFileIdentity(right, out var rightIdentity))
+        {
+            throw new ExactBaseXrefPolicyException(
+                code,
+                "active candidate file identity could not be proven");
+        }
+        if (leftIdentity != rightIdentity)
+        {
+            throw new ExactBaseXrefPolicyException(code, message);
+        }
     }
 
     private static void EnsureNoReparsePoints(string path, string code)

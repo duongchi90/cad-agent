@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -128,6 +129,7 @@ public sealed class CommandContext
         private readonly Action<string> _mechanicalWarning;
         private readonly string _ipcDirectory;
         private readonly AutoCadExactBaseXrefReader _exactBaseXrefReader;
+        private readonly ExactBaseXrefPolicy _exactBaseXrefPolicy;
 
         public AutoCadDrawingGateway(
             Document document,
@@ -140,12 +142,586 @@ public sealed class CommandContext
             _ipcDirectory = string.IsNullOrWhiteSpace(ipcDirectory)
                 ? throw new ArgumentException("The IPC directory is required.", nameof(ipcDirectory))
                 : ipcDirectory;
+            _exactBaseXrefPolicy = exactBaseXrefPolicy ?? throw new ArgumentNullException(nameof(exactBaseXrefPolicy));
             _exactBaseXrefReader = new AutoCadExactBaseXrefReader(
                 new AutoCadExactBaseXrefDatabase(_document),
-                exactBaseXrefPolicy ?? throw new ArgumentNullException(nameof(exactBaseXrefPolicy)));
+                _exactBaseXrefPolicy);
         }
 
         public string? ActiveDocumentFullPath => _document.Database?.Filename;
+
+        public BoundedNativeLineEditSnapshot ApplyBoundedNativeLineEdit(
+            BoundedNativeLineEditRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            var database = _document.Database
+                ?? throw new InvalidOperationException("The active document has no database.");
+            var drawingSha256Before = request.DrawingSha256;
+            var dbmodBefore = -1;
+            NativeLineEditObservation[] before = Array.Empty<NativeLineEditObservation>();
+            var mutationStarted = false;
+            var committed = false;
+            string? candidatePath = null;
+
+            try
+            {
+                using var documentLock = _document.LockDocument();
+                EnsureActiveDocument();
+                candidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
+                    request.DrawingFullPath,
+                    database.Filename);
+                drawingSha256Before = ComputeSha256(candidatePath);
+                dbmodBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"));
+
+                using (var transaction = _document.TransactionManager.StartTransaction())
+                {
+                    var modelSpaceId = GetModelSpaceId(database, transaction);
+                    var targetLines = new Dictionary<string, Line>(StringComparer.OrdinalIgnoreCase);
+                    before = ReadNativeLineObservations(
+                        database,
+                        transaction,
+                        modelSpaceId,
+                        request,
+                        targetLines);
+                    BoundedNativeLineEditPolicy.ValidateBeforeWrite(
+                        request,
+                        candidatePath,
+                        candidatePath,
+                        drawingSha256Before,
+                        dbmodBefore,
+                        before);
+
+                    EnsureActiveDocument();
+                    candidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
+                        request.DrawingFullPath,
+                        database.Filename);
+                    var freshSha256 = ComputeSha256(candidatePath);
+                    var freshDbmod = Convert.ToInt32(ReadSystemNumber("DBMOD"));
+                    BoundedNativeLineEditPolicy.ValidateBeforeWrite(
+                        request,
+                        candidatePath,
+                        candidatePath,
+                        freshSha256,
+                        freshDbmod,
+                        before);
+
+                    mutationStarted = true;
+                    foreach (var target in request.Targets)
+                    {
+                        var line = targetLines[target.Handle];
+                        line.UpgradeOpen();
+                        line.StartPoint = ToPoint3d(target.After.Start);
+                        line.EndPoint = ToPoint3d(target.After.End);
+                    }
+
+                    var afterInTransaction = ReadNativeLineObservations(
+                        database,
+                        transaction,
+                        modelSpaceId,
+                        request,
+                        targetLines: null);
+                    BoundedNativeLineEditPolicy.ValidateReadback(
+                        request,
+                        before,
+                        afterInTransaction);
+                    transaction.Commit();
+                    committed = true;
+                }
+
+                var activeAfterCommit = ReadNativeLineObservations(database, request);
+                BoundedNativeLineEditPolicy.ValidateReadback(request, before, activeAfterCommit);
+
+                EnsureActiveDocument();
+                candidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
+                    request.DrawingFullPath,
+                    database.Filename);
+                if (!string.Equals(ComputeSha256(candidatePath), drawingSha256Before, StringComparison.Ordinal))
+                {
+                    var restored = TryRestoreNativeLineEditInMemory(
+                        database,
+                        request,
+                        before,
+                        out var restoreError);
+                    var error = restored
+                        ? "candidate disk SHA changed before save; in-memory edit was restored without overwriting the changed file"
+                        : $"candidate disk SHA changed before save and in-memory rollback was not proven: {restoreError}";
+                    return NativeLineEditFailure(
+                        request,
+                        drawingSha256Before,
+                        TryComputeSha256(candidatePath),
+                        BoundedNativeLineEditPolicy.ResolveDurableState(
+                            saveCompleted: false,
+                            savedReadbackMatches: false,
+                            savedFileMatches: false,
+                            databaseClean: false,
+                            rollbackProven: false),
+                        savePerformed: false,
+                        before,
+                        null,
+                        new[] { $"DURABLE_STATE_UNCERTAIN: {error}" });
+                }
+
+                database.SaveAs(
+                    candidatePath,
+                    true,
+                    DwgVersion.Current,
+                    database.SecurityParameters);
+
+                var drawingSha256After = ComputeSha256(candidatePath);
+                var activeAfterSave = ReadNativeLineObservations(database, request);
+                var reopenedAfterSave = ReadSavedNativeLineObservations(candidatePath, request);
+                BoundedNativeLineEditPolicy.ValidateReadback(request, before, activeAfterSave);
+                BoundedNativeLineEditPolicy.ValidateReadback(request, before, reopenedAfterSave);
+                var dbmodAfter = Convert.ToInt32(ReadSystemNumber("DBMOD"));
+                var durableState = BoundedNativeLineEditPolicy.ResolveDurableState(
+                    saveCompleted: true,
+                    savedReadbackMatches: true,
+                    savedFileMatches: File.Exists(candidatePath)
+                        && drawingSha256After != drawingSha256Before,
+                    databaseClean: dbmodAfter == 0,
+                    rollbackProven: false);
+                if (durableState != "SAVED")
+                {
+                    throw new InvalidOperationException(
+                        "saved candidate did not pass reopened-drawing SHA-256 and DBMOD checks");
+                }
+
+                return NativeLineEditSuccess(
+                    request,
+                    drawingSha256Before,
+                    drawingSha256After,
+                    before,
+                    reopenedAfterSave);
+            }
+            catch (System.Exception exception)
+            {
+                if (!mutationStarted)
+                {
+                    return NativeLineEditFailure(
+                        request,
+                        drawingSha256Before,
+                        TryComputeSha256(candidatePath),
+                        "UNCHANGED",
+                        savePerformed: false,
+                        before,
+                        before,
+                        new[] { exception.Message });
+                }
+
+                if (!committed)
+                {
+                    var unchanged = TryVerifyNativeLineEditUnchanged(
+                        database,
+                        request,
+                        candidatePath,
+                        drawingSha256Before,
+                        before,
+                        out var unchangedError);
+                    return NativeLineEditFailure(
+                        request,
+                        drawingSha256Before,
+                        TryComputeSha256(candidatePath),
+                        unchanged ? "UNCHANGED" : "UNCERTAIN",
+                        savePerformed: false,
+                        before,
+                        unchanged ? before : null,
+                        unchanged
+                            ? new[] { exception.Message }
+                            : new[]
+                            {
+                                $"DURABLE_STATE_UNCERTAIN: {exception.Message}; rollback verification failed: {unchangedError}"
+                            });
+                }
+
+                string? rollbackSha256 = null;
+                var rollbackError = "candidate path was unavailable";
+                var rollbackPersisted = candidatePath is not null
+                    && TryRestoreAndPersistNativeLineEdit(
+                        database,
+                        request,
+                        candidatePath,
+                        before,
+                        out rollbackSha256,
+                        out rollbackError);
+                var rollbackState = BoundedNativeLineEditPolicy.ResolveDurableState(
+                    saveCompleted: false,
+                    savedReadbackMatches: false,
+                    savedFileMatches: false,
+                    databaseClean: false,
+                    rollbackProven: rollbackPersisted);
+                return NativeLineEditFailure(
+                    request,
+                    drawingSha256Before,
+                    rollbackSha256 ?? TryComputeSha256(candidatePath),
+                    rollbackState,
+                    savePerformed: rollbackPersisted,
+                    before,
+                    rollbackPersisted ? before : null,
+                    rollbackPersisted
+                        ? new[] { $"native-line edit failed and was durably rolled back: {exception.Message}" }
+                        : new[]
+                        {
+                            $"DURABLE_STATE_UNCERTAIN: {exception.Message}; rollback persistence was not proven: {rollbackError}"
+                        });
+            }
+        }
+
+        private void EnsureActiveDocument()
+        {
+            if (!ReferenceEquals(AcadApplication.DocumentManager.MdiActiveDocument, _document))
+            {
+                throw new InvalidOperationException("the active AutoCAD document changed during native-line edit");
+            }
+        }
+
+        private static ObjectId GetModelSpaceId(Database database, Transaction transaction)
+        {
+            var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+            return blockTable[BlockTableRecord.ModelSpace];
+        }
+
+        private static NativeLineEditObservation[] ReadNativeLineObservations(
+            Database database,
+            Transaction transaction,
+            ObjectId modelSpaceId,
+            BoundedNativeLineEditRequest request,
+            IDictionary<string, Line>? targetLines)
+        {
+            var targets = request.Targets
+                .Select(target => target.Handle)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var handles = request.Targets.Select(target => target.Handle)
+                .Concat(request.Protected.Select(entity => entity.Handle))
+                .ToArray();
+            if (handles.Distinct(StringComparer.OrdinalIgnoreCase).Count() != handles.Length)
+            {
+                throw new InvalidOperationException("target and protected handles must be unique and disjoint");
+            }
+
+            var observations = new List<NativeLineEditObservation>(handles.Length);
+            foreach (var handleText in handles)
+            {
+                if (!TryParseHandle(handleText, out var handle))
+                {
+                    throw new InvalidOperationException($"native LINE handle '{handleText}' is invalid");
+                }
+                var objectId = database.GetObjectId(false, new Handle(handle), 0);
+                if (objectId.IsNull
+                    || transaction.GetObject(objectId, OpenMode.ForRead, false) is not Line line)
+                {
+                    throw new InvalidOperationException(
+                        $"native entity '{handleText}' is missing or is not an AcDbLine");
+                }
+
+                var directModelSpace = line.OwnerId == modelSpaceId;
+                observations.Add(new NativeLineEditObservation(
+                    handleText.Trim().ToUpperInvariant(),
+                    IsAcDbLine: true,
+                    IsDirectModelSpace: directModelSpace,
+                    HasSharedDefinitionReachability: !directModelSpace,
+                    ToNativeLineGeometry(line)));
+                if (targetLines is not null && targets.Contains(handleText))
+                {
+                    targetLines.Add(handleText, line);
+                }
+            }
+            return observations.ToArray();
+        }
+
+        private static NativeLineEditObservation[] ReadNativeLineObservations(
+            Database database,
+            BoundedNativeLineEditRequest request)
+        {
+            using var transaction = database.TransactionManager.StartOpenCloseTransaction();
+            var modelSpaceId = GetModelSpaceId(database, transaction);
+            return ReadNativeLineObservations(
+                database,
+                transaction,
+                modelSpaceId,
+                request,
+                targetLines: null);
+        }
+
+        private static NativeLineEditObservation[] ReadSavedNativeLineObservations(
+            string drawingPath,
+            BoundedNativeLineEditRequest request)
+        {
+            using var savedDatabase = new Database(false, true);
+            savedDatabase.ReadDwgFile(
+                drawingPath,
+                FileOpenMode.OpenForReadAndAllShare,
+                allowCPConversion: false,
+                password: string.Empty);
+            return ReadNativeLineObservations(savedDatabase, request);
+        }
+
+        private static NativeLineGeometry ToNativeLineGeometry(Line line) => new(
+            [line.StartPoint.X, line.StartPoint.Y, line.StartPoint.Z],
+            [line.EndPoint.X, line.EndPoint.Y, line.EndPoint.Z]);
+
+        private static Point3d ToPoint3d(IReadOnlyList<double> coordinates)
+        {
+            if (coordinates.Count != 3 || coordinates.Any(value => !double.IsFinite(value)))
+            {
+                throw new InvalidOperationException("native LINE endpoint must contain three finite coordinates");
+            }
+            return new Point3d(coordinates[0], coordinates[1], coordinates[2]);
+        }
+
+        private bool TryVerifyNativeLineEditUnchanged(
+            Database database,
+            BoundedNativeLineEditRequest request,
+            string? candidatePath,
+            string drawingSha256Before,
+            IReadOnlyCollection<NativeLineEditObservation> before,
+            out string error)
+        {
+            error = string.Empty;
+            if (candidatePath is null)
+            {
+                error = "candidate path was unavailable";
+                return false;
+            }
+            try
+            {
+                using var documentLock = _document.LockDocument();
+                EnsureActiveDocument();
+                var canonicalCandidate = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
+                    request.DrawingFullPath,
+                    database.Filename);
+                if (!string.Equals(ComputeSha256(canonicalCandidate), drawingSha256Before, StringComparison.Ordinal)
+                    || Convert.ToInt32(ReadSystemNumber("DBMOD")) != 0)
+                {
+                    error = "disk SHA or DBMOD no longer proves the pre-write state";
+                    return false;
+                }
+                BoundedNativeLineEditPolicy.ValidateRollbackReadback(
+                    request,
+                    before,
+                    ReadNativeLineObservations(database, request));
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
+        private bool TryRestoreNativeLineEditInMemory(
+            Database database,
+            BoundedNativeLineEditRequest request,
+            IReadOnlyCollection<NativeLineEditObservation> before,
+            out string error)
+        {
+            error = string.Empty;
+            try
+            {
+                using var transaction = _document.TransactionManager.StartTransaction();
+                var modelSpaceId = GetModelSpaceId(database, transaction);
+                var targetLines = new Dictionary<string, Line>(StringComparer.OrdinalIgnoreCase);
+                _ = ReadNativeLineObservations(
+                    database,
+                    transaction,
+                    modelSpaceId,
+                    request,
+                    targetLines);
+                var beforeByHandle = before.ToDictionary(
+                    observation => observation.Handle,
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (var target in request.Targets)
+                {
+                    if (!beforeByHandle.TryGetValue(target.Handle, out var original))
+                    {
+                        throw new InvalidOperationException($"pre-write LINE {target.Handle} was not captured");
+                    }
+                    var line = targetLines[target.Handle];
+                    line.UpgradeOpen();
+                    line.StartPoint = ToPoint3d(original.Geometry.Start);
+                    line.EndPoint = ToPoint3d(original.Geometry.End);
+                }
+
+                var restored = ReadNativeLineObservations(
+                    database,
+                    transaction,
+                    modelSpaceId,
+                    request,
+                    targetLines: null);
+                BoundedNativeLineEditPolicy.ValidateRollbackReadback(request, before, restored);
+                transaction.Commit();
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
+        private bool TryRestoreAndPersistNativeLineEdit(
+            Database database,
+            BoundedNativeLineEditRequest request,
+            string candidatePath,
+            IReadOnlyCollection<NativeLineEditObservation> before,
+            out string? drawingSha256After,
+            out string error)
+        {
+            drawingSha256After = null;
+            error = string.Empty;
+            try
+            {
+                using var documentLock = _document.LockDocument();
+                EnsureActiveDocument();
+                var canonicalCandidate = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
+                    request.DrawingFullPath,
+                    database.Filename);
+                if (!StringComparer.OrdinalIgnoreCase.Equals(canonicalCandidate, candidatePath))
+                {
+                    throw new InvalidOperationException("candidate identity changed before rollback persistence");
+                }
+                if (!TryRestoreNativeLineEditInMemory(database, request, before, out error))
+                {
+                    return false;
+                }
+
+                database.SaveAs(
+                    canonicalCandidate,
+                    true,
+                    DwgVersion.Current,
+                    database.SecurityParameters);
+                drawingSha256After = ComputeSha256(canonicalCandidate);
+                var reopened = ReadSavedNativeLineObservations(canonicalCandidate, request);
+                BoundedNativeLineEditPolicy.ValidateRollbackReadback(request, before, reopened);
+                if (Convert.ToInt32(ReadSystemNumber("DBMOD")) != 0)
+                {
+                    throw new InvalidOperationException("DBMOD is not zero after rollback save");
+                }
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                error = string.IsNullOrEmpty(error) ? exception.Message : $"{error}; {exception.Message}";
+                return false;
+            }
+        }
+
+        private static BoundedNativeLineEditSnapshot NativeLineEditSuccess(
+            BoundedNativeLineEditRequest request,
+            string drawingSha256Before,
+            string drawingSha256After,
+            IReadOnlyCollection<NativeLineEditObservation> before,
+            IReadOnlyCollection<NativeLineEditObservation> after)
+        {
+            var beforeByHandle = before.ToDictionary(
+                observation => observation.Handle,
+                StringComparer.OrdinalIgnoreCase);
+            var afterByHandle = after.ToDictionary(
+                observation => observation.Handle,
+                StringComparer.OrdinalIgnoreCase);
+            var targetStates = request.Targets
+                .Select(target => new BoundedNativeLineEditState(
+                    target.Handle,
+                    CloneGeometry(beforeByHandle[target.Handle].Geometry),
+                    CloneGeometry(afterByHandle[target.Handle].Geometry)))
+                .ToArray();
+            var protectedStates = request.Protected
+                .Select(entity => new BoundedNativeLineEditState(
+                    entity.Handle,
+                    CloneGeometry(beforeByHandle[entity.Handle].Geometry),
+                    CloneGeometry(afterByHandle[entity.Handle].Geometry)))
+                .ToArray();
+            return new BoundedNativeLineEditSnapshot(
+                true,
+                "SAVED",
+                true,
+                drawingSha256Before,
+                drawingSha256After,
+                targetStates,
+                protectedStates,
+                Array.Empty<string>(),
+                Array.Empty<string>());
+        }
+
+        private static BoundedNativeLineEditSnapshot NativeLineEditFailure(
+            BoundedNativeLineEditRequest request,
+            string? drawingSha256Before,
+            string? drawingSha256After,
+            string durableState,
+            bool savePerformed,
+            IReadOnlyCollection<NativeLineEditObservation> before,
+            IReadOnlyCollection<NativeLineEditObservation>? after,
+            IReadOnlyList<string> errors)
+        {
+            var beforeByHandle = before
+                .GroupBy(observation => observation.Handle, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() == 1)
+                .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+            var afterByHandle = (after ?? Array.Empty<NativeLineEditObservation>())
+                .GroupBy(observation => observation.Handle, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() == 1)
+                .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+            NativeLineGeometry BeforeFor(string handle, NativeLineGeometry fallback) =>
+                CloneGeometry(beforeByHandle.TryGetValue(handle, out var original)
+                    ? original.Geometry
+                    : fallback);
+            NativeLineGeometry AfterFor(string handle, NativeLineGeometry fallback) =>
+                CloneGeometry(afterByHandle.TryGetValue(handle, out var observed)
+                    ? observed.Geometry
+                    : beforeByHandle.TryGetValue(handle, out var original)
+                        ? original.Geometry
+                        : fallback);
+            var targetStates = request.Targets
+                .Select(target => new BoundedNativeLineEditState(
+                    target.Handle,
+                    BeforeFor(target.Handle, target.Before),
+                    AfterFor(target.Handle, target.Before)))
+                .ToArray();
+            var protectedStates = request.Protected
+                .Select(entity => new BoundedNativeLineEditState(
+                    entity.Handle,
+                    BeforeFor(entity.Handle, entity.Before),
+                    AfterFor(entity.Handle, entity.Before)))
+                .ToArray();
+            return new BoundedNativeLineEditSnapshot(
+                false,
+                durableState,
+                savePerformed,
+                drawingSha256Before ?? string.Empty,
+                drawingSha256After,
+                targetStates,
+                protectedStates,
+                Array.Empty<string>(),
+                errors);
+        }
+
+        private static NativeLineGeometry CloneGeometry(NativeLineGeometry geometry) =>
+            new((double[])geometry.Start.Clone(), (double[])geometry.End.Clone());
+
+        private static string ComputeSha256(string path)
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        }
+
+        private static string? TryComputeSha256(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return null;
+            }
+            try
+            {
+                return ComputeSha256(path);
+            }
+            catch (System.Exception)
+            {
+                return null;
+            }
+        }
 
         public IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles)
         {
