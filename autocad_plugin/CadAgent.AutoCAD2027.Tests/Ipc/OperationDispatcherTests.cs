@@ -51,21 +51,10 @@ public sealed class OperationDispatcherTests
         try
         {
             SetProtectedAcl(ipcPath);
-            var rootFailure = Record.Exception(store.EnsureProtectedForNativeEdit);
-            var result = CreateDispatcher(gateway, store: store)
-                .Dispatch(BoundedNativeLineEditRequest(path));
-
-            if (rootFailure is not null)
-            {
-                Assert.False(result.Success);
-                Assert.False(result.Changed);
-                Assert.Empty(result.EntityHandles!);
-                Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
-                Assert.Contains(result.Errors!, error =>
-                    error.Contains("FileIPC", StringComparison.OrdinalIgnoreCase)
-                    || error.Contains("untrusted", StringComparison.OrdinalIgnoreCase));
-                return;
-            }
+            var request = BoundedNativeLineEditRequest(path);
+            store.WriteRequest(request);
+            var requestRead = store.ReadRequestForDispatch(request.RequestId!);
+            var result = CreateDispatcher(gateway, store: store).DispatchFileIpcRequest(requestRead);
 
             Assert.True(result.Success, string.Join("; ", result.Errors!));
             Assert.True(result.Changed);
@@ -87,6 +76,22 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void BoundedNativeLineEditRejectsInMemoryRequestBeforeGatewayCall()
+    {
+        const string path = @"C:\drawings\candidate.dwg";
+        var gateway = new StubDrawingGateway { ActiveDocumentFullPath = path };
+        var request = BoundedNativeLineEditRequest(path);
+
+        var result = CreateDispatcher(gateway).Dispatch(request);
+
+        Assert.False(result.Success);
+        Assert.False(result.Changed);
+        Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
+        Assert.Contains(result.Errors!, error =>
+            error.Contains("identity-bound FileIPC request read", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void BoundedNativeLineEditRejectsUnprotectedIpcRootBeforeGatewayCall()
     {
         const string path = @"C:\drawings\candidate.dwg";
@@ -97,8 +102,11 @@ public sealed class OperationDispatcherTests
         try
         {
             SetUnprotectedAcl(ipcPath);
+            var request = BoundedNativeLineEditRequest(path);
+            store.WriteRequest(request);
+            var requestRead = store.ReadRequestForDispatch(request.RequestId!);
             var result = CreateDispatcher(gateway, store: store)
-                .Dispatch(BoundedNativeLineEditRequest(path));
+                .DispatchFileIpcRequest(requestRead);
 
             Assert.False(result.Success);
             Assert.False(result.Changed);
@@ -117,21 +125,114 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void BoundedNativeLineEditRejectsRequestFileReplacementAfterReadBeforeGatewayCall()
+    {
+        const string path = @"C:\drawings\candidate.dwg";
+        const string requestId = "native-edit-request-swap";
+        var ipcPath = Path.Combine(Path.GetTempPath(), "cadagent-native-edit-request-swap-" + Guid.NewGuid().ToString("N"));
+        var store = new JsonFileStore(ipcPath);
+        var originalRequest = BoundedNativeLineEditRequest(path) with { RequestId = requestId };
+        SetProtectedAcl(ipcPath);
+        store.WriteRequest(originalRequest);
+        var observedRequest = store.ReadRequestForDispatch(requestId);
+        store.WriteRequest(originalRequest with { DrawingSha256 = new string('b', 64) });
+        var gateway = new StubDrawingGateway { ActiveDocumentFullPath = path };
+
+        try
+        {
+            var result = CreateDispatcher(gateway, store: store).DispatchFileIpcRequest(observedRequest);
+
+            Assert.False(result.Success);
+            Assert.False(result.Changed);
+            Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
+            Assert.Contains(result.Errors!, error =>
+                error.Contains("request changed since it was read", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(ipcPath))
+            {
+                Directory.Delete(ipcPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void BoundedNativeLineEditRejectsIpcRootReplacementAfterRequestReadBeforeGatewayCall()
+    {
+        const string path = @"C:\drawings\candidate.dwg";
+        const string requestId = "native-edit-root-swap";
+        var ipcPath = Path.Combine(Path.GetTempPath(), "cadagent-native-edit-root-swap-" + Guid.NewGuid().ToString("N"));
+        var displacedPath = ipcPath + ".displaced";
+        var store = new JsonFileStore(ipcPath);
+        var request = BoundedNativeLineEditRequest(path) with { RequestId = requestId };
+        SetProtectedAcl(ipcPath);
+        store.WriteRequest(request);
+        var observedRequest = store.ReadRequestForDispatch(requestId);
+        Directory.Move(ipcPath, displacedPath);
+        Directory.CreateDirectory(ipcPath);
+        SetProtectedAcl(ipcPath);
+        File.Copy(
+            Path.Combine(displacedPath, JsonFileStore.GetRequestFileName(requestId)),
+            store.GetRequestPath(requestId));
+        var gateway = new StubDrawingGateway { ActiveDocumentFullPath = path };
+
+        try
+        {
+            var result = CreateDispatcher(gateway, store: store).DispatchFileIpcRequest(observedRequest);
+
+            Assert.False(result.Success);
+            Assert.False(result.Changed);
+            Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
+            Assert.Contains(result.Errors!, error =>
+                error.Contains("IPC root changed since the request was read", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(ipcPath))
+            {
+                Directory.Delete(ipcPath, recursive: true);
+            }
+
+            if (Directory.Exists(displacedPath))
+            {
+                Directory.Delete(displacedPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void BoundedNativeLineEditRejectsActiveDocumentMismatchBeforeGatewayCall()
     {
+        const string requestPath = @"C:\drawings\other.dwg";
+        var ipcPath = Path.Combine(Path.GetTempPath(), "cadagent-native-edit-active-mismatch-" + Guid.NewGuid().ToString("N"));
+        var store = new JsonFileStore(ipcPath);
+        SetProtectedAcl(ipcPath);
+        var request = BoundedNativeLineEditRequest(requestPath);
+        store.WriteRequest(request);
         var gateway = new StubDrawingGateway
         {
             ActiveDocumentFullPath = @"C:\drawings\open.dwg"
         };
 
-        var result = CreateDispatcher(gateway).Dispatch(
-            BoundedNativeLineEditRequest(@"C:\drawings\other.dwg"));
+        try
+        {
+            var result = CreateDispatcher(gateway, store: store)
+                .DispatchFileIpcRequest(store.ReadRequestForDispatch(request.RequestId!));
 
-        Assert.False(result.Success);
-        Assert.False(result.Changed);
-        Assert.Empty(result.EntityHandles!);
-        Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
-        Assert.Contains(result.Errors!, error => error.Contains("does not match", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.Success);
+            Assert.False(result.Changed);
+            Assert.Empty(result.EntityHandles!);
+            Assert.Equal(0, gateway.ApplyBoundedNativeLineEditCallCount);
+            Assert.Contains(result.Errors!, error => error.Contains("does not match", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(ipcPath))
+            {
+                Directory.Delete(ipcPath, recursive: true);
+            }
+        }
     }
 
     [Fact]
