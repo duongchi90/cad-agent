@@ -1,5 +1,6 @@
 using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
+using System.Security.Cryptography;
 using Xunit;
 
 namespace CadAgent.AutoCAD2027.Tests.Drawing;
@@ -237,6 +238,90 @@ public sealed class BoundedNativeLineEditPolicyTests
     }
 
     [Fact]
+    public void PreservesExternallyChangedCandidateAndSkipsRollbackPersistence()
+    {
+        var candidatePath = Path.Combine(
+            Path.GetTempPath(),
+            $"cad-agent-rollback-{Guid.NewGuid():N}.dwg");
+        try
+        {
+            File.WriteAllText(candidatePath, "authorized pre-edit candidate");
+            var authorizedSha256 = HashFile(candidatePath);
+            File.WriteAllText(candidatePath, "external candidate change");
+            var externalBytes = File.ReadAllBytes(candidatePath);
+            var saveAsCalled = false;
+
+            var persisted = BoundedNativeLineEditPolicy.TryPersistRollbackIfDiskCurrent(
+                authorizedSha256,
+                HashFile(candidatePath),
+                () =>
+                {
+                    saveAsCalled = true;
+                    File.WriteAllText(candidatePath, "rollback SaveAs");
+                });
+
+            Assert.False(persisted);
+            Assert.False(saveAsCalled);
+            Assert.Equal(externalBytes, File.ReadAllBytes(candidatePath));
+        }
+        finally
+        {
+            if (File.Exists(candidatePath))
+            {
+                File.Delete(candidatePath);
+            }
+        }
+    }
+
+    [Fact]
+    public void PersistsRollbackWhenCandidateDiskStillMatchesAuthorizedState()
+    {
+        var candidatePath = Path.Combine(
+            Path.GetTempPath(),
+            $"cad-agent-rollback-{Guid.NewGuid():N}.dwg");
+        try
+        {
+            File.WriteAllText(candidatePath, "authorized pre-edit candidate");
+            var authorizedSha256 = HashFile(candidatePath);
+            var saveAsCalled = false;
+
+            var persisted = BoundedNativeLineEditPolicy.TryPersistRollbackIfDiskCurrent(
+                authorizedSha256,
+                HashFile(candidatePath),
+                () =>
+                {
+                    saveAsCalled = true;
+                    File.WriteAllText(candidatePath, "rollback SaveAs");
+                });
+
+            Assert.True(persisted);
+            Assert.True(saveAsCalled);
+            Assert.Equal("rollback SaveAs", File.ReadAllText(candidatePath));
+        }
+        finally
+        {
+            if (File.Exists(candidatePath))
+            {
+                File.Delete(candidatePath);
+            }
+        }
+    }
+
+    [Fact]
+    public void SkipsRollbackPersistenceWhenNoTrustedDiskShaWasCaptured()
+    {
+        var saveAsCalled = false;
+
+        var persisted = BoundedNativeLineEditPolicy.TryPersistRollbackIfDiskCurrent(
+            string.Empty,
+            "current-disk-sha",
+            () => saveAsCalled = true);
+
+        Assert.False(persisted);
+        Assert.False(saveAsCalled);
+    }
+
+    [Fact]
     public void ReportsSavedOnlyWhenSaveDiskReadbackAndDbmodAgree()
     {
         Assert.Equal(
@@ -280,4 +365,7 @@ public sealed class BoundedNativeLineEditPolicyTests
         new("A1", true, true, false, new(new[] { 0d, 0d, 0d }, new[] { 1d, 0d, 0d })),
         new("AF", true, true, false, new(new[] { 0d, 1d, 0d }, new[] { 0d, 2d, 0d }))
     ];
+
+    private static string HashFile(string path) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 }
