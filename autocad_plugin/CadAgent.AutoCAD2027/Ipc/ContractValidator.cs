@@ -125,6 +125,10 @@ public static class ContractValidator
         {
             ValidateNativeRenderEvidenceRequest(request, errors);
         }
+        else if (string.Equals(request.Operation, "bounded_native_line_edit", StringComparison.Ordinal))
+        {
+            ValidateBoundedNativeLineEditRequest(request, errors);
+        }
 
         if (request.Operation is ExactBaseXrefOperationNames.Inspection
             or ExactBaseXrefOperationNames.Extraction)
@@ -195,6 +199,10 @@ public static class ContractValidator
             {
                 errors.Add("native_render_evidence failure results must contain an empty payload");
             }
+        }
+        if (string.Equals(result.Operation, "bounded_native_line_edit", StringComparison.Ordinal))
+        {
+            ValidateBoundedNativeLineEditResult(result, errors);
         }
         if (string.Equals(result.Operation, ExactBaseXrefOperationNames.Inspection, StringComparison.Ordinal))
         {
@@ -381,6 +389,336 @@ public static class ContractValidator
             errors.Add("review parameters contain unsupported fields");
         }
     }
+
+    private static void ValidateBoundedNativeLineEditRequest(
+        IpcRequest request,
+        ICollection<string> errors)
+    {
+        if (request.DrawingSha256 is null || !LowercaseSha256Pattern.IsMatch(request.DrawingSha256))
+        {
+            errors.Add("bounded_native_line_edit drawing_sha256 must be a lowercase SHA-256");
+        }
+        if (request.Approval.HasValue && request.Approval.Value.ValueKind != JsonValueKind.Null)
+        {
+            errors.Add("bounded_native_line_edit approval is not allowed");
+        }
+
+        var parameters = request.Parameters!;
+        if (parameters.Keys.Any(key => key is not "targets" and not "protected"))
+        {
+            errors.Add("bounded_native_line_edit parameters contain unsupported fields");
+        }
+        if (!parameters.TryGetValue("targets", out var targets)
+            || targets.ValueKind != JsonValueKind.Array
+            || targets.GetArrayLength() is < 1 or > 512)
+        {
+            errors.Add("bounded_native_line_edit parameters.targets must contain 1 to 512 items");
+        }
+        if (!parameters.TryGetValue("protected", out var protectedEntities)
+            || protectedEntities.ValueKind != JsonValueKind.Array
+            || protectedEntities.GetArrayLength() > 512)
+        {
+            errors.Add("bounded_native_line_edit parameters.protected must be an array of at most 512 items");
+        }
+        if (targets.ValueKind != JsonValueKind.Array || protectedEntities.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var seenHandles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var index = 0;
+        foreach (var target in targets.EnumerateArray())
+        {
+            var prefix = $"bounded_native_line_edit parameters.targets[{index++}]";
+            if (!TryValidateObjectProperties(target, new[] { "handle", "before", "after" }, prefix, errors))
+            {
+                continue;
+            }
+            if (!TryGetString(target, "handle", out var handle) || !IsNativeHandle(handle))
+            {
+                errors.Add($"{prefix}.handle must be a hexadecimal entity handle");
+            }
+            else
+            {
+                if (!seenHandles.Add(handle))
+                {
+                    errors.Add("bounded_native_line_edit target and protected handles must be unique and disjoint");
+                }
+            }
+            double[]? beforeStart = null;
+            double[]? beforeEnd = null;
+            double[]? afterStart = null;
+            double[]? afterEnd = null;
+            var beforeValid = TryGetProperty(target, "before", out var before)
+                && TryReadNativeLineGeometry(before, $"{prefix}.before", errors, out beforeStart, out beforeEnd);
+            var afterValid = TryGetProperty(target, "after", out var after)
+                && TryReadNativeLineGeometry(after, $"{prefix}.after", errors, out afterStart, out afterEnd);
+            if (beforeValid && afterValid && IsSameNativeLine(beforeStart!, beforeEnd!, afterStart!, afterEnd!))
+            {
+                errors.Add($"{prefix} geometry must change");
+            }
+        }
+
+        index = 0;
+        foreach (var protectedEntity in protectedEntities.EnumerateArray())
+        {
+            var prefix = $"bounded_native_line_edit parameters.protected[{index++}]";
+            if (!TryValidateObjectProperties(protectedEntity, new[] { "handle", "before" }, prefix, errors))
+            {
+                continue;
+            }
+            if (!TryGetString(protectedEntity, "handle", out var handle) || !IsNativeHandle(handle))
+            {
+                errors.Add($"{prefix}.handle must be a hexadecimal entity handle");
+            }
+            else
+            {
+                if (!seenHandles.Add(handle))
+                {
+                    errors.Add("bounded_native_line_edit target and protected handles must be unique and disjoint");
+                }
+            }
+            if (TryGetProperty(protectedEntity, "before", out var before))
+            {
+                _ = TryReadNativeLineGeometry(before, $"{prefix}.before", errors, out _, out _);
+            }
+        }
+    }
+
+    private static void ValidateBoundedNativeLineEditResult(
+        IpcResult result,
+        ICollection<string> errors)
+    {
+        if (!result.Success)
+        {
+            if (result.Changed || (result.EntityHandles?.Count ?? 0) != 0)
+            {
+                errors.Add("bounded_native_line_edit failure results must be unchanged and contain no entity handles");
+            }
+            if (result.Payload is not null && result.Payload.Count != 0)
+            {
+                errors.Add("bounded_native_line_edit failure results must contain an empty payload");
+            }
+            return;
+        }
+
+        if (!result.Changed)
+        {
+            errors.Add("successful bounded_native_line_edit results must report changed=true");
+        }
+        if (result.Errors is { Count: > 0 })
+        {
+            errors.Add("successful bounded_native_line_edit results must not contain errors");
+        }
+        if (result.Payload is null)
+        {
+            errors.Add("successful bounded_native_line_edit results require a payload");
+            return;
+        }
+
+        var payload = result.Payload;
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "changed", "durable_state", "save_performed", "drawing_sha256_before",
+            "drawing_sha256_after", "targets", "protected", "warnings", "errors"
+        };
+        foreach (var missing in required.Except(payload.Keys, StringComparer.Ordinal))
+        {
+            errors.Add($"bounded_native_line_edit result payload is missing '{missing}'");
+        }
+        foreach (var unsupported in payload.Keys.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"bounded_native_line_edit result payload contains unsupported field '{unsupported}'");
+        }
+        if (!TryGetBoolean(payload, "changed", out var changed) || !changed)
+        {
+            errors.Add("bounded_native_line_edit payload.changed must be true");
+        }
+        if (!TryGetString(payload, "durable_state", out var durableState) || durableState != "SAVED")
+        {
+            errors.Add("bounded_native_line_edit payload.durable_state must be SAVED");
+        }
+        if (!TryGetBoolean(payload, "save_performed", out var savePerformed) || !savePerformed)
+        {
+            errors.Add("bounded_native_line_edit payload.save_performed must be true");
+        }
+        if (!TryGetString(payload, "drawing_sha256_before", out var hashBefore)
+            || !LowercaseSha256Pattern.IsMatch(hashBefore))
+        {
+            errors.Add("bounded_native_line_edit payload.drawing_sha256_before must be a lowercase SHA-256");
+        }
+        if (!TryGetString(payload, "drawing_sha256_after", out var hashAfter)
+            || !LowercaseSha256Pattern.IsMatch(hashAfter))
+        {
+            errors.Add("bounded_native_line_edit payload.drawing_sha256_after must be a lowercase SHA-256");
+        }
+
+        var targetHandles = ValidateNativeLineEditStates(payload, "targets", allowChanges: true, errors);
+        var protectedHandles = ValidateNativeLineEditStates(payload, "protected", allowChanges: false, errors);
+        if (targetHandles.Count == 0)
+        {
+            errors.Add("bounded_native_line_edit payload.targets must contain at least one target");
+        }
+        var allHandles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var handle in targetHandles.Concat(protectedHandles))
+        {
+            if (!allHandles.Add(handle))
+            {
+                errors.Add("bounded_native_line_edit result target and protected handles must be unique and disjoint");
+                break;
+            }
+        }
+        if (result.EntityHandles is null
+            || !result.EntityHandles.SequenceEqual(targetHandles, StringComparer.OrdinalIgnoreCase))
+        {
+            errors.Add("bounded_native_line_edit entity_handles must match the target readback handles in order");
+        }
+        if (TryGetArray(payload, "warnings", out var warnings)
+            && warnings.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String))
+        {
+            errors.Add("bounded_native_line_edit payload.warnings must contain strings");
+        }
+        if (TryGetArray(payload, "errors", out var payloadErrors)
+            && payloadErrors.GetArrayLength() != 0)
+        {
+            errors.Add("bounded_native_line_edit successful payload.errors must be empty");
+        }
+    }
+
+    private static List<string> ValidateNativeLineEditStates(
+        IReadOnlyDictionary<string, JsonElement> payload,
+        string field,
+        bool allowChanges,
+        ICollection<string> errors)
+    {
+        var handles = new List<string>();
+        if (!TryGetArray(payload, field, out var states) || states.GetArrayLength() > 512)
+        {
+            errors.Add($"bounded_native_line_edit payload.{field} must be an array of at most 512 items");
+            return handles;
+        }
+        var index = 0;
+        foreach (var state in states.EnumerateArray())
+        {
+            var prefix = $"bounded_native_line_edit payload.{field}[{index++}]";
+            if (!TryValidateObjectProperties(state, new[] { "handle", "before", "after" }, prefix, errors))
+            {
+                continue;
+            }
+            if (!TryGetString(state, "handle", out var handle) || !IsNativeHandle(handle))
+            {
+                errors.Add($"{prefix}.handle must be a hexadecimal entity handle");
+            }
+            else
+            {
+                handles.Add(handle);
+            }
+            double[]? beforeStart = null;
+            double[]? beforeEnd = null;
+            double[]? afterStart = null;
+            double[]? afterEnd = null;
+            var beforeValid = TryGetProperty(state, "before", out var before)
+                && TryReadNativeLineGeometry(before, $"{prefix}.before", errors, out beforeStart, out beforeEnd);
+            var afterValid = TryGetProperty(state, "after", out var after)
+                && TryReadNativeLineGeometry(after, $"{prefix}.after", errors, out afterStart, out afterEnd);
+            if (beforeValid && afterValid)
+            {
+                var same = IsSameNativeLine(beforeStart!, beforeEnd!, afterStart!, afterEnd!);
+                if (allowChanges == same)
+                {
+                    errors.Add(allowChanges
+                        ? $"{prefix} target geometry must change"
+                        : $"{prefix} protected geometry must remain unchanged");
+                }
+            }
+        }
+        return handles;
+    }
+
+    private static bool TryReadNativeLineGeometry(
+        JsonElement value,
+        string displayName,
+        ICollection<string> errors,
+        out double[]? start,
+        out double[]? end)
+    {
+        start = null;
+        end = null;
+        if (!TryValidateObjectProperties(value, new[] { "start", "end" }, displayName, errors))
+        {
+            errors.Add($"{displayName} geometry must be an object with start and end");
+            return false;
+        }
+        if (!TryReadNativeLinePoint(value.GetProperty("start"), $"{displayName}.start", errors, out start)
+            || !TryReadNativeLinePoint(value.GetProperty("end"), $"{displayName}.end", errors, out end))
+        {
+            return false;
+        }
+        if (start.SequenceEqual(end))
+        {
+            errors.Add($"{displayName} geometry must be non-degenerate");
+            return false;
+        }
+        return true;
+    }
+
+    private static bool TryReadNativeLinePoint(
+        JsonElement value,
+        string displayName,
+        ICollection<string> errors,
+        out double[]? point)
+    {
+        point = null;
+        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != 3)
+        {
+            errors.Add($"{displayName} geometry must contain exactly three finite coordinates");
+            return false;
+        }
+        var coordinates = new List<double>(3);
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Number
+                || !item.TryGetDouble(out var coordinate)
+                || !double.IsFinite(coordinate))
+            {
+                errors.Add($"{displayName} geometry coordinates must be finite numbers");
+                return false;
+            }
+            coordinates.Add(coordinate);
+        }
+        point = coordinates.ToArray();
+        return true;
+    }
+
+    private static bool TryValidateObjectProperties(
+        JsonElement value,
+        IReadOnlyCollection<string> required,
+        string displayName,
+        ICollection<string> errors)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{displayName} must be an object");
+            return false;
+        }
+        var properties = value.EnumerateObject().Select(property => property.Name).ToArray();
+        foreach (var missing in required.Except(properties, StringComparer.Ordinal))
+        {
+            errors.Add($"{displayName} is missing '{missing}'");
+        }
+        foreach (var unsupported in properties.Except(required, StringComparer.Ordinal))
+        {
+            errors.Add($"{displayName} contains unsupported field '{unsupported}'");
+        }
+        return required.All(properties.Contains);
+    }
+
+    private static bool IsNativeHandle(string value) =>
+        value.Length is > 0 and <= 64 && value.All(Uri.IsHexDigit);
+
+    private static bool IsSameNativeLine(double[] start, double[] end, double[] otherStart, double[] otherEnd) =>
+        (start.SequenceEqual(otherStart) && end.SequenceEqual(otherEnd))
+        || (start.SequenceEqual(otherEnd) && end.SequenceEqual(otherStart));
 
     private static void ValidateDisposableParameters(
         IReadOnlyDictionary<string, JsonElement> parameters,

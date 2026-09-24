@@ -8,6 +8,108 @@ namespace CadAgent.AutoCAD2027.Tests.Ipc;
 public sealed class ContractTests
 {
     [Fact]
+    public void AcceptsBoundedNativeLineEditProfilesWithoutDrawingSpecificAssumptions()
+    {
+        var profiles = new[]
+        {
+            """{"targets":[{"handle":"A1","before":{"start":[0,0,0],"end":[4,0,0]},"after":{"start":[0,0,0],"end":[5.5,0,0]}},{"handle":"A2","before":{"start":[3,2,0],"end":[3,5,0]},"after":{"start":[3,2,0],"end":[3,6.25,0]}}],"protected":[{"handle":"AF","before":{"start":[-1,1,0],"end":[-1,8,0]}}]}""",
+            """{"targets":[{"handle":"B1","before":{"start":[10,-2,0],"end":[13,2,0]},"after":{"start":[10,-2,0],"end":[14.5,4,0]}},{"handle":"B2","before":{"start":[1,7,0],"end":[6,7,0]},"after":{"start":[1,7,0],"end":[8,7,0]}},{"handle":"B3","before":{"start":[8,9,0],"end":[8,3,0]},"after":{"start":[8,9,0],"end":[8,1.5,0]}}],"protected":[{"handle":"BF","before":{"start":[20,20,0],"end":[22,23,0]}}]}"""
+        };
+
+        foreach (var profile in profiles)
+        {
+            var request = ValidRequest("bounded_native_line_edit") with
+            {
+                DrawingSha256 = new string('a', 64),
+                Parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(profile)
+            };
+
+            var validation = ContractValidator.ValidateRequest(request);
+
+            Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+        }
+    }
+
+    [Fact]
+    public void RejectsBoundedNativeLineEditWithOverlappingTargetAndProtectedHandles()
+    {
+        var request = ValidRequest("bounded_native_line_edit") with
+        {
+            DrawingSha256 = new string('a', 64),
+            Parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                """{"targets":[{"handle":"A1","before":{"start":[0,0,0],"end":[4,0,0]},"after":{"start":[0,0,0],"end":[5,0,0]}}],"protected":[{"handle":"a1","before":{"start":[0,0,0],"end":[4,0,0]}}]}""")
+        };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("unique and disjoint", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RejectsBoundedNativeLineEditWithEmptyTargetsOrInvalidGeometry()
+    {
+        var emptyTargets = ValidRequest("bounded_native_line_edit") with
+        {
+            DrawingSha256 = new string('a', 64),
+            Parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                """{"targets":[],"protected":[]}""")
+        };
+        var invalidGeometry = ValidRequest("bounded_native_line_edit") with
+        {
+            DrawingSha256 = new string('a', 64),
+            Parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                """{"targets":[{"handle":"A1","before":{"start":[0,0],"end":[4,0,0]},"after":{"start":[0,0,0],"end":[4,0,0]}}],"protected":[]}""")
+        };
+
+        var emptyValidation = ContractValidator.ValidateRequest(emptyTargets);
+        var geometryValidation = ContractValidator.ValidateRequest(invalidGeometry);
+
+        Assert.False(emptyValidation.IsValid);
+        Assert.Contains(emptyValidation.Errors, error => error.Contains("targets", StringComparison.OrdinalIgnoreCase));
+        Assert.False(geometryValidation.IsValid);
+        Assert.Contains(geometryValidation.Errors, error => error.Contains("geometry", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RejectsBoundedNativeLineEditSuccessResultWhenProtectedStateChanged()
+    {
+        var result = new IpcResult
+        {
+            RequestId = "native-edit-001",
+            Success = true,
+            Operation = "bounded_native_line_edit",
+            DrawingFullPath = @"C:\drawings\candidate.dwg",
+            Changed = true,
+            EntityHandles = new List<string> { "A1" },
+            Warnings = new List<string>(),
+            Errors = new List<string>(),
+            StartedAt = DateTimeOffset.Parse("2026-09-24T08:00:00Z"),
+            CompletedAt = DateTimeOffset.Parse("2026-09-24T08:00:01Z"),
+            Payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                """{"changed":true,"durable_state":"SAVED","save_performed":true,"drawing_sha256_before":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","drawing_sha256_after":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","targets":[{"handle":"A1","before":{"start":[0,0,0],"end":[4,0,0]},"after":{"start":[0,0,0],"end":[5,0,0]}}],"protected":[{"handle":"AF","before":{"start":[0,1,0],"end":[0,4,0]},"after":{"start":[0,1,0],"end":[0,4,0]}}],"warnings":[],"errors":[]}""")
+        };
+
+        var valid = ContractValidator.ValidateResult(result);
+        var invalidProtected = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                handle = "AF",
+                before = new { start = new[] { 0, 1, 0 }, end = new[] { 0, 4, 0 } },
+                after = new { start = new[] { 0, 1, 0 }, end = new[] { 0, 5, 0 } }
+            }
+        });
+        result.Payload!["protected"] = invalidProtected;
+
+        var invalid = ContractValidator.ValidateResult(result);
+
+        Assert.True(valid.IsValid, string.Join("; ", valid.Errors));
+        Assert.False(invalid.IsValid);
+        Assert.Contains(invalid.Errors, error => error.Contains("protected", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void RejectsUnsupportedSchemaVersion()
     {
         var request = ValidRequest() with { SchemaVersion = "9.9" };
@@ -549,6 +651,7 @@ public sealed class ContractTests
 
             Assert.Contains("exact_base_xref_inspection", operations);
             Assert.Contains("exact_base_xref_extraction", operations);
+            Assert.Contains("bounded_native_line_edit", operations);
         }
 
         Assert.Equal(
@@ -568,6 +671,14 @@ public sealed class ContractTests
                 .GetProperty("$ref")
                 .GetString());
         Assert.Equal(
+            "operations/bounded-native-line-edit.schema.json",
+            FindOperationBranch(requestSchema.RootElement, "bounded_native_line_edit")
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("parameters")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
             "operations/exact-base-xref-inspection-result.schema.json",
             FindOperationBranch(resultSchema.RootElement, "exact_base_xref_inspection")
                 .GetProperty("then")
@@ -580,6 +691,16 @@ public sealed class ContractTests
         Assert.Equal(
             "operations/exact-base-xref-extraction-result.schema.json",
             FindOperationBranch(resultSchema.RootElement, "exact_base_xref_extraction")
+                .GetProperty("then")
+                .GetProperty("allOf")[0]
+                .GetProperty("then")
+                .GetProperty("properties")
+                .GetProperty("payload")
+                .GetProperty("$ref")
+                .GetString());
+        Assert.Equal(
+            "operations/bounded-native-line-edit-result.schema.json",
+            FindOperationBranch(resultSchema.RootElement, "bounded_native_line_edit")
                 .GetProperty("then")
                 .GetProperty("allOf")[0]
                 .GetProperty("then")
