@@ -85,23 +85,22 @@ root or lint target to `scripts/verify.ps1` and its contract test.
   mutation, destructive or irreversible high-cost external actions, and
   genuinely ambiguous product requirements.
 
-## Workstation temp note (2026-09-25)
+## Workstation temp location (updated 2026-09-26)
 
-- On every repository refresh/update, Luna should read this note: prefer
+- On every repository refresh/update, Luna should read this note. Prefer
   `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when
-  the owning tool allows it; `C:\temp` remains the existing FileIPC root.
-- A verified archive of the ordinary files from `C:\temp` is at
-  `D:\Cad agent temp\c-temp-archive-20260925\remaining-c-temp-20260925`;
-  127,957 files were SHA-256 checked against the source at the time of copying.
-- The user has since moved some additional `C:\temp` folders to `D:\Cad agent temp`,
-  but confirms the move is incomplete; the exact subset and destination subfolders
-  were not recorded. Do not assume the archive or manual moves cover all contents.
-- This archive does not preserve reparse-point links. The last inventory found
-  185 top-level directories still in `C:\temp`; the folder is not empty, and
-  the user wants its remaining contents cleared.
-- Keep `C:\temp` itself as the existing FileIPC-compatible root. Before
-  cleanup, inspect the current contents and avoid deleting reparse-point
-  targets or active IPC files; do not redirect FileIPC to D as part of cleanup.
+  the owning tool allows it.
+- `C:\temp` was emptied on 2026-09-26 and the directory was left in place for
+  compatibility. The ordinary files copied during cleanup are archived at
+  `D:\Cad agent temp\c-temp-archive-20260926-000018`. Reparse-point link objects
+  were not recreated there; their paths/types/targets are recorded in
+  `D:\Cad agent temp\c-temp-archive-20260926-000018\reparse-points-manifest.json`.
+  Their targets were not followed or deleted.
+- Keeping the `C:\temp` directory does not automatically move FileIPC. Its
+  default remains `C:\temp`; use `CAD_AGENT_DOTNET_IPC_DIR` only when an existing
+  workflow explicitly configures another root. Do not assume IPC requests,
+  results, or other active files are redirected to D without checking the
+  current process configuration.
 
 ## Review allocation
 
