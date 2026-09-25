@@ -85,6 +85,21 @@ root or lint target to `scripts/verify.ps1` and its contract test.
   mutation, destructive or irreversible high-cost external actions, and
   genuinely ambiguous product requirements.
 
+## Workstation temp note (2026-09-25)
+
+- A verified archive of the ordinary files from `C:\temp` is at
+  `D:\Cad agent temp\c-temp-archive-20260925\remaining-c-temp-20260925`;
+  127,957 files were SHA-256 checked against the source at the time of copying.
+- The user has since moved some additional `C:\temp` folders to `D:\Cad agent temp`,
+  but confirms the move is incomplete; the exact subset and destination subfolders
+  were not recorded. Do not assume the archive or manual moves cover all contents.
+- This archive does not preserve reparse-point links. The last inventory found
+  185 top-level directories still in `C:\temp`; the folder is not empty, and
+  the user wants its remaining contents cleared.
+- Keep `C:\temp` itself as the existing FileIPC-compatible root. Before
+  cleanup, inspect the current contents and avoid deleting reparse-point
+  targets or active IPC files; do not redirect FileIPC to D as part of cleanup.
+
 ## Review allocation
 
 - Small: Codex plus one bounded independent review.
