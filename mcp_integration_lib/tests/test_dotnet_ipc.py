@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import importlib
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from cad_agent import drawing_artifact_reference as drawing_artifacts
 from mcp_integration_lib import dotnet_ipc
 from mcp_integration_lib.dotnet_ipc import (
     DEFAULT_IPC_DIR,
@@ -377,6 +379,139 @@ class FakeDispatcher:
 
 
 class DotNetIPCClientTests(unittest.TestCase):
+    def test_bounded_native_line_edit_dispatches_current_candidate_request_profiles(self) -> None:
+        profiles = [
+            {
+                "targets": [
+                    {
+                        "handle": "A1",
+                        "before": {"start": [0.0, 0.0, 0.0], "end": [4.0, 0.0, 0.0]},
+                        "after": {"start": [0.0, 0.0, 0.0], "end": [5.5, 0.0, 0.0]},
+                    },
+                    {
+                        "handle": "A2",
+                        "before": {"start": [3.0, 2.0, 0.0], "end": [3.0, 5.0, 0.0]},
+                        "after": {"start": [3.0, 2.0, 0.0], "end": [3.0, 6.25, 0.0]},
+                    },
+                ],
+                "protected": [
+                    {
+                        "handle": "AF",
+                        "before": {"start": [-1.0, 1.0, 0.0], "end": [-1.0, 8.0, 0.0]},
+                    }
+                ],
+            },
+            {
+                "targets": [
+                    {
+                        "handle": "B1",
+                        "before": {"start": [10.0, -2.0, 0.0], "end": [13.0, 2.0, 0.0]},
+                        "after": {"start": [10.0, -2.0, 0.0], "end": [14.5, 4.0, 0.0]},
+                    },
+                    {
+                        "handle": "B2",
+                        "before": {"start": [1.0, 7.0, 0.0], "end": [6.0, 7.0, 0.0]},
+                        "after": {"start": [1.0, 7.0, 0.0], "end": [8.0, 7.0, 0.0]},
+                    },
+                    {
+                        "handle": "B3",
+                        "before": {"start": [8.0, 9.0, 0.0], "end": [8.0, 3.0, 0.0]},
+                        "after": {"start": [8.0, 9.0, 0.0], "end": [8.0, 1.5, 0.0]},
+                    },
+                ],
+                "protected": [
+                    {
+                        "handle": "BF",
+                        "before": {"start": [20.0, 20.0, 0.0], "end": [22.0, 23.0, 0.0]},
+                    }
+                ],
+            },
+        ]
+        candidate_bytes = b"disposable candidate profile"
+        candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
+        reference = drawing_artifacts.issue_drawing_artifact_reference(
+            run_id="native-edit-run",
+            project_id="vehicle-project",
+            drawing_id="candidate-drawing",
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=candidate_bytes,
+            upstream_evidence={
+                "evidence_kind": "R3_CANDIDATE_CUSTODY",
+                "evidence_id": "candidate-custody",
+                "evidence_sha256": "a" * 64,
+            },
+            r3_provenance_binding={
+                "registry_snapshot_sha256": "b" * 64,
+                "provenance_sha256": "c" * 64,
+            },
+        )
+        observation = drawing_artifacts.observe_drawing_artifact_currentness(
+            reference=reference,
+            artifact_bytes=candidate_bytes,
+            observation_evidence_sha256="d" * 64,
+        )
+        observed_requests: list[dict[str, object]] = []
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            drawing_path = ipc_dir / "candidate.dwg"
+            drawing_path.write_bytes(candidate_bytes)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob(f"{REQUEST_PREFIX}*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                observed_requests.append(request)
+                parameters = request["parameters"]
+                payload = {
+                    "targets": [
+                        {
+                            "handle": item["handle"],
+                            "before": item["before"],
+                            "after": item["after"],
+                        }
+                        for item in parameters["targets"]
+                    ],
+                    "protected": [
+                        {
+                            "handle": item["handle"],
+                            "before": item["before"],
+                            "after": item["before"],
+                        }
+                        for item in parameters["protected"]
+                    ],
+                    "candidate_sha256_before": candidate_sha256,
+                    "candidate_sha256_after": "e" * 64,
+                    "save_performed": True,
+                }
+                result = _result(request, payload)
+                result["changed"] = True
+                result["entity_handles"] = [item["handle"] for item in parameters["targets"]]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), result)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            operation = getattr(client, "bounded_native_line_edit", None)
+            self.assertTrue(
+                callable(operation),
+                "DotNetIPCClient must expose the bounded native edit through existing FileIPC",
+            )
+            for index, parameters in enumerate(profiles, start=1):
+                with self.subTest(profile=index):
+                    result = operation(
+                        drawing_path,
+                        candidate_reference=reference,
+                        current_observation=observation,
+                        parameters=parameters,
+                        request_id=f"generic-line-edit-{index}",
+                    )
+                    self.assertTrue(result["success"])
+                    self.assertTrue(result["changed"])
+
+        self.assertEqual(2, len(observed_requests))
+        for request, expected in zip(observed_requests, profiles, strict=True):
+            self.assertEqual("bounded_native_line_edit", request["operation"])
+            self.assertEqual(candidate_sha256, request["drawing_sha256"])
+            self.assertEqual(expected, request["parameters"])
+
     def test_request_preserves_utf8_and_request_id(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
@@ -967,6 +1102,75 @@ class DotNetIPCClientTests(unittest.TestCase):
 
             self.assertIn("document mismatch", str(context.exception))
             self.assertFalse(list(ipc_dir.glob("cadagent_dotnet_*.json")))
+
+    def test_bounded_native_line_edit_failure_exposes_typed_uncertain_state(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                failed = _result(request)
+                failed["success"] = False
+                failed["changed"] = False
+                failed["entity_handles"] = []
+                failed["payload"] = {"durable_state": "UNCERTAIN", "save_performed": True}
+                failed["errors"] = ["DURABLE_STATE_UNCERTAIN"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), failed)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            with self.assertRaises(DotNetIPCResultError) as raised:
+                client.request(
+                    "bounded_native_line_edit",
+                    r"C:\temp\candidate.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={
+                        "targets": [
+                            {
+                                "handle": "A1",
+                                "before": {"start": [0, 0, 0], "end": [4, 0, 0]},
+                                "after": {"start": [0, 0, 0], "end": [5, 0, 0]},
+                            }
+                        ],
+                        "protected": [],
+                    },
+                )
+
+            self.assertEqual("UNCERTAIN", raised.exception.durable_state)
+            self.assertEqual("UNCERTAIN", raised.exception.result["payload"]["durable_state"])
+
+    def test_bounded_native_line_edit_rejects_unknown_failure_durable_state(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                failed = _result(request)
+                failed["success"] = False
+                failed["changed"] = False
+                failed["entity_handles"] = []
+                failed["payload"] = {"durable_state": "MAYBE", "save_performed": False}
+                failed["errors"] = ["native edit did not reach SAVED"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), failed)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            with self.assertRaises(DotNetIPCProtocolError):
+                client.request(
+                    "bounded_native_line_edit",
+                    r"C:\temp\candidate.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={
+                        "targets": [
+                            {
+                                "handle": "A1",
+                                "before": {"start": [0, 0, 0], "end": [4, 0, 0]},
+                                "after": {"start": [0, 0, 0], "end": [5, 0, 0]},
+                            }
+                        ],
+                        "protected": [],
+                    },
+                )
 
     def test_oversized_result_is_rejected_by_bounded_read(self) -> None:
         with TemporaryDirectory() as temporary:

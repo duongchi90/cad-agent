@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/autocad-ipc/operations/bounded-native-line-edit-result.schema.json",
+  "title": "CadAgent bounded native ModelSpace LINE edit snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "changed",
+    "durable_state",
+    "save_performed",
+    "drawing_sha256_before",
+    "drawing_sha256_after",
+    "targets",
+    "protected",
+    "warnings",
+    "errors"
+  ],
+  "properties": {
+    "changed": { "const": true },
+    "durable_state": { "const": "SAVED" },
+    "save_performed": { "const": true },
+    "drawing_sha256_before": { "$ref": "#/$defs/lowercaseSha256" },
+    "drawing_sha256_after": { "$ref": "#/$defs/lowercaseSha256" },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/state" }
+    },
+    "protected": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/state" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 512 }
+    },
+    "errors": {
+      "type": "array",
+      "maxItems": 0
+    }
+  },
+  "$defs": {
+    "lowercaseSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "handle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Fa-f]+$"
+    },
+    "point3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/point3" },
+        "end": { "$ref": "#/$defs/point3" }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "before", "after"],
+      "properties": {
+        "handle": { "$ref": "#/$defs/handle" },
+        "before": { "$ref": "#/$defs/line" },
+        "after": { "$ref": "#/$defs/line" }
+      }
+    }
+  }
+}

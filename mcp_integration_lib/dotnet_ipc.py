@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import math
 import ntpath
 import os
 import re
@@ -66,6 +67,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "native_render_evidence",
         "exact_base_xref_inspection",
         "exact_base_xref_extraction",
+        "bounded_native_line_edit",
     }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -75,6 +77,8 @@ _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _EXACT_BASE_XREF_INSPECTION = "exact_base_xref_inspection"
 _EXACT_BASE_XREF_EXTRACTION = "exact_base_xref_extraction"
+_BOUNDED_NATIVE_LINE_EDIT = "bounded_native_line_edit"
+_BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES = frozenset({"UNCHANGED", "ROLLED_BACK", "UNCERTAIN"})
 _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE = "INSPECTION_HOST"
 _EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE = "DISPOSABLE_CANDIDATE"
 _EXACT_BASE_XREF_LIVE_OWNED_FIELDS = frozenset(
@@ -577,6 +581,16 @@ class DotNetIPCResultError(DotNetIPCError):
         super().__init__(message)
         self.result = dict(result) if result is not None else None
 
+    @property
+    def durable_state(self) -> str | None:
+        """Return the bounded native edit's typed persistence outcome, if present."""
+
+        payload = self.result.get("payload") if self.result is not None else None
+        if not isinstance(payload, Mapping):
+            return None
+        state = payload.get("durable_state")
+        return state if isinstance(state, str) and state in _BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES else None
+
 
 class DisposableWorkspaceError(DotNetIPCError):
     """Base error for the server-owned disposable workspace seam."""
@@ -790,6 +804,41 @@ class DotNetIPCClient:
         finally:
             if not timed_out:
                 cleanup_request_files(self.ipc_dir, actual_request_id)
+
+    def bounded_native_line_edit(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        candidate_reference: Mapping[str, Any],
+        current_observation: Mapping[str, Any],
+        parameters: Mapping[str, Any],
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply one request-bound edit to the current disposable R3 candidate."""
+
+        from cad_agent.drawing_artifact_reference import (
+            require_current_drawing_artifact_reference,
+            validate_drawing_artifact_reference,
+        )
+
+        normalized_path = normalize_windows_absolute_path(drawing_full_path)
+        candidate_bytes = Path(normalized_path).read_bytes()
+        reference = validate_drawing_artifact_reference(
+            candidate_reference,
+            expected_artifact_role="R3_CANDIDATE",
+        )
+        require_current_drawing_artifact_reference(
+            reference=reference,
+            observation=current_observation,
+            artifact_bytes=candidate_bytes,
+        )
+        return self.request(
+            _BOUNDED_NATIVE_LINE_EDIT,
+            normalized_path,
+            drawing_sha256=hashlib.sha256(candidate_bytes).hexdigest(),
+            parameters=parameters,
+            request_id=request_id,
+        )
 
     def health(
         self,
@@ -1761,7 +1810,66 @@ class DotNetIPCClient:
             DotNetIPCClient._validate_exact_base_xref_inspection_parameters(values)
         elif operation == _EXACT_BASE_XREF_EXTRACTION:
             DotNetIPCClient._validate_exact_base_xref_extraction_parameters(values)
+        elif operation == _BOUNDED_NATIVE_LINE_EDIT:
+            DotNetIPCClient._validate_bounded_native_line_edit_parameters(values)
         return values
+
+    @staticmethod
+    def _validate_bounded_native_line_edit_parameters(
+        parameters: Mapping[str, Any],
+    ) -> None:
+        required = {"targets", "protected"}
+        if set(parameters) != required:
+            raise ValueError("bounded_native_line_edit parameters must contain only targets and protected")
+        targets = parameters["targets"]
+        protected = parameters["protected"]
+        if not isinstance(targets, list) or not targets:
+            raise ValueError("parameters.targets must be a non-empty array")
+        if not isinstance(protected, list):
+            raise ValueError("parameters.protected must be an array")
+
+        seen_handles: set[str] = set()
+        for name, lines, required_line_fields in (
+            ("targets", targets, {"handle", "before", "after"}),
+            ("protected", protected, {"handle", "before"}),
+        ):
+            for index, line in enumerate(lines):
+                if not isinstance(line, Mapping) or set(line) != required_line_fields:
+                    raise ValueError(f"parameters.{name}[{index}] has an invalid shape")
+                handle = line["handle"]
+                if not isinstance(handle, str) or not re.fullmatch(r"[0-9A-Fa-f]+", handle):
+                    raise ValueError(f"parameters.{name}[{index}].handle must be hexadecimal")
+                normalized_handle = handle.upper()
+                if normalized_handle in seen_handles:
+                    raise ValueError("target and protected handles must be unique and disjoint")
+                seen_handles.add(normalized_handle)
+                before = DotNetIPCClient._validate_bounded_line_geometry(
+                    line["before"], f"parameters.{name}[{index}].before"
+                )
+                if name == "targets":
+                    after = DotNetIPCClient._validate_bounded_line_geometry(
+                        line["after"], f"parameters.{name}[{index}].after"
+                    )
+                    if before == after:
+                        raise ValueError(f"parameters.targets[{index}] must declare a geometry change")
+
+    @staticmethod
+    def _validate_bounded_line_geometry(value: Any, field_name: str) -> dict[str, list[int | float]]:
+        if not isinstance(value, Mapping) or set(value) != {"start", "end"}:
+            raise ValueError(f"{field_name} must contain only start and end")
+        points: dict[str, list[int | float]] = {}
+        for point_name in ("start", "end"):
+            point = value[point_name]
+            if (
+                not isinstance(point, list)
+                or len(point) != 3
+                or any(type(coordinate) not in (int, float) or not math.isfinite(coordinate) for coordinate in point)
+            ):
+                raise ValueError(f"{field_name}.{point_name} must contain three finite coordinates")
+            points[point_name] = list(point)
+        if points["start"] == points["end"]:
+            raise ValueError(f"{field_name} must describe a non-degenerate LINE")
+        return points
 
     @staticmethod
     def _validate_offline_xref_inspection(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -2376,6 +2484,22 @@ class DotNetIPCClient:
             ):
                 raise DotNetIPCProtocolError(
                     "exact_base_xref_extraction failure must be cleaned up and empty"
+                )
+        if operation == _BOUNDED_NATIVE_LINE_EDIT and result["success"] is False:
+            if result["changed"] is not False or result["entity_handles"]:
+                raise DotNetIPCProtocolError(
+                    "bounded_native_line_edit failure must be unchanged and contain no entity handles"
+                )
+            payload = result.get("payload")
+            if payload not in (None, {}) and (
+                not isinstance(payload, dict)
+                or set(payload) != {"durable_state", "save_performed"}
+                or not isinstance(payload.get("durable_state"), str)
+                or payload.get("durable_state") not in _BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES
+                or type(payload.get("save_performed")) is not bool
+            ):
+                raise DotNetIPCProtocolError(
+                    "bounded_native_line_edit failure payload has an invalid durable state"
                 )
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:
