@@ -87,6 +87,9 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 
 ## Workstation temp note (2026-09-25)
 
+- On every repository refresh/update, Luna should read this note: prefer
+  `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when
+  the owning tool allows it; `C:\temp` remains the existing FileIPC root.
 - A verified archive of the ordinary files from `C:\temp` is at
   `D:\Cad agent temp\c-temp-archive-20260925\remaining-c-temp-20260925`;
   127,957 files were SHA-256 checked against the source at the time of copying.
