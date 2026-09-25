@@ -14,7 +14,7 @@ internal static class BoundedNativeLineEditPolicy
 {
     internal const double EndpointTolerance = ContractValidator.NativeLineEndpointTolerance;
 
-    internal static ProtectedIpcDirectoryCustody AcquireCandidateDirectoryCustody(string candidatePath)
+    internal static NativeLineEditCandidateCustody AcquireCandidateCustody(string candidatePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(candidatePath);
         var fullPath = Path.GetFullPath(candidatePath);
@@ -25,7 +25,17 @@ internal static class BoundedNativeLineEditPolicy
 
         var candidateDirectory = Path.GetDirectoryName(fullPath)
             ?? throw new InvalidDataException("native-edit candidate has no parent directory");
-        return ProtectedIpcDirectoryPolicy.AcquireProtectedDirectory(candidateDirectory, canonical: true);
+        var directoryCustody = ProtectedIpcDirectoryPolicy.AcquireProtectedDirectory(candidateDirectory, canonical: true);
+        try
+        {
+            var fileCustody = ProtectedIpcDirectoryPolicy.AcquireProtectedFile(fullPath);
+            return new NativeLineEditCandidateCustody(directoryCustody, fileCustody);
+        }
+        catch
+        {
+            directoryCustody.Dispose();
+            throw;
+        }
     }
 
     internal static void ValidateBeforeWrite(
@@ -254,5 +264,36 @@ internal static class BoundedNativeLineEditPolicy
             }
         }
         return true;
+    }
+}
+
+internal sealed class NativeLineEditCandidateCustody : IDisposable
+{
+    private readonly ProtectedIpcDirectoryCustody _directoryCustody;
+    private readonly ProtectedIpcFileCustody _fileCustody;
+
+    internal NativeLineEditCandidateCustody(
+        ProtectedIpcDirectoryCustody directoryCustody,
+        ProtectedIpcFileCustody fileCustody)
+    {
+        _directoryCustody = directoryCustody;
+        _fileCustody = fileCustody;
+    }
+
+    internal IpcFileIdentity RootIdentity => _directoryCustody.RootIdentity;
+
+    internal void EnsureCandidatePathMatches(string candidatePath) =>
+        _fileCustody.EnsurePathMatches(candidatePath);
+
+    public void Dispose()
+    {
+        try
+        {
+            _fileCustody.Dispose();
+        }
+        finally
+        {
+            _directoryCustody.Dispose();
+        }
     }
 }

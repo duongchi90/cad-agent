@@ -102,6 +102,81 @@ internal static class ProtectedIpcDirectoryPolicy
         }
     }
 
+    internal static ProtectedIpcFileCustody AcquireProtectedFile(string filePath)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new InvalidDataException("Native edits require a protected local Windows file.");
+        }
+
+        var fullPath = Path.GetFullPath(filePath);
+        if (!IsCanonical(filePath, fullPath))
+        {
+            throw new InvalidDataException("The candidate file path is not canonical.");
+        }
+
+        var handle = CreateFileHandle(
+            fullPath,
+            FileReadAttributes | ReadControl,
+            ShareRead | ShareWrite | ShareDelete,
+            FileFlagOpenReparsePoint);
+        try
+        {
+            EnsureFileHandleMatchesPath(handle, fullPath);
+            var securityHandle = CreateFileHandle(
+                fullPath,
+                GenericRead | ReadControl,
+                ShareRead | ShareWrite | ShareDelete,
+                FileFlagOpenReparsePoint);
+            using var stream = new FileStream(securityHandle, FileAccess.Read, 1, isAsync: false);
+            EnsureFileHandleMatchesPath(securityHandle, fullPath);
+            if (GetFileIdentity(securityHandle) != GetFileIdentity(handle))
+            {
+                throw new InvalidDataException("The candidate file identity changed while its ACL was being read.");
+            }
+            var security = FileSystemAclExtensions.GetAccessControl(stream);
+            var currentUser = WindowsIdentity.GetCurrent().User
+                ?? throw new InvalidDataException("The current Windows principal could not be identified.");
+            var trustedSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                currentUser.Value,
+                new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value,
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value
+            };
+            EnsureProtectedAcl(
+                security,
+                trustedSids,
+                requireProtectedDacl: false,
+                subject: "candidate file");
+            return new ProtectedIpcFileCustody(handle, GetFileIdentity(handle));
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    internal static void EnsureFilePathMatches(IpcFileIdentity expectedIdentity, string expectedPath)
+    {
+        var fullPath = Path.GetFullPath(expectedPath);
+        if (!IsCanonical(expectedPath, fullPath))
+        {
+            throw new InvalidDataException("The candidate file path is not canonical.");
+        }
+
+        using var current = CreateFileHandle(
+            fullPath,
+            FileReadAttributes,
+            ShareRead | ShareWrite | ShareDelete,
+            FileFlagOpenReparsePoint);
+        EnsureFileHandleMatchesPath(current, fullPath);
+        if (GetFileIdentity(current) != expectedIdentity)
+        {
+            throw new InvalidDataException("The candidate path no longer resolves to the admitted file identity.");
+        }
+    }
+
     internal static SafeFileHandle OpenDirectoryForObservation(string directoryPath) =>
         OpenDirectoryHandle(directoryPath, holdCustody: false, readControl: false);
 
@@ -223,20 +298,24 @@ internal static class ProtectedIpcDirectoryPolicy
         IReadOnlySet<string> trustedSids)
     {
         var security = root.GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
-        EnsureProtectedRootAcl(security, trustedSids);
+        EnsureProtectedAcl(security, trustedSids, requireProtectedDacl: true, "protected directory");
     }
 
-    private static void EnsureProtectedRootAcl(FileSystemSecurity security, IReadOnlySet<string> trustedSids)
+    private static void EnsureProtectedAcl(
+        FileSystemSecurity security,
+        IReadOnlySet<string> trustedSids,
+        bool requireProtectedDacl,
+        string subject)
     {
-        if (!security.AreAccessRulesProtected)
+        if (requireProtectedDacl && !security.AreAccessRulesProtected)
         {
-            throw new InvalidDataException("The protected directory ACL must be protected from inheritance.");
+            throw new InvalidDataException($"The {subject} ACL must be protected from inheritance.");
         }
 
         var owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
         if (owner is null || !trustedSids.Contains(owner.Value))
         {
-            throw new InvalidDataException("The protected directory owner is not a trusted Windows principal.");
+            throw new InvalidDataException($"The {subject} owner is not a trusted Windows principal.");
         }
 
         var fullControlSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -250,7 +329,7 @@ internal static class ProtectedIpcDirectoryPolicy
                 && HasWriteRights(rule.FileSystemRights))
             {
                 throw new InvalidDataException(
-                    "The protected directory ACL denies write access needed by the trusted Windows principal.");
+                    $"The {subject} ACL denies write access needed by the trusted Windows principal.");
             }
 
             if (rule.AccessControlType == AccessControlType.Allow
@@ -258,7 +337,7 @@ internal static class ProtectedIpcDirectoryPolicy
                 && !trustedSids.Contains(sid))
             {
                 throw new InvalidDataException(
-                    "An untrusted Windows principal has write access to the protected directory.");
+                    $"An untrusted Windows principal has write access to the {subject}.");
             }
 
             if (rule.AccessControlType == AccessControlType.Allow
@@ -275,8 +354,22 @@ internal static class ProtectedIpcDirectoryPolicy
             if (!fullControlSids.Contains(sid))
             {
                 throw new InvalidDataException(
-                    "The protected directory must grant full control only to the current principal, Administrators, and SYSTEM.");
+                    $"The {subject} must grant full control only to the current principal, Administrators, and SYSTEM.");
             }
+        }
+    }
+
+    private static void EnsureFileHandleMatchesPath(SafeFileHandle handle, string expectedPath)
+    {
+        var attributes = GetFileAttributes(handle);
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The candidate must be a regular, non-reparse file.");
+        }
+
+        if (!PathsEqual(GetFinalPath(handle), expectedPath))
+        {
+            throw new InvalidDataException("The candidate file path changed while custody was being acquired.");
         }
     }
 
@@ -314,7 +407,7 @@ internal static class ProtectedIpcDirectoryPolicy
         {
             var error = Marshal.GetLastWin32Error();
             handle.Dispose();
-            throw new Win32Exception(error, "The FileIPC path could not be opened for identity custody.");
+            throw new Win32Exception(error, "The Windows file path could not be opened for identity custody.");
         }
 
         return handle;
@@ -388,6 +481,24 @@ internal static class ProtectedIpcDirectoryPolicy
 }
 
 internal readonly record struct IpcFileIdentity(ulong VolumeSerialNumber, ulong FileIdLow, ulong FileIdHigh);
+
+internal sealed class ProtectedIpcFileCustody : IDisposable
+{
+    private readonly SafeFileHandle _handle;
+
+    internal ProtectedIpcFileCustody(SafeFileHandle handle, IpcFileIdentity identity)
+    {
+        _handle = handle;
+        Identity = identity;
+    }
+
+    internal IpcFileIdentity Identity { get; }
+
+    internal void EnsurePathMatches(string path) =>
+        ProtectedIpcDirectoryPolicy.EnsureFilePathMatches(Identity, path);
+
+    public void Dispose() => _handle.Dispose();
+}
 
 internal sealed class ProtectedIpcDirectoryCustody : IDisposable
 {

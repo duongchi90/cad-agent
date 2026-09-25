@@ -163,7 +163,7 @@ public sealed class CommandContext
             var committed = false;
             string? candidatePath = null;
             string? rollbackExpectedDiskSha256 = null;
-            ProtectedIpcDirectoryCustody? candidateDirectoryCustody = null;
+            NativeLineEditCandidateCustody? candidateCustody = null;
 
             try
             {
@@ -172,8 +172,8 @@ public sealed class CommandContext
                 candidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
                     request.DrawingFullPath,
                     database.Filename);
-                candidateDirectoryCustody = BoundedNativeLineEditPolicy
-                    .AcquireCandidateDirectoryCustody(candidatePath);
+                candidateCustody = BoundedNativeLineEditPolicy
+                    .AcquireCandidateCustody(candidatePath);
                 var securedCandidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
                     request.DrawingFullPath,
                     database.Filename);
@@ -182,6 +182,7 @@ public sealed class CommandContext
                     throw new InvalidOperationException("native-edit candidate changed while path custody was acquired");
                 }
                 candidatePath = securedCandidatePath;
+                candidateCustody.EnsureCandidatePathMatches(candidatePath);
                 drawingSha256Before = ComputeSha256(candidatePath);
                 rollbackExpectedDiskSha256 = drawingSha256Before;
                 dbmodBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"));
@@ -208,6 +209,7 @@ public sealed class CommandContext
                     candidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
                         request.DrawingFullPath,
                         database.Filename);
+                    candidateCustody.EnsureCandidatePathMatches(candidatePath);
                     var freshSha256 = ComputeSha256(candidatePath);
                     var freshDbmod = Convert.ToInt32(ReadSystemNumber("DBMOD"));
                     BoundedNativeLineEditPolicy.ValidateBeforeWrite(
@@ -248,6 +250,7 @@ public sealed class CommandContext
                 candidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
                     request.DrawingFullPath,
                     database.Filename);
+                candidateCustody.EnsureCandidatePathMatches(candidatePath);
                 if (!string.Equals(ComputeSha256(candidatePath), drawingSha256Before, StringComparison.Ordinal))
                 {
                     var restored = TryRestoreNativeLineEditInMemory(
@@ -274,16 +277,19 @@ public sealed class CommandContext
                         new[] { $"DURABLE_STATE_UNCERTAIN: {error}" });
                 }
 
+                candidateCustody.EnsureCandidatePathMatches(candidatePath);
                 database.SaveAs(
                     candidatePath,
                     true,
                     DwgVersion.Current,
                     database.SecurityParameters);
+                candidateCustody.EnsureCandidatePathMatches(candidatePath);
 
                 var drawingSha256After = ComputeSha256(candidatePath);
                 rollbackExpectedDiskSha256 = drawingSha256After;
                 var activeAfterSave = ReadNativeLineObservations(database, request);
                 var reopenedAfterSave = ReadSavedNativeLineObservations(candidatePath, request);
+                candidateCustody.EnsureCandidatePathMatches(candidatePath);
                 BoundedNativeLineEditPolicy.ValidateReadback(request, before, activeAfterSave);
                 BoundedNativeLineEditPolicy.ValidateReadback(request, before, reopenedAfterSave);
                 var dbmodAfter = Convert.ToInt32(ReadSystemNumber("DBMOD"));
@@ -350,10 +356,12 @@ public sealed class CommandContext
                 string? rollbackSha256 = null;
                 var rollbackError = "candidate path was unavailable";
                 var rollbackPersisted = candidatePath is not null
+                    && candidateCustody is not null
                     && TryRestoreAndPersistNativeLineEdit(
                         database,
                         request,
                         candidatePath,
+                        candidateCustody,
                         rollbackExpectedDiskSha256,
                         before,
                         out rollbackSha256,
@@ -381,7 +389,7 @@ public sealed class CommandContext
             }
             finally
             {
-                candidateDirectoryCustody?.Dispose();
+                candidateCustody?.Dispose();
             }
         }
 
@@ -584,6 +592,7 @@ public sealed class CommandContext
             Database database,
             BoundedNativeLineEditRequest request,
             string candidatePath,
+            NativeLineEditCandidateCustody candidateCustody,
             string? expectedDiskSha256,
             IReadOnlyCollection<NativeLineEditObservation> before,
             out string? drawingSha256After,
@@ -602,6 +611,7 @@ public sealed class CommandContext
                 {
                     throw new InvalidOperationException("candidate identity changed before rollback persistence");
                 }
+                candidateCustody.EnsureCandidatePathMatches(canonicalCandidate);
                 if (!TryRestoreNativeLineEditInMemory(database, request, before, out error))
                 {
                     return false;
@@ -610,11 +620,16 @@ public sealed class CommandContext
                 var rollbackPersisted = BoundedNativeLineEditPolicy.TryPersistRollbackIfDiskCurrent(
                     expectedDiskSha256 ?? string.Empty,
                     ComputeSha256(canonicalCandidate),
-                    () => database.SaveAs(
-                        canonicalCandidate,
-                        true,
-                        DwgVersion.Current,
-                        database.SecurityParameters));
+                    () =>
+                    {
+                        candidateCustody.EnsureCandidatePathMatches(canonicalCandidate);
+                        database.SaveAs(
+                            canonicalCandidate,
+                            true,
+                            DwgVersion.Current,
+                            database.SecurityParameters);
+                        candidateCustody.EnsureCandidatePathMatches(canonicalCandidate);
+                    });
                 if (!rollbackPersisted)
                 {
                     throw new InvalidOperationException(
@@ -624,6 +639,7 @@ public sealed class CommandContext
                 }
                 drawingSha256After = ComputeSha256(canonicalCandidate);
                 var reopened = ReadSavedNativeLineObservations(canonicalCandidate, request);
+                candidateCustody.EnsureCandidatePathMatches(canonicalCandidate);
                 BoundedNativeLineEditPolicy.ValidateRollbackReadback(request, before, reopened);
                 if (Convert.ToInt32(ReadSystemNumber("DBMOD")) != 0)
                 {

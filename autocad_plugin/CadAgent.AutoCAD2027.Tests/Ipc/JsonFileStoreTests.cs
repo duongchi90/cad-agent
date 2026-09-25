@@ -95,7 +95,7 @@ public sealed class JsonFileStoreTests
 
             var candidatePath = Path.Combine(candidateDirectory, "candidate.dwg");
             File.WriteAllText(candidatePath, "candidate");
-            using var custody = BoundedNativeLineEditPolicy.AcquireCandidateDirectoryCustody(candidatePath);
+            using var custody = BoundedNativeLineEditPolicy.AcquireCandidateCustody(candidatePath);
 
             Assert.NotEqual(default, custody.RootIdentity);
             Assert.True(Directory.Exists(candidateDirectory));
@@ -123,9 +123,75 @@ public sealed class JsonFileStoreTests
         SetUnprotectedAcl(fixture.DirectoryPath);
 
         var exception = Assert.Throws<InvalidDataException>(() =>
-            BoundedNativeLineEditPolicy.AcquireCandidateDirectoryCustody(candidatePath));
+            BoundedNativeLineEditPolicy.AcquireCandidateCustody(candidatePath));
 
         Assert.Contains("protected", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CandidateFileCustodyRejectsAnUntrustedWriterEvenWhenItsDirectoryIsProtected()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var candidateDirectory = Path.Combine(Path.GetTempPath(), "cadagent-candidate-file-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(candidateDirectory);
+        try
+        {
+            SetProtectedAcl(candidateDirectory);
+            var candidatePath = Path.Combine(candidateDirectory, "candidate.dwg");
+            File.WriteAllText(candidatePath, "candidate");
+            SetUntrustedFileAcl(candidatePath);
+
+            var exception = Assert.Throws<InvalidDataException>(() =>
+                BoundedNativeLineEditPolicy.AcquireCandidateCustody(candidatePath));
+
+            Assert.Contains("untrusted", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(candidateDirectory))
+            {
+                Directory.Delete(candidateDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CandidateFileCustodyRejectsAPathReplacedAfterAdmission()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var candidateDirectory = Path.Combine(Path.GetTempPath(), "cadagent-candidate-identity-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(candidateDirectory);
+        try
+        {
+            SetProtectedAcl(candidateDirectory);
+            var candidatePath = Path.Combine(candidateDirectory, "candidate.dwg");
+            var admittedPath = Path.Combine(candidateDirectory, "admitted.dwg");
+            File.WriteAllText(candidatePath, "admitted candidate");
+
+            using var custody = ProtectedIpcDirectoryPolicy.AcquireProtectedFile(candidatePath);
+            File.Move(candidatePath, admittedPath);
+            File.WriteAllText(candidatePath, "replacement candidate");
+
+            var exception = Assert.Throws<InvalidDataException>(() =>
+                custody.EnsurePathMatches(candidatePath));
+
+            Assert.Contains("identity", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(candidateDirectory))
+            {
+                Directory.Delete(candidateDirectory, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -406,6 +472,17 @@ public sealed class JsonFileStoreTests
             PropagationFlags.None,
             AccessControlType.Allow));
         directory.SetAccessControl(security);
+    }
+
+    private static void SetUntrustedFileAcl(string filePath)
+    {
+        var file = new FileInfo(filePath);
+        var security = file.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            AccessControlType.Allow));
+        file.SetAccessControl(security);
     }
 
     private static IReadOnlySet<string> TrustedWindowsPrincipals()
