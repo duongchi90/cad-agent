@@ -318,12 +318,24 @@ public sealed class OperationDispatcher
             || !snapshot.SavePerformed
             || snapshot.Errors.Count != 0)
         {
-            return Failure(
+            var failure = Failure(
                 boundRequest,
                 snapshot.Errors.Count > 0
                     ? snapshot.Errors
                     : new[] { "bounded_native_line_edit did not produce a saved readback" },
                 startedAt);
+            var durableState = snapshot.DurableState is "UNCHANGED" or "ROLLED_BACK" or "UNCERTAIN"
+                ? snapshot.DurableState
+                : "UNCERTAIN";
+            failure = failure with
+            {
+                Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                {
+                    ["durable_state"] = JsonSerializer.SerializeToElement(durableState),
+                    ["save_performed"] = JsonSerializer.SerializeToElement(snapshot.SavePerformed)
+                }
+            };
+            return ContractValidator.NormalizeResult(failure);
         }
 
         var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)

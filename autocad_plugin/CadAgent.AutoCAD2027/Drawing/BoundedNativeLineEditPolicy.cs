@@ -14,6 +14,20 @@ internal static class BoundedNativeLineEditPolicy
 {
     internal const double EndpointTolerance = ContractValidator.NativeLineEndpointTolerance;
 
+    internal static ProtectedIpcDirectoryCustody AcquireCandidateDirectoryCustody(string candidatePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidatePath);
+        var fullPath = Path.GetFullPath(candidatePath);
+        if (!ProtectedIpcDirectoryPolicy.IsCanonical(candidatePath, fullPath))
+        {
+            throw new InvalidDataException("native-edit candidate path must be canonical");
+        }
+
+        var candidateDirectory = Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidDataException("native-edit candidate has no parent directory");
+        return ProtectedIpcDirectoryPolicy.AcquireProtectedDirectory(candidateDirectory, canonical: true);
+    }
+
     internal static void ValidateBeforeWrite(
         BoundedNativeLineEditRequest request,
         string candidatePath,

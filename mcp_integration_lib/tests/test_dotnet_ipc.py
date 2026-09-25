@@ -1103,6 +1103,75 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertIn("document mismatch", str(context.exception))
             self.assertFalse(list(ipc_dir.glob("cadagent_dotnet_*.json")))
 
+    def test_bounded_native_line_edit_failure_exposes_typed_uncertain_state(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                failed = _result(request)
+                failed["success"] = False
+                failed["changed"] = False
+                failed["entity_handles"] = []
+                failed["payload"] = {"durable_state": "UNCERTAIN", "save_performed": True}
+                failed["errors"] = ["DURABLE_STATE_UNCERTAIN"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), failed)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            with self.assertRaises(DotNetIPCResultError) as raised:
+                client.request(
+                    "bounded_native_line_edit",
+                    r"C:\temp\candidate.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={
+                        "targets": [
+                            {
+                                "handle": "A1",
+                                "before": {"start": [0, 0, 0], "end": [4, 0, 0]},
+                                "after": {"start": [0, 0, 0], "end": [5, 0, 0]},
+                            }
+                        ],
+                        "protected": [],
+                    },
+                )
+
+            self.assertEqual("UNCERTAIN", raised.exception.durable_state)
+            self.assertEqual("UNCERTAIN", raised.exception.result["payload"]["durable_state"])
+
+    def test_bounded_native_line_edit_rejects_unknown_failure_durable_state(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                failed = _result(request)
+                failed["success"] = False
+                failed["changed"] = False
+                failed["entity_handles"] = []
+                failed["payload"] = {"durable_state": "MAYBE", "save_performed": False}
+                failed["errors"] = ["native edit did not reach SAVED"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), failed)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            with self.assertRaises(DotNetIPCProtocolError):
+                client.request(
+                    "bounded_native_line_edit",
+                    r"C:\temp\candidate.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={
+                        "targets": [
+                            {
+                                "handle": "A1",
+                                "before": {"start": [0, 0, 0], "end": [4, 0, 0]},
+                                "after": {"start": [0, 0, 0], "end": [5, 0, 0]},
+                            }
+                        ],
+                        "protected": [],
+                    },
+                )
+
     def test_oversized_result_is_rejected_by_bounded_read(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)

@@ -163,6 +163,7 @@ public sealed class CommandContext
             var committed = false;
             string? candidatePath = null;
             string? rollbackExpectedDiskSha256 = null;
+            ProtectedIpcDirectoryCustody? candidateDirectoryCustody = null;
 
             try
             {
@@ -171,6 +172,16 @@ public sealed class CommandContext
                 candidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
                     request.DrawingFullPath,
                     database.Filename);
+                candidateDirectoryCustody = BoundedNativeLineEditPolicy
+                    .AcquireCandidateDirectoryCustody(candidatePath);
+                var securedCandidatePath = _exactBaseXrefPolicy.ValidateNativeEditCandidate(
+                    request.DrawingFullPath,
+                    database.Filename);
+                if (!string.Equals(candidatePath, securedCandidatePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("native-edit candidate changed while path custody was acquired");
+                }
+                candidatePath = securedCandidatePath;
                 drawingSha256Before = ComputeSha256(candidatePath);
                 rollbackExpectedDiskSha256 = drawingSha256Before;
                 dbmodBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"));
@@ -367,6 +378,10 @@ public sealed class CommandContext
                         {
                             $"DURABLE_STATE_UNCERTAIN: {exception.Message}; rollback persistence was not proven: {rollbackError}"
                         });
+            }
+            finally
+            {
+                candidateDirectoryCustody?.Dispose();
             }
         }
 

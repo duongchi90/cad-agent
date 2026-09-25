@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
 using Xunit;
 
@@ -66,6 +67,65 @@ public sealed class JsonFileStoreTests
                 Directory.Delete(parentPath, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public void CandidateDirectoryCustodyAcceptsProtectedLeafUnderBroadParent()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var parentPath = Path.Combine(Path.GetTempPath(), "cadagent-candidate-parent-" + Guid.NewGuid().ToString("N"));
+        var candidateDirectory = Path.Combine(parentPath, "candidate");
+        Directory.CreateDirectory(candidateDirectory);
+        try
+        {
+            var parent = new DirectoryInfo(parentPath);
+            var parentSecurity = parent.GetAccessControl();
+            parentSecurity.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+                FileSystemRights.Modify,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(parentSecurity);
+            SetProtectedAcl(candidateDirectory);
+
+            var candidatePath = Path.Combine(candidateDirectory, "candidate.dwg");
+            File.WriteAllText(candidatePath, "candidate");
+            using var custody = BoundedNativeLineEditPolicy.AcquireCandidateDirectoryCustody(candidatePath);
+
+            Assert.NotEqual(default, custody.RootIdentity);
+            Assert.True(Directory.Exists(candidateDirectory));
+        }
+        finally
+        {
+            if (Directory.Exists(parentPath))
+            {
+                Directory.Delete(parentPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CandidateDirectoryCustodyRejectsAnUnprotectedLeaf()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new StoreFixture();
+        var candidatePath = Path.Combine(fixture.DirectoryPath, "candidate.dwg");
+        File.WriteAllText(candidatePath, "candidate");
+        SetUnprotectedAcl(fixture.DirectoryPath);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            BoundedNativeLineEditPolicy.AcquireCandidateDirectoryCustody(candidatePath));
+
+        Assert.Contains("protected", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -331,6 +391,20 @@ public sealed class JsonFileStoreTests
                 AccessControlType.Allow));
         }
 
+        directory.SetAccessControl(security);
+    }
+
+    private static void SetUnprotectedAcl(string directoryPath)
+    {
+        var directory = new DirectoryInfo(directoryPath);
+        var security = directory.GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: false, preserveInheritance: true);
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
         directory.SetAccessControl(security);
     }
 

@@ -78,6 +78,7 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _EXACT_BASE_XREF_INSPECTION = "exact_base_xref_inspection"
 _EXACT_BASE_XREF_EXTRACTION = "exact_base_xref_extraction"
 _BOUNDED_NATIVE_LINE_EDIT = "bounded_native_line_edit"
+_BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES = frozenset({"UNCHANGED", "ROLLED_BACK", "UNCERTAIN"})
 _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE = "INSPECTION_HOST"
 _EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE = "DISPOSABLE_CANDIDATE"
 _EXACT_BASE_XREF_LIVE_OWNED_FIELDS = frozenset(
@@ -579,6 +580,16 @@ class DotNetIPCResultError(DotNetIPCError):
     def __init__(self, message: str, *, result: Mapping[str, Any] | None = None) -> None:
         super().__init__(message)
         self.result = dict(result) if result is not None else None
+
+    @property
+    def durable_state(self) -> str | None:
+        """Return the bounded native edit's typed persistence outcome, if present."""
+
+        payload = self.result.get("payload") if self.result is not None else None
+        if not isinstance(payload, Mapping):
+            return None
+        state = payload.get("durable_state")
+        return state if isinstance(state, str) and state in _BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES else None
 
 
 class DisposableWorkspaceError(DotNetIPCError):
@@ -2473,6 +2484,22 @@ class DotNetIPCClient:
             ):
                 raise DotNetIPCProtocolError(
                     "exact_base_xref_extraction failure must be cleaned up and empty"
+                )
+        if operation == _BOUNDED_NATIVE_LINE_EDIT and result["success"] is False:
+            if result["changed"] is not False or result["entity_handles"]:
+                raise DotNetIPCProtocolError(
+                    "bounded_native_line_edit failure must be unchanged and contain no entity handles"
+                )
+            payload = result.get("payload")
+            if payload not in (None, {}) and (
+                not isinstance(payload, dict)
+                or set(payload) != {"durable_state", "save_performed"}
+                or not isinstance(payload.get("durable_state"), str)
+                or payload.get("durable_state") not in _BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES
+                or type(payload.get("save_performed")) is not bool
+            ):
+                raise DotNetIPCProtocolError(
+                    "bounded_native_line_edit failure payload has an invalid durable state"
                 )
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:

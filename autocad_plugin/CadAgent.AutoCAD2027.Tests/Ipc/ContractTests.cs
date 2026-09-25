@@ -30,6 +30,66 @@ public sealed class ContractTests
         }
     }
 
+    [Theory]
+    [InlineData("UNCHANGED", false)]
+    [InlineData("ROLLED_BACK", true)]
+    [InlineData("UNCERTAIN", false)]
+    public void AcceptsClosedDurableStateOnBoundedNativeLineEditFailure(
+        string durableState,
+        bool savePerformed)
+    {
+        var result = new IpcResult
+        {
+            RequestId = "native-edit-failure-001",
+            Success = false,
+            Operation = "bounded_native_line_edit",
+            DrawingFullPath = @"C:\drawings\candidate.dwg",
+            Changed = false,
+            EntityHandles = new List<string>(),
+            Warnings = new List<string>(),
+            Errors = new List<string> { "native edit did not reach SAVED" },
+            StartedAt = DateTimeOffset.Parse("2026-09-24T08:00:00Z"),
+            CompletedAt = DateTimeOffset.Parse("2026-09-24T08:00:01Z"),
+            Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["durable_state"] = JsonSerializer.SerializeToElement(durableState),
+                ["save_performed"] = JsonSerializer.SerializeToElement(savePerformed)
+            }
+        };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+    }
+
+    [Fact]
+    public void RejectsUnknownDurableStateOnBoundedNativeLineEditFailure()
+    {
+        var result = new IpcResult
+        {
+            RequestId = "native-edit-failure-unknown-001",
+            Success = false,
+            Operation = "bounded_native_line_edit",
+            DrawingFullPath = @"C:\drawings\candidate.dwg",
+            Changed = false,
+            EntityHandles = new List<string>(),
+            Warnings = new List<string>(),
+            Errors = new List<string> { "native edit did not reach SAVED" },
+            StartedAt = DateTimeOffset.Parse("2026-09-24T08:00:00Z"),
+            CompletedAt = DateTimeOffset.Parse("2026-09-24T08:00:01Z"),
+            Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["durable_state"] = JsonSerializer.SerializeToElement("MAYBE"),
+                ["save_performed"] = JsonSerializer.SerializeToElement(false)
+            }
+        };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("durable_state", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void RejectsBoundedNativeLineEditWithOverlappingTargetAndProtectedHandles()
     {
@@ -742,6 +802,24 @@ public sealed class ContractTests
                 .GetProperty("payload")
                 .GetProperty("$ref")
                 .GetString());
+        var boundedFailurePayload = FindOperationBranch(
+                resultSchema.RootElement,
+                "bounded_native_line_edit")
+            .GetProperty("then")
+            .GetProperty("allOf")[1]
+            .GetProperty("then")
+            .GetProperty("properties")
+            .GetProperty("payload");
+        Assert.Equal(2, boundedFailurePayload.GetProperty("oneOf").GetArrayLength());
+        Assert.Equal(
+            new[] { "UNCHANGED", "ROLLED_BACK", "UNCERTAIN" },
+            boundedFailurePayload.GetProperty("oneOf")[1]
+                .GetProperty("properties")
+                .GetProperty("durable_state")
+                .GetProperty("enum")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .ToArray());
 
         using var inspectionSchema = JsonDocument.Parse(File.ReadAllText(
             RepositoryFile(
