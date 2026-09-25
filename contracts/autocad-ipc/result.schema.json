@@ -335,8 +335,32 @@
                   "maxItems": 0
                 },
                 "payload": {
-                  "type": "object",
-                  "maxProperties": 0
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "maxProperties": 0
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "durable_state",
+                        "save_performed"
+                      ],
+                      "properties": {
+                        "durable_state": {
+                          "enum": [
+                            "UNCHANGED",
+                            "ROLLED_BACK",
+                            "UNCERTAIN"
+                          ]
+                        },
+                        "save_performed": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }

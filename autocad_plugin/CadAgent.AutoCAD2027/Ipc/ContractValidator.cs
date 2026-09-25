@@ -496,9 +496,13 @@ public static class ContractValidator
             {
                 errors.Add("bounded_native_line_edit failure results must be unchanged and contain no entity handles");
             }
-            if (result.Payload is not null && result.Payload.Count != 0)
+            if (result.Payload is { Count: > 0 } failurePayload
+                && (failurePayload.Count != 2
+                    || !TryGetString(failurePayload, "durable_state", out var failureDurableState)
+                    || failureDurableState is not "UNCHANGED" and not "ROLLED_BACK" and not "UNCERTAIN"
+                    || !TryGetBoolean(failurePayload, "save_performed", out _)))
             {
-                errors.Add("bounded_native_line_edit failure results must contain an empty payload");
+                errors.Add("bounded_native_line_edit failure payload must contain only a closed durable_state and save_performed");
             }
             return;
         }

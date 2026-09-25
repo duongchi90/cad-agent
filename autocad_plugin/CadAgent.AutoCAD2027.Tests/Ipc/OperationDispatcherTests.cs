@@ -75,6 +75,56 @@ public sealed class OperationDispatcherTests
         }
     }
 
+    [Theory]
+    [InlineData("UNCHANGED", false)]
+    [InlineData("ROLLED_BACK", true)]
+    [InlineData("UNCERTAIN", false)]
+    public void BoundedNativeLineEditFailurePreservesDurableState(
+        string durableState,
+        bool savePerformed)
+    {
+        const string path = @"C:\drawings\candidate.dwg";
+        var ipcPath = Path.Combine(Path.GetTempPath(), "cadagent-native-edit-failure-" + Guid.NewGuid().ToString("N"));
+        var store = new JsonFileStore(ipcPath);
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            BoundedNativeLineEdit = new BoundedNativeLineEditSnapshot(
+                false,
+                durableState,
+                savePerformed,
+                new string('a', 64),
+                null,
+                Array.Empty<BoundedNativeLineEditState>(),
+                Array.Empty<BoundedNativeLineEditState>(),
+                Array.Empty<string>(),
+                new[] { "native edit did not reach SAVED" })
+        };
+
+        try
+        {
+            SetProtectedAcl(ipcPath);
+            var request = BoundedNativeLineEditRequest(path);
+            store.WriteRequest(request);
+            var result = CreateDispatcher(gateway, store: store)
+                .DispatchFileIpcRequest(store.ReadRequestForDispatch(request.RequestId!));
+
+            Assert.False(result.Success);
+            Assert.False(result.Changed);
+            Assert.Empty(result.EntityHandles!);
+            Assert.Equal(durableState, result.Payload!["durable_state"].GetString());
+            Assert.Equal(savePerformed, result.Payload["save_performed"].GetBoolean());
+            Assert.True(ContractValidator.ValidateResult(result).IsValid);
+        }
+        finally
+        {
+            if (Directory.Exists(ipcPath))
+            {
+                Directory.Delete(ipcPath, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public void BoundedNativeLineEditRejectsInMemoryRequestBeforeGatewayCall()
     {

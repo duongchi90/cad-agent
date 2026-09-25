@@ -56,12 +56,12 @@ internal static class ProtectedIpcDirectoryPolicy
     {
         if (!OperatingSystem.IsWindows())
         {
-            throw new InvalidDataException("Native edits require a protected local Windows FileIPC directory.");
+            throw new InvalidDataException("Native edits require a protected local Windows directory.");
         }
 
         if (!canonical)
         {
-            throw new InvalidDataException("The FileIPC directory path is not canonical.");
+            throw new InvalidDataException("The protected directory path is not canonical.");
         }
 
         var fullPath = Path.GetFullPath(directoryPath);
@@ -69,7 +69,7 @@ internal static class ProtectedIpcDirectoryPolicy
         if (string.IsNullOrWhiteSpace(volumeRoot)
             || new DriveInfo(volumeRoot).DriveType != DriveType.Fixed)
         {
-            throw new InvalidDataException("The FileIPC directory must be on a local fixed Windows volume.");
+            throw new InvalidDataException("The protected directory must be on a local fixed Windows volume.");
         }
 
         var directories = GetExistingPathDirectories(fullPath);
@@ -186,7 +186,7 @@ internal static class ProtectedIpcDirectoryPolicy
         {
             if (!current.Exists)
             {
-                throw new InvalidDataException("The FileIPC directory path contains a missing directory.");
+                throw new InvalidDataException("The protected directory path contains a missing directory.");
             }
 
             directories.Add(current);
@@ -204,17 +204,17 @@ internal static class ProtectedIpcDirectoryPolicy
         var attributes = GetFileAttributes(handle);
         if ((attributes & FileAttributes.Directory) == 0)
         {
-            throw new InvalidDataException("The FileIPC directory path contains a non-directory component.");
+            throw new InvalidDataException("The protected directory path contains a non-directory component.");
         }
 
         if ((attributes & FileAttributes.ReparsePoint) != 0)
         {
-            throw new InvalidDataException("The FileIPC directory path must not contain reparse points.");
+            throw new InvalidDataException("The protected directory path must not contain reparse points.");
         }
 
         if (!PathsEqual(GetFinalPath(handle), expectedPath))
         {
-            throw new InvalidDataException("The FileIPC directory path changed while custody was being acquired.");
+            throw new InvalidDataException("The protected directory path changed while custody was being acquired.");
         }
     }
 
@@ -230,13 +230,13 @@ internal static class ProtectedIpcDirectoryPolicy
     {
         if (!security.AreAccessRulesProtected)
         {
-            throw new InvalidDataException("The FileIPC directory ACL must be protected from inheritance.");
+            throw new InvalidDataException("The protected directory ACL must be protected from inheritance.");
         }
 
         var owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
         if (owner is null || !trustedSids.Contains(owner.Value))
         {
-            throw new InvalidDataException("The FileIPC directory owner is not a trusted Windows principal.");
+            throw new InvalidDataException("The protected directory owner is not a trusted Windows principal.");
         }
 
         var fullControlSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -250,7 +250,7 @@ internal static class ProtectedIpcDirectoryPolicy
                 && HasWriteRights(rule.FileSystemRights))
             {
                 throw new InvalidDataException(
-                    "The FileIPC directory ACL denies write access needed by the trusted Windows principal.");
+                    "The protected directory ACL denies write access needed by the trusted Windows principal.");
             }
 
             if (rule.AccessControlType == AccessControlType.Allow
@@ -258,7 +258,7 @@ internal static class ProtectedIpcDirectoryPolicy
                 && !trustedSids.Contains(sid))
             {
                 throw new InvalidDataException(
-                    "An untrusted Windows principal has write access to the FileIPC directory.");
+                    "An untrusted Windows principal has write access to the protected directory.");
             }
 
             if (rule.AccessControlType == AccessControlType.Allow
@@ -275,7 +275,7 @@ internal static class ProtectedIpcDirectoryPolicy
             if (!fullControlSids.Contains(sid))
             {
                 throw new InvalidDataException(
-                    "The FileIPC directory must grant full control only to the current principal, Administrators, and SYSTEM.");
+                    "The protected directory must grant full control only to the current principal, Administrators, and SYSTEM.");
             }
         }
     }
