@@ -137,6 +137,16 @@ def test_dimension_register_accepts_180_degree_ocr_evidence() -> None:
     assert validate_visual_contract(payload, contract="dimension_register") == payload
 
 
+def test_dimension_register_rejects_180_degree_evidence_with_legacy_rotation_provenance() -> None:
+    payload = valid_dimension_register()
+    evidence = valid_dimension_observer_evidence()
+    evidence["ocr_evidence"][0]["rotation_deg"] = 180.0
+    payload["dimensions"][0].update(evidence)
+
+    with pytest.raises(VisualContractError, match="rotation_deg.*ocr_rotations_deg"):
+        validate_visual_contract(payload, contract="dimension_register")
+
+
 def test_observer_evidence_rejects_unknown_property() -> None:
     payload = valid_dimension_register()
     evidence = valid_dimension_observer_evidence()

@@ -338,6 +338,15 @@ def _validate_dimension_observer_evidence(
             rotations = provenance["ocr_rotations_deg"]
             if rotations not in ([0.0, 90.0, -90.0], [0.0, 90.0, -90.0, 180.0]):
                 _fail(contract, f"{path}.provenance.ocr_rotations_deg is invalid")
+    if "ocr_evidence" in dimension:
+        provenance = dimension.get("provenance", {})
+        rotations = provenance.get("ocr_rotations_deg", [0.0, 90.0, -90.0])
+        for index, candidate in enumerate(dimension["ocr_evidence"]):
+            if candidate["rotation_deg"] not in rotations:
+                _fail(
+                    contract,
+                    f"{path}.ocr_evidence[{index}].rotation_deg is not declared by provenance.ocr_rotations_deg",
+                )
 
 
 _DIMENSION_ROLES = {"DRIVING", "REFERENCE", "DERIVED", "AMBIGUOUS", "CONFLICT"}
