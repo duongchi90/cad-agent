@@ -203,7 +203,7 @@ def _validate_dimension_observer_evidence(
                 contract=contract,
                 path=f"{candidate_path}.rotation_deg",
             )
-            if rotation not in {-90.0, 0.0, 90.0}:
+            if rotation not in {-90.0, 0.0, 90.0, 180.0}:
                 _fail(contract, f"{candidate_path}.rotation_deg is invalid")
             confidence = _finite_number(
                 candidate["confidence"],
@@ -336,7 +336,7 @@ def _validate_dimension_observer_evidence(
         )
         if "ocr_rotations_deg" in provenance:
             rotations = provenance["ocr_rotations_deg"]
-            if rotations != [0.0, 90.0, -90.0]:
+            if rotations not in ([0.0, 90.0, -90.0], [0.0, 90.0, -90.0, 180.0]):
                 _fail(contract, f"{path}.provenance.ocr_rotations_deg is invalid")
 
 

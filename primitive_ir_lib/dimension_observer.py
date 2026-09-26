@@ -26,7 +26,7 @@ OcrReader = Callable[[np.ndarray], Sequence[RawText]]
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ROLES = {"DRIVING", "REFERENCE", "DERIVED"}
-_OCR_ROTATIONS = (0.0, 90.0, -90.0)
+_OCR_ROTATIONS = (0.0, 90.0, -90.0, 180.0)
 
 
 class DimensionObserverError(ValueError):
@@ -88,6 +88,8 @@ def _rotate_crop(crop: np.ndarray, rotation_deg: float) -> np.ndarray:
         return cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
     if rotation_deg == -90.0:
         return cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if rotation_deg == 180.0:
+        return cv2.rotate(crop, cv2.ROTATE_180)
     raise DimensionObserverError("unsupported OCR rotation")
 
 
@@ -100,6 +102,8 @@ def _map_rotated_bbox(bbox: Bbox, *, width: int, height: int, rotation_deg: floa
         mapped = tuple((y, height - x) for x, y in corners)
     elif rotation_deg == -90.0:
         mapped = tuple((width - y, x) for x, y in corners)
+    elif rotation_deg == 180.0:
+        mapped = tuple((width - x, height - y) for x, y in corners)
     else:
         raise DimensionObserverError("unsupported OCR rotation")
     mapped_x = [point[0] for point in mapped]
@@ -192,7 +196,7 @@ def _select_parsed_candidate(
     parsed_candidates: list[tuple[RawText, ParsedDimensionText]] = []
     reasons: list[str] = []
     for raw_text in raw_texts:
-        if raw_text.rotation_deg not in {0.0, 90.0, -90.0}:
+        if raw_text.rotation_deg not in {0.0, 90.0, -90.0, 180.0}:
             reasons.append("unsupported_ocr_rotation")
             continue
         parsed = parse_dimension_text(raw_text.content, default_unit=default_unit)

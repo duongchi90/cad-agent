@@ -128,6 +128,15 @@ def test_dimension_register_accepts_closed_observer_evidence_fields() -> None:
     assert validate_visual_contract(payload, contract="dimension_register") == payload
 
 
+def test_dimension_register_accepts_180_degree_ocr_evidence() -> None:
+    payload = valid_dimension_register()
+    evidence = valid_dimension_observer_evidence()
+    evidence["ocr_evidence"][0]["rotation_deg"] = 180.0
+    evidence["provenance"]["ocr_rotations_deg"] = [0.0, 90.0, -90.0, 180.0]
+    payload["dimensions"][0].update(evidence)
+    assert validate_visual_contract(payload, contract="dimension_register") == payload
+
+
 def test_observer_evidence_rejects_unknown_property() -> None:
     payload = valid_dimension_register()
     evidence = valid_dimension_observer_evidence()

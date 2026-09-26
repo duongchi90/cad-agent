@@ -163,7 +163,7 @@ def test_rotated_ocr_candidate_is_fused_and_mapped_to_original_crop() -> None:
         ocr_reader=rotated_reader,
     )
 
-    assert calls == 3
+    assert calls == 4
     assert disposition.observation["value"] == 4500.0
     assert disposition.observation["raw_text_candidates"] == ["4500"]
     assert disposition.observation["ocr_evidence"] == [{
@@ -174,11 +174,58 @@ def test_rotated_ocr_candidate_is_fused_and_mapped_to_original_crop() -> None:
         "confidence": 0.95,
         "source": "text_tesseract",
     }]
-    assert disposition.observation["provenance"]["ocr_rotations_deg"] == [0.0, 90.0, -90.0]
+    assert disposition.observation["provenance"]["ocr_rotations_deg"] == [0.0, 90.0, -90.0, 180.0]
+
+
+def test_180_degree_only_ocr_candidate_is_parsed_and_mapped_to_original_crop() -> None:
+    images: list[np.ndarray] = []
+    image = synthetic_horizontal_dimension()
+
+    def upside_down_reader(rotated: np.ndarray) -> list[RawText]:
+        images.append(rotated.copy())
+        if len(images) != 4:
+            return []
+        return [RawText(
+            id="rawtext-rotated-1700",
+            content="1700",
+            bbox_px=(20, 15, 100, 55),
+            rotation_deg=0.0,
+            confidence=0.96,
+            source="text_tesseract",
+            parsed_value=1700.0,
+            semantic_role="dimension_value",
+        )]
+
+    try:
+        disposition = observe_dimension_cluster(
+            image,
+            horizontal_dimension_cluster(),
+            page_id="PAGE-001",
+            view_id="SIDE",
+            source_sha256="1" * 64,
+            ocr_reader=upside_down_reader,
+        )
+    except DimensionObserverError as exc:
+        pytest.fail(f"180-degree OCR candidate was rejected: {exc}")
+
+    assert len(images) == 4
+    assert np.array_equal(images[3], cv2.rotate(images[0], cv2.ROTATE_180))
+    assert disposition.observation is not None
+    assert disposition.observation["value"] == 1700.0
+    assert disposition.observation["raw_text_candidates"] == ["1700"]
+    assert disposition.observation["ocr_evidence"] == [{
+        "id": "rawtext-rotated-1700-rot180",
+        "content": "1700",
+        "bbox": [320.0, 85.0, 400.0, 125.0],
+        "rotation_deg": 180.0,
+        "confidence": 0.96,
+        "source": "text_tesseract",
+    }]
+    assert disposition.observation["provenance"]["ocr_rotations_deg"] == [0.0, 90.0, -90.0, 180.0]
 
 
 def test_cross_angle_ocr_conflict_is_not_resolved_by_rotation_majority() -> None:
-    values = ("4500", "4600", "4700")
+    values = ("4500", "4600", "4700", "4800")
     calls = 0
     image = synthetic_horizontal_dimension()
     cluster = horizontal_dimension_cluster()
@@ -208,13 +255,14 @@ def test_cross_angle_ocr_conflict_is_not_resolved_by_rotation_majority() -> None
         ocr_reader=conflicting_reader,
     )
 
-    assert calls == 3
+    assert calls == 4
     assert disposition.disposition == "CONFLICT"
-    assert disposition.observation["raw_text_candidates"] == ["4500", "4600", "4700"]
+    assert disposition.observation["raw_text_candidates"] == ["4500", "4600", "4700", "4800"]
     assert [item["rotation_deg"] for item in disposition.observation["ocr_evidence"]] == [
         0.0,
         90.0,
         -90.0,
+        180.0,
     ]
 
     register = build_dimension_register(
