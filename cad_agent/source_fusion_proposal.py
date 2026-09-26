@@ -1,7 +1,7 @@
-"""Compile-only boundary for external visual/object proposals.
+"""Proposal-only external visual compilation and native-line composition.
 
-This module is intentionally pre-fusion: proposal data is not accepted semantic
-or PrimitiveIR evidence and this seam has no CAD or source mutation side effect.
+Geometry proposals remain non-semantic and this seam has no CAD or source
+mutation side effect.
 """
 
 from __future__ import annotations
@@ -12,15 +12,25 @@ import re as _re
 from collections.abc import Mapping as _Mapping
 
 from cad_agent.drawing_contracts import canonical_json_sha256 as _canonical_json_sha256
+from primitive_ir_lib.models import (
+    PrimitiveIRDocument as _PrimitiveIRDocument,
+    SourceDocument as _SourceDocument,
+)
 
 
-__all__ = ["compile_external_visual_object_proposal"]
+__all__ = [
+    "compile_external_visual_object_proposal",
+    "compose_verified_native_line_delta",
+]
 
 
 _SCHEMA_VERSION = "external-visual-object-proposal-1.0"
 _SHA256_RE = _re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _VIEW_ROLES = {"SIDE", "FRONT", "TOP", "REAR"}
+# Calibration already puts target geometry in native units; alignment must not
+# rescale physical dimensions. Allow only floating-point fit noise around 1:1.
+_TARGET_BASE_SCALE_TOLERANCE = 1e-6
 
 _BINDING_FIELDS = {
     "source_sha256",
@@ -56,6 +66,8 @@ _CALIBRATION_FIELDS = {
     "status",
     "source_sha256",
 }
+_MAX_NATIVE_LINE_OBSERVATIONS = 512
+_MAX_VERIFIED_TARGET_LINES = 256
 
 
 def _fail(code: str) -> None:
@@ -425,3 +437,370 @@ def compile_external_visual_object_proposal(
         )
     request["verification_request_sha256"] = _canonical_json_sha256(request)
     return request
+
+
+def _finite_point(value: object, code: str) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        _fail(code)
+    if any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value):
+        _fail(code)
+    try:
+        point = [float(value[0]), float(value[1])]
+    except OverflowError:
+        _fail(code)
+    if not all(_math.isfinite(item) for item in point):
+        _fail(code)
+    return point
+
+
+def _native_lines(value: object) -> list[dict[str, object]]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > _MAX_NATIVE_LINE_OBSERVATIONS
+    ):
+        _fail("NATIVE_LINE_OBSERVATIONS_INVALID")
+
+    normalized: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
+    for item in value:
+        record = _closed(
+            item,
+            {"observation_id", "start", "end"},
+            "NATIVE_LINE_OBSERVATION_INVALID",
+        )
+        observation_id = _identifier(
+            record["observation_id"], "NATIVE_LINE_OBSERVATION_INVALID"
+        )
+        if observation_id in seen_ids:
+            _fail("DUPLICATE_NATIVE_LINE_OBSERVATION")
+        seen_ids.add(observation_id)
+        start = _finite_point(record["start"], "NATIVE_LINE_OBSERVATION_INVALID")
+        end = _finite_point(record["end"], "NATIVE_LINE_OBSERVATION_INVALID")
+        if start == end:
+            _fail("NATIVE_LINE_OBSERVATION_INVALID")
+        normalized.append(
+            {"observation_id": observation_id, "start": start, "end": end}
+        )
+    return normalized
+
+
+def _stable_target_document(value: _PrimitiveIRDocument) -> dict[str, object]:
+    try:
+        record = _copy.deepcopy(value.to_dict())
+        for primitive in record["primitives"]:
+            primitive["trace"].pop("extracted_at", None)
+        return record
+    except (AttributeError, KeyError, TypeError):
+        _fail("VERIFIED_TARGET_DOCUMENT_INVALID")
+
+
+def _verified_target_lines(
+    value: object,
+    *,
+    verification_request: object,
+    verification_result: object,
+    source_render_bytes: object,
+    calibration: object,
+) -> list[dict[str, object]]:
+    if (
+        not isinstance(value, _PrimitiveIRDocument)
+        or not isinstance(value.source_document, _SourceDocument)
+        or not isinstance(value.primitives, list)
+        or not value.primitives
+        or len(value.primitives) > _MAX_VERIFIED_TARGET_LINES
+    ):
+        _fail("VERIFIED_TARGET_DOCUMENT_INVALID")
+
+    # Re-run the existing source-support/calibration owner from exact bytes;
+    # trace-shaped fields alone are not evidence of verification.
+    from cad_agent.source_verified_geometry import (
+        materialize_verified_external_visual_lines,
+    )
+
+    source = value.source_document
+    reproduced = materialize_verified_external_visual_lines(
+        verification_request=verification_request,
+        verification_result=verification_result,
+        source_render_bytes=source_render_bytes,
+        calibration=calibration,
+        source_file_name=source.file_name,
+        image_width_px=source.image_width_px,
+        image_height_px=source.image_height_px,
+    )
+    if _stable_target_document(value) != _stable_target_document(reproduced):
+        _fail("VERIFIED_TARGET_EVIDENCE_MISMATCH")
+
+    normalized: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
+    for primitive in reproduced.primitives:
+        primitive_id = _identifier(primitive.id, "VERIFIED_TARGET_LINE_INVALID")
+        if primitive_id in seen_ids:
+            _fail("DUPLICATE_VERIFIED_TARGET_LINE")
+        seen_ids.add(primitive_id)
+        start = _finite_point(
+            [primitive.geometry.start.x, primitive.geometry.start.y],
+            "VERIFIED_TARGET_LINE_INVALID",
+        )
+        end = _finite_point(
+            [primitive.geometry.end.x, primitive.geometry.end.y],
+            "VERIFIED_TARGET_LINE_INVALID",
+        )
+        if start == end:
+            _fail("VERIFIED_TARGET_LINE_INVALID")
+        normalized.append(
+            {"primitive_id": primitive_id, "start": start, "end": end}
+        )
+    return normalized
+
+
+def _line_pair_residual(first: _Mapping[str, object], second: _Mapping[str, object]) -> float:
+    first_start, first_end = first["start"], first["end"]
+    second_start, second_end = second["start"], second["end"]
+    direct = max(_math.dist(first_start, second_start), _math.dist(first_end, second_end))
+    reverse = max(_math.dist(first_start, second_end), _math.dist(first_end, second_start))
+    residual = min(direct, reverse)
+    if not _math.isfinite(residual):
+        _fail("LINE_GEOMETRY_OUT_OF_RANGE")
+    return residual
+
+
+def _aligned_target_line(
+    base: _Mapping[str, object], target: _Mapping[str, object]
+) -> dict[str, list[float]]:
+    start, end = target["start"], target["end"]
+    direct = max(_math.dist(base["start"], start), _math.dist(base["end"], end))
+    reverse = max(_math.dist(base["start"], end), _math.dist(base["end"], start))
+    return {"start": start, "end": end} if direct <= reverse else {"start": end, "end": start}
+
+
+def _nonnegative_tolerance(value: object, code: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _fail(code)
+    try:
+        tolerance = float(value)
+    except OverflowError:
+        _fail(code)
+    if not _math.isfinite(tolerance) or tolerance < 0:
+        _fail(code)
+    return tolerance
+
+
+def _target_to_base_alignment(
+    value: object, *, max_residual: float, coordinate_unit: str
+) -> tuple[dict[str, object], tuple[tuple[float, ...], ...]]:
+    from primitive_ir_lib.geometry_alignment import (
+        AnchorPair as _AnchorPair,
+        estimate_similarity_alignment as _estimate_similarity_alignment,
+    )
+
+    if (
+        not isinstance(value, (list, tuple))
+        or not 2 <= len(value) <= 32
+        or any(not isinstance(anchor, _AnchorPair) for anchor in value)
+    ):
+        _fail("TARGET_BASE_ALIGNMENT_UNPROVEN")
+
+    alignment = _estimate_similarity_alignment(
+        value,
+        max_residual_px=max_residual,
+    )
+    matrix = alignment.matrix
+    if (
+        alignment.status != "ALIGNED"
+        or alignment.method != "VERIFIED_ANCHOR_SIMILARITY"
+        or matrix is None
+        or len(matrix) != 2
+        or any(len(row) != 3 for row in matrix)
+        or not all(_math.isfinite(float(item)) for row in matrix for item in row)
+    ):
+        _fail("TARGET_BASE_ALIGNMENT_UNPROVEN")
+
+    uniform_scale = _math.hypot(float(matrix[0][0]), float(matrix[1][0]))
+    if (
+        not _math.isfinite(uniform_scale)
+        or abs(uniform_scale - 1.0) > _TARGET_BASE_SCALE_TOLERANCE
+    ):
+        _fail("TARGET_BASE_ALIGNMENT_SCALE_UNPROVEN")
+
+    anchors_by_id = {anchor.anchor_id: anchor for anchor in value}
+    selected_anchors = []
+    for anchor_id in alignment.anchor_ids:
+        anchor = anchors_by_id[anchor_id]
+        selected_anchors.append(
+            {
+                "anchor_id": anchor_id,
+                "base": _finite_point(anchor.reference_px, "TARGET_BASE_ALIGNMENT_UNPROVEN"),
+                "target": _finite_point(anchor.cad_px, "TARGET_BASE_ALIGNMENT_UNPROVEN"),
+                "authority": anchor.authority,
+                "confidence": float(anchor.confidence),
+            }
+        )
+    return (
+        {
+            "status": alignment.status,
+            "method": alignment.method,
+            "coordinate_unit": coordinate_unit,
+            "anchor_pairs": selected_anchors,
+            "matrix": [list(row) for row in matrix],
+            "uniform_scale": uniform_scale,
+            "scale_tolerance": _TARGET_BASE_SCALE_TOLERANCE,
+            "residual_rms": float(alignment.residual_rms_px),
+            "max_residual": max_residual,
+        },
+        matrix,
+    )
+
+
+def _apply_alignment_to_target_line(
+    line: _Mapping[str, object], matrix: tuple[tuple[float, ...], ...]
+) -> dict[str, object]:
+    def transform(value: object) -> list[float]:
+        x, y = _finite_point(value, "TARGET_BASE_ALIGNMENT_UNPROVEN")
+        try:
+            point = [
+                matrix[0][0] * x + matrix[0][1] * y + matrix[0][2],
+                matrix[1][0] * x + matrix[1][1] * y + matrix[1][2],
+            ]
+        except OverflowError:
+            _fail("TARGET_BASE_ALIGNMENT_UNPROVEN")
+        if not all(_math.isfinite(item) for item in point):
+            _fail("TARGET_BASE_ALIGNMENT_UNPROVEN")
+        return point
+
+    return {
+        "primitive_id": line["primitive_id"],
+        "start": transform(line["start"]),
+        "end": transform(line["end"]),
+    }
+
+
+def _same_residual(first: float, second: float) -> bool:
+    # Treat only floating-point representation noise as a geometric tie.
+    return first == second or abs(first - second) <= 4 * max(
+        _math.ulp(first), _math.ulp(second)
+    )
+
+
+def _proposal_without_match(
+    status: str,
+    geometry_tolerance: dict[str, object],
+    target_to_base_alignment: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "status": "PROPOSAL_ONLY",
+        "correspondence_status": status,
+        "base_target_correspondence": [],
+        "geometry_tolerance": geometry_tolerance,
+        "target_to_base_alignment": target_to_base_alignment,
+        "bounded_native_line_deltas": [],
+        "semantic_label_authority": "NONE",
+        "cad_mutation": False,
+    }
+
+
+def compose_verified_native_line_delta(
+    *,
+    base_native_line_observations: object,
+    verified_target_document: object,
+    verification_request: object,
+    verification_result: object,
+    source_render_bytes: object,
+    calibration: object,
+    base_coordinate_unit: object,
+    max_correspondence_residual: object,
+    keep_tolerance: object,
+    target_to_base_alignment_anchors: object,
+    max_alignment_residual: object,
+) -> dict[str, object]:
+    """Compose a geometry-only, proposal-only correspondence for bounded LINEs.
+
+    Opaque IDs are carried into the result but never participate in matching.
+    The existing anchor-similarity owner first maps target coordinates into the
+    base frame; ambiguous or colliding matches then fail closed without deltas.
+    """
+
+    base_lines = _native_lines(base_native_line_observations)
+    target_lines = _verified_target_lines(
+        verified_target_document,
+        verification_request=verification_request,
+        verification_result=verification_result,
+        source_render_bytes=source_render_bytes,
+        calibration=calibration,
+    )
+    max_residual = _nonnegative_tolerance(
+        max_correspondence_residual, "GEOMETRY_TOLERANCE_INVALID"
+    )
+    keep_limit = _nonnegative_tolerance(keep_tolerance, "GEOMETRY_TOLERANCE_INVALID")
+    if keep_limit > max_residual:
+        _fail("GEOMETRY_TOLERANCE_INVALID")
+    target_calibration = verified_target_document.calibration
+    if base_coordinate_unit != target_calibration.unit:
+        _fail("GEOMETRY_UNIT_MISMATCH")
+    alignment_limit = _nonnegative_tolerance(
+        max_alignment_residual, "TARGET_BASE_ALIGNMENT_UNPROVEN"
+    )
+    alignment_record, alignment_matrix = _target_to_base_alignment(
+        target_to_base_alignment_anchors,
+        max_residual=alignment_limit,
+        coordinate_unit=target_calibration.unit,
+    )
+    target_lines = [
+        _apply_alignment_to_target_line(line, alignment_matrix) for line in target_lines
+    ]
+    geometry_tolerance = {
+        "unit": target_calibration.unit,
+        "max_correspondence_residual": max_residual,
+        "keep_tolerance": keep_limit,
+    }
+    matches: list[tuple[dict[str, object], dict[str, object], float]] = []
+    used_base_ids: set[str] = set()
+    for target in target_lines:
+        costs = [(_line_pair_residual(base, target), base) for base in base_lines]
+        costs.sort(key=lambda item: item[0])
+        best_residual, best_base = costs[0]
+        if best_residual > max_residual:
+            return _proposal_without_match(
+                "NO_SUPPORTED_DELTA", geometry_tolerance, alignment_record
+            )
+        if len(costs) > 1 and _same_residual(best_residual, costs[1][0]):
+            return _proposal_without_match("AMBIGUOUS", geometry_tolerance, alignment_record)
+        base_id = str(best_base["observation_id"])
+        if base_id in used_base_ids:
+            return _proposal_without_match("AMBIGUOUS", geometry_tolerance, alignment_record)
+        used_base_ids.add(base_id)
+        matches.append((best_base, target, best_residual))
+
+    correspondence: list[dict[str, object]] = []
+    deltas: list[dict[str, object]] = []
+    for base, target, residual in sorted(matches, key=lambda pair: str(pair[0]["observation_id"])):
+        before = {"start": base["start"], "end": base["end"]}
+        after = _aligned_target_line(base, target)
+        changed = residual > keep_limit
+        correspondence.append(
+            {
+                "base_observation_id": str(base["observation_id"]),
+                "target_primitive_id": str(target["primitive_id"]),
+                "disposition": "CHANGE" if changed else "KEEP",
+                "residual": residual,
+            }
+        )
+        if changed:
+            deltas.append(
+                {
+                    "base_observation_id": str(base["observation_id"]),
+                    "target_primitive_id": str(target["primitive_id"]),
+                    "before": before,
+                    "after": after,
+                }
+            )
+    return {
+        "status": "PROPOSAL_ONLY",
+        "correspondence_status": "UNIQUE",
+        "base_target_correspondence": correspondence,
+        "geometry_tolerance": geometry_tolerance,
+        "target_to_base_alignment": alignment_record,
+        "bounded_native_line_deltas": deltas,
+        "semantic_label_authority": "NONE",
+        "cad_mutation": False,
+    }
