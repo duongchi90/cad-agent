@@ -62,7 +62,7 @@ public sealed class CadAgentCommands
         IpcResult result;
         try
         {
-            result = dispatcher.Dispatch(context.Store.ReadRequest(requestId));
+            result = dispatcher.DispatchFileIpcRequest(context.Store.ReadRequestForDispatch(requestId));
         }
         catch (System.Exception exception)
         {

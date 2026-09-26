@@ -1,5 +1,8 @@
 using System.Text.Json;
 using System.Text;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using CadAgent.AutoCAD2027.Drawing;
 using CadAgent.AutoCAD2027.Ipc;
 using Xunit;
 
@@ -22,6 +25,196 @@ public sealed class JsonFileStoreTests
         var copy = fixture.Store.ReadRequest(request.RequestId!);
         Assert.Equal(request.RequestId, copy.RequestId);
         Assert.Equal(request.DrawingFullPath, copy.DrawingFullPath);
+    }
+
+    [Fact]
+    public void AcceptsProtectedIpcRootAclForTrustedWindowsPrincipals()
+    {
+        using var fixture = new StoreFixture();
+        SetProtectedAcl(fixture.DirectoryPath);
+
+        ProtectedIpcDirectoryPolicy.EnsureProtectedRootAcl(
+            new DirectoryInfo(fixture.DirectoryPath),
+            TrustedWindowsPrincipals());
+    }
+
+    [Fact]
+    public void AcceptsProtectedIpcRootUnderAnUntrustedParentWhenRootAclIsProtected()
+    {
+        var parentPath = Path.Combine(Path.GetTempPath(), "cadagent-untrusted-parent-" + Guid.NewGuid().ToString("N"));
+        var rootPath = Path.Combine(parentPath, "ipc");
+        Directory.CreateDirectory(rootPath);
+
+        try
+        {
+            var parent = new DirectoryInfo(parentPath);
+            var parentSecurity = parent.GetAccessControl();
+            parentSecurity.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+                FileSystemRights.Modify,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(parentSecurity);
+            SetProtectedAcl(rootPath);
+
+            ProtectedIpcDirectoryPolicy.EnsureProtected(rootPath, canonical: true);
+        }
+        finally
+        {
+            if (Directory.Exists(parentPath))
+            {
+                Directory.Delete(parentPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CandidateDirectoryCustodyAcceptsProtectedLeafUnderBroadParent()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var parentPath = Path.Combine(Path.GetTempPath(), "cadagent-candidate-parent-" + Guid.NewGuid().ToString("N"));
+        var candidateDirectory = Path.Combine(parentPath, "candidate");
+        Directory.CreateDirectory(candidateDirectory);
+        try
+        {
+            var parent = new DirectoryInfo(parentPath);
+            var parentSecurity = parent.GetAccessControl();
+            parentSecurity.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+                FileSystemRights.Modify,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(parentSecurity);
+            SetProtectedAcl(candidateDirectory);
+
+            var candidatePath = Path.Combine(candidateDirectory, "candidate.dwg");
+            File.WriteAllText(candidatePath, "candidate");
+            using var custody = BoundedNativeLineEditPolicy.AcquireCandidateCustody(candidatePath);
+
+            Assert.NotEqual(default, custody.RootIdentity);
+            Assert.True(Directory.Exists(candidateDirectory));
+        }
+        finally
+        {
+            if (Directory.Exists(parentPath))
+            {
+                Directory.Delete(parentPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CandidateDirectoryCustodyRejectsAnUnprotectedLeaf()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new StoreFixture();
+        var candidatePath = Path.Combine(fixture.DirectoryPath, "candidate.dwg");
+        File.WriteAllText(candidatePath, "candidate");
+        SetUnprotectedAcl(fixture.DirectoryPath);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            BoundedNativeLineEditPolicy.AcquireCandidateCustody(candidatePath));
+
+        Assert.Contains("protected", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CandidateFileCustodyRejectsAnUntrustedWriterEvenWhenItsDirectoryIsProtected()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var candidateDirectory = Path.Combine(Path.GetTempPath(), "cadagent-candidate-file-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(candidateDirectory);
+        try
+        {
+            SetProtectedAcl(candidateDirectory);
+            var candidatePath = Path.Combine(candidateDirectory, "candidate.dwg");
+            File.WriteAllText(candidatePath, "candidate");
+            SetUntrustedFileAcl(candidatePath);
+
+            var exception = Assert.Throws<InvalidDataException>(() =>
+                BoundedNativeLineEditPolicy.AcquireCandidateCustody(candidatePath));
+
+            Assert.Contains("untrusted", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(candidateDirectory))
+            {
+                Directory.Delete(candidateDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CandidateFileCustodyRejectsAPathReplacedAfterAdmission()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var candidateDirectory = Path.Combine(Path.GetTempPath(), "cadagent-candidate-identity-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(candidateDirectory);
+        try
+        {
+            SetProtectedAcl(candidateDirectory);
+            var candidatePath = Path.Combine(candidateDirectory, "candidate.dwg");
+            var admittedPath = Path.Combine(candidateDirectory, "admitted.dwg");
+            File.WriteAllText(candidatePath, "admitted candidate");
+
+            using var custody = ProtectedIpcDirectoryPolicy.AcquireProtectedFile(candidatePath);
+            File.Move(candidatePath, admittedPath);
+            File.WriteAllText(candidatePath, "replacement candidate");
+
+            var exception = Assert.Throws<InvalidDataException>(() =>
+                custody.EnsurePathMatches(candidatePath));
+
+            Assert.Contains("identity", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(candidateDirectory))
+            {
+                Directory.Delete(candidateDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void RejectsProtectedIpcRootThatGrantsWriteToAnotherWindowsPrincipal()
+    {
+        using var fixture = new StoreFixture();
+        SetProtectedAcl(fixture.DirectoryPath);
+        var directory = new DirectoryInfo(fixture.DirectoryPath);
+        var security = directory.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        directory.SetAccessControl(security);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            ProtectedIpcDirectoryPolicy.EnsureProtectedRootAcl(
+                directory,
+                TrustedWindowsPrincipals()));
+
+        Assert.Contains("untrusted", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -235,6 +428,73 @@ public sealed class JsonFileStoreTests
         Parameters = new Dictionary<string, JsonElement>(),
         Approval = null
     };
+
+    private static void SetProtectedAcl(string directoryPath)
+    {
+        var directory = new DirectoryInfo(directoryPath);
+        var security = directory.GetAccessControl();
+        var currentUser = WindowsIdentity.GetCurrent().User!;
+        var trustedSids = TrustedWindowsPrincipals()
+            .Select(sid => new SecurityIdentifier(sid))
+            .ToArray();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        var existingRules = security.GetAccessRules(
+            includeExplicit: true,
+            includeInherited: false,
+            targetType: typeof(SecurityIdentifier));
+        foreach (FileSystemAccessRule rule in existingRules)
+        {
+            security.RemoveAccessRuleAll(rule);
+        }
+
+        foreach (var trustedSid in trustedSids)
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                trustedSid,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+        }
+
+        directory.SetAccessControl(security);
+    }
+
+    private static void SetUnprotectedAcl(string directoryPath)
+    {
+        var directory = new DirectoryInfo(directoryPath);
+        var security = directory.GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: false, preserveInheritance: true);
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        directory.SetAccessControl(security);
+    }
+
+    private static void SetUntrustedFileAcl(string filePath)
+    {
+        var file = new FileInfo(filePath);
+        var security = file.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            AccessControlType.Allow));
+        file.SetAccessControl(security);
+    }
+
+    private static IReadOnlySet<string> TrustedWindowsPrincipals()
+    {
+        var currentUser = WindowsIdentity.GetCurrent().User!;
+        return new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            currentUser.Value,
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value,
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value
+        };
+    }
 
     private static IpcResult HealthResult(string requestId, bool success) => new()
     {

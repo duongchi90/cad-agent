@@ -85,6 +85,23 @@ root or lint target to `scripts/verify.ps1` and its contract test.
   mutation, destructive or irreversible high-cost external actions, and
   genuinely ambiguous product requirements.
 
+## Workstation temp location (updated 2026-09-26)
+
+- On every repository refresh/update, Luna should read this note. Prefer
+  `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when
+  the owning tool allows it.
+- `C:\temp` was emptied on 2026-09-26 and the directory was left in place for
+  compatibility. The ordinary files copied during cleanup are archived at
+  `D:\Cad agent temp\c-temp-archive-20260926-000018`. Reparse-point link objects
+  were not recreated there; their paths/types/targets are recorded in
+  `D:\Cad agent temp\c-temp-archive-20260926-000018\reparse-points-manifest.json`.
+  Their targets were not followed or deleted.
+- Keeping the `C:\temp` directory does not automatically move FileIPC. Its
+  default remains `C:\temp`; use `CAD_AGENT_DOTNET_IPC_DIR` only when an existing
+  workflow explicitly configures another root. Do not assume IPC requests,
+  results, or other active files are redirected to D without checking the
+  current process configuration.
+
 ## Review allocation
 
 - Small: Codex plus one bounded independent review.
