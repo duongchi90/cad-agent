@@ -10,11 +10,49 @@ using AcadApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 namespace CadAgent.AutoCAD2027.Drawing;
 
+internal sealed record NativeRenderMediaObservation(
+    string CanonicalMediaName,
+    bool Selectable,
+    string? Units,
+    double? Width,
+    double? Height);
+
+internal sealed record NativeRenderMediaCensus(
+    IReadOnlyList<NativeRenderMediaObservation> Observations,
+    IReadOnlyList<string> ApprovedMediaNames)
+{
+    private const int MaxDiagnosticObservations = 64;
+
+    internal string FormatDiagnostic()
+    {
+        var observed = Observations.Take(MaxDiagnosticObservations).Select(item =>
+            $"canonical={item.CanonicalMediaName};"
+            + $"selectable={item.Selectable.ToString().ToLowerInvariant()};"
+            + $"units={item.Units?.ToString() ?? "unavailable"};"
+            + $"size={FormatSize(item.Width, item.Height)};"
+            + $"approved={ApprovedMediaNames.Contains(item.CanonicalMediaName, StringComparer.Ordinal).ToString().ToLowerInvariant()}");
+        var omittedCount = Math.Max(0, Observations.Count - MaxDiagnosticObservations);
+        var omitted = omittedCount == 0 ? string.Empty : $" | ... {omittedCount} more observations omitted";
+        return $"Observed plot media: [{string.Join(" | ", observed)}{omitted}]; "
+            + $"approved=[{string.Join(", ", ApprovedMediaNames)}].";
+    }
+
+    private static string Format(double? value) =>
+        value?.ToString("R", CultureInfo.InvariantCulture) ?? "unavailable";
+
+    private static string FormatSize(double? width, double? height) =>
+        !width.HasValue && !height.HasValue
+            ? "unavailable"
+            : $"{Format(width)}x{Format(height)}";
+}
+
 public static class AutoCadNativeRenderReader
 {
     private const string PdfDevice = "AutoCAD PDF (General Documentation).pc3";
     private const string PngDevice = "PublishToWeb PNG.pc3";
     private const string A4MediaName = "ISO_A4_(210.00_x_297.00_MM)";
+    private const string PixelUnits = "Pixels";
+    private const string MillimeterUnits = "Millimeters";
     private const double A4WidthMillimeters = 210;
     private const double A4HeightMillimeters = 297;
     private const double CameraStateTolerance = 1e-9;
@@ -590,36 +628,34 @@ public static class AutoCadNativeRenderReader
                 exception);
         }
 
-        var approvedMediaNames = new List<string>();
-        foreach (var mediaName in mediaNames)
-        {
-            try
+        var census = CensusPlotMedia(
+            request.ArtifactKind,
+            mediaNames,
+            mediaName =>
             {
-                validator.SetCanonicalMediaName(plotSettings, mediaName);
-            }
-            catch (Autodesk.AutoCAD.Runtime.Exception)
-            {
-                continue;
-            }
+                try
+                {
+                    validator.SetCanonicalMediaName(plotSettings, mediaName);
+                }
+                catch (Autodesk.AutoCAD.Runtime.Exception)
+                {
+                    return new NativeRenderMediaObservation(
+                        mediaName,
+                        false,
+                        null,
+                        null,
+                        null);
+                }
 
-            var paperSize = plotSettings.PlotPaperSize;
-            var isApproved = request.ArtifactKind == "PNG"
-                ? plotSettings.PlotPaperUnits == PlotPaperUnit.Pixels
-                    && ((
-                        IsCloseTo(paperSize.X, NativeRenderPolicy.ApprovedPngWidth)
-                        && IsCloseTo(paperSize.Y, NativeRenderPolicy.ApprovedPngHeight))
-                        || (
-                            IsCloseTo(paperSize.X, NativeRenderPolicy.ApprovedPngLandscapeWidth)
-                            && IsCloseTo(paperSize.Y, NativeRenderPolicy.ApprovedPngLandscapeHeight)))
-                : string.Equals(mediaName, A4MediaName, StringComparison.Ordinal)
-                    && plotSettings.PlotPaperUnits == PlotPaperUnit.Millimeters
-                    && IsCloseTo(paperSize.X, A4WidthMillimeters)
-                    && IsCloseTo(paperSize.Y, A4HeightMillimeters);
-            if (isApproved)
-            {
-                approvedMediaNames.Add(mediaName);
-            }
-        }
+                var paperSize = plotSettings.PlotPaperSize;
+                return new NativeRenderMediaObservation(
+                    mediaName,
+                    true,
+                    plotSettings.PlotPaperUnits.ToString(),
+                    paperSize.X,
+                    paperSize.Y);
+            });
+        var approvedMediaNames = census.ApprovedMediaNames;
 
         if (approvedMediaNames.Count != 1)
         {
@@ -627,7 +663,8 @@ public static class AutoCadNativeRenderReader
                 $"{NativeRenderPolicy.MediaUnavailableErrorCode}: "
                 + (request.ArtifactKind == "PNG"
                     ? "The approved PNG device does not expose exactly one approved A4 pixel media."
-                    : "The approved PDF device does not expose exactly one approved A4 media."));
+                    : "The approved PDF device does not expose exactly one approved A4 media.")
+                + $" {census.FormatDiagnostic()}");
         }
 
         try
@@ -638,7 +675,7 @@ public static class AutoCadNativeRenderReader
         {
             throw new InvalidDataException(
                 $"{NativeRenderPolicy.MediaUnavailableErrorCode}: "
-                + "The approved media could not be selected.",
+                + $"The approved media could not be selected. {census.FormatDiagnostic()}",
                 exception);
         }
 
@@ -658,6 +695,50 @@ public static class AutoCadNativeRenderReader
         validator.SetUseStandardScale(plotSettings, true);
         validator.SetStdScaleType(plotSettings, StdScaleType.ScaleToFit);
         validator.SetCurrentStyleSheet(plotSettings, request.RenderOptions.PlotStyle);
+    }
+
+    internal static NativeRenderMediaCensus CensusPlotMedia(
+        string artifactKind,
+        IEnumerable<string> canonicalMediaNames,
+        Func<string, NativeRenderMediaObservation> observe)
+    {
+        ArgumentNullException.ThrowIfNull(artifactKind);
+        ArgumentNullException.ThrowIfNull(canonicalMediaNames);
+        ArgumentNullException.ThrowIfNull(observe);
+
+        var observations = canonicalMediaNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => observe(name) with { CanonicalMediaName = name })
+            .OrderBy(item => item.CanonicalMediaName, StringComparer.Ordinal)
+            .ToArray();
+        var approvedMediaNames = observations
+            .Where(item => IsApprovedMedia(artifactKind, item))
+            .Select(item => item.CanonicalMediaName)
+            .ToArray();
+
+        return new NativeRenderMediaCensus(observations, approvedMediaNames);
+    }
+
+    private static bool IsApprovedMedia(string artifactKind, NativeRenderMediaObservation media)
+    {
+        if (!media.Selectable || media.Units is null || media.Width is null || media.Height is null)
+        {
+            return false;
+        }
+
+        if (artifactKind == "PNG")
+        {
+            return string.Equals(media.Units, PixelUnits, StringComparison.Ordinal)
+                && ((IsCloseTo(media.Width.Value, NativeRenderPolicy.ApprovedPngWidth)
+                        && IsCloseTo(media.Height.Value, NativeRenderPolicy.ApprovedPngHeight))
+                    || (IsCloseTo(media.Width.Value, NativeRenderPolicy.ApprovedPngLandscapeWidth)
+                        && IsCloseTo(media.Height.Value, NativeRenderPolicy.ApprovedPngLandscapeHeight)));
+        }
+
+        return string.Equals(media.CanonicalMediaName, A4MediaName, StringComparison.Ordinal)
+            && string.Equals(media.Units, MillimeterUnits, StringComparison.Ordinal)
+            && IsCloseTo(media.Width.Value, A4WidthMillimeters)
+            && IsCloseTo(media.Height.Value, A4HeightMillimeters);
     }
 
     private static bool IsCloseTo(double actual, double expected) =>

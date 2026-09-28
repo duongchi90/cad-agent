@@ -83,6 +83,85 @@ public sealed class NativeRenderBoundaryTests
         Assert.DoesNotContain("SetPlotCentered(", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void PdfMediaCensusReportsObservedTuplesAndRejectsNearMatches()
+    {
+        var media = new Dictionary<string, NativeRenderMediaObservation>(StringComparer.Ordinal)
+        {
+            ["ISO_A4_(210.00_x_297.00_MM)"] = new(
+                "ISO_A4_(210.00_x_297.00_MM)", true, "Inches", 8.27, 11.69),
+            ["OTHER_A4_MM"] = new("OTHER_A4_MM", true, "Millimeters", 210, 297),
+            ["ISO_A4_(210.00_x_297.00_MM)_TRUNCATED"] = new(
+                "ISO_A4_(210.00_x_297.00_MM)_TRUNCATED", true, "Millimeters", 210, 296),
+            ["UNSELECTABLE_A4"] = new("UNSELECTABLE_A4", false, null, null, null),
+            ["ALIAS_TO_VALID_A4"] = new("ISO_A4_(210.00_x_297.00_MM)", true, "Millimeters", 210, 297)
+        };
+
+        var census = AutoCadNativeRenderReader.CensusPlotMedia(
+            "PDF",
+            media.Keys,
+            name => media[name]);
+
+        Assert.Empty(census.ApprovedMediaNames);
+        Assert.Equal(media.Count, census.Observations.Count);
+        var diagnostic = census.FormatDiagnostic();
+        Assert.Contains("canonical=ISO_A4_(210.00_x_297.00_MM);selectable=true;units=Inches;size=8.27x11.69;approved=false", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("canonical=OTHER_A4_MM;selectable=true;units=Millimeters;size=210x297;approved=false", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("canonical=ISO_A4_(210.00_x_297.00_MM)_TRUNCATED;selectable=true;units=Millimeters;size=210x296;approved=false", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("canonical=UNSELECTABLE_A4;selectable=false;units=unavailable;size=unavailable;approved=false", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("canonical=ALIAS_TO_VALID_A4;selectable=true;units=Millimeters;size=210x297;approved=false", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PdfMediaCensusAdmitsOnlyTheExactSelectableA4Tuple()
+    {
+        var media = new NativeRenderMediaObservation(
+            "ISO_A4_(210.00_x_297.00_MM)", true, "Millimeters", 210, 297);
+
+        var census = AutoCadNativeRenderReader.CensusPlotMedia(
+            "PDF",
+            new[] { media.CanonicalMediaName },
+            _ => media);
+
+        Assert.Equal(new[] { "ISO_A4_(210.00_x_297.00_MM)" }, census.ApprovedMediaNames);
+        Assert.Contains("approved=true", census.FormatDiagnostic(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PngMediaCensusReportsBothApprovedOrientationsWithoutRelaxingCardinality()
+    {
+        var media = new Dictionary<string, NativeRenderMediaObservation>(StringComparer.Ordinal)
+        {
+            ["UserDefinedRasterLandscape"] = new(
+                "UserDefinedRasterLandscape", true, "Pixels", 3508, 2480),
+            ["UserDefinedRasterPortrait"] = new(
+                "UserDefinedRasterPortrait", true, "Pixels", 2480, 3508)
+        };
+
+        var census = AutoCadNativeRenderReader.CensusPlotMedia(
+            "PNG",
+            media.Keys.Reverse().Append("UserDefinedRasterLandscape"),
+            name => media[name]);
+
+        Assert.Equal(
+            new[]
+            {
+                "UserDefinedRasterLandscape",
+                "UserDefinedRasterLandscape",
+                "UserDefinedRasterPortrait"
+            },
+            census.ApprovedMediaNames);
+        Assert.Equal(
+            census.Observations.Select(item => item.CanonicalMediaName).Order(StringComparer.Ordinal),
+            new[]
+            {
+                "UserDefinedRasterLandscape",
+                "UserDefinedRasterLandscape",
+                "UserDefinedRasterPortrait"
+            });
+        Assert.Contains("approved=true", census.FormatDiagnostic(), StringComparison.Ordinal);
+    }
+
     private static NativeRenderRequest Request(
         string artifactKind,
         string layoutName,
