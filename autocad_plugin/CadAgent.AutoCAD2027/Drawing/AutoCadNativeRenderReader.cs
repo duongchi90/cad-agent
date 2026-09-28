@@ -22,19 +22,40 @@ internal sealed record NativeRenderMediaCensus(
     IReadOnlyList<string> ApprovedMediaNames)
 {
     private const int MaxDiagnosticObservations = 64;
+    private const int MaxDiagnosticFieldLength = 96;
+    private const int MaxDiagnosticOutputLength = 8192;
+    private const int DiagnosticSummaryReserveLength = 256;
 
     internal string FormatDiagnostic()
     {
-        var observed = Observations.Take(MaxDiagnosticObservations).Select(item =>
-            $"canonical={item.CanonicalMediaName};"
-            + $"selectable={item.Selectable.ToString().ToLowerInvariant()};"
-            + $"units={item.Units?.ToString() ?? "unavailable"};"
-            + $"size={FormatSize(item.Width, item.Height)};"
-            + $"approved={ApprovedMediaNames.Contains(item.CanonicalMediaName, StringComparer.Ordinal).ToString().ToLowerInvariant()}");
-        var omittedCount = Math.Max(0, Observations.Count - MaxDiagnosticObservations);
-        var omitted = omittedCount == 0 ? string.Empty : $" | ... {omittedCount} more observations omitted";
-        return $"Observed plot media: [{string.Join(" | ", observed)}{omitted}]; "
-            + $"approved=[{string.Join(", ", ApprovedMediaNames)}].";
+        var diagnostic = new StringBuilder("Observed plot media: [");
+        var displayedCount = 0;
+        foreach (var item in Observations.Take(MaxDiagnosticObservations))
+        {
+            var observation =
+                $"canonical={FormatDiagnosticField(item.CanonicalMediaName)};"
+                + $"selectable={item.Selectable.ToString().ToLowerInvariant()};"
+                + $"units={FormatDiagnosticField(item.Units)};"
+                + $"size={FormatSize(item.Width, item.Height)};"
+                + $"approved={ApprovedMediaNames.Contains(item.CanonicalMediaName, StringComparer.Ordinal).ToString().ToLowerInvariant()}";
+            var separator = displayedCount == 0 ? string.Empty : " | ";
+            if (diagnostic.Length + separator.Length + observation.Length + DiagnosticSummaryReserveLength
+                > MaxDiagnosticOutputLength)
+            {
+                break;
+            }
+
+            diagnostic.Append(separator).Append(observation);
+            displayedCount++;
+        }
+
+        var omittedCount = Observations.Count - displayedCount;
+        var outputTruncated = (omittedCount > 0).ToString().ToLowerInvariant();
+        var summary = $"]; observation_count={Observations.Count}; "
+            + $"approved_count={ApprovedMediaNames.Count}; displayed_observations={displayedCount}; "
+            + $"omitted_observations={omittedCount}; output_truncated={outputTruncated}.";
+        diagnostic.Append(summary);
+        return diagnostic.ToString();
     }
 
     private static string Format(double? value) =>
@@ -44,6 +65,33 @@ internal sealed record NativeRenderMediaCensus(
         !width.HasValue && !height.HasValue
             ? "unavailable"
             : $"{Format(width)}x{Format(height)}";
+
+    private static string FormatDiagnosticField(string? value)
+    {
+        if (value is null)
+        {
+            return "unavailable";
+        }
+
+        var formatted = new StringBuilder(Math.Min(value.Length, MaxDiagnosticFieldLength));
+        foreach (var character in value)
+        {
+            var fragment = char.IsControl(character)
+                || char.IsSurrogate(character)
+                || character is '\\' or ';' or '=' or '|' or '[' or ']' or ','
+                ? $"\\u{(int)character:X4}"
+                : character.ToString();
+            if (formatted.Length + fragment.Length > MaxDiagnosticFieldLength - 1)
+            {
+                formatted.Append('…');
+                break;
+            }
+
+            formatted.Append(fragment);
+        }
+
+        return formatted.ToString();
+    }
 }
 
 public static class AutoCadNativeRenderReader

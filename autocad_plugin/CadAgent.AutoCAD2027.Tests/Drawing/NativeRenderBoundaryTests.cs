@@ -162,6 +162,43 @@ public sealed class NativeRenderBoundaryTests
         Assert.Contains("approved=true", census.FormatDiagnostic(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void MediaCensusDiagnosticBoundsTotalOutputAndEscapesUntrustedText()
+    {
+        var approvedMedia = new NativeRenderMediaObservation(
+            "ISO_A4_(210.00_x_297.00_MM)", true, "Millimeters", 210, 297);
+        var repeatedNames = Enumerable.Repeat(approvedMedia.CanonicalMediaName, 100);
+        var repeatedCensus = AutoCadNativeRenderReader.CensusPlotMedia(
+            "PDF",
+            repeatedNames,
+            _ => approvedMedia);
+
+        Assert.Equal(100, repeatedCensus.Observations.Count);
+        Assert.Equal(100, repeatedCensus.ApprovedMediaNames.Count);
+        var repeatedDiagnostic = repeatedCensus.FormatDiagnostic();
+        Assert.True(repeatedDiagnostic.Length <= 8192);
+        Assert.Contains("observation_count=100", repeatedDiagnostic, StringComparison.Ordinal);
+        Assert.Contains("approved_count=100", repeatedDiagnostic, StringComparison.Ordinal);
+        Assert.Contains("omitted_observations=36", repeatedDiagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("approved_media=[", repeatedDiagnostic, StringComparison.Ordinal);
+
+        var hostileName = "CUSTOM|A4;\r\n" + new string('x', 1024);
+        var hostileMedia = new NativeRenderMediaObservation(
+            hostileName, true, "Millimeters\r\nInjected=true", 210, 297);
+        var hostileCensus = AutoCadNativeRenderReader.CensusPlotMedia(
+            "PDF",
+            new[] { hostileName },
+            _ => hostileMedia);
+        var hostileDiagnostic = hostileCensus.FormatDiagnostic();
+
+        Assert.True(hostileDiagnostic.Length <= 8192);
+        Assert.DoesNotContain('\r', hostileDiagnostic);
+        Assert.DoesNotContain('\n', hostileDiagnostic);
+        Assert.Contains("CUSTOM\\u007CA4\\u003B\\u000D\\u000A", hostileDiagnostic, StringComparison.Ordinal);
+        Assert.Contains("Millimeters\\u000D\\u000AInjected\\u003Dtrue", hostileDiagnostic, StringComparison.Ordinal);
+        Assert.Contains('…', hostileDiagnostic);
+    }
+
     private static NativeRenderRequest Request(
         string artifactKind,
         string layoutName,
