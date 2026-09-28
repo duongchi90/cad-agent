@@ -72,6 +72,7 @@ SUPPORTED_OPERATIONS = frozenset(
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _WM_CHAR = 0x0102
+_GA_ROOT = 2
 _DOTNET_DISPATCH_COMMAND = "\x1b\x1bCADAGENT_DISPATCH\r"
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
@@ -124,6 +125,7 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
         enum_child_windows = user32.EnumChildWindows
         is_window_visible = user32.IsWindowVisible
         get_foreground_window = user32.GetForegroundWindow
+        get_ancestor = user32.GetAncestor
         post_message = user32.PostMessageW
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         set_native_signature(
@@ -143,6 +145,11 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
         )
         set_native_signature(is_window_visible, [wintypes.HWND], wintypes.BOOL)
         set_native_signature(get_foreground_window, [], wintypes.HWND)
+        set_native_signature(
+            get_ancestor,
+            [wintypes.HWND, wintypes.UINT],
+            wintypes.HWND,
+        )
         set_native_signature(
             post_message,
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
@@ -181,15 +188,19 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
             raise DotNetIPCError("WINDOW_RECEIVER_AMBIGUOUS")
         target = visible_owned_mdi_clients[0]
 
+        def foreground_is_exact_owner() -> bool:
+            foreground = get_foreground_window()
+            return bool(foreground) and get_ancestor(foreground, _GA_ROOT) == hwnd
+
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise DotNetIPCError("WINDOW_IDENTITY_CHANGED")
-        if get_foreground_window() != hwnd:
+        if not foreground_is_exact_owner():
             raise DotNetIPCError("WINDOW_FOREGROUND_INVALID")
 
         for character in _DOTNET_DISPATCH_COMMAND:
             if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
                 raise DotNetIPCError("WINDOW_IDENTITY_CHANGED")
-            if get_foreground_window() != hwnd:
+            if not foreground_is_exact_owner():
                 raise DotNetIPCError("WINDOW_FOREGROUND_INVALID")
             if not post_message(target, _WM_CHAR, ord(character), 0):
                 raise DotNetIPCError("WINDOW_DELIVERY_FAILED")

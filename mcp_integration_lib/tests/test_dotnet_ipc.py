@@ -48,6 +48,7 @@ class RecordingUser32:
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = 9001,
         foreground_sequence: list[int] | None = None,
+        root_ancestors: dict[int, int] | None = None,
         post_returns: list[bool] | None = None,
     ) -> None:
         self.top_pid = top_pid
@@ -65,6 +66,7 @@ class RecordingUser32:
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
         self.foreground_sequence = foreground_sequence or []
+        self.root_ancestors = root_ancestors or {}
         self.post_returns = post_returns or []
         self.pid_calls: list[int] = []
         self.class_names: dict[int, str] = {}
@@ -106,6 +108,11 @@ class RecordingUser32:
         if self.foreground_sequence:
             return self.foreground_sequence.pop(0)
         return self.foreground_hwnd
+
+    def GetAncestor(self, hwnd, flags):
+        if flags != 2:  # GA_ROOT
+            return 0
+        return self.root_ancestors.get(hwnd, hwnd)
 
     def PostMessageW(self, target, message, wparam, lparam):
         self.post_calls.append((target, message, wparam, lparam))
@@ -205,6 +212,36 @@ class WindowsDotNetTriggerTests(unittest.TestCase):
                 trigger()
 
         self.assertGreaterEqual(user32.foreground_calls, 1)
+        self.assertEqual([], user32.post_calls)
+
+    def test_accepts_foreground_child_of_exact_admitted_top_level(self) -> None:
+        command = "\x1b\x1bCADAGENT_DISPATCH\r"
+        user32 = RecordingUser32(
+            foreground_hwnd=7007,
+            root_ancestors={7007: 9001},
+        )
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            factory(9001)()
+
+        self.assertEqual(
+            [(202, 0x0102, ord(character), 0) for character in command],
+            user32.post_calls,
+        )
+
+    def test_rejects_foreground_child_of_another_root_in_same_process(self) -> None:
+        user32 = RecordingUser32(
+            foreground_hwnd=7007,
+            root_ancestors={7007: 9002},
+            child_pids={7007: 4242, 9002: 4242},
+        )
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            with self.assertRaises(DotNetIPCError):
+                factory(9001)()
+
         self.assertEqual([], user32.post_calls)
 
     def test_postmessage_failure_stops_at_first_failed_enqueue(self) -> None:
