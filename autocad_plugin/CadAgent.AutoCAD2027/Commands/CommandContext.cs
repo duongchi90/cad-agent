@@ -161,6 +161,7 @@ public sealed class CommandContext
             NativeLineEditObservation[] before = Array.Empty<NativeLineEditObservation>();
             var mutationStarted = false;
             var committed = false;
+            var readbackStage = "MUTATION_TRANSACTION";
             string? candidatePath = null;
             string? rollbackExpectedDiskSha256 = null;
             NativeLineEditCandidateCustody? candidateCustody = null;
@@ -243,6 +244,7 @@ public sealed class CommandContext
                     committed = true;
                 }
 
+                readbackStage = "ACTIVE_AFTER_COMMIT";
                 var activeAfterCommit = ReadNativeLineObservations(database, request);
                 BoundedNativeLineEditPolicy.ValidateReadback(request, before, activeAfterCommit);
 
@@ -287,10 +289,12 @@ public sealed class CommandContext
 
                 var drawingSha256After = ComputeSha256(candidatePath);
                 rollbackExpectedDiskSha256 = drawingSha256After;
+                readbackStage = "ACTIVE_AFTER_SAVE";
                 var activeAfterSave = ReadNativeLineObservations(database, request);
                 var reopenedAfterSave = ReadSavedNativeLineObservations(candidatePath, request);
                 candidateCustody.EnsureCandidatePathMatches(candidatePath);
                 BoundedNativeLineEditPolicy.ValidateReadback(request, before, activeAfterSave);
+                readbackStage = "PERSISTED_AFTER_SAVE";
                 BoundedNativeLineEditPolicy.ValidateReadback(request, before, reopenedAfterSave);
                 var dbmodAfter = Convert.ToInt32(ReadSystemNumber("DBMOD"));
                 var durableState = BoundedNativeLineEditPolicy.ResolveDurableState(
@@ -381,7 +385,7 @@ public sealed class CommandContext
                     before,
                     rollbackPersisted ? before : null,
                     rollbackPersisted
-                        ? new[] { $"native-line edit failed and was durably rolled back: {exception.Message}" }
+                        ? new[] { $"native-line edit failed at {readbackStage} and was durably rolled back: {exception.Message}" }
                         : new[]
                         {
                             $"DURABLE_STATE_UNCERTAIN: {exception.Message}; rollback persistence was not proven: {rollbackError}"
