@@ -270,7 +270,7 @@ internal static class BoundedNativeLineEditPolicy
 internal sealed class NativeLineEditCandidateCustody : IDisposable
 {
     private readonly ProtectedIpcDirectoryCustody _directoryCustody;
-    private readonly ProtectedIpcFileCustody _fileCustody;
+    private ProtectedIpcFileCustody _fileCustody;
 
     internal NativeLineEditCandidateCustody(
         ProtectedIpcDirectoryCustody directoryCustody,
@@ -284,6 +284,30 @@ internal sealed class NativeLineEditCandidateCustody : IDisposable
 
     internal void EnsureCandidatePathMatches(string candidatePath) =>
         _fileCustody.EnsurePathMatches(candidatePath);
+
+    internal void SaveOwnedCandidate(string candidatePath, Action save)
+    {
+        ArgumentNullException.ThrowIfNull(save);
+        EnsureCandidatePathMatches(candidatePath);
+        // Native SaveAs may rename the admitted file to its backup and create a
+        // new file at the same path. Directory custody remains held throughout.
+        // Only a successful owned save admits that replacement, with the same
+        // regular-file, canonical-path and trusted-principal ACL checks.
+        save();
+        var savedFileCustody = ProtectedIpcDirectoryPolicy.AcquireProtectedFile(candidatePath);
+        try
+        {
+            savedFileCustody.EnsurePathMatches(candidatePath);
+        }
+        catch
+        {
+            savedFileCustody.Dispose();
+            throw;
+        }
+        var previous = _fileCustody;
+        _fileCustody = savedFileCustody;
+        previous.Dispose();
+    }
 
     public void Dispose()
     {

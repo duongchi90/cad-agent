@@ -278,11 +278,11 @@ public sealed class CommandContext
                 }
 
                 candidateCustody.EnsureCandidatePathMatches(candidatePath);
-                database.SaveAs(
+                candidateCustody.SaveOwnedCandidate(candidatePath, () => database.SaveAs(
                     candidatePath,
                     true,
                     DwgVersion.Current,
-                    database.SecurityParameters);
+                    database.SecurityParameters));
                 candidateCustody.EnsureCandidatePathMatches(candidatePath);
 
                 var drawingSha256After = ComputeSha256(candidatePath);
@@ -623,11 +623,11 @@ public sealed class CommandContext
                     () =>
                     {
                         candidateCustody.EnsureCandidatePathMatches(canonicalCandidate);
-                        database.SaveAs(
+                        candidateCustody.SaveOwnedCandidate(canonicalCandidate, () => database.SaveAs(
                             canonicalCandidate,
                             true,
                             DwgVersion.Current,
-                            database.SecurityParameters);
+                            database.SecurityParameters));
                         candidateCustody.EnsureCandidatePathMatches(canonicalCandidate);
                     });
                 if (!rollbackPersisted)
