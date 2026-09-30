@@ -468,12 +468,15 @@ public sealed class CommandContext
         {
             using var transaction = database.TransactionManager.StartOpenCloseTransaction();
             var modelSpaceId = GetModelSpaceId(database, transaction);
-            return ReadNativeLineObservations(
+            var observations = ReadNativeLineObservations(
                 database,
                 transaction,
                 modelSpaceId,
                 request,
                 targetLines: null);
+            // Cancelling an OpenCloseTransaction can undo earlier edits in the active command.
+            transaction.Commit();
+            return observations;
         }
 
         private static NativeLineEditObservation[] ReadSavedNativeLineObservations(

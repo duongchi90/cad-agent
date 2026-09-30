@@ -16,6 +16,26 @@
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
+## Sheet04 native save/readback repair (2026-09-30)
+
+- **Partially verified:** the admitted driver-side 12-line 490-to-500 edit
+  exposed two causal native defects. AutoCAD SaveAs replaces the candidate
+  file identity; successful owned saves now refresh protected file custody
+  while retaining protected directory custody. The Windows regression gate
+  passed 46 tests, and the authoritative verifier passed on `b1ba607`.
+- The next live attempt failed at `ACTIVE_AFTER_SAVE` and reported a durable
+  rollback. A separate disposable native clone isolated the readback defect:
+  a committed line at 500 was read as 500, then became 490 after the read-only
+  OpenCloseTransaction was disposed without Commit. Successful bounded native
+  read transactions now commit before disposal. The opt-in live regression
+  verifies requested target endpoints, protected endpoints, candidate SHA
+  transition, protected source SHA, and the owner's reopened saved readback.
+- Corrected same-candidate acceptance is **NOT RUN** at this snapshot. The
+  public checkpoint in issue #409 remains the authority for later live
+  results. This change does not authorize canonical BASE mutation or imply
+  project completion. Material integration requires independent exact-head
+  Security Redteam and Integration CI clearance.
+
 ## Current canonical snapshot (2026-09-20)
 
 - Fresh GitHub `main` is `7b3c6c4b9af7ced91d4dfb758072d7ba1cacffd1`, the
