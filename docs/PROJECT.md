@@ -1,10 +1,34 @@
 # CAD Agent Project
 
-## Goal
+## Product baseline
 
-Convert an approved real CAD image or PDF into a reviewable DXF, validate it
-headlessly, open it in AutoCAD Mechanical 2027, and produce reproducible evidence for every
-stage.
+CAD Agent is a Windows engineering workflow for reading modified source drawings,
+reusing the ORIGINAL native CAD BASE, applying only source-supported changes to a
+disposable candidate, and proving an editable persisted result in AutoCAD Mechanical
+2027. Fresh GitHub wins over cached status, historical plans, and local checkouts.
+
+The product roadmap is [#291](https://github.com/duongchi90/cad-agent/issues/291).
+The authorized cumulative BVTL product run is accepted and closed in
+[#461](https://github.com/duongchi90/cad-agent/issues/461#issuecomment-5915471764).
+This acceptance covers eight modifications on one candidate copied from ORIGINAL
+BASE, including native geometry, dimensions/annotations, hatch representation,
+protected-state comparison, editability, and save/reopen/readback. Historical target
+DXFs and prior candidates are evidence, never generation inputs.
+
+## What is packaged and what is orchestrated
+
+Current main contains source/provenance validators, geometry and dimension
+inspection, native CAD query/edit interfaces, FileIPC/.NET dispatch, staged DXF
+tools, and regression infrastructure. The accepted cumulative run also uses the
+authorized local executor's source reasoning and bounded native COM/AutoLISP
+operations. It is not evidence of a single unattended CLI that solves arbitrary
+drawings. New drawings require source-specific scope and acceptance evidence.
+
+The image/PDF -> Primitive IR -> Semantic IR -> staged DXF pipeline remains
+available for inspection, reconstruction experiments, and regression. Its output
+does not acquire the native workflow's acceptance merely by being generated.
+Optional provider experiments are separate; PR #340 remains frozen. A completed
+BVTL run does not authorize another product phase or provider/billing work.
 
 ## Supported environment
 
@@ -13,66 +37,27 @@ stage.
 - AutoCAD Mechanical 2027
 - Tesseract 5.4.0.20240606
 
-Other operating systems, Python versions, and AutoCAD products are not release
-evidence for this project.
-
 ## Product principles
 
-- Incremental hardening: preserve verified code and refactor only against a
-  failing test, benchmark, or measured integration problem.
-- Deterministic rules first; AI supports ambiguous recognition and review.
-- Human approval is mandatory for unverified calibration, ambiguous decisions,
-  and production DXF mutation.
-- Private drawings and annotations remain outside Git.
-- A missing private/live gate is reported as skipped or not run, never passed.
+- Incremental hardening: existing owner plus the smallest necessary surface.
+- Source and ORIGINAL BASE identity precede candidate mutation.
+- Preserve source, BASE, accepted DWGs, manifests, hashes, and audit evidence.
+- Geometry/visual evidence precedes applicable dimension/text checks; finish
+  editability/readback, save/reopen, and deterministic verification on the same candidate.
+- Missing prerequisites, uncertainty, `SKIP`, and `NOT RUN` never become PASS.
+- Runtime changes need causal/reachability evidence and the applicable independent
+  exact-head Security and Integration review under #305/#392/#429.
+- No GUI, web service, or VPS is part of this supported baseline.
 
-## First product milestone
+## Canonical references and history
 
-One approved real image or PDF runs through Primitive IR, Semantic IR, optional
-agent advice, DXF build/headless review, and AutoCAD Mechanical 2027 live
-review. If review finds a confirmed production defect, the separately approved
-repair/rollback loop is available; a passing review is never mutated merely to
-exercise repair. The run records input hash, configuration, artifacts,
-approvals, and test evidence.
+- Current owners: `docs/ARCHITECTURE.md`
+- Accepted product/evidence routing: `docs/STATUS.md`
+- Verification: `docs/QUALITY.md`; `scripts/bootstrap.ps1`; `scripts/verify.ps1`
+- Execution authority: latest #305/#429 and `docs/AI_OPERATING_MODEL.md`
+- Historical design/plan policy: `docs/superpowers/README.md`
+- Prior project snapshot: [historical PROJECT](history/project-before-bvtl-consolidation.md)
 
-## Modernization slices
-
-1. Reproducible foundation: canonical guidance, locked environment, shared
-   verification, explicit gates, and immutable CI.
-2. Thin vertical-slice CLI: `doctor`, `run`, and `resume`, with manifests,
-   checkpoints, approval gates, and no duplicated domain algorithms.
-3. Private real-data benchmark normalization and evidence-driven algorithm
-   hardening.
-4. Windows/AutoCAD Mechanical 2027 production review-repair loop, backup policy, live smoke,
-   and release checklist.
-
-Each slice receives its own approved design, implementation plan, tests, and
-review gate.
-
-## Drawing Initialization Gate
-
-The configurable Drawing Initialization Gate is the required entry boundary for
-future authoritative drawing paths. It binds an approved Drawing Definition,
-Drawing Profile, Domain Pack, and template provenance to a read-only setup
-audit before any geometry is created. The existing image/PDF pipeline remains
-`DRAFT_REFERENCE`; it cannot become authoritative until a separate
-dimension-first path presents hash-bound `SETUP_VERIFIED` evidence. This gate
-does not make a source-specific vehicle or equipment configuration part of the
-core product contract.
-
-## Non-goals
-
-- No GUI, web service, or VPS.
-- No Linux or macOS production support.
-- No AutoCAD product/version support beyond AutoCAD Mechanical 2027.
-- No rewrite of the five existing implementation packages.
-- No automatic production mutation without human approval.
-
-## Canonical references
-
-- Current architecture: `docs/ARCHITECTURE.md`
-- Verified status: `docs/STATUS.md`
-- Quality and release gates: `docs/QUALITY.md`
-- Design/plan record policy: `docs/superpowers/README.md`
-- Approved complete design: `docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md`
-- M2 execution plan: `docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md`
+The historical Drawing Initialization Gate and M0-M8/R0-R8 plans remain records of
+their own contracts and tests. Unchecked tasks and old frontier statements are not
+the current product queue. Fresh #291 and accepted #461 define this closure.

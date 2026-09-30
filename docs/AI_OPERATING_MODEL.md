@@ -1,6 +1,12 @@
 # CAD Agent — AI Operating Model
 
-Status: stable role, authority, safety, and reuse model.
+Status: durable principles with actor-specific history.
+
+Fresh latest #305/#429 governs execution. #429 comment 5903652026 establishes
+SOLO_CODEX, SUBAGENTS_DISABLED=YES, MAX_ACTIVE_SUBAGENTS=0. The five scheduled
+Web SOLs remain independent radar/review only. Historical Luna/SOL actor names
+below explain prior delegation; they do not override this overlay. The accepted
+BVTL product run is #461, not an active historical control sequence.
 
 This document defines durable operating rules. It intentionally does **not** cache mutable branch heads, PR state, CI state, runtime PID/HWND, or the current numbered control sequence. Read GitHub fresh for those facts.
 
@@ -20,11 +26,15 @@ GitHub is the canonical mutable source of truth for repository state, accepted e
 
 Durable control/navigation pointers:
 
-- Issue #305: persistent Luna/SOL operating contract.
+- Issue #305: durable operating contract; read its latest comments.
+- Issue #429: latest execution overlay; it supersedes historical actor assumptions.
+- Issue #461: accepted cumulative BVTL product evidence, not a new execution queue.
 - Issue #301: advisory/no-miss feed.
 - The newest current-lookahead pointer recorded by #305 names the active frontier issue.
 - Issue #131: historical saturated ledger/evidence only.
-- Issue #294: numbered control ledger only when a task mechanically requires numbered control; it is not the default daily work queue.
+- Issue #294: historical numbered-control ledger. Its older instructions do not
+  supply current execution authority; existing workflow references remain a
+  separate runtime-retirement question.
 
 ## 2. Human Owner
 
