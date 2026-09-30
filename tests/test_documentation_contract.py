@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationContractTests(unittest.TestCase):
-    def test_status_is_evidence_based(self) -> None:
-        status = (ROOT / "docs/STATUS.md").read_text(encoding="utf-8")
+    def test_historical_status_is_evidence_based(self) -> None:
+        status = (ROOT / "docs/history/status-before-bvtl-consolidation.md").read_text(encoding="utf-8")
         self.assertIn("908d016", status)
         self.assertIn("255 passed, 11 skipped, 3 warnings", status)
         self.assertIn("Verified", status)
@@ -77,10 +77,10 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("docs/QUALITY.md", project)
         self.assertIn("docs/superpowers/README.md", project)
 
-    def test_canonical_docs_route_the_m2_setup_gate_and_preserve_boundaries(self) -> None:
+    def test_historical_canonical_docs_route_the_m2_setup_gate_and_preserve_boundaries(self) -> None:
         documents = {
             path: (ROOT / path).read_text(encoding="utf-8")
-            for path in ("docs/PROJECT.md", "docs/ARCHITECTURE.md", "docs/STATUS.md")
+            for path in ("docs/history/project-before-bvtl-consolidation.md", "docs/history/architecture-before-bvtl-consolidation.md", "docs/history/status-before-bvtl-consolidation.md")
         }
         design = "docs/superpowers/specs/2026-08-02-cad-agent-complete-design.md"
         plan = "docs/superpowers/plans/2026-08-02-m2-drawing-initialization-gate.md"
@@ -88,7 +88,7 @@ class DocumentationContractTests(unittest.TestCase):
             self.assertIn(design, content, f"{design!r} missing from {path}")
             self.assertIn(plan, content, f"{plan!r} missing from {path}")
 
-        project = documents["docs/PROJECT.md"]
+        project = documents["docs/history/project-before-bvtl-consolidation.md"]
         normalized_project = " ".join(project.split())
         self.assertIn("Drawing Initialization Gate", project)
         self.assertIn("configurable", project)
@@ -99,7 +99,7 @@ class DocumentationContractTests(unittest.TestCase):
             normalized_project,
         )
 
-        architecture = documents["docs/ARCHITECTURE.md"]
+        architecture = documents["docs/history/architecture-before-bvtl-consolidation.md"]
         normalized_architecture = " ".join(architecture.split())
         self.assertIn(
             "Their configurable values and provenance are hash-bound. An "
@@ -115,7 +115,7 @@ class DocumentationContractTests(unittest.TestCase):
             "does not replace the .NET/File IPC boundary", normalized_architecture
         )
 
-        status = documents["docs/STATUS.md"]
+        status = documents["docs/history/status-before-bvtl-consolidation.md"]
         m2_status = status.split("## M2 Drawing Initialization Gate", 1)[1].split(
             "## AutoCAD .NET plugin", 1
         )[0]
@@ -155,8 +155,8 @@ class DocumentationContractTests(unittest.TestCase):
             self.assertIn("docs/STATUS.md", opening)
             self.assertIn("docs/ARCHITECTURE.md", opening)
 
-    def test_foundation_certificate_is_well_formed_when_present(self) -> None:
-        status = (ROOT / "docs/STATUS.md").read_text(encoding="utf-8")
+    def test_historical_foundation_certificate_is_well_formed_when_present(self) -> None:
+        status = (ROOT / "docs/history/status-before-bvtl-consolidation.md").read_text(encoding="utf-8")
         if "## Foundation certificate" not in status:
             self.assertIn("| Reproducible foundation | Unverified |", status)
             return
@@ -233,8 +233,8 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("No GUI, web service, or VPS", project)
         self.assertIn("Incremental hardening", project)
 
-    def test_architecture_names_every_package_and_schema(self) -> None:
-        architecture = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+    def test_historical_architecture_names_every_package_and_schema(self) -> None:
+        architecture = (ROOT / "docs/history/architecture-before-bvtl-consolidation.md").read_text(encoding="utf-8")
         for package in (
             "primitive_ir_lib",
             "semantic_ir_lib",
@@ -265,9 +265,9 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("--agent-action-approval", architecture)
         self.assertIn("agent_application.json", architecture)
 
-    def test_visual_supervisor_t0_documentation_preserves_contract_boundaries(self) -> None:
-        architecture = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
-        status = (ROOT / "docs/STATUS.md").read_text(encoding="utf-8")
+    def test_historical_visual_supervisor_t0_documentation_preserves_contract_boundaries(self) -> None:
+        architecture = (ROOT / "docs/history/architecture-before-bvtl-consolidation.md").read_text(encoding="utf-8")
+        status = (ROOT / "docs/history/status-before-bvtl-consolidation.md").read_text(encoding="utf-8")
         for term in (
             "Visual Supervisor contract boundary",
             "Codex cannot self-approve",

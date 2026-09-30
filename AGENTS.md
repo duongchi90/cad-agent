@@ -2,14 +2,17 @@
 
 ## Canonical sources
 
-Read these before planning or changing behavior:
+Fresh-read GitHub before material decisions: #291 product roadmap, latest #305/#429
+operating contract/overlay, #392 material review gates, and #461 accepted product.
+GitHub wins. SOLO_CODEX is the current executor; subagents are disabled. The five
+scheduled Web SOLs are independent radar/review only. Then read these local routers:
 
 - Product and scope: `docs/PROJECT.md`
 - Current architecture: `docs/ARCHITECTURE.md`
 - Verified status: `docs/STATUS.md`
 - Quality and release gates: `docs/QUALITY.md`
 - AI roles and authority: `docs/AI_OPERATING_MODEL.md`
-- Active accelerated reuse-first program: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md` and `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`
+- Historical accelerated reuse-first program: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md` and `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`
 - Design/plan record policy: `docs/superpowers/README.md`
 
 `HANDOFF.md` and `CAD-Agent-Kien-Truc-v1_3.md` are historical evidence. Do not
@@ -45,8 +48,8 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 3. Before new production behavior, complete the Issue's internal/external reuse dossier and prefer existing APIs or a thin adapter; stop for PO review when licensing, reproducibility, architecture ownership, or benchmark benefit is unclear.
 4. Do not build a custom production Codex transport: use the approved official SDK/App Server/fallback order from the operating model.
 5. Use a failing regression test or benchmark before changing production logic.
-6. Keep one writer for a branch or overlapping file set. Use parallel agents for
-   read-heavy exploration, test execution, and independent review.
+6. Keep one writer for a branch or overlapping file set. Follow the latest #429
+   actor/delegation overlay; do not revive historical parallel-agent instructions.
 7. Keep commits scoped and run focused checks after each task.
 8. Run `scripts/verify.ps1` before claiming completion or committing a release
    candidate.
@@ -73,9 +76,9 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 - Do not alter architecture, public schemas, or package boundaries outside the
   approved task.
 
-## Luna routine execution authority
+## Primary executor routine execution authority
 
-- Within this project's existing authority, Luna may perform routine APPLOAD,
+- Within this project's existing authority, the primary executor may perform routine APPLOAD,
   file-picker, AutoCAD, test, Git, PR, CI, disposable-candidate mutation,
   save, close, and reopen actions without an additional human confirmation.
 - This includes loading the known repository dispatcher for local FileIPC
@@ -87,7 +90,7 @@ root or lint target to `scripts/verify.ps1` and its contract test.
 
 ## Workstation temp location (updated 2026-09-26)
 
-- On every repository refresh/update, Luna should read this note. Prefer
+- On every repository refresh/update, the primary executor should read this note. Prefer
   `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when
   the owning tool allows it.
 - `C:\temp` was emptied on 2026-09-26 and the directory was left in place for
@@ -103,6 +106,12 @@ root or lint target to `scripts/verify.ps1` and its contract test.
   current process configuration.
 
 ## Review allocation
+
+Latest #305/#392/#429 govern applicable review. Material runtime, safety,
+currentness, live-promotion or persistence merges require independent exact-head
+SECURITY_REDTEAM and INTEGRATION_CI clearance. Routine documentation changes do
+not require five-role ceremony. Historical reviewer examples below do not
+authorize subagent execution or supersede the current SOLO overlay.
 
 - Small: Codex plus one bounded independent review.
 - Medium: requirements/architecture plus correctness/test reviews.
@@ -122,4 +131,5 @@ not review evidence for an external session.
 - Required private/live gates ran, or their missing state is explicitly recorded.
 - `git diff --check` is clean and verification did not change repository status.
 - No unresolved P0/P1 finding remains; deferred P2 has a reason and owner.
-- `docs/STATUS.md` reflects only evidence that actually ran.
+- `docs/STATUS.md` routes durable acceptance; transient state stays on GitHub.
+- Historical plans/ledgers are evidence, not an active queue after #461 closure.

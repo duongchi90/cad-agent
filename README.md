@@ -1,7 +1,11 @@
 # CAD Agent
 
-CAD Agent converts CAD images/PDFs into structured IR and DXF, then validates
-the result headlessly and through AutoCAD Mechanical 2027.
+CAD Agent reads modified source drawings, reuses ORIGINAL native CAD, applies
+source-supported changes to a disposable candidate, and verifies an editable
+persisted result in AutoCAD Mechanical 2027. The cumulative BVTL run is accepted
+in [#461](https://github.com/duongchi90/cad-agent/issues/461#issuecomment-5915471764).
+Fresh [#291](https://github.com/duongchi90/cad-agent/issues/291) defines scope; latest #305/#429 defines authority.
+`docs/ARCHITECTURE.md` maps current owners. The staged CLI below is a separate tool path.
 
 ## Supported release environment
 
@@ -22,11 +26,11 @@ The bootstrap creates/reuses `.venv-py311` and installs the hash-locked
 `requirements/windows-py311.lock`. Verification rejects a stale/polluted
 environment, runs the offline suite with zero skips, safely probes both
 specialized markers as unavailable, runs Ruff/Git/content checks, and writes
-three JUnit artifacts under `.artifacts/`.
+JUnit artifacts under `.artifacts/`.
 
 ## Packages
 
-- `cad_agent/`: thin image/PDF orchestration with durable manifests.
+- `cad_agent/`: source/provenance, native reuse bindings, staged orchestration, and manifests.
 - `primitive_ir_lib/`: image/PDF to Primitive IR.
 - `semantic_ir_lib/`: parts, compounds, constraints, pruning, and solving.
 - `agent_lib/`: audited advice for ambiguous cases.
@@ -69,7 +73,6 @@ manual-scale approval and source SHA-256 in `pdf-run-manifest.json`:
 Use `resume-pdf` with that manifest and the original PDF to retry only missing
 page stages. A changed source PDF is rejected by SHA-256 before any checkpoint
 is reused.
-
 Add `--auto-ocr-roi` to preserve scale-label candidates. Non-ambiguous
 dimension evidence may produce a crop-local child IR under `view_ir/`; both
 remain `needs_verification` and cannot authorize production automatically.
@@ -95,8 +98,8 @@ repair.
 
 Private drawings and annotations stay outside Git. Missing private/live tests are
 reported as `SKIP` or `NOT RUN`. The specialized markers are `real_data` and
-`autocad_mechanical`; `.\scripts\verify.ps1` probes their unavailable state but never
-executes either live gate. Unverified calibration, ambiguous recognition, and
+`autocad_mechanical`; `.\scripts\verify.ps1` probes their unavailable state; actual specialized
+gates run only when their explicit prerequisites are configured. Unverified calibration, ambiguous recognition, and
 production DXF mutation require human approval.
 
 ## Mixed-scale PDF sheets
@@ -106,7 +109,6 @@ dimension evidence may produce SHA-recorded child PNG/IR; all remain
 `needs_verification` and cannot override calibration or authorize DXF.
 
 `fidelity-dimension-*`, `fidelity-table-text-*`, and `fidelity-hatch-*` require hash-bound approvals; they emit only approved linear `DIMENSION`s, table-cell `TEXT`, or polygon `HATCH` entities into `needs_review` DXFs. Unapproved OCR, radius/diameter/angular mappings, and Mechanical production remain unsupported.
-
 ## Canonical documentation
 
 - Product and scope: `docs/PROJECT.md`
@@ -114,6 +116,5 @@ dimension evidence may produce SHA-recorded child PNG/IR; all remain
 - Verified status: `docs/STATUS.md`
 - Test and release gates: `docs/QUALITY.md`
 - Agent working agreement: `AGENTS.md`
-
 `HANDOFF.md` and `CAD-Agent-Kien-Truc-v1_3.md` are retained as historical
 records; they are not current status sources.
