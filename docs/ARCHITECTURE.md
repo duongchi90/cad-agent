@@ -43,8 +43,9 @@ Native reuse, staged reconstruction, synthetic fixtures, and source inference
 have different authority and acceptance conditions; they are not interchangeable.
 
 The Drawing Initialization Gate, R3/R4 candidate contracts, Visual Supervisor,
-approved repair and publication validators, and sealed local-executor control
-contracts remain reachable through library APIs, tests, or existing workflows.
+and approved repair/publication validators remain reachable through library APIs
+or tests. Historical proposed mission/envelope modules are absent from main;
+the existing local-executor workflow retains its own bounded command allowlist.
 Their presence does not make their historical implementation plans active work.
 No duplicate owner or abstraction is removed without caller/supersession proof.
 
