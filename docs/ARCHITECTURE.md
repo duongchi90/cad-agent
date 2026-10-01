@@ -20,7 +20,7 @@ modified source PDF + ORIGINAL native BASE
 | Owner | Responsibility and current entry point |
 | --- | --- |
 | `cad_agent.pdf`, `primitive_ir_lib.run_pdf`, `cad_agent.source_bundle`, `cad_agent.source_integrity` | PDF rendering, source identity and supported observation artifacts; `run_pdf_stages`, `build_source_bundle`, source validation. |
-| `cad_agent.source_fusion`, `cad_agent.source_fusion_proposal`, `cad_agent.source_support_verifier`, `cad_agent.source_verified_geometry` | Source reconciliation, proposed/verified source geometry; `compose_verified_native_line_delta` reuses native readback and source-supported geometry. |
+| `cad_agent.source_fusion`, `cad_agent.source_fusion_proposal`, `cad_agent.source_support_verifier`, `cad_agent.source_verified_geometry` | Source reconciliation and proposed/verified geometry; `source_fusion_proposal.compose_verified_native_line_delta` composes proposal-only LINE changes, and `source_verified_geometry.materialize_verified_external_visual_lines` binds the target geometry to verified render/support/calibration evidence. |
 | `cad_agent.native_dwg_provenance`, `cad_agent.base_cad_adapter` | Native file/readback binding (`build_native_dwg_provenance`, `compose_native_dwg_query_binding`) and reusable exact-base extraction/handoff validation. |
 | `cad_agent.file_integrity`, `cad_agent.drawing_artifact_reference`, `cad_agent.component_view_registry`, `cad_agent.candidate_revision` | File identity and stage-specific source/currentness/R3/R4 bindings. Derived hash-bound artifacts are not independent authority databases. |
 | `cad_agent.cad_read_facade`, `cad_agent.drawing_query`, `mcp_integration_lib.exact_base_xref`, `mcp_integration_lib.dotnet_ipc` | Native query/exact-base inspection and typed requests; `DotNetIPCClient.exact_base_xref_inspection`, `validate_xref_inspection`. |
@@ -58,6 +58,7 @@ retirement requires a separately evidenced and appropriately reviewed write-set.
 
 - Product scope: `docs/PROJECT.md`; acceptance and preservation: `docs/STATUS.md`
 - Verification and environment: `docs/QUALITY.md`
+- Native operator steps: `docs/PROJECT.md#native-operator-workflow`; runtime topology and currentness: `docs/operations/runtime_environment_inventory.md`
 - Current authority: latest #305/#429; material review protocol #392
 - Prior detailed architecture: [historical ARCHITECTURE](history/architecture-before-bvtl-consolidation.md)
 - Prior reuse inventory: `docs/superpowers/reuse/2026-08-04-reuse-inventory.json`

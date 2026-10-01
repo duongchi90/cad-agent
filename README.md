@@ -5,7 +5,7 @@ source-supported changes to a disposable candidate, and verifies an editable
 persisted result in AutoCAD Mechanical 2027. The cumulative BVTL run is accepted
 in [#461](https://github.com/duongchi90/cad-agent/issues/461#issuecomment-5915471764).
 Fresh [#291](https://github.com/duongchi90/cad-agent/issues/291) defines scope; latest #305/#429 defines authority.
-`docs/ARCHITECTURE.md` maps current owners. The staged CLI below is a separate tool path.
+Start with the [native operator workflow](docs/PROJECT.md#native-operator-workflow), [runtime inventory](docs/operations/runtime_environment_inventory.md) and `docs/ARCHITECTURE.md` owner map. The staged CLI below is a separate tool path.
 
 ## Supported release environment
 
