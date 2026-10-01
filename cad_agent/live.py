@@ -262,47 +262,53 @@ def _backup(
     *,
     owned_paths: dict[Path, os.stat_result | None] | None = None,
 ) -> dict[str, Any]:
-    dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
-    backup_paths = (dxf_backup, evidence_backup)
-    owned_paths = {} if owned_paths is None else owned_paths
+    backup_dir = Path(os.path.abspath(backup_dir))
     try:
-        dxf_source_before = sha256_file(dxf)
-        evidence_source_before = sha256_file(evidence)
-        dxf_backup_hash = _copy_to_exclusive_backup(dxf, dxf_backup, owned_paths)
-        evidence_backup_hash = _copy_to_exclusive_backup(
-            evidence, evidence_backup, owned_paths
-        )
-        dxf_source_after = sha256_file(dxf)
-        evidence_source_after = sha256_file(evidence)
-        verified = (
-            dxf_source_before == dxf_source_after == dxf_backup_hash
-            and evidence_source_before == evidence_source_after == evidence_backup_hash
-        )
-        if not verified:
-            raise LiveSafetyError(
-                "Production backup verification failed; repair is refused before mutation."
-            )
-        return {
-            "dxf_path": str(dxf_backup),
-            "dxf_source_sha256": dxf_source_before,
-            "dxf_backup_sha256": dxf_backup_hash,
-            "build_evidence_path": str(evidence_backup),
-            "build_evidence_source_sha256": evidence_source_before,
-            "build_evidence_backup_sha256": evidence_backup_hash,
-            "verified": True,
-        }
-    except Exception as exc:
-        try:
-            _cleanup_backup_artifacts(backup_paths, owned_paths)
-        except LiveSafetyError as cleanup_exc:
-            raise LiveSafetyError(
-                "backup acquisition failed; cleanup could not prove zero survivors."
-            ) from cleanup_exc
-        if isinstance(exc, LiveSafetyError):
-            raise exc
-        raise LiveSafetyError(
-            "backup acquisition failed; zero owned survivors were proven."
-        ) from exc
+        with pin_directory_chain(backup_dir):
+            dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
+            backup_paths = (dxf_backup, evidence_backup)
+            owned_paths = {} if owned_paths is None else owned_paths
+            try:
+                dxf_source_before = sha256_file(dxf)
+                evidence_source_before = sha256_file(evidence)
+                dxf_backup_hash = _copy_to_exclusive_backup(dxf, dxf_backup, owned_paths)
+                evidence_backup_hash = _copy_to_exclusive_backup(
+                    evidence, evidence_backup, owned_paths
+                )
+                dxf_source_after = sha256_file(dxf)
+                evidence_source_after = sha256_file(evidence)
+                verified = (
+                    dxf_source_before == dxf_source_after == dxf_backup_hash
+                    and evidence_source_before == evidence_source_after == evidence_backup_hash
+                )
+                if not verified:
+                    raise LiveSafetyError(
+                        "Production backup verification failed; repair is refused before mutation."
+                    )
+                return {
+                    "dxf_path": str(dxf_backup),
+                    "dxf_source_sha256": dxf_source_before,
+                    "dxf_backup_sha256": dxf_backup_hash,
+                    "build_evidence_path": str(evidence_backup),
+                    "build_evidence_source_sha256": evidence_source_before,
+                    "build_evidence_backup_sha256": evidence_backup_hash,
+                    "verified": True,
+                }
+            except Exception as exc:
+                try:
+                    _cleanup_backup_artifacts(backup_paths, owned_paths)
+                except LiveSafetyError as cleanup_exc:
+                    raise LiveSafetyError(
+                        "backup acquisition failed; cleanup could not prove zero survivors."
+                    ) from cleanup_exc
+                if isinstance(exc, LiveSafetyError):
+                    raise exc
+                raise LiveSafetyError(
+                    "backup acquisition failed; zero owned survivors were proven."
+                ) from exc
+
+    except FileIdentityError as error:
+        raise LiveSafetyError("Backup directory identity could not be established.") from error
 
 
 def _open_bound_file(path: Path, *, flags: int, label: str) -> tuple[int, os.stat_result]:
