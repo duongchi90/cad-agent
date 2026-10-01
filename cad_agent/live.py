@@ -10,6 +10,7 @@ import json
 import ntpath
 import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from .file_integrity import (
     is_regular_non_reparse,
     is_single_link_regular_non_reparse,
     open_bound_file,
+    pin_directory_chain,
 )
 from .manifest import sha256_file
 
@@ -76,10 +78,7 @@ def write_build_evidence(path: Path, build: BuildResult) -> None:
         "dxf": {"name": dxf.name, "sha256": sha256_file(dxf)},
         "build_result": _build_result_dict(build),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_json_artifact(path, payload, label="Build evidence")
 
 
 def load_build_evidence(path: Path, dxf: Path) -> BuildResult:
@@ -104,10 +103,52 @@ def review_dict(review: LiveReviewResult) -> dict[str, Any]:
 
 
 def write_live_report(path: Path, report: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_json_artifact(path, report, label="Live report")
+
+
+def _write_json_artifact(path: Path, payload: dict[str, Any], *, label: str) -> None:
+    """Publish exact JSON through the existing bound-file and directory owner."""
+    path = Path(os.path.abspath(path))
+    data = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    owned_stat = None
+    try:
+        with pin_directory_chain(path.parent):
+            def destination_identity():
+                try:
+                    current = os.stat(path, follow_symlinks=False)
+                except FileNotFoundError:
+                    return None
+                if not is_single_link_regular_non_reparse(current):
+                    raise LiveSafetyError(f"{label} destination must be a single-link regular non-reparse file.")
+                return current
+
+            before = destination_identity()
+            try:
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+                with os.fdopen(descriptor, "wb") as stream:
+                    owned_stat = os.fstat(stream.fileno())
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                assert_path_identity(temporary, owned_stat, label=f"{label} temporary")
+                current = destination_identity()
+                if (before is None) != (current is None) or (before is not None and not os.path.samestat(before, current)):
+                    raise LiveSafetyError(f"{label} destination identity changed before publication.")
+                os.replace(temporary, path)
+                descriptor, published_stat = open_bound_file(
+                    path, flags=os.O_RDONLY | getattr(os, "O_BINARY", 0), label=f"{label} destination")
+                with os.fdopen(descriptor, "rb") as stream:
+                    persisted = stream.read()
+                assert_path_identity(path, published_stat, label=f"{label} destination")
+                if not os.path.samestat(owned_stat, published_stat) or persisted != data:
+                    raise LiveSafetyError(f"{label} persisted identity/bytes differ from publication.")
+            finally:
+                if owned_stat is not None and os.path.lexists(temporary):
+                    assert_path_identity(temporary, owned_stat, label=f"{label} temporary cleanup")
+                    temporary.unlink()
+    except (FileIdentityError, OSError) as error:
+        raise LiveSafetyError(f"{label} identity-safe publication failed: {error}") from error
 
 
 def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Path]:

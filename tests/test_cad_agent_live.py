@@ -63,6 +63,105 @@ def test_build_evidence_round_trips_and_binds_dxf_hash() -> None:
         assert loaded.written_geometry_by_primitive_id["line-1"]["end"] == [10.0, 0.0]
 
 
+@pytest.mark.parametrize("writer", ["build", "report"])
+def test_artifact_writer_rejects_reparse_parent_without_outside_write(tmp_path: Path, writer: str) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(outside, target_is_directory=True)
+    dxf = tmp_path / "staged.dxf"
+    dxf.write_bytes(b"staged dxf")
+    with pytest.raises(LiveSafetyError, match="directory|reparse|identity"):
+        if writer == "build":
+            write_build_evidence(linked / "nested" / "evidence.json", _build(dxf))
+        else:
+            live_module.write_live_report(linked / "nested" / "report.json", {"state": "candidate"})
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("writer", ["build", "report"])
+def test_artifact_writer_does_not_follow_existing_temporary_link(tmp_path: Path, writer: str) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside sentinel")
+    destination = tmp_path / "artifact.json"
+    temporary = destination.with_suffix(".json.tmp")
+    temporary.symlink_to(outside)
+    dxf = tmp_path / "staged.dxf"
+    dxf.write_bytes(b"staged dxf")
+    if writer == "build":
+        write_build_evidence(destination, _build(dxf))
+    else:
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert outside.read_bytes() == b"outside sentinel"
+    assert temporary.is_symlink()
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_artifact_writer_refuses_linked_destination(tmp_path: Path, link_kind: str) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside sentinel")
+    destination = tmp_path / "report.json"
+    if link_kind == "symlink":
+        destination.symlink_to(outside)
+    else:
+        os.link(outside, destination)
+    with pytest.raises(LiveSafetyError, match="destination|regular|identity"):
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert outside.read_bytes() == b"outside sentinel"
+
+
+def test_artifact_writer_pins_parent_during_creation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = tmp_path / "reports"
+    parent.mkdir()
+    original_open = live_module.os.open
+    blocked = []
+
+    def try_parent_replacement(path, flags, *args, **kwargs):
+        if Path(path).suffix == ".tmp":
+            try:
+                parent.rename(tmp_path / "moved-parent")
+            except OSError:
+                blocked.append(True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(live_module.os, "open", try_parent_replacement)
+    live_module.write_live_report(parent / "report.json", {"state": "candidate"})
+    assert blocked == [True]
+    assert json.loads((parent / "report.json").read_text()) == {"state": "candidate"}
+
+
+def test_artifact_writer_cleans_owned_temp_on_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    destination = tmp_path / "report.json"
+    destination.write_bytes(b"previous report")
+
+    def fail_sync(_descriptor):
+        raise OSError("injected flush failure")
+
+    monkeypatch.setattr(live_module.os, "fsync", fail_sync)
+    with pytest.raises(LiveSafetyError, match="publication"):
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert destination.read_bytes() == b"previous report"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_artifact_writer_refuses_post_publish_identity_substitution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    destination = tmp_path / "report.json"
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside sentinel")
+    original_replace = live_module.os.replace
+
+    def substitute(source, target):
+        original_replace(source, target)
+        Path(target).unlink()
+        Path(target).symlink_to(outside)
+
+    monkeypatch.setattr(live_module.os, "replace", substitute)
+    with pytest.raises(LiveSafetyError, match="identity|regular"):
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert outside.read_bytes() == b"outside sentinel"
+    assert destination.is_symlink()
+
+
 def test_repair_requires_approval_before_backup_or_mutation() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
