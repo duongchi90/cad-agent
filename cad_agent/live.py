@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.repair2 import repair_dxf_live
+from mcp_integration_lib.repair2 import MCPTimeoutError, MCPToolError, repair_dxf_live
 from mcp_integration_lib.reviewer2 import LiveReviewResult, review_dxf_live
 
 from .file_integrity import (
@@ -588,7 +588,33 @@ def repair_live(
         owned_paths=owned_backup_paths,
     )
     report["backup"] = backup
-    repaired = repair_dxf_live(build, before.mismatches, client)
+    handles_before_repair = dict(build.handle_by_primitive_id)
+    try:
+        repaired = repair_dxf_live(build, before.mismatches, client)
+    except (MCPTimeoutError, MCPToolError):
+        # An acknowledgement can be lost after remote mutation. No handle is
+        # trustworthy until the existing canonical recovery owner proves restore.
+        build.handle_by_primitive_id.clear()
+        report["repair_error"] = "REPAIR_CAPABILITY_FAILED"
+        try:
+            client.drawing_close(save_changes=False)
+            restored = _restore_canonical(
+                client=client,
+                dxf=dxf,
+                evidence_path=evidence_path,
+                backup=backup,
+            )
+        except Exception:
+            report["rollback_restore"] = {
+                "recovery_verified": False,
+                "error": "ROLLBACK_FAILED",
+            }
+            report["rollback_state"] = "rollback_failed"
+        else:
+            build.handle_by_primitive_id.update(handles_before_repair)
+            report["rollback_restore"] = {"recovery_verified": True, **restored}
+            report["rollback_state"] = "failed_canonical_restored"
+        return report
     report["repair"] = asdict(repaired)
     after = review_dxf_live(build, client, open_drawing=False)
     report["after_review"] = review_dict(after)
