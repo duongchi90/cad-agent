@@ -757,3 +757,69 @@ def test_corrupt_backup_aborts_before_repair(
         assert "A" in client._entities
         assert len(client._entities) == 1
         assert list((root / "backups").iterdir()) == []
+
+
+def test_backup_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "backup-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+        backup_dir = linked_parent / "nested"
+
+        with pytest.raises(LiveSafetyError, match="backup|reparse|symlink|identity"):
+            _backup(dxf, evidence, backup_dir)
+
+        assert list(outside.iterdir()) == []
+
+
+def test_backup_parent_binding_blocks_reparse_parent_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        backups = root / "backups"
+        backups.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        original_copy = live_module._copy_to_exclusive_backup
+        copy_count = 0
+        substitution_blocked = False
+
+        def replace_parent_after_first_copy(
+            source, destination, owned_paths, **kwargs
+        ):  # type: ignore[no-untyped-def]
+            nonlocal copy_count, substitution_blocked
+            copy_count += 1
+            result = original_copy(source, destination, owned_paths, **kwargs)
+            if copy_count == 1:
+                try:
+                    moved = root / "backups-moved"
+                    backups.rename(moved)
+                    backups.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    substitution_blocked = True
+            return result
+
+        monkeypatch.setattr(
+            "cad_agent.live._copy_to_exclusive_backup",
+            replace_parent_after_first_copy,
+        )
+
+        backup = _backup(dxf, evidence, backups)
+
+        assert substitution_blocked is True
+        assert list(outside.iterdir()) == []
+        assert Path(backup["dxf_path"]).is_file()
+        assert Path(backup["build_evidence_path"]).is_file()
