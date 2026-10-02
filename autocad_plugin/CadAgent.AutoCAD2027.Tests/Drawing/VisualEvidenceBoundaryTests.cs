@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reflection;
 using CadAgent.AutoCAD2027.Drawing;
 using Xunit;
 
@@ -127,6 +128,94 @@ public sealed class VisualEvidenceBoundaryTests
         Assert.Equal("PAPER_SPACE_FLOATING_VIEWPORT", state.Space.Kind);
         Assert.Equal(JsonValueKind.Number, state.RendererSystemVariables["LTSCALE"].ValueKind);
         Assert.Equal(2.5, state.RendererSystemVariables["LTSCALE"].GetDouble());
+    }
+
+    [Fact]
+    public void EqualScalarSystemVariableDoesNotRequestRestoreWrite()
+    {
+        var captured = JsonSerializer.SerializeToElement(1);
+        var current = JsonSerializer.SerializeToElement(1);
+
+        Assert.False(InvokeRestoreDecision(
+            "ShouldRestoreSystemVariableForTesting",
+            new[] { typeof(JsonElement), typeof(JsonElement) },
+            current,
+            captured));
+    }
+
+    [Fact]
+    public void ChangedScalarSystemVariableRequestsRestoreWrite()
+    {
+        var captured = JsonSerializer.SerializeToElement(1);
+        var current = JsonSerializer.SerializeToElement(2);
+
+        Assert.True(InvokeRestoreDecision(
+            "ShouldRestoreSystemVariableForTesting",
+            new[] { typeof(JsonElement), typeof(JsonElement) },
+            current,
+            captured));
+    }
+
+    [Fact]
+    public void EqualImpliedSelectionDoesNotRequestRestoreWrite()
+    {
+        Assert.False(InvokeRestoreDecision(
+            "ShouldRestoreSelectionForTesting",
+            new[] { typeof(IReadOnlyList<string>), typeof(IReadOnlyList<string>) },
+            new[] { "AB", "CD" },
+            new[] { "AB", "CD" }));
+    }
+
+    [Fact]
+    public void ChangedImpliedSelectionRequestsRestoreWrite()
+    {
+        Assert.True(InvokeRestoreDecision(
+            "ShouldRestoreSelectionForTesting",
+            new[] { typeof(IReadOnlyList<string>), typeof(IReadOnlyList<string>) },
+            new[] { "AB", "EF" },
+            new[] { "AB", "CD" }));
+    }
+
+    [Fact]
+    public void EquivalentViewDoesNotRequestRestore()
+    {
+        var captured = new SessionViewSnapshot(10, 20, 100, 50, 0, 0, 0, 0, 0, 1, 0, 50);
+
+        Assert.False(InvokeRestoreDecision(
+            "ShouldRestoreViewForTesting",
+            new[] { typeof(SessionViewSnapshot), typeof(SessionViewSnapshot) },
+            captured,
+            captured));
+    }
+
+    [Fact]
+    public void ChangedViewRequestsRestore()
+    {
+        var captured = new SessionViewSnapshot(10, 20, 100, 50, 0, 0, 0, 0, 0, 1, 0, 50);
+        var current = captured with { CenterX = 11 };
+
+        Assert.True(InvokeRestoreDecision(
+            "ShouldRestoreViewForTesting",
+            new[] { typeof(SessionViewSnapshot), typeof(SessionViewSnapshot) },
+            current,
+            captured));
+    }
+
+    private static bool InvokeRestoreDecision(
+        string methodName,
+        Type[] parameterTypes,
+        params object?[] arguments)
+    {
+        var method = typeof(AutoCadVisualEvidenceReader).GetMethod(
+            methodName,
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            types: parameterTypes,
+            modifiers: null);
+        Assert.NotNull(method);
+        var result = method!.Invoke(null, arguments);
+        Assert.IsType<bool>(result);
+        return (bool)result!;
     }
 
     private static SessionStateSnapshot CreateState(SessionViewSnapshot view) => SessionStateSnapshot.Create(
