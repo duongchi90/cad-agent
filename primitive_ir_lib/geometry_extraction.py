@@ -108,6 +108,37 @@ def extract_lines(
     return raw_lines
 
 
+def _circle_edge_support(
+    edge_distance: np.ndarray, x: float, y: float, radius: float,
+) -> Tuple[float, float]:
+    """Return supported circumference fraction and longest unsupported gap.
+
+    Sample at least twice per degree and twice per circumference pixel. Allow
+    three pixels (or 4% of the radius) for stroke width, pixel rounding and
+    Hough localization. Oversampling avoids angular/raster-grid aliasing.
+    Samples outside the source image count as unsupported.
+    """
+    sample_count = max(720, int(np.ceil(4 * np.pi * radius)))
+    angles = np.arange(sample_count) * (2 * np.pi / sample_count)
+    xs = np.rint(x + radius * np.cos(angles)).astype(int)
+    ys = np.rint(y + radius * np.sin(angles)).astype(int)
+    height, width = edge_distance.shape
+    inside = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
+    supported = np.zeros(sample_count, dtype=bool)
+    supported[inside] = edge_distance[ys[inside], xs[inside]] <= max(3.0, 0.04 * radius)
+    coverage = float(supported.mean())
+    if not supported.any():
+        return coverage, 360.0
+
+    # Start at a supported sample so a gap crossing zero degrees stays whole.
+    start = int(np.flatnonzero(supported)[0])
+    longest_gap = current_gap = 0
+    for has_edge in np.roll(supported, -start):
+        current_gap = 0 if has_edge else current_gap + 1
+        longest_gap = max(longest_gap, current_gap)
+    return coverage, longest_gap * 360.0 / sample_count
+
+
 def extract_circles(
     image_bgr: np.ndarray,
     min_radius: int = 5,
@@ -116,9 +147,12 @@ def extract_circles(
     param2: int = 30,
     min_dist: int = 20,
 ) -> List[RawCircle]:
-    """HoughCircles (phương pháp gradient). confidence ước lượng thô cố định
-    ở mức trung bình-cao vì HoughCircles của OpenCV không trả vote count trực
-    tiếp qua API Python — nên đánh dấu rõ đây là ước lượng, không phải số đo."""
+    """Admit Hough candidates only when source edges support a full circle.
+
+    confidence is measured circumference support, not an engineering-truth
+    probability. Up to 15% distributed raster loss is tolerated, but an open
+    interval exceeding 30 degrees is not promoted to a closed CAD circle.
+    """
     gray = _preprocess(image_bgr)
     circles = cv2.HoughCircles(
         gray, cv2.HOUGH_GRADIENT, dp=1, minDist=min_dist,
@@ -132,14 +166,19 @@ def extract_circles(
     # Tương thích cả OpenCV 4 (shape (1,N,3)) lẫn OpenCV 5 (shape (N,3)):
     # chuẩn hoá về mảng 2D (N,3), mỗi hàng là [x,y,r].
     circ = np.asarray(circles).reshape(-1, 3)
+    edges = cv2.Canny(gray, param1 / 2, param1)
+    edge_distance = cv2.distanceTransform(255 - edges, cv2.DIST_L2, 3)
 
     for x, y, r in circ:
+        coverage, longest_gap = _circle_edge_support(edge_distance, float(x), float(y), float(r))
+        if coverage < 0.85 or longest_gap > 30.0:
+            continue
         bbox = (float(x - r), float(y - r), float(x + r), float(y + r))
         raw_circles.append(RawCircle(
             id=new_id("rawcirc"),
             center_px=(float(x), float(y)),
             radius_px=float(r),
-            confidence=0.75,  # ước lượng cố định — xem docstring
+            confidence=round(coverage, 3),
             bbox_px=bbox,
         ))
     return raw_circles
