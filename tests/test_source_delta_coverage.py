@@ -7,16 +7,22 @@ the composition must never infer engineering truth from its hashes.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import hashlib
 from itertools import product
 
-import ezdxf
 from PIL import Image, ImageDraw
 import pytest
 
 from cad_agent import source_fusion_proposal as owner
 from cad_agent.drawing_contracts import canonical_json_sha256
 from cad_agent.source_bundle import build_source_bundle
+from dxf_builder_lib.builder import build_dxf
+from dxf_builder_lib.reviewer import review_dxf
+from primitive_ir_lib.models import (
+    Calibration, LineGeometry, Point2D, Primitive, PrimitiveIRDocument,
+    SourceDocument, TextData, Trace,
+)
 
 COMPLETE = "SOURCE_DELTA_COVERAGE_COMPLETE"
 UNRESOLVED = "SOURCE_DELTA_COVERAGE_UNRESOLVED"
@@ -56,37 +62,48 @@ def _context(tmp_path, *, geometry_new=True, text_new=True, keep_same=True):
 
     keep = [((150, 20), (180, 20)), ((180, 20), (180, 50)),
             ((180, 50), (150, 50)), ((150, 50), (150, 20))]
-    base = ezdxf.new("R2018")
-    block = base.blocks.new("SYNTHETIC_COMPOSITE")
-    for start, end in component(100):
-        block.add_line(start, end)
-    base.modelspace().add_blockref(block.name, (0, 0))
-    for start, end in keep:
-        base.modelspace().add_line(start, end)
-    base.modelspace().add_text("REV-A", dxfattribs={"height": 10, "insert": (20, 125)})
+    def document(right, revision, keep_offset=0):
+        primitives = []
+        for prefix, lines in (("composite", component(right)), ("keep", keep)):
+            for index, (start, end) in enumerate(lines):
+                offset = keep_offset if prefix == "keep" else 0
+                primitives.append(Primitive(
+                    id=f"{prefix}-{index}", type="line", source="geometry_opencv", confidence=1,
+                    trace=Trace(bbox_px=(0, 0, 239, 159)),
+                    geometry=LineGeometry(Point2D(start[0] + offset, start[1]),
+                                          Point2D(end[0] + offset, end[1])),
+                ))
+        primitives.append(Primitive(
+            id="revision", type="text", source="text_tesseract", confidence=1,
+            trace=Trace(bbox_px=(20, 125, 74, 139)),
+            text_data=TextData(revision, Point2D(20, 125), 0, 10),
+        ))
+        return PrimitiveIRDocument(
+            source_document=SourceDocument("source.png", 0, 240, 160, source_sha),
+            calibration=Calibration(unit="mm", pixel_to_unit_scale=1, origin_px=(0, 0),
+                                    method="manual_override", status="verified"),
+            primitives=primitives,
+        )
+
     base_path = tmp_path / "base.dxf"
-    base.saveas(base_path)
+    build_dxf(document(100, "REV-A"), str(base_path))
     base_sha = _sha(base_path.read_bytes())
-    candidate = ezdxf.readfile(base_path)
-    candidate_block = candidate.blocks.get(block.name)
-    for entity in list(candidate_block):
-        candidate_block.delete_entity(entity)
-    for start, end in component(80 if geometry_new else 100):
-        candidate_block.add_line(start, end)
-    if not keep_same:
-        for entity in candidate.modelspace().query("LINE"):
-            entity.translate(5, 0, 0)
-    next(iter(candidate.modelspace().query("TEXT"))).dxf.text = "REV-B" if text_new else "REV-A"
     candidate_path = tmp_path / "candidate.dxf"
-    candidate.saveas(candidate_path)
-    persisted = ezdxf.readfile(candidate_path)
-    actual_component = [(tuple(e.dxf.start)[:2], tuple(e.dxf.end)[:2])
-                        for e in persisted.blocks.get(block.name).query("LINE")]
-    actual_keep = [(tuple(e.dxf.start)[:2], tuple(e.dxf.end)[:2])
-                   for e in persisted.modelspace().query("LINE")]
-    actual_revision = next(iter(persisted.modelspace().query("TEXT"))).dxf.text
-    verdicts = {"composite": actual_component == component(80),
-                "revision": actual_revision == "REV-B", "keep": actual_keep == keep}
+    built = build_dxf(document(80 if geometry_new else 100, "REV-B" if text_new else "REV-A",
+                               0 if keep_same else 5), str(candidate_path))
+    assert review_dxf(built).passed  # All eight selected plans persist/roundtrip correctly.
+    source_expected = {}
+    for prefix, lines in (("composite", component(80)), ("keep", keep)):
+        for index, (start, end) in enumerate(lines):
+            source_expected[f"{prefix}-{index}"] = {"type": "line", "start": start, "end": end}
+    source_expected["revision"] = {"type": "text", "content": "REV-B", "insert": (20, 125),
+                                   "height": 10, "rotation_deg": 0}
+    # Existing reader checks actual DXF against independently authored source
+    # expectations. Never use the candidate builder's own geometry as truth.
+    source_review = review_dxf(replace(built, written_geometry_by_primitive_id=source_expected))
+    verdicts = {"composite": not any(item.startswith("composite-") for item in source_review.mismatches),
+                "revision": not any(item.startswith("revision:") for item in source_review.mismatches),
+                "keep": not any(item.startswith("keep-") for item in source_review.mismatches)}
     assert _sha(base_path.read_bytes()) == base_sha
     with Image.open(source_path) as opened:
         assert not opened.info
