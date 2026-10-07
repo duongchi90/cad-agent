@@ -1,4 +1,4 @@
-"""Proposal-only external visual compilation and native-line composition.
+"""Source-bound proposals and pure native-line/source-delta composition.
 
 Geometry proposals remain non-semantic and this seam has no CAD or source
 mutation side effect.
@@ -21,6 +21,7 @@ from primitive_ir_lib.models import (
 __all__ = [
     "compile_external_visual_object_proposal",
     "compose_verified_native_line_delta",
+    "compose_source_delta_coverage",
 ]
 
 
@@ -804,3 +805,199 @@ def compose_verified_native_line_delta(
         "semantic_label_authority": "NONE",
         "cad_mutation": False,
     }
+
+
+_COVERAGE_IDS = ("source_id", "region_id", "aspect")
+_COVERAGE_CANDIDATE = {
+    "candidate_revision_sha256", "candidate_state_sha256", "latest_mutation_sha256",
+}
+_COVERAGE_DISPOSITIONS = {
+    "CHANGE", "KEEP", "NO_DISTINCT_DELTA", "AMBIGUOUS", "INSUFFICIENT_SOURCE_EVIDENCE",
+}
+_COVERAGE_OBLIGATION = {
+    *_COVERAGE_IDS, "source_binding", "source_evidence_sha256", "disposition",
+    "scope_status", "candidate_evidence",
+}
+_COVERAGE_PROOF = {
+    *_COVERAGE_IDS, "source_binding", "source_evidence_sha256", "candidate_binding",
+    "evidence_kind", "status", "evidence_sha256",
+}
+
+
+def _coverage_key(record: _Mapping[str, object]) -> tuple[str, str, str]:
+    return tuple(_identifier(record[name], "COVERAGE_ID_INVALID") for name in _COVERAGE_IDS)
+
+
+def _coverage_ids(key: tuple[str, str, str]) -> dict[str, str]:
+    return dict(zip(_COVERAGE_IDS, key))
+
+
+def _coverage_current(value: object) -> dict[str, str]:
+    record = _closed(value, _COVERAGE_CANDIDATE, "COVERAGE_CANDIDATE_INVALID")
+    return {name: _sha256(record[name], "COVERAGE_CANDIDATE_INVALID")
+            for name in sorted(_COVERAGE_CANDIDATE)}
+
+
+def _coverage_scope(value: object, bundle: dict[str, object]) -> dict[str, object]:
+    scope = _closed(value, {"source_bundle_sha256", "regions", "exclusions"}, "COVERAGE_SCOPE_INVALID")
+    if scope["source_bundle_sha256"] != _canonical_json_sha256(bundle):
+        _fail("COVERAGE_SOURCE_BUNDLE_MISMATCH")
+    if not isinstance(scope["regions"], list) or not scope["regions"]:
+        _fail("COVERAGE_SCOPE_EMPTY")
+    sources = {item["source_id"]: item for item in bundle["items"]}
+    regions, exclusions = [], []
+    seen_regions, keys = set(), set()
+    for raw in scope["regions"]:
+        region = _closed(raw, {"source_id", "region_id", "source_binding", "aspects"}, "COVERAGE_REGION_INVALID")
+        source_id = _identifier(region["source_id"], "COVERAGE_REGION_INVALID")
+        region_id = _identifier(region["region_id"], "COVERAGE_REGION_INVALID")
+        source = sources.get(source_id)
+        if source is None or region_id not in source["region_ids"]:
+            _fail("COVERAGE_REGION_NOT_SOURCE_BOUND")
+        binding = _binding(region["source_binding"], "COVERAGE_SOURCE_BINDING_INVALID")
+        if binding["source_sha256"] != source["sha256"]:
+            _fail("COVERAGE_SOURCE_HASH_MISMATCH")
+        if (source_id, region_id) in seen_regions:
+            _fail("COVERAGE_REGION_DUPLICATE")
+        seen_regions.add((source_id, region_id))
+        if not isinstance(region["aspects"], list) or not region["aspects"]:
+            _fail("COVERAGE_ASPECTS_INVALID")
+        aspects = [_identifier(item, "COVERAGE_ASPECTS_INVALID") for item in region["aspects"]]
+        if len(aspects) != len(set(aspects)):
+            _fail("COVERAGE_ASPECT_DUPLICATE")
+        keys.update((source_id, region_id, item) for item in aspects)
+        regions.append({"source_id": source_id, "region_id": region_id,
+                        "source_binding": binding, "aspects": sorted(aspects)})
+    if not isinstance(scope["exclusions"], list):
+        _fail("COVERAGE_EXCLUSIONS_INVALID")
+    seen_exclusions = set()
+    for raw in scope["exclusions"]:
+        excluded = _closed(raw, {*_COVERAGE_IDS, "reason", "evidence_sha256"}, "COVERAGE_EXCLUSION_INVALID")
+        key = _coverage_key(excluded)
+        if key not in keys or key in seen_exclusions:
+            _fail("COVERAGE_EXCLUSION_NOT_UNIQUE_DECLARED")
+        seen_exclusions.add(key)
+        if not isinstance(excluded["reason"], str) or not excluded["reason"].strip():
+            _fail("COVERAGE_EXCLUSION_REASON_MISSING")
+        exclusions.append({**_coverage_ids(key), "reason": excluded["reason"],
+                           "evidence_sha256": _sha256(excluded["evidence_sha256"], "COVERAGE_EXCLUSION_INVALID")})
+    regions.sort(key=lambda item: (item["source_id"], item["region_id"]))
+    exclusions.sort(key=_coverage_key)
+    return {"source_bundle_sha256": scope["source_bundle_sha256"], "regions": regions,
+            "exclusions": exclusions}
+
+
+def _coverage_candidate_proof(
+    record: _Mapping[str, object], key: tuple[str, str, str],
+    source_binding: dict[str, object], current: dict[str, str],
+) -> dict[str, object]:
+    proof = _closed(record["candidate_evidence"], _COVERAGE_PROOF, "COVERAGE_CANDIDATE_EVIDENCE_MISSING_OR_INVALID")
+    unsigned = {name: value for name, value in proof.items() if name != "evidence_sha256"}
+    if _sha256(proof["evidence_sha256"], "COVERAGE_EVIDENCE_HASH_INVALID") != _canonical_json_sha256(unsigned):
+        _fail("COVERAGE_EVIDENCE_CHECKSUM_MISMATCH")
+    if _coverage_key(proof) != key:
+        _fail("COVERAGE_EVIDENCE_OBLIGATION_MISMATCH")
+    if _binding(proof["source_binding"], "COVERAGE_EVIDENCE_SOURCE_INVALID") != source_binding:
+        _fail("COVERAGE_EVIDENCE_SOURCE_MISMATCH")
+    if proof["source_evidence_sha256"] != record["source_evidence_sha256"]:
+        _fail("COVERAGE_EVIDENCE_SOURCE_FACT_MISMATCH")
+    if _coverage_current(proof["candidate_binding"]) != current:
+        _fail("COVERAGE_CANDIDATE_STALE")
+    allowed = ({"PLANNED_CHANGE", "APPLIED_CHANGE"} if record["disposition"] == "CHANGE"
+               else {"PROTECTED_STATE"})
+    if proof["evidence_kind"] not in allowed:
+        _fail("COVERAGE_EVIDENCE_KIND_INVALID")
+    if proof["status"] != "VERIFIED":
+        _fail("COVERAGE_EVIDENCE_UNRESOLVED")
+    return {**_coverage_ids(key), "disposition": record["disposition"],
+            "evidence_kind": proof["evidence_kind"], "evidence_sha256": proof["evidence_sha256"]}
+
+
+def compose_source_delta_coverage(
+    *, source_bundle: object, declared_scope: object, admitted_scope_sha256: object,
+    current_candidate: object, obligations: object,
+) -> dict[str, object]:
+    """Compose SOURCE_DELTA_COVERAGE_V1; never infer truth or emit PRODUCT_PASS.
+
+    Reuses SourceBundle validation and this owner's source/page/render/ROI
+    binding profile. The caller supplies its frozen PRE-MUTATION normalized
+    scope hash and the current candidate revision/state/latest-mutation hash
+    projection from existing owners. Changing an exclusion cannot replace that
+    admitted binding. Other bundle inventory does not widen the claimed scope.
+
+    Source/native proof verdicts must already be truthful. Checksums bind only
+    their metadata projections, not their engineering truth. PLANNED_CHANGE
+    covers a plan, never proves applied execution. This pure composition cannot
+    discover undeclared source facts, read CAD, mutate/authorize/publish it or
+    replace downstream native/visual/editability/persistence acceptance gates.
+    """
+    from cad_agent.source_bundle import validate_source_bundle
+
+    result = {"schema_version": "SOURCE_DELTA_COVERAGE_V1", "status": None,
+              "source_bundle_sha256": None, "scope_sha256": None,
+              "candidate_binding": None, "claim_scope": [], "covered": [],
+              "unresolved": [], "excluded": []}
+    try:
+        try:
+            bundle = validate_source_bundle(source_bundle)
+        except ValueError:
+            _fail("COVERAGE_SOURCE_BUNDLE_INVALID")
+        scope = _coverage_scope(declared_scope, bundle)
+        result["source_bundle_sha256"] = scope["source_bundle_sha256"]
+        result["scope_sha256"] = _canonical_json_sha256(scope)
+        if _sha256(admitted_scope_sha256, "COVERAGE_ADMITTED_SCOPE_INVALID") != result["scope_sha256"]:
+            _fail("COVERAGE_ADMITTED_SCOPE_MISMATCH")
+        current = _coverage_current(current_candidate)
+        result["candidate_binding"] = current
+        expected = {(region["source_id"], region["region_id"], aspect): region["source_binding"]
+                    for region in scope["regions"] for aspect in region["aspects"]}
+        exclusions = {_coverage_key(item): item for item in scope["exclusions"]}
+        result["claim_scope"] = [_coverage_ids(key) for key in sorted(expected) if key not in exclusions]
+        if not result["claim_scope"]:
+            _fail("COVERAGE_CLAIM_EMPTY")
+        if not isinstance(obligations, list):
+            _fail("COVERAGE_OBLIGATIONS_INVALID")
+        groups = {}
+        for raw in obligations:
+            try:
+                record = _closed(raw, _COVERAGE_OBLIGATION, "COVERAGE_OBLIGATION_INVALID")
+                groups.setdefault(_coverage_key(record), []).append(record)
+            except ValueError as error:
+                result["unresolved"].append({"reason_code": str(error)})
+        for key in sorted(set(expected) | set(groups)):
+            issue = _coverage_ids(key)
+            try:
+                if key not in expected:
+                    _fail("COVERAGE_UNDECLARED_OBLIGATION")
+                records = groups.get(key, [])
+                if len(records) != 1:
+                    _fail("COVERAGE_DUPLICATE_OBLIGATION" if records else "COVERAGE_MISSING_OBLIGATION")
+                record = records[0]
+                binding = _binding(record["source_binding"], "COVERAGE_OBLIGATION_SOURCE_INVALID")
+                if binding != expected[key]:
+                    _fail("COVERAGE_OBLIGATION_SOURCE_MISMATCH")
+                disposition = record["disposition"]
+                if not isinstance(disposition, str) or disposition not in _COVERAGE_DISPOSITIONS:
+                    _fail("COVERAGE_DISPOSITION_INVALID")
+                if record["scope_status"] != ("EXCLUDED" if key in exclusions else "IN_SCOPE"):
+                    _fail("COVERAGE_SCOPE_STATUS_MISMATCH")
+                if key in exclusions:
+                    result["excluded"].append({**issue, "disposition": disposition,
+                                               "reason": exclusions[key]["reason"],
+                                               "exclusion_evidence_sha256": exclusions[key]["evidence_sha256"]})
+                else:
+                    if disposition in {"AMBIGUOUS", "INSUFFICIENT_SOURCE_EVIDENCE"}:
+                        _fail("COVERAGE_SOURCE_UNRESOLVED")
+                    _sha256(record["source_evidence_sha256"], "COVERAGE_SOURCE_EVIDENCE_MISSING")
+                    result["covered"].append(_coverage_candidate_proof(record, key, binding, current))
+            except (ValueError, TypeError) as error:
+                issue["reason_code"] = str(error) if isinstance(error, ValueError) else "COVERAGE_EVIDENCE_INVALID"
+                result["unresolved"].append(issue)
+    except (ValueError, TypeError) as error:
+        result["unresolved"].append({"reason_code": str(error) if isinstance(error, ValueError)
+                                     else "COVERAGE_INPUT_INVALID"})
+    result["unresolved"].sort(key=_canonical_json_sha256)
+    result["status"] = ("SOURCE_DELTA_COVERAGE_UNRESOLVED" if result["unresolved"]
+                        else "SOURCE_DELTA_COVERAGE_COMPLETE")
+    result["coverage_sha256"] = _canonical_json_sha256(result)
+    return result
