@@ -57,7 +57,7 @@ def _check_geometry(pid: str, written: Dict[str, Any], actual: Dict[str, Any], r
 
 def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawing: bool = True,
                     attempt_geometry: bool = True) -> LiveReviewResult:
-    """Check handles/type/layer always; degrade gracefully when ``entity:get`` times out."""
+    """Check structure; exact-approved dimensions require readable measurements."""
     result = LiveReviewResult()
     if open_drawing:
         try:
@@ -141,6 +141,11 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
             result.warnings.append(
                 f"{validation_id}: skipped DIMENSION measurement check ({exc})"
             )
+            if expected.get("approved_value_mm") is not None:
+                result.mismatch(
+                    f"{validation_id}: DIMENSION measurement unavailable for "
+                    "approved_value_mm"
+                )
             continue
         actual_measurement = _actual(actual, "measurement")
         if not _same(expected.get("measurement"), actual_measurement):
