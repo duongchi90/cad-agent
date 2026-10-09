@@ -23,6 +23,7 @@ DEFAULT_VALIDATOR_VERSION = "vision-handoff-validator-1.0"
 SERVER_OWNED_ADAPTER_VERSION = "adapter-1.0"
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PROVIDER_RESPONSE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
 _FORBIDDEN_AUTHORITY_FIELDS = frozenset(
     {
         "cad_truth",
@@ -500,6 +501,71 @@ class ProviderStartObservation:
     def __post_init__(self) -> None:
         for field_name in self.__dataclass_fields__:
             object.__setattr__(self, field_name, _freeze(getattr(self, field_name)))
+
+
+@dataclass(frozen=True)
+class InferenceProviderObservation:
+    """Provider-neutral facts for an inference-only response.
+
+    This intentionally has no Codex thread, approval, sandbox, cwd, or
+    instruction-source fields.  Those facts are not produced by an
+    inference-only Responses call and must not be fabricated.
+    """
+
+    provider: str
+    response_id: str
+    model: str
+    status: str
+    error: Mapping[str, object] | None
+    incomplete_details: Mapping[str, object] | None
+    usage: Mapping[str, object] | None
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            object.__setattr__(self, field_name, _freeze(getattr(self, field_name)))
+
+
+def validate_inference_provider_observation(
+    value: object,
+    *,
+    expected_provider: str,
+    expected_model: str,
+) -> InferenceProviderObservation:
+    """Validate only observed inference facts, never Codex worker attestation."""
+
+    fields = {
+        "provider",
+        "response_id",
+        "model",
+        "status",
+        "error",
+        "incomplete_details",
+        "usage",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        _fail("inference provider observation shape mismatch")
+    provider = _identifier(value["provider"], path="inference_provider_observation.provider")
+    response_id = _string(value["response_id"], path="inference_provider_observation.response_id")
+    if _PROVIDER_RESPONSE_ID.fullmatch(response_id) is None:
+        _fail("inference provider observation response identity is invalid")
+    model = _identifier(value["model"], path="inference_provider_observation.model")
+    status = _identifier(value["status"], path="inference_provider_observation.status")
+    if status not in {"queued", "in_progress", "completed", "failed", "incomplete", "cancelled"}:
+        _fail("inference provider observation status is invalid")
+    for field in ("error", "incomplete_details", "usage"):
+        if value[field] is not None and not isinstance(value[field], Mapping):
+            _fail(f"inference provider observation {field} is invalid")
+    if provider != expected_provider or model != expected_model:
+        _fail("inference provider observation identity mismatch")
+    return InferenceProviderObservation(
+        provider=provider,
+        response_id=response_id,
+        model=model,
+        status=status,
+        error=value["error"],
+        incomplete_details=value["incomplete_details"],
+        usage=value["usage"],
+    )
 
 
 @dataclass(frozen=True)
@@ -1646,6 +1712,7 @@ __all__ = [
     "BoundWorkerThread",
     "DEFAULT_VALIDATOR_VERSION",
     "HANDOFF_SCHEMA_VERSION",
+    "InferenceProviderObservation",
     "ProviderStartObservation",
     "ServerOwnedAuthorityContext",
     "ServerOwnedWorkerBindingContext",
@@ -1659,6 +1726,7 @@ __all__ = [
     "fork_worker_thread",
     "resume_worker_thread",
     "validate_output_schema_binding",
+    "validate_inference_provider_observation",
     "validate_provider_effective_attestation",
     "validate_provider_start_observation",
     "validate_worker_start_context",
