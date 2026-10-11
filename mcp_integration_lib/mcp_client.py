@@ -453,6 +453,8 @@ class FileIPCLiveMCPClient:
                         raise
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
                 time.sleep(self._document_settle_s)
+                if not self._legacy_fixture_mode:
+                    self._wait_for_active_document(expected_path)
                 self._active_drawing_path = expected_path
                 self._assert_root_unchanged()
                 root_literal = _autolisp_string_literal(str(self._dir).replace("\\", "/"))
@@ -487,6 +489,56 @@ class FileIPCLiveMCPClient:
         result = self._dispatch("drawing-open", {"path": path})
         self._active_drawing_path = _normalized_autocad_path(path)
         return result
+
+    def _wait_for_active_document(self, expected_path: str) -> None:
+        """Require a completed readonly expression in the target editor before load.
+
+        Opening a DWG can drop queued expressions while its document context is
+        changing. Only this readonly probe may repeat; open and loader do not.
+        Legacy replay fixtures retain their existing transport contract.
+        """
+        self._assert_root_unchanged()
+        token = uuid.uuid4().hex
+        result = self._dir / f"autocad_mcp_document_ready_{token}.txt"
+        if result.exists() or result.is_symlink():
+            raise MCPToolError("DRAWING_OPEN_READINESS_CONFLICT")
+        literal = _autolisp_string_literal(str(result).replace("\\", "/"))
+        expression = (
+            '(progn (setq mcp-ready-file (open ' + literal + ' "w")) '
+            '(write-line "' + token + '" mcp-ready-file) '
+            '(write-line (strcat (getvar "DWGPREFIX") (getvar "DWGNAME")) '
+            'mcp-ready-file) (write-line "READY" mcp-ready-file) '
+            '(close mcp-ready-file))'
+        )
+        deadline = time.monotonic() + self._timeout
+        probe_interval = self._timeout / 3
+        next_probe = 0.0
+        probes = 0
+        try:
+            while time.monotonic() < deadline:
+                self._assert_root_unchanged()
+                if result.is_symlink() or _file_ipc_path_has_reparse_point(result):
+                    raise MCPToolError("DRAWING_OPEN_READINESS_CONFLICT")
+                if result.is_file():
+                    lines = result.read_text(encoding="utf-8").splitlines()
+                    if len(lines) == 3 and lines[-1] == "READY":
+                        if lines[0] != token:
+                            raise MCPToolError("DRAWING_OPEN_READINESS_IDENTITY_MISMATCH")
+                        if _normalized_autocad_path(lines[1]) != expected_path:
+                            raise MCPToolError("DRAWING_OPEN_READINESS_TARGET_MISMATCH")
+                        return
+                now = time.monotonic()
+                if probes < 3 and now >= next_probe:
+                    assert self._raw_lisp_trigger is not None
+                    self._raw_lisp_trigger(expression)
+                    probes += 1
+                    next_probe = now + probe_interval
+                time.sleep(self._poll)
+            raise MCPTimeoutError("DRAWING_OPEN_READINESS_NOT_CONFIRMED")
+        finally:
+            self._assert_root_unchanged()
+            if not result.is_symlink() and not _file_ipc_path_has_reparse_point(result):
+                result.unlink(missing_ok=True)
 
     def _start_tab_no_document_is_proven(self, error: Exception) -> bool:
         message = str(error).casefold()

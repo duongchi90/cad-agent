@@ -83,3 +83,56 @@ full-verifier-dimtype-flags.txt; SHA256
 No repeated CAD case or unchanged receiver retry. New exact-head hosted CI and
 independent review remain required. Human requires reviewers to post their
 exact-head verdicts directly on PR GitHub and return the comment links.
+## Native cold-open bootstrap remediation
+
+Status: executing; actual default cold-open witness passed, final verifier and
+exact-head independent native acceptance remain pending.
+Base: 133294b7f5ea8c4f768a08a9605b3897fab8a784.
+Approval: Human continuous existing-owner hardening scope, 2026-10-11;
+[PO causal scope](https://github.com/duongchi90/cad-agent/issues/491#issuecomment-6106985455).
+
+The actual native contour/DIM tests passed after deploying identical dispatcher
+bytes into the existing trusted bundle directory. No trust configuration changed.
+Cold DWG reopening then dropped the one bootstrap expression while the editor
+was opening, leaving C:MCP-DISPATCH undefined. Warm binding restored correct
+0.1mm gap readback; diagnostic settle8 also restored it. Neither was default
+production clearance. A readonly COM observation during cold opening was
+temporarily rejected; after exact target/CMD0/quiescence observation, the first
+loader succeeded. COM was diagnostic only, never a native command transport.
+
+Reuse FileIPCLiveMCPClient, existing raw-LISP/claim-bound Windows triggers,
+normalized exact paths, root checks, and temporary readonly receipt pattern.
+Before loading in the real claim-bound route, require a nonce-bound completed
+readonly editor expression reporting the requested active full path. At most
+three readonly probes within the existing timeout; opening and loader are not
+retried. Wrong target/nonce, missing or incomplete receipt are nonPASS before
+bootstrap. Retain final dispatcher ping and post-load native path verification.
+Legacy fixture replay behavior is unchanged. No new public API, transport,
+dependency, dispatcher, store, geometry owner or native mutation capability.
+
+Write-set addition: mcp_integration_lib/mcp_client.py and its existing
+tests/test_mcp_client_drawing_open.py, plus this record.
+RED: two failures/ten valid controls pass before change: dropped bootstrap and
+absent exact-document prerequisite. Focused current selection:145 tests plus
+6 subtests PASS; explicit causal_red/native markers excluded as in verifier.
+Default native cold reopen of the retained radius-only persisted witness now
+reads3 entities/2 joins and rejects both0.1mm gaps without degradation; protected
+dirty V13 source custody/hash and disposable DWG bytes unchanged, fixture closed.
+Canonical verifier at clean implementation head
+d4c09062041e9ab3a574d13a39a4c43c740c889a: PASS,3492 Python tests plus77
+subtests,261 .NET tests,76 IPC tests plus52 subtests; zero offline failures,
+errors or skips. Command: scripts/verify.ps1 -PythonExe
+C:/cad-agent/.venv-py311/Scripts/python.exe, process-local installed SDK PATH.
+Known causal_red negative oracle failed as required; unavailable-state native18
+and real_data2 probes skipped, not qualification PASS.
+
+Coupled contour and wrong-feature DIM survive actual SaveAs/close/cold-reopen
+with unchanged verdicts and no degraded readback. The bound DIM's first batch
+reopen was nonPASS before usable entity readback; its exact open failure was not
+captured by the batch harness. Subsequent default cold-open instrumentation
+passed with one exact-path acknowledgement then one loader,LINE1/DIM1 readback.
+Retain that failed epoch; it is not evidence of changed DIM geometry or of
+universally reliable cold startup. Native gate acceptance and merge clearance
+remain pending independent review of these explicitly bounded observations.
+Source V13 remains sole held dirty document,DBMOD29; its disk hash and all
+disposable DXF inputs remain unchanged. No source/gold/frozen drawing mutation.
