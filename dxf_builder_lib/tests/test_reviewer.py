@@ -57,6 +57,52 @@ def _doc(*prims: Primitive) -> PrimitiveIRDocument:
     )
 
 
+@pytest.mark.parametrize("field,actual,want_pass", [
+    ("height", 3.5, True), ("height", 20.0, False),
+    ("rotation", 0.0, True), ("rotation", 45.0, False),
+    ("height", 3.5 + 0.5e-6, True), ("height", 3.5 + 2e-6, False),
+    ("rotation", 0.5e-4, True), ("rotation", 2e-4, False),
+    ("height", math.inf, False), ("rotation", math.nan, False),
+])
+def test_saved_text_drafting_must_match_written_height_and_rotation(
+    tmp_path, field, actual, want_pass,
+):
+    primitive = Primitive(
+        id="label", type="text", source="text_tesseract", confidence=1.0,
+        trace=Trace((0, 0, 100, 100)),
+        text_data=TextData("PART A", Point2D(0, 0), 0, 3.5),
+    )
+    built = build_dxf(_doc(primitive), str(tmp_path / "candidate.dxf"))
+    native = ezdxf.readfile(built.output_path)
+    handle = built.handle_by_primitive_id["label"]
+    native.entitydb[handle].dxf.set(field, actual)
+    native.saveas(built.output_path)
+    reopened = ezdxf.readfile(built.output_path)
+    saved = getattr(reopened.entitydb[handle].dxf, field)
+    assert math.isnan(saved) if math.isnan(actual) else saved == actual
+    before = (tmp_path / "candidate.dxf").read_bytes()
+    result = review_dxf(built)
+    assert result.checked_count == 1
+    assert result.passed == want_pass
+    assert bool(result.mismatches) == (not want_pass)
+    assert (tmp_path / "candidate.dxf").read_bytes() == before
+
+
+def test_legacy_text_evidence_does_not_invent_undeclared_drafting_values(tmp_path):
+    primitive = Primitive(
+        id="label", type="text", source="text_tesseract", confidence=1.0,
+        trace=Trace((0, 0, 100, 100)),
+        text_data=TextData("PART A", Point2D(0, 0), 45, 20),
+    )
+    built = build_dxf(_doc(primitive), str(tmp_path / "candidate.dxf"))
+    # Older handoffs may carry only insertion/content expectations. Do not
+    # invent source-authorized height or rotation from a global default.
+    written = built.written_geometry_by_primitive_id["label"]
+    written.pop("height")
+    written.pop("rotation_deg")
+    assert review_dxf(built).passed
+
+
 @pytest.mark.parametrize("kind,field,expected", [
     ("circle", "radius", 2.0), ("arc", "radius", 2.0),
     ("arc", "start_angle", 0.0), ("arc", "end_angle", 90.0),
