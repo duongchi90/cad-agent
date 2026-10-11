@@ -156,6 +156,36 @@ def test_live_client_propagates_timeout_and_rejects_nonpositive(monkeypatch, tmp
         _live_client(42, dispatcher, timeout_s=0.0)
 
 
+def test_live_client_wires_guarded_start_tab_open_fallback(monkeypatch, tmp_path: Path) -> None:
+    import mcp_integration_lib.mcp_client as mcp_client
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    dispatcher = tmp_path / "mcp_dispatch.lsp"
+    dispatcher.write_text("", encoding="utf-8")
+    command_trigger = object()
+    no_document_probe = object()
+    monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
+    trigger_options = {}
+    monkeypatch.setattr(
+        mcp_client,
+        "make_windows_command_trigger",
+        lambda hwnd, **kwargs: trigger_options.update(kwargs) or command_trigger,
+        raising=False,
+    )
+    monkeypatch.setattr("cad_agent.cli._make_start_tab_no_document_probe", lambda hwnd: no_document_probe, raising=False)
+
+    _live_client(42, dispatcher)
+
+    assert captured["command_trigger"] is command_trigger
+    assert captured["start_tab_no_document_probe"] is no_document_probe
+    assert trigger_options == {"require_foreground": True}
+
+
 @pytest.mark.parametrize("ipc_dir", ["", "   "])
 def test_live_client_defaults_blank_ipc_root(monkeypatch, tmp_path: Path, ipc_dir: str) -> None:
     import mcp_integration_lib.mcp_client as mcp_client

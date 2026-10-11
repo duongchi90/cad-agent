@@ -950,6 +950,7 @@ def _fidelity_review_queue_command(args: argparse.Namespace) -> int:
 def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
     from mcp_integration_lib.mcp_client import (
         FileIPCLiveMCPClient,
+        make_windows_command_trigger,
         make_windows_dispatch_trigger,
         make_windows_lisp_trigger,
     )
@@ -969,7 +970,74 @@ def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
         raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
         bootstrap_lisp_path=str(dispatcher),
         timeout_s=timeout_s,
+        command_trigger=make_windows_command_trigger(
+            hwnd, require_foreground=True
+        ),
+        start_tab_no_document_probe=_make_start_tab_no_document_probe(hwnd),
     )
+
+
+def _make_start_tab_no_document_probe(hwnd: int):
+    """Prove the exact owned AutoCAD window is idle on Start with no document."""
+    def probe() -> bool:
+        import ctypes
+        import subprocess
+        from ctypes import wintypes
+
+        try:
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            foreground = user32.GetForegroundWindow
+            foreground.argtypes = []
+            foreground.restype = wintypes.HWND
+            visible = user32.IsWindowVisible
+            visible.argtypes = [wintypes.HWND]
+            visible.restype = wintypes.BOOL
+            get_pid = user32.GetWindowThreadProcessId
+            get_pid.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+            get_pid.restype = wintypes.DWORD
+
+            owner_pid = wintypes.DWORD()
+            if (
+                foreground() != hwnd
+                or not visible(hwnd)
+                or not get_pid(hwnd, ctypes.byref(owner_pid))
+                or not owner_pid.value
+            ):
+                return False
+
+            command = (
+                '$ErrorActionPreference="Stop"; '
+                '$p=@(Get-Process acad -ErrorAction SilentlyContinue); '
+                'if($p.Count -ne 1 -or $p[0].Id -ne ' + str(owner_pid.value) +
+                '){[Console]::Out.Write("NO"); exit 0}; '
+                '$c=[Runtime.InteropServices.Marshal]::GetActiveObject("AutoCAD.Application.26"); '
+                '$d=@($c.Documents); '
+                'if([int64]$c.HWND -eq ' + str(int(hwnd)) +
+                ' -and $c.Visible -and $c.GetAcadState().IsQuiescent -and $d.Count -eq 0) '
+                '{[Console]::Out.Write("YES")} else {[Console]::Out.Write("NO")}'
+            )
+            shell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            result = subprocess.run(
+                [shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if result.returncode or result.stderr.strip() or result.stdout.strip() != "YES":
+                return False
+
+            current_pid = wintypes.DWORD()
+            return (
+                foreground() == hwnd
+                and visible(hwnd)
+                and bool(get_pid(hwnd, ctypes.byref(current_pid)))
+                and current_pid.value == owner_pid.value
+            )
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            return False
+
+    return probe
 
 
 def _mechanical_review_command(args: argparse.Namespace) -> int:

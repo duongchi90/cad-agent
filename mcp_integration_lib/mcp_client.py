@@ -428,6 +428,7 @@ class FileIPCLiveMCPClient:
             expected_path = _normalized_autocad_path(path)
             active_path = ""
             for attempt in range(2):
+                command_open_sent = False
                 try:
                     self._raw_lisp_trigger(
                         '(progn (vl-load-com) '
@@ -452,9 +453,22 @@ class FileIPCLiveMCPClient:
                     ):
                         raise
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
+                    command_open_sent = True
                 time.sleep(self._document_settle_s)
                 if not self._legacy_fixture_mode:
-                    self._wait_for_active_document(expected_path)
+                    try:
+                        self._wait_for_active_document(expected_path)
+                    except MCPTimeoutError as exc:
+                        if (
+                            self._command_trigger is None
+                            or attempt != 0
+                            or command_open_sent
+                            or not self._start_tab_no_document_is_proven(exc)
+                        ):
+                            raise
+                        self._command_trigger('_.OPEN\r"' + normalized_path + '"')
+                        time.sleep(self._document_settle_s)
+                        self._wait_for_active_document(expected_path)
                 self._active_drawing_path = expected_path
                 self._assert_root_unchanged()
                 root_literal = _autolisp_string_literal(str(self._dir).replace("\\", "/"))
@@ -796,10 +810,25 @@ class FileIPCLiveMCPClient:
         return self._dispatch("create-text", {k: v for k, v in {"x": x, "y": y, "text": text, "height": height, "rotation": rotation, "layer": layer}.items() if v is not None})
 
 
-def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
+def _make_windows_text_trigger(
+    hwnd: int, *, require_foreground: bool = False
+) -> Callable[[str], None]:
     """Return a bounded, exact-owner trigger for AutoCAD's command boundary."""
     def trigger(text: str) -> None:
         user32 = ctypes.windll.user32
+
+        class GuiThreadInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", wintypes.RECT),
+            ]
 
         def set_native_signature(function: Any, argtypes: list[Any], restype: Any) -> None:
             try:
@@ -817,6 +846,9 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         set_foreground_window = user32.SetForegroundWindow
         get_foreground_window = user32.GetForegroundWindow
         post_message = user32.PostMessageW
+        get_gui_thread_info = (
+            user32.GetGUIThreadInfo if require_foreground else None
+        )
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         set_native_signature(
             get_window_thread_process_id,
@@ -842,16 +874,24 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
             wintypes.BOOL,
         )
+        if get_gui_thread_info is not None:
+            set_native_signature(
+                get_gui_thread_info,
+                [wintypes.DWORD, ctypes.POINTER(GuiThreadInfo)],
+                wintypes.BOOL,
+            )
+
+        def window_identity(window: int) -> tuple[int, int]:
+            pid = wintypes.DWORD()
+            thread_id = get_window_thread_process_id(window, ctypes.byref(pid))
+            if not thread_id or not pid.value:
+                raise MCPToolError("WINDOW_IDENTITY_INVALID")
+            return int(thread_id), int(pid.value)
 
         def window_pid(window: int) -> int:
-            pid = wintypes.DWORD()
-            if not get_window_thread_process_id(window, ctypes.byref(pid)):
-                raise MCPToolError("WINDOW_IDENTITY_INVALID")
-            if not pid.value:
-                raise MCPToolError("WINDOW_IDENTITY_INVALID")
-            return int(pid.value)
+            return window_identity(window)[1]
 
-        owner_pid = window_pid(hwnd)
+        owner_thread_id, owner_pid = window_identity(hwnd)
         mdi_clients: List[int] = []
         callback_error: Optional[str] = None
 
@@ -883,10 +923,26 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise MCPToolError("WINDOW_IDENTITY_CHANGED")
         if get_foreground_window() != hwnd:
+            if require_foreground:
+                raise MCPToolError("WINDOW_FOREGROUND_INVALID")
             show_window(hwnd, 9)
             set_foreground_window(hwnd)
         if get_foreground_window() != hwnd:
             raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+
+        def require_owned_input_focus() -> None:
+            if get_gui_thread_info is None:
+                return
+            thread_info = GuiThreadInfo()
+            thread_info.cbSize = ctypes.sizeof(GuiThreadInfo)
+            if not get_gui_thread_info(owner_thread_id, ctypes.byref(thread_info)):
+                raise MCPToolError("WINDOW_FOCUS_INVALID")
+            focus_hwnd = int(thread_info.hwndFocus or 0)
+            if focus_hwnd <= 0 or window_pid(focus_hwnd) != owner_pid:
+                raise MCPToolError("WINDOW_FOCUS_INVALID")
+
+        if require_foreground:
+            require_owned_input_focus()
 
         framed_text = ("\x1b\x1b" + text + "\r").encode("utf-16-le")
         for offset in range(0, len(framed_text), 2):
@@ -894,6 +950,8 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
                 raise MCPToolError("WINDOW_IDENTITY_CHANGED")
             if get_foreground_window() != hwnd:
                 raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+            if require_foreground:
+                require_owned_input_focus()
             code_unit = int.from_bytes(framed_text[offset:offset + 2], "little")
             if not post_message(target, 0x0102, code_unit, 0):
                 raise MCPToolError("WINDOW_DELIVERY_FAILED")
@@ -905,13 +963,16 @@ def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
     return _make_windows_text_trigger(hwnd)
 
 
-def make_windows_command_trigger(hwnd: int) -> Callable[[str], None]:
+def make_windows_command_trigger(
+    hwnd: int, *, require_foreground: bool = False
+) -> Callable[[str], None]:
     """Return a trigger that types an AutoCAD command sequence.
 
     Use ``\r`` between command inputs, for example ``"_.CLOSE\r_N"``.
-    The final Enter is appended by the trigger.
+    The final Enter is appended by the trigger. ``require_foreground`` refuses
+    delivery instead of activating the frame when focus has changed.
     """
-    return _make_windows_text_trigger(hwnd)
+    return _make_windows_text_trigger(hwnd, require_foreground=require_foreground)
 
 
 def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:

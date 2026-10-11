@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import tempfile
 import textwrap
 import unittest
 from unittest.mock import patch
@@ -17,7 +18,10 @@ import pytest
 
 from mcp_integration_lib import mcp_client
 from mcp_integration_lib.mcp_client import (
+    FileIPCLiveMCPClient,
     MCPToolError,
+    MCPTimeoutError,
+    make_windows_command_trigger,
     make_windows_dispatch_trigger,
     make_windows_lisp_trigger,
 )
@@ -63,6 +67,8 @@ class RecordingUser32:
         visible_children: set[int] | None = None,
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = OWNED_HWND,
+        focus_hwnd: int = RECEIVER_HWND,
+        focus_pid: int = OWNED_PID,
         set_foreground_result: int = 1,
         post_returns: list[int] | None = None,
         receiver_consumption: list[bool] | None = None,
@@ -80,6 +86,8 @@ class RecordingUser32:
         )
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
+        self.focus_hwnd = focus_hwnd
+        self.focus_pid = focus_pid
         self.set_foreground_result = set_foreground_result
         self.post_returns = post_returns or [1]
         self.receiver_consumption = receiver_consumption or [False]
@@ -89,6 +97,7 @@ class RecordingUser32:
         self.kernel32 = RecordingKernel32()
         self.enum_calls: list[tuple[int, int]] = []
         self.window_pid_calls: list[int] = []
+        self.gui_thread_info_calls: list[int] = []
         self._pid_call_counts: dict[int, int] = {}
         self.focus_calls: list[tuple[str, int]] = []
         self.post_calls: list[tuple[int, int, int, int]] = []
@@ -115,7 +124,16 @@ class RecordingUser32:
 
     def GetWindowThreadProcessId(self, hwnd, pid_pointer):
         self.window_pid_calls.append(hwnd)
-        sequence = self.pid_sequences.get(hwnd, [self.child_pids.get(hwnd, OWNED_PID)])
+        sequence = self.pid_sequences.get(hwnd)
+        if sequence is not None:
+            call_index = self._pid_call_counts.get(hwnd, 0)
+            self._pid_call_counts[hwnd] = call_index + 1
+            pid_pointer._obj.value = sequence[min(call_index, len(sequence) - 1)]
+            return 1
+        if hwnd == self.focus_hwnd:
+            pid_pointer._obj.value = self.focus_pid
+            return 1
+        sequence = [self.child_pids.get(hwnd, OWNED_PID)]
         call_index = self._pid_call_counts.get(hwnd, 0)
         self._pid_call_counts[hwnd] = call_index + 1
         pid_pointer._obj.value = sequence[min(call_index, len(sequence) - 1)]
@@ -123,6 +141,17 @@ class RecordingUser32:
 
     def GetForegroundWindow(self):
         return self.foreground_hwnd
+
+    def GetGUIThreadInfo(self, thread_id, info_pointer):
+        self.gui_thread_info_calls.append(thread_id)
+        info = info_pointer._obj
+        info.hwndActive = OWNED_HWND
+        info.hwndFocus = self.focus_hwnd
+        info.hwndCapture = 0
+        info.hwndMenuOwner = 0
+        info.hwndMoveSize = 0
+        info.hwndCaret = 0
+        return 1
 
     def ShowWindow(self, hwnd, command):
         self.focus_calls.append(("ShowWindow", hwnd))
@@ -182,6 +211,15 @@ class ReacquiringUser32(RecordingUser32):
     def SetForegroundWindow(self, hwnd):
         result = super().SetForegroundWindow(hwnd)
         self.foreground_hwnd = hwnd
+        return result
+
+
+class LosingForegroundOnPostUser32(RecordingUser32):
+    """Model focus leaving after one character was admitted to the queue."""
+
+    def PostMessageW(self, target, message, wparam, lparam):
+        result = super().PostMessageW(target, message, wparam, lparam)
+        self.foreground_hwnd = FOREIGN_HWND
         return result
 
 
@@ -272,6 +310,129 @@ class WindowsTriggerExecutionRedTests(unittest.TestCase):
         with self.assertRaises(MCPToolError):
             self._run_current_trigger(user32)
         self.assertEqual(user32.post_calls, [])
+
+    def test_start_tab_fallback_refuses_focus_lost_after_positive_probe(self) -> None:
+        """A stale positive Start-tab probe must not reactivate the owner."""
+        user32 = RecordingUser32()
+
+        def raw_lisp(_text: str) -> None:
+            raise MCPTimeoutError("DRAWING_OPEN_READINESS_NOT_CONFIRMED")
+
+        def positive_probe_then_focus_loss() -> bool:
+            user32.foreground_hwnd = FOREIGN_HWND
+            return True
+
+        with tempfile.TemporaryDirectory() as ipc_dir:
+            client = FileIPCLiveMCPClient(
+                ipc_dir=ipc_dir,
+                raw_lisp_trigger=raw_lisp,
+                bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+                command_trigger=make_windows_command_trigger(
+                    OWNED_HWND, require_foreground=True
+                ),
+                start_tab_no_document_probe=positive_probe_then_focus_loss,
+                timeout_s=0.001,
+                poll_interval_s=0,
+                document_settle_s=0,
+                legacy_fixture_mode=False,
+            )
+            with (
+                patch.object(mcp_client.ctypes.windll, "user32", user32),
+                patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+                self.assertRaises(MCPToolError),
+            ):
+                client.drawing_open("C:/work/synthetic.dxf")
+
+        self.assertEqual([], user32.focus_calls)
+        self.assertEqual([], user32.post_calls)
+
+    def test_strict_command_trigger_delivers_when_exact_owner_stays_foreground(self) -> None:
+        user32 = RecordingUser32()
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
+            make_windows_command_trigger(
+                OWNED_HWND, require_foreground=True
+            )(EXPRESSION)
+
+        self.assertEqual([], user32.focus_calls)
+        self.assertEqual(
+            [1] * (len(EXPECTED_FRAMED_TEXT) + 1),
+            user32.gui_thread_info_calls,
+        )
+        self.assertEqual(
+            [RECEIVER_HWND] * len(EXPECTED_FRAMED_TEXT),
+            [call[0] for call in user32.post_calls],
+        )
+
+    def test_strict_trigger_rejects_foreign_chromium_focus_before_delivery(self) -> None:
+        """Foreground frame identity does not permit sending into foreign embedded UI."""
+        user32 = RecordingUser32(
+            focus_hwnd=FOREIGN_HWND,
+            focus_pid=FOREIGN_PID,
+        )
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+            self.assertRaisesRegex(MCPToolError, "WINDOW_FOCUS_INVALID"),
+        ):
+            make_windows_command_trigger(
+                OWNED_HWND, require_foreground=True
+            )(EXPRESSION)
+
+        self.assertEqual([], user32.focus_calls)
+        self.assertEqual([], user32.post_calls)
+
+    def test_strict_trigger_stops_when_focus_moves_out_of_owner_mid_delivery(self) -> None:
+        user32 = RecordingUser32()
+        original_post = user32.PostMessageW
+
+        def lose_focus_after_one_post(target, message, wparam, lparam):
+            result = original_post(target, message, wparam, lparam)
+            user32.focus_hwnd = FOREIGN_HWND
+            user32.focus_pid = FOREIGN_PID
+            return result
+
+        user32.PostMessageW = lose_focus_after_one_post
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+            self.assertRaisesRegex(MCPToolError, "WINDOW_FOCUS_INVALID"),
+        ):
+            make_windows_command_trigger(
+                OWNED_HWND, require_foreground=True
+            )(EXPRESSION)
+
+        self.assertEqual(1, len(user32.post_calls))
+
+    def test_command_trigger_default_preserves_existing_reacquisition(self) -> None:
+        user32 = ReacquiringUser32(foreground_hwnd=FOREIGN_HWND)
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+        ):
+            make_windows_command_trigger(OWNED_HWND)(EXPRESSION)
+
+        self.assertEqual(
+            [("ShowWindow", OWNED_HWND), ("SetForegroundWindow", OWNED_HWND)],
+            user32.focus_calls,
+        )
+        self.assertEqual(len(EXPECTED_FRAMED_TEXT), len(user32.post_calls))
+
+    def test_strict_command_trigger_stops_after_inflight_focus_loss(self) -> None:
+        user32 = LosingForegroundOnPostUser32()
+        with (
+            patch.object(mcp_client.ctypes.windll, "user32", user32),
+            patch.object(mcp_client.ctypes.windll, "kernel32", user32.kernel32),
+            self.assertRaisesRegex(MCPToolError, "WINDOW_FOREGROUND_INVALID"),
+        ):
+            make_windows_command_trigger(
+                OWNED_HWND, require_foreground=True
+            )(EXPRESSION)
+
+        self.assertEqual([], user32.focus_calls)
+        self.assertEqual(1, len(user32.post_calls))
 
     def test_exact_foreground_does_not_reacquire_before_delivery(self) -> None:
         """The exact foreground precondition must avoid a destructive reacquisition."""

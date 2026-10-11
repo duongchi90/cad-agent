@@ -290,6 +290,69 @@ class DrawingOpenFallbackTests(unittest.TestCase):
 
         self.assertEqual([], command_sequences)
 
+    def test_start_tab_readiness_timeout_uses_one_guarded_open_fallback(self):
+        raw_commands = []
+        command_sequences = []
+        readiness_probes = []
+        target = "C:/work/start-tab.dxf"
+
+        def raw_trigger(command):
+            raw_commands.append(command)
+            marker = '(setq mcp-ready-file (open "'
+            if marker in command:
+                readiness_probes.append(command)
+                if command_sequences:
+                    path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                    token = path.stem.removeprefix("autocad_mcp_document_ready_")
+                    path.write_text(token + "\n" + target + "\nREADY\n", encoding="utf-8")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            timeout_s=0.01,
+            poll_interval_s=0,
+            document_settle_s=0,
+            legacy_fixture_mode=False,
+        )
+        client._dispatch = lambda command, params: (
+            {"DWGPREFIX": "C:/work/", "DWGNAME": "start-tab.dxf"}
+            if command == "drawing-get-variables" else {}
+        )
+
+        self.assertEqual({"path": target}, client.drawing_open(target))
+        self.assertEqual(['_.OPEN\r"C:/work/start-tab.dxf"'], command_sequences)
+        self.assertGreaterEqual(len(readiness_probes), 2)
+        self.assertLessEqual(len(readiness_probes), 6)
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_initial_trigger_error_does_not_repeat_guarded_open_after_readiness_timeout(self):
+        command_sequences = []
+
+        def raw_trigger(command):
+            if command.startswith("(progn (vl-load-com)"):
+                raise MCPTimeoutError("initial AutoCAD LISP delivery timed out")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir,
+            raw_lisp_trigger=raw_trigger,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            command_trigger=command_sequences.append,
+            start_tab_no_document_probe=lambda: True,
+            timeout_s=0.005,
+            poll_interval_s=0,
+            document_settle_s=0,
+            legacy_fixture_mode=False,
+        )
+
+        with self.assertRaises(MCPTimeoutError):
+            client.drawing_open("C:/work/start-tab.dxf")
+
+        self.assertEqual(['_.OPEN\r"C:/work/start-tab.dxf"'], command_sequences)
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
     def test_rejected_com_or_modal_state_never_falls_back_to_open(self):
         raw_commands = []
         command_sequences = []
