@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import os
 import tempfile
+import math
 
 import pytest
 
 from primitive_ir_lib.models import (
-    Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
-    PrimitiveIRDocument, SourceDocument, Trace,
+    ArcGeometry, Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
+    PrimitiveIRDocument, SourceDocument, TextData, Trace,
 )
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
 
@@ -54,6 +55,45 @@ def _doc(*prims: Primitive) -> PrimitiveIRDocument:
         calibration=Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 0), method="manual_override"),
         primitives=list(prims),
     )
+
+
+@pytest.mark.parametrize("kind,field,expected", [
+    ("circle", "radius", 2.0), ("arc", "radius", 2.0),
+    ("arc", "start_angle", 0.0), ("arc", "end_angle", 90.0),
+])
+@pytest.mark.parametrize("change,want_pass", [
+    ("nan", False), ("infinity", False), ("exact", True),
+    ("within-tolerance", True), ("outside-tolerance", False),
+])
+def test_saved_standalone_scalar_geometry_is_finite_and_source_matching(
+    tmp_path, kind, field, expected, change, want_pass,
+):
+    primitive = _circle("source", 0, 0, 2) if kind == "circle" else Primitive(
+        id="source", type="arc", source="geometry_external_ai", confidence=1.0,
+        trace=Trace((0, 0, 10, 10)), geometry=ArcGeometry(Point2D(0, 0), 2, 0, 90),
+    )
+    built = build_dxf(_doc(primitive), str(tmp_path / "candidate.dxf"))
+    tolerance = 1e-6 if field == "radius" else 1e-4
+    actual = {
+        "nan": math.nan, "infinity": math.inf, "exact": expected,
+        "within-tolerance": expected + tolerance / 2,
+        "outside-tolerance": expected + tolerance * 2,
+    }[change]
+    native = ezdxf.readfile(built.output_path)
+    native.entitydb[built.handle_by_primitive_id["source"]].dxf.set(field, actual)
+    native.saveas(built.output_path)
+    reopened = ezdxf.readfile(built.output_path)
+    saved = reopened.entitydb[built.handle_by_primitive_id["source"]].dxf.get(field)
+    if change in ("nan", "infinity"):
+        assert not math.isfinite(saved), "The saved DXF must actually retain nonfinite data"
+    else:
+        assert saved == actual
+    before = (tmp_path / "candidate.dxf").read_bytes()
+    report = review_dxf(built)
+    assert report.checked_count == 1
+    assert report.passed == want_pass
+    assert bool(report.mismatches) == (not want_pass)
+    assert (tmp_path / "candidate.dxf").read_bytes() == before
 
 
 def _beam_semantic_doc() -> SemanticIRDocument:
@@ -110,6 +150,38 @@ def test_review_passes_on_correctly_built_dxf():
         assert review_result.checked_count == 2
         assert review_result.mismatches == []
     print("OK   test_review_passes_on_correctly_built_dxf")
+
+
+@pytest.mark.parametrize("kind", ["line", "circle", "arc", "text"])
+@pytest.mark.parametrize("elevation_mm", [0.0, 2.0, float("nan")], ids=["source-plane", "displaced", "unreadable-z"])
+def test_source_written_2d_primitive_requires_native_zero_elevation(tmp_path, kind, elevation_mm):
+    primitives = {
+        "line": _line("line", 0, 0, 80, 0),
+        "circle": _circle("circle", 0, 0, 2),
+        "arc": Primitive(
+            id="arc", type="arc", source="geometry_external_ai", confidence=1.0,
+            trace=Trace((0, 0, 10, 10)), geometry=ArcGeometry(Point2D(0, 0), 2, 0, 90),
+        ),
+        "text": Primitive(
+            id="text", type="text", source="text_tesseract", confidence=1.0,
+            trace=Trace((0, 0, 10, 10)),
+            text_data=TextData("source label", Point2D(0, 0), 0, 3.5),
+        ),
+    }
+    built = build_dxf(_doc(primitives[kind]), str(tmp_path / "candidate.dxf"))
+    assert review_dxf(built).passed
+    native = ezdxf.readfile(built.output_path)
+    entity = native.entitydb[built.handle_by_primitive_id[kind]]
+    names = ("start", "end") if kind == "line" else (("insert",) if kind == "text" else ("center",))
+    for name in names:
+        point = entity.dxf.get(name)
+        entity.dxf.set(name, (point.x, point.y, elevation_mm))
+    native.saveas(built.output_path)
+    before = (tmp_path / "candidate.dxf").read_bytes()
+    observed = review_dxf(built)
+    assert observed.passed == (elevation_mm == 0)
+    assert bool(observed.mismatches) == (elevation_mm != 0)
+    assert (tmp_path / "candidate.dxf").read_bytes() == before
 
 
 def test_review_flags_handle_not_found_after_tamper():

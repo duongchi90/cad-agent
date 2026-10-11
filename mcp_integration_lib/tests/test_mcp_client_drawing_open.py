@@ -18,6 +18,107 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.addCleanup(self._ipc_tmp.cleanup)
         self._ipc_dir = self._ipc_tmp.name
 
+    def test_claim_bound_open_waits_for_exact_document_ack_before_loader(self):
+        loaded = []
+        probes = []
+        target = "C:/work/slow-open.dwg"
+
+        def raw(command):
+            marker = '(setq mcp-ready-file (open "'
+            if marker in command:
+                probes.append(command)
+                # The first expression is dropped by the opening editor, as in
+                # the actual cold DWG log. A later readonly probe executes.
+                if len(probes) == 1:
+                    return
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                token = path.stem.removeprefix("autocad_mcp_document_ready_")
+                path.write_text(token + "\n" + target + "\nREADY\n", encoding="utf-8")
+            elif command.startswith("(progn (setq *cad-agent-file-ipc-root*"):
+                loaded.append(command)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            timeout_s=0.05, poll_interval_s=0.001, document_settle_s=0,
+            legacy_fixture_mode=False,
+        )
+
+        def dispatch(command, params):
+            if command == "ping" and len(probes) < 2:
+                raise MCPTimeoutError("dispatcher loader arrived before editor ready")
+            return {"DWGPREFIX":"C:/work/", "DWGNAME":"slow-open.dwg"}
+
+        client._dispatch = dispatch
+        self.assertEqual({"path":target}, client.drawing_open(target))
+        self.assertEqual(1, len(loaded))
+        self.assertEqual(2, len(probes))
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_claim_bound_open_without_exact_document_ack_never_loads(self):
+        loaded = []
+
+        def raw(command):
+            marker = '(setq mcp-ready-file (open "'
+            if marker in command:
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                token = path.stem.removeprefix("autocad_mcp_document_ready_")
+                path.write_text(token + "\nC:/work/protected-source.dwg\nREADY\n", encoding="utf-8")
+            elif command.startswith("(progn (setq *cad-agent-file-ipc-root*"):
+                loaded.append(command)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            timeout_s=0.02, poll_interval_s=0.001, document_settle_s=0,
+            legacy_fixture_mode=False,
+        )
+        client._dispatch = lambda command, params: {
+            "DWGPREFIX":"C:/work/", "DWGNAME":"wanted.dwg",
+        }
+        with self.assertRaisesRegex(MCPToolError, "DRAWING_OPEN_READINESS_TARGET_MISMATCH"):
+            client.drawing_open("C:/work/wanted.dwg")
+        self.assertEqual([], loaded)
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_claim_bound_open_rejects_missing_incomplete_or_foreign_ack(self):
+        for mode in ("missing", "incomplete", "foreign"):
+            with self.subTest(mode=mode):
+                loaded = []
+                opened = []
+                probes = []
+
+                def raw(command):
+                    if "vla-open" in command:
+                        opened.append(command)
+                    marker = '(setq mcp-ready-file (open "'
+                    if marker in command:
+                        probes.append(command)
+                        path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                        token = path.stem.removeprefix("autocad_mcp_document_ready_")
+                        if mode != "missing":
+                            text = token + "\nC:/work/wanted.dwg\n"
+                            if mode == "foreign":
+                                text = "foreign-nonce\nC:/work/wanted.dwg\nREADY\n"
+                            path.write_text(text, encoding="utf-8")
+                    elif command.startswith("(progn (setq *cad-agent-file-ipc-root*"):
+                        loaded.append(command)
+
+                client = FileIPCLiveMCPClient(
+                    ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+                    bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+                    timeout_s=0.03, poll_interval_s=0.001, document_settle_s=0,
+                    legacy_fixture_mode=False,
+                )
+                client._dispatch = lambda *_args: self.fail("No dispatch before readiness")
+                error = MCPToolError if mode == "foreign" else MCPTimeoutError
+                with self.assertRaisesRegex(error, "DRAWING_OPEN_READINESS"):
+                    client.drawing_open("C:/work/wanted.dwg")
+                self.assertEqual([], loaded)
+                self.assertEqual(1, len(opened))
+                self.assertLessEqual(len(probes), 3)
+                self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
     def _client(self, raw_commands, command_sequences):
         return FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,

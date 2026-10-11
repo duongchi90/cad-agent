@@ -39,7 +39,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from .builder import BuildResult
+from .builder import BuildResult, validate_contour_joins
 
 _DEFAULT_TOLERANCE_MM = 1e-6
 _ROTATION_TOLERANCE_DEG = 1e-4
@@ -78,6 +78,8 @@ class ReviewResult:
     dimension_checked_count: int = 0
     dimension_mismatches: List[str] = field(default_factory=list)
     dimension_measurement_by_id: Dict[str, float] = field(default_factory=dict)
+    contour_checked_count: int = 0
+    contour_mismatches: List[str] = field(default_factory=list)
 
     def format_report(self) -> str:
         """Report lỗi có cấu trúc, gom theo part_id — dùng khi debug thủ
@@ -97,6 +99,9 @@ class ReviewResult:
             f"{len(self.dimension_mismatches)} mismatch"
         )
         for mismatch in self.dimension_mismatches:
+            lines.append(f"    - {mismatch}")
+        lines.append(f"  contour joins: {self.contour_checked_count} checked, {len(self.contour_mismatches)} mismatch")
+        for mismatch in self.contour_mismatches:
             lines.append(f"    - {mismatch}")
         lines.append(
             f"  components (INSERT): {self.component_checked_count} checked, "
@@ -119,7 +124,99 @@ def _dist(a, b) -> float:
 
 
 def _dist3(a, b) -> float:
-    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+    a = (*a, 0.0) if len(a) == 2 else a
+    b = (*b, 0.0) if len(b) == 2 else b
+    distance = math.dist(a, b)
+    return distance if math.isfinite(distance) else math.inf
+
+
+def _scalar_matches(actual: float, expected: float, tolerance: float) -> bool:
+    """Require finite scalars without changing existing absolute tolerances."""
+    return (
+        math.isfinite(actual) and math.isfinite(expected)
+        and abs(actual - expected) <= tolerance
+    )
+
+
+def linear_dimension_matches_feature(dimension: dict, feature: dict) -> bool:
+    """Prove WCS extension origins match a declared direct ModelSpace LINE.
+
+    This checks measured-feature placement, not a native DIMASSOC dependency.
+    Missing readback cannot be filled from expected/build geometry.
+    """
+    def point(value):
+        if not isinstance(value, (tuple, list)) or len(value) not in (2, 3):
+            raise ValueError("missing native point")
+        if any(type(item) not in (int, float) or not math.isfinite(item) for item in value):
+            raise ValueError("invalid native point")
+        return tuple(value) if len(value) == 3 else (*value, 0.0)
+
+    if feature.get("type") != "LINE" or feature.get("layout") != "Model":
+        return False
+    dimtype = dimension.get("dimtype")
+    # Linear/aligned types allow only block-reference (32) and moved-text (128)
+    # flags. Ordinate-only bit64 or unknown bits cannot prove this binding.
+    if (dimension.get("layout") != "Model" or type(dimtype) is not int
+            or dimtype not in (0, 1, 32, 33, 128, 129, 160, 161)):
+        return False
+    try:
+        origins = [point(dimension.get(name)) for name in ("defpoint2", "defpoint3")]
+        endpoints = [point(feature.get(name)) for name in ("start", "end")]
+        return any(all(math.dist(a, b) <= _DEFAULT_TOLERANCE_MM for a, b in zip(origins, ordered))
+                   for ordered in (endpoints, list(reversed(endpoints))))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def contour_endpoints(geometry: dict) -> dict:
+    """Resolve LINE/planar ARC endpoints using the existing ezdxf geometry API.
+
+    Snapshots must describe the actual native entity, never written expectations.
+    This is endpoint incidence only; it does not assert tangency or 3D fillets.
+    """
+    from ezdxf.math import ConstructionArc
+
+    def point(value):
+        if not isinstance(value, (tuple, list)) or len(value) not in (2, 3):
+            raise ValueError("unavailable contour point")
+        if any(type(item) not in (int, float) or not math.isfinite(item) for item in value):
+            raise ValueError("invalid contour point")
+        return tuple(value) if len(value) == 3 else (*value, 0.0)
+
+    if geometry.get("type") == "line":
+        return {"start": point(geometry.get("start")), "end": point(geometry.get("end"))}
+    if geometry.get("type") == "arc":
+        center = point(geometry.get("center"))
+        extrusion = point(geometry.get("extrusion"))
+        if extrusion != (0.0, 0.0, 1.0):
+            raise ValueError("unsupported contour ARC plane")
+        values = [geometry.get("radius"), geometry.get("start_angle_deg", geometry.get("start_angle")),
+                  geometry.get("end_angle_deg", geometry.get("end_angle"))]
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in values) or values[0] <= 0:
+            raise ValueError("invalid contour ARC geometry")
+        arc = ConstructionArc(center[:2], *values)
+        return {"start": (*arc.start_point, center[2]), "end": (*arc.end_point, center[2])}
+    raise ValueError("unsupported contour entity")
+
+
+def review_contour_joins(joins: dict, endpoints_by_primitive_id: dict) -> tuple[int, List[str]]:
+    """Check only declared endpoint pairs; unreadable obligations fail closed."""
+    try:
+        validate_contour_joins(joins)
+    except ValueError as error:
+        return 0, [f"contour: {error}"]
+    mismatches = []
+    for join_id, join in joins.items():
+        try:
+            points = [endpoints_by_primitive_id[side["primitive_id"]][side["endpoint"]]
+                      for side in (join["first"], join["second"])]
+            gap = math.dist(*points)
+        except (KeyError, TypeError, ValueError):
+            mismatches.append(f"{join_id}: contour endpoint readback unavailable")
+            continue
+        if not math.isfinite(gap) or gap > _DEFAULT_TOLERANCE_MM:
+            mismatches.append(f"{join_id}: open contour join, endpoint gap={gap:.12g} mm")
+    return len(joins), mismatches
 
 
 def resolve_component_insert(db, modelspace, handle, part_id, expected_block_name=None):
@@ -176,6 +273,30 @@ def review_dxf(
 
     mismatches: List[str] = []
     checked = 0
+    contour_endpoints_by_id = {}
+    if build_result.contour_join_by_id:
+        for pid, handle in build_result.handle_by_primitive_id.items():
+            entity = db.get(handle)
+            if entity is None or entity.dxf.owner != doc.modelspace().block_record_handle:
+                continue
+            try:
+                if entity.dxftype() == "LINE":
+                    geometry = {"type": "line", "start": tuple(entity.dxf.start),
+                                "end": tuple(entity.dxf.end)}
+                elif entity.dxftype() == "ARC":
+                    geometry = {
+                        "type": "arc", "center": tuple(entity.dxf.center),
+                        "radius": entity.dxf.radius, "start_angle_deg": entity.dxf.start_angle,
+                        "end_angle_deg": entity.dxf.end_angle, "extrusion": tuple(entity.dxf.extrusion),
+                    }
+                else:
+                    continue
+                contour_endpoints_by_id[pid] = contour_endpoints(geometry)
+            except (ValueError, TypeError, OverflowError):
+                pass  # Unreadable/unsupported geometry cannot prove the join.
+    contour_checked, contour_mismatches = review_contour_joins(
+        build_result.contour_join_by_id, contour_endpoints_by_id,
+    )
 
     if strict_primitive_inventory:
         authorized_handles = (
@@ -221,31 +342,31 @@ def review_dxf(
             )
 
         if written["type"] == "line":
-            actual_start = (entity.dxf.start.x, entity.dxf.start.y)
-            actual_end = (entity.dxf.end.x, entity.dxf.end.y)
-            if _dist(actual_start, written["start"]) > tolerance_mm:
+            actual_start = tuple(entity.dxf.start)
+            actual_end = tuple(entity.dxf.end)
+            if _dist3(actual_start, written["start"]) > tolerance_mm:
                 mismatches.append(f"{pid}: điểm đầu LINE lệch — ghi {written['start']}, đọc lại {actual_start}")
-            if _dist(actual_end, written["end"]) > tolerance_mm:
+            if _dist3(actual_end, written["end"]) > tolerance_mm:
                 mismatches.append(f"{pid}: điểm cuối LINE lệch — ghi {written['end']}, đọc lại {actual_end}")
 
         elif written["type"] == "circle":
-            actual_center = (entity.dxf.center.x, entity.dxf.center.y)
-            if _dist(actual_center, written["center"]) > tolerance_mm:
+            actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
+            if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm CIRCLE lệch — ghi {written['center']}, đọc lại {actual_center}")
-            if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
+            if not _scalar_matches(entity.dxf.radius, written["radius"], tolerance_mm):
                 mismatches.append(
                     f"{pid}: bán kính CIRCLE lệch — ghi {written['radius']}, đọc lại {entity.dxf.radius}"
                 )
 
         elif written["type"] == "arc":
-            actual_center = (entity.dxf.center.x, entity.dxf.center.y)
-            if _dist(actual_center, written["center"]) > tolerance_mm:
+            actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
+            if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm ARC lệch — ghi {written['center']}, đọc lại {actual_center}")
-            if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
+            if not _scalar_matches(entity.dxf.radius, written["radius"], tolerance_mm):
                 mismatches.append(f"{pid}: bán kính ARC lệch")
-            if abs(entity.dxf.start_angle - written["start_angle_deg"]) > 1e-4:
+            if not _scalar_matches(entity.dxf.start_angle, written["start_angle_deg"], 1e-4):
                 mismatches.append(f"{pid}: góc bắt đầu ARC lệch")
-            if abs(entity.dxf.end_angle - written["end_angle_deg"]) > 1e-4:
+            if not _scalar_matches(entity.dxf.end_angle, written["end_angle_deg"], 1e-4):
                 mismatches.append(f"{pid}: góc kết thúc ARC lệch")
 
         elif written["type"] == "text":
@@ -253,8 +374,8 @@ def review_dxf(
                 mismatches.append(
                     f"{pid}: nội dung TEXT lệch — ghi {written['content']!r}, đọc lại {entity.dxf.text!r}"
                 )
-            actual_insert = (entity.dxf.insert.x, entity.dxf.insert.y)
-            if _dist(actual_insert, written["insert"]) > tolerance_mm:
+            actual_insert = tuple(entity.ocs().to_wcs(entity.dxf.insert))
+            if _dist3(actual_insert, written["insert"]) > tolerance_mm:
                 mismatches.append(f"{pid}: vị trí TEXT lệch")
 
     # thiếu-hụt ngược: mọi primitive Builder đã coi là skip (không vẽ được)
@@ -316,6 +437,26 @@ def review_dxf(
                 f"{validation_id}: approved measurement {approved}, "
                 f"actual {measurement}, tolerance {tolerance_mm}"
             )
+        feature_id = expected.get("geometry_primitive_id")
+        if feature_id is not None:
+            feature_handle = build_result.handle_by_primitive_id.get(feature_id)
+            feature = db.get(feature_handle) if feature_handle else None
+            feature_geometry = {}
+            if feature is not None and feature.dxftype() == "LINE":
+                feature_geometry = {
+                    "type": "LINE", "layout": "Model" if feature in doc.modelspace() else None,
+                    "start": tuple(feature.dxf.start), "end": tuple(feature.dxf.end),
+                }
+            definition = {
+                "dimtype": entity.dxf.dimtype,
+                "layout": "Model" if entity in doc.modelspace() else None,
+                "defpoint2": tuple(entity.dxf.get("defpoint2")) if entity.dxf.hasattr("defpoint2") else None,
+                "defpoint3": tuple(entity.dxf.get("defpoint3")) if entity.dxf.hasattr("defpoint3") else None,
+            }
+            if not linear_dimension_matches_feature(definition, feature_geometry):
+                dimension_mismatches.append(
+                    f"{validation_id}: DIMENSION feature binding unavailable or differs from LINE {feature_id!r}"
+                )
 
     for part_id, handle in build_result.component_handle_by_part_id.items():
         written = build_result.written_component_by_part_id.get(part_id)
@@ -433,6 +574,7 @@ def review_dxf(
             len(mismatches) == 0
             and len(component_mismatches) == 0
             and len(dimension_mismatches) == 0
+            and len(contour_mismatches) == 0
         ),
         checked_count=checked,
         mismatches=mismatches,
@@ -440,5 +582,7 @@ def review_dxf(
         component_mismatches=component_mismatches,
         dimension_checked_count=dimension_checked,
         dimension_mismatches=dimension_mismatches,
+        contour_checked_count=contour_checked,
+        contour_mismatches=contour_mismatches,
         dimension_measurement_by_id=dimension_measurement_by_id,
     )
