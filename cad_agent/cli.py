@@ -970,7 +970,9 @@ def _live_client(hwnd: int, dispatcher: Path, timeout_s: float = 10.0):
         raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
         bootstrap_lisp_path=str(dispatcher),
         timeout_s=timeout_s,
-        command_trigger=make_windows_command_trigger(hwnd),
+        command_trigger=make_windows_command_trigger(
+            hwnd, require_foreground=True
+        ),
         start_tab_no_document_probe=_make_start_tab_no_document_probe(hwnd),
     )
 

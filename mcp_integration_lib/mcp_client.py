@@ -810,7 +810,9 @@ class FileIPCLiveMCPClient:
         return self._dispatch("create-text", {k: v for k, v in {"x": x, "y": y, "text": text, "height": height, "rotation": rotation, "layer": layer}.items() if v is not None})
 
 
-def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
+def _make_windows_text_trigger(
+    hwnd: int, *, require_foreground: bool = False
+) -> Callable[[str], None]:
     """Return a bounded, exact-owner trigger for AutoCAD's command boundary."""
     def trigger(text: str) -> None:
         user32 = ctypes.windll.user32
@@ -897,6 +899,8 @@ def _make_windows_text_trigger(hwnd: int) -> Callable[[str], None]:
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise MCPToolError("WINDOW_IDENTITY_CHANGED")
         if get_foreground_window() != hwnd:
+            if require_foreground:
+                raise MCPToolError("WINDOW_FOREGROUND_INVALID")
             show_window(hwnd, 9)
             set_foreground_window(hwnd)
         if get_foreground_window() != hwnd:
@@ -919,13 +923,16 @@ def make_windows_lisp_trigger(hwnd: int) -> Callable[[str], None]:
     return _make_windows_text_trigger(hwnd)
 
 
-def make_windows_command_trigger(hwnd: int) -> Callable[[str], None]:
+def make_windows_command_trigger(
+    hwnd: int, *, require_foreground: bool = False
+) -> Callable[[str], None]:
     """Return a trigger that types an AutoCAD command sequence.
 
     Use ``\r`` between command inputs, for example ``"_.CLOSE\r_N"``.
-    The final Enter is appended by the trigger.
+    The final Enter is appended by the trigger. ``require_foreground`` refuses
+    delivery instead of activating the frame when focus has changed.
     """
-    return _make_windows_text_trigger(hwnd)
+    return _make_windows_text_trigger(hwnd, require_foreground=require_foreground)
 
 
 def make_windows_dispatch_trigger(hwnd: int) -> Callable[[], None]:

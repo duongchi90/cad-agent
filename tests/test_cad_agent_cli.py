@@ -170,13 +170,20 @@ def test_live_client_wires_guarded_start_tab_open_fallback(monkeypatch, tmp_path
     command_trigger = object()
     no_document_probe = object()
     monkeypatch.setattr(mcp_client, "FileIPCLiveMCPClient", _Client)
-    monkeypatch.setattr(mcp_client, "make_windows_command_trigger", lambda hwnd: command_trigger, raising=False)
+    trigger_options = {}
+    monkeypatch.setattr(
+        mcp_client,
+        "make_windows_command_trigger",
+        lambda hwnd, **kwargs: trigger_options.update(kwargs) or command_trigger,
+        raising=False,
+    )
     monkeypatch.setattr("cad_agent.cli._make_start_tab_no_document_probe", lambda hwnd: no_document_probe, raising=False)
 
     _live_client(42, dispatcher)
 
     assert captured["command_trigger"] is command_trigger
     assert captured["start_tab_no_document_probe"] is no_document_probe
+    assert trigger_options == {"require_foreground": True}
 
 
 @pytest.mark.parametrize("ipc_dir", ["", "   "])
