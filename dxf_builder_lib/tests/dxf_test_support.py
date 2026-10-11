@@ -211,3 +211,37 @@ def build_fillet_dimension_fixture(tmp_path, radius, coupled, wrong_dimension):
         native.saveas(built.output_path)
         native = ezdxf.readfile(built.output_path)
     return built, _dimension_native_records_for_test(native, built, dimension_handle)
+
+
+def build_contour_plane_fixture(tmp_path, extrusion, invalid=None):
+    """Saved ARC/LINE joins are incident in WCS even on an unsupported plane."""
+    import ezdxf
+
+    built = build_fillet_join_fixture(tmp_path, 1.0, False)
+    native = ezdxf.readfile(built.output_path)
+    arc = native.entitydb[built.handle_by_primitive_id["fillet"]]
+    arc.dxf.extrusion = extrusion
+    top = native.entitydb[built.handle_by_primitive_id["top"]]
+    side = native.entitydb[built.handle_by_primitive_id["side"]]
+    top.dxf.end, side.dxf.start = arc.start_point, arc.end_point
+    built.written_geometry_by_primitive_id["top"]["end"] = tuple(top.dxf.end)
+    built.written_geometry_by_primitive_id["side"]["start"] = tuple(side.dxf.start)
+    if invalid == "center":
+        arc.dxf.center = (float("nan"), 1.0, 0.0)
+    elif invalid == "radius":
+        arc.dxf.radius = float("nan")
+    native.saveas(built.output_path)
+    native = ezdxf.readfile(built.output_path)
+    records = []
+    for handle in built.handle_by_primitive_id.values():
+        entity = native.entitydb[handle]
+        if entity.dxftype() == "LINE":
+            geometry = {"start": tuple(entity.dxf.start), "end": tuple(entity.dxf.end), "layout": "Model"}
+        else:
+            geometry = {
+                "center": tuple(entity.dxf.center), "radius": entity.dxf.radius,
+                "start_angle_deg": entity.dxf.start_angle, "end_angle_deg": entity.dxf.end_angle,
+                "extrusion": tuple(entity.dxf.extrusion), "layout": "Model",
+            }
+        records.append((handle, entity.dxftype(), entity.dxf.layer, geometry))
+    return built, records

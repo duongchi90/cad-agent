@@ -266,11 +266,21 @@ def review_dxf(
             entity = db.get(handle)
             if entity is None or entity.dxf.owner != doc.modelspace().block_record_handle:
                 continue
-            if entity.dxftype() == "LINE":
-                contour_endpoints_by_id[pid] = {"start": tuple(entity.dxf.start), "end": tuple(entity.dxf.end)}
-            elif entity.dxftype() == "ARC":
-                # Native WCS endpoints also preserve elevation/extrusion.
-                contour_endpoints_by_id[pid] = {"start": tuple(entity.start_point), "end": tuple(entity.end_point)}
+            try:
+                if entity.dxftype() == "LINE":
+                    geometry = {"type": "line", "start": tuple(entity.dxf.start),
+                                "end": tuple(entity.dxf.end)}
+                elif entity.dxftype() == "ARC":
+                    geometry = {
+                        "type": "arc", "center": tuple(entity.dxf.center),
+                        "radius": entity.dxf.radius, "start_angle_deg": entity.dxf.start_angle,
+                        "end_angle_deg": entity.dxf.end_angle, "extrusion": tuple(entity.dxf.extrusion),
+                    }
+                else:
+                    continue
+                contour_endpoints_by_id[pid] = contour_endpoints(geometry)
+            except (ValueError, TypeError, OverflowError):
+                pass  # Unreadable/unsupported geometry cannot prove the join.
     contour_checked, contour_mismatches = review_contour_joins(
         build_result.contour_join_by_id, contour_endpoints_by_id,
     )

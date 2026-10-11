@@ -77,6 +77,26 @@ def test_dimension_feature_needs_actual_supported_readback(tmp_path, change):
     assert any("feature binding" in item for item in result.dimension_feature_mismatches)
 
 
+@pytest.mark.parametrize("dimtype,want_pass", [
+    (0, True), (1, True), (32, True), (33, True),
+    (34, False), (35, False), (36, False), (37, False), (38, False),
+    (-1, False), (True, False),
+], ids=["rotated", "aligned", "rotated-block-bit", "aligned-block-bit",
+        "angular", "diameter", "radius", "angular-three-point", "ordinate",
+        "invalid-negative", "invalid-boolean"])
+def test_measured_feature_binding_rejects_other_native_dimension_types(tmp_path, dimtype, want_pass):
+    # External native transport only is replayed; the real reviewer decides.
+    built, records, _ = build_native_dimension_consumer_fixture(tmp_path, 80, 80, "")
+    client = FakeMCPClient(fail_entity_get=False)
+    for handle, entity_type, layer, geometry in records:
+        if entity_type == "DIMENSION":
+            geometry["dimtype"] = dimtype
+        client.preload_entity(handle, entity_type, layer, geometry)
+    result = review_dxf_live(built, client)
+    assert result.passed == want_pass
+    assert bool(result.dimension_feature_mismatches) == (not want_pass)
+
+
 def test_legacy_unbound_dimension_does_not_acquire_feature_obligation(tmp_path):
     built, records, _ = build_native_dimension_consumer_fixture(tmp_path, 80, 80, "")
     for expected in built.written_dimension_by_cross_validation_id.values():

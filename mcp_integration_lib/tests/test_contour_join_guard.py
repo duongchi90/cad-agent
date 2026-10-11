@@ -8,7 +8,9 @@ import pytest
 
 from cad_agent import cli
 from cad_agent.live import LiveSafetyError, load_build_evidence, repair_live, write_build_evidence
-from dxf_builder_lib.tests.dxf_test_support import build_fillet_join_fixture
+from dxf_builder_lib.tests.dxf_test_support import (
+    build_contour_plane_fixture, build_fillet_join_fixture,
+)
 from dxf_builder_lib.reviewer import review_dxf
 from mcp_integration_lib.mcp_client import FakeMCPClient, MCPToolError
 from mcp_integration_lib.reviewer2 import review_dxf_live
@@ -108,7 +110,8 @@ def test_structural_only_review_does_not_discharge_contour_obligations(tmp_path)
     assert not review_dxf_live(built, client, attempt_geometry=False).passed
 
 
-def test_open_plan_is_not_repaired_by_recreating_unchanged_entities(tmp_path):
+@pytest.mark.parametrize("primitive_mismatch", [False, True], ids=["contour-only", "mixed-failures"])
+def test_open_plan_is_not_repaired_by_recreating_unchanged_entities(tmp_path, primitive_mismatch):
     built = build_fillet_join_fixture(tmp_path, 1.1, False)
     # Deliberately collide the obligation ID with a primitive ID. A topology
     # verdict must not become a primitive erase/recreate instruction.
@@ -119,13 +122,42 @@ def test_open_plan_is_not_repaired_by_recreating_unchanged_entities(tmp_path):
     for pid, handle in built.handle_by_primitive_id.items():
         geometry = dict(built.written_geometry_by_primitive_id[pid], extrusion=(0.0, 0.0, 1.0))
         geometry = dict(geometry, layout=geometry.get("layout", "Model"))
+        if primitive_mismatch and pid == "side":
+            geometry["end"] = (0.0, -3.0, 0.0)
         client.preload_entity(handle, geometry["type"].upper(), built.layer_by_primitive_id[pid], geometry)
+    observed = review_dxf_live(built, client)
+    assert observed.contour_mismatches
+    assert bool(observed.mismatches) == primitive_mismatch
     before = Path(built.output_path).read_bytes(), evidence.read_bytes(), client.entity_list()
     backup = tmp_path / "backup"
     with pytest.raises(LiveSafetyError, match="CONTOUR_JOIN_REPAIR_UNSUPPORTED"):
         repair_live(built, client, Path(built.output_path), evidence, backup, "synthetic-approval")
     assert (Path(built.output_path).read_bytes(), evidence.read_bytes(), client.entity_list()) == before
     assert not backup.exists()
+
+
+@pytest.mark.parametrize("extrusion,invalid,want_pass", [
+    ((0.0, 0.0, 1.0), None, True),
+    ((0.0, 0.0, -1.0), None, False),
+    ((0.0, 1.0, 0.0), None, False),
+    ((0.0, 0.0, 1.0), "center", False),
+    ((0.0, 0.0, 1.0), "radius", False),
+], ids=["default-plane", "reversed-plane", "tilted-plane", "nonfinite-center", "nonfinite-radius"])
+def test_offline_and_live_contour_arc_plane_eligibility_agree(tmp_path, extrusion, invalid, want_pass):
+    # Physically incident WCS joins must not discharge an unsupported plane.
+    built, records = build_contour_plane_fixture(tmp_path, extrusion, invalid)
+    candidate = Path(built.output_path)
+    before = candidate.read_bytes()
+    headless = review_dxf(built)
+    client = FakeMCPClient(fail_entity_get=False)
+    for handle, entity_type, layer, geometry in records:
+        client.preload_entity(handle, entity_type, layer, geometry)
+    live = review_dxf_live(built, client)
+    assert live.passed == want_pass
+    assert headless.passed == want_pass
+    assert bool(headless.contour_mismatches) == (not want_pass)
+    assert bool(live.contour_mismatches) == (not want_pass)
+    assert candidate.read_bytes() == before
 
 
 def test_legacy_review_does_not_infer_contour_connections(tmp_path):

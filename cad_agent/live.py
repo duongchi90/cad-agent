@@ -586,10 +586,10 @@ def repair_live(
     }
     if before.passed:
         return report
-    if before.contour_mismatches and not before.mismatches:
+    if before.contour_mismatches:
         raise LiveSafetyError(
-            "CONTOUR_JOIN_REPAIR_UNSUPPORTED: per-entity geometry matches the plan "
-            "but declared joins do not; an explicit coupled feature plan is required."
+            "CONTOUR_JOIN_REPAIR_UNSUPPORTED: declared joins are not proven; "
+            "an explicit coupled feature plan is required."
         )
 
     if before.dimension_feature_mismatches:
