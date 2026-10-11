@@ -428,6 +428,7 @@ class FileIPCLiveMCPClient:
             expected_path = _normalized_autocad_path(path)
             active_path = ""
             for attempt in range(2):
+                command_open_sent = False
                 try:
                     self._raw_lisp_trigger(
                         '(progn (vl-load-com) '
@@ -452,9 +453,22 @@ class FileIPCLiveMCPClient:
                     ):
                         raise
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
+                    command_open_sent = True
                 time.sleep(self._document_settle_s)
                 if not self._legacy_fixture_mode:
-                    self._wait_for_active_document(expected_path)
+                    try:
+                        self._wait_for_active_document(expected_path)
+                    except MCPTimeoutError as exc:
+                        if (
+                            self._command_trigger is None
+                            or attempt != 0
+                            or command_open_sent
+                            or not self._start_tab_no_document_is_proven(exc)
+                        ):
+                            raise
+                        self._command_trigger('_.OPEN\r"' + normalized_path + '"')
+                        time.sleep(self._document_settle_s)
+                        self._wait_for_active_document(expected_path)
                 self._active_drawing_path = expected_path
                 self._assert_root_unchanged()
                 root_literal = _autolisp_string_literal(str(self._dir).replace("\\", "/"))
