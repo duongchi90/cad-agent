@@ -377,6 +377,14 @@ def review_dxf(
             actual_insert = tuple(entity.ocs().to_wcs(entity.dxf.insert))
             if _dist3(actual_insert, written["insert"]) > tolerance_mm:
                 mismatches.append(f"{pid}: vị trí TEXT lệch")
+            for field_name, actual_value, field_tolerance in (
+                ("height", entity.dxf.height, tolerance_mm),
+                ("rotation_deg", entity.dxf.rotation, _ROTATION_TOLERANCE_DEG),
+            ):
+                if field_name in written and not _scalar_matches(
+                    actual_value, written[field_name], field_tolerance
+                ):
+                    mismatches.append(f"{pid}: TEXT {field_name} lệch so với geometry đã build")
 
     # thiếu-hụt ngược: mọi primitive Builder đã coi là skip (không vẽ được)
     # không thuộc trách nhiệm Reviewer #1 (đó là lỗi dữ liệu Phase 1/2 gốc,
