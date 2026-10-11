@@ -136,3 +136,60 @@ universally reliable cold startup. Native gate acceptance and merge clearance
 remain pending independent review of these explicitly bounded observations.
 Source V13 remains sole held dirty document,DBMOD29; its disk hash and all
 disposable DXF inputs remain unchanged. No source/gold/frozen drawing mutation.
+
+## Joint elevation headless false-PASS remediation
+
+Status: executing; published head remains8cb4c09 during independent review.
+Approval: Human existing-owner causal hardening scope,2026-10-11.
+Current base remains133294b7f5ea8c4f768a08a9605b3897fab8a784.
+Existing Security chat feedback identifies that joint Z translation preserves
+LINE/DIM and contour incidence while headless source geometry checks ignoreZ.
+The finding is technical input, not a durable independent verdict. Publication
+requested from the same Security role; executor confirmed it separately:
+[causal checkpoint](https://github.com/duongchi90/cad-agent/pull/492#issuecomment-6107554499).
+
+Actual saved-DXF paired reviewer regression: twoZ2mm cases falsely pass
+headless, while native boundary replay rejects the primitive displacement;
+twoZ0 controls pass both. All DIM/contour relation checks remain valid, so this
+proves the source-written primitive comparison boundary, not a relation defect.
+Reuse existing DXF test-support, headless reviewer and dimension integration
+tests. Smallest repair compares full native LINE endpoints with source-written
+points using existing3D distance; generated2D points implyZ0. Existing INSERT
+3D comparison is mathematically unchanged. No native transport/readback logic,
+source recognition, schema, geometry engine or subsystem changes.
+
+Focused command: python -m pytest dxf_builder_lib/tests
+mcp_integration_lib/tests/test_dimension_feature_binding.py
+mcp_integration_lib/tests/test_contour_join_guard.py
+tests/test_reuse_architecture_boundaries.py -q
+-m "not causal_red and not autocad_mechanical and not real_data".
+Result:141PASS; Ruff F401 and diff whitespace checks PASS.
+Canonical verifier and publication pending; no repeated native run because the
+changed distance helper is used only by the headless reviewer. Existing bounded
+native evidence/failed epochs are preserved, not promoted to new clearance.
+
+Security posted matching exact-head CHANGES_REQUESTED directly:
+https://github.com/duongchi90/cad-agent/pull/492#issuecomment-6107544090.
+Its applicable ARC/other primitive request is confirmed, not assumed: standalone
+ARC,CIRCLE,TEXT all falsely pass a2mmZ displacement. Broader deterministic RED
+at the LINE-only intermediate head:7FAIL/5valid controlsPASS; failures cover
+three remaining displaced primitive types and four nonfinite nativeZ values.
+Existing headless owner now compares full LINE WCS endpoints, and ARC/CIRCLE
+centers/TEXT insertion transformed by ezdxf's existing OCS-to-WCS API. Generated
+2D written points implyZ0; nonfinite distance cannot satisfy tolerance.
+No source-approved geometry, dimensions, relation obligation or native reader
+is inferred or rewritten. Additional write-set:test_reviewer.py in existing
+DXF owner. Final focused/nearest selection:153PASS, Ruff and whitespacePASS.
+Final canonical verifier at clean implementation
+7fc15e489298592ee0fe9cf413ceeb96751ddde8: PASS,3508 Python tests plus77
+subtests,261.NET,76IPC plus52subtests. Offline JUnit3585 and IPC JUnit128 have
+zero failures/errors/skips. Command:scripts/verify.ps1 -PythonExe
+C:/cad-agent/.venv-py311/Scripts/python.exe with installed SDK process-local PATH.
+Known causal_red oracle failed as required; real_data2/native18 unavailable
+probes areSKIP, not runtime PASS. This distance function has only headless
+callers; native reviewer imports unchanged relation functions. Prior actual
+native/persistence observations remain bounded history and require independent
+current-head disposition; no new native/merge clearance. Only this record changes
+after verified implementation. The earlier LINE-only verifier4703419 passed but
+was not final clearance. Independent re-review of the newly published head is
+required before merge; previous8cb4c09 verdicts cannot transfer.

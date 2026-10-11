@@ -165,6 +165,21 @@ def build_dimension_feature_binding_fixture(tmp_path, origins=None, *, dimtype=N
     native = ezdxf.readfile(built.output_path)
     records = _dimension_native_records_for_test(native, built, dimension_handle)
     return built, records, native.entitydb[dimension_handle].get_measurement()
+
+
+def translate_fixture_elevation_for_test(built, elevation_mm):
+    """Translate native LINE/ARC/DIM together, retaining written source evidence."""
+    import ezdxf
+
+    native = ezdxf.readfile(built.output_path)
+    for entity in native.modelspace():
+        entity.translate(0, 0, elevation_mm)
+    native.saveas(built.output_path)
+    native = ezdxf.readfile(built.output_path)
+    dimension_handle = next(iter(built.dimension_handle_by_cross_validation_id.values()))
+    return _dimension_native_records_for_test(native, built, dimension_handle)
+
+
 def build_fillet_join_fixture(tmp_path, radius, coupled, offset=0.0, *, dimensions=False):
     """Literal quarter arc plus two edges; no production helper computes wants."""
     from dxf_builder_lib.builder import NativeLinearDimensionSpec, build_dxf

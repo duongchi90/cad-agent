@@ -124,7 +124,10 @@ def _dist(a, b) -> float:
 
 
 def _dist3(a, b) -> float:
-    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+    a = (*a, 0.0) if len(a) == 2 else a
+    b = (*b, 0.0) if len(b) == 2 else b
+    distance = math.dist(a, b)
+    return distance if math.isfinite(distance) else math.inf
 
 
 def linear_dimension_matches_feature(dimension: dict, feature: dict) -> bool:
@@ -331,16 +334,16 @@ def review_dxf(
             )
 
         if written["type"] == "line":
-            actual_start = (entity.dxf.start.x, entity.dxf.start.y)
-            actual_end = (entity.dxf.end.x, entity.dxf.end.y)
-            if _dist(actual_start, written["start"]) > tolerance_mm:
+            actual_start = tuple(entity.dxf.start)
+            actual_end = tuple(entity.dxf.end)
+            if _dist3(actual_start, written["start"]) > tolerance_mm:
                 mismatches.append(f"{pid}: điểm đầu LINE lệch — ghi {written['start']}, đọc lại {actual_start}")
-            if _dist(actual_end, written["end"]) > tolerance_mm:
+            if _dist3(actual_end, written["end"]) > tolerance_mm:
                 mismatches.append(f"{pid}: điểm cuối LINE lệch — ghi {written['end']}, đọc lại {actual_end}")
 
         elif written["type"] == "circle":
-            actual_center = (entity.dxf.center.x, entity.dxf.center.y)
-            if _dist(actual_center, written["center"]) > tolerance_mm:
+            actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
+            if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm CIRCLE lệch — ghi {written['center']}, đọc lại {actual_center}")
             if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
                 mismatches.append(
@@ -348,8 +351,8 @@ def review_dxf(
                 )
 
         elif written["type"] == "arc":
-            actual_center = (entity.dxf.center.x, entity.dxf.center.y)
-            if _dist(actual_center, written["center"]) > tolerance_mm:
+            actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
+            if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm ARC lệch — ghi {written['center']}, đọc lại {actual_center}")
             if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
                 mismatches.append(f"{pid}: bán kính ARC lệch")
@@ -363,8 +366,8 @@ def review_dxf(
                 mismatches.append(
                     f"{pid}: nội dung TEXT lệch — ghi {written['content']!r}, đọc lại {entity.dxf.text!r}"
                 )
-            actual_insert = (entity.dxf.insert.x, entity.dxf.insert.y)
-            if _dist(actual_insert, written["insert"]) > tolerance_mm:
+            actual_insert = tuple(entity.ocs().to_wcs(entity.dxf.insert))
+            if _dist3(actual_insert, written["insert"]) > tolerance_mm:
                 mismatches.append(f"{pid}: vị trí TEXT lệch")
 
     # thiếu-hụt ngược: mọi primitive Builder đã coi là skip (không vẽ được)

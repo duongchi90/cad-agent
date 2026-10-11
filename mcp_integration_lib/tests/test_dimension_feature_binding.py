@@ -12,9 +12,39 @@ from dxf_builder_lib.reviewer import review_dxf
 from dxf_builder_lib.tests.dxf_test_support import (
     build_dimension_feature_binding_fixture, build_fillet_dimension_fixture,
     build_native_dimension_consumer_fixture,
+    translate_fixture_elevation_for_test,
 )
 from mcp_integration_lib.mcp_client import FakeMCPClient
 from mcp_integration_lib.reviewer2 import review_dxf_live
+
+
+@pytest.mark.parametrize("kind", ["line-dimension", "fillet-dimension"])
+@pytest.mark.parametrize("elevation_mm", [0.0, 2.0])
+def test_joint_native_elevation_preserves_relations_but_must_match_source(
+    tmp_path, kind, elevation_mm,
+):
+    if kind == "line-dimension":
+        built, _, _ = build_dimension_feature_binding_fixture(tmp_path)
+    else:
+        built, _ = build_fillet_dimension_fixture(tmp_path, 1.0, False, False)
+    records = translate_fixture_elevation_for_test(built, elevation_mm)
+    client = FakeMCPClient(fail_entity_get=False)
+    for handle, entity_type, layer, geometry in records:
+        client.preload_entity(handle, entity_type, layer, geometry)
+    before = Path(built.output_path).read_bytes()
+    headless = review_dxf(built)
+    live = review_dxf_live(built, client)
+    # Incidence and measured-feature placement are still correct. The source
+    # geometry check independently owns rejection of joint Z displacement.
+    assert not headless.contour_mismatches
+    assert not headless.dimension_mismatches
+    assert not live.contour_mismatches
+    assert not live.dimension_feature_mismatches
+    assert live.passed == (elevation_mm == 0)
+    assert headless.passed == (elevation_mm == 0)
+    if elevation_mm:
+        assert headless.mismatches and live.mismatches
+    assert Path(built.output_path).read_bytes() == before
 
 
 @pytest.mark.parametrize("shift,reverse,want_exit", [
