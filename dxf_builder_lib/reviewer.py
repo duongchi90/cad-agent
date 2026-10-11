@@ -130,6 +130,14 @@ def _dist3(a, b) -> float:
     return distance if math.isfinite(distance) else math.inf
 
 
+def _scalar_matches(actual: float, expected: float, tolerance: float) -> bool:
+    """Require finite scalars without changing existing absolute tolerances."""
+    return (
+        math.isfinite(actual) and math.isfinite(expected)
+        and abs(actual - expected) <= tolerance
+    )
+
+
 def linear_dimension_matches_feature(dimension: dict, feature: dict) -> bool:
     """Prove WCS extension origins match a declared direct ModelSpace LINE.
 
@@ -345,7 +353,7 @@ def review_dxf(
             actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
             if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm CIRCLE lệch — ghi {written['center']}, đọc lại {actual_center}")
-            if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
+            if not _scalar_matches(entity.dxf.radius, written["radius"], tolerance_mm):
                 mismatches.append(
                     f"{pid}: bán kính CIRCLE lệch — ghi {written['radius']}, đọc lại {entity.dxf.radius}"
                 )
@@ -354,11 +362,11 @@ def review_dxf(
             actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
             if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm ARC lệch — ghi {written['center']}, đọc lại {actual_center}")
-            if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
+            if not _scalar_matches(entity.dxf.radius, written["radius"], tolerance_mm):
                 mismatches.append(f"{pid}: bán kính ARC lệch")
-            if abs(entity.dxf.start_angle - written["start_angle_deg"]) > 1e-4:
+            if not _scalar_matches(entity.dxf.start_angle, written["start_angle_deg"], 1e-4):
                 mismatches.append(f"{pid}: góc bắt đầu ARC lệch")
-            if abs(entity.dxf.end_angle - written["end_angle_deg"]) > 1e-4:
+            if not _scalar_matches(entity.dxf.end_angle, written["end_angle_deg"], 1e-4):
                 mismatches.append(f"{pid}: góc kết thúc ARC lệch")
 
         elif written["type"] == "text":

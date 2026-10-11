@@ -193,3 +193,47 @@ current-head disposition; no new native/merge clearance. Only this record change
 after verified implementation. The earlier LINE-only verifier4703419 passed but
 was not final clearance. Independent re-review of the newly published head is
 required before merge; previous8cb4c09 verdicts cannot transfer.
+
+## I2 nonfinite scalar geometry remediation
+
+Status: implementation/offline verification complete; publication and independent
+exact-head review/native disposition pending.
+Approval: Human's explicit four-field I2 repair scope,2026-10-11.
+Base133294b7f5ea8c4f768a08a9605b3897fab8a784; reviewed parent
+580a8afbfa40d28856f1dd10397a5d1537c4985e.
+Independent exact-head Integration finding:
+https://github.com/duongchi90/cad-agent/pull/492#issuecomment-6108162329.
+
+Actual standalone saved/reopened DXFs preserve nonfinite CIRCLE radius,
+ARC radius,start_angle,end_angle. Causal baseline4FAIL/16controlsPASS: every
+NaN falsely passes headless; infinity and finite out-of-tolerance already reject;
+finite exact/within-tolerance controls pass. No DIM/contour obligation masks the
+scalar comparison. New tests assert the actual reopened scalar remains nonfinite
+and review does not alter candidate bytes.
+
+Existing headless reviewer now requires finite observed and written values
+before its absolute comparison in only those four fields. Radius tolerance is
+unchanged tolerance_mm; angle tolerance remains1e-4deg. Existing live _same
+rejects nonfinite observed values against finite source values; its relative
+and angular tolerance policies are not copied into the headless owner. No native
+reviewer, mutation epic, transport, geometry engine, schema or other scalar
+comparison changes. Retained DIM cold-reopen failed epoch stays unchanged.
+Write-set:reviewer.py,existing test_reviewer.py,this existing record.
+
+Focused command:python -m pytest dxf_builder_lib/tests
+mcp_integration_lib/tests/test_phase4.py
+mcp_integration_lib/tests/test_contour_join_guard.py
+mcp_integration_lib/tests/test_dimension_feature_binding.py
+tests/test_reuse_architecture_boundaries.py -q
+-m "not causal_red and not autocad_mechanical and not real_data".
+Result:209PASS; Ruff F401/whitespace checks passed.
+Canonical verifier at clean implementation
+abd1825a529523f5f73e98ebb285bae780b433c5:PASS,3528Python tests+77subtests,
+261.NET,76IPC+52subtests; offline JUnit3605/IPC128 zero failures/errors/skips.
+Command:scripts/verify.ps1 -PythonExe C:/cad-agent/.venv-py311/Scripts/python.exe
+with installed SDK process-local PATH. Known causal_red negative oracle failed
+as required; real_data2/native18 unavailable probes skipped, not runtimePASS.
+Only this record changes after verified implementation. No live mutation or new
+native qualification is claimed for this headless-only repair; exact-head hosted
+checks and independent reviews remain pending. Retained failed DIM artifacts
+were rehashed unchanged; the unattributed epoch is not rewritten or discarded.

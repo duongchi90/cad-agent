@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import math
 
 import pytest
 
@@ -54,6 +55,45 @@ def _doc(*prims: Primitive) -> PrimitiveIRDocument:
         calibration=Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 0), method="manual_override"),
         primitives=list(prims),
     )
+
+
+@pytest.mark.parametrize("kind,field,expected", [
+    ("circle", "radius", 2.0), ("arc", "radius", 2.0),
+    ("arc", "start_angle", 0.0), ("arc", "end_angle", 90.0),
+])
+@pytest.mark.parametrize("change,want_pass", [
+    ("nan", False), ("infinity", False), ("exact", True),
+    ("within-tolerance", True), ("outside-tolerance", False),
+])
+def test_saved_standalone_scalar_geometry_is_finite_and_source_matching(
+    tmp_path, kind, field, expected, change, want_pass,
+):
+    primitive = _circle("source", 0, 0, 2) if kind == "circle" else Primitive(
+        id="source", type="arc", source="geometry_external_ai", confidence=1.0,
+        trace=Trace((0, 0, 10, 10)), geometry=ArcGeometry(Point2D(0, 0), 2, 0, 90),
+    )
+    built = build_dxf(_doc(primitive), str(tmp_path / "candidate.dxf"))
+    tolerance = 1e-6 if field == "radius" else 1e-4
+    actual = {
+        "nan": math.nan, "infinity": math.inf, "exact": expected,
+        "within-tolerance": expected + tolerance / 2,
+        "outside-tolerance": expected + tolerance * 2,
+    }[change]
+    native = ezdxf.readfile(built.output_path)
+    native.entitydb[built.handle_by_primitive_id["source"]].dxf.set(field, actual)
+    native.saveas(built.output_path)
+    reopened = ezdxf.readfile(built.output_path)
+    saved = reopened.entitydb[built.handle_by_primitive_id["source"]].dxf.get(field)
+    if change in ("nan", "infinity"):
+        assert not math.isfinite(saved), "The saved DXF must actually retain nonfinite data"
+    else:
+        assert saved == actual
+    before = (tmp_path / "candidate.dxf").read_bytes()
+    report = review_dxf(built)
+    assert report.checked_count == 1
+    assert report.passed == want_pass
+    assert bool(report.mismatches) == (not want_pass)
+    assert (tmp_path / "candidate.dxf").read_bytes() == before
 
 
 def _beam_semantic_doc() -> SemanticIRDocument:
