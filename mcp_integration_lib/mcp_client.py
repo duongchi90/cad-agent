@@ -817,6 +817,19 @@ def _make_windows_text_trigger(
     def trigger(text: str) -> None:
         user32 = ctypes.windll.user32
 
+        class GuiThreadInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", wintypes.RECT),
+            ]
+
         def set_native_signature(function: Any, argtypes: list[Any], restype: Any) -> None:
             try:
                 function.argtypes = argtypes
@@ -833,6 +846,9 @@ def _make_windows_text_trigger(
         set_foreground_window = user32.SetForegroundWindow
         get_foreground_window = user32.GetForegroundWindow
         post_message = user32.PostMessageW
+        get_gui_thread_info = (
+            user32.GetGUIThreadInfo if require_foreground else None
+        )
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         set_native_signature(
             get_window_thread_process_id,
@@ -858,16 +874,24 @@ def _make_windows_text_trigger(
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
             wintypes.BOOL,
         )
+        if get_gui_thread_info is not None:
+            set_native_signature(
+                get_gui_thread_info,
+                [wintypes.DWORD, ctypes.POINTER(GuiThreadInfo)],
+                wintypes.BOOL,
+            )
+
+        def window_identity(window: int) -> tuple[int, int]:
+            pid = wintypes.DWORD()
+            thread_id = get_window_thread_process_id(window, ctypes.byref(pid))
+            if not thread_id or not pid.value:
+                raise MCPToolError("WINDOW_IDENTITY_INVALID")
+            return int(thread_id), int(pid.value)
 
         def window_pid(window: int) -> int:
-            pid = wintypes.DWORD()
-            if not get_window_thread_process_id(window, ctypes.byref(pid)):
-                raise MCPToolError("WINDOW_IDENTITY_INVALID")
-            if not pid.value:
-                raise MCPToolError("WINDOW_IDENTITY_INVALID")
-            return int(pid.value)
+            return window_identity(window)[1]
 
-        owner_pid = window_pid(hwnd)
+        owner_thread_id, owner_pid = window_identity(hwnd)
         mdi_clients: List[int] = []
         callback_error: Optional[str] = None
 
@@ -906,12 +930,28 @@ def _make_windows_text_trigger(
         if get_foreground_window() != hwnd:
             raise MCPToolError("WINDOW_FOREGROUND_INVALID")
 
+        def require_owned_input_focus() -> None:
+            if get_gui_thread_info is None:
+                return
+            thread_info = GuiThreadInfo()
+            thread_info.cbSize = ctypes.sizeof(GuiThreadInfo)
+            if not get_gui_thread_info(owner_thread_id, ctypes.byref(thread_info)):
+                raise MCPToolError("WINDOW_FOCUS_INVALID")
+            focus_hwnd = int(thread_info.hwndFocus or 0)
+            if focus_hwnd <= 0 or window_pid(focus_hwnd) != owner_pid:
+                raise MCPToolError("WINDOW_FOCUS_INVALID")
+
+        if require_foreground:
+            require_owned_input_focus()
+
         framed_text = ("\x1b\x1b" + text + "\r").encode("utf-16-le")
         for offset in range(0, len(framed_text), 2):
             if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
                 raise MCPToolError("WINDOW_IDENTITY_CHANGED")
             if get_foreground_window() != hwnd:
                 raise MCPToolError("WINDOW_FOREGROUND_INVALID")
+            if require_foreground:
+                require_owned_input_focus()
             code_unit = int.from_bytes(framed_text[offset:offset + 2], "little")
             if not post_message(target, 0x0102, code_unit, 0):
                 raise MCPToolError("WINDOW_DELIVERY_FAILED")
