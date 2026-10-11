@@ -39,7 +39,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from .builder import BuildResult
+from .builder import BuildResult, validate_contour_joins
 
 _DEFAULT_TOLERANCE_MM = 1e-6
 _ROTATION_TOLERANCE_DEG = 1e-4
@@ -78,6 +78,8 @@ class ReviewResult:
     dimension_checked_count: int = 0
     dimension_mismatches: List[str] = field(default_factory=list)
     dimension_measurement_by_id: Dict[str, float] = field(default_factory=dict)
+    contour_checked_count: int = 0
+    contour_mismatches: List[str] = field(default_factory=list)
 
     def format_report(self) -> str:
         """Report lỗi có cấu trúc, gom theo part_id — dùng khi debug thủ
@@ -97,6 +99,9 @@ class ReviewResult:
             f"{len(self.dimension_mismatches)} mismatch"
         )
         for mismatch in self.dimension_mismatches:
+            lines.append(f"    - {mismatch}")
+        lines.append(f"  contour joins: {self.contour_checked_count} checked, {len(self.contour_mismatches)} mismatch")
+        for mismatch in self.contour_mismatches:
             lines.append(f"    - {mismatch}")
         lines.append(
             f"  components (INSERT): {self.component_checked_count} checked, "
@@ -120,6 +125,57 @@ def _dist(a, b) -> float:
 
 def _dist3(a, b) -> float:
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+
+
+def contour_endpoints(geometry: dict) -> dict:
+    """Resolve LINE/planar ARC endpoints using the existing ezdxf geometry API.
+
+    Snapshots must describe the actual native entity, never written expectations.
+    This is endpoint incidence only; it does not assert tangency or 3D fillets.
+    """
+    from ezdxf.math import ConstructionArc
+
+    def point(value):
+        if not isinstance(value, (tuple, list)) or len(value) not in (2, 3):
+            raise ValueError("unavailable contour point")
+        if any(type(item) not in (int, float) or not math.isfinite(item) for item in value):
+            raise ValueError("invalid contour point")
+        return tuple(value) if len(value) == 3 else (*value, 0.0)
+
+    if geometry.get("type") == "line":
+        return {"start": point(geometry.get("start")), "end": point(geometry.get("end"))}
+    if geometry.get("type") == "arc":
+        center = point(geometry.get("center"))
+        extrusion = point(geometry.get("extrusion"))
+        if extrusion != (0.0, 0.0, 1.0):
+            raise ValueError("unsupported contour ARC plane")
+        values = [geometry.get("radius"), geometry.get("start_angle_deg", geometry.get("start_angle")),
+                  geometry.get("end_angle_deg", geometry.get("end_angle"))]
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in values) or values[0] <= 0:
+            raise ValueError("invalid contour ARC geometry")
+        arc = ConstructionArc(center[:2], *values)
+        return {"start": (*arc.start_point, center[2]), "end": (*arc.end_point, center[2])}
+    raise ValueError("unsupported contour entity")
+
+
+def review_contour_joins(joins: dict, endpoints_by_primitive_id: dict) -> tuple[int, List[str]]:
+    """Check only declared endpoint pairs; unreadable obligations fail closed."""
+    try:
+        validate_contour_joins(joins)
+    except ValueError as error:
+        return 0, [f"contour: {error}"]
+    mismatches = []
+    for join_id, join in joins.items():
+        try:
+            points = [endpoints_by_primitive_id[side["primitive_id"]][side["endpoint"]]
+                      for side in (join["first"], join["second"])]
+            gap = math.dist(*points)
+        except (KeyError, TypeError, ValueError):
+            mismatches.append(f"{join_id}: contour endpoint readback unavailable")
+            continue
+        if not math.isfinite(gap) or gap > _DEFAULT_TOLERANCE_MM:
+            mismatches.append(f"{join_id}: open contour join, endpoint gap={gap:.12g} mm")
+    return len(joins), mismatches
 
 
 def resolve_component_insert(db, modelspace, handle, part_id, expected_block_name=None):
@@ -176,6 +232,20 @@ def review_dxf(
 
     mismatches: List[str] = []
     checked = 0
+    contour_endpoints_by_id = {}
+    if build_result.contour_join_by_id:
+        for pid, handle in build_result.handle_by_primitive_id.items():
+            entity = db.get(handle)
+            if entity is None or entity.dxf.owner != doc.modelspace().block_record_handle:
+                continue
+            if entity.dxftype() == "LINE":
+                contour_endpoints_by_id[pid] = {"start": tuple(entity.dxf.start), "end": tuple(entity.dxf.end)}
+            elif entity.dxftype() == "ARC":
+                # Native WCS endpoints also preserve elevation/extrusion.
+                contour_endpoints_by_id[pid] = {"start": tuple(entity.start_point), "end": tuple(entity.end_point)}
+    contour_checked, contour_mismatches = review_contour_joins(
+        build_result.contour_join_by_id, contour_endpoints_by_id,
+    )
 
     if strict_primitive_inventory:
         authorized_handles = (
@@ -433,6 +503,7 @@ def review_dxf(
             len(mismatches) == 0
             and len(component_mismatches) == 0
             and len(dimension_mismatches) == 0
+            and len(contour_mismatches) == 0
         ),
         checked_count=checked,
         mismatches=mismatches,
@@ -440,5 +511,7 @@ def review_dxf(
         component_mismatches=component_mismatches,
         dimension_checked_count=dimension_checked,
         dimension_mismatches=dimension_mismatches,
+        contour_checked_count=contour_checked,
+        contour_mismatches=contour_mismatches,
         dimension_measurement_by_id=dimension_measurement_by_id,
     )

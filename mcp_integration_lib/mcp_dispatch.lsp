@@ -1067,6 +1067,7 @@
                 (cons "handle" (cdr (assoc 5 data)))
                 (cons "type" entity-type)
                 (cons "layer" (cdr (assoc 8 data)))
+                (cons "layout" (cdr (assoc 410 data)))
               ))
       (cond
         ((= entity-type "LINE")
@@ -1097,6 +1098,7 @@
                 (cons "radius" (cdr (assoc 40 data)))
                 (cons "start_angle_deg" (mcp-angle-degrees (cdr (assoc 50 data))))
                 (cons "end_angle_deg" (mcp-angle-degrees (cdr (assoc 51 data))))
+                (cons "extrusion" (mcp-array (if (assoc 210 data) (cdr (assoc 210 data)) '(0.0 0.0 1.0))))
               )
             )
           )

@@ -35,6 +35,7 @@ constraint_solving.py.
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -103,6 +104,29 @@ class BuildResult:
     # written_geometry_by_primitive_id ở trên, dùng cho reviewer.py đối
     # chiếu ngược sau khi đọc lại file (round-trip INSERT).
     written_component_by_part_id: Dict[str, dict] = field(default_factory=dict)
+    # Source-declared endpoint connections, independent of per-entity write truth.
+    # Empty preserves legacy roundtrip-only review; no connections are inferred.
+    contour_join_by_id: Dict[str, dict] = field(default_factory=dict)
+
+
+def validate_contour_joins(joins: object) -> None:
+    """Validate the closed, additive source obligation shape before use."""
+    if type(joins) is not dict:
+        raise ValueError("Contour joins must be a dictionary.")
+    for join_id, join in joins.items():
+        if type(join_id) is not str or not join_id.strip():
+            raise ValueError("Contour join ID must be a nonempty string.")
+        if type(join) is not dict or set(join) != {"first", "second"}:
+            raise ValueError(f"{join_id}: invalid contour join sides.")
+        for side in join.values():
+            if type(side) is not dict or set(side) != {"primitive_id", "endpoint"}:
+                raise ValueError(f"{join_id}: invalid contour endpoint reference.")
+            if type(side["primitive_id"]) is not str or not side["primitive_id"].strip():
+                raise ValueError(f"{join_id}: missing contour primitive ID.")
+            if type(side["endpoint"]) is not str or side["endpoint"] not in {"start", "end"}:
+                raise ValueError(f"{join_id}: invalid contour endpoint selector.")
+        if join["first"]["primitive_id"] == join["second"]["primitive_id"]:
+            raise ValueError(f"{join_id}: contour joins require two distinct primitives.")
 
 
 def _part_type_by_primitive_id(semantic_doc) -> Dict[str, str]:
@@ -249,6 +273,7 @@ def build_dxf(
     build_components: bool = False,
     build_dimensions: bool = False,
     dimension_specs: Optional[Sequence[NativeLinearDimensionSpec]] = None,
+    contour_join_by_id: Optional[Dict[str, dict]] = None,
 ) -> BuildResult:
     """Build 1 file DXF thật từ `primitive_doc`. Trả về `BuildResult` —
     không raise nếu 1 primitive không vẽ được (thiếu geometry/text_data),
@@ -275,6 +300,8 @@ def build_dxf(
         if not build_dimensions:
             raise ValueError("dimension_specs requires build_dimensions=True")
         _validate_explicit_dimension_specs(dimension_specs)
+    joins = {} if contour_join_by_id is None else contour_join_by_id
+    validate_contour_joins(joins)
     try:
         import ezdxf
     except ImportError as exc:
@@ -292,7 +319,7 @@ def build_dxf(
     doc.header["$INSUNITS"] = 4  # millimetres
     msp = doc.modelspace()
 
-    result = BuildResult(output_path=output_path)
+    result = BuildResult(output_path=output_path, contour_join_by_id=deepcopy(joins))
 
     if build_dimensions:
         _ensure_layer(doc, "DIMENSIONS", 2)

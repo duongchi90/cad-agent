@@ -6,6 +6,7 @@ from math import isclose
 from typing import Any, Dict, List
 
 from dxf_builder_lib.builder import BuildResult
+from dxf_builder_lib.reviewer import contour_endpoints, review_contour_joins
 from .mcp_client import MCPClient, MCPTimeoutError, MCPToolError
 
 _DXF_TYPE = {"line": "LINE", "circle": "CIRCLE", "arc": "ARC", "text": "TEXT"}
@@ -17,6 +18,8 @@ class LiveReviewResult:
     structural_checked: int = 0
     geometry_checked: int = 0
     dimension_checked: int = 0
+    contour_checked: int = 0
+    contour_mismatches: List[str] = field(default_factory=list)
     geometry_degraded: bool = False
     mismatches: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -59,6 +62,7 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
                     attempt_geometry: bool = True) -> LiveReviewResult:
     """Check structure; exact-approved dimensions require readable measurements."""
     result = LiveReviewResult()
+    contour_endpoints_by_id = {}
     if open_drawing:
         try:
             client.drawing_open(build_result.output_path)
@@ -95,6 +99,21 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
         else:
             result.geometry_checked += 1
             _check_geometry(pid, written, actual, result)
+            if build_result.contour_join_by_id:
+                try:
+                    if actual.get("layout") != "Model":
+                        raise ValueError("contour endpoint is not proven in ModelSpace")
+                    # entity:list identifies native type; entity:get supplies geometry.
+                    native_geometry = dict(actual, type=str(entity.get("type", "")).lower())
+                    contour_endpoints_by_id[pid] = contour_endpoints(native_geometry)
+                except (ValueError, TypeError, OverflowError):
+                    pass  # The declared obligation below becomes unavailable/nonPASS.
+    result.contour_checked, contour_mismatches = review_contour_joins(
+        build_result.contour_join_by_id, contour_endpoints_by_id,
+    )
+    for mismatch in contour_mismatches:
+        result.passed = False
+        result.contour_mismatches.append(mismatch)
     actual_dimension_count = sum(
         1
         for entity in listed.values()

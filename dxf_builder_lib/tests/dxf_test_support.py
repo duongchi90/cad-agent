@@ -131,3 +131,36 @@ def build_native_dimension_consumer_fixture(
                     {"measurement": dimension.get_measurement()}))
 
     return built, records, dimension.get_measurement()
+
+
+def build_fillet_join_fixture(tmp_path, radius, coupled, offset=0.0):
+    """Literal quarter arc plus two edges; no production helper computes wants."""
+    from dxf_builder_lib.builder import build_dxf
+    from primitive_ir_lib.models import (
+        ArcGeometry, Calibration, LineGeometry, Point2D, Primitive,
+        PrimitiveIRDocument, SourceDocument, Trace,
+    )
+    line_y = 2.1 if coupled else 2.0
+    line_x = -0.1 if coupled else 0.0
+    document = PrimitiveIRDocument(
+        source_document=SourceDocument("synthetic.png", 0, 100, 100),
+        calibration=Calibration("mm", 1.0, (0, 0), "manual_override"),
+        primitives=[
+            Primitive(id="fillet", type="arc", source="geometry_external_ai",
+                      confidence=1.0, trace=Trace((0, 0, 100, 100)),
+                      geometry=ArcGeometry(Point2D(offset + 1, 1), radius, 90, 180)),
+            Primitive(id="top", type="line", source="geometry_opencv",
+                      confidence=1.0, trace=Trace((0, 0, 100, 100)),
+                      geometry=LineGeometry(Point2D(offset + 4, line_y), Point2D(offset + 1, line_y))),
+            Primitive(id="side", type="line", source="geometry_opencv",
+                      confidence=1.0, trace=Trace((0, 0, 100, 100)),
+                      geometry=LineGeometry(Point2D(offset + line_x, 1), Point2D(offset + line_x, -2))),
+        ],
+    )
+    joins = {
+        "top-fillet": {"first": {"primitive_id": "fillet", "endpoint": "start"},
+                       "second": {"primitive_id": "top", "endpoint": "end"}},
+        "fillet-side": {"first": {"primitive_id": "fillet", "endpoint": "end"},
+                        "second": {"primitive_id": "side", "endpoint": "start"}},
+    }
+    return build_dxf(document, str(tmp_path / "candidate.dxf"), contour_join_by_id=joins)

@@ -59,6 +59,7 @@ def _build_result_dict(build: BuildResult) -> dict[str, Any]:
         "skipped_part_reasons": build.skipped_part_reasons,
         "component_count": build.component_count,
         "written_component_by_part_id": build.written_component_by_part_id,
+        "contour_join_by_id": build.contour_join_by_id,
     }
 
 
@@ -585,6 +586,11 @@ def repair_live(
     }
     if before.passed:
         return report
+    if before.contour_mismatches and not before.mismatches:
+        raise LiveSafetyError(
+            "CONTOUR_JOIN_REPAIR_UNSUPPORTED: per-entity geometry matches the plan "
+            "but declared joins do not; an explicit coupled feature plan is required."
+        )
 
     owned_backup_paths: dict[Path, os.stat_result | None] = {}
     backup = _backup(
