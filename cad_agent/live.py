@@ -592,6 +592,12 @@ def repair_live(
             "but declared joins do not; an explicit coupled feature plan is required."
         )
 
+    if before.dimension_feature_mismatches:
+        raise LiveSafetyError(
+            "DIMENSION_FEATURE_REPAIR_UNSUPPORTED: declared DIM/LINE binding is not proven; "
+            "primitive erase/recreate cannot repair a dimension relationship."
+        )
+
     owned_backup_paths: dict[Path, os.stat_result | None] = {}
     backup = _backup(
         dxf,

@@ -116,11 +116,24 @@ def build_native_dimension_consumer_fixture(
     assert dimension.get_measurement() == length
 
 
+    records = _dimension_native_records_for_test(native, built, dimension_handle)
+    return built, records, dimension.get_measurement()
+
+
+def _dimension_native_records_for_test(native, built, dimension_handle):
+    """Read actual saved candidate geometry for external-native test replay."""
+    dimension = native.entitydb[dimension_handle]
     records = []
     for handle in built.handle_by_primitive_id.values():
         entity = native.entitydb[handle]
         if entity.dxftype() == "LINE":
-            geometry = {"start": tuple(entity.dxf.start), "end": tuple(entity.dxf.end)}
+            geometry = {"start": tuple(entity.dxf.start), "end": tuple(entity.dxf.end), "layout": "Model"}
+        elif entity.dxftype() == "ARC":
+            geometry = {
+                "center": tuple(entity.dxf.center), "radius": entity.dxf.radius,
+                "start_angle_deg": entity.dxf.start_angle, "end_angle_deg": entity.dxf.end_angle,
+                "extrusion": tuple(entity.dxf.extrusion), "layout": "Model",
+            }
         else:
             geometry = {
                 "insert": tuple(entity.dxf.insert), "text": entity.dxf.text,
@@ -128,14 +141,30 @@ def build_native_dimension_consumer_fixture(
             }
         records.append((handle, entity.dxftype(), entity.dxf.layer, geometry))
     records.append((dimension_handle, "DIMENSION", dimension.dxf.layer,
-                    {"measurement": dimension.get_measurement()}))
+                    {"measurement": dimension.get_measurement(), "dimtype": dimension.dxf.dimtype,
+                     "defpoint2": tuple(dimension.dxf.defpoint2),
+                     "defpoint3": tuple(dimension.dxf.defpoint3), "layout": "Model"}))
 
-    return built, records, dimension.get_measurement()
+    return records
 
 
-def build_fillet_join_fixture(tmp_path, radius, coupled, offset=0.0):
+def build_dimension_feature_binding_fixture(tmp_path, origins=None):
+    """Build an 80 mm source-bound DIM, optionally move only its WCS origins."""
+    import ezdxf
+
+    built, _, _ = build_native_dimension_consumer_fixture(tmp_path, 80, 80, "")
+    dimension_handle = next(iter(built.dimension_handle_by_cross_validation_id.values()))
+    native = ezdxf.readfile(built.output_path)
+    dimension = native.entitydb[dimension_handle]
+    if origins is not None:
+        dimension.dxf.defpoint2, dimension.dxf.defpoint3 = origins
+        native.saveas(built.output_path)
+    native = ezdxf.readfile(built.output_path)
+    records = _dimension_native_records_for_test(native, built, dimension_handle)
+    return built, records, native.entitydb[dimension_handle].get_measurement()
+def build_fillet_join_fixture(tmp_path, radius, coupled, offset=0.0, *, dimensions=False):
     """Literal quarter arc plus two edges; no production helper computes wants."""
-    from dxf_builder_lib.builder import build_dxf
+    from dxf_builder_lib.builder import NativeLinearDimensionSpec, build_dxf
     from primitive_ir_lib.models import (
         ArcGeometry, Calibration, LineGeometry, Point2D, Primitive,
         PrimitiveIRDocument, SourceDocument, Trace,
@@ -163,4 +192,22 @@ def build_fillet_join_fixture(tmp_path, radius, coupled, offset=0.0):
         "fillet-side": {"first": {"primitive_id": "fillet", "endpoint": "end"},
                         "second": {"primitive_id": "side", "endpoint": "start"}},
     }
-    return build_dxf(document, str(tmp_path / "candidate.dxf"), contour_join_by_id=joins)
+    specs = [NativeLinearDimensionSpec("top-dim", "top", 3, "synthetic-top-length")] if dimensions else None
+    return build_dxf(document, str(tmp_path / "candidate.dxf"), contour_join_by_id=joins,
+                     build_dimensions=dimensions, dimension_specs=specs)
+
+
+def build_fillet_dimension_fixture(tmp_path, radius, coupled, wrong_dimension):
+    """One candidate carries both source contour and DIM feature obligations."""
+    import ezdxf
+
+    built = build_fillet_join_fixture(tmp_path, radius, coupled, dimensions=True)
+    native = ezdxf.readfile(built.output_path)
+    dimension_handle = built.dimension_handle_by_cross_validation_id["top-dim"]
+    if wrong_dimension:
+        dimension = native.entitydb[dimension_handle]
+        dimension.dxf.defpoint2 += (0, 25, 0)
+        dimension.dxf.defpoint3 += (0, 25, 0)
+        native.saveas(built.output_path)
+        native = ezdxf.readfile(built.output_path)
+    return built, _dimension_native_records_for_test(native, built, dimension_handle)

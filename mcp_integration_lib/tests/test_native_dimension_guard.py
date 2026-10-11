@@ -67,7 +67,7 @@ def test_mechanical_review_consumes_exact_dimension_truth(
 
 @pytest.mark.parametrize("error_type", [MCPTimeoutError, MCPToolError])
 @pytest.mark.parametrize("approved", [79.0, None], ids=["exact", "reference"])
-def test_mechanical_review_does_not_accept_unreadable_exact_dimension(
+def test_mechanical_review_does_not_accept_unreadable_bound_dimension(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     error_type: type[Exception],
@@ -103,8 +103,9 @@ def test_mechanical_review_does_not_accept_unreadable_exact_dimension(
     assert review["geometry_checked"] == len(built.handle_by_primitive_id)
     assert review["dimension_checked"] == 1
     assert review["geometry_degraded"]
-    assert exit_code == (1 if approved is not None else 0)
-    assert review["passed"] == (approved is None)
+    assert exit_code == 1
+    assert not review["passed"]
+    assert any("feature binding" in message for message in review["dimension_feature_mismatches"])
     if approved is not None:
         assert any("approved_value_mm" in message for message in review["mismatches"])
     assert (candidate.read_bytes(), evidence.read_bytes()) == before

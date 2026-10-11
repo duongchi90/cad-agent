@@ -1103,6 +1103,17 @@
             )
           )
         )
+        ((= entity-type "DIMENSION")
+          (setq pairs
+            (append pairs
+              (list
+                (cons "dimtype" (cdr (assoc 70 data)))
+                (cons "defpoint2" (mcp-array (cdr (assoc 13 data))))
+                (cons "defpoint3" (mcp-array (cdr (assoc 14 data))))
+              )
+            )
+          )
+        )
         ((member entity-type '("TEXT" "MTEXT"))
           (setq pairs
             (append pairs

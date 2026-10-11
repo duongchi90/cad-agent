@@ -127,6 +127,34 @@ def _dist3(a, b) -> float:
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
 
+def linear_dimension_matches_feature(dimension: dict, feature: dict) -> bool:
+    """Prove WCS extension origins match a declared direct ModelSpace LINE.
+
+    This checks measured-feature placement, not a native DIMASSOC dependency.
+    Missing readback cannot be filled from expected/build geometry.
+    """
+    def point(value):
+        if not isinstance(value, (tuple, list)) or len(value) not in (2, 3):
+            raise ValueError("missing native point")
+        if any(type(item) not in (int, float) or not math.isfinite(item) for item in value):
+            raise ValueError("invalid native point")
+        return tuple(value) if len(value) == 3 else (*value, 0.0)
+
+    if feature.get("type") != "LINE" or feature.get("layout") != "Model":
+        return False
+    dimtype = dimension.get("dimtype")
+    if (dimension.get("layout") != "Model" or type(dimtype) is not int
+            or dimtype < 0 or dimtype & 7 not in (0, 1)):
+        return False
+    try:
+        origins = [point(dimension.get(name)) for name in ("defpoint2", "defpoint3")]
+        endpoints = [point(feature.get(name)) for name in ("start", "end")]
+        return any(all(math.dist(a, b) <= _DEFAULT_TOLERANCE_MM for a, b in zip(origins, ordered))
+                   for ordered in (endpoints, list(reversed(endpoints))))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def contour_endpoints(geometry: dict) -> dict:
     """Resolve LINE/planar ARC endpoints using the existing ezdxf geometry API.
 
@@ -386,6 +414,26 @@ def review_dxf(
                 f"{validation_id}: approved measurement {approved}, "
                 f"actual {measurement}, tolerance {tolerance_mm}"
             )
+        feature_id = expected.get("geometry_primitive_id")
+        if feature_id is not None:
+            feature_handle = build_result.handle_by_primitive_id.get(feature_id)
+            feature = db.get(feature_handle) if feature_handle else None
+            feature_geometry = {}
+            if feature is not None and feature.dxftype() == "LINE":
+                feature_geometry = {
+                    "type": "LINE", "layout": "Model" if feature in doc.modelspace() else None,
+                    "start": tuple(feature.dxf.start), "end": tuple(feature.dxf.end),
+                }
+            definition = {
+                "dimtype": entity.dxf.dimtype,
+                "layout": "Model" if entity in doc.modelspace() else None,
+                "defpoint2": tuple(entity.dxf.get("defpoint2")) if entity.dxf.hasattr("defpoint2") else None,
+                "defpoint3": tuple(entity.dxf.get("defpoint3")) if entity.dxf.hasattr("defpoint3") else None,
+            }
+            if not linear_dimension_matches_feature(definition, feature_geometry):
+                dimension_mismatches.append(
+                    f"{validation_id}: DIMENSION feature binding unavailable or differs from LINE {feature_id!r}"
+                )
 
     for part_id, handle in build_result.component_handle_by_part_id.items():
         written = build_result.written_component_by_part_id.get(part_id)
