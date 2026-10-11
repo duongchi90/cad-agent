@@ -22,9 +22,10 @@
 
 3. **Removal (`research/antigravity/2026-10-11/removal/`):**
    - Analyzed 12 raster dropout failure modes proving `UNMATCHED_BASE != REMOVE`.
-   - Formulated `SOURCE_NEGATIVE_LINE_SUPPORT_EVIDENCE_V1` pixel-domain verifier contract.
-   - Retained native deletion as `BLOCKED` due to occlusion ambiguities.
-   - 5 empirical scripts + 2 formal specifications.
+   - Formulated `SOURCE_NEGATIVE_LINE_SUPPORT_EVIDENCE_V1` pixel-domain verifier contract closure.
+   - Completed behavioral causal RED, controls matrix (0, A-H), and threshold classification.
+   - Retained native deletion as `BLOCKED` due to occlusion and entity lifecycle ambiguities.
+   - 6 empirical scripts + 2 formal specifications.
 
 ## File Inventory and SHA-256 Signatures
 
@@ -45,9 +46,10 @@
 | `removal` | [`test_positive_removal_case.py`](test_positive_removal_case.py) | Proof Script | `RESEARCH_ONLY` | `5b6f5f0d8a8e8a62afe0b0bf66cfd8b17ac5ae0b9f8ab8d72b46122d7815dda0` | Positive removal case and 5 distinguishing proofs on 3-rib bracket |
 | `removal` | [`test_reverse_path.py`](test_reverse_path.py) | Coordinate Mapping Test | `RESEARCH_ONLY` | `5ccccb56b183fc906b240403cfd58ae2214b445d3e5afd92b5c7bf8443c97e2a` | Reverse coordinate mapping from Base WCS to source pixels |
 | `removal` | [`test_negative_support_pairs.py`](test_negative_support_pairs.py) | Benchmark | `RESEARCH_ONLY` | `76f5990b7c9e38122a83a5f86f44d2a773a815fcbcf807f65f5ea4eca7d2ec81` | Benchmark across Pairs A-H proving naive threshold inversion is fatal |
-| `removal` | [`test_causal_red_negative_support.py`](test_causal_red_negative_support.py) | Public Path Test | `RESEARCH_ONLY` | `faf8612f25ccdf26c721467cbe6072a9d9a523b008f7c23df11fd3a696e28ca2` | Causal RED for missing verify_native_line_source_absence_evidence |
+| `removal` | [`test_negative_support_controls.py`](test_negative_support_controls.py) | Controls Benchmark | `RESEARCH_ONLY` | `fd9a4c770e93284062ae542fd5b770c79a5f2a0c37d05630783770e48f58a5f1` | Empirical benchmark across controls 0 and A-H for threshold closure |
+| `removal` | [`test_causal_red_negative_support.py`](test_causal_red_negative_support.py) | Public Path Test | `RESEARCH_ONLY` | `08c626b7a25c8cc0dfa3976bfe4d338ddda692ee70e224c40aa9f6bd84b3afae` | Behavioral causal RED for missing raster absence evidence |
 | `removal` | [`source_base_line_removal_evidence_empirical_specification.md`](source_base_line_removal_evidence_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `9d6fd2e9598b86e1e5588dc041f5263a3e8a86dab305b03189b618aa08c870f5` | Core safety doctrine UNMATCHED_BASE != REMOVE specification |
-| `removal` | [`source_negative_line_support_empirical_specification.md`](source_negative_line_support_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `0d57efe6754f0d16c4741624f621ac9419ceef6cc078a28ea70b3bfee1365251` | Observational absence evidence and raster verifier contract specification |
+| `removal` | [`source_negative_line_support_empirical_specification.md`](source_negative_line_support_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `cba1e54007889f21bf9862a69f2762198133abed6831a6de475dab1d1e8b9081` | Observational absence evidence and raster verifier contract closure |
 
 ## Verification and Non-Interference Guarantees
 
