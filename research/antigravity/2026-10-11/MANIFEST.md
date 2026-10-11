@@ -42,6 +42,16 @@
    - Validated 100.0% false-positive elimination rate (0/144 false detections retained) while maintaining 100.0% true circle retention across 35 radius/stroke configs.
    - 5 empirical scripts + 1 formal specification.
 
+6. **Cardinal Rotated Text Extraction (`research/antigravity/2026-10-11/text_extraction/`):**
+   - Baseline causal RED demonstrating 100% failure rate of current production `extract_text_tesseract` on 90°, 180°, 270° text across 6 text classes.
+   - Proved that demo pipeline's "longest non-empty string" heuristic fails 100% of the time (24/24) on short text, selecting longer hallucinated garbage over ground truth.
+   - Proved that Tesseract OSD fails 100% on dimension/short crops ("Too few characters").
+   - Benchmarked Strategy D (geometry-assisted aspect ratio pruning) achieving 100.0% exact match and 100.0% rotation accuracy while halving runtime (370.1 ms/ROI vs 719.5 ms/ROI).
+   - Executed 280-run exact matrix across font sizes (12-48px), rotations, and paddings: 95.7% exact match, 100.0% rotation classification, with identical performance across 0°, 90°, 180°, 270°.
+   - Demonstrated 100% non-text false-positive elimination (0/11 accepted) under composite evidence scoring.
+   - Proved 100% numeric dimension safety (40/40 exact values, zero catastrophic substitutions).
+   - 8 empirical scripts + 1 formal specification.
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -79,6 +89,15 @@
 | `circle_validation` | [`test_true_circle_positive_matrix.py`](circle_validation/test_true_circle_positive_matrix.py) | Positive Matrix Test | `RESEARCH_ONLY` | `e21ad27c5d0ff9c78dfbe431ee691d40d99d7336ed93fbada57f912e356f96b5` | True circle retention matrix (radii 5-120px, widths 1-8px, 100% retention on detections) |
 | `circle_validation` | [`test_false_positive_negative_matrix.py`](circle_validation/test_false_positive_negative_matrix.py) | Negative Matrix Test | `RESEARCH_ONLY` | `5e372673555832e06f7ea584b2086e63bb1a39ed8cb2e0287239bfb2db5762cf` | Negative elimination matrix across 17 fixture families (100% false circles eliminated) |
 | `circle_validation` | [`circle_false_positive_perimeter_validation_empirical_specification.md`](circle_validation/circle_false_positive_perimeter_validation_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `65224a2e5e53a19a5b2b9b0e65d60ff4c16d6e952c1daf622ac3be37116ee3a8` | Formal technical specification for circle false-positive perimeter validation |
+| `text_extraction` | [`test_causal_red_cardinal_text.py`](text_extraction/test_causal_red_cardinal_text.py) | Causal RED Test | `RESEARCH_ONLY` | `f73ba4f7826e7a42d5e51f436b4a006472c6240ab7a6f67c0b860e6ab13f218b` | Baseline causal RED proving 100% failure on 90, 180, 270 deg text on current main |
+| `text_extraction` | [`test_mock_length_heuristic_failure.py`](text_extraction/test_mock_length_heuristic_failure.py) | Benchmark | `RESEARCH_ONLY` | `64fec698d91d96418896166a0a52a954a4452c6162e7cfb0b5994b39e9d944e0` | Empirical proof of 100% failure rate for demo pipeline's max length selection heuristic |
+| `text_extraction` | [`test_cardinal_rotation_benchmark.py`](text_extraction/test_cardinal_rotation_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `ce18068c190a97339c36b7e07f9da27cb81091e724530e8a2c5b7a5adc5f1267` | Comparison of Strategies A, B, C, D proving Strategy D cuts runtime to 370 ms/ROI |
+| `text_extraction` | [`test_cardinal_exact_matrix.py`](text_extraction/test_cardinal_exact_matrix.py) | Matrix Benchmark | `RESEARCH_ONLY` | `000a246fb9bcb604c4553c770fe38d7061bb2229ead313c34c79faf7b909cbbc` | 280-run matrix across classes, rotations (0-270), and font sizes (12-48px) |
+| `text_extraction` | [`test_180_and_90_ambiguity.py`](text_extraction/test_180_and_90_ambiguity.py) | Ambiguity Benchmark | `RESEARCH_ONLY` | `bf75b706f76d4727b8a50b8294181592c419803cb6c86184f874c7e4cd902786` | 180-deg rotational ambiguity classification and 90 vs 270 deg confidence separation |
+| `text_extraction` | [`test_numeric_dimension_safety.py`](text_extraction/test_numeric_dimension_safety.py) | Safety Benchmark | `RESEARCH_ONLY` | `a935f52a5bff2150507defd79fc1829077129b6c22e8ed642764c2df7e52da8f` | Exact numeric value preservation and catastrophic character substitution tracking |
+| `text_extraction` | [`test_non_text_false_positives.py`](text_extraction/test_non_text_false_positives.py) | Negative Matrix Test | `RESEARCH_ONLY` | `efc9693bb4ded23c38cb3e5f8abba972bb53965ef7664cc1c59efc5103baf389` | False-positive control across 11 non-text ROIs proving zero garbage amplification |
+| `text_extraction` | [`test_roi_detection_and_table_control.py`](text_extraction/test_roi_detection_and_table_control.py) | Integration Test | `RESEARCH_ONLY` | `fa013b8b62f8988d5bed2c1a5e9e636772f38874a56aa13955dc45c5211568ca` | ROI clustering orientation recall and table cell rotated header extraction |
+| `text_extraction` | [`cardinal_rotated_text_extraction_empirical_specification.md`](text_extraction/cardinal_rotated_text_extraction_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `1802647e60003c0ef97909df4c895a1a3f38a3295ebd134d0436fa99d30dced5` | Formal technical specification for cardinal rotated text extraction |
 
 ## Verification and Non-Interference Guarantees
 
