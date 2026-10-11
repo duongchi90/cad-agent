@@ -148,7 +148,7 @@ def _dimension_native_records_for_test(native, built, dimension_handle):
     return records
 
 
-def build_dimension_feature_binding_fixture(tmp_path, origins=None):
+def build_dimension_feature_binding_fixture(tmp_path, origins=None, *, dimtype=None):
     """Build an 80 mm source-bound DIM, optionally move only its WCS origins."""
     import ezdxf
 
@@ -158,6 +158,9 @@ def build_dimension_feature_binding_fixture(tmp_path, origins=None):
     dimension = native.entitydb[dimension_handle]
     if origins is not None:
         dimension.dxf.defpoint2, dimension.dxf.defpoint3 = origins
+    if dimtype is not None:
+        dimension.dxf.dimtype = dimtype
+    if origins is not None or dimtype is not None:
         native.saveas(built.output_path)
     native = ezdxf.readfile(built.output_path)
     records = _dimension_native_records_for_test(native, built, dimension_handle)

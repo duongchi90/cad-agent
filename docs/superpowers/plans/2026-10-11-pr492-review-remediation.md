@@ -1,8 +1,9 @@
 # PR #492 independent review remediation
 
-Status: completed (implementation/offline verification; re-review/native promotion pending)
+Status: completed (offline implementation; new-head re-review/native promotion pending)
 Base SHA: 133294b7f5ea8c4f768a08a9605b3897fab8a784
-Completion Head SHA: f57269bd96a8b2b503306bb2897ef254084e213c
+Completion Head SHA: 6aebdd5d742a76915cac1e13039dc5fb4fe1acc8
+Previous Completion Head SHA: f57269bd96a8b2b503306bb2897ef254084e213c
 Reviewed Head SHA: eddcc44b80e5e5e29c06c5230cd49ff7c1f7d03e
 Approval date: 2026-10-11; Human supplied both independent reviews and authorized
 the existing SOLO production loop. No subagents or new subsystem.
@@ -38,7 +39,7 @@ Nearest-owner selection (DXF owner, both relationship guards, native DIM consume
 Phase4, live CLI/repair and architecture boundaries): 199 PASS.
 
 Canonical `scripts/verify.ps1 -PythonExe C:/cad-agent/.venv-py311/Scripts/python.exe`
-completed with exit 0 on the clean committed Completion Head above: 3471 Python
+completed with exit 0 on the clean previous implementation f57269bd96a8b2b503306bb2897ef254084e213c: 3471 Python
 plus 74 subtests PASS, JUnit3545 with zero failures/errors/skips; 261 .NET PASS;
 76 IPC plus 52 subtests PASS, JUnit128 with zero failures/errors/skips.
 The required causal-RED negative oracle produced its expected failure and the
@@ -52,3 +53,33 @@ No retry of the unchanged
 WINDOW_RECEIVER_AMBIGUOUS condition, no new CAD source case, no frozen/revealed
 candidate edit or gold access. Publishing a draft does not close independent
 exact-head re-review or native promotion.
+
+## Follow-up independent Integration I1
+
+Re-reviewed published head fd23a642c361350a81bca96dac8e35bc589a014b:
+Security bounded offline PASS resolves F1/F2/F3; Integration BLOCKED identifies
+low-three-bit DIM type validation accepting ordinate-only/unknown flags.
+Integration result is durable at PR492 comment6104654975. Security plain text
+was supplied by Human; it grants no native/merge clearance.
+
+[Autodesk group70 specification](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-EDD54EAC-A339-4EBA-AEA6-EC8066505E2B.htm)
+permits linear/aligned base types0/1, block bit32 and moved-text bit128. Bit64
+applies only to ordinate base type6. Reuse the existing shared DIM predicate;
+accept only 0/1,32/33,128/129,160/161. Reject bit64 and unknown combinations.
+No API/schema/native mutation change.
+
+Before the predicate edit, native replay and actual saved-DXF controls produced
+10 causal FAIL/19 passing controls. Negative flags64/65/96/97/256 falsely passed;
+documented positive text-position flags128/129/160/161 remained valid.
+Retained dimtype-flag-red.xml. After the single predicate correction, combined
+guard/owner-boundary selection74 PASS. Canonical verifier completed on clean
+follow-up Completion Head above: 3489 Python plus74 subtests PASS, JUnit3563
+with zero failures/errors/skips; 261 .NET and76 IPC plus52 subtests PASS.
+Expected causal-RED oracle and lint/lock/environment/diff/side-effect gates PASS.
+Real-data2/native18 unavailable probes SKIP; AutoCAD/M2 NOT RUN. Final local log:
+D:/Cad agent temp/native-dimension-feature-production-evidence-20261011/
+full-verifier-dimtype-flags.txt; SHA256
+6267d6633671b51386c5fbd01336134ae8b0cdbed62a2c9d7a9dc2c99a065690.
+No repeated CAD case or unchanged receiver retry. New exact-head hosted CI and
+independent review remain required. Human requires reviewers to post their
+exact-head verdicts directly on PR GitHub and return the comment links.

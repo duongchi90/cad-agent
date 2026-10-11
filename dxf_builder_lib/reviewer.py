@@ -143,8 +143,10 @@ def linear_dimension_matches_feature(dimension: dict, feature: dict) -> bool:
     if feature.get("type") != "LINE" or feature.get("layout") != "Model":
         return False
     dimtype = dimension.get("dimtype")
+    # Linear/aligned types allow only block-reference (32) and moved-text (128)
+    # flags. Ordinate-only bit64 or unknown bits cannot prove this binding.
     if (dimension.get("layout") != "Model" or type(dimtype) is not int
-            or dimtype < 0 or dimtype & 7 not in (0, 1)):
+            or dimtype not in (0, 1, 32, 33, 128, 129, 160, 161)):
         return False
     try:
         origins = [point(dimension.get(name)) for name in ("defpoint2", "defpoint3")]

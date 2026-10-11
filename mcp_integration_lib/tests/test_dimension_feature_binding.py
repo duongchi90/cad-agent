@@ -79,10 +79,15 @@ def test_dimension_feature_needs_actual_supported_readback(tmp_path, change):
 
 @pytest.mark.parametrize("dimtype,want_pass", [
     (0, True), (1, True), (32, True), (33, True),
+    (128, True), (129, True), (160, True), (161, True),
     (34, False), (35, False), (36, False), (37, False), (38, False),
+    (64, False), (65, False), (96, False), (97, False), (256, False),
     (-1, False), (True, False),
 ], ids=["rotated", "aligned", "rotated-block-bit", "aligned-block-bit",
+        "rotated-moved-text", "aligned-moved-text", "rotated-block-moved-text", "aligned-block-moved-text",
         "angular", "diameter", "radius", "angular-three-point", "ordinate",
+        "invalid-ordinate-flag-rotated", "invalid-ordinate-flag-aligned",
+        "invalid-block-ordinate-flag-rotated", "invalid-block-ordinate-flag-aligned", "unknown-high-bit",
         "invalid-negative", "invalid-boolean"])
 def test_measured_feature_binding_rejects_other_native_dimension_types(tmp_path, dimtype, want_pass):
     # External native transport only is replayed; the real reviewer decides.
@@ -95,6 +100,23 @@ def test_measured_feature_binding_rejects_other_native_dimension_types(tmp_path,
     result = review_dxf_live(built, client)
     assert result.passed == want_pass
     assert bool(result.dimension_feature_mismatches) == (not want_pass)
+
+
+@pytest.mark.parametrize("dimtype,want_pass", [
+    (128, True), (129, True), (160, True), (161, True),
+    (64, False), (65, False), (96, False), (97, False), (256, False),
+])
+def test_saved_dimension_type_flags_cannot_discharge_wrong_native_type(tmp_path, dimtype, want_pass):
+    built, records, measurement = build_dimension_feature_binding_fixture(tmp_path, dimtype=dimtype)
+    assert measurement == 80
+    headless = review_dxf(built)
+    client = FakeMCPClient(fail_entity_get=False)
+    for handle, entity_type, layer, geometry in records:
+        client.preload_entity(handle, entity_type, layer, geometry)
+    live = review_dxf_live(built, client)
+    assert headless.passed == want_pass
+    assert live.passed == want_pass
+    assert bool(live.dimension_feature_mismatches) == (not want_pass)
 
 
 def test_legacy_unbound_dimension_does_not_acquire_feature_obligation(tmp_path):
