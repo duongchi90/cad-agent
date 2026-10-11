@@ -34,6 +34,14 @@
    - Hard safety gates verified: two real parallel lines, junctions (T, L, X), dense/sparse hatch, dimension lines, dashed gaps.
    - 7 empirical scripts + 1 formal specification.
 
+5. **Circle False-Positive Perimeter Validation (`research/antigravity/2026-10-11/circle_validation/`):**
+   - Baseline causal RED demonstrating 144 false-positive circles from HoughCircles on non-circle patterns (cross-hatch, dense hatch, text, grid crossings).
+   - Arc vs circle conflation analysis showing semicircles (>= 180 deg) falsely proposed as full engineering circles.
+   - Empirical validation of perimeter support oracle: minimum circumference support >= 75%, max unsupported angular gap <= 45 deg, radial gradient alignment >= 60%, and radial distance roundness sigma_r <= max(0.35, 0.04*r).
+   - Proven that inside/outside contrast check is unsafe for solid disks and thick strokes.
+   - Validated 100.0% false-positive elimination rate (0/144 false detections retained) while maintaining 100.0% true circle retention across 35 radius/stroke configs.
+   - 5 empirical scripts + 1 formal specification.
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -65,6 +73,12 @@
 | `thick_line` | [`test_hatch_and_dimension_controls.py`](thick_line/test_hatch_and_dimension_controls.py) | Control Benchmark | `RESEARCH_ONLY` | `e8109f97bf35537ebd9903fd785c81ee7f24e3dabd02c8ceea1a58dc709adc41` | Dense/sparse hatch, dimension extension lines, and dashed gap non-bridging tests |
 | `thick_line` | [`test_circle_interaction.py`](thick_line/test_circle_interaction.py) | Interaction Benchmark | `RESEARCH_ONLY` | `7e39dfb708e364cefb70b607a654cb27d11bef8a957e3abd6fdb57b17949c05e` | Isolated circles, tangent lines, crossing lines, and rounded rectangle chord elimination |
 | `thick_line` | [`thick_line_centerline_normalization_empirical_specification.md`](thick_line/thick_line_centerline_normalization_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `bcef57e693b8bab44cf0571db717e709f689e6c302005e4c127749181b676b85` | Formal technical specification for thick line centerline normalization |
+| `circle_validation` | [`test_circle_false_positives_red.py`](circle_validation/test_circle_false_positives_red.py) | Causal RED Test | `RESEARCH_ONLY` | `bbc118fd86495c2271a514b1f422c3c1c5d3336e2a6b5a7167d8df7dee1d0520` | Baseline causal RED proving 144 false circles across 17 non-circle fixture families |
+| `circle_validation` | [`test_arc_vs_circle.py`](circle_validation/test_arc_vs_circle.py) | Boundary Test | `RESEARCH_ONLY` | `f916d90eb559811f99cfb6cb1508fbca76b82e9b8893be7106a2e7d43b1a90f9` | Arc sweep vs Hough circle candidate proposal proving conflation for arcs >= 180 deg |
+| `circle_validation` | [`test_circle_validator_oracle.py`](circle_validation/test_circle_validator_oracle.py) | Oracle Benchmark | `RESEARCH_ONLY` | `981a1376dfce4c0b4e2b85c0f5386e88fcd29bed1477fe0fe20684675307e937` | Component contribution analysis: support, angular bins, radial gradients, contrast |
+| `circle_validation` | [`test_true_circle_positive_matrix.py`](circle_validation/test_true_circle_positive_matrix.py) | Positive Matrix Test | `RESEARCH_ONLY` | `e21ad27c5d0ff9c78dfbe431ee691d40d99d7336ed93fbada57f912e356f96b5` | True circle retention matrix (radii 5-120px, widths 1-8px, 100% retention on detections) |
+| `circle_validation` | [`test_false_positive_negative_matrix.py`](circle_validation/test_false_positive_negative_matrix.py) | Negative Matrix Test | `RESEARCH_ONLY` | `5e372673555832e06f7ea584b2086e63bb1a39ed8cb2e0287239bfb2db5762cf` | Negative elimination matrix across 17 fixture families (100% false circles eliminated) |
+| `circle_validation` | [`circle_false_positive_perimeter_validation_empirical_specification.md`](circle_validation/circle_false_positive_perimeter_validation_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `65224a2e5e53a19a5b2b9b0e65d60ff4c16d6e952c1daf622ac3be37116ee3a8` | Formal technical specification for circle false-positive perimeter validation |
 
 ## Verification and Non-Interference Guarantees
 
