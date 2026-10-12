@@ -116,6 +116,13 @@
    - Verified 8 positive/negative controls (rounded rectangle, keyhole bore, triple concentric lug, parallel offset, non-concentric lug, radial spoke, disjoint arcs, unequal radii) and 8 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`ARC_FILLET_CONSTRAINT_DETECTION_V1_READY_FOR_CODEX`).
 
+15. **Compound Slot & Fillet Feature Assembly (`research/antigravity/2026-10-11/compound_features/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `pattern_compound.py` and `assemble.py`: elongated slot omission (dropped arcs and tangent constraints), filleted rectangular frame omission (broken line-line coincident corner assumption), filleted L-bracket omission, mounting lug tab omission, and naive proximity false merging.
+   - Benchmarked 4 strategies (A: Current Main, B: Naive Bounding Box Overlap Clusterer, C: Line-Only Polygon Cycle Matcher, D: Constraint-Driven Multi-Primitive Feature Grammar), proving Strategy D achieves 100.0% accuracy across 8 test scenarios (vs 25.0% in Strategy A and C) and executes in < 20 ms across 120 primitives.
+   - Unified multi-primitive constraint grammar assembling 2 parallel lines + 2 tangent arcs into `mechanical_hole_feature` (slots), 4 lines + 4 corner arcs into `khung_chu_nhat` (filleted frames), 2 lines + 1 fillet arc into `gia_do` (filleted brackets), and outer arc + concentric hole circle + 2 lines into `ban_le` (mounting lugs), with greedy size-priority deduplication.
+   - Verified 8 positive/negative controls (slotted flange plate, double-ended lug bar, multi-feature assembly, cross-hatch rejection, open parallel rails, floating arc, non-concentric hole) and 6 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`COMPOUND_SLOT_AND_FILLET_FEATURE_ASSEMBLY_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -220,6 +227,12 @@
 | `arc_constraint_detection` | [`test_arc_constraint_controls.py`](arc_constraint_detection/test_arc_constraint_controls.py) | Controls Test | `RESEARCH_ONLY` | `348f457e331583d8d752130a7fa53a341b916d0059b152772c4bd8f9d92c5746` | Positive fixtures (rounded rectangle, keyhole, triple concentric) and strong negative controls |
 | `arc_constraint_detection` | [`test_arc_constraint_degenerate_and_perf.py`](arc_constraint_detection/test_arc_constraint_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `c620bf243fa129437473e0edd3b77fe57bdae7915c77c81246946d7f47a8ff77` | Zero-radius, zero-length, non-finite coords, 0/360 deg sweep, and 100-primitive latency profiling |
 | `arc_constraint_detection` | [`arc_fillet_constraint_detection_empirical_specification.md`](arc_constraint_detection/arc_fillet_constraint_detection_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `8ec4bc44d79a3b2e5093734afb2270afb2488e8ed4fb77ee31d74c69e60d0116` | Complete empirical specification for arc and fillet constraint detection (Sections 10-20, `ARC_FILLET_CONSTRAINT_DETECTION_V1`) |
+| `compound_features` | [`compound_feature_engine.py`](compound_features/compound_feature_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `09937f347bebc492bd4be5ac93fb33d45db19b9614faf476089b8e3ea39740c3` | Reference implementation of Strategies A-D for compound slot and fillet feature assembly |
+| `compound_features` | [`test_causal_red_compound_features.py`](compound_features/test_causal_red_compound_features.py) | Causal RED Test | `RESEARCH_ONLY` | `f40867e64e6f298f5b030bec6652d9936b507aaa21e722f26c0f7d44cf579091` | Public causal RED reproducing 5 baseline failure modes on production pattern_compound.py |
+| `compound_features` | [`test_compound_feature_benchmark.py`](compound_features/test_compound_feature_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `ea3a52e920c1245cd629564c17e4c436222cc70a239952a4451d6b638fe56aaf` | Empirical benchmark comparing Strategies A-D across 8 compound feature scenarios |
+| `compound_features` | [`test_compound_feature_controls.py`](compound_features/test_compound_feature_controls.py) | Controls Test | `RESEARCH_ONLY` | `51910b5546b96b06716bff9569ea146697cb70ef7ffe1105d8ebebb7fa8d088b` | Positive fixtures (slotted plate, lug bar, multi-feature assembly) and strong negative controls |
+| `compound_features` | [`test_compound_feature_degenerate_and_perf.py`](compound_features/test_compound_feature_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `796b76373e02384beac152a570ea7b3d5402b6c00f4af2fe3395740bca18003c` | Zero-length, zero-radius, non-finite coords, stale IDs, and 120-primitive latency profiling |
+| `compound_features` | [`compound_slot_and_fillet_empirical_specification.md`](compound_features/compound_slot_and_fillet_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `80ec8bda282d004bfb068717f9ffe48432daea6a4d84d773292c85726a1833b3` | Complete empirical specification for compound slot and fillet feature assembly (Sections 10-20, `COMPOUND_SLOT_AND_FILLET_FEATURE_ASSEMBLY_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
