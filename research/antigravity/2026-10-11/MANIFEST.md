@@ -70,6 +70,13 @@
    - Verified 6 degenerate/numeric safety cases (empty, singletons, zero-length, micro-segments, duplicate/nested collapse, extreme coordinates 10^6 px, NaN/Inf safety) and runtime scalability up to N=1000 segments (5.6 ms at N=100).
    - 9 empirical scripts + 1 formal specification (`COLLINEAR_LINE_MERGING_V1_READY_FOR_CODEX`).
 
+9. **Automatic Calibration Multi-Candidate Consensus (`research/antigravity/2026-10-11/calibration_consensus/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `calibration.py`: 59.6% scale error from fragmented Hough line pairing (337px vs 538px), unverified single-candidate return under `require_consensus=False` default, permissive 10.0% consensus tolerance violating `AGENTS.md` 3% invariant, sheet number ("09") calibration hallucination (99% error), and cross-axis aspect ratio distortion blindness (25% axis stretching).
+   - Benchmarked 4 strategies (A: Current Main, B: Naive 10% Consensus, C: Strict 3% Consensus, D: Topology Oracle), proving Strategy D achieves 0.00% scale error, 100% fragment immunity, 100% noise rejection, and 100% cross-axis verification at 223.4 µs/call.
+   - Enforced `AGENTS.md` production invariant: >= 2 independent candidates with median relative error <= 3.0%, failing closed on single candidates, > 3% error, and conflicting mixed-scale views.
+   - Verified 6 degenerate/numeric safety cases (empty, zero values, negative dimensions, NaN/Inf safety, zero-length points, extreme coordinates 10^6 px) and runtime scalability (7.77 ms for 50 texts x 200 lines).
+   - 5 empirical scripts + 1 formal specification (`AUTOMATIC_CALIBRATION_CONSENSUS_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -138,6 +145,12 @@
 | `line_merging` | [`test_angle_drift_and_weighted_fit.py`](line_merging/test_angle_drift_and_weighted_fit.py) | Stability Benchmark | `RESEARCH_ONLY` | `f45d74d849598ec2ea67803cc5bd127b66702aff83ca3b7d74d353a3928a84f8` | 12-angle rotation circle benchmark and multi-fragment length-squared weighted fit attenuation |
 | `line_merging` | [`test_degenerate_nonfinite_and_perf_benchmark.py`](line_merging/test_degenerate_nonfinite_and_perf_benchmark.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `4631c2d661208a43437576c8458da2013002cec0ba70b0464dbdcb055c580638` | Zero-length points, duplicates, nested containment, extreme coordinates, NaN/Inf safety, and N=1000 scalability |
 | `line_merging` | [`collinear_line_merging_empirical_specification.md`](line_merging/collinear_line_merging_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `0e868d18a56dad8b786bc7ca78feccf70e1a738ce40e9fedb1da6c500724047f` | Complete empirical specification for collinear line merging (Sections 10-22, `COLLINEAR_LINE_MERGING_V1`) |
+| `calibration_consensus` | [`calibration_consensus_engine.py`](calibration_consensus/calibration_consensus_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `318fbe6b611cc573c17126600534ed637c0f5d7327414c05e9c56c917262a216` | Reference implementation of Strategies A-D for multi-candidate calibration consensus |
+| `calibration_consensus` | [`test_causal_red_calibration.py`](calibration_consensus/test_causal_red_calibration.py) | Causal RED Test | `RESEARCH_ONLY` | `7866fe09f44a0d1ae8762fd628c4df95d8eba0295790091ffe45639e2df02664` | Public causal RED reproducing 5 baseline failure modes on production calibration.py |
+| `calibration_consensus` | [`test_calibration_strategies_benchmark.py`](calibration_consensus/test_calibration_strategies_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `a2e91fe148fd607afb793e05b3deba6d86996d04d7eacb4cbb6759b9f29dd436` | Empirical benchmark comparing Strategies A-D on realistic multi-view drawing scenario |
+| `calibration_consensus` | [`test_positive_and_negative_consensus_controls.py`](calibration_consensus/test_positive_and_negative_consensus_controls.py) | Controls Test | `RESEARCH_ONLY` | `16b885dc0f6e01f7126e397e2935f78f37c020aa713b9fc612705dda2b6641fd` | Positive consensus fixtures and strong negative controls enforcing AGENTS.md 3% gate |
+| `calibration_consensus` | [`test_calibration_degenerate_nonfinite_and_perf.py`](calibration_consensus/test_calibration_degenerate_nonfinite_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `5786985c8cbce13922e46e4534e4cce8d7842c2666ac4ab5178704eaaff5071c` | Empty collections, non-finite values, zero-length points, extreme coordinates, and scalability profiling |
+| `calibration_consensus` | [`calibration_consensus_empirical_specification.md`](calibration_consensus/calibration_consensus_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `b15df585aec6124923a428b981aa18c415853d7609e73d0031c597677d385294` | Complete empirical specification for automatic calibration consensus (Sections 10-20, `AUTOMATIC_CALIBRATION_CONSENSUS_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
