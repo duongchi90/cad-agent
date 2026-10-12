@@ -123,6 +123,13 @@
    - Verified 8 positive/negative controls (slotted flange plate, double-ended lug bar, multi-feature assembly, cross-hatch rejection, open parallel rails, floating arc, non-concentric hole) and 6 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`COMPOUND_SLOT_AND_FILLET_FEATURE_ASSEMBLY_V1_READY_FOR_CODEX`).
 
+16. **Mechanical Dimension & Tolerance Parsing (`research/antigravity/2026-10-11/dimension_symbols/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `primitive_ir_lib/dimension_symbols.py`: ISO 286 Limits & Fits omission (`⌀25 H7`, `⌀50 g6`), asymmetric zero-limit tolerance omission (`50 +0.05 / 0`, `50 0 / -0.02`), metric thread callout omission (`M10`, `M8x1.25`), chamfer callout omission (`C2`, `2x45°`), and reference dimension parentheses omission (`(50)`).
+   - Benchmarked 4 strategies (A: Current Main, B: Naive Regex Strip, C: Strict Positional Matcher, D: Tokenized Mechanical Dimension Grammar), proving Strategy D achieves 100.0% accuracy across 8 test scenarios (vs 0.0% in Strategy A and 37.5% in Strategy C) and executes in < 30 ms across 1,200 callouts.
+   - Robust tokenized grammar parsing nominal values, unit normalization, repeat count prefixes, chamfers, metric threads, ISO fits, asymmetric zero-limit tolerances, depths (`↧ <dp>`), throughs (`THRU`), reference brackets (`(50)`), and comma decimal conversion (`25,4` -> `25.4`).
+   - Verified 8 positive/negative controls (symmetrical tolerances, angular callouts, spherical features, comma decimals, drawing code rejection, revision date rejection, general note rejection, material noise rejection) and 6 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`MECHANICAL_DIMENSION_AND_TOLERANCE_PARSING_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -233,6 +240,12 @@
 | `compound_features` | [`test_compound_feature_controls.py`](compound_features/test_compound_feature_controls.py) | Controls Test | `RESEARCH_ONLY` | `51910b5546b96b06716bff9569ea146697cb70ef7ffe1105d8ebebb7fa8d088b` | Positive fixtures (slotted plate, lug bar, multi-feature assembly) and strong negative controls |
 | `compound_features` | [`test_compound_feature_degenerate_and_perf.py`](compound_features/test_compound_feature_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `796b76373e02384beac152a570ea7b3d5402b6c00f4af2fe3395740bca18003c` | Zero-length, zero-radius, non-finite coords, stale IDs, and 120-primitive latency profiling |
 | `compound_features` | [`compound_slot_and_fillet_empirical_specification.md`](compound_features/compound_slot_and_fillet_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `80ec8bda282d004bfb068717f9ffe48432daea6a4d84d773292c85726a1833b3` | Complete empirical specification for compound slot and fillet feature assembly (Sections 10-20, `COMPOUND_SLOT_AND_FILLET_FEATURE_ASSEMBLY_V1`) |
+| `dimension_symbols` | [`dimension_symbol_engine.py`](dimension_symbols/dimension_symbol_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `7c9730bed2084bbc8573e87776ab2b641a7a6d3943d89527765c2e9ac219778b` | Reference implementation of Strategies A-D for mechanical dimension & tolerance parsing |
+| `dimension_symbols` | [`test_causal_red_dimension_symbols.py`](dimension_symbols/test_causal_red_dimension_symbols.py) | Causal RED Test | `RESEARCH_ONLY` | `78cbff6c7350e0e1acc01644abefc81972c55e5571c49a7c84c8c6585d113447` | Public causal RED reproducing 5 baseline failure modes on production dimension_symbols.py |
+| `dimension_symbols` | [`test_dimension_symbol_benchmark.py`](dimension_symbols/test_dimension_symbol_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `e6c877bb78203d6bb5ed6f09bbc6552f81a2aa7ab4ced819bf70ad481a927aaa` | Empirical benchmark comparing Strategies A-D across 8 mechanical callout scenarios |
+| `dimension_symbols` | [`test_dimension_symbol_controls.py`](dimension_symbols/test_dimension_symbol_controls.py) | Controls Test | `RESEARCH_ONLY` | `e28dd6ea85cf41a25584115ef87b2b471f5be1bd6264d44bb9ffe9f615fde8f2` | Positive fixtures (symmetric tol, angular, spherical, comma) and strong negative controls |
+| `dimension_symbols` | [`test_dimension_symbol_degenerate_and_perf.py`](dimension_symbols/test_dimension_symbol_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `01518b5a1bfe2466aa4ab2c87b692bad91cb4190dea5dbac4624da2715389fbe` | Empty, lone symbols, garbage punctuation, non-finite coords, and 1200-callout latency profiling |
+| `dimension_symbols` | [`mechanical_dimension_and_tolerance_empirical_specification.md`](dimension_symbols/mechanical_dimension_and_tolerance_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `1ede4ef042ab840e2b3dfe9f1d20e3a5abdf8c1c4457edfd33bc54be87c8b18b` | Complete empirical specification for mechanical dimension & tolerance parsing (Sections 10-20, `MECHANICAL_DIMENSION_AND_TOLERANCE_PARSING_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
