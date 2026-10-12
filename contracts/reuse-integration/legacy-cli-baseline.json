@@ -919,6 +919,11 @@
           "dest": "scale_mm_per_px",
           "nargs": null,
           "required": true
+        },
+        "--no-auto-ocr-roi": {
+          "dest": "auto_ocr_roi",
+          "nargs": 0,
+          "required": false
         }
       }
     }
