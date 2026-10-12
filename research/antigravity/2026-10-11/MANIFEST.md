@@ -77,6 +77,15 @@
    - Verified 6 degenerate/numeric safety cases (empty, zero values, negative dimensions, NaN/Inf safety, zero-length points, extreme coordinates 10^6 px) and runtime scalability (7.77 ms for 50 texts x 200 lines).
    - 5 empirical scripts + 1 formal specification (`AUTOMATIC_CALIBRATION_CONSENSUS_V1_READY_FOR_CODEX`).
 
+10. **Robust Dimension Geometry Extraction (`research/antigravity/2026-10-11/dimension_geometry/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `dimension_geometry.py`: vertical dimension line inversion into horizontal extension line (candidates = horizontal or vertical), upward extension lines returning () (0% recall), rightward extension lines returning () (0% recall), aligned/diagonal 45° dimensions dropped completely, and narrow-gap outward arrowheads unclassified.
+   - Benchmarked 4 strategies (A: Current Main, B: Naive Bidirectional, C: Orthogonal Pair Matching, D: Topology Oracle), proving Strategy D achieves 100.0% accuracy across 9 test cases (vs 22.2% in Strategy A) and runs at 3.07 ms/crop.
+   - Resolved text gap interruptions via collinear candidate merging across gaps up to 120px while preserving narrow gaps with outer stems.
+   - Immune to dense cross-hatching (96 segments) via spaced parallel line filter (`count_spaced_parallel >= 4`).
+   - Established dual-condition endpoint patch density threshold (70 nz for corner/extension, 45 nz for open endpoint) with wide safety margins separating plain corners (56 nz) and plain line endpoints (31 nz) from arrowheads (78 nz, 115 nz).
+   - Verified 8 positive/negative controls (rectangle, cross-hatch, parallel tracks, T-junction, crosshair, bridged gap, tall vertical, 30° aligned) and 8 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`DIMENSION_GEOMETRY_EXTRACTION_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -151,6 +160,12 @@
 | `calibration_consensus` | [`test_positive_and_negative_consensus_controls.py`](calibration_consensus/test_positive_and_negative_consensus_controls.py) | Controls Test | `RESEARCH_ONLY` | `16b885dc0f6e01f7126e397e2935f78f37c020aa713b9fc612705dda2b6641fd` | Positive consensus fixtures and strong negative controls enforcing AGENTS.md 3% gate |
 | `calibration_consensus` | [`test_calibration_degenerate_nonfinite_and_perf.py`](calibration_consensus/test_calibration_degenerate_nonfinite_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `5786985c8cbce13922e46e4534e4cce8d7842c2666ac4ab5178704eaaff5071c` | Empty collections, non-finite values, zero-length points, extreme coordinates, and scalability profiling |
 | `calibration_consensus` | [`calibration_consensus_empirical_specification.md`](calibration_consensus/calibration_consensus_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `b15df585aec6124923a428b981aa18c415853d7609e73d0031c597677d385294` | Complete empirical specification for automatic calibration consensus (Sections 10-20, `AUTOMATIC_CALIBRATION_CONSENSUS_V1`) |
+| `dimension_geometry` | [`dimension_geometry_engine.py`](dimension_geometry/dimension_geometry_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `9da7c145190b08b6a42266a1f85d0470e344e3ed43d3090d4785768f5f165cbd` | Reference implementation of Strategies A-D for robust dimension geometry extraction |
+| `dimension_geometry` | [`test_causal_red_dimension_geometry.py`](dimension_geometry/test_causal_red_dimension_geometry.py) | Causal RED Test | `RESEARCH_ONLY` | `0d7bbee4b20a998aac1ea112f028c9c4133d869b53042751243c1711ddc8730e` | Public causal RED reproducing 5 baseline failure modes on production dimension_geometry.py |
+| `dimension_geometry` | [`test_dimension_geometry_benchmark.py`](dimension_geometry/test_dimension_geometry_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `8f2aeb748f7ae114282ea4fd1d4d6cbaf50bf1e3e1859c88114e271a7b18c7e2` | Empirical benchmark comparing Strategies A-D across 9 cases (H, V, aligned, inward/outward arrows) |
+| `dimension_geometry` | [`test_dimension_geometry_controls.py`](dimension_geometry/test_dimension_geometry_controls.py) | Controls Test | `RESEARCH_ONLY` | `91584da6647fdbf6f1328fae2363a5b655acb55298c96fcd0ea5b2ff03d0223a` | Positive fixtures and strong negative controls (rectangle, hatch, tracks, T-junction, crosshair) |
+| `dimension_geometry` | [`test_dimension_geometry_degenerate_and_perf.py`](dimension_geometry/test_dimension_geometry_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `b02d372482db38d0f674300d578dc714dcd589d30c03cb8852f9826feff745e4` | Blank, black, tiny, noise, extreme aspect ratio, ambiguity, and latency profiling (3.07 ms/crop) |
+| `dimension_geometry` | [`dimension_geometry_empirical_specification.md`](dimension_geometry/dimension_geometry_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `918cec3a7df47294813c993d53de61cfe000f174cf5e9a209f9f08d1bf128399` | Complete empirical specification for robust dimension geometry extraction (Sections 10-20, `DIMENSION_GEOMETRY_EXTRACTION_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
