@@ -94,6 +94,14 @@
    - Verified 7 positive/negative controls (dimension witness, cross-hatch, L-bracket, text ruling, scattered geometry, ISO 7200 title block, standard BOM parts list) and 8 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`TABLE_CELL_GRID_EXTRACTION_V1_READY_FOR_CODEX`).
 
+12. **Semantic View Region Partitioning (`research/antigravity/2026-10-11/view_partitioning/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `view_calibration.py`: single-linkage chaining bridge collapse merging separate orthographic views (assigning conflicting scales to the same bbox), outer sheet border line assimilation triggering >= 80% area bailout (losing dimension evidence), inter-view centerline crossing traps, equidistant scale label dropping under 1e-6 float equality, and title block metadata table conflation.
+   - Benchmarked 4 strategies (A: Current Main, B: Bounding Box Chaining, C: Projection Gutter Slicing, D: Semantic View Partitioning Oracle), proving Strategy D achieves 100.0% accuracy across 6 test cases (vs 50.0% in Strategy A) and runs at < 8.5 ms for 50-view complex assemblies (0.32 ms/drawing batch throughput).
+   - Resolved sheet border and title block isolation via margin envelope peeling and rectangular table boundary extraction before view clustering.
+   - Enforced directional heading alignment and horizontal offset penalties, robustly binding scale labels to their intended drawing views.
+   - Verified 6 positive/negative controls (border frame, notes column, registration marks, title block only, A3 2-view, 3-view section/detail) and 7 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`SEMANTIC_VIEW_REGION_PARTITIONING_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -180,6 +188,12 @@
 | `table_extraction` | [`test_table_extraction_controls.py`](table_extraction/test_table_extraction_controls.py) | Controls Test | `RESEARCH_ONLY` | `19a21ae0d4fc13818fb55cb215d76bad43567eaeb31628a949701ba3b21c94f0` | Positive fixtures (ISO 7200, BOM) and strong negative controls (dimension, hatch, L-bracket) |
 | `table_extraction` | [`test_table_extraction_degenerate_and_perf.py`](table_extraction/test_table_extraction_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `d56f7ecb93bf5a172cd3e54504a906c9222b334e15c355049b2b50526a7c1ac4` | Empty, zero-length, non-finite coords, micro-ROI, inverted ROI, broken borders, and latency profiling |
 | `table_extraction` | [`table_cell_grid_extraction_empirical_specification.md`](table_extraction/table_cell_grid_extraction_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `363aff123f360b3fe1dea777e9a0cfa2f20c469ea40ecf1867b4b2c7d7edc850` | Complete empirical specification for robust table cell grid extraction (Sections 10-20, `TABLE_CELL_GRID_EXTRACTION_V1`) |
+| `view_partitioning` | [`view_partitioning_engine.py`](view_partitioning/view_partitioning_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `c1467ab00c68812b789860d6de10cb5e8664116b696d43056822e5cf066e4da8` | Reference implementation of Strategies A-D for semantic view region partitioning |
+| `view_partitioning` | [`test_causal_red_view_partitioning.py`](view_partitioning/test_causal_red_view_partitioning.py) | Causal RED Test | `RESEARCH_ONLY` | `71746e97328291faaf86ce49f7df3d4028eb3409a6f6bd83a7c3c267215b2c91` | Public causal RED reproducing 5 baseline failure modes on production view_calibration.py |
+| `view_partitioning` | [`test_view_partitioning_benchmark.py`](view_partitioning/test_view_partitioning_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `31faa7ee61ee48192f9826d524d9127be55532961f76f429766aec17b7f062b8` | Empirical benchmark comparing Strategies A-D across 6 multi-view layouts |
+| `view_partitioning` | [`test_view_partitioning_controls.py`](view_partitioning/test_view_partitioning_controls.py) | Controls Test | `RESEARCH_ONLY` | `319eba2b37cb3739c01995796b753bae9fa80d92a9737abfe80192630add434b` | Positive fixtures (A3 two-view, 3-view section) and strong negative controls |
+| `view_partitioning` | [`test_view_partitioning_degenerate_and_perf.py`](view_partitioning/test_view_partitioning_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `87f9c05f34a5a428c82be320c77d0cd7bce426f7541691b3f3e9e5b02d1d20ef` | Empty, zero-length, non-finite coords, micro-segments, and 50-view latency profiling |
+| `view_partitioning` | [`semantic_view_region_partitioning_empirical_specification.md`](view_partitioning/semantic_view_region_partitioning_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `20ebe7ffad9334002d2fd0e13ca76c3c2e68fa19700d482f51dd77900149110a` | Complete empirical specification for semantic view region partitioning (Sections 10-20, `SEMANTIC_VIEW_REGION_PARTITIONING_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
