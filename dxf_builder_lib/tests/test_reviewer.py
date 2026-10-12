@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import tempfile
 import math
+from pathlib import Path
 
 import pytest
 
@@ -140,6 +141,60 @@ def test_saved_standalone_scalar_geometry_is_finite_and_source_matching(
     assert report.passed == want_pass
     assert bool(report.mismatches) == (not want_pass)
     assert (tmp_path / "candidate.dxf").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "angle,approved_value,want_pass",
+    [
+        (0.0, 80.0, True),
+        (0.0, 70.0, False),
+        (math.nan, 80.0, False),
+    ],
+    ids=["finite-approved", "finite-approval-mismatch", "nonfinite-measurement"],
+)
+def test_saved_reopened_dimension_measurement_is_finite_and_approved(
+    tmp_path, angle, approved_value, want_pass,
+):
+    from dxf_builder_lib.tests.dxf_test_support import (
+        build_native_dimension_consumer_fixture,
+    )
+
+    built, _, _ = build_native_dimension_consumer_fixture(
+        tmp_path, 80.0, approved_value, "",
+    )
+    dimension_handle = next(
+        iter(built.dimension_handle_by_cross_validation_id.values())
+    )
+    document = ezdxf.readfile(built.output_path)
+    dimension = document.entitydb[dimension_handle]
+    dimension.dxf.angle = angle
+    document.saveas(built.output_path)
+
+    reopened = ezdxf.readfile(built.output_path)
+    reopened_dimension = reopened.entitydb[dimension_handle]
+    measurement = float(reopened_dimension.get_measurement())
+    saved_line = reopened.entitydb[built.handle_by_primitive_id["line"]]
+
+    assert tuple(saved_line.dxf.start) == (0.0, 0.0, 0.0)
+    assert tuple(saved_line.dxf.end) == (80.0, 0.0, 0.0)
+    assert all(
+        math.isfinite(value)
+        for point_name in ("defpoint2", "defpoint3")
+        for value in reopened_dimension.dxf.get(point_name)
+    )
+    assert math.isfinite(reopened_dimension.dxf.angle) == math.isfinite(angle)
+    if math.isnan(angle):
+        assert math.isnan(measurement), "the saved/reopened DXF must produce a real NaN measurement"
+    else:
+        assert measurement == 80.0
+
+    before_review = Path(built.output_path).read_bytes()
+    report = review_dxf(built)
+
+    assert report.dimension_checked_count == 1
+    assert not any("feature binding" in item for item in report.dimension_mismatches)
+    assert report.passed is want_pass
+    assert Path(built.output_path).read_bytes() == before_review
 
 
 def _beam_semantic_doc() -> SemanticIRDocument:

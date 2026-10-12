@@ -434,13 +434,17 @@ def review_dxf(
             )
         measurement = float(entity.get_measurement())
         dimension_measurement_by_id[validation_id] = measurement
-        if abs(measurement - float(expected["measurement"])) > tolerance_mm:
+        if not _scalar_matches(
+            measurement, float(expected["measurement"]), tolerance_mm,
+        ):
             dimension_mismatches.append(
                 f"{validation_id}: expected measurement "
                 f"{expected['measurement']}, actual {measurement}"
             )
         approved = expected.get("approved_value_mm")
-        if approved is not None and abs(measurement - float(approved)) > tolerance_mm:
+        if approved is not None and not _scalar_matches(
+            measurement, float(approved), tolerance_mm,
+        ):
             dimension_mismatches.append(
                 f"{validation_id}: approved measurement {approved}, "
                 f"actual {measurement}, tolerance {tolerance_mm}"
