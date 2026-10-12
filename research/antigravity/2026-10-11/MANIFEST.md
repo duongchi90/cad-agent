@@ -109,6 +109,13 @@
    - Verified 8 positive/negative controls (plain line, dense hatch, parallel tracks, touching text, L-corner, architectural 4-span chain, stepped shaft chain, solid arrows) and 8 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`TICK_MARK_BOUNDARY_DETECTION_V1_READY_FOR_CODEX`).
 
+14. **Arc, Fillet & Curved Constraint Detection (`research/antigravity/2026-10-11/arc_constraint_detection/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `constraint_detection.py` and `assemble.py`: distant collinear line false positive tangency (infinite line flaw), complete omission of line-arc fillet transitions (`assemble.py` drops `arc` primitives), omission of arc-arc tangent S-curves, omission of bolt-hole to mounting-lug (circle-to-arc) concentricity, and naive out-of-sweep false tangency.
+   - Benchmarked 4 strategies (A: Current Main, B: Naive Infinite Projection Matcher, C: Endpoint-Only Proximity Matcher, D: Bounded Sweep Contact Oracle), proving Strategy D achieves 100.0% accuracy across 8 test scenarios (vs 12.5% in Strategy A) and runs at < 15 ms across 100 primitives (4,950 pairwise evaluations).
+   - Resolved line-arc tangency via two-stage bounded contact projection and angular sweep containment, orthogonal spoke non-tangency rejection via tangent vector orthogonality, and multi-primitive concentricity/equal radius.
+   - Verified 8 positive/negative controls (rounded rectangle, keyhole bore, triple concentric lug, parallel offset, non-concentric lug, radial spoke, disjoint arcs, unequal radii) and 8 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`ARC_FILLET_CONSTRAINT_DETECTION_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -207,6 +214,12 @@
 | `tick_mark_detection` | [`test_tick_mark_controls.py`](tick_mark_detection/test_tick_mark_controls.py) | Controls Test | `RESEARCH_ONLY` | `dfb1ae84ee2ecd1a87a6bb61a06b8db67711cb3caafc43419610e48f96f1452b` | Positive fixtures (4-span arch chain, shaft chain, solid arrows) and strong negative controls |
 | `tick_mark_detection` | [`test_tick_mark_degenerate_and_perf.py`](tick_mark_detection/test_tick_mark_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `c87de07f13ec79c351903edce37b056ee611d8750911da97ed4319fdbe2a50e4` | Empty, zero-length, non-finite coords, blank canvas, and 50-line latency profiling |
 | `tick_mark_detection` | [`tick_mark_boundary_empirical_specification.md`](tick_mark_detection/tick_mark_boundary_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `b85c4329e9ae7976b8bfd93127c659864eb18f9f04b41570892c509396574730` | Complete empirical specification for tick mark & boundary symbol detection (Sections 10-20, `TICK_MARK_BOUNDARY_DETECTION_V1`) |
+| `arc_constraint_detection` | [`arc_constraint_engine.py`](arc_constraint_detection/arc_constraint_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `01978d072a8b33c85972507d87322dd0ec30b36040ba1bcaf012a822a80ee928` | Reference implementation of Strategies A-D for arc and fillet constraint detection |
+| `arc_constraint_detection` | [`test_causal_red_arc_constraints.py`](arc_constraint_detection/test_causal_red_arc_constraints.py) | Causal RED Test | `RESEARCH_ONLY` | `81ac8af6e6b30382d6e64f680d32ea33762e78c02acde3ac205969b13cd8bcea` | Public causal RED reproducing 5 baseline failure modes on production constraint_detection.py |
+| `arc_constraint_detection` | [`test_arc_constraint_benchmark.py`](arc_constraint_detection/test_arc_constraint_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `d850b7615ec25fb860162392094a4db39ff60a2ef9967953b67880a2bb3cc64b` | Empirical benchmark comparing Strategies A-D across 8 curved constraint scenarios |
+| `arc_constraint_detection` | [`test_arc_constraint_controls.py`](arc_constraint_detection/test_arc_constraint_controls.py) | Controls Test | `RESEARCH_ONLY` | `348f457e331583d8d752130a7fa53a341b916d0059b152772c4bd8f9d92c5746` | Positive fixtures (rounded rectangle, keyhole, triple concentric) and strong negative controls |
+| `arc_constraint_detection` | [`test_arc_constraint_degenerate_and_perf.py`](arc_constraint_detection/test_arc_constraint_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `c620bf243fa129437473e0edd3b77fe57bdae7915c77c81246946d7f47a8ff77` | Zero-radius, zero-length, non-finite coords, 0/360 deg sweep, and 100-primitive latency profiling |
+| `arc_constraint_detection` | [`arc_fillet_constraint_detection_empirical_specification.md`](arc_constraint_detection/arc_fillet_constraint_detection_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `8ec4bc44d79a3b2e5093734afb2270afb2488e8ed4fb77ee31d74c69e60d0116` | Complete empirical specification for arc and fillet constraint detection (Sections 10-20, `ARC_FILLET_CONSTRAINT_DETECTION_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
