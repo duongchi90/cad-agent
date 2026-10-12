@@ -73,6 +73,8 @@ def _primitive_from_dict(d: dict) -> Primitive:
         bbox_px=tuple(trace_d["bbox_px"]),
         extraction_tool=trace_d.get("extraction_tool"),
         extracted_at=trace_d.get("extracted_at"),
+        verification_request_sha256=trace_d.get("verification_request_sha256"),
+        verification_result_sha256=trace_d.get("verification_result_sha256"),
     )
     validation_d = d.get("validation", {})
     validation = Validation(

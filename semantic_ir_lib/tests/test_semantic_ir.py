@@ -354,3 +354,68 @@ def run_all():
 
 if __name__ == "__main__":
     run_all()
+
+def test_primitive_loader_preserves_trace_verification_hashes(tmp_path):
+    from semantic_ir_lib.io_utils import load_primitive_ir_document_bytes
+
+    primitive = _line("trace-hashes", 0, 0, 10, 0)
+    primitive.trace = Trace(
+        bbox_px=(1, 2, 11, 12),
+        extraction_tool="fixture-extractor",
+        extracted_at="2026-10-12T00:00:00Z",
+        verification_request_sha256="a" * 64,
+        verification_result_sha256="b" * 64,
+    )
+    document = PrimitiveIRDocument(
+        source_document=SourceDocument(
+            file_name="trace-hashes.png",
+            page_index=0,
+            image_width_px=100,
+            image_height_px=100,
+        ),
+        calibration=Calibration(
+            unit="mm",
+            pixel_to_unit_scale=1.0,
+            origin_px=(0, 100),
+            method="title_block_scale",
+            status="verified",
+            source_sha256="c" * 64,
+        ),
+        primitives=[primitive],
+    )
+    payload = json.dumps(document.to_dict()).encode("utf-8")
+    path = tmp_path / "trace-hashes.json"
+    path.write_bytes(payload)
+
+    loaded_documents = (
+        load_primitive_ir_document(str(path)),
+        load_primitive_ir_document_bytes(payload),
+    )
+    for loaded in loaded_documents:
+        trace = loaded.primitives[0].trace
+        assert trace.verification_request_sha256 == "a" * 64
+        assert trace.verification_result_sha256 == "b" * 64
+        assert trace.bbox_px == (1, 2, 11, 12)
+        assert trace.extraction_tool == "fixture-extractor"
+        assert trace.extracted_at == "2026-10-12T00:00:00Z"
+        assert loaded.primitives[0].geometry.start == Point2D(0, 0)
+        assert loaded.primitives[0].geometry.end == Point2D(10, 0)
+
+    primitive_without_hashes = _line("no-trace-hashes", 0, 0, 10, 0)
+    empty_hash_document = PrimitiveIRDocument(
+        source_document=document.source_document,
+        calibration=document.calibration,
+        primitives=[primitive_without_hashes],
+    )
+    empty_payload = json.dumps(empty_hash_document.to_dict()).encode("utf-8")
+    empty_path = tmp_path / "trace-hashes-absent.json"
+    empty_path.write_bytes(empty_payload)
+    empty_loaded = (
+        load_primitive_ir_document(str(empty_path)),
+        load_primitive_ir_document_bytes(empty_payload),
+    )
+    assert all(
+        item.primitives[0].trace.verification_request_sha256 is None
+        and item.primitives[0].trace.verification_result_sha256 is None
+        for item in empty_loaded
+    )
