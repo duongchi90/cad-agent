@@ -258,6 +258,25 @@ def test_pdf_cli_persists_auto_ocr_roi_choice() -> None:
         assert manifest["configuration"]["auto_ocr_roi"] is True
 
 
+def test_pdf_manifest_helper_default_remains_geometry_only() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        output = root / "run"
+        _dimension_pdf(source)
+
+        manifest = new_pdf_manifest(source, 1, "synthetic-scale", 144)
+        manifest_path = output / "pdf-run-manifest.json"
+        run_pdf_stages(source, output, manifest_path, manifest)
+
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert persisted["configuration"]["auto_ocr_roi"] is False
+        assert not [item for item in primitive["primitives"] if item["type"] == "text"]
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
 def test_pdf_cli_defaults_to_ocr_and_retains_explicit_geometry_only_opt_out() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

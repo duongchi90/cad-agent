@@ -35,7 +35,7 @@ def new_pdf_manifest(
     approval: str,
     dpi: int,
     *,
-    auto_ocr_roi: bool = True,
+    auto_ocr_roi: bool = False,
 ) -> dict[str, Any]:
     if not source.is_file():
         raise ManifestError(f"Input PDF does not exist: {source}")
