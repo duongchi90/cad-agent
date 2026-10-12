@@ -73,9 +73,9 @@ manual-scale approval and source SHA-256 in `pdf-run-manifest.json`:
 Use `resume-pdf` with that manifest and the original PDF to retry only missing
 page stages. A changed source PDF is rejected by SHA-256 before any checkpoint
 is reused.
-Add `--auto-ocr-roi` to preserve scale-label candidates. Non-ambiguous
-dimension evidence may produce a crop-local child IR under `view_ir/`; both
-remain `needs_verification` and cannot authorize production automatically.
+Top-level `run-pdf` enables OCR ROI by default; `--no-auto-ocr-roi` selects
+geometry-only. Non-ambiguous dimension evidence may create a `needs_verification`
+child IR under `view_ir/`; it cannot authorize production automatically.
 
 ## Agent advice and approved application
 

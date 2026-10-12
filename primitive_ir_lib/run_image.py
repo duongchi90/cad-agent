@@ -216,7 +216,11 @@ def run(
         raw_lines,
         calibration,
         merge_collinear=False,
+        image_bgr=image if auto_ocr_roi else None,
     )
+    if auto_ocr_roi:
+        for cross_validation in document.cross_validations:
+            cross_validation.status = "unverified"
 
     output_dir = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(output_dir, exist_ok=True)

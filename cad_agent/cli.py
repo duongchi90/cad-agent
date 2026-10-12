@@ -272,7 +272,7 @@ def _write_stage(
     write_manifest(manifest_path, manifest)
 
 
-def _run_primitive(source: Path, output: Path, scale: float) -> None:
+def _run_primitive(source: Path, output: Path, scale: float, *, auto_ocr_roi: bool = False) -> None:
     from primitive_ir_lib.run_image import run
 
     run(
@@ -281,6 +281,7 @@ def _run_primitive(source: Path, output: Path, scale: float) -> None:
         scale_mm_per_px=scale,
         preset="real_scan_tuned_v1",
         merge_lines=True,
+        auto_ocr_roi=auto_ocr_roi,
     )
 
 
@@ -1030,7 +1031,19 @@ def build_parser() -> argparse.ArgumentParser:
     run_pdf.add_argument("--scale-mm-per-px", type=float, required=True)
     run_pdf.add_argument("--calibration-approval", required=True)
     run_pdf.add_argument("--dpi", type=int, default=144)
-    run_pdf.add_argument("--auto-ocr-roi", action="store_true", help="Detect OCR regions before PDF scale-label review")
+    run_pdf.add_argument(
+        "--auto-ocr-roi",
+        dest="auto_ocr_roi",
+        action="store_true",
+        help="Detect OCR regions (enabled by default)",
+    )
+    run_pdf.add_argument(
+        "--no-auto-ocr-roi",
+        dest="auto_ocr_roi",
+        action="store_false",
+        help="Skip OCR ROI detection and run geometry-only extraction",
+    )
+    run_pdf.set_defaults(auto_ocr_roi=True)
     resume_pdf = subcommands.add_parser("resume-pdf", help="Resume a validated staged PDF run")
     resume_pdf.add_argument("--manifest", type=Path, required=True)
     resume_pdf.add_argument("--input", type=Path, required=True)
