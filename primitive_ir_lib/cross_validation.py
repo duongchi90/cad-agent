@@ -26,6 +26,7 @@ from typing import List, Optional
 import numpy as np
 
 from .calibration import find_nearest_line
+from .dimension_geometry import detect_dimension_geometry
 from .geometry_extraction import RawLine
 from .line_merging import merge_collinear_lines
 from .models import Calibration, CrossValidation
@@ -41,6 +42,7 @@ def cross_validate(
     merge_collinear: bool = True,
     merge_gap_tol_px: float = 25.0,
     image_bgr: Optional[np.ndarray] = None,
+    require_dimension_geometry: bool = False,
 ) -> List[CrossValidation]:
     """Với mỗi RawText có semantic_role == 'dimension_value':
       1. (mặc định) gộp collinear-line có neo bằng tick-mark (nếu có
@@ -53,6 +55,8 @@ def cross_validate(
 
     image_bgr: ảnh gốc (BGR) để bật tick-mark detection (Lớp 1, ưu tiên hơn
     text-anchor). None -> chỉ dùng text-anchor (Lớp 2), giữ tương thích ngược.
+    require_dimension_geometry: nếu bật, chỉ xác nhận khi ảnh có ít nhất hai
+    extension line gắn với đúng witness-line đã chọn; thiếu ảnh thì unverified.
 
     LƯU Ý: nếu raw_lines rỗng hoặc không tìm được line phù hợp trong
     max_distance_px, trả về status='unverified' — KHÔNG suy đoán, để trống
@@ -93,6 +97,16 @@ def cross_validate(
             ))
             continue
 
+        if require_dimension_geometry and not _has_bound_dimension_geometry(line, image_bgr):
+            results.append(CrossValidation(
+                text_primitive_id=text.id,
+                geometry_primitive_id=line.id,
+                status="unverified",
+                text_value=text.parsed_value,
+                match_threshold_percent=threshold_percent,
+            ))
+            continue
+
         measured = line.length_px() * calibration.pixel_to_unit_scale
         delta_percent = abs(text.parsed_value - measured) / text.parsed_value * 100.0
         status = "confirmed" if delta_percent <= threshold_percent else "conflict"
@@ -108,3 +122,44 @@ def cross_validate(
         ))
 
     return results
+
+
+def _has_bound_dimension_geometry(line: RawLine, image_bgr: Optional[np.ndarray]) -> bool:
+    """Require two extension lines tied to this witness before auto-confirming OCR.
+
+    The crop is centered on the selected RawLine, and the detected dimension
+    line must match that line's endpoints. This prevents another dimension in
+    the same page neighborhood from lending structural evidence to a note.
+    """
+    if (
+        image_bgr is None
+        or not isinstance(image_bgr, np.ndarray)
+        or image_bgr.ndim not in {2, 3}
+    ):
+        return False
+    height, width = image_bgr.shape[:2]
+    x0, y0 = line.bbox_px[0], line.bbox_px[1]
+    x1, y1 = line.bbox_px[2], line.bbox_px[3]
+    padding = 36
+    left = max(0, int(np.floor(x0)) - padding)
+    top = max(0, int(np.floor(y0)) - padding)
+    right = min(width, int(np.ceil(x1)) + padding + 1)
+    bottom = min(height, int(np.ceil(y1)) + padding + 1)
+    if right <= left or bottom <= top:
+        return False
+
+    evidence = detect_dimension_geometry(image_bgr[top:bottom, left:right])
+    if evidence.dimension_line is None or len(evidence.extension_lines) < 2:
+        return False
+
+    detected = tuple((point[0] + left, point[1] + top) for point in evidence.dimension_line)
+    expected = (line.p1_px, line.p2_px)
+    direct = max(
+        np.hypot(detected[0][0] - expected[0][0], detected[0][1] - expected[0][1]),
+        np.hypot(detected[1][0] - expected[1][0], detected[1][1] - expected[1][1]),
+    )
+    reverse = max(
+        np.hypot(detected[0][0] - expected[1][0], detected[0][1] - expected[1][1]),
+        np.hypot(detected[1][0] - expected[0][0], detected[1][1] - expected[0][1]),
+    )
+    return min(direct, reverse) <= 10.0

@@ -33,6 +33,28 @@ def _dimension_pdf(path: Path, label: str = "1077") -> None:
     document.close()
 
 
+def _numeric_note_pdf(path: Path) -> None:
+    document = fitz.open()
+    page = document.new_page(width=900, height=600)
+    page.draw_line((180, 360), (720, 360), width=1.5)
+    page.insert_text((420, 335), "1077", fontsize=16, fontname="helv")
+    document.save(path)
+    document.close()
+
+
+def _numeric_note_with_separate_dimension_pdf(path: Path) -> None:
+    document = fitz.open()
+    page = document.new_page(width=900, height=600)
+    page.draw_line((180, 260), (720, 260), width=1.5)
+    page.insert_text((420, 235), "540", fontsize=16, fontname="helv")
+    page.draw_line((180, 430), (480, 430), width=1.5)
+    page.draw_line((180, 400), (180, 460), width=1.5)
+    page.draw_line((480, 400), (480, 460), width=1.5)
+    page.insert_text((305, 405), "300", fontsize=16, fontname="helv")
+    document.save(path)
+    document.close()
+
+
 def test_new_and_historical_pdf_manifests_are_draft_reference(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
     source.write_bytes(b"pdf")
@@ -332,6 +354,40 @@ def test_pdf_auto_ocr_does_not_create_dimension_without_cross_validation_support
         assert primitive["cross_validations"][0]["status"] == "conflict"
         evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
         assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_auto_ocr_does_not_confirm_nearby_numeric_note_as_dimension() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "numeric-note.pdf"
+        output = root / "run"
+        _numeric_note_pdf(source)
+
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(output),
+            "--scale-mm-per-px", "1", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert primitive["cross_validations"][0]["status"] != "confirmed"
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_auto_ocr_does_not_borrow_separate_dimension_geometry_for_note() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "numeric-note-and-dimension.pdf"
+        output = root / "run"
+        _numeric_note_with_separate_dimension_pdf(source)
+
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(output),
+            "--scale-mm-per-px", "0.5", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        cross_validations = {item["text_value"]: item["status"] for item in primitive["cross_validations"]}
+        assert cross_validations[540.0] != "confirmed"
+        assert cross_validations[300.0] == "confirmed"
 
 
 def test_historical_pdf_manifest_without_ocr_choice_remains_geometry_only() -> None:

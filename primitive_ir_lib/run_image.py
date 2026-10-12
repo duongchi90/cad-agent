@@ -216,6 +216,8 @@ def run(
         raw_lines,
         calibration,
         merge_collinear=False,
+        image_bgr=image if auto_ocr_roi else None,
+        require_dimension_geometry=auto_ocr_roi,
     )
 
     output_dir = os.path.dirname(os.path.abspath(output_path))
