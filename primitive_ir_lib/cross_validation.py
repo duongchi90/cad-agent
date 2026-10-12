@@ -71,6 +71,15 @@ def cross_validate(
             gap_tol_px=merge_gap_tol_px,
         )
 
+    selected_witness_counts: dict[str, int] = {}
+    if require_dimension_geometry:
+        for candidate in raw_texts:
+            if candidate.semantic_role != "dimension_value" or candidate.parsed_value in {None, 0}:
+                continue
+            candidate_line = find_nearest_line(candidate, raw_lines, max_distance_px=max_distance_px)
+            if candidate_line is not None:
+                selected_witness_counts[candidate_line.id] = selected_witness_counts.get(candidate_line.id, 0) + 1
+
     for text in raw_texts:
         if text.semantic_role != "dimension_value" or text.parsed_value is None:
             continue
@@ -97,7 +106,10 @@ def cross_validate(
             ))
             continue
 
-        if require_dimension_geometry and not _has_bound_dimension_geometry(line, image_bgr):
+        if require_dimension_geometry and (
+            selected_witness_counts.get(line.id, 0) != 1
+            or not _has_bound_dimension_geometry(line, text, image_bgr)
+        ):
             results.append(CrossValidation(
                 text_primitive_id=text.id,
                 geometry_primitive_id=line.id,
@@ -124,12 +136,15 @@ def cross_validate(
     return results
 
 
-def _has_bound_dimension_geometry(line: RawLine, image_bgr: Optional[np.ndarray]) -> bool:
-    """Require two extension lines tied to this witness before auto-confirming OCR.
+def _has_bound_dimension_geometry(
+    line: RawLine, text: RawText, image_bgr: Optional[np.ndarray]
+) -> bool:
+    """Require dimension structure and one centered OCR value candidate.
 
     The crop is centered on the selected RawLine, and the detected dimension
-    line must match that line's endpoints. This prevents another dimension in
-    the same page neighborhood from lending structural evidence to a note.
+    line must match that line's endpoints. The OCR value must also be centered
+    on the detected span and lie close to it. Multiple values selecting the
+    same witness are rejected by the caller as ambiguous.
     """
     if (
         image_bgr is None
@@ -162,4 +177,23 @@ def _has_bound_dimension_geometry(line: RawLine, image_bgr: Optional[np.ndarray]
         np.hypot(detected[0][0] - expected[1][0], detected[0][1] - expected[1][1]),
         np.hypot(detected[1][0] - expected[0][0], detected[1][1] - expected[0][1]),
     )
-    return min(direct, reverse) <= 10.0
+    if min(direct, reverse) > 10.0:
+        return False
+
+    (x0, y0), (x1, y1) = detected
+    tx0, ty0, tx1, ty1 = text.bbox_px
+    text_center = ((tx0 + tx1) / 2.0, (ty0 + ty1) / 2.0)
+    dx, dy = x1 - x0, y1 - y0
+    length_squared = dx * dx + dy * dy
+    if length_squared <= 0:
+        return False
+    projection = ((text_center[0] - x0) * dx + (text_center[1] - y0) * dy) / length_squared
+    if not 0.42 <= projection <= 0.58:
+        return False
+    perpendicular_distance = abs(
+        dx * (text_center[1] - y0) - dy * (text_center[0] - x0)
+    ) / np.sqrt(length_squared)
+    text_cross_axis_size = (ty1 - ty0) if abs(dx) >= abs(dy) else (tx1 - tx0)
+    if perpendicular_distance > max(18.0, 3.0 * text_cross_axis_size):
+        return False
+    return True
