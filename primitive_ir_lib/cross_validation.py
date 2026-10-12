@@ -41,6 +41,7 @@ def cross_validate(
     merge_collinear: bool = True,
     merge_gap_tol_px: float = 25.0,
     image_bgr: Optional[np.ndarray] = None,
+    require_dimension_geometry: bool = False,
 ) -> List[CrossValidation]:
     """Với mỗi RawText có semantic_role == 'dimension_value':
       1. (mặc định) gộp collinear-line có neo bằng tick-mark (nếu có
@@ -53,6 +54,8 @@ def cross_validate(
 
     image_bgr: ảnh gốc (BGR) để bật tick-mark detection (Lớp 1, ưu tiên hơn
     text-anchor). None -> chỉ dùng text-anchor (Lớp 2), giữ tương thích ngược.
+    require_dimension_geometry: compatibility option; when enabled, results
+    remain unverified because visual structure alone cannot prove text linkage.
     LƯU Ý: nếu raw_lines rỗng hoặc không tìm được line phù hợp trong
     max_distance_px, trả về status='unverified' — KHÔNG suy đoán, để trống
     cho bước sau (Reviewer hoặc con người) xử lý.
@@ -106,4 +109,7 @@ def cross_validate(
             match_threshold_percent=threshold_percent,
         ))
 
+    if require_dimension_geometry:
+        for result in results:
+            result.status = "unverified"
     return results

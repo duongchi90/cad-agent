@@ -8,7 +8,7 @@ import fitz
 import pytest
 
 from cad_agent.cli import main
-from cad_agent.manifest import ManifestError
+from cad_agent.manifest import ManifestError, sha256_file
 from cad_agent.pdf import new_pdf_manifest, read_pdf_manifest, run_pdf_stages
 
 
@@ -261,6 +261,41 @@ def test_pdf_resume_regenerates_missing_primitive_with_ocr_policy(
             assert "auto_ocr_roi" not in resumed["configuration"]
         else:
             assert resumed["configuration"]["auto_ocr_roi"] is ocr_policy
+
+
+@pytest.mark.parametrize("remove_dxf", [True, False], ids=["missing-dxf", "completed-dxf"])
+def test_pdf_resume_rebuilds_legacy_confirmed_ocr_primitive(remove_dxf: bool) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        output = root / "run"
+        _dimension_pdf(source)
+        manifest = new_pdf_manifest(source, 1, "synthetic-scale", 144, auto_ocr_roi=True)
+        manifest_path = output / "pdf-run-manifest.json"
+        run_pdf_stages(source, output, manifest_path, manifest)
+
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        page = persisted["pages"][0]
+        primitive_path = output / page["stages"]["primitive_ir"]["artifact"]
+        primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+        primitive["cross_validations"][0]["status"] = "confirmed"
+        primitive_path.write_text(json.dumps(primitive), encoding="utf-8")
+        page["stages"]["primitive_ir"]["sha256"] = sha256_file(primitive_path)
+        dxf_path = output / page["stages"]["dxf"]["artifact"]
+        evidence_path = output / page["stages"]["build_evidence"]["artifact"]
+        if remove_dxf:
+            dxf_path.unlink()
+            evidence_path.unlink()
+            page["stages"]["dxf"] = {"state": "pending", "artifact": None, "sha256": None, "details": None}
+            page["stages"]["build_evidence"] = {"state": "pending", "artifact": None, "sha256": None, "details": None}
+        manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+        run_pdf_stages(source, output, manifest_path, persisted)
+
+        repaired = json.loads(primitive_path.read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert repaired["cross_validations"][0]["status"] == "unverified"
+        assert evidence["build_result"]["dimension_count"] == 0
 
 
 def test_pdf_cli_run_and_resume() -> None:

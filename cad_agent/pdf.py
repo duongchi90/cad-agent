@@ -101,6 +101,21 @@ def _completed(output_dir: Path, stage: dict[str, Any]) -> bool:
     return completed_artifact(output_dir, stage)
 
 
+def _requires_auto_ocr_checkpoint_regeneration(primitive_path: Path) -> bool:
+    """Return whether a cached auto-OCR Primitive IR violates current policy."""
+    try:
+        primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    validations = primitive.get("cross_validations") if isinstance(primitive, dict) else None
+    if not isinstance(validations, list):
+        return True
+    return any(
+        not isinstance(validation, dict) or validation.get("status") != "unverified"
+        for validation in validations
+    )
+
+
 def _page_record(
     number: int,
     primitive: Path,
@@ -188,7 +203,19 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
     for page in manifest["pages"]:
         stages = page["stages"]
         primitive = output_dir / stages["primitive_ir"]["artifact"]
-        if not _completed(output_dir, stages["primitive_ir"]):
+        primitive_completed = _completed(output_dir, stages["primitive_ir"])
+        if (
+            primitive_completed
+            and bool(manifest["configuration"].get("auto_ocr_roi", False))
+            and _requires_auto_ocr_checkpoint_regeneration(primitive)
+        ):
+            primitive_completed = False
+        if not primitive_completed:
+            stages["primitive_ir"] = _stage(artifact=stages["primitive_ir"].get("artifact"))
+            stages["semantic_ir"] = _stage(artifact=stages["semantic_ir"].get("artifact"))
+            stages["dxf"] = _stage(artifact=stages["dxf"].get("artifact"))
+            stages["build_evidence"] = _stage(artifact=stages["build_evidence"].get("artifact"))
+            write_manifest(manifest_path, manifest)
             rendered = output_dir / page["rendered_png"]["artifact"]
             if not _completed(output_dir, page.get("rendered_png", {})):
                 raise ManifestError(f"PDF page {page['page']} rendered-page checkpoint is invalid.")
@@ -199,10 +226,6 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
                 auto_ocr_roi=bool(manifest["configuration"].get("auto_ocr_roi", False)),
             )
             _write_page_stage(manifest_path, manifest, page, "primitive_ir", primitive, "Primitive IR regenerated from verified rendered page.")
-            stages["semantic_ir"] = _stage()
-            stages["dxf"] = _stage()
-            stages["build_evidence"] = _stage()
-            write_manifest(manifest_path, manifest)
         semantic = output_dir / "semantic_ir" / f"page_{page['page']:02d}.json"
         dxf = output_dir / "dxf" / f"page_{page['page']:02d}.dxf"
         evidence = output_dir / "build_evidence" / f"page_{page['page']:02d}.json"

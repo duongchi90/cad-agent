@@ -134,15 +134,15 @@ def test_cross_validate_unverified_for_zero_dimension_value():
     assert results[0].geometry_primitive_id == ""
 
 
-def test_cross_validate_direct_call_keeps_legacy_confirmation_behavior():
+def test_cross_validate_structural_gate_keyword_remains_fail_closed():
     line = _line((100, 50), (100, 550))
     text = _text("1700", (60, 280, 90, 320))
     cal = estimate_calibration_from_reference(text, line, image_height_px=700)
 
-    results = cross_validate([text], [line], cal)
+    results = cross_validate([text], [line], cal, require_dimension_geometry=True)
 
     assert len(results) == 1
-    assert results[0].status == "confirmed"
+    assert results[0].status == "unverified"
 
 
 # ----------------------------------------------------------- table tier 2 --
