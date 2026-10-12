@@ -102,6 +102,13 @@
    - Verified 6 positive/negative controls (border frame, notes column, registration marks, title block only, A3 2-view, 3-view section/detail) and 7 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`SEMANTIC_VIEW_REGION_PARTITIONING_V1_READY_FOR_CODEX`).
 
+13. **Tick Mark & Boundary Symbol Detection (`research/antigravity/2026-10-11/tick_mark_detection/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `tick_mark_detection.py`: single-diagonal cross-hatch false positive trigger (1-segment flaw), tilted 18° witness line split failure from unrotated column drift, acute mechanical arrowhead omission (< 25° minimum angle drop), text descender false slicing into fragments, and architectural 45° oblique tick mark slash split omission.
+   - Benchmarked 4 strategies (A: Current Main, B: Naive Two-Segment Matcher, C: Orientation-Rotated Column Projection, D: Multi-Model Boundary Oracle), proving Strategy D achieves 100.0% accuracy across 8 test cases (vs 37.5% in Strategy A) and runs at < 5.3 ms per line with 40x speedup via fast 3-directional crossing pre-filter.
+   - Resolved 2D text glyph rejection using PCA transverse eigenvalue ($\lambda_2 \ge 2.0$) and top/bottom crossing verification, and cross-hatch immunity via spatial track clustering ($\ge 3$ tracks with gap $\ge 5\text{ px}$).
+   - Verified 8 positive/negative controls (plain line, dense hatch, parallel tracks, touching text, L-corner, architectural 4-span chain, stepped shaft chain, solid arrows) and 8 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`TICK_MARK_BOUNDARY_DETECTION_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -194,6 +201,12 @@
 | `view_partitioning` | [`test_view_partitioning_controls.py`](view_partitioning/test_view_partitioning_controls.py) | Controls Test | `RESEARCH_ONLY` | `319eba2b37cb3739c01995796b753bae9fa80d92a9737abfe80192630add434b` | Positive fixtures (A3 two-view, 3-view section) and strong negative controls |
 | `view_partitioning` | [`test_view_partitioning_degenerate_and_perf.py`](view_partitioning/test_view_partitioning_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `87f9c05f34a5a428c82be320c77d0cd7bce426f7541691b3f3e9e5b02d1d20ef` | Empty, zero-length, non-finite coords, micro-segments, and 50-view latency profiling |
 | `view_partitioning` | [`semantic_view_region_partitioning_empirical_specification.md`](view_partitioning/semantic_view_region_partitioning_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `20ebe7ffad9334002d2fd0e13ca76c3c2e68fa19700d482f51dd77900149110a` | Complete empirical specification for semantic view region partitioning (Sections 10-20, `SEMANTIC_VIEW_REGION_PARTITIONING_V1`) |
+| `tick_mark_detection` | [`tick_mark_engine.py`](tick_mark_detection/tick_mark_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `6f814e69b665708a60c12690b6d75e389212db5c44aad723544bd4b4a2e5a610` | Reference implementation of Strategies A-D for tick mark and boundary symbol detection |
+| `tick_mark_detection` | [`test_causal_red_tick_mark_detection.py`](tick_mark_detection/test_causal_red_tick_mark_detection.py) | Causal RED Test | `RESEARCH_ONLY` | `0ae3de3b5aee0c587daa2dc682b15a2f9eba61868e1934fca8ad29ed22b5f794` | Public causal RED reproducing 5 baseline failure modes on production tick_mark_detection.py |
+| `tick_mark_detection` | [`test_tick_mark_benchmark.py`](tick_mark_detection/test_tick_mark_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `a310237087f79fb6a1939276b7fe2cee737191b2766ae36577563a93d52ada37` | Empirical benchmark comparing Strategies A-D across 8 boundary conditions |
+| `tick_mark_detection` | [`test_tick_mark_controls.py`](tick_mark_detection/test_tick_mark_controls.py) | Controls Test | `RESEARCH_ONLY` | `dfb1ae84ee2ecd1a87a6bb61a06b8db67711cb3caafc43419610e48f96f1452b` | Positive fixtures (4-span arch chain, shaft chain, solid arrows) and strong negative controls |
+| `tick_mark_detection` | [`test_tick_mark_degenerate_and_perf.py`](tick_mark_detection/test_tick_mark_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `c87de07f13ec79c351903edce37b056ee611d8750911da97ed4319fdbe2a50e4` | Empty, zero-length, non-finite coords, blank canvas, and 50-line latency profiling |
+| `tick_mark_detection` | [`tick_mark_boundary_empirical_specification.md`](tick_mark_detection/tick_mark_boundary_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `b85c4329e9ae7976b8bfd93127c659864eb18f9f04b41570892c509396574730` | Complete empirical specification for tick mark & boundary symbol detection (Sections 10-20, `TICK_MARK_BOUNDARY_DETECTION_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
