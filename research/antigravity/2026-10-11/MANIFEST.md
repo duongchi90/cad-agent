@@ -144,6 +144,13 @@
    - Verified 8 positive/negative controls (5-hole star, 16-hole turbine flange, multi-pattern flange, 180 deg sector arc, unequal hole size rejection, elliptical arrangement rejection, background lines non-interference, < 3 holes rejection) and 5 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`CIRCULAR_PITCH_BOLT_PATTERN_RECOGNITION_V1_READY_FOR_CODEX`).
 
+19. **Headless Dimension & Associativity Repair (`research/antigravity/2026-10-11/dimension_repair/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `repair.py`: deleted dimension entity handle unrepairable in Strategy A (`repair_dxf` skips validation IDs), measurement drift and corrupted defpoints unrepairable in Strategy A, corrupted dimension layer unrepairable in Strategy A, broken feature binding to underlying LINE primitive unrepairable in Strategy A, and fail-safe handling of untracked validation IDs.
+   - Benchmarked 4 strategies (A: Current Main, B: Blind DB Wipe, C: In-Place Attribute Patch, D: Full Ground-Truth Handle Reconstruction with Line Feature Associativity), proving Strategy D achieves 100.0% accuracy across 8 test scenarios (vs 0.0% in Strategy A and 25.0% in Strategy C) and executes in < 60 ms across 50 simultaneous dimensions.
+   - Reconstructs linear dimensions using exact outward normal offsets, binds defpoint2/defpoint3 to underlying ModelSpace LINE primitives, re-renders dimension blocks via ezdxf, synchronizes `dimension_handle_by_cross_validation_id`, and achieves 100% review roundtrip pass without mutating uncorrupted dimensions.
+   - Verified 8 positive/negative controls (horizontal, vertical, chained 3-span, on-demand layer creation, missing line geometry, non-line primitive rejection, zero-length rejection, empty mismatches no-op) and 6 degenerate/non-finite edge cases (NaN, Inf, extreme $10^6$ mm, micro-segments, malformed strings, 50-dimension performance scaling).
+   - 5 empirical scripts + 1 formal specification (`HEADLESS_DIMENSION_AND_ASSOCIATIVITY_REPAIR_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -272,6 +279,12 @@
 | `bolt_circle_patterns` | [`test_bolt_circle_controls.py`](bolt_circle_patterns/test_bolt_circle_controls.py) | Controls Test | `RESEARCH_ONLY` | `8aa802e66978c60edbb5a8d5e1f6401bd03cf06b6fa89b1f65d544fbc13f2b60` | Positive fixtures (star, turbine, multi-pattern, sector) and strong negative controls |
 | `bolt_circle_patterns` | [`test_bolt_circle_degenerate_and_perf.py`](bolt_circle_patterns/test_bolt_circle_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `7028da9dd527ec4696128864ff90e5032335f6933f46545a46ecde47f0cefe1e` | Empty, sub-threshold, non-circle, non-finite coords, and 90-circle latency profiling |
 | `bolt_circle_patterns` | [`circular_pitch_bolt_pattern_empirical_specification.md`](bolt_circle_patterns/circular_pitch_bolt_pattern_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `6c1cdc7a88ae8dc51380679e4ef924c3928d78f11a704e2f029e871cbe4d7a6c` | Complete empirical specification for circular pitch bolt pattern recognition (Sections 10-20, `CIRCULAR_PITCH_BOLT_PATTERN_RECOGNITION_V1`) |
+| `dimension_repair` | [`dimension_repair_engine.py`](dimension_repair/dimension_repair_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `f99ac3e32f58dce7ac833fe1850b50ef8897998dcf11b5ec49dcb571f77bcbee` | Reference implementation of Strategies A-D for headless dimension & associativity repair |
+| `dimension_repair` | [`test_causal_red_dimension_repair.py`](dimension_repair/test_causal_red_dimension_repair.py) | Causal RED Test | `RESEARCH_ONLY` | `27d4605705f840e3e4e4eec8eda5372e0737a0d1dbe631771c76f71f11de3b0a` | Public causal RED reproducing 5 baseline failure modes on production repair.py |
+| `dimension_repair` | [`test_dimension_repair_benchmark.py`](dimension_repair/test_dimension_repair_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `016977b2549a7d02aef30cd91e1d334257ddc5389f5c8537e130648f0a09b2d8` | Empirical benchmark comparing Strategies A-D across 8 dimension repair scenarios |
+| `dimension_repair` | [`test_dimension_repair_controls.py`](dimension_repair/test_dimension_repair_controls.py) | Controls Test | `RESEARCH_ONLY` | `4e8e328a24a1a551a5c1f0b5987dfe63c471c5e7f3e05e97fe983058bc50760b` | Positive fixtures (horizontal, vertical, chained, layer) and strong negative controls |
+| `dimension_repair` | [`test_dimension_repair_degenerate_and_perf.py`](dimension_repair/test_dimension_repair_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `610391f08a17c7fe3c268b35532a14820f1adb97e33df7401d53d2a41e6b8b2f` | NaN, Inf, extreme coords, micro-segments, malformed strings, and 50-dimension latency profiling |
+| `dimension_repair` | [`headless_dimension_repair_empirical_specification.md`](dimension_repair/headless_dimension_repair_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `4e76d7d7af98e0bea17a1619a0758be628eebd8211f9a674347413e31273f8b1` | Complete empirical specification for headless dimension repair (Sections 10-20, `HEADLESS_DIMENSION_AND_ASSOCIATIVITY_REPAIR_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
