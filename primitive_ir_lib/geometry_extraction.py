@@ -34,6 +34,11 @@ import numpy as np
 from .models import new_id
 
 
+# HoughCircles allocates an accumulator proportional to the image area at dp=1.
+# Keep that full-resolution accumulator bounded for large rendered sheets.
+_HOUGH_CIRCLE_FULL_RESOLUTION_MAX_PIXELS = 4_000_000
+
+
 @dataclass
 class RawLine:
     id: str
@@ -120,8 +125,9 @@ def extract_circles(
     ở mức trung bình-cao vì HoughCircles của OpenCV không trả vote count trực
     tiếp qua API Python — nên đánh dấu rõ đây là ước lượng, không phải số đo."""
     gray = _preprocess(image_bgr)
+    dp = 1 if gray.shape[0] * gray.shape[1] <= _HOUGH_CIRCLE_FULL_RESOLUTION_MAX_PIXELS else 2
     circles = cv2.HoughCircles(
-        gray, cv2.HOUGH_GRADIENT, dp=1, minDist=min_dist,
+        gray, cv2.HOUGH_GRADIENT, dp=dp, minDist=min_dist,
         param1=param1, param2=param2, minRadius=min_radius, maxRadius=max_radius,
     )
 
