@@ -130,6 +130,13 @@
    - Verified 8 positive/negative controls (symmetrical tolerances, angular callouts, spherical features, comma decimals, drawing code rejection, revision date rejection, general note rejection, material noise rejection) and 6 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`MECHANICAL_DIMENSION_AND_TOLERANCE_PARSING_V1_READY_FOR_CODEX`).
 
+17. **Transitive & Conflicting Constraint Pruning (`research/antigravity/2026-10-11/constraint_pruning/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `semantic_ir_lib/constraint_pruning.py`: concentric cycle redundancy (omission of `concentric` from `_TRANSITIVE_TYPES`), intra-group perpendicular contradiction ($ga == gb$ preserved as valid), collinear-parallel subsumption redundancy, concentric-tangent mutual exclusion contradiction, and 4-circle concentric clique over-constraining ($K_4 \to 6$ constraints instead of 3).
+   - Benchmarked 4 strategies (A: Current Main, B: Naive Greedy Filter, C: Extended Transitive Only, D: Comprehensive Graph-Theoretic Constraint Normalization Engine), proving Strategy D achieves 100.0% accuracy across 8 test scenarios (vs 37.5% in Strategy A and 62.5% in Strategy C) and executes in < 15 ms across 1,147 pairwise constraints.
+   - Rigorous normalization resolving concentric spanning trees ($N-1$ edges), intra-group contradiction elimination, collinear-parallel subsumption pruning, and mutual exclusion resolution between incompatible constraints.
+   - Verified 8 positive/negative controls (flange bore with tangents, closed rectangular frame, slotted plate, multi-segment collinear split, low-confidence rejection, self-perpendicular triad rejection, concentric-tangent clash rejection, dense false perpendicular matrix) and 6 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`TRANSITIVE_AND_CONFLICTING_CONSTRAINT_PRUNING_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -246,6 +253,12 @@
 | `dimension_symbols` | [`test_dimension_symbol_controls.py`](dimension_symbols/test_dimension_symbol_controls.py) | Controls Test | `RESEARCH_ONLY` | `e28dd6ea85cf41a25584115ef87b2b471f5be1bd6264d44bb9ffe9f615fde8f2` | Positive fixtures (symmetric tol, angular, spherical, comma) and strong negative controls |
 | `dimension_symbols` | [`test_dimension_symbol_degenerate_and_perf.py`](dimension_symbols/test_dimension_symbol_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `01518b5a1bfe2466aa4ab2c87b692bad91cb4190dea5dbac4624da2715389fbe` | Empty, lone symbols, garbage punctuation, non-finite coords, and 1200-callout latency profiling |
 | `dimension_symbols` | [`mechanical_dimension_and_tolerance_empirical_specification.md`](dimension_symbols/mechanical_dimension_and_tolerance_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `1ede4ef042ab840e2b3dfe9f1d20e3a5abdf8c1c4457edfd33bc54be87c8b18b` | Complete empirical specification for mechanical dimension & tolerance parsing (Sections 10-20, `MECHANICAL_DIMENSION_AND_TOLERANCE_PARSING_V1`) |
+| `constraint_pruning` | [`constraint_pruning_engine.py`](constraint_pruning/constraint_pruning_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `a259dff3dfb98499469d4aede85d48771cbeb8ea670164217b1a52cd52a28b19` | Reference implementation of Strategies A-D for transitive and conflicting constraint pruning |
+| `constraint_pruning` | [`test_causal_red_constraint_pruning.py`](constraint_pruning/test_causal_red_constraint_pruning.py) | Causal RED Test | `RESEARCH_ONLY` | `5037fe3af71477e7f41e238b06102f06e12190844a3d55a5b4fac3595bcc2dc4` | Public causal RED reproducing 5 baseline failure modes on production constraint_pruning.py |
+| `constraint_pruning` | [`test_constraint_pruning_benchmark.py`](constraint_pruning/test_constraint_pruning_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `4a33198b6ee1aae81487977c0a99c9a8457fdb987cd7707adbe1663ee9f99627` | Empirical benchmark comparing Strategies A-D across 8 constraint pruning scenarios |
+| `constraint_pruning` | [`test_constraint_pruning_controls.py`](constraint_pruning/test_constraint_pruning_controls.py) | Controls Test | `RESEARCH_ONLY` | `803824f697d6eb390258950e704b6ee9010b11dff90f40c12ae75f9ede26df5c` | Positive fixtures (flange bore, frame, slot, collinear) and strong negative controls |
+| `constraint_pruning` | [`test_constraint_pruning_degenerate_and_perf.py`](constraint_pruning/test_constraint_pruning_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `831b223bcb2974628ca5eca062cd727192bdad112ebd16945bfadf85139da348` | Empty, single, self-referential, extreme confidences, and 1000+ constraint latency profiling |
+| `constraint_pruning` | [`transitive_and_conflicting_constraint_pruning_empirical_specification.md`](constraint_pruning/transitive_and_conflicting_constraint_pruning_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `57a61dee303f3686bc315191f60e41aa0686ede1f8384e5b23ba3ef050ae1261` | Complete empirical specification for transitive and conflicting constraint pruning (Sections 10-20, `TRANSITIVE_AND_CONFLICTING_CONSTRAINT_PRUNING_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
